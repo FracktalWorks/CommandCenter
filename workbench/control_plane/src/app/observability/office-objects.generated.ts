@@ -214,5 +214,75 @@ export const OFFICE_OBJECTS: Record<string, OfficeObject> = {
     "north-west": "/office-objects/printer-office/north-west.png",
     "west": "/office-objects/printer-office/west.png",
     "south-west": "/office-objects/printer-office/south-west.png"
+  },
+  "desk-computer": {
+    "south": "/office-objects/desk-computer/south.png",
+    "south-east": "/office-objects/desk-computer/south-east.png",
+    "east": "/office-objects/desk-computer/east.png",
+    "north-east": "/office-objects/desk-computer/north-east.png",
+    "north": "/office-objects/desk-computer/north.png",
+    "north-west": "/office-objects/desk-computer/north-west.png",
+    "west": "/office-objects/desk-computer/west.png",
+    "south-west": "/office-objects/desk-computer/south-west.png"
+  },
+  "table-plant": {
+    "south": "/office-objects/table-plant/south.png",
+    "south-east": "/office-objects/table-plant/south-east.png",
+    "east": "/office-objects/table-plant/east.png",
+    "north-east": "/office-objects/table-plant/north-east.png",
+    "north": "/office-objects/table-plant/north.png",
+    "north-west": "/office-objects/table-plant/north-west.png",
+    "west": "/office-objects/table-plant/west.png",
+    "south-west": "/office-objects/table-plant/south-west.png"
+  },
+  "counter-coffee": {
+    "south": "/office-objects/counter-coffee/south.png",
+    "south-east": "/office-objects/counter-coffee/south-east.png",
+    "east": "/office-objects/counter-coffee/east.png",
+    "north-east": "/office-objects/counter-coffee/north-east.png",
+    "north": "/office-objects/counter-coffee/north.png",
+    "north-west": "/office-objects/counter-coffee/north-west.png",
+    "west": "/office-objects/counter-coffee/west.png",
+    "south-west": "/office-objects/counter-coffee/south-west.png"
+  },
+  "wall-clock": {
+    "south": "/office-objects/wall-clock/south.png",
+    "south-east": "/office-objects/wall-clock/south-east.png",
+    "east": "/office-objects/wall-clock/east.png",
+    "north-east": "/office-objects/wall-clock/north-east.png",
+    "north": "/office-objects/wall-clock/north.png",
+    "north-west": "/office-objects/wall-clock/north-west.png",
+    "west": "/office-objects/wall-clock/west.png",
+    "south-west": "/office-objects/wall-clock/south-west.png"
+  },
+  "tv-screen": {
+    "south": "/office-objects/tv-screen/south.png",
+    "south-east": "/office-objects/tv-screen/south-east.png",
+    "east": "/office-objects/tv-screen/east.png",
+    "north-east": "/office-objects/tv-screen/north-east.png",
+    "north": "/office-objects/tv-screen/north.png",
+    "north-west": "/office-objects/tv-screen/north-west.png",
+    "west": "/office-objects/tv-screen/west.png",
+    "south-west": "/office-objects/tv-screen/south-west.png"
+  },
+  "notice-board": {
+    "south": "/office-objects/notice-board/south.png",
+    "south-east": "/office-objects/notice-board/south-east.png",
+    "east": "/office-objects/notice-board/east.png",
+    "north-east": "/office-objects/notice-board/north-east.png",
+    "north": "/office-objects/notice-board/north.png",
+    "north-west": "/office-objects/notice-board/north-west.png",
+    "west": "/office-objects/notice-board/west.png",
+    "south-west": "/office-objects/notice-board/south-west.png"
+  },
+  "blackboard": {
+    "south": "/office-objects/blackboard/south.png",
+    "south-east": "/office-objects/blackboard/south-east.png",
+    "east": "/office-objects/blackboard/east.png",
+    "north-east": "/office-objects/blackboard/north-east.png",
+    "north": "/office-objects/blackboard/north.png",
+    "north-west": "/office-objects/blackboard/north-west.png",
+    "west": "/office-objects/blackboard/west.png",
+    "south-west": "/office-objects/blackboard/south-west.png"
   }
 };

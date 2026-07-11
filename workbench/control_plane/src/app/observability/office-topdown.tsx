@@ -36,55 +36,100 @@ interface OfficeAgent {
 // fixed height would make a side-table look as big as a bookshelf; these keep the
 // relative scale faithful (and generally smaller so nothing reads "zoomed in").
 const OBJ_H: Record<string, number> = {
-  bookshelf: 66, "bookshelf-wide": 58, "shelf-files": 58,
-  couch: 54, armchair: 54, beanbag: 48, "side-table": 40,
-  "plant-tall": 76, "plant-palm": 72, "plant-monstera": 64,
-  "plant-small": 46, "plant-cactus": 50, "plant-hanging": 40,
-  "coffee-machine": 54, "water-cooler": 58, workstation: 52,
-  "printer-3d": 60, "printer-3d-large": 68, "printer-office": 46,
-  "filing-cabinet": 56, whiteboard: 60,
+  bookshelf: 64, "bookshelf-wide": 58, "shelf-files": 56,
+  couch: 54, armchair: 54, beanbag: 46, "side-table": 40,
+  "plant-tall": 74, "plant-palm": 70, "plant-monstera": 62,
+  "plant-small": 44, "plant-cactus": 48, "plant-hanging": 40,
+  "coffee-machine": 52, "water-cooler": 58, workstation: 50,
+  "printer-3d": 58, "printer-3d-large": 66, "printer-office": 46,
+  "filing-cabinet": 56, whiteboard: 58,
+  // equipment-on-a-surface + back-wall fixtures
+  "desk-computer": 58, "table-plant": 46, "counter-coffee": 54,
+  "wall-clock": 40, "tv-screen": 42, "notice-board": 44, blackboard: 44,
 };
 
-// Furniture scattered around the room's BORDER band (on the darker border tiles,
-// hugging the walls) so the central floor stays clear for desks. Each piece uses
-// the 8-direction sprite that faces INTO the room from its wall: top wall -> south
-// (front), left wall -> east (faces right), right wall -> west (faces left),
-// bottom -> north / diagonals. Coords are px/%, anchored to the floor edges.
-// Missing objects (not yet generated) are skipped, so this list can name any piece.
-type Placed = { obj: string; dir: Dir; css: React.CSSProperties };
-// Grouped into wall-hugging CLUSTERS (a library, a print/workstation corner, a
-// lounge, a kitchen, and two plant groves) rather than evenly spread. Sprites are
-// pre-cropped to content (crop_objects.py) so a 0-2px edge offset sits FLUSH against
-// the wall. Left/right clusters use calc(%±px) so members stay a fixed distance apart
-// (tight) while the cluster stays centered as the room grows.
-const DECOR: Placed[] = [
-  // TOP-LEFT — library nook (front-facing, flush to the top wall)
-  { obj: "bookshelf", dir: "south", css: { top: 2, left: 6 } },
-  { obj: "bookshelf-wide", dir: "south", css: { top: 6, left: 62 } },
-  { obj: "shelf-files", dir: "south", css: { top: 4, left: 124 } },
-  { obj: "whiteboard", dir: "south", css: { top: 6, left: 186 } },
-  // TOP-RIGHT — 3D-print & workstation corner
-  { obj: "printer-3d-large", dir: "south", css: { top: 2, right: 150 } },
-  { obj: "printer-3d", dir: "south", css: { top: 4, right: 100 } },
-  { obj: "workstation", dir: "south", css: { top: 4, right: 48 } },
-  { obj: "plant-palm", dir: "south", css: { top: -2, right: 2 } },
-  // LEFT WALL — lounge cluster (faces right), centered vertically
-  { obj: "couch", dir: "east", css: { left: 0, top: "calc(45% - 46px)" } },
-  { obj: "side-table", dir: "east", css: { left: 44, top: "calc(45% - 8px)" } },
-  { obj: "armchair", dir: "east", css: { left: 2, top: "calc(45% + 40px)" } },
-  // RIGHT WALL — kitchen / supply cluster (faces left)
-  { obj: "coffee-machine", dir: "west", css: { right: 2, top: "calc(44% - 62px)" } },
-  { obj: "water-cooler", dir: "west", css: { right: 6, top: "calc(44% - 14px)" } },
-  { obj: "printer-office", dir: "west", css: { right: 2, top: "calc(44% + 32px)" } },
-  { obj: "filing-cabinet", dir: "west", css: { right: 0, top: "calc(44% + 78px)" } },
-  // BOTTOM-LEFT — chill nook + greenery
-  { obj: "beanbag", dir: "north-east", css: { bottom: 2, left: 12 } },
-  { obj: "plant-cactus", dir: "north", css: { bottom: 8, left: 60 } },
-  { obj: "plant-monstera", dir: "north", css: { bottom: 2, left: 100 } },
+// Furniture is grouped into wall-hugging CLUSTERS, each rendered as a flex box so its
+// members auto-space with a fixed gap (no manual overlap math) and sit on a common
+// baseline. Sprites are pre-cropped to content (crop_objects.py) so the flex box sits
+// FLUSH against its wall. Top/bottom clusters are horizontal rows; left/right clusters
+// are vertical columns centered on the wall. Each item faces sensibly for its wall:
+// top -> south (front), left -> east (faces right), right -> west (faces left), round
+// tables use south (a round table reads the same from any side, front is cleanest),
+// bottom -> north / diagonals. Missing objects (not yet generated) are skipped.
+type ClItem = { obj: string; dir: Dir };
+type Cluster = { id: string; cls: string; items: ClItem[] };
+const CLUSTERS: Cluster[] = [
+  // TOP-LEFT — library
+  {
+    id: "library",
+    cls: "oc-cl-tl",
+    items: [
+      { obj: "bookshelf", dir: "south" },
+      { obj: "bookshelf-wide", dir: "south" },
+      { obj: "shelf-files", dir: "south" },
+    ],
+  },
+  // TOP-RIGHT — 3D-print & workstation corner (computer sits ON a desk)
+  {
+    id: "printlab",
+    cls: "oc-cl-tr",
+    items: [
+      { obj: "desk-computer", dir: "south" },
+      { obj: "printer-3d", dir: "south" },
+      { obj: "printer-3d-large", dir: "south" },
+    ],
+  },
+  // LEFT WALL — lounge (couch + round coffee table + armchair)
+  {
+    id: "lounge",
+    cls: "oc-cl-lm",
+    items: [
+      { obj: "couch", dir: "east" },
+      { obj: "side-table", dir: "south" },
+      { obj: "armchair", dir: "east" },
+    ],
+  },
+  // RIGHT WALL — kitchen / supply (coffee machine sits ON a counter)
+  {
+    id: "kitchen",
+    cls: "oc-cl-rm",
+    items: [
+      { obj: "counter-coffee", dir: "south" },
+      { obj: "water-cooler", dir: "west" },
+      { obj: "printer-office", dir: "west" },
+      { obj: "filing-cabinet", dir: "west" },
+    ],
+  },
+  // BOTTOM-LEFT — chill nook + greenery (plant sits ON a table)
+  {
+    id: "grove-l",
+    cls: "oc-cl-bl",
+    items: [
+      { obj: "beanbag", dir: "north-east" },
+      { obj: "plant-cactus", dir: "north" },
+      { obj: "table-plant", dir: "south" },
+      { obj: "plant-monstera", dir: "north" },
+    ],
+  },
   // BOTTOM-RIGHT — plant grove
-  { obj: "plant-tall", dir: "north-west", css: { bottom: 0, right: 12 } },
-  { obj: "plant-small", dir: "north", css: { bottom: 6, right: 50 } },
-  { obj: "plant-hanging", dir: "north-east", css: { bottom: 2, right: 88 } },
+  {
+    id: "grove-r",
+    cls: "oc-cl-br",
+    items: [
+      { obj: "plant-tall", dir: "north-west" },
+      { obj: "plant-palm", dir: "north" },
+      { obj: "plant-small", dir: "north" },
+      { obj: "plant-hanging", dir: "north-east" },
+    ],
+  },
+];
+
+// Back-wall mounted fixtures (front-facing), laid along the top wall band.
+const WALL_FIXTURES: ClItem[] = [
+  { obj: "blackboard", dir: "south" },
+  { obj: "notice-board", dir: "south" },
+  { obj: "tv-screen", dir: "south" },
+  { obj: "wall-clock", dir: "south" },
 ];
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
@@ -247,9 +292,8 @@ export function TopDownOffice({
     const last = collabs[collabs.length - 1];
     if (collabs.length > 1 && last.length === 1) collabs[collabs.length - 2].push(collabs.pop()![0]);
   }
-  // Agents in a conference leave their desk; only the rest stay in the desk grid.
-  const conferencing = new Set(collabs.flat().map((a) => a.name));
-  const deskAgents = roster.filter((a) => !conferencing.has(a.name));
+  // Agents are not mutually exclusive: every agent always keeps its desk in the office
+  // AND also appears in a conference room while collaborating (multiple instances).
 
   // Seamless generated floor tile (repeats to fill any room size); undefined until
   // the Pixel Lab tileset is built, in which case CSS falls back to a procedural floor.
@@ -285,36 +329,46 @@ export function TopDownOffice({
         <div className="oc-office" style={roomStyle}>
           <div className="oc-room">
           <div className="oc-wall">
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img className="oc-wallboard" src="/office-props/whiteboard.png" alt="" aria-hidden />
             <span className="oc-sign">THE OFFICE</span>
+            <div className="oc-wall-fix">
+              {WALL_FIXTURES.map((it) => {
+                const src = OFFICE_OBJECTS[it.obj]?.[it.dir];
+                if (!src) return null;
+                return (
+                  <span
+                    key={it.obj}
+                    className={`oc-fix oc-fix-${it.obj}`}
+                    style={{ height: OBJ_H[it.obj] ?? 40 }}
+                  >
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img src={src} alt="" aria-hidden style={{ height: OBJ_H[it.obj] ?? 40 }} />
+                  </span>
+                );
+              })}
+            </div>
           </div>
           <div className="oc-floor">
-            {DECOR.map((it, i) => {
-              const src = OFFICE_OBJECTS[it.obj]?.[it.dir];
-              if (!src) return null;
-              const wall =
-                it.css.left != null && typeof it.css.top === "string"
-                  ? "left"
-                  : it.css.right != null && typeof it.css.top === "string"
-                    ? "right"
-                    : it.css.bottom != null
-                      ? "bottom"
-                      : "top";
-              return (
-                <img
-                  key={`${it.obj}-${i}`}
-                  className={`oc-decor oc-w-${wall}`}
-                  style={{ ...it.css, height: OBJ_H[it.obj] ?? 62 }}
-                  src={src}
-                  alt=""
-                  aria-hidden
-                  // eslint-disable-next-line @next/next/no-img-element
-                />
-              );
-            })}
+            {CLUSTERS.map((cl) => (
+              <div key={cl.id} className={`oc-cluster ${cl.cls}`}>
+                {cl.items.map((it, i) => {
+                  const src = OFFICE_OBJECTS[it.obj]?.[it.dir];
+                  if (!src) return null;
+                  return (
+                    <img
+                      key={`${it.obj}-${i}`}
+                      className="oc-obj"
+                      style={{ height: OBJ_H[it.obj] ?? 58 }}
+                      src={src}
+                      alt=""
+                      aria-hidden
+                      // eslint-disable-next-line @next/next/no-img-element
+                    />
+                  );
+                })}
+              </div>
+            ))}
             <div className="oc-grid">
-              {deskAgents.map((a, i) => {
+              {roster.map((a, i) => {
                 // Green up ~every 3rd desk with a small plant (variant rotates).
                 const plantKey = i % 3 === 1 ? DESK_PLANTS[(i >> 1) % DESK_PLANTS.length] : null;
                 const plant = plantKey ? OFFICE_OBJECTS[plantKey]?.south ?? null : null;
@@ -364,9 +418,10 @@ export const TOPDOWN_STYLE = `
   border:5px solid #cbbfa4;
   box-shadow: inset 0 0 0 3px #f5f0e4, 0 10px 30px rgba(0,0,0,.28);
 }
-/* Top wall band — holds the mounted whiteboard + room sign. */
+/* Top wall band — the room sign plus the mounted fixtures (blackboard, notice board,
+   TV, clock). */
 .oc-wall {
-  position:relative; height:56px; z-index:3;
+  position:relative; height:58px; z-index:3;
   background:
     linear-gradient(rgba(255,255,255,.22), rgba(0,0,0,.10)),
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
@@ -377,9 +432,17 @@ export const TOPDOWN_STYLE = `
   display:flex; align-items:center; gap:14px; padding:0 18px;
   box-shadow: inset 0 -6px 12px rgba(0,0,0,.10);
 }
-.oc-wallboard { height:40px; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
-.oc-sign { font-family:ui-monospace,monospace; font-size:12px; letter-spacing:.28em;
+.oc-sign { flex-shrink:0; font-family:ui-monospace,monospace; font-size:12px; letter-spacing:.28em;
   color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
+/* fixtures hang on the wall, right-aligned, bottoms sitting just above the trim */
+.oc-wall-fix { margin-left:auto; display:flex; align-items:flex-end; gap:20px; height:100%;
+  padding-bottom:5px; }
+.oc-fix { display:inline-flex; align-items:flex-end; image-rendering:pixelated;
+  filter:drop-shadow(0 2px 2px rgba(0,0,0,.30)); }
+.oc-fix img { display:block; image-rendering:pixelated; }
+/* the TV is "on": a gentle screen-glow pulse */
+.oc-fix-tv-screen img { animation: oc-tv 2.6s ease-in-out infinite; }
+@keyframes oc-tv { 0%,100%{filter:brightness(1)} 50%{filter:brightness(1.22) saturate(1.25)} }
 
 /* Floor — the darker lane tile frames the whole office as a BORDER; an inset
    ::before field carries the main floor tile. */
@@ -401,13 +464,22 @@ export const TOPDOWN_STYLE = `
     inset 0 12px 22px rgba(0,0,0,.05);
 }
 
-/* Directional furniture scattered around the room's border. Each faces into the
-   room via its 8-direction sprite; height comes from the inline OBJ_H map so relative
-   scale stays faithful. Left/right-wall pieces are vertically centered on their %
-   anchor. Anchored to the floor edges so they hold at any room size. */
-.oc-decor { position:absolute; z-index:1; image-rendering:pixelated;
-  filter:drop-shadow(0 4px 3px rgba(0,0,0,.30)); pointer-events:none; }
-.oc-w-left, .oc-w-right { transform:translateY(-50%); }
+/* Furniture clusters — each is a flex box anchored to a wall/corner so its members
+   auto-space (fixed gap, no overlap) and sit on a common baseline. Heights come from
+   the inline OBJ_H map (kept as downscales of the cropped sprites so pixels stay crisp
+   and every object reads at a scale consistent with the agents). */
+.oc-cluster { position:absolute; z-index:1; display:flex; align-items:flex-end; gap:9px;
+  pointer-events:none; }
+.oc-obj { display:block; image-rendering:pixelated;
+  filter:drop-shadow(0 4px 3px rgba(0,0,0,.30)); }
+.oc-cl-tl { top:2px; left:10px; }
+.oc-cl-tr { top:2px; right:10px; }
+.oc-cl-bl { bottom:6px; left:12px; }
+.oc-cl-br { bottom:6px; right:12px; }
+.oc-cl-lm { top:47%; left:4px; transform:translateY(-50%);
+  flex-direction:column; align-items:flex-start; gap:7px; }
+.oc-cl-rm { top:47%; right:4px; transform:translateY(-50%);
+  flex-direction:column; align-items:flex-end; gap:7px; }
 /* small potted plant tucked beside a desk to green up the grid */
 .oc-seat-plant { position:absolute; right:2px; bottom:12px; height:38px; z-index:2;
   image-rendering:pixelated; filter:drop-shadow(0 3px 2px rgba(0,0,0,.45)); }
@@ -489,13 +561,14 @@ export const TOPDOWN_STYLE = `
   .oc-figure { height:104px; }
   .oc-static { height:104px; }
   .oc-anim { --w:104px; }
-  .oc-floor { padding:40px 18px 40px; }
+  .oc-floor { padding:44px 16px 40px; }
   .oc-floor::before { inset:14px; }
-  /* the side gutters collapse on mobile, so drop the left/right-wall furniture and
-     shrink the rest; inline heights need !important to be capped here. */
-  .oc-w-left, .oc-w-right { display:none; }
-  .oc-decor { height:44px !important; }
+  /* the side gutters collapse on mobile, so drop the left/right-wall clusters */
+  .oc-cl-lm, .oc-cl-rm { display:none; }
+  .oc-cluster { gap:5px; }
+  .oc-obj { height:38px !important; }
   .oc-seat-plant { height:30px; }
+  .oc-wall-fix { gap:10px; }
   .oc-sign { display:none; }
 }
 

@@ -47,6 +47,19 @@ SPEC = {
     "filing-cabinet": f"a short metal office filing cabinet with drawers, {STYLE}",
     "whiteboard": f"a standing whiteboard easel with colourful diagrams, {STYLE}",
     "printer-office": f"a white office laser printer on a small stand, {STYLE}",
+    # --- equipment sitting ON a surface (grounded, not floating on the floor) ---
+    "desk-computer": f"a wooden office desk with a desktop computer, monitor and "
+                     f"keyboard on top of it, {STYLE}",
+    "table-plant": f"a small round wooden side table with a green potted plant "
+                   f"sitting on top of it, {STYLE}",
+    "counter-coffee": f"a wooden kitchen counter cabinet with an espresso machine "
+                      f"and mugs on top of it, {STYLE}",
+    # --- back-wall mounted fixtures (front-facing) ---
+    "wall-clock": f"a round analog wall clock, {STYLE}",
+    "tv-screen": f"a wall-mounted flat-screen TV showing a colourful picture, {STYLE}",
+    "notice-board": f"a cork notice board with pinned papers and sticky notes, {STYLE}",
+    "blackboard": f"a wall-mounted blackboard with white chalk writing and diagrams, "
+                  f"{STYLE}",
 }
 
 _UA = urllib.request.build_opener()

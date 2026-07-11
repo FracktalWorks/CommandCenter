@@ -95,8 +95,11 @@ function objHeight(obj: string, dir: string): number {
 // Wall-mounted fixtures are sized to the wall band explicitly (not floor-scaled).
 const WALL_FIX_H: Record<string, number> = {
   blackboard: 36, "notice-board": 36, "tv-screen": 32, "wall-clock": 32,
-  window: 56,
+  window: 44,
 };
+// Optional explicit width override (else width follows the aspect). The window is
+// kept wide but flatter — same width as before, shorter.
+const WALL_FIX_W: Record<string, number> = { window: 61 };
 
 // Furniture is grouped into wall-hugging CLUSTERS, each rendered as a flex box so its
 // members auto-space with a fixed gap (no manual overlap math) and sit on a common
@@ -268,8 +271,8 @@ function Seat({
             alert triangle when errored. No text pill — the agent's pose says the rest. */}
         {state === "idle" && <span className="oc-badge oc-b-idle">z</span>}
         {state === "working" && (
-          <span className="oc-badge oc-b-working" title={tool ? `Using ${tool}` : "working"}>
-            <WorkIcon size={14} strokeWidth={2.5} />
+          <span className="oc-seat-bubble" title={tool ? `Using ${tool}` : "working"}>
+            <WorkIcon size={15} strokeWidth={2.6} />
           </span>
         )}
         {state === "error" && (
@@ -490,10 +493,15 @@ export function TopDownOffice({
                   <span
                     key={it.obj}
                     className={`oc-fix oc-fix-${it.obj}`}
-                    style={{ height: WALL_FIX_H[it.obj] ?? 34 }}
+                    style={{ height: WALL_FIX_H[it.obj] ?? 34, width: WALL_FIX_W[it.obj] }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={src} alt="" aria-hidden style={{ height: WALL_FIX_H[it.obj] ?? 34 }} />
+                    <img
+                      src={src}
+                      alt=""
+                      aria-hidden
+                      style={{ height: WALL_FIX_H[it.obj] ?? 34, width: WALL_FIX_W[it.obj] }}
+                    />
                   </span>
                 );
               })}
@@ -677,7 +685,7 @@ export const TOPDOWN_STYLE = `
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 /* generic TV-screen glow pulse (wall band uses .oc-fix-tv-screen img above) */
 img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
-.oc-cr-floor { position:relative; height:192px; overflow:hidden;
+.oc-cr-floor { position:relative; height:200px; overflow:hidden;
   background-color:#cbb89a; background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto); background-repeat:repeat; image-rendering:pixelated; }
 .oc-cr-floor::before { content:''; position:absolute; inset:10px; z-index:0; pointer-events:none;
@@ -687,11 +695,11 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 /* agents STANDING around the centred table, facing inward, gently breathing */
 .oc-cr-row { position:absolute; left:0; right:0; display:flex; justify-content:center;
   align-items:flex-end; gap:10px; pointer-events:none; }
-.oc-cr-row-top { top:8px; z-index:1; }        /* far side — behind the table */
-.oc-cr-row-bottom { bottom:6px; z-index:3; }  /* near side — in front of the table */
+.oc-cr-row-top { top:8px; z-index:1; }         /* far side — behind the table */
+.oc-cr-row-bottom { bottom:24px; z-index:3; }  /* near side — up against the table */
 .oc-cr-standee { position:relative; background:none; border:none; cursor:pointer;
   padding:0; line-height:0; pointer-events:auto; }
-.oc-cr-standimg { height:70px; display:block; image-rendering:pixelated;
+.oc-cr-standimg { height:90px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.4));
   animation: oc-breathe 3.4s ease-in-out infinite; }
 .oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
@@ -711,7 +719,7 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 @keyframes oc-focus { 0%,100%{opacity:.25;transform:scale(.8)} 50%{opacity:.6;transform:scale(1.15)} }
 /* the shared conference table, centred in the room */
 .oc-cr-table { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  z-index:2; width:min(130px, 52%); image-rendering:pixelated;
+  z-index:2; width:min(112px, 44%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 /* plants standing in the room's bottom corners (table draws in front of their base) */
 .oc-cr-plant { position:absolute; bottom:8px; z-index:1; height:62px; image-rendering:pixelated;
@@ -752,6 +760,13 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   text-shadow:0 1px 1px rgba(255,255,255,.6); }
 .oc-b-working { color:#2a7fff; }
 .oc-b-error { color:#e0392f; animation-duration:1.5s; }
+/* working agents show their CURRENT TOOL icon in a clean chat bubble above the head
+   (same look as the conference-room discussion bubble). */
+.oc-seat-bubble { position:absolute; top:4px; left:50%; margin-left:-13px; z-index:4;
+  width:26px; height:26px; border-radius:50% 50% 50% 4px; display:flex;
+  align-items:center; justify-content:center; color:#3a6ea5;
+  background:rgba(255,255,255,.96); border:1px solid rgba(0,0,0,.16);
+  box-shadow:0 2px 3px rgba(0,0,0,.3); animation:oc-pop .25s ease-out; }
 
 .oc-plate { margin-top:-2px; text-align:center; z-index:3; }
 /* the agent NAME styled as a readable pill (like the old status indicator) */

@@ -12,14 +12,21 @@ from __future__ import annotations
 import asyncio
 from typing import Any
 
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_internal_auth
 from acb_common import get_logger
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 _log = get_logger("gateway.memory")
 
-router = APIRouter(prefix="/memory", tags=["memory"])
+# Every endpoint here takes user_id from the path and would otherwise be an
+# anonymous IDOR (read/delete any user's memories, audit C6). All callers are
+# the Next.js server (lib/memory.ts gatewayHeaders) which forwards the internal
+# Bearer token; require_internal_auth 401s anyone without it.
+router = APIRouter(
+    prefix="/memory", tags=["memory"],
+    dependencies=[Depends(require_internal_auth)],
+)
 
 
 class SearchRequest(BaseModel):

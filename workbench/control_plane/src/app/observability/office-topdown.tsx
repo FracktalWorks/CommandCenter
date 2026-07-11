@@ -620,8 +620,8 @@ export const TOPDOWN_STYLE = `
   text-transform:uppercase; color:#8a7c5c; display:flex; align-items:center; gap:6px;
   margin:0 2px 8px; }
 .oc-confs-grid { display:flex; flex-wrap:wrap; gap:16px; }
-/* two rooms per row, filling the office width with the row gap between them */
-.oc-cr { flex:1 1 320px; max-width:calc(50% - 8px); border-radius:14px;
+/* three rooms per row, filling the office width with the row gaps between them */
+.oc-cr { flex:1 1 220px; max-width:calc(33.333% - 11px); border-radius:14px;
   overflow:hidden; border:4px solid #cbbfa4;
   box-shadow: inset 0 0 0 2px #f5f0e4, 0 8px 22px rgba(0,0,0,.24);
   background:linear-gradient(#efe9dd,#e6ddcd); }
@@ -661,7 +661,7 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 /* the shared table (cropped to content) crossing the agents' fronts so it reads as
    ONE meeting table hiding their individual desks */
 .oc-cr-table { position:absolute; left:50%; bottom:8px; transform:translateX(-50%);
-  z-index:2; width:min(168px, 62%); image-rendering:pixelated;
+  z-index:2; width:min(138px, 58%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 /* plants standing in the room's bottom corners (table draws in front of their base) */
 .oc-cr-plant { position:absolute; bottom:8px; z-index:1; height:62px; image-rendering:pixelated;

@@ -1,22 +1,20 @@
-// AUTO-GENERATED - Honeytan (create_tiles_pro) zoned floor, gen_honeytan.py.
-// Base checker + plank lanes + corner accent + wood wall. Do not edit by hand.
+// AUTO-GENERATED - zoned office floor mosaics (create_tiles_pro), gen_honeytan.py.
+// Each zone is a mosaic of similar tile variations. Pre-upscaled; use natural size.
+// Do not edit by hand.
 
 export interface OfficeEnv {
-  /** Base repeating floor tile. */
+  /** Base floor mosaic (the majority of the room). */
   floor?: string;
-  /** On-screen tile repeat size in px. */
-  floorSize?: number;
-  /** Accent tile for the four room corners. */
+  /** Decorative accent mosaic for the four room corners. */
   corner?: string;
-  /** Plank tile for the walkway lanes between areas. */
+  /** Darker mosaic for the walkway lanes. */
   lane?: string;
-  /** Wood tile for the top wall band. */
+  /** Wood-plank mosaic for the top wall band. */
   wall?: string;
 }
 
 export const OFFICE_ENV: OfficeEnv = {
   floor: "/office-env/floor-floor.png",
-  floorSize: 64,
   corner: "/office-env/floor-corner.png",
   lane: "/office-env/floor-lane.png",
   wall: "/office-env/floor-wall.png",

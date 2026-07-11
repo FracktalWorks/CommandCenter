@@ -117,6 +117,22 @@ export function TopDownOffice({
   };
   const workingCount = roster.filter((a) => stateOf(a) === "working").length;
 
+  // Collaborations → conference tables. Concurrently-working agents are grouped
+  // (~2 per table) so tables multiply on the fly as more agents work together;
+  // a single empty table shows by default when nobody is collaborating. (A real
+  // backend collaboration signal can replace this heuristic later.)
+  const working = roster
+    .filter((a) => stateOf(a) === "working")
+    .map((a) => a.name)
+    .sort();
+  const collabs: string[][] = [];
+  if (working.length >= 2) {
+    for (let i = 0; i < working.length; i += 2) collabs.push(working.slice(i, i + 2));
+    const last = collabs[collabs.length - 1];
+    if (collabs.length > 1 && last.length === 1) collabs[collabs.length - 2].push(collabs.pop()![0]);
+  }
+  const stations: string[][] = collabs.length ? collabs : [[]];
+
   // Seamless generated floor tile (repeats to fill any room size); undefined until
   // the Pixel Lab tileset is built, in which case CSS falls back to a procedural floor.
   const roomStyle = OFFICE_ENV.floor
@@ -154,20 +170,26 @@ export function TopDownOffice({
               // eslint-disable-next-line @next/next/no-img-element
               <img key={p} className={`oc-prop ${corner}`} src={`/office-props/${p}.png`} alt="" aria-hidden />
             ))}
-            {/* Conference room — the shared collaboration zone (static for now;
-                agents will walk over here in a later pass). */}
-            <div className="oc-conf">
-              <span className="oc-conf-label">Conference Room</span>
-              <div className="oc-conf-stage">
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="oc-conf-rug" src="/office-props/rug.png" alt="" aria-hidden />
-                <span className="oc-chair oc-ch-t1" />
-                <span className="oc-chair oc-ch-t2" />
-                {/* eslint-disable-next-line @next/next/no-img-element */}
-                <img className="oc-conf-table" src="/office-props/conference-table.png" alt="" aria-hidden />
-                <span className="oc-chair oc-ch-b1" />
-                <span className="oc-chair oc-ch-b2" />
-              </div>
+            {/* Conference room — one table by default; more tables spawn as more
+                agents collaborate concurrently (static seats for now; agents will
+                walk over in a later pass). */}
+            <div className="oc-conf-zone">
+              {stations.map((members, i) => (
+                <div className="oc-conf" key={members.join("|") || `conf-${i}`}>
+                  <span className="oc-conf-label">
+                    {members.length ? members.join(" + ") : "Conference Room"}
+                  </span>
+                  <div className="oc-conf-stage">
+                    <span className="oc-rug" aria-hidden />
+                    {["oc-ch-t1", "oc-ch-t2", "oc-ch-b1", "oc-ch-b2"].map((ch) => (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img key={ch} className={`oc-chair ${ch}`} src="/office-props/chair.png" alt="" aria-hidden />
+                    ))}
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img className="oc-conf-table" src="/office-props/conference-table.png" alt="" aria-hidden />
+                  </div>
+                </div>
+              ))}
             </div>
             <div className="oc-grid">
               {roster.map((a) => (
@@ -223,35 +245,45 @@ export const TOPDOWN_STYLE = `
   box-shadow: inset 0 14px 26px rgba(0,0,0,.08), inset 0 -12px 22px rgba(0,0,0,.06);
 }
 
-/* Corner props stay pinned to the room corners at ANY size. */
-.oc-prop { position:absolute; height:46px; z-index:1; image-rendering:pixelated;
-  filter:drop-shadow(0 3px 3px rgba(0,0,0,.5)); pointer-events:none; }
-.oc-prop.oc-tl { top:8px;  left:12px; }
-.oc-prop.oc-tr { top:8px;  right:12px; }
-.oc-prop.oc-bl { bottom:10px; left:12px; }
-.oc-prop.oc-br { bottom:10px; right:12px; }
+/* Corner props stay pinned to the room corners at ANY size. Scaled to sit in
+   proportion to the seated agents (~90px), not tiny. */
+.oc-prop { position:absolute; height:74px; z-index:1; image-rendering:pixelated;
+  filter:drop-shadow(0 4px 3px rgba(0,0,0,.32)); pointer-events:none; }
+.oc-prop.oc-tl { top:8px;  left:14px; }
+.oc-prop.oc-tr { top:8px;  right:14px; }
+.oc-prop.oc-bl { bottom:12px; left:14px; }
+.oc-prop.oc-br { bottom:12px; right:14px; }
 
-/* Conference room — a distinct panelled zone at the top of the floor. Static
-   collaboration area; centered block so it stays responsive. */
-.oc-conf { position:relative; z-index:2; margin:0 auto 20px; width:min(420px, 100%);
-  padding:20px 14px 14px; border-radius:14px;
-  background:radial-gradient(120% 90% at 50% 40%, rgba(255,255,255,.42), rgba(0,0,0,.05));
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,.06), inset 0 0 22px rgba(0,0,0,.04);
+/* Conference zone — one table by default; wraps to a grid of tables as more
+   collaborations spawn. */
+.oc-conf-zone { position:relative; z-index:2; margin:0 auto 22px;
+  display:flex; flex-wrap:wrap; justify-content:center; gap:14px 18px; }
+/* One collaboration table = a panelled card. */
+.oc-conf { position:relative; width:250px; padding:16px 12px 12px; border-radius:14px;
+  background:radial-gradient(120% 90% at 50% 42%, rgba(255,255,255,.5), rgba(0,0,0,.05));
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.06), inset 0 0 20px rgba(0,0,0,.04);
   display:flex; flex-direction:column; align-items:center; gap:8px; }
-.oc-conf-label { font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.24em;
+.oc-conf-label { max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
+  font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.14em;
   text-transform:uppercase; color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
-.oc-conf-stage { position:relative; width:220px; height:132px;
-  display:flex; align-items:center; justify-content:center; }
-.oc-conf-rug { position:absolute; left:50%; top:52%; transform:translate(-50%,-50%);
-  width:210px; image-rendering:pixelated; opacity:.9;
-  filter:drop-shadow(0 4px 4px rgba(0,0,0,.45)); }
-.oc-conf-table { position:relative; z-index:2; width:170px; image-rendering:pixelated;
-  filter:drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
-/* empty seats around the table (small cushioned stools) */
-.oc-chair { position:absolute; z-index:1; width:20px; height:16px; border-radius:5px;
-  background:linear-gradient(#5bbcb0,#3f9a90); box-shadow:inset 0 -3px 0 rgba(0,0,0,.20), 0 2px 3px rgba(0,0,0,.28); }
-.oc-ch-t1 { top:14px; left:64px; } .oc-ch-t2 { top:14px; right:64px; }
-.oc-ch-b1 { bottom:16px; left:64px; } .oc-ch-b2 { bottom:16px; right:64px; }
+.oc-conf-stage { position:relative; width:224px; height:150px; }
+/* CSS area rug centered under the table (clean rectangle, no odd pixel shape). */
+.oc-rug { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  width:206px; height:126px; border-radius:12px;
+  background:linear-gradient(#efe7d6,#e3d8c0);
+  box-shadow: inset 0 0 0 4px rgba(255,255,255,.4), inset 0 0 0 6px rgba(0,0,0,.06),
+    0 4px 8px rgba(0,0,0,.12); }
+.oc-conf-table { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  z-index:2; width:172px; image-rendering:pixelated;
+  filter:drop-shadow(0 5px 4px rgba(0,0,0,.32)); }
+/* pixel-art meeting chairs hugging the table's long edges. The chair sprite is
+   drawn from behind (back toward viewer) — correct for the near/bottom seats; the
+   far/top seats flip vertically so their backs point away toward the wall. */
+.oc-chair { position:absolute; z-index:1; width:36px; image-rendering:pixelated;
+  filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
+.oc-ch-t1, .oc-ch-t2 { transform:scaleY(-1); }
+.oc-ch-t1 { top:22px; left:50px; } .oc-ch-t2 { top:22px; right:50px; }
+.oc-ch-b1 { bottom:22px; left:50px; } .oc-ch-b2 { bottom:22px; right:50px; }
 
 /* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. */
 .oc-grid { position:relative; z-index:2;
@@ -289,7 +321,7 @@ export const TOPDOWN_STYLE = `
   .oc-static { height:104px; }
   .oc-anim { --w:104px; }
   .oc-floor { padding:52px 8px 46px; }
-  .oc-prop { height:36px; }
+  .oc-prop { height:56px; }
   .oc-prop.oc-tr, .oc-prop.oc-br { display:none; }
   .oc-sign { display:none; }
 }

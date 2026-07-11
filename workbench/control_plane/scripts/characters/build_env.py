@@ -58,6 +58,12 @@ def main():
     floor, floor_rc, floor_wood = pick(floor_sheet, min)
     b, s = FLOOR_TONE
     floor = ImageEnhance.Color(ImageEnhance.Brightness(floor).enhance(b)).enhance(s)
+    # Warm nudge toward cream (pull blue/green down a touch) so it matches the
+    # warm floor palette the user liked.
+    r, g, bl, a = floor.split()
+    g = g.point(lambda v: int(v * 0.985))
+    bl = bl.point(lambda v: int(v * 0.93))
+    floor = Image.merge("RGBA", (r, g, bl, a))
     floor.save(f"{ENVDIR}/floor.png")
 
     # Wall: full-wood tile from the SAME sheet as the floor, so the wall matches

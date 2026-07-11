@@ -154,6 +154,66 @@ function Seat({
   );
 }
 
+/**
+ * A conference room that spawns dynamically when 2+ agents collaborate: a smaller
+ * room sharing the office aesthetic (same floor/wall tiles), with the collaborating
+ * agents seated together across a shared conference table. No loose chairs — each
+ * agent brings their own seated pose, and the table crosses their fronts so it reads
+ * as a real meeting. These render as separate cards below the office, not on the floor.
+ */
+function ConferenceRoom({
+  members,
+  stateFor,
+  onOpen,
+}: {
+  members: OfficeAgent[];
+  stateFor: (a: OfficeAgent) => OfficeState;
+  onOpen: (name: string) => void;
+}) {
+  return (
+    <div className="oc-cr">
+      <div className="oc-cr-wall">
+        <span className="oc-cr-sign">{members.map((m) => m.name).join("  +  ")}</span>
+      </div>
+      <div className="oc-cr-floor">
+        <div className="oc-cr-seats">
+          {members.map((a) => {
+            const c = OFFICE_CAST[characterFor(a.name)];
+            const st = stateFor(a);
+            const playTyping = st === "working" && Boolean(c?.working && c?.workingFrames);
+            return (
+              <button
+                key={a.name}
+                className={`oc-cr-fig oc-${st}`}
+                onClick={() => onOpen(a.name)}
+                title={a.description || a.name}
+              >
+                {playTyping ? (
+                  <span
+                    className="oc-anim"
+                    style={
+                      {
+                        "--sheet": `url(${c.working})`,
+                        "--n": c.workingFrames,
+                        "--w": "94px",
+                      } as React.CSSProperties
+                    }
+                  />
+                ) : (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img className="oc-static" src={c?.seated} alt={a.name} />
+                )}
+              </button>
+            );
+          })}
+        </div>
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img className="oc-cr-table" src="/office-props/conference-table.png" alt="" aria-hidden />
+      </div>
+    </div>
+  );
+}
+
 export function TopDownOffice({
   roster,
   hotAgents,
@@ -174,21 +234,22 @@ export function TopDownOffice({
   };
   const workingCount = roster.filter((a) => stateOf(a) === "working").length;
 
-  // Collaborations → conference tables. Concurrently-working agents are grouped
-  // (~2 per table) so tables multiply on the fly as more agents work together;
-  // a single empty table shows by default when nobody is collaborating. (A real
-  // backend collaboration signal can replace this heuristic later.)
-  const working = roster
+  // Collaborations → conference rooms. When 2+ agents work concurrently they pair up
+  // (~2-3 per room) and are shown meeting in a separate conference-room card instead
+  // of at their desks; nothing shows when nobody is collaborating. (A real backend
+  // collaboration signal can replace this heuristic later.)
+  const workingAgents = roster
     .filter((a) => stateOf(a) === "working")
-    .map((a) => a.name)
-    .sort();
-  const collabs: string[][] = [];
-  if (working.length >= 2) {
-    for (let i = 0; i < working.length; i += 2) collabs.push(working.slice(i, i + 2));
+    .sort((a, b) => a.name.localeCompare(b.name));
+  const collabs: OfficeAgent[][] = [];
+  if (workingAgents.length >= 2) {
+    for (let i = 0; i < workingAgents.length; i += 2) collabs.push(workingAgents.slice(i, i + 2));
     const last = collabs[collabs.length - 1];
     if (collabs.length > 1 && last.length === 1) collabs[collabs.length - 2].push(collabs.pop()![0]);
   }
-  const stations: string[][] = collabs.length ? collabs : [[]];
+  // Agents in a conference leave their desk; only the rest stay in the desk grid.
+  const conferencing = new Set(collabs.flat().map((a) => a.name));
+  const deskAgents = roster.filter((a) => !conferencing.has(a.name));
 
   // Seamless generated floor tile (repeats to fill any room size); undefined until
   // the Pixel Lab tileset is built, in which case CSS falls back to a procedural floor.
@@ -221,7 +282,8 @@ export function TopDownOffice({
           <p className="oc-mono text-sm text-muted-foreground">No agents registered yet.</p>
         </div>
       ) : (
-        <div className="oc-room" style={roomStyle}>
+        <div className="oc-office" style={roomStyle}>
+          <div className="oc-room">
           <div className="oc-wall">
             {/* eslint-disable-next-line @next/next/no-img-element */}
             <img className="oc-wallboard" src="/office-props/whiteboard.png" alt="" aria-hidden />
@@ -251,32 +313,8 @@ export function TopDownOffice({
                 />
               );
             })}
-            {/* Conference room — one table by default; more tables spawn as more
-                agents collaborate concurrently (static seats for now; agents will
-                walk over in a later pass). */}
-            <div className="oc-conf-zone">
-              {stations.map((members, i) => (
-                <div className="oc-conf" key={members.join("|") || `conf-${i}`}>
-                  <span className="oc-conf-label">
-                    {members.length ? members.join(" + ") : "Conference Room"}
-                  </span>
-                  <div className="oc-conf-stage">
-                    <span className="oc-rug" aria-hidden />
-                    {/* Seating gathered organically at the HEAD (top) of the table —
-                        a cluster of chairs with jittered offsets/tilt, backs to the
-                        wall (scaleY flip), rather than a rigid 4-around layout. */}
-                    {["oc-ch-a", "oc-ch-b", "oc-ch-c", "oc-ch-d", "oc-ch-e"].map((ch) => (
-                      // eslint-disable-next-line @next/next/no-img-element
-                      <img key={ch} className={`oc-chair ${ch}`} src="/office-props/chair.png" alt="" aria-hidden />
-                    ))}
-                    {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img className="oc-conf-table" src="/office-props/conference-table.png" alt="" aria-hidden />
-                  </div>
-                </div>
-              ))}
-            </div>
             <div className="oc-grid">
-              {roster.map((a, i) => {
+              {deskAgents.map((a, i) => {
                 // Green up ~every 3rd desk with a small plant (variant rotates).
                 const plantKey = i % 3 === 1 ? DESK_PLANTS[(i >> 1) % DESK_PLANTS.length] : null;
                 const plant = plantKey ? OFFICE_OBJECTS[plantKey]?.south ?? null : null;
@@ -286,6 +324,25 @@ export function TopDownOffice({
               })}
             </div>
           </div>
+          </div>
+          {collabs.length > 0 && (
+            <div className="oc-confs">
+              <div className="oc-confs-head">
+                <Building2 size={12} /> {collabs.length === 1 ? "Conference room" : "Conference rooms"} ·{" "}
+                {collabs.length} in session
+              </div>
+              <div className="oc-confs-grid">
+                {collabs.map((members, i) => (
+                  <ConferenceRoom
+                    key={members.map((m) => m.name).join("|") || `cr-${i}`}
+                    members={members}
+                    stateFor={stateOf}
+                    onOpen={onOpen}
+                  />
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -295,6 +352,10 @@ export function TopDownOffice({
 /** Injected once by the page. */
 export const TOPDOWN_STYLE = `
 .oc-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing:.02em; }
+
+/* Office wrapper — carries the shared floor/wall CSS vars so both the main room and
+   the conference-room cards inherit the same tileset. */
+.oc-office { display:block; }
 
 /* Outer room = the walls. Bright startup-office palette (light wood + beige). */
 .oc-room {
@@ -351,40 +412,46 @@ export const TOPDOWN_STYLE = `
 .oc-seat-plant { position:absolute; right:2px; bottom:12px; height:38px; z-index:2;
   image-rendering:pixelated; filter:drop-shadow(0 3px 2px rgba(0,0,0,.45)); }
 
-/* Conference zone — one table by default; wraps to a grid of tables as more
-   collaborations spawn. */
-.oc-conf-zone { position:relative; z-index:2; margin:0 auto 22px;
-  display:flex; flex-wrap:wrap; justify-content:center; gap:14px 18px; }
-/* One collaboration table = a panelled card. */
-.oc-conf { position:relative; width:250px; padding:16px 12px 12px; border-radius:14px;
-  background:radial-gradient(120% 90% at 50% 42%, rgba(255,255,255,.5), rgba(0,0,0,.05));
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,.06), inset 0 0 20px rgba(0,0,0,.04);
-  display:flex; flex-direction:column; align-items:center; gap:8px; }
-.oc-conf-label { max-width:230px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap;
-  font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.14em;
-  text-transform:uppercase; color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
-.oc-conf-stage { position:relative; width:224px; height:150px; }
-/* CSS area rug centered under the table (clean rectangle, no odd pixel shape). */
-.oc-rug { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  width:206px; height:126px; border-radius:12px;
-  background:linear-gradient(#efe7d6,#e3d8c0);
-  box-shadow: inset 0 0 0 4px rgba(255,255,255,.4), inset 0 0 0 6px rgba(0,0,0,.06),
-    0 4px 8px rgba(0,0,0,.12); }
-.oc-conf-table { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  z-index:2; width:172px; image-rendering:pixelated;
-  filter:drop-shadow(0 5px 4px rgba(0,0,0,.32)); }
-/* pixel-art meeting chairs hugging the table's long edges. The chair sprite is
-   drawn from behind (back toward viewer) — correct for the near/bottom seats; the
-   far/top seats flip vertically so their backs point away toward the wall. */
-.oc-chair { position:absolute; z-index:1; width:34px; image-rendering:pixelated;
-  filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); transform-origin:center bottom; }
-/* clustered at the head (top) of the table, jittered + tilted for an organic look;
-   all flipped so their backs point toward the wall, and behind the table (z<table). */
-.oc-ch-a { top:8px;  left:30px;  transform:scaleY(-1) rotate(8deg); }
-.oc-ch-b { top:0;    left:70px;  transform:scaleY(-1) rotate(3deg); }
-.oc-ch-c { top:2px;  left:112px; transform:scaleY(-1) rotate(-4deg); }
-.oc-ch-d { top:10px; left:152px; transform:scaleY(-1) rotate(-9deg); }
-.oc-ch-e { top:26px; left:92px;  width:30px; transform:scaleY(-1) rotate(2deg); }
+/* Conference rooms — separate cards below the office that spawn dynamically when
+   2+ agents collaborate. Each is a smaller room sharing the office tiles/walls, with
+   the collaborating agents seated together across a shared table. */
+.oc-confs { margin-top:18px; }
+.oc-confs-head { font-family:ui-monospace,monospace; font-size:11px; letter-spacing:.04em;
+  text-transform:uppercase; color:#8a7c5c; display:flex; align-items:center; gap:6px;
+  margin:0 2px 8px; }
+.oc-confs-grid { display:flex; flex-wrap:wrap; gap:16px; }
+.oc-cr { width:min(360px, 100%); flex:1 1 300px; max-width:420px; border-radius:14px;
+  overflow:hidden; border:4px solid #cbbfa4;
+  box-shadow: inset 0 0 0 2px #f5f0e4, 0 8px 22px rgba(0,0,0,.24);
+  background:linear-gradient(#efe9dd,#e6ddcd); }
+.oc-cr-wall { position:relative; z-index:2; height:30px; display:flex; align-items:center;
+  padding:0 12px;
+  background: linear-gradient(rgba(255,255,255,.22), rgba(0,0,0,.10)),
+    var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
+  background-size: cover, var(--oc-wall-bg,auto); background-repeat:no-repeat, repeat;
+  image-rendering:pixelated; border-bottom:3px solid #b6a67f; }
+.oc-cr-sign { font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.12em;
+  text-transform:uppercase; color:#5f5030; text-shadow:0 1px 0 rgba(255,255,255,.5);
+  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.oc-cr-floor { position:relative; height:150px; overflow:hidden;
+  background-color:#cbb89a; background-image: var(--oc-lane, none);
+  background-size: var(--oc-lane-bg, auto); background-repeat:repeat; image-rendering:pixelated; }
+.oc-cr-floor::before { content:''; position:absolute; inset:10px; z-index:0; pointer-events:none;
+  background-image: var(--oc-floor, none); background-size: var(--oc-floor-bg, auto);
+  background-repeat:repeat; image-rendering:pixelated; border-radius:4px;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.10), inset 0 10px 18px rgba(0,0,0,.05); }
+/* the agents, seated in a row and meeting */
+.oc-cr-seats { position:absolute; left:0; right:0; top:16px; z-index:1;
+  display:flex; justify-content:center; align-items:flex-end; gap:0; }
+.oc-cr-fig { position:relative; background:none; border:none; cursor:pointer; padding:0;
+  margin:0 -4px; line-height:0; }
+.oc-cr-fig .oc-static { height:94px; }
+.oc-cr-fig:hover { transform:translateY(-3px); transition:transform .15s; z-index:2; }
+/* the shared table (cropped to content) crossing the agents' fronts so it reads as
+   ONE meeting table hiding their individual desks */
+.oc-cr-table { position:absolute; left:50%; bottom:12px; transform:translateX(-50%);
+  z-index:2; width:min(300px, 86%); image-rendering:pixelated;
+  filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 
 /* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. Tighter
    cells + gap pull the agents' desks closer together. */

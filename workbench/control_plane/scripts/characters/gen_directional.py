@@ -67,8 +67,9 @@ SPEC = {
     "air-conditioner": f"a wall-mounted white split air-conditioner unit, front view, "
                        f"bold simple clean shapes, {STYLE}",
     # --- the shared conference table, in the office's high-top-down perspective ---
-    "conference-table": f"a long rectangular wooden conference meeting table, high "
-                        f"top-down view, bold simple clean shapes, {STYLE}",
+    "conference-table": f"a long rectangular conference meeting table made of light "
+                        f"beige tan wood, plain EMPTY flat top surface with no pattern "
+                        f"or decoration, high top-down view, bold simple clean, {STYLE}",
 }
 
 # Per-object generation size override (default SIZE). The conference table is bigger

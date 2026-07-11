@@ -94,7 +94,7 @@ function objHeight(obj: string, dir: string): number {
 // Wall-mounted fixtures are sized to the wall band explicitly (not floor-scaled).
 const WALL_FIX_H: Record<string, number> = {
   blackboard: 36, "notice-board": 36, "tv-screen": 32, "wall-clock": 32,
-  window: 42, "air-conditioner": 34,
+  window: 52, "air-conditioner": 46,
 };
 
 // Furniture is grouped into wall-hugging CLUSTERS, each rendered as a flex box so its
@@ -538,8 +538,9 @@ export const TOPDOWN_STYLE = `
 .oc-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing:.02em; }
 
 /* Office wrapper — carries the shared floor/wall CSS vars so both the main room and
-   the conference-room cards inherit the same tileset. */
-.oc-office { display:block; }
+   the conference-room cards inherit the same tileset. Capped + centred so on a wide
+   monitor it stays a RECTANGLE (~6 desks across) instead of stretching into a strip. */
+.oc-office { display:block; max-width:900px; margin-inline:auto; }
 
 /* Outer room = the walls. Bright startup-office palette (light wood + beige). */
 .oc-room {
@@ -643,9 +644,9 @@ export const TOPDOWN_STYLE = `
   background:rgba(255,255,255,.8); box-shadow:0 1px 2px rgba(0,0,0,.14);
   text-shadow:0 1px 1px rgba(255,255,255,.6);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* air-conditioner mounted at the CENTRE of the conference-room wall */
-.oc-cr-ac { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
-  height:26px; z-index:3; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
+/* air-conditioner mounted high (top edge), horizontally centred, on the conf wall */
+.oc-cr-ac { position:absolute; left:50%; top:1px; transform:translateX(-50%);
+  height:30px; z-index:3; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 .oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:12px; }
 .oc-cr-fiximg { height:26px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
@@ -667,8 +668,8 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-fig:hover { transform:translateY(-3px); transition:transform .15s; z-index:2; }
 /* the shared table (cropped to content) crossing the agents' fronts so it reads as
    ONE meeting table hiding their individual desks */
-.oc-cr-table { position:absolute; left:50%; bottom:6px; transform:translateX(-50%);
-  z-index:2; width:min(200px, 74%); image-rendering:pixelated;
+.oc-cr-table { position:absolute; left:50%; bottom:8px; transform:translateX(-50%);
+  z-index:2; width:min(168px, 62%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 /* plants standing in the room's bottom corners (table draws in front of their base) */
 .oc-cr-plant { position:absolute; bottom:8px; z-index:1; height:62px; image-rendering:pixelated;
@@ -679,7 +680,7 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 /* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. Tight
    cells + gap pack the agents' desks close together. */
 .oc-grid { position:relative; z-index:2;
-  display:grid; grid-template-columns:repeat(auto-fill, minmax(108px, 1fr));
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(122px, 1fr));
   gap:0 2px; justify-items:center; }
 
 .oc-seat { position:relative; display:flex; flex-direction:column; align-items:center;

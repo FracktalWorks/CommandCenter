@@ -271,8 +271,8 @@ function Seat({
             alert triangle when errored. No text pill — the agent's pose says the rest. */}
         {state === "idle" && <span className="oc-badge oc-b-idle">z</span>}
         {state === "working" && (
-          <span className="oc-seat-bubble" title={tool ? `Using ${tool}` : "working"}>
-            <WorkIcon size={15} strokeWidth={2.6} />
+          <span className="oc-badge oc-b-working" title={tool ? `Using ${tool}` : "working"}>
+            <WorkIcon size={14} strokeWidth={2.5} />
           </span>
         )}
         {state === "error" && (
@@ -705,7 +705,7 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
 /* discussion: the current speaker leans in + pops a chat bubble above the head */
 .oc-cr-speaking { transform:translateY(-4px) scale(1.07); transition:transform .3s; z-index:4; }
-.oc-cr-bubble { position:absolute; top:-2px; left:50%; margin-left:-9px;
+.oc-cr-bubble { position:absolute; top:16px; left:62%; margin-left:-9px;
   width:18px; height:18px; border-radius:50% 50% 50% 3px; display:flex;
   align-items:center; justify-content:center; color:#3a6ea5;
   background:rgba(255,255,255,.95); border:1px solid rgba(0,0,0,.16);
@@ -760,13 +760,6 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   text-shadow:0 1px 1px rgba(255,255,255,.6); }
 .oc-b-working { color:#2a7fff; }
 .oc-b-error { color:#e0392f; animation-duration:1.5s; }
-/* working agents show their CURRENT TOOL icon in a clean chat bubble above the head
-   (same look as the conference-room discussion bubble). */
-.oc-seat-bubble { position:absolute; top:4px; left:50%; margin-left:-13px; z-index:4;
-  width:26px; height:26px; border-radius:50% 50% 50% 4px; display:flex;
-  align-items:center; justify-content:center; color:#3a6ea5;
-  background:rgba(255,255,255,.96); border:1px solid rgba(0,0,0,.16);
-  box-shadow:0 2px 3px rgba(0,0,0,.3); animation:oc-pop .25s ease-out; }
 
 .oc-plate { margin-top:-2px; text-align:center; z-index:3; }
 /* the agent NAME styled as a readable pill (like the old status indicator) */

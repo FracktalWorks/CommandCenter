@@ -131,8 +131,16 @@ const WALL_FIXTURES: ClItem[] = [
   { obj: "tv-screen", dir: "south" },
   { obj: "wall-clock", dir: "south" },
 ];
-// A couple of fixtures mounted on the conference-room wall too.
-const CR_FIXTURES = ["tv-screen", "wall-clock"];
+// Pool of fixtures for the conference-room wall; each room picks 2 (deterministically
+// from its members, so it's stable per room across renders but varies between rooms).
+const CR_FIX_POOL = ["tv-screen", "wall-clock", "notice-board", "blackboard"];
+function crFixturesFor(members: OfficeAgent[]): string[] {
+  const key = members.map((m) => m.name).join("|");
+  let h = 0;
+  for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
+  const start = Math.abs(h) % CR_FIX_POOL.length;
+  return [CR_FIX_POOL[start], CR_FIX_POOL[(start + 1) % CR_FIX_POOL.length]];
+}
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
 const ROLE_TO_CHAR: Record<string, string> = {
@@ -222,7 +230,7 @@ function ConferenceRoom({
       <div className="oc-cr-wall">
         <span className="oc-cr-sign">{members.map((m) => m.name).join("  +  ")}</span>
         <div className="oc-cr-fix">
-          {CR_FIXTURES.map((obj) => {
+          {crFixturesFor(members).map((obj) => {
             const src = OFFICE_OBJECTS[obj]?.south;
             if (!src) return null;
             return (
@@ -460,7 +468,7 @@ export const TOPDOWN_STYLE = `
 /* Floor — the darker lane tile frames the office as a thin BORDER (matching the
    conference-room cards); an inset ::before field carries the main floor tile. */
 .oc-floor {
-  position:relative; padding:50px 82px 44px;
+  position:relative; padding:60px 82px 46px;
   background-color:#cbb89a;
   background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto);
@@ -483,15 +491,16 @@ export const TOPDOWN_STYLE = `
   pointer-events:none; }
 .oc-obj { display:block; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.30)); }
-/* negative offsets tuck the wall-side pieces slightly UNDER the walls (behind the
-   opaque wall band / room border) so they read as sitting against the wall. */
-.oc-cl-tl { top:-12px; left:6px; }
-.oc-cl-tr { top:-12px; right:6px; }
-.oc-cl-bl { bottom:-6px; left:6px; }
-.oc-cl-br { bottom:-6px; right:6px; }
-.oc-cl-lm { top:47%; left:-8px; transform:translateY(-50%);
+/* small positive offsets keep the pieces IN FRONT of the wall band / room frame
+   (never behind it) so nothing gets clipped, while still sitting on the border tiles
+   right against the wall. */
+.oc-cl-tl { top:4px; left:10px; }
+.oc-cl-tr { top:4px; right:10px; }
+.oc-cl-bl { bottom:4px; left:10px; }
+.oc-cl-br { bottom:4px; right:10px; }
+.oc-cl-lm { top:47%; left:6px; transform:translateY(-50%);
   flex-direction:column; align-items:flex-start; gap:5px; }
-.oc-cl-rm { top:47%; right:-8px; transform:translateY(-50%);
+.oc-cl-rm { top:47%; right:6px; transform:translateY(-50%);
   flex-direction:column; align-items:flex-end; gap:5px; }
 /* small potted plant tucked beside a desk to green up the grid */
 .oc-seat-plant { position:absolute; right:2px; bottom:12px; height:38px; z-index:2;

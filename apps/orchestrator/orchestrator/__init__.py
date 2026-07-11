@@ -1,1 +1,1 @@
-"""LangGraph + Deep Agents orchestrator (WBS 0.5, 0.7)."""
+"""MAF orchestrator — dynamic agent loader + executor (WBS 0.5, 0.7)."""

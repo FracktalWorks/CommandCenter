@@ -1,6 +1,8 @@
-"""Output guardrails (citation enforcement, schema validation, second-pass verify).
+"""Output guardrails.
 
-Phase-0 placeholder; real implementation lands with WBS 0.8.
+Currently implements citation enforcement/repair (Levenshtein-based) — used by
+the pull agents and the gateway pull endpoints. Schema validation and a
+second-pass verify pass are intended extensions, not yet implemented.
 """
 from __future__ import annotations
 

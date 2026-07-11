@@ -22,10 +22,11 @@ directly — see §5 of ``ai-company-brain/agent_repo_compatibility.md``.
 
 - Credentials are resolved *at run time* from the server process environment
   (set via ``infra/docker-compose.yml`` / Hostinger secrets manager).
-- They are injected into the LangGraph state dict, which is serialised to
-  Postgres via the checkpointer.  **Do not store unencrypted secrets in the
-  checkpointer in production** — encrypt the Postgres volume and restrict DB
-  access to the gateway/orchestrator service account.
+- They are injected into the agent run's environment/state. Where a run's
+  state is persisted, secrets can reach Postgres in the clear. **Do not rely on
+  application-level encryption for these** — encrypt the Postgres volume and
+  restrict DB access to the gateway/orchestrator service account. (See
+  FOUNDATION_BUILDOUT_CHECKLIST.md BO-7 for the sandbox/secret-scoping plan.)
 - OAuth refresh tokens: if a skill raises ``IntegrationAuthError``, the
   executor should refresh and retry once (not yet implemented — Phase 2).
 """

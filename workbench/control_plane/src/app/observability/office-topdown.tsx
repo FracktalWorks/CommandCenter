@@ -16,7 +16,56 @@
 
 import React from "react";
 
-import { Building2, Coins, Cog, TriangleAlert } from "lucide-react";
+import {
+  Building2,
+  Calendar,
+  Cog,
+  Coins,
+  Database,
+  FileText,
+  GitBranch,
+  Globe,
+  ListTodo,
+  Mail,
+  MessageCircleQuestion,
+  PenTool,
+  PencilLine,
+  Search,
+  Send,
+  Share2,
+  Stethoscope,
+  Terminal,
+  TriangleAlert,
+  Wrench,
+} from "lucide-react";
+
+// Granular observability: map the tool an agent is CURRENTLY calling to a lucide icon
+// shown on the agent (top-right badge). Ordered rules — first match wins, most
+// specific first — so any tool name (read_email, gtd_add_task, web_search, git_push…)
+// resolves to a sensible icon, falling back to a generic wrench.
+type IconType = typeof Cog;
+const TOOL_ICON_RULES: Array<[RegExp, IconType]> = [
+  [/send|dispatch|deliver/, Send],
+  [/mail|email|inbox|reply|thread|message/, Mail],
+  [/web|search|browse|google|lookup|find_/, Search],
+  [/diagnos|lint|error|test|verify|check/, Stethoscope],
+  [/git|commit|push|pull|branch|\bpr\b|merge/, GitBranch],
+  [/diagram|draw|chart|render|image|figure/, PenTool],
+  [/artifact|share|export|upload|publish/, Share2],
+  [/task|gtd|todo|ticket|clickup|reclarify/, ListTodo],
+  [/calendar|schedule|meeting|event|remind/, Calendar],
+  [/ask|question|clarify|confirm/, MessageCircleQuestion],
+  [/sql|database|postgres|\bdb\b|record/, Database],
+  [/http|fetch|\bapi\b|url|request/, Globe],
+  [/write|edit|create_|update_|save|note|draft/, PencilLine],
+  [/shell|bash|exec|run_|command|terminal|code|python/, Terminal],
+  [/read|get_|open|view|list|file|doc|load|query/, FileText],
+];
+function toolIcon(tool: string): IconType {
+  const t = tool.toLowerCase();
+  for (const [re, Icon] of TOOL_ICON_RULES) if (re.test(t)) return Icon;
+  return Wrench;
+}
 
 import { OFFICE_CAST } from "./office-cast.generated";
 import { OFFICE_ENV } from "./office-env.generated";
@@ -157,21 +206,26 @@ export function characterFor(name: string): string {
 
 // A small potted plant tucked beside a desk (front-facing sprite), used to green up
 // the desk grid. Rotates through the small-plant variants so the room isn't uniform.
-const DESK_PLANTS = ["plant-small", "plant-cactus", "plant-monstera", "plant-hanging"];
+const DESK_PLANTS = ["plant-small", "plant-cactus", "plant-monstera"];
 
 function Seat({
   agent,
   state,
   onOpen,
   plant,
+  tool,
 }: {
   agent: OfficeAgent;
   state: OfficeState;
   onOpen: (name: string) => void;
   plant?: string | null;
+  tool?: string | null;
 }) {
   const key = characterFor(agent.name);
   const c = OFFICE_CAST[key];
+  // When working, the badge is the CURRENT TOOL's icon (granular observability);
+  // a generic cog when the tool is unknown.
+  const WorkIcon = tool ? toolIcon(tool) : Cog;
   // Working agents play the seated TYPING animation (custom v3 — keeps the seated
   // pose). Idle/error use the static seated sprite with CSS breathe/shake. (The
   // breathing-idle TEMPLATE animates a standing skeleton, so it isn't used.)
@@ -197,8 +251,8 @@ function Seat({
             alert triangle when errored. No text pill — the agent's pose says the rest. */}
         {state === "idle" && <span className="oc-badge oc-b-idle">z</span>}
         {state === "working" && (
-          <span className="oc-badge oc-b-working">
-            <Cog size={14} strokeWidth={2.5} />
+          <span className="oc-badge oc-b-working" title={tool ? `Using ${tool}` : "working"}>
+            <WorkIcon size={14} strokeWidth={2.5} />
           </span>
         )}
         {state === "error" && (
@@ -292,12 +346,15 @@ function ConferenceRoom({
 export function TopDownOffice({
   roster,
   hotAgents,
+  agentTools,
   todayCost,
   fmtCost,
   onOpen,
 }: {
   roster: OfficeAgent[];
   hotAgents: Set<string>;
+  /** name -> the tool that agent is CURRENTLY calling (granular observability). */
+  agentTools?: Record<string, string>;
   todayCost: number;
   fmtCost: (n?: number | null) => string;
   onOpen: (name: string) => void;
@@ -403,7 +460,14 @@ export function TopDownOffice({
                 const plantKey = i % 3 === 1 ? DESK_PLANTS[(i >> 1) % DESK_PLANTS.length] : null;
                 const plant = plantKey ? OFFICE_OBJECTS[plantKey]?.south ?? null : null;
                 return (
-                  <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} plant={plant} />
+                  <Seat
+                    key={a.name}
+                    agent={a}
+                    state={stateOf(a)}
+                    onOpen={onOpen}
+                    plant={plant}
+                    tool={agentTools?.[a.name] ?? null}
+                  />
                 );
               })}
             </div>
@@ -588,7 +652,7 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 /* Status badge — the ONLY status cue: a small icon at the agent's top-right that
    floats up and fades on a loop (inspired by the sleep "z"). z = sleeping,
    cog = working/thinking, alert-triangle = error. No text pill. */
-.oc-badge { position:absolute; top:2px; right:28px; z-index:3; display:flex;
+.oc-badge { position:absolute; top:24px; right:26px; z-index:3; display:flex;
   align-items:center; justify-content:center; line-height:0;
   filter:drop-shadow(0 1px 1px rgba(255,255,255,.6));
   animation: oc-float 2.6s ease-in-out infinite; }

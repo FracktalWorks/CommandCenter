@@ -9,7 +9,6 @@
   "plant-palm": "f69336ab-646c-442d-b45e-f5f79e33beaf",
   "plant-cactus": "f4cbb951-d5b2-459b-93f8-4a100a3ed820",
   "plant-monstera": "4ecc76da-42b5-4482-9d52-b4bc792d4eb2",
-  "plant-hanging": "5fb119b0-d7c5-44e2-926b-ad239f137e93",
   "bookshelf-wide": "ec323881-fd6c-4b78-b458-9191f9b86491",
   "shelf-files": "d0d63bf2-df95-48c7-9fed-0a956ecf5477",
   "printer-3d": "ae9b85dd-7080-4ce6-80a1-4bd933046fdf",
@@ -22,9 +21,10 @@
   "printer-office": "087ec6eb-81aa-4c18-9d66-b162f020347c",
   "desk-computer": "8022a6ed-e85b-4ace-90e8-e2608046e4d7",
   "table-plant": "ef106dc8-2c9a-4a01-b5c6-e241f6606d6b",
-  "counter-coffee": "579ac868-2bf5-4efb-b752-497bec51beb5",
   "wall-clock": "016bb33c-ab43-403d-a449-4f878842580c",
   "tv-screen": "47b47c8f-1474-4e0a-a1d2-ce01569d2210",
   "notice-board": "ef746659-8100-4293-9e3a-3d861fcddc18",
-  "blackboard": "c207648f-f09a-4150-9fa7-791024e67335"
+  "blackboard": "c207648f-f09a-4150-9fa7-791024e67335",
+  "plant-hanging": "2470632d-bd3f-42f1-88f8-cbf4b5a86c36",
+  "counter-coffee": "623f73dc-94b2-4ade-b91e-8aded01c70eb"
 }

@@ -2759,6 +2759,19 @@ async def run_agent_stream(
     except Exception:  # noqa: BLE001
         pass
 
+    # Tool-call activations (E2 granular observability): publish a kind:"tool"
+    # event when the agent starts/finishes a tool so /observability can show the
+    # EXACT tool on the agent's avatar. Best-effort; inherits agent/run context.
+    def _emit_tool(_name: str, _phase: str) -> None:
+        try:
+            from acb_common import publish_activity  # noqa: PLC0415
+            publish_activity(
+                kind="tool", phase=_phase, tool=_name,
+                agent=agent_name, run_id=run_id, source=_corr_source,
+            )
+        except Exception:  # noqa: BLE001
+            pass
+
     # ── Stream relay: tee all SSE events to Redis for reconnection support ─
     _relay_token = _stream_relay_thread_id.set(thread_id)
     # Expose the run's model so sub-agents inherit the parent tier. Seed with the
@@ -3207,6 +3220,7 @@ async def run_agent_stream(
                                         _ev.get("toolCallName") or "tool"
                                     )
                                     _tc_args[_cid] = str(_ev.get("args") or "")
+                                    _emit_tool(_tc_name[_cid], "start")
                                 elif _et == "TOOL_CALL_ARGS":
                                     _cid = str(_ev.get("toolCallId") or "")
                                     _tc_args[_cid] = _tc_args.get(_cid, "") + str(
@@ -3223,6 +3237,7 @@ async def run_agent_stream(
                                         _tc_args.get(_cid, ""),
                                     ):
                                         _loop_tripped = True
+                                    _emit_tool(_tc_name.get(_cid, "tool"), "end")
                                     _tc_name.pop(_cid, None)
                                     _tc_args.pop(_cid, None)
                                 else:
@@ -3515,6 +3530,9 @@ async def run_agent_stream(
                 ) -> list[dict[str, Any]]:
                     _extra: list[dict[str, Any]] = []
                     _emitted_todo = False
+                    # granular observability: mark this tool as the agent's current
+                    # one (cleared on the agent-run end event / TTL on the client).
+                    _emit_tool(_tc_name, "start")
                     # Structured todo-list tracking — two paths to the same
                     # TODO_LIST event: manage_todo_list (primary) and the
                     # legacy sql-on-todos fallback via _TodoTracker.

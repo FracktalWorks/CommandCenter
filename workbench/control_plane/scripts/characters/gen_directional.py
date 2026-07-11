@@ -34,7 +34,8 @@ SPEC = {
     "plant-palm": f"a tall potted areca palm with wide fronds in a woven basket, {STYLE}",
     "plant-cactus": f"a small potted cactus in a painted clay pot, {STYLE}",
     "plant-monstera": f"a leafy monstera plant in a modern grey pot, {STYLE}",
-    "plant-hanging": f"a small trailing pothos plant in a hanging pot, {STYLE}",
+    "plant-hanging": f"a lush leafy potted pothos plant with trailing vines in a "
+                     f"round ceramic pot on the floor, crisp readable, {STYLE}",
     # --- more bookshelf variety ---
     "bookshelf-wide": f"a low wide wooden bookcase with books and a few plants on top, {STYLE}",
     "shelf-files": f"a wooden shelf stacked with binders, folders and boxes, {STYLE}",
@@ -52,8 +53,8 @@ SPEC = {
                      f"keyboard on top of it, {STYLE}",
     "table-plant": f"a small round wooden side table with a green potted plant "
                    f"sitting on top of it, {STYLE}",
-    "counter-coffee": f"a wooden kitchen counter cabinet with an espresso machine "
-                      f"and mugs on top of it, {STYLE}",
+    "counter-coffee": f"a small wooden coffee bar counter with a chrome espresso "
+                      f"machine and a mug clearly on top, crisp readable, {STYLE}",
     # --- back-wall mounted fixtures (front-facing) ---
     "wall-clock": f"a round analog wall clock, {STYLE}",
     "tv-screen": f"a wall-mounted flat-screen TV showing a colourful picture, {STYLE}",

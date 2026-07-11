@@ -52,6 +52,7 @@ interface ActivityEvent {
   run_id?: string;
   source?: string;
   status?: string;
+  tool?: string; // for kind:"tool" events — the tool being called
   duration_ms?: number;
   tokens?: number;
   cost_usd?: number | null;
@@ -107,6 +108,13 @@ interface CostData {
 const MAX_FEED = 300;
 const MODEL_TTL_MS = 12_000; // a model counts as "active" for this long after a call
 const AGENT_HOT_MS = 15_000; // an agent glows "working" this long after a start
+const TOOL_TTL_MS = 12_000; // a tool badge lingers this long after its last event
+// Realistic tool names used only by sim mode to demo the per-tool agent badges.
+const SIM_TOOLS = [
+  "read_email", "send_email", "draft_reply", "query_inbox", "web_search",
+  "run_diagnostics", "git_push", "gtd_add_task", "create_diagram",
+  "share_artifact", "ask_questions", "run_command", "schedule_meeting",
+];
 
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -253,12 +261,14 @@ function ServerRack({ blades }: { blades: ModelBlade[] }) {
 function OfficeView({
   roster,
   hotAgents,
+  agentTools,
   blades,
   todayCost,
   onOpen,
 }: {
   roster: AgentRow[];
   hotAgents: Set<string>;
+  agentTools: Record<string, string>;
   blades: ModelBlade[];
   todayCost: number;
   onOpen: (name: string) => void;
@@ -269,6 +279,7 @@ function OfficeView({
         <TopDownOffice
           roster={roster}
           hotAgents={hotAgents}
+          agentTools={agentTools}
           todayCost={todayCost}
           fmtCost={fmtCost}
           onOpen={onOpen}
@@ -743,6 +754,8 @@ export default function ObservabilityPage() {
   const [cost, setCost] = useState<CostData | null>(null);
   const [models, setModels] = useState<Record<string, ModelBlade>>({});
   const [hotAgents, setHotAgents] = useState<Record<string, number>>({});
+  // name -> the tool that agent is CURRENTLY calling (+ last-seen ts for TTL).
+  const [agentTool, setAgentTool] = useState<Record<string, { tool: string; ts: number }>>({});
   const [connected, setConnected] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [, forceTick] = useState(0);
@@ -789,6 +802,28 @@ export default function ObservabilityPage() {
       if (e.kind === "agent" && e.agent && e.phase === "start") {
         const name = e.agent;
         setHotAgents((prev) => ({ ...prev, [name]: Date.now() }));
+      }
+      // Tool-level observability: a kind:"tool" start pins the agent's current tool;
+      // its end (or the agent run ending) clears it.
+      if (e.kind === "tool" && e.agent && e.tool) {
+        const name = e.agent;
+        if (e.phase === "end") {
+          setAgentTool((prev) => {
+            if (prev[name]?.tool !== e.tool) return prev;
+            const { [name]: _drop, ...rest } = prev;
+            return rest;
+          });
+        } else {
+          setAgentTool((prev) => ({ ...prev, [name]: { tool: e.tool as string, ts: Date.now() } }));
+        }
+      }
+      if (e.kind === "agent" && e.agent && e.phase === "end") {
+        const name = e.agent;
+        setAgentTool((prev) => {
+          if (!(name in prev)) return prev;
+          const { [name]: _drop, ...rest } = prev;
+          return rest;
+        });
       }
     }
   }, []);
@@ -841,6 +876,27 @@ export default function ObservabilityPage() {
       clearInterval(id);
     };
   }, [simMode, pushEvents]);
+
+  // Sim: give each working agent a (stable) current tool so the per-tool badges
+  // demo end-to-end without the backend. A tool persists while the agent stays
+  // working and clears when it stops.
+  useEffect(() => {
+    if (!simMode) return;
+    setAgentTool((prev) => {
+      const now = Date.now();
+      const next: Record<string, { tool: string; ts: number }> = {};
+      for (const a of roster) {
+        const working = a.status === "working" || a.name in hotAgents;
+        if (!working) continue;
+        next[a.name] =
+          prev[a.name] ?? {
+            tool: SIM_TOOLS[Math.floor(Math.random() * SIM_TOOLS.length)],
+            ts: now,
+          };
+      }
+      return next;
+    });
+  }, [roster, hotAgents, simMode]);
 
   // Backfill
   useEffect(() => {
@@ -944,16 +1000,33 @@ export default function ObservabilityPage() {
         }
         return changed ? next : prev;
       });
+      if (!simMode) {
+        // In sim, tools are synced from the roster; only prune for the live path.
+        setAgentTool((prev) => {
+          const next: Record<string, { tool: string; ts: number }> = {};
+          let changed = false;
+          for (const [k, v] of Object.entries(prev)) {
+            if (now - v.ts < TOOL_TTL_MS) next[k] = v;
+            else changed = true;
+          }
+          return changed ? next : prev;
+        });
+      }
       forceTick((n) => n + 1);
     }, 1500);
     return () => clearInterval(id);
-  }, []);
+  }, [simMode]);
 
   const blades = useMemo(
     () => Object.values(models).sort((a, b) => b.lastTs - a.lastTs),
     [models],
   );
   const hotSet = useMemo(() => new Set(Object.keys(hotAgents)), [hotAgents]);
+  const agentTools = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [name, v] of Object.entries(agentTool)) out[name] = v.tool;
+    return out;
+  }, [agentTool]);
   const todayCost = cost?.days.length ? cost.days[cost.days.length - 1].cost : 0;
   const workingNow = roster.filter((a) => a.status === "working" || hotSet.has(a.name)).length;
 
@@ -1014,6 +1087,7 @@ export default function ObservabilityPage() {
           <OfficeView
             roster={roster}
             hotAgents={hotSet}
+            agentTools={agentTools}
             blades={blades}
             todayCost={todayCost}
             onOpen={setSelected}

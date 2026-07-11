@@ -25,6 +25,7 @@ import mcp
 OUT = "../../public/office-env"
 TS = "../../src/app/observability/office-env.generated.ts"
 TILE_PX = 40       # on-screen size of ONE tile (was ~64; smaller now)
+WALL_TILE_PX = 118  # walls: BIG tiles → few, wide, full-height slats (less busy)
 SEED = 7           # deterministic mosaic layout
 
 SETS = {
@@ -39,9 +40,9 @@ ALL_ROT = [0, 90, 180, 270]
 ZONES = {
     "floor": ("cream", [13], 8, 8, ALL_ROT),         # the decorative tile everywhere
     "lane": ("cream", [12, 15], 6, 2, ALL_ROT),      # darker tile: office BORDER frame
-    # NEW wall slats — cohesive warm planks (skip #3 crosshatch); no rotation so the
-    # vertical slats stay vertical + seamless.
-    "wall": ("wallslats", [0, 1, 4, 5, 6, 9, 10, 14], 8, 2, [0]),
+    # NEW wall slats — ONE row (full-height slats, no horizontal seam) of only the
+    # LIGHTEST planks (0/4/5), displayed big (WALL_TILE_PX) so slats are few + wide.
+    "wall": ("wallslats", [0, 4, 5], 6, 1, [0]),
 }
 # role -> (brightness, saturation) multipliers. Floor: flat + a bit darker (less white).
 TONE = {"floor": (1.0, 0.5)}
@@ -84,7 +85,8 @@ def main():
         name = f"floor-{role}.png"
         img.save(f"{OUT}/{name}")
         saved[role] = f"/office-env/{name}"
-        bg[role] = f"{cols * TILE_PX}px"   # background-size (width); height auto
+        _px = WALL_TILE_PX if role == "wall" else TILE_PX
+        bg[role] = f"{cols * _px}px"   # background-size (width); height auto
         print(f"{role} <- {set_key}{idxs} {cols}x{rows} rot{rots} -> {name} {img.size}")
 
     lines = [

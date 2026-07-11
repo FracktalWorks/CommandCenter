@@ -11,5 +11,5 @@ export interface OfficeEnv {
 export const OFFICE_ENV: OfficeEnv = {
   floor: "/office-env/floor-floor.png", floorBg: "320px",
   lane: "/office-env/floor-lane.png", laneBg: "240px",
-  wall: "/office-env/floor-wall.png", wallBg: "320px",
+  wall: "/office-env/floor-wall.png", wallBg: "708px",
 };

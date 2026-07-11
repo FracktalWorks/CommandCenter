@@ -9,14 +9,25 @@ Serves both /v1/chat/completions (OpenAI standard) and /chat/completions (some S
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
+from acb_auth import require_internal_auth
 from acb_common import get_logger
 from acb_llm.client import _ensure_keys_loaded
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 _log = get_logger("v1")
+
+# Whether to honour a caller-supplied ``api_base``/``api_key`` in the request
+# body (for Ollama / vLLM / self-hosted endpoints). OFF by default: an
+# untrusted body could point the server at an arbitrary URL (SSRF/relay). No
+# internal caller sends these in the body today — they configure the provider
+# on their own client — so default-off is safe. Opt in per deployment.
+_ALLOW_CALLER_ENDPOINT_OVERRIDE = os.environ.get(
+    "V1_ALLOW_CALLER_ENDPOINT_OVERRIDE", "0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # Mount at /v1 (OpenAI standard) and also at root for SDKs that omit the prefix.
 router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
@@ -162,9 +173,16 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     temperature = body.get("temperature", 0.2)
     max_tokens = body.get("max_tokens", 4096)
     stream = body.get("stream", False)
-    # Passthrough: custom api_base for Ollama / vLLM / self-hosted endpoints.
-    api_base = body.get("api_base") or None
-    api_key = body.get("api_key") or None
+    # Passthrough: custom api_base/api_key for Ollama / vLLM / self-hosted
+    # endpoints — only when explicitly enabled (SSRF guard; see module top).
+    if _ALLOW_CALLER_ENDPOINT_OVERRIDE:
+        api_base = body.get("api_base") or None
+        api_key = body.get("api_key") or None
+    else:
+        api_base = None
+        api_key = None
+        if body.get("api_base") or body.get("api_key"):
+            _log.warning("v1.caller_endpoint_override_ignored")
 
     import litellm as _litellm  # type: ignore[import-untyped]
     from litellm import acompletion  # type: ignore[import-untyped]
@@ -229,8 +247,18 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                     yield f"data: {json.dumps(data)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as exc:
+                # Log the detail server-side; return a generic message so
+                # provider payloads / URLs / key fragments in the exception
+                # string are not disclosed to the caller.
                 _log.exception("v1.stream_error")
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+                yield (
+                    "data: "
+                    + json.dumps({"error": {
+                        "message": "upstream completion error",
+                        "type": type(exc).__name__,
+                    }})
+                    + "\n\n"
+                )
             finally:
                 # Observability (E2): rebuild usage from the streamed chunks
                 # (litellm's own stream aggregator) → emit the model activation +
@@ -268,19 +296,29 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
             pass
         return dict(response) if hasattr(response, "items") else response  # type: ignore[return-value]
     except Exception as exc:
+        # Log detail server-side; return a generic message (no raw provider
+        # exception string) to avoid leaking URLs / payloads / key fragments.
         _log.exception("v1.completion_error")
         return {
             "error": {
-                "message": str(exc),
+                "message": "upstream completion error",
                 "type": type(exc).__name__,
             }
         }
 
 
 # Register on both /v1/chat/completions and /chat/completions
-# response_model=None because we return either StreamingResponse or dict
-router_v1.post("/chat/completions", response_model=None)(_handle_chat_completions)
-router_root.post("/chat/completions", response_model=None)(_handle_chat_completions)
+# response_model=None because we return either StreamingResponse or dict.
+# require_internal_auth 401s any caller without the internal Bearer token —
+# this endpoint bills the server's stored provider keys, so it must not be
+# world-reachable. Every internal caller already forwards the token.
+_auth = [Depends(require_internal_auth)]
+router_v1.post(
+    "/chat/completions", response_model=None, dependencies=_auth,
+)(_handle_chat_completions)
+router_root.post(
+    "/chat/completions", response_model=None, dependencies=_auth,
+)(_handle_chat_completions)
 
 # Export both routers — callers include both
 routers = [router_v1, router_root]

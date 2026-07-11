@@ -17,7 +17,15 @@ from gateway.routes import v1_compat
 from litellm import ModelResponse
 
 
+# The internal Bearer token every /v1 caller must now present (audit F1).
+# Set via GATEWAY_INTERNAL_TOKEN so it wins over Settings/LITELLM_MASTER_KEY.
+_TOKEN = "test-internal-token"
+_AUTH = {"Authorization": f"Bearer {_TOKEN}"}
+
+
 def _mk_app(monkeypatch, captured: list[dict]) -> TestClient:
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", _TOKEN)
+
     async def _no_keys() -> None:
         return None
 
@@ -53,7 +61,7 @@ def test_v1_compat_nonstreaming_emits_priced_model_activation(monkeypatch):
     captured: list[dict] = []
     client = _mk_app(monkeypatch, captured)
 
-    resp = client.post("/v1/chat/completions", json={
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": False,
@@ -76,7 +84,7 @@ def test_v1_compat_attributes_agent_from_header(monkeypatch):
 
     resp = client.post(
         "/v1/chat/completions",
-        headers={"X-CC-Agent": "sales", "X-CC-Source": "chat"},
+        headers={**_AUTH, "X-CC-Agent": "sales", "X-CC-Source": "chat"},
         json={"model": "gpt-4o-mini",
               "messages": [{"role": "user", "content": "hi"}], "stream": False},
     )
@@ -90,13 +98,31 @@ def test_v1_compat_without_header_falls_back_to_chat(monkeypatch):
     # Fail-soft: no attribution header → source="chat", no agent (today's behaviour).
     captured: list[dict] = []
     client = _mk_app(monkeypatch, captured)
-    resp = client.post("/v1/chat/completions", json={
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hi"}], "stream": False})
     assert resp.status_code == 200
     ev = [e for e in captured if e.get("kind") == "model"][0]
     assert ev["source"] == "chat"
     assert ev.get("agent") is None
+
+
+def test_v1_compat_rejects_anonymous(monkeypatch):
+    # audit F1: the OpenAI-compatible proxy must not be world-reachable.
+    captured: list[dict] = []
+    client = _mk_app(monkeypatch, captured)
+    resp = client.post("/v1/chat/completions", json={
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}], "stream": False})
+    assert resp.status_code == 401
+    # A wrong token is also rejected.
+    resp = client.post(
+        "/v1/chat/completions",
+        headers={"Authorization": "Bearer wrong"},
+        json={"model": "gpt-4o-mini",
+              "messages": [{"role": "user", "content": "hi"}], "stream": False},
+    )
+    assert resp.status_code == 401
 
 
 def test_v1_compat_completion_error_does_not_emit(monkeypatch):
@@ -108,6 +134,7 @@ def test_v1_compat_completion_error_does_not_emit(monkeypatch):
     async def _boom(**kw):
         raise RuntimeError("provider down")
 
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", _TOKEN)
     monkeypatch.setattr(v1_compat, "_ensure_keys_loaded", _no_keys)
     monkeypatch.setattr(litellm, "acompletion", _boom)
     monkeypatch.setattr(llm_client, "ensure_model_registered", lambda m: "openai")
@@ -123,7 +150,7 @@ def test_v1_compat_completion_error_does_not_emit(monkeypatch):
         app.include_router(r)
     client = TestClient(app)
 
-    resp = client.post("/v1/chat/completions", json={
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
         "model": "gpt-4o-mini",
         "messages": [{"role": "user", "content": "hi"}],
         "stream": False,

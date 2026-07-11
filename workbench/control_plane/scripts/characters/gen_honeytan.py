@@ -40,8 +40,8 @@ ZONES = {
     "lane": ("cream", [12, 15], 6, 2, ALL_ROT),      # darker tile: office BORDER frame
     "wall": ("wood", [0, 2, 3, 7, 9, 11], 8, 2, [0, 180]),  # keep planks vertical
 }
-# role -> (brightness, saturation) multipliers. Floor: flat/washed — light, near-grey.
-TONE = {"floor": (1.22, 0.5)}
+# role -> (brightness, saturation) multipliers. Floor: flat + a bit darker (less white).
+TONE = {"floor": (1.0, 0.5)}
 
 _ROT = {0: None, 90: Image.ROTATE_90, 180: Image.ROTATE_180, 270: Image.ROTATE_270}
 _UA = urllib.request.build_opener()

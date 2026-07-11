@@ -253,11 +253,18 @@ class BaseEmailProvider(ABC):
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        thread_id: str | None = None,
     ) -> str:
         """Send an email. Returns the provider message ID of the sent message.
 
         ``attachments`` is a list of ``{"filename", "content" (bytes),
-        "mime_type"}`` dicts to attach to the outgoing message."""
+        "mime_type"}`` dicts to attach to the outgoing message.
+
+        ``reply_to_message_id`` / ``thread_id`` carry threading intent. Their
+        exact meaning is provider-specific (Gmail threads by ``thread_id``,
+        Outlook replies to ``reply_to_message_id``, IMAP sets In-Reply-To from
+        whichever is given) — callers should pass both when replying and let the
+        provider use what it needs."""
         ...
 
     @abstractmethod
@@ -404,8 +411,13 @@ class BaseEmailProvider(ABC):
         subject: str | None = None,
         body_text: str | None = None,
         body_html: str | None = None,
+        thread_id: str | None = None,
     ) -> str:
         """Update an existing draft in place; return the (possibly new) draft id.
+
+        ``thread_id`` (when the provider needs it, e.g. Gmail) keeps the draft
+        attached to its conversation across the update — omitting it would strip
+        the draft's threading. Providers that thread implicitly ignore it.
 
         Default raises NotImplementedError so callers can fall back to creating a
         fresh draft on providers without an update primitive.

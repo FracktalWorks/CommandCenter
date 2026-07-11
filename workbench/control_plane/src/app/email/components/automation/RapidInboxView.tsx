@@ -967,6 +967,9 @@ function InlineReply({
   const ownEmail = useEmailStore((s) =>
     s.accounts.find((a) => a.id === accountId)?.emailAddress?.toLowerCase()
   );
+  // The full threaded send path — used when there's a Cc (the draft write-path
+  // doesn't carry Cc/Bcc, so a Cc'd reply must go through /send).
+  const sendEmailFull = useEmailStore((s) => s.sendEmail);
 
   // If the backend surfaced a draft id but no preview text, hydrate the
   // composer from the stored draft so the pane isn't blank on open.
@@ -1100,8 +1103,29 @@ function InlineReply({
     setSending(true);
     setError(null);
     try {
-      const id = await persist();
-      if (id) await sendDraft(accountId, id);
+      const toList = to.split(",").map((s) => s.trim()).filter(Boolean);
+      const ccList = cc.split(",").map((s) => s.trim()).filter(Boolean);
+      if (ccList.length) {
+        // Cc isn't carried by the draft write-path — send via the full threaded
+        // /send path (which resolves the thread and applies the signature), then
+        // drop any auto-saved draft so it doesn't linger in Drafts.
+        await sendEmailFull({
+          accountId,
+          to: toList,
+          cc: ccList,
+          subject,
+          bodyText: body,
+          replyToMessageId: full?.providerMessageId || undefined,
+        });
+        if (draftIdRef.current) {
+          try { await deleteEmail(draftIdRef.current); } catch { /* best-effort */ }
+        }
+      } else {
+        // No Cc → keep the native no-duplicate path (Drafts → Sent), signed at
+        // send time by /email/drafts/send.
+        const id = await persist();
+        if (id) await sendDraft(accountId, id);
+      }
       onSent();
     } catch (e) {
       setError((e as Error).message || "Failed to send.");

@@ -290,6 +290,7 @@ class GmailProvider(BaseEmailProvider):
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        thread_id: str | None = None,
     ) -> str:
         # Build RFC 2822 message — multipart when file attachments are present.
         msg: Any
@@ -314,12 +315,19 @@ class GmailProvider(BaseEmailProvider):
         msg["Subject"] = subject
         if cc:
             msg["Cc"] = ", ".join(cc)
+        if bcc:
+            msg["Bcc"] = ", ".join(bcc)
 
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
 
         body: dict[str, Any] = {"raw": raw}
-        if reply_to_message_id:
-            body["threadId"] = reply_to_message_id
+        # Gmail threads by threadId. Prefer the real conversation id
+        # (``thread_id``); fall back to ``reply_to_message_id`` only when a caller
+        # passes a message id as the thread anchor. Passing a non-thread message
+        # id here would fail to thread — the "reply shows as a separate email" bug.
+        tid = thread_id or reply_to_message_id
+        if tid:
+            body["threadId"] = tid
 
         client = await self._get_client()
         resp = await client.post("/users/me/messages/send", json=body)
@@ -380,14 +388,22 @@ class GmailProvider(BaseEmailProvider):
         thread_id: str | None = None,
     ) -> str:
         """Replace a Gmail draft's content in place (drafts.update). Returns the
-        (unchanged) draft id so the editor keeps tracking the same draft."""
-        msg = MIMEText(body_text or "", "plain" if not body_html else "html")
+        (unchanged) draft id so the editor keeps tracking the same draft.
+
+        When ``body_html`` is given the draft is written as HTML (so a signed
+        HTML body survives the update); otherwise it stays plain text."""
+        if body_html:
+            msg = MIMEText(body_html, "html")
+        else:
+            msg = MIMEText(body_text or "", "plain")
         if to is not None:
             msg["To"] = ", ".join(to)
         if subject is not None:
             msg["Subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         message: dict[str, Any] = {"raw": raw}
+        # threadId MUST be re-supplied on update — Gmail drops the draft's thread
+        # otherwise, so the sent reply would start a new conversation.
         if thread_id:
             message["threadId"] = thread_id
         client = await self._get_client()

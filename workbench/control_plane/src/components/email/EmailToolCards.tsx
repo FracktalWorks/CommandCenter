@@ -27,7 +27,7 @@ import { useRouter } from "next/navigation";
 import {
   PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, MailOpen, Tag,
   Archive, FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
-  Clock, Wrench, Search, ChevronDown, Star,
+  Clock, Wrench, Search, ChevronDown, Star, Layers,
 } from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
@@ -52,6 +52,9 @@ const RULE_TOOLS = new Set(["create_rule", "update_rule"]);
 // primary inbox tools (query_inbox / get_important_emails), not just search.
 const LIST_TOOLS = new Set([
   "query_inbox",
+  "find_priority",
+  // Legacy tool names (pre-consolidation) — kept so older transcripts still
+  // render as list cards. The live agent now emits find_priority / query_inbox.
   "get_important_emails",
   "search_emails",
   "find_urgent",
@@ -60,6 +63,9 @@ const LIST_TOOLS = new Set([
 const READ_TOOL = "read_email";
 const READ_THREAD_TOOL = "read_thread";
 const SETTINGS_TOOL = "update_assistant_settings";
+// The agent-driven categorized board: emails grouped under LLM-chosen headings
+// (HR / Finance / R&D, by project, by urgency…), each an interactive section.
+const GROUPS_TOOL = "present_email_groups";
 
 /** Tools that return a human-readable LIST / overview (a header + bullet lines,
  *  with no clickable email ids) — e.g. list_learned_patterns, list_senders.
@@ -80,6 +86,7 @@ const INFO_META: Record<string, { icon: React.ElementType; label: string }> = {
   list_cold_senders: { icon: Archive, label: "Cold senders" },
   suggest_unsubscribes: { icon: Archive, label: "Unsubscribe candidates" },
   get_account_overview: { icon: Mail, label: "Account overview" },
+  digest: { icon: Send, label: "Digest" },
   get_digest: { icon: Send, label: "Digest" },
   create_rules_from_prompt: { icon: Sparkles, label: "Rules created" },
   test_rule_match: { icon: Wrench, label: "Rule match test" },
@@ -90,10 +97,12 @@ const INFO_TOOLS = new Set(Object.keys(INFO_META));
  *  delete (forget). Two separate systems — drafting style (list_learned_patterns)
  *  and rule classification pins from Fix (list_rule_patterns) — each with its own
  *  delete endpoint. */
-const PATTERN_META: Record<
-  string,
-  { icon: React.ElementType; label: string; remove: (id: string) => Promise<void> }
-> = {
+type PatternMeta = {
+  icon: React.ElementType;
+  label: string;
+  remove: (id: string) => Promise<void>;
+};
+const PATTERN_META: Record<string, PatternMeta> = {
   list_learned_patterns: {
     icon: PenLine, label: "Learned writing preferences", remove: deleteLearnedPattern,
   },
@@ -101,7 +110,19 @@ const PATTERN_META: Record<
     icon: Sparkles, label: "Learned rule patterns", remove: deleteRulePattern,
   },
 };
-const PATTERN_TOOLS = new Set(Object.keys(PATTERN_META));
+// The consolidated list_patterns tool selects the store via its `kind` arg;
+// legacy names keep their own entries above so old transcripts still render.
+const PATTERN_TOOLS = new Set([...Object.keys(PATTERN_META), "list_patterns"]);
+
+/** The right icon/label/delete-endpoint for a pattern-list event — from the
+ *  `kind` arg for the consolidated list_patterns, else from the tool name. */
+function patternMeta(e: ToolEvent): PatternMeta {
+  if (e.name === "list_patterns") {
+    const kind = String((e.args as Record<string, unknown> | undefined)?.kind ?? "draft");
+    return kind === "rule" ? PATTERN_META.list_rule_patterns : PATTERN_META.list_learned_patterns;
+  }
+  return PATTERN_META[e.name] ?? PATTERN_META.list_learned_patterns;
+}
 
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
 const ACTION_META: Record<string, { icon: React.ElementType; label: string; danger?: boolean }> = {
@@ -115,7 +136,9 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   delete_rule: { icon: Trash2, label: "Rule deleted", danger: true },
   reset_rules: { icon: Sparkles, label: "Rules reset", danger: true },
   run_rules_now: { icon: Wrench, label: "Rules run" },
+  run_rules: { icon: Wrench, label: "Rules run" },
   update_rule_state: { icon: Sparkles, label: "Rule updated" },
+  resolve_execution: { icon: CheckCircle2, label: "Execution resolved" },
   learn_rule_pattern: { icon: Sparkles, label: "Pattern learned" },
   install_default_rules: { icon: Sparkles, label: "Default rules installed" },
   process_past_emails: { icon: Clock, label: "Processing past mail" },
@@ -125,15 +148,18 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   import_artifact: { icon: BookOpen, label: "Artifact imported" },
   add_knowledge: { icon: BookOpen, label: "Knowledge added" },
   update_knowledge: { icon: BookOpen, label: "Knowledge updated" },
+  save_knowledge: { icon: BookOpen, label: "Knowledge saved" },
   delete_knowledge: { icon: Trash2, label: "Knowledge deleted", danger: true },
   delete_learned_pattern: { icon: Trash2, label: "Pattern forgotten" },
   delete_rule_pattern: { icon: Trash2, label: "Pattern forgotten" },
+  forget_pattern: { icon: Trash2, label: "Pattern forgotten" },
   find_follow_ups: { icon: Clock, label: "Follow-ups scanned" },
   mark_thread_done: { icon: CheckCircle2, label: "Thread updated" },
   reclassify_reply_zero: { icon: RefreshCw, label: "Reply Zero reclassifying" },
   unsubscribe_sender: { icon: Archive, label: "Unsubscribed", danger: true },
   keep_newsletter: { icon: Mail, label: "Newsletter kept" },
   set_cold_sender: { icon: Archive, label: "Cold sender updated" },
+  set_sender_status: { icon: Tag, label: "Sender updated" },
   categorize_senders: { icon: Tag, label: "Categorizing senders" },
   send_digest: { icon: Send, label: "Digest sent" },
   sync_account: { icon: RefreshCw, label: "Syncing" },
@@ -151,6 +177,7 @@ function hasEmailCard(e: ToolEvent): boolean {
     INFO_TOOLS.has(e.name) ||
     PATTERN_TOOLS.has(e.name) ||
     e.name === READ_THREAD_TOOL ||
+    e.name === GROUPS_TOOL ||
     e.name === SETTINGS_TOOL ||
     e.name in ACTION_META
   );
@@ -168,7 +195,16 @@ function renderCard(
   if (e.name === SETTINGS_TOOL) return <SettingsUpdatedCard event={e} />;
   // LIST_TOOLS are merged into ONE card by the caller (see EmailToolCards loop).
   if (e.name === "apply_labels") return <LabelUpdateCard event={e} />;
-  if (e.name === "manage_inbox") return <ManageInboxCard event={e} />;
+  if (e.name === "manage_inbox") {
+    // manage_inbox(action="label") gets the label-chip card; everything else
+    // (archive / trash / read / move / …) gets the inbox-action card.
+    const action = String(
+      (e.args as Record<string, unknown> | undefined)?.action ?? "",
+    ).toLowerCase();
+    return action === "label"
+      ? <LabelUpdateCard event={e} />
+      : <ManageInboxCard event={e} />;
+  }
   return <ActionResultCard event={e} />;
 }
 
@@ -321,6 +357,12 @@ export default function EmailToolCards({
   const hasThread = all.some(
     (e) => e.status === "done" && e.name === READ_THREAD_TOOL,
   );
+  // A categorized board supersedes the flat list tools it was built from — the
+  // agent gathers ids with find_needs_reply / query_inbox / … and then regroups
+  // them. Show only the board (one card, categorized), not the raw flat list too.
+  const hasGroups = all.some(
+    (e) => e.status === "done" && e.name === GROUPS_TOOL,
+  );
 
   const items: React.ReactNode[] = [];
   let readRun: ToolEvent[] = [];
@@ -342,8 +384,9 @@ export default function EmailToolCards({
       continue;
     }
     if (!hasEmailCard(e)) continue;
-    // Drop the search/list lookup card when a thread is shown.
-    if (hasThread && LIST_TOOLS.has(e.name)) continue;
+    // Drop the flat list/search cards when a thread OR a categorized board is
+    // shown — both subsume the raw list the lookup produced.
+    if ((hasThread || hasGroups) && LIST_TOOLS.has(e.name)) continue;
     flushReads();
     // Merge ALL list-tool results into ONE interactive card at the position of
     // the first list event; the rest are folded in (not rendered separately).
@@ -367,9 +410,18 @@ export default function EmailToolCards({
       items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
       continue;
     }
+    // Agent-driven categorized board — grouped, interactive sections.
+    if (e.name === GROUPS_TOOL) {
+      items.push(
+        <DismissableCard key={e.id} onDismiss={() => dismissToolCard(e.id)}>
+          <EmailGroupsCard event={e} />
+        </DismissableCard>,
+      );
+      continue;
+    }
     // Editable learned-pattern list (delete per row) — own chrome.
     if (PATTERN_TOOLS.has(e.name)) {
-      items.push(<PatternListCard key={e.id} event={e} meta={PATTERN_META[e.name]} />);
+      items.push(<PatternListCard key={e.id} event={e} meta={patternMeta(e)} />);
       continue;
     }
     // Info/list cards bring their own ToolCardShell chrome (collapse + X), so
@@ -807,6 +859,7 @@ function parseEmailRows(result: string): ParsedRow[] {
 
 const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
   query_inbox: { icon: Mail, label: "Inbox results" },
+  find_priority: { icon: Clock, label: "Priority emails" },
   get_important_emails: { icon: Clock, label: "Important to check" },
   search_emails: { icon: Search, label: "Search results" },
   find_urgent: { icon: Clock, label: "Urgent / needs attention" },
@@ -823,6 +876,24 @@ const LIST_PROV: Record<string, string> = {
   search_emails: "Search",
 };
 
+/** find_priority carries its "why" in the `kind` arg (one tool, many kinds), so
+ *  its chip is derived from the call args rather than the tool name. */
+const PRIORITY_CHIP: Record<string, string> = {
+  needs_reply: "Needs reply",
+  important: "Important",
+  urgent: "Urgent",
+};
+
+/** The provenance chip for a list event — from the `kind` arg for find_priority,
+ *  else from the tool name. */
+function listChip(e: ToolEvent): string | undefined {
+  if (e.name === "find_priority") {
+    const kind = String((e.args as Record<string, unknown> | undefined)?.kind ?? "needs_reply");
+    return PRIORITY_CHIP[kind] ?? "Priority";
+  }
+  return LIST_PROV[e.name];
+}
+
 /** Quick-categorize options offered per row (the rule-engine categories). */
 const QUICK_CATEGORIES = [
   "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
@@ -836,7 +907,7 @@ const QUICK_CATEGORIES = [
 function mergeListRows(events: ToolEvent[]): ParsedRow[] {
   const byId = new Map<string, ParsedRow>();
   for (const e of events) {
-    const chip = LIST_PROV[e.name];
+    const chip = listChip(e);
     for (const r of parseEmailRows(e.result || "")) {
       const existing = byId.get(r.id);
       if (existing) {
@@ -869,10 +940,15 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
   // heading and each row shows provenance chips (why it's listed).
   const names = [...new Set(events.map((e) => e.name))];
   const multi = names.length > 1;
+  // Show per-row "why it's here" chips when several tools merged OR when one
+  // tool (find_priority) produced rows of mixed provenance (different `kind`s).
+  const distinctProv = new Set(rows.flatMap((r) => r.prov ?? []));
+  const showProv = multi || distinctProv.size > 1;
   const meta = !multi
     ? LIST_META[names[0]] ?? { icon: Mail, label: "Emails" }
     : names.some((n) =>
-          n === "get_important_emails" || n === "find_needs_reply" || n === "find_urgent")
+          n === "find_priority" || n === "get_important_emails" ||
+          n === "find_needs_reply" || n === "find_urgent")
       ? { icon: Clock, label: "High-priority emails" }
       : { icon: Mail, label: "Emails" };
   const Icon = meta.icon;
@@ -938,7 +1014,7 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
           <EmailRow
             key={r.id}
             row={r}
-            showProv={multi}
+            showProv={showProv}
             status={statuses[r.id] ?? "idle"}
             onArchive={() => archive(r.id)}
             onMarkRead={() => markRead(r.id)}
@@ -952,6 +1028,185 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
         >
           {expanded ? "Show less" : `Show ${rows.length - 5} more`}
         </button>
+      )}
+    </div>
+  );
+}
+
+// ── Categorized email board (present_email_groups) ────────────────────────────
+
+interface EmailGroup {
+  title: string;
+  note?: string;
+  rows: ParsedRow[];
+}
+
+/** Parse present_email_groups output into titled groups of rows. The tool emits:
+ *    Categorized emails — <total> across <n> group(s):
+ *    ## <Title> (<count>)[ — <note>]
+ *    • id=<id> | <sender>: <subject>
+ *    …
+ *  Each "##" line opens a new group; the "• id=…" lines under it are its rows
+ *  (reusing the shared row parser). Empty groups are dropped. */
+function parseGroupedRows(result: string): EmailGroup[] {
+  const groups: EmailGroup[] = [];
+  let current: EmailGroup | null = null;
+  for (const line of result.split("\n")) {
+    const head = line.match(/^\s*##\s+(.*)$/);
+    if (head) {
+      let label = head[1].trim();
+      let note: string | undefined;
+      const dash = label.indexOf(" — ");
+      if (dash !== -1) {
+        note = label.slice(dash + 3).trim() || undefined;
+        label = label.slice(0, dash).trim();
+      }
+      // Drop a trailing "(count)" from the heading — the card recomputes it.
+      label = label.replace(/\s*\(\d+\)\s*$/, "").trim();
+      current = { title: label || "Untitled", note, rows: [] };
+      groups.push(current);
+      continue;
+    }
+    if (current) {
+      const parsed = parseEmailRows(line);
+      if (parsed.length) current.rows.push(...parsed);
+    }
+  }
+  return groups.filter((g) => g.rows.length > 0);
+}
+
+/** Interactive, categorized board of emails — the agent groups mail under its
+ *  own headings (HR / Finance / R&D, by project, by urgency…) and each group is
+ *  a titled, collapsible section of the same interactive rows as the flat list
+ *  (open / archive / mark-read / categorize). Triage state is lifted here so a
+ *  group's bulk actions and its rows stay in sync. Falls back to the generic
+ *  confirmation card when there's nothing parseable to group. */
+function EmailGroupsCard({ event: e }: { event: ToolEvent }) {
+  const groups = parseGroupedRows(e.result || "");
+  const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
+  if (groups.length === 0) return <ActionResultCard event={e} />;
+
+  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  const set = (id: string, s: RowStatus) =>
+    setStatuses((prev) => ({ ...prev, [id]: s }));
+  const archive = async (id: string) => {
+    set(id, "busy");
+    try {
+      await patchEmail(id, { folder: "archive" });
+      set(id, "archived");
+    } catch {
+      set(id, "idle");
+    }
+  };
+  const markRead = async (id: string) => {
+    set(id, "busy");
+    try {
+      await patchEmail(id, { isRead: true });
+      set(id, "read");
+    } catch {
+      set(id, "idle");
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2 min-w-0 overflow-hidden">
+      <div className="flex items-center gap-1.5 mb-2 pr-5">
+        <Layers size={12} className="text-primary" />
+        <span className="text-[11px] font-medium text-foreground">
+          Categorized emails
+        </span>
+        <span className="text-[10px] text-muted-foreground">
+          ({total} in {groups.length} group{groups.length > 1 ? "s" : ""})
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {groups.map((g, i) => (
+          <GroupSection
+            key={`${g.title}-${i}`}
+            group={g}
+            statuses={statuses}
+            onArchive={archive}
+            onMarkRead={markRead}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One category within the board: a titled header (count + optional note) with
+ *  Read-all / Archive-all shortcuts, collapsible, over its interactive rows. */
+function GroupSection({
+  group,
+  statuses,
+  onArchive,
+  onMarkRead,
+}: {
+  group: EmailGroup;
+  statuses: Record<string, RowStatus>;
+  onArchive: (id: string) => void;
+  onMarkRead: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  // Bulk acts on this group's not-yet-handled rows.
+  const actionable = group.rows.filter(
+    (r) => !["archived", "read", "busy"].includes(statuses[r.id] ?? "idle"),
+  );
+  return (
+    <div className="rounded-md border border-border/70 bg-background/40">
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+        >
+          <ChevronDown
+            size={11}
+            className={`text-muted-foreground flex-shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+          <span className="text-[11px] font-semibold text-foreground truncate">
+            {group.title}
+          </span>
+          <span className="text-[10px] text-muted-foreground flex-shrink-0">
+            ({group.rows.length})
+          </span>
+          {group.note && (
+            <span className="text-[10px] text-muted-foreground/80 truncate hidden sm:inline">
+              — {group.note}
+            </span>
+          )}
+        </button>
+        {open && actionable.length > 1 && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => actionable.forEach((r) => onMarkRead(r.id))}
+              title="Mark all in this group as read"
+              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <MailOpen size={10} /> Read all
+            </button>
+            <button
+              onClick={() => actionable.forEach((r) => onArchive(r.id))}
+              title="Archive all in this group"
+              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <Archive size={10} /> Archive all
+            </button>
+          </div>
+        )}
+      </div>
+      {open && (
+        <div className="px-1.5 pb-1.5 space-y-1">
+          {group.rows.map((r) => (
+            <EmailRow
+              key={r.id}
+              row={r}
+              status={statuses[r.id] ?? "idle"}
+              onArchive={() => onArchive(r.id)}
+              onMarkRead={() => onMarkRead(r.id)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );
@@ -1231,8 +1486,10 @@ function LabelUpdateCard({ event: e }: { event: ToolEvent }) {
   const args = e.args as Record<string, unknown> | undefined;
   const toList = (v: unknown) =>
     Array.isArray(v) ? v.map(String).map((s) => s.trim()).filter(Boolean) : [];
-  const add = toList(args?.add);
-  const remove = toList(args?.remove);
+  // apply_labels uses add/remove; manage_inbox(action="label") uses
+  // add_labels/remove_labels — accept either shape.
+  const add = toList(args?.add ?? args?.add_labels);
+  const remove = toList(args?.remove ?? args?.remove_labels);
   const ids = args?.message_ids;
   const count = Array.isArray(ids) ? ids.length : 0;
   // Nothing structured to show → fall back to the generic confirmation.
@@ -1294,6 +1551,7 @@ const INBOX_ACTION_META: Record<
   unread: { icon: Mail, verb: "Marked unread" },
   star: { icon: Star, verb: "Starred" },
   unstar: { icon: Star, verb: "Unstarred" },
+  move: { icon: FolderInput, verb: "Moved" },
 };
 
 /** manage_inbox result — names the action + email count ("Archived 3 emails")
@@ -1330,6 +1588,9 @@ function ManageInboxCard({ event: e }: { event: ToolEvent }) {
         <span className="text-[11px] font-medium text-foreground">
           {failed ? `Couldn't ${meta.verb.toLowerCase()}` : meta.verb}{" "}
           {count} email{count > 1 ? "s" : ""}
+          {action === "move" && args?.folder
+            ? ` → ${String(args.folder)}`
+            : ""}
         </span>
       </div>
     </div>
@@ -1460,8 +1721,20 @@ function PatternListCard({
  *  WHOLE result (no 160-char truncation) so the list is actually readable, with
  *  collapse + dismiss from ToolCardShell. Counts the bullet lines for the title.
  */
+/** Label for the consolidated list_senders tool, chosen by its `view` arg. */
+const SENDER_VIEW_META: Record<string, { icon: React.ElementType; label: string }> = {
+  top: { icon: Mail, label: "Top senders" },
+  categories: { icon: Tag, label: "Sender categories" },
+  unsubscribe: { icon: Archive, label: "Unsubscribe candidates" },
+  cold: { icon: Archive, label: "Cold senders" },
+};
+
 function InfoResultCard({ event: e }: { event: ToolEvent }) {
-  const meta = INFO_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  let meta = INFO_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  if (e.name === "list_senders") {
+    const view = String((e.args as Record<string, unknown> | undefined)?.view ?? "top");
+    meta = SENDER_VIEW_META[view] ?? SENDER_VIEW_META.top;
+  }
   const Icon = meta.icon;
   const text = (e.result || "").trim();
   const bullets = text.split("\n").filter((l) => l.trim().startsWith("•")).length;

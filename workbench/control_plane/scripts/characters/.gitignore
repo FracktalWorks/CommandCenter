@@ -3,3 +3,6 @@ __pycache__/
 *.pyc
 _*.png
 office-preview.html
+
+honeytan/
+gen3_ids.json

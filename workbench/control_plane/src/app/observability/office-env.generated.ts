@@ -1,18 +1,23 @@
-// AUTO-GENERATED - Pixel Lab office environment tiles (create_topdown_tileset).
-// Seamless checkered-ceramic floor + wood wall sliced by build_env.py.
-// Do not edit by hand.
+// AUTO-GENERATED - Honeytan (create_tiles_pro) zoned floor, gen_honeytan.py.
+// Base checker + plank lanes + corner accent + wood wall. Do not edit by hand.
 
 export interface OfficeEnv {
-  /** Seamless repeating floor tile (public path). */
+  /** Base repeating floor tile. */
   floor?: string;
-  /** Tile render size in px for the repeating background. */
+  /** On-screen tile repeat size in px. */
   floorSize?: number;
-  /** Optional wall / skirting tile for the top wall band. */
+  /** Accent tile for the four room corners. */
+  corner?: string;
+  /** Plank tile for the walkway lanes between areas. */
+  lane?: string;
+  /** Wood tile for the top wall band. */
   wall?: string;
 }
 
 export const OFFICE_ENV: OfficeEnv = {
-  floor: "/office-env/floor.png",
-  floorSize: 64,
-  wall: "/office-env/wall.png",
+  floor: "/office-env/floor-floor.png",
+  floorSize: 96,
+  corner: "/office-env/floor-corner.png",
+  lane: "/office-env/floor-lane.png",
+  wall: "/office-env/floor-wall.png",
 };

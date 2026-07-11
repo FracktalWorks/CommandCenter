@@ -14,12 +14,12 @@ OUT = "../../public/office-env"
 IDS = "floor_ids.json"
 
 TILESET = {
-    "lower_description": ("bright startup office floor, light warm-grey and cream "
-                          "checkered ceramic tiles, crisp detailed pixel art with "
-                          "visible fine grout lines, subtle speckled stone grain and "
-                          "soft dithered shading in each tile, airy and well-lit, "
-                          "top-down"),
-    "upper_description": "light natural oak wood office wall with a pale skirting board",
+    "lower_description": ("cozy warm tan and light beige checkered ceramic tile "
+                          "floor, classic 16-bit Game Boy Advance Pokemon Center "
+                          "JRPG style, two-tone square tiles with soft shading and "
+                          "a gentle highlight in each tile, top-down"),
+    "upper_description": ("warm brown wood-panelled interior wall, Pokemon Center "
+                          "JRPG style, with vertical plank seams"),
     "transition_size": 0.0,
     "tile_size": {"width": 32, "height": 32},
 }

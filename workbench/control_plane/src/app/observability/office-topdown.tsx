@@ -140,6 +140,8 @@ export function TopDownOffice({
         "--oc-floor": `url(${OFFICE_ENV.floor})`,
         "--oc-floor-size": `${OFFICE_ENV.floorSize ?? 64}px`,
         ...(OFFICE_ENV.wall ? { "--oc-wall": `url(${OFFICE_ENV.wall})` } : {}),
+        ...(OFFICE_ENV.corner ? { "--oc-corner": `url(${OFFICE_ENV.corner})` } : {}),
+        ...(OFFICE_ENV.lane ? { "--oc-lane": `url(${OFFICE_ENV.lane})` } : {}),
       } as React.CSSProperties)
     : undefined;
 
@@ -166,6 +168,11 @@ export function TopDownOffice({
             <span className="oc-sign">THE OFFICE</span>
           </div>
           <div className="oc-floor">
+            {/* Zoned floor: a different Honeytan tile in each corner over the
+                base checker, so the floor reads as a laid-out room. */}
+            {["oc-fz-tl", "oc-fz-tr", "oc-fz-bl", "oc-fz-br"].map((z) => (
+              <span key={z} className={`oc-fz oc-fz-corner ${z}`} aria-hidden />
+            ))}
             {CORNER_PROPS.map(([p, corner]) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img key={p} className={`oc-prop ${corner}`} src={`/office-props/${p}.png`} alt="" aria-hidden />
@@ -191,6 +198,8 @@ export function TopDownOffice({
                 </div>
               ))}
             </div>
+            {/* Walkway lane separating the meeting area from the desks. */}
+            <div className="oc-lane" aria-hidden />
             <div className="oc-grid">
               {roster.map((a) => (
                 <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} />
@@ -253,6 +262,23 @@ export const TOPDOWN_STYLE = `
 .oc-prop.oc-tr { top:8px;  right:14px; }
 .oc-prop.oc-bl { bottom:12px; left:14px; }
 .oc-prop.oc-br { bottom:12px; right:14px; }
+
+/* Zoned floor — a different Honeytan tile in each corner over the base checker,
+   plus a plank walkway lane, so the floor reads as a laid-out room not one repeat. */
+.oc-fz { position:absolute; z-index:0; pointer-events:none; image-rendering:pixelated;
+  background-repeat:repeat;
+  background-size: var(--oc-floor-size,96px) var(--oc-floor-size,96px); }
+.oc-fz-corner { width:clamp(120px, 22%, 200px); height:clamp(96px, 20%, 168px);
+  background-image: var(--oc-corner);
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.05); }
+.oc-fz-tl { top:0; left:0; border-bottom-right-radius:16px; }
+.oc-fz-tr { top:0; right:0; border-bottom-left-radius:16px; }
+.oc-fz-bl { bottom:0; left:0; border-top-right-radius:16px; }
+.oc-fz-br { bottom:0; right:0; border-top-left-radius:16px; }
+.oc-lane { position:relative; z-index:2; height:76px; margin:0 -16px 16px;
+  background-image: var(--oc-lane); image-rendering:pixelated; background-repeat:repeat;
+  background-size: var(--oc-floor-size,96px) var(--oc-floor-size,96px);
+  box-shadow: inset 0 7px 12px rgba(0,0,0,.10), inset 0 -7px 12px rgba(0,0,0,.10); }
 
 /* Conference zone — one table by default; wraps to a grid of tables as more
    collaborations spawn. */
@@ -323,6 +349,7 @@ export const TOPDOWN_STYLE = `
   .oc-floor { padding:52px 8px 46px; }
   .oc-prop { height:56px; }
   .oc-prop.oc-tr, .oc-prop.oc-br { display:none; }
+  .oc-lane { margin:0 -8px 12px; height:58px; }
   .oc-sign { display:none; }
 }
 

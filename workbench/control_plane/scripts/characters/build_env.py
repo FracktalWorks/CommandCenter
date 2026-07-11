@@ -17,9 +17,9 @@ import os
 
 from PIL import Image, ImageEnhance
 
-# (brightness, saturation) multipliers applied to the floor tile. Light startup
-# floor: keep it bright, just slightly desaturate so it reads as clean/neutral.
-FLOOR_TONE = (1.0, 0.9)
+# (brightness, saturation) multipliers applied to the floor tile. The raw Gen-3
+# checker is a vivid orange; desaturate hard to the soft warm tan of the reference.
+FLOOR_TONE = (1.03, 0.5)
 
 FLOOR_SHEET = "../../public/office-env/_floor_sheet.png"
 SHEET = "../../public/office-env/_sheet.png"
@@ -43,36 +43,57 @@ def wood_frac(im, r, c):
     return wood / max(tot, 1)
 
 
-def pick(sheet, chooser):
-    im = Image.open(sheet).convert("RGBA")
-    scores = {(r, c): wood_frac(im, r, c) for r in range(4) for c in range(4)}
-    rc = chooser(scores, key=scores.get)
-    r, c = rc
-    return im.crop((c * S, r * S, c * S + S, r * S + S)), rc, scores[rc]
+def tile_lum(im, r, c):
+    return im.crop((c * S, r * S, c * S + S, r * S + S)).convert("L")
+
+
+def checkerness(t):
+    """Mean vertical (down-column) luminance std. The checker FLOOR alternates
+    light/dark down each column → high; the plank WALL is a uniform vertical
+    stripe → low. Palette-independent, so it works even when both are warm."""
+    px = t.load()
+    total = 0.0
+    for x in range(S):
+        col = [px[x, y] for y in range(S)]
+        m = sum(col) / S
+        total += (sum((v - m) ** 2 for v in col) / S) ** 0.5
+    return total / S
+
+
+def dark_frac(t):
+    """Fraction of near-black pixels — the Wang transition curve between floor and
+    wall is a dark outline, so pure (non-transition) tiles have ~none."""
+    px = t.load()
+    dark = sum(1 for y in range(S) for x in range(S) if px[x, y] < 55)
+    return dark / (S * S)
 
 
 def main():
-    # Floor: purest checkered tile (least wood) from the dedicated floor sheet,
-    # used AS-IS — the checker texture is already baked in by Pixel Lab.
     floor_sheet = FLOOR_SHEET if os.path.exists(FLOOR_SHEET) else SHEET
-    floor, floor_rc, floor_wood = pick(floor_sheet, min)
+    im = Image.open(floor_sheet).convert("RGBA")
+    lum = {(r, c): tile_lum(im, r, c) for r in range(4) for c in range(4)}
+    chk = {rc: checkerness(t) for rc, t in lum.items()}
+    dark = {rc: dark_frac(t) for rc, t in lum.items()}
+    # Pure floor = most checkered AMONG tiles with no transition outline.
+    clean = [rc for rc in lum if dark[rc] < 0.04]
+    floor_rc = max(clean or lum, key=lambda rc: chk[rc])
+    # Plank wall = most uniform (least checkered) clean tile.
+    wall_rc = min(clean or lum, key=lambda rc: chk[rc])
+    scores = chk
+
+    def crop(rc):
+        r, c = rc
+        return im.crop((c * S, r * S, c * S + S, r * S + S))
+
+    # Floor: the checker tile, desaturated to the soft warm tan of the reference.
     b, s = FLOOR_TONE
-    floor = ImageEnhance.Color(ImageEnhance.Brightness(floor).enhance(b)).enhance(s)
-    # Warm nudge toward cream (pull blue/green down a touch) so it matches the
-    # warm floor palette the user liked.
-    r, g, bl, a = floor.split()
-    g = g.point(lambda v: int(v * 0.985))
-    bl = bl.point(lambda v: int(v * 0.93))
-    floor = Image.merge("RGBA", (r, g, bl, a))
+    floor = ImageEnhance.Color(ImageEnhance.Brightness(crop(floor_rc)).enhance(b)).enhance(s)
     floor.save(f"{ENVDIR}/floor.png")
 
-    # Wall: full-wood tile from the SAME sheet as the floor, so the wall matches
-    # the floor's palette (light oak for the startup theme). Falls back to _sheet.png.
-    wall_sheet = floor_sheet if os.path.exists(FLOOR_SHEET) else SHEET
-    wall, wall_rc, wall_wood = pick(wall_sheet, max)
-    wall.save(f"{ENVDIR}/wall.png")
-    print(f"floor tile {floor_rc} (wood={floor_wood:.2f}) from "
-          f"{os.path.basename(floor_sheet)}, wall tile {wall_rc} (wood={wall_wood:.2f})")
+    # Wall: the plank tile from the same sheet (matches the floor palette).
+    crop(wall_rc).save(f"{ENVDIR}/wall.png")
+    print(f"floor tile {floor_rc} (checker={scores[floor_rc]:.1f}), "
+          f"wall tile {wall_rc} (checker={scores[wall_rc]:.1f})")
 
     lines = [
         "// AUTO-GENERATED - Pixel Lab office environment tiles (create_topdown_tileset).",

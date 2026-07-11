@@ -254,8 +254,13 @@ function Seat({
             style={{ "--sheet": `url(${c.working})`, "--n": c.workingFrames } as React.CSSProperties}
           />
         ) : (
+          // idle → asleep-at-desk sprite (falls back to the plain seated sprite)
           // eslint-disable-next-line @next/next/no-img-element
-          <img className="oc-static" src={c?.seated} alt={agent.name} />
+          <img
+            className="oc-static"
+            src={state === "idle" && c?.sleeping ? c.sleeping : c?.seated}
+            alt={agent.name}
+          />
         )}
         {/* Status is shown ONLY by a small icon at the top-right that floats up and
             fades (inspired by the sleep "z"): z when sleeping, a cog when working, an
@@ -284,22 +289,47 @@ function Seat({
   );
 }
 
+/** One agent STANDING at the conference table, facing inward, gently breathing. */
+function CrStandee({
+  agent,
+  dir,
+  onOpen,
+}: {
+  agent: OfficeAgent;
+  dir: "south" | "north" | "east" | "west";
+  onOpen: (name: string) => void;
+}) {
+  const c = OFFICE_CAST[characterFor(agent.name)];
+  const stand = c?.standing as Record<string, string | undefined> | undefined;
+  const src = stand?.[dir] ?? c?.seated;
+  if (!src) return null;
+  return (
+    <button
+      className="oc-cr-standee"
+      onClick={() => onOpen(agent.name)}
+      title={agent.description || agent.name}
+    >
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img className="oc-cr-standimg" src={src} alt={agent.name} />
+    </button>
+  );
+}
+
 /**
  * A conference room that spawns dynamically when 2+ agents collaborate: a smaller
- * room sharing the office aesthetic (same floor/wall tiles), with the collaborating
- * agents seated together across a shared conference table. No loose chairs — each
- * agent brings their own seated pose, and the table crosses their fronts so it reads
- * as a real meeting. These render as separate cards below the office, not on the floor.
+ * room sharing the office aesthetic, with the collaborating agents STANDING around a
+ * centred conference table (breathing). Far-side agents face down (south), near-side
+ * agents face up (north). Renders as a separate card below the office.
  */
 function ConferenceRoom({
   members,
-  stateFor,
   onOpen,
 }: {
   members: OfficeAgent[];
-  stateFor: (a: OfficeAgent) => OfficeState;
   onOpen: (name: string) => void;
 }) {
+  const top = members.filter((_, i) => i % 2 === 0);
+  const bottom = members.filter((_, i) => i % 2 === 1);
   return (
     <div className="oc-cr">
       <div className="oc-cr-wall">
@@ -316,36 +346,10 @@ function ConferenceRoom({
         </div>
       </div>
       <div className="oc-cr-floor">
-        <div className="oc-cr-seats">
-          {members.map((a) => {
-            const c = OFFICE_CAST[characterFor(a.name)];
-            const st = stateFor(a);
-            const playTyping = st === "working" && Boolean(c?.working && c?.workingFrames);
-            return (
-              <button
-                key={a.name}
-                className={`oc-cr-fig oc-${st}`}
-                onClick={() => onOpen(a.name)}
-                title={a.description || a.name}
-              >
-                {playTyping ? (
-                  <span
-                    className="oc-anim"
-                    style={
-                      {
-                        "--sheet": `url(${c.working})`,
-                        "--n": c.workingFrames,
-                        "--w": "82px",
-                      } as React.CSSProperties
-                    }
-                  />
-                ) : (
-                  // eslint-disable-next-line @next/next/no-img-element
-                  <img className="oc-static" src={c?.seated} alt={a.name} />
-                )}
-              </button>
-            );
-          })}
+        <div className="oc-cr-row oc-cr-row-top">
+          {top.map((a) => (
+            <CrStandee key={a.name} agent={a} dir="south" onOpen={onOpen} />
+          ))}
         </div>
         {/* plants flanking the table, matching the office aesthetic */}
         {crPlantsFor(members).map((obj, i) => {
@@ -369,6 +373,11 @@ function ConferenceRoom({
           alt=""
           aria-hidden
         />
+        <div className="oc-cr-row oc-cr-row-bottom">
+          {bottom.map((a) => (
+            <CrStandee key={a.name} agent={a} dir="north" onOpen={onOpen} />
+          ))}
+        </div>
       </div>
     </div>
   );
@@ -515,7 +524,6 @@ export function TopDownOffice({
                   <ConferenceRoom
                     key={members.map((m) => m.name).join("|") || `cr-${i}`}
                     members={members}
-                    stateFor={stateOf}
                     onOpen={onOpen}
                   />
                 ))}
@@ -644,24 +652,27 @@ export const TOPDOWN_STYLE = `
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 /* generic TV-screen glow pulse (wall band uses .oc-fix-tv-screen img above) */
 img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
-.oc-cr-floor { position:relative; height:172px; overflow:hidden;
+.oc-cr-floor { position:relative; height:192px; overflow:hidden;
   background-color:#cbb89a; background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto); background-repeat:repeat; image-rendering:pixelated; }
 .oc-cr-floor::before { content:''; position:absolute; inset:10px; z-index:0; pointer-events:none;
   background-image: var(--oc-floor, none); background-size: var(--oc-floor-bg, auto);
   background-repeat:repeat; image-rendering:pixelated; border-radius:4px;
   box-shadow: inset 0 0 0 2px rgba(0,0,0,.10), inset 0 10px 18px rgba(0,0,0,.05); }
-/* the agents, seated in a row and meeting */
-.oc-cr-seats { position:absolute; left:0; right:0; top:12px; z-index:1;
-  display:flex; justify-content:center; align-items:flex-end; gap:0; }
-.oc-cr-fig { position:relative; background:none; border:none; cursor:pointer; padding:0;
-  margin:0 -4px; line-height:0; }
-.oc-cr-fig .oc-static { height:82px; }
-.oc-cr-fig:hover { transform:translateY(-3px); transition:transform .15s; z-index:2; }
-/* the shared table (cropped to content) crossing the agents' fronts so it reads as
-   ONE meeting table hiding their individual desks */
-.oc-cr-table { position:absolute; left:50%; bottom:8px; transform:translateX(-50%);
-  z-index:2; width:min(138px, 58%); image-rendering:pixelated;
+/* agents STANDING around the centred table, facing inward, gently breathing */
+.oc-cr-row { position:absolute; left:0; right:0; display:flex; justify-content:center;
+  align-items:flex-end; gap:10px; pointer-events:none; }
+.oc-cr-row-top { top:8px; z-index:1; }        /* far side — behind the table */
+.oc-cr-row-bottom { bottom:6px; z-index:3; }  /* near side — in front of the table */
+.oc-cr-standee { background:none; border:none; cursor:pointer; padding:0; line-height:0;
+  pointer-events:auto; }
+.oc-cr-standimg { height:70px; display:block; image-rendering:pixelated;
+  filter:drop-shadow(0 4px 3px rgba(0,0,0,.4));
+  animation: oc-breathe 3.4s ease-in-out infinite; }
+.oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
+/* the shared conference table, centred in the room */
+.oc-cr-table { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  z-index:2; width:min(130px, 52%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 /* plants standing in the room's bottom corners (table draws in front of their base) */
 .oc-cr-plant { position:absolute; bottom:8px; z-index:1; height:62px; image-rendering:pixelated;

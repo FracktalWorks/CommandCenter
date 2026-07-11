@@ -14,6 +14,8 @@ AGENTS = ["orchestrator", "apis-config", "sales", "task-manager", "email-assista
 SRC = "char_seated"
 PUB = "../../public/characters-seated"
 TS = "../../src/app/observability/office-cast.generated.ts"
+DIRS = ["south", "east", "north", "west", "south-east", "north-east", "north-west",
+        "south-west"]
 
 
 def main():
@@ -47,6 +49,27 @@ def main():
                 sheet.save(f"{out}/working.png")
                 entry["working"] = f"/characters-seated/{a}/working.png"
                 entry["workingFrames"] = len(imgs)
+
+        # 'sleeping' = asleep-at-desk seated sprite (used when idle).
+        sleep_src = f"{SRC}/{a}/sleeping.png"
+        if os.path.exists(sleep_src):
+            Image.open(sleep_src).convert("RGBA").save(f"{out}/sleeping.png")
+            entry["sleeping"] = f"/characters-seated/{a}/sleeping.png"
+
+        # 'standing' = the base char's 8 rotations (agents standing round the table).
+        stand_src = f"{SRC}/{a}/standing"
+        if os.path.isdir(stand_src):
+            stand: dict[str, str] = {}
+            sd = f"{out}/standing"
+            os.makedirs(sd, exist_ok=True)
+            for dr in DIRS:
+                p = f"{stand_src}/{dr}.png"
+                if os.path.exists(p):
+                    Image.open(p).convert("RGBA").save(f"{sd}/{dr}.png")
+                    stand[dr] = f"/characters-seated/{a}/standing/{dr}.png"
+            if stand:
+                entry["standing"] = stand
+
         cast[a] = entry
         print(f"{a}: seated{' + working x' + str(entry.get('workingFrames', 0)) if 'working' in entry else ''}")
 
@@ -54,7 +77,11 @@ def main():
         "// AUTO-GENERATED - Pixel Lab seated office cast (create_character_state +",
         "// breathing-idle). Static assets under public/characters-seated/. Do not edit.",
         "",
-        "export interface OfficeChar { seated: string; working?: string; workingFrames?: number }",
+        'export type Dir = "south"|"east"|"north"|"west"|"south-east"|"north-east"'
+        '|"north-west"|"south-west";',
+        "export interface OfficeChar { seated: string; working?: string;",
+        "  workingFrames?: number; sleeping?: string;",
+        "  standing?: Partial<Record<Dir, string>> }",
         "",
         "export const OFFICE_CAST: Record<string, OfficeChar> = {",
         *[f"  {json.dumps(a)}: {json.dumps(v)}," for a, v in cast.items()],

@@ -94,7 +94,7 @@ function objHeight(obj: string, dir: string): number {
 // Wall-mounted fixtures are sized to the wall band explicitly (not floor-scaled).
 const WALL_FIX_H: Record<string, number> = {
   blackboard: 36, "notice-board": 36, "tv-screen": 32, "wall-clock": 32,
-  window: 52, "air-conditioner": 46,
+  window: 56,
 };
 
 // Furniture is grouped into wall-hugging CLUSTERS, each rendered as a flex box so its
@@ -173,14 +173,13 @@ const CLUSTERS: Cluster[] = [
 ];
 
 // Back-wall mounted fixtures (front-facing), laid along the top wall band. The window
-// (scenery) sits among them; the air-conditioner is last so it hangs at the far side.
+// (scenery) sits among them.
 const WALL_FIXTURES: ClItem[] = [
   { obj: "window", dir: "south" },
   { obj: "blackboard", dir: "south" },
   { obj: "notice-board", dir: "south" },
   { obj: "tv-screen", dir: "south" },
   { obj: "wall-clock", dir: "south" },
-  { obj: "air-conditioner", dir: "south" },
 ];
 // Pool of fixtures for the conference-room wall; each room picks 2 (deterministically
 // from its members, so it's stable per room across renders but varies between rooms).
@@ -305,10 +304,6 @@ function ConferenceRoom({
     <div className="oc-cr">
       <div className="oc-cr-wall">
         <span className="oc-cr-sign">{members.map((m) => m.name).join("  +  ")}</span>
-        {OFFICE_OBJECTS["air-conditioner"]?.south && (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img className="oc-cr-ac" src={OFFICE_OBJECTS["air-conditioner"].south} alt="" aria-hidden />
-        )}
         <div className="oc-cr-fix">
           {crFixturesFor(members).map((obj) => {
             const src = OFFICE_OBJECTS[obj]?.south;
@@ -625,7 +620,8 @@ export const TOPDOWN_STYLE = `
   text-transform:uppercase; color:#8a7c5c; display:flex; align-items:center; gap:6px;
   margin:0 2px 8px; }
 .oc-confs-grid { display:flex; flex-wrap:wrap; gap:16px; }
-.oc-cr { width:min(360px, 100%); flex:1 1 300px; max-width:420px; border-radius:14px;
+/* two rooms per row, filling the office width with the row gap between them */
+.oc-cr { flex:1 1 320px; max-width:calc(50% - 8px); border-radius:14px;
   overflow:hidden; border:4px solid #cbbfa4;
   box-shadow: inset 0 0 0 2px #f5f0e4, 0 8px 22px rgba(0,0,0,.24);
   background:linear-gradient(#efe9dd,#e6ddcd); }
@@ -635,18 +631,14 @@ export const TOPDOWN_STYLE = `
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
   background-size: cover, var(--oc-wall-bg,auto); background-repeat:no-repeat, repeat;
   image-rendering:pixelated; border-bottom:3px solid #b6a67f; }
-/* the collaboration name in a readable pill (matching the agent name pills); capped
-   to the left half so a long name never runs under the centre-mounted AC */
-.oc-cr-sign { flex-shrink:1; min-width:0; max-width:calc(50% - 52px);
+/* the collaboration name in a readable pill (matching the agent name pills) */
+.oc-cr-sign { flex-shrink:1; min-width:0; max-width:calc(100% - 90px);
   font-family:ui-monospace,monospace; font-size:10px;
   letter-spacing:.1em; text-transform:uppercase; font-weight:700; color:#2c2a24;
   padding:2px 9px; border-radius:6px; border:1px solid rgba(0,0,0,.16);
   background:rgba(255,255,255,.8); box-shadow:0 1px 2px rgba(0,0,0,.14);
   text-shadow:0 1px 1px rgba(255,255,255,.6);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-/* air-conditioner mounted high (top edge), horizontally centred, on the conf wall */
-.oc-cr-ac { position:absolute; left:50%; top:1px; transform:translateX(-50%);
-  height:30px; z-index:3; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 .oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:12px; }
 .oc-cr-fiximg { height:26px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }

@@ -62,7 +62,18 @@ SPEC = {
     "notice-board": f"a cork notice board with pinned papers and sticky notes, {STYLE}",
     "blackboard": f"a wall-mounted blackboard with white chalk writing and diagrams, "
                   f"{STYLE}",
+    "window": f"a closed wooden-framed window with a scenic view of green trees and "
+              f"blue sky outside, front view, {STYLE}",
+    "air-conditioner": f"a wall-mounted white split air-conditioner unit, front view, "
+                       f"bold simple clean shapes, {STYLE}",
+    # --- the shared conference table, in the office's high-top-down perspective ---
+    "conference-table": f"a long rectangular wooden conference meeting table, high "
+                        f"top-down view, bold simple clean shapes, {STYLE}",
 }
+
+# Per-object generation size override (default SIZE). The conference table is bigger
+# so it stays crisp when stretched across the meeting room.
+SIZES = {"conference-table": 128}
 
 _UA = urllib.request.build_opener()
 _UA.addheaders = [("User-Agent", "Mozilla/5.0")]
@@ -97,7 +108,8 @@ def main():
             if name in done or ids.get(name):
                 continue
             out = mcp.call("create_8_direction_object",
-                           {"description": desc, "size": SIZE, "view": "high top-down"})
+                           {"description": desc, "size": SIZES.get(name, SIZE),
+                            "view": "high top-down"})
             oid = parse_id(out)
             if oid:
                 ids[name] = oid

@@ -284,5 +284,35 @@ export const OFFICE_OBJECTS: Record<string, OfficeObject> = {
     "north-west": "/office-objects/blackboard/north-west.png",
     "west": "/office-objects/blackboard/west.png",
     "south-west": "/office-objects/blackboard/south-west.png"
+  },
+  "window": {
+    "south": "/office-objects/window/south.png",
+    "south-east": "/office-objects/window/south-east.png",
+    "east": "/office-objects/window/east.png",
+    "north-east": "/office-objects/window/north-east.png",
+    "north": "/office-objects/window/north.png",
+    "north-west": "/office-objects/window/north-west.png",
+    "west": "/office-objects/window/west.png",
+    "south-west": "/office-objects/window/south-west.png"
+  },
+  "air-conditioner": {
+    "south": "/office-objects/air-conditioner/south.png",
+    "south-east": "/office-objects/air-conditioner/south-east.png",
+    "east": "/office-objects/air-conditioner/east.png",
+    "north-east": "/office-objects/air-conditioner/north-east.png",
+    "north": "/office-objects/air-conditioner/north.png",
+    "north-west": "/office-objects/air-conditioner/north-west.png",
+    "west": "/office-objects/air-conditioner/west.png",
+    "south-west": "/office-objects/air-conditioner/south-west.png"
+  },
+  "conference-table": {
+    "south": "/office-objects/conference-table/south.png",
+    "south-east": "/office-objects/conference-table/south-east.png",
+    "east": "/office-objects/conference-table/east.png",
+    "north-east": "/office-objects/conference-table/north-east.png",
+    "north": "/office-objects/conference-table/north.png",
+    "north-west": "/office-objects/conference-table/north-west.png",
+    "west": "/office-objects/conference-table/west.png",
+    "south-west": "/office-objects/conference-table/south-west.png"
   }
 };

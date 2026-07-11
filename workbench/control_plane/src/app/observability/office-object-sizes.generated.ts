@@ -3,6 +3,40 @@
 // so pixel density is uniform across objects. Do not edit by hand.
 
 export const OBJ_SIZES: Record<string, Record<string, [number, number]>> = {
+  "air-conditioner": {
+    "east": [
+      26,
+      45
+    ],
+    "north": [
+      71,
+      34
+    ],
+    "north-east": [
+      62,
+      63
+    ],
+    "north-west": [
+      61,
+      63
+    ],
+    "south": [
+      71,
+      34
+    ],
+    "south-east": [
+      61,
+      59
+    ],
+    "south-west": [
+      61,
+      58
+    ],
+    "west": [
+      26,
+      45
+    ]
+  },
   "armchair": {
     "east": [
       40,
@@ -205,6 +239,40 @@ export const OBJ_SIZES: Record<string, Record<string, [number, number]>> = {
     "west": [
       62,
       67
+    ]
+  },
+  "conference-table": {
+    "east": [
+      63,
+      97
+    ],
+    "north": [
+      121,
+      70
+    ],
+    "north-east": [
+      127,
+      106
+    ],
+    "north-west": [
+      127,
+      107
+    ],
+    "south": [
+      121,
+      75
+    ],
+    "south-east": [
+      128,
+      108
+    ],
+    "south-west": [
+      127,
+      108
+    ],
+    "west": [
+      63,
+      102
     ]
   },
   "couch": {
@@ -918,6 +986,40 @@ export const OBJ_SIZES: Record<string, Record<string, [number, number]>> = {
     ],
     "west": [
       23,
+      62
+    ]
+  },
+  "window": {
+    "east": [
+      12,
+      62
+    ],
+    "north": [
+      54,
+      54
+    ],
+    "north-east": [
+      47,
+      64
+    ],
+    "north-west": [
+      47,
+      64
+    ],
+    "south": [
+      57,
+      52
+    ],
+    "south-east": [
+      47,
+      69
+    ],
+    "south-west": [
+      47,
+      69
+    ],
+    "west": [
+      12,
       62
     ]
   },

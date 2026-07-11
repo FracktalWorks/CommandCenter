@@ -94,6 +94,7 @@ function objHeight(obj: string, dir: string): number {
 // Wall-mounted fixtures are sized to the wall band explicitly (not floor-scaled).
 const WALL_FIX_H: Record<string, number> = {
   blackboard: 36, "notice-board": 36, "tv-screen": 32, "wall-clock": 32,
+  window: 42, "air-conditioner": 34,
 };
 
 // Furniture is grouped into wall-hugging CLUSTERS, each rendered as a flex box so its
@@ -171,12 +172,15 @@ const CLUSTERS: Cluster[] = [
   },
 ];
 
-// Back-wall mounted fixtures (front-facing), laid along the top wall band.
+// Back-wall mounted fixtures (front-facing), laid along the top wall band. The window
+// (scenery) sits among them; the air-conditioner is last so it hangs at the far side.
 const WALL_FIXTURES: ClItem[] = [
+  { obj: "window", dir: "south" },
   { obj: "blackboard", dir: "south" },
   { obj: "notice-board", dir: "south" },
   { obj: "tv-screen", dir: "south" },
   { obj: "wall-clock", dir: "south" },
+  { obj: "air-conditioner", dir: "south" },
 ];
 // Pool of fixtures for the conference-room wall; each room picks 2 (deterministically
 // from its members, so it's stable per room across renders but varies between rooms).
@@ -301,6 +305,10 @@ function ConferenceRoom({
     <div className="oc-cr">
       <div className="oc-cr-wall">
         <span className="oc-cr-sign">{members.map((m) => m.name).join("  +  ")}</span>
+        {OFFICE_OBJECTS["air-conditioner"]?.south && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className="oc-cr-ac" src={OFFICE_OBJECTS["air-conditioner"].south} alt="" aria-hidden />
+        )}
         <div className="oc-cr-fix">
           {crFixturesFor(members).map((obj) => {
             const src = OFFICE_OBJECTS[obj]?.south;
@@ -332,7 +340,7 @@ function ConferenceRoom({
                       {
                         "--sheet": `url(${c.working})`,
                         "--n": c.workingFrames,
-                        "--w": "94px",
+                        "--w": "82px",
                       } as React.CSSProperties
                     }
                   />
@@ -360,7 +368,12 @@ function ConferenceRoom({
           );
         })}
         {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img className="oc-cr-table" src="/office-props/conference-table.png" alt="" aria-hidden />
+        <img
+          className="oc-cr-table"
+          src={OFFICE_OBJECTS["conference-table"]?.south ?? "/office-props/conference-table.png"}
+          alt=""
+          aria-hidden
+        />
       </div>
     </div>
   );
@@ -621,19 +634,24 @@ export const TOPDOWN_STYLE = `
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
   background-size: cover, var(--oc-wall-bg,auto); background-repeat:no-repeat, repeat;
   image-rendering:pixelated; border-bottom:3px solid #b6a67f; }
-/* the collaboration name in a readable pill (matching the agent name pills) */
-.oc-cr-sign { flex-shrink:1; min-width:0; font-family:ui-monospace,monospace; font-size:10px;
+/* the collaboration name in a readable pill (matching the agent name pills); capped
+   to the left half so a long name never runs under the centre-mounted AC */
+.oc-cr-sign { flex-shrink:1; min-width:0; max-width:calc(50% - 52px);
+  font-family:ui-monospace,monospace; font-size:10px;
   letter-spacing:.1em; text-transform:uppercase; font-weight:700; color:#2c2a24;
   padding:2px 9px; border-radius:6px; border:1px solid rgba(0,0,0,.16);
   background:rgba(255,255,255,.8); box-shadow:0 1px 2px rgba(0,0,0,.14);
   text-shadow:0 1px 1px rgba(255,255,255,.6);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+/* air-conditioner mounted at the CENTRE of the conference-room wall */
+.oc-cr-ac { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
+  height:26px; z-index:3; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 .oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:12px; }
 .oc-cr-fiximg { height:26px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 /* generic TV-screen glow pulse (wall band uses .oc-fix-tv-screen img above) */
 img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
-.oc-cr-floor { position:relative; height:150px; overflow:hidden;
+.oc-cr-floor { position:relative; height:172px; overflow:hidden;
   background-color:#cbb89a; background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto); background-repeat:repeat; image-rendering:pixelated; }
 .oc-cr-floor::before { content:''; position:absolute; inset:10px; z-index:0; pointer-events:none;
@@ -641,16 +659,16 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   background-repeat:repeat; image-rendering:pixelated; border-radius:4px;
   box-shadow: inset 0 0 0 2px rgba(0,0,0,.10), inset 0 10px 18px rgba(0,0,0,.05); }
 /* the agents, seated in a row and meeting */
-.oc-cr-seats { position:absolute; left:0; right:0; top:16px; z-index:1;
+.oc-cr-seats { position:absolute; left:0; right:0; top:12px; z-index:1;
   display:flex; justify-content:center; align-items:flex-end; gap:0; }
 .oc-cr-fig { position:relative; background:none; border:none; cursor:pointer; padding:0;
   margin:0 -4px; line-height:0; }
-.oc-cr-fig .oc-static { height:94px; }
+.oc-cr-fig .oc-static { height:82px; }
 .oc-cr-fig:hover { transform:translateY(-3px); transition:transform .15s; z-index:2; }
 /* the shared table (cropped to content) crossing the agents' fronts so it reads as
    ONE meeting table hiding their individual desks */
-.oc-cr-table { position:absolute; left:50%; bottom:12px; transform:translateX(-50%);
-  z-index:2; width:min(300px, 86%); image-rendering:pixelated;
+.oc-cr-table { position:absolute; left:50%; bottom:6px; transform:translateX(-50%);
+  z-index:2; width:min(200px, 74%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 /* plants standing in the room's bottom corners (table draws in front of their base) */
 .oc-cr-plant { position:absolute; bottom:8px; z-index:1; height:62px; image-rendering:pixelated;

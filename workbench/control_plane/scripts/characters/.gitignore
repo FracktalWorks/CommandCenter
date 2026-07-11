@@ -1,3 +1,5 @@
 char_seated/
 __pycache__/
 *.pyc
+_*.png
+office-preview.html

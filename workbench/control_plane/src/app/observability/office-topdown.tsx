@@ -154,6 +154,21 @@ export function TopDownOffice({
               // eslint-disable-next-line @next/next/no-img-element
               <img key={p} className={`oc-prop ${corner}`} src={`/office-props/${p}.png`} alt="" aria-hidden />
             ))}
+            {/* Conference room — the shared collaboration zone (static for now;
+                agents will walk over here in a later pass). */}
+            <div className="oc-conf">
+              <span className="oc-conf-label">Conference Room</span>
+              <div className="oc-conf-stage">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="oc-conf-rug" src="/office-props/rug.png" alt="" aria-hidden />
+                <span className="oc-chair oc-ch-t1" />
+                <span className="oc-chair oc-ch-t2" />
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img className="oc-conf-table" src="/office-props/conference-table.png" alt="" aria-hidden />
+                <span className="oc-chair oc-ch-b1" />
+                <span className="oc-chair oc-ch-b2" />
+              </div>
+            </div>
             <div className="oc-grid">
               {roster.map((a) => (
                 <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} />
@@ -215,6 +230,28 @@ export const TOPDOWN_STYLE = `
 .oc-prop.oc-tr { top:8px;  right:12px; }
 .oc-prop.oc-bl { bottom:10px; left:12px; }
 .oc-prop.oc-br { bottom:10px; right:12px; }
+
+/* Conference room — a distinct panelled zone at the top of the floor. Static
+   collaboration area; centered block so it stays responsive. */
+.oc-conf { position:relative; z-index:2; margin:0 auto 20px; width:min(420px, 100%);
+  padding:20px 14px 14px; border-radius:14px;
+  background:radial-gradient(120% 90% at 50% 40%, rgba(88,166,255,.08), rgba(0,0,0,.22));
+  box-shadow: inset 0 0 0 2px rgba(255,255,255,.06), inset 0 0 26px rgba(0,0,0,.35);
+  display:flex; flex-direction:column; align-items:center; gap:8px; }
+.oc-conf-label { font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.24em;
+  text-transform:uppercase; color:#c7b8e0; text-shadow:0 1px 0 #12101a; }
+.oc-conf-stage { position:relative; width:220px; height:132px;
+  display:flex; align-items:center; justify-content:center; }
+.oc-conf-rug { position:absolute; left:50%; top:52%; transform:translate(-50%,-50%);
+  width:210px; image-rendering:pixelated; opacity:.9;
+  filter:drop-shadow(0 4px 4px rgba(0,0,0,.45)); }
+.oc-conf-table { position:relative; z-index:2; width:170px; image-rendering:pixelated;
+  filter:drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
+/* empty seats around the table (small cushioned stools) */
+.oc-chair { position:absolute; z-index:1; width:20px; height:16px; border-radius:5px;
+  background:linear-gradient(#7b6cb0,#5a4d86); box-shadow:inset 0 -3px 0 rgba(0,0,0,.28), 0 2px 3px rgba(0,0,0,.4); }
+.oc-ch-t1 { top:14px; left:64px; } .oc-ch-t2 { top:14px; right:64px; }
+.oc-ch-b1 { bottom:16px; left:64px; } .oc-ch-b2 { bottom:16px; right:64px; }
 
 /* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. */
 .oc-grid { position:relative; z-index:2;

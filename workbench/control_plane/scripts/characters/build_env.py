@@ -38,13 +38,26 @@ def main():
     floor_rc = min(scores, key=scores.get)   # ~0% wood  -> pure carpet
     wall_rc = max(scores, key=scores.get)     # ~100% wood -> full wall
 
-    def save(rc, name):
+    def tile(rc):
         r, c = rc
-        im.crop((c * S, r * S, c * S + S, r * S + S)).save(f"{ENVDIR}/{name}.png")
+        return im.crop((c * S, r * S, c * S + S, r * S + S))
 
-    save(floor_rc, "floor")
-    save(wall_rc, "wall")
-    print(f"floor tile {floor_rc} (wood={scores[floor_rc]:.2f}), "
+    # Wall tile stays a single seamless texture.
+    tile(wall_rc).save(f"{ENVDIR}/wall.png")
+
+    # Floor becomes a Pokemon-style 2x2 CHECKERBOARD block of two brightness
+    # variants of the carpet tile — gives visible tiling texture, still seamless.
+    base = tile(floor_rc)
+    from PIL import ImageEnhance
+    light = ImageEnhance.Brightness(base).enhance(1.16)
+    dark = ImageEnhance.Brightness(base).enhance(0.90)
+    block = Image.new("RGBA", (S * 2, S * 2), (0, 0, 0, 0))
+    block.alpha_composite(light, (0, 0))
+    block.alpha_composite(dark, (S, 0))
+    block.alpha_composite(dark, (0, S))
+    block.alpha_composite(light, (S, S))
+    block.save(f"{ENVDIR}/floor.png")   # 64x64 checker block
+    print(f"floor tile {floor_rc} -> checker block, "
           f"wall tile {wall_rc} (wood={scores[wall_rc]:.2f})")
 
     lines = [
@@ -63,7 +76,7 @@ def main():
         "",
         "export const OFFICE_ENV: OfficeEnv = {",
         '  floor: "/office-env/floor.png",',
-        "  floorSize: 64,",
+        "  floorSize: 96,",
         '  wall: "/office-env/wall.png",',
         "};",
         "",

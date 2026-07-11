@@ -13,6 +13,6 @@ export interface OfficeEnv {
 
 export const OFFICE_ENV: OfficeEnv = {
   floor: "/office-env/floor.png",
-  floorSize: 64,
+  floorSize: 96,
   wall: "/office-env/wall.png",
 };

@@ -74,5 +74,145 @@ export const OFFICE_OBJECTS: Record<string, OfficeObject> = {
     "north-west": "/office-objects/side-table/north-west.png",
     "west": "/office-objects/side-table/west.png",
     "south-west": "/office-objects/side-table/south-west.png"
+  },
+  "plant-palm": {
+    "south": "/office-objects/plant-palm/south.png",
+    "south-east": "/office-objects/plant-palm/south-east.png",
+    "east": "/office-objects/plant-palm/east.png",
+    "north-east": "/office-objects/plant-palm/north-east.png",
+    "north": "/office-objects/plant-palm/north.png",
+    "north-west": "/office-objects/plant-palm/north-west.png",
+    "west": "/office-objects/plant-palm/west.png",
+    "south-west": "/office-objects/plant-palm/south-west.png"
+  },
+  "plant-cactus": {
+    "south": "/office-objects/plant-cactus/south.png",
+    "south-east": "/office-objects/plant-cactus/south-east.png",
+    "east": "/office-objects/plant-cactus/east.png",
+    "north-east": "/office-objects/plant-cactus/north-east.png",
+    "north": "/office-objects/plant-cactus/north.png",
+    "north-west": "/office-objects/plant-cactus/north-west.png",
+    "west": "/office-objects/plant-cactus/west.png",
+    "south-west": "/office-objects/plant-cactus/south-west.png"
+  },
+  "plant-monstera": {
+    "south": "/office-objects/plant-monstera/south.png",
+    "south-east": "/office-objects/plant-monstera/south-east.png",
+    "east": "/office-objects/plant-monstera/east.png",
+    "north-east": "/office-objects/plant-monstera/north-east.png",
+    "north": "/office-objects/plant-monstera/north.png",
+    "north-west": "/office-objects/plant-monstera/north-west.png",
+    "west": "/office-objects/plant-monstera/west.png",
+    "south-west": "/office-objects/plant-monstera/south-west.png"
+  },
+  "plant-hanging": {
+    "south": "/office-objects/plant-hanging/south.png",
+    "south-east": "/office-objects/plant-hanging/south-east.png",
+    "east": "/office-objects/plant-hanging/east.png",
+    "north-east": "/office-objects/plant-hanging/north-east.png",
+    "north": "/office-objects/plant-hanging/north.png",
+    "north-west": "/office-objects/plant-hanging/north-west.png",
+    "west": "/office-objects/plant-hanging/west.png",
+    "south-west": "/office-objects/plant-hanging/south-west.png"
+  },
+  "bookshelf-wide": {
+    "south": "/office-objects/bookshelf-wide/south.png",
+    "south-east": "/office-objects/bookshelf-wide/south-east.png",
+    "east": "/office-objects/bookshelf-wide/east.png",
+    "north-east": "/office-objects/bookshelf-wide/north-east.png",
+    "north": "/office-objects/bookshelf-wide/north.png",
+    "north-west": "/office-objects/bookshelf-wide/north-west.png",
+    "west": "/office-objects/bookshelf-wide/west.png",
+    "south-west": "/office-objects/bookshelf-wide/south-west.png"
+  },
+  "shelf-files": {
+    "south": "/office-objects/shelf-files/south.png",
+    "south-east": "/office-objects/shelf-files/south-east.png",
+    "east": "/office-objects/shelf-files/east.png",
+    "north-east": "/office-objects/shelf-files/north-east.png",
+    "north": "/office-objects/shelf-files/north.png",
+    "north-west": "/office-objects/shelf-files/north-west.png",
+    "west": "/office-objects/shelf-files/west.png",
+    "south-west": "/office-objects/shelf-files/south-west.png"
+  },
+  "printer-3d": {
+    "south": "/office-objects/printer-3d/south.png",
+    "south-east": "/office-objects/printer-3d/south-east.png",
+    "east": "/office-objects/printer-3d/east.png",
+    "north-east": "/office-objects/printer-3d/north-east.png",
+    "north": "/office-objects/printer-3d/north.png",
+    "north-west": "/office-objects/printer-3d/north-west.png",
+    "west": "/office-objects/printer-3d/west.png",
+    "south-west": "/office-objects/printer-3d/south-west.png"
+  },
+  "printer-3d-large": {
+    "south": "/office-objects/printer-3d-large/south.png",
+    "south-east": "/office-objects/printer-3d-large/south-east.png",
+    "east": "/office-objects/printer-3d-large/east.png",
+    "north-east": "/office-objects/printer-3d-large/north-east.png",
+    "north": "/office-objects/printer-3d-large/north.png",
+    "north-west": "/office-objects/printer-3d-large/north-west.png",
+    "west": "/office-objects/printer-3d-large/west.png",
+    "south-west": "/office-objects/printer-3d-large/south-west.png"
+  },
+  "coffee-machine": {
+    "south": "/office-objects/coffee-machine/south.png",
+    "south-east": "/office-objects/coffee-machine/south-east.png",
+    "east": "/office-objects/coffee-machine/east.png",
+    "north-east": "/office-objects/coffee-machine/north-east.png",
+    "north": "/office-objects/coffee-machine/north.png",
+    "north-west": "/office-objects/coffee-machine/north-west.png",
+    "west": "/office-objects/coffee-machine/west.png",
+    "south-west": "/office-objects/coffee-machine/south-west.png"
+  },
+  "water-cooler": {
+    "south": "/office-objects/water-cooler/south.png",
+    "south-east": "/office-objects/water-cooler/south-east.png",
+    "east": "/office-objects/water-cooler/east.png",
+    "north-east": "/office-objects/water-cooler/north-east.png",
+    "north": "/office-objects/water-cooler/north.png",
+    "north-west": "/office-objects/water-cooler/north-west.png",
+    "west": "/office-objects/water-cooler/west.png",
+    "south-west": "/office-objects/water-cooler/south-west.png"
+  },
+  "workstation": {
+    "south": "/office-objects/workstation/south.png",
+    "south-east": "/office-objects/workstation/south-east.png",
+    "east": "/office-objects/workstation/east.png",
+    "north-east": "/office-objects/workstation/north-east.png",
+    "north": "/office-objects/workstation/north.png",
+    "north-west": "/office-objects/workstation/north-west.png",
+    "west": "/office-objects/workstation/west.png",
+    "south-west": "/office-objects/workstation/south-west.png"
+  },
+  "filing-cabinet": {
+    "south": "/office-objects/filing-cabinet/south.png",
+    "south-east": "/office-objects/filing-cabinet/south-east.png",
+    "east": "/office-objects/filing-cabinet/east.png",
+    "north-east": "/office-objects/filing-cabinet/north-east.png",
+    "north": "/office-objects/filing-cabinet/north.png",
+    "north-west": "/office-objects/filing-cabinet/north-west.png",
+    "west": "/office-objects/filing-cabinet/west.png",
+    "south-west": "/office-objects/filing-cabinet/south-west.png"
+  },
+  "whiteboard": {
+    "south": "/office-objects/whiteboard/south.png",
+    "south-east": "/office-objects/whiteboard/south-east.png",
+    "east": "/office-objects/whiteboard/east.png",
+    "north-east": "/office-objects/whiteboard/north-east.png",
+    "north": "/office-objects/whiteboard/north.png",
+    "north-west": "/office-objects/whiteboard/north-west.png",
+    "west": "/office-objects/whiteboard/west.png",
+    "south-west": "/office-objects/whiteboard/south-west.png"
+  },
+  "printer-office": {
+    "south": "/office-objects/printer-office/south.png",
+    "south-east": "/office-objects/printer-office/south-east.png",
+    "east": "/office-objects/printer-office/east.png",
+    "north-east": "/office-objects/printer-office/north-east.png",
+    "north": "/office-objects/printer-office/north.png",
+    "north-west": "/office-objects/printer-office/north-west.png",
+    "west": "/office-objects/printer-office/west.png",
+    "south-west": "/office-objects/printer-office/south-west.png"
   }
 };

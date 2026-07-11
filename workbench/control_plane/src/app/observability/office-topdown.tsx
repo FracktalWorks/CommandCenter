@@ -32,17 +32,49 @@ interface OfficeAgent {
   source?: string | null;
 }
 
-// Decorative furniture placed around the room. Each piece uses the 8-direction
-// sprite that faces INTO the room from its wall: top wall -> south (front),
-// left wall -> east (faces right), right wall -> west (faces left), etc.
-const DECOR: Array<{ obj: string; dir: Dir; pos: string }> = [
-  { obj: "bookshelf", dir: "south", pos: "tl" }, // top wall, left
-  { obj: "plant-tall", dir: "south", pos: "tr" }, // top wall, right
-  { obj: "couch", dir: "east", pos: "lm" }, // left wall, faces right
-  { obj: "armchair", dir: "west", pos: "rm" }, // right wall, faces left
-  { obj: "beanbag", dir: "north-east", pos: "bl" }, // bottom-left
-  { obj: "side-table", dir: "south", pos: "bc" }, // bottom-center
-  { obj: "plant-small", dir: "north-west", pos: "br" }, // bottom-right
+// On-screen height (px) for each object type. Sprites share a 96px canvas, so a
+// fixed height would make a side-table look as big as a bookshelf; these keep the
+// relative scale faithful (and generally smaller so nothing reads "zoomed in").
+const OBJ_H: Record<string, number> = {
+  bookshelf: 92, "bookshelf-wide": 62, "shelf-files": 72,
+  couch: 74, armchair: 60, beanbag: 48, "side-table": 40,
+  "plant-tall": 76, "plant-palm": 84, "plant-monstera": 58,
+  "plant-small": 44, "plant-cactus": 38, "plant-hanging": 42,
+  "coffee-machine": 54, "water-cooler": 60, workstation: 50,
+  "printer-3d": 54, "printer-3d-large": 78, "printer-office": 50,
+  "filing-cabinet": 58, whiteboard: 72,
+};
+
+// Furniture scattered around the room's BORDER band (on the darker border tiles,
+// hugging the walls) so the central floor stays clear for desks. Each piece uses
+// the 8-direction sprite that faces INTO the room from its wall: top wall -> south
+// (front), left wall -> east (faces right), right wall -> west (faces left),
+// bottom -> north / diagonals. Coords are px/%, anchored to the floor edges.
+// Missing objects (not yet generated) are skipped, so this list can name any piece.
+type Placed = { obj: string; dir: Dir; css: React.CSSProperties };
+const DECOR: Placed[] = [
+  // top wall — front-facing, along the top border
+  { obj: "bookshelf", dir: "south", css: { top: 0, left: 14 } },
+  { obj: "shelf-files", dir: "south", css: { top: 14, left: 112 } },
+  { obj: "whiteboard", dir: "south", css: { top: 8, left: 208 } },
+  { obj: "printer-3d-large", dir: "south", css: { top: 6, right: 120 } },
+  { obj: "plant-palm", dir: "south", css: { top: -2, right: 18 } },
+  // left wall — faces right into the room
+  { obj: "filing-cabinet", dir: "east", css: { top: "13%", left: 6 } },
+  { obj: "couch", dir: "east", css: { top: "38%", left: 0 } },
+  { obj: "plant-monstera", dir: "east", css: { top: "63%", left: 8 } },
+  { obj: "water-cooler", dir: "east", css: { top: "84%", left: 6 } },
+  // right wall — faces left into the room
+  { obj: "printer-3d", dir: "west", css: { top: "13%", right: 8 } },
+  { obj: "armchair", dir: "west", css: { top: "38%", right: 2 } },
+  { obj: "plant-tall", dir: "west", css: { top: "62%", right: 6 } },
+  { obj: "workstation", dir: "west", css: { top: "86%", right: 10 } },
+  // bottom border — north / diagonal facings, scattered
+  { obj: "beanbag", dir: "north-east", css: { bottom: 6, left: 24 } },
+  { obj: "plant-cactus", dir: "north", css: { bottom: 8, left: 120 } },
+  { obj: "side-table", dir: "north", css: { bottom: 12, left: 214 } },
+  { obj: "coffee-machine", dir: "north", css: { bottom: 8, right: 132 } },
+  { obj: "plant-small", dir: "north-west", css: { bottom: 4, right: 22 } },
 ];
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
@@ -60,14 +92,20 @@ export function characterFor(name: string): string {
   return ROLE_TO_CHAR[roleFor(name)] ?? "strategy";
 }
 
+// A small potted plant tucked beside a desk (front-facing sprite), used to green up
+// the desk grid. Rotates through the small-plant variants so the room isn't uniform.
+const DESK_PLANTS = ["plant-small", "plant-cactus", "plant-monstera", "plant-hanging"];
+
 function Seat({
   agent,
   state,
   onOpen,
+  plant,
 }: {
   agent: OfficeAgent;
   state: OfficeState;
   onOpen: (name: string) => void;
+  plant?: string | null;
 }) {
   const key = characterFor(agent.name);
   const c = OFFICE_CAST[key];
@@ -93,6 +131,10 @@ function Seat({
         )}
         {state === "idle" && <span className="oc-zzz">z</span>}
         {state === "working" && <span className="oc-ping" />}
+        {plant && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img className="oc-seat-plant" src={plant} alt="" aria-hidden />
+        )}
       </div>
       <div className="oc-plate">
         <span className="oc-name">{agent.name}</span>
@@ -176,12 +218,27 @@ export function TopDownOffice({
             <span className="oc-sign">THE OFFICE</span>
           </div>
           <div className="oc-floor">
-            {DECOR.map((it) => {
+            {DECOR.map((it, i) => {
               const src = OFFICE_OBJECTS[it.obj]?.[it.dir];
               if (!src) return null;
+              const wall =
+                it.css.left != null && typeof it.css.top === "string"
+                  ? "left"
+                  : it.css.right != null && typeof it.css.top === "string"
+                    ? "right"
+                    : it.css.bottom != null
+                      ? "bottom"
+                      : "top";
               return (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img key={it.pos} className={`oc-decor oc-d-${it.pos}`} src={src} alt="" aria-hidden />
+                <img
+                  key={`${it.obj}-${i}`}
+                  className={`oc-decor oc-w-${wall}`}
+                  style={{ ...it.css, height: OBJ_H[it.obj] ?? 62 }}
+                  src={src}
+                  alt=""
+                  aria-hidden
+                  // eslint-disable-next-line @next/next/no-img-element
+                />
               );
             })}
             {/* Conference room — one table by default; more tables spawn as more
@@ -195,7 +252,10 @@ export function TopDownOffice({
                   </span>
                   <div className="oc-conf-stage">
                     <span className="oc-rug" aria-hidden />
-                    {["oc-ch-t1", "oc-ch-t2", "oc-ch-b1", "oc-ch-b2"].map((ch) => (
+                    {/* Seating gathered organically at the HEAD (top) of the table —
+                        a cluster of chairs with jittered offsets/tilt, backs to the
+                        wall (scaleY flip), rather than a rigid 4-around layout. */}
+                    {["oc-ch-a", "oc-ch-b", "oc-ch-c", "oc-ch-d", "oc-ch-e"].map((ch) => (
                       // eslint-disable-next-line @next/next/no-img-element
                       <img key={ch} className={`oc-chair ${ch}`} src="/office-props/chair.png" alt="" aria-hidden />
                     ))}
@@ -206,9 +266,14 @@ export function TopDownOffice({
               ))}
             </div>
             <div className="oc-grid">
-              {roster.map((a) => (
-                <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} />
-              ))}
+              {roster.map((a, i) => {
+                // Green up ~every 3rd desk with a small plant (variant rotates).
+                const plantKey = i % 3 === 1 ? DESK_PLANTS[(i >> 1) % DESK_PLANTS.length] : null;
+                const plant = plantKey ? OFFICE_OBJECTS[plantKey]?.south ?? null : null;
+                return (
+                  <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} plant={plant} />
+                );
+              })}
             </div>
           </div>
         </div>
@@ -265,17 +330,16 @@ export const TOPDOWN_STYLE = `
     inset 0 12px 22px rgba(0,0,0,.05);
 }
 
-/* Directional furniture placed around the room. Each faces into the room via its
-   8-direction sprite. Anchored to the walls so they hold at any room size. */
-.oc-decor { position:absolute; z-index:1; height:82px; image-rendering:pixelated;
-  filter:drop-shadow(0 4px 3px rgba(0,0,0,.32)); pointer-events:none; }
-.oc-d-tl { top:40px; left:26px; }
-.oc-d-tr { top:40px; right:26px; }
-.oc-d-lm { top:46%; left:22px; transform:translateY(-50%); height:88px; }
-.oc-d-rm { top:46%; right:22px; transform:translateY(-50%); height:88px; }
-.oc-d-bl { bottom:40px; left:26px; }
-.oc-d-br { bottom:40px; right:26px; }
-.oc-d-bc { bottom:18px; left:50%; transform:translateX(-50%); height:66px; }
+/* Directional furniture scattered around the room's border. Each faces into the
+   room via its 8-direction sprite; height comes from the inline OBJ_H map so relative
+   scale stays faithful. Left/right-wall pieces are vertically centered on their %
+   anchor. Anchored to the floor edges so they hold at any room size. */
+.oc-decor { position:absolute; z-index:1; image-rendering:pixelated;
+  filter:drop-shadow(0 4px 3px rgba(0,0,0,.30)); pointer-events:none; }
+.oc-w-left, .oc-w-right { transform:translateY(-50%); }
+/* small potted plant tucked beside a desk to green up the grid */
+.oc-seat-plant { position:absolute; right:2px; bottom:12px; height:38px; z-index:2;
+  image-rendering:pixelated; filter:drop-shadow(0 3px 2px rgba(0,0,0,.45)); }
 
 /* Conference zone — one table by default; wraps to a grid of tables as more
    collaborations spawn. */
@@ -302,16 +366,21 @@ export const TOPDOWN_STYLE = `
 /* pixel-art meeting chairs hugging the table's long edges. The chair sprite is
    drawn from behind (back toward viewer) — correct for the near/bottom seats; the
    far/top seats flip vertically so their backs point away toward the wall. */
-.oc-chair { position:absolute; z-index:1; width:36px; image-rendering:pixelated;
-  filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
-.oc-ch-t1, .oc-ch-t2 { transform:scaleY(-1); }
-.oc-ch-t1 { top:22px; left:50px; } .oc-ch-t2 { top:22px; right:50px; }
-.oc-ch-b1 { bottom:22px; left:50px; } .oc-ch-b2 { bottom:22px; right:50px; }
+.oc-chair { position:absolute; z-index:1; width:34px; image-rendering:pixelated;
+  filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); transform-origin:center bottom; }
+/* clustered at the head (top) of the table, jittered + tilted for an organic look;
+   all flipped so their backs point toward the wall, and behind the table (z<table). */
+.oc-ch-a { top:8px;  left:30px;  transform:scaleY(-1) rotate(8deg); }
+.oc-ch-b { top:0;    left:70px;  transform:scaleY(-1) rotate(3deg); }
+.oc-ch-c { top:2px;  left:112px; transform:scaleY(-1) rotate(-4deg); }
+.oc-ch-d { top:10px; left:152px; transform:scaleY(-1) rotate(-9deg); }
+.oc-ch-e { top:26px; left:92px;  width:30px; transform:scaleY(-1) rotate(2deg); }
 
-/* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. */
+/* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. Tighter
+   cells + gap pull the agents' desks closer together. */
 .oc-grid { position:relative; z-index:2;
-  display:grid; grid-template-columns:repeat(auto-fill, minmax(148px, 1fr));
-  gap:10px 12px; justify-items:center; }
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(126px, 1fr));
+  gap:4px 6px; justify-items:center; }
 
 .oc-seat { position:relative; display:flex; flex-direction:column; align-items:center;
   background:none; border:none; cursor:pointer; padding:4px 0; width:100%; }
@@ -339,18 +408,17 @@ export const TOPDOWN_STYLE = `
 
 /* Compact the room on small screens: smaller sprites, tighter grid, fewer props. */
 @media (max-width:560px){
-  .oc-grid { grid-template-columns:repeat(auto-fill, minmax(116px, 1fr)); gap:6px 8px; }
+  .oc-grid { grid-template-columns:repeat(auto-fill, minmax(112px, 1fr)); gap:4px 6px; }
   .oc-figure { height:104px; }
   .oc-static { height:104px; }
   .oc-anim { --w:104px; }
-  .oc-floor { padding:46px 30px 42px; }
-  .oc-floor::before { inset:16px; }
-  .oc-decor { height:54px; }
-  .oc-d-lm, .oc-d-rm, .oc-d-bc { display:none; }
-  .oc-d-tl { top:22px; left:12px; }
-  .oc-d-tr { top:22px; right:12px; }
-  .oc-d-bl { bottom:22px; left:12px; }
-  .oc-d-br { bottom:22px; right:12px; }
+  .oc-floor { padding:40px 18px 40px; }
+  .oc-floor::before { inset:14px; }
+  /* the side gutters collapse on mobile, so drop the left/right-wall furniture and
+     shrink the rest; inline heights need !important to be capped here. */
+  .oc-w-left, .oc-w-right { display:none; }
+  .oc-decor { height:44px !important; }
+  .oc-seat-plant { height:30px; }
   .oc-sign { display:none; }
 }
 

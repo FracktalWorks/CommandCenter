@@ -22,6 +22,7 @@ DIRS = ["south", "south-east", "east", "north-east",
         "north", "north-west", "west", "south-west"]
 
 SPEC = {
+    # --- original set ---
     "bookshelf": f"a tall wooden bookshelf full of colourful books, {STYLE}",
     "couch": f"a cozy two-seater lounge couch with soft cushions, {STYLE}",
     "beanbag": f"a round comfy beanbag chair, {STYLE}",
@@ -29,6 +30,23 @@ SPEC = {
     "plant-small": f"a small round potted fern in a terracotta pot, {STYLE}",
     "armchair": f"a comfy cushioned lounge armchair, {STYLE}",
     "side-table": f"a small round wooden coffee side table, {STYLE}",
+    # --- more plant variety (make the room greener + more random) ---
+    "plant-palm": f"a tall potted areca palm with wide fronds in a woven basket, {STYLE}",
+    "plant-cactus": f"a small potted cactus in a painted clay pot, {STYLE}",
+    "plant-monstera": f"a leafy monstera plant in a modern grey pot, {STYLE}",
+    "plant-hanging": f"a small trailing pothos plant in a hanging pot, {STYLE}",
+    # --- more bookshelf variety ---
+    "bookshelf-wide": f"a low wide wooden bookcase with books and a few plants on top, {STYLE}",
+    "shelf-files": f"a wooden shelf stacked with binders, folders and boxes, {STYLE}",
+    # --- office equipment (a 3D-printing startup) ---
+    "printer-3d": f"a desktop FDM 3D printer with a half-printed model on its bed, {STYLE}",
+    "printer-3d-large": f"a large industrial 3D printer cabinet with a glass door, {STYLE}",
+    "coffee-machine": f"a countertop espresso coffee machine with a mug, {STYLE}",
+    "water-cooler": f"a blue-jug office water cooler dispenser, {STYLE}",
+    "workstation": f"a computer workstation: monitor, keyboard and desktop tower, {STYLE}",
+    "filing-cabinet": f"a short metal office filing cabinet with drawers, {STYLE}",
+    "whiteboard": f"a standing whiteboard easel with colourful diagrams, {STYLE}",
+    "printer-office": f"a white office laser printer on a small stand, {STYLE}",
 }
 
 _UA = urllib.request.build_opener()

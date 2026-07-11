@@ -29,8 +29,9 @@ SEED = 7           # deterministic mosaic layout
 
 SETS = {
     "cream": "7cd0feac-fc6f-47e5-b212-6f03a8ab2630",  # cream floor + darker tiles
-    "wood": "e2c6c06e-c847-463a-851b-04adae703fd8",   # warm wood planks
+    "wood": "e2c6c06e-c847-463a-851b-04adae703fd8",   # warm wood planks (old wall)
     "honeytan": "72f290b6-b338-4e59-94e0-f20c3793ade3",  # 48px honey-tan checker
+    "wallslats": "0ce1e7b8-7619-4c55-8ede-2861baf6191f",  # NEW wooden wall slats 64px
 }
 
 ALL_ROT = [0, 90, 180, 270]
@@ -38,7 +39,9 @@ ALL_ROT = [0, 90, 180, 270]
 ZONES = {
     "floor": ("cream", [13], 8, 8, ALL_ROT),         # the decorative tile everywhere
     "lane": ("cream", [12, 15], 6, 2, ALL_ROT),      # darker tile: office BORDER frame
-    "wall": ("wood", [0, 2, 3, 7, 9, 11], 8, 2, [0, 180]),  # keep planks vertical
+    # NEW wall slats — cohesive warm planks (skip #3 crosshatch); no rotation so the
+    # vertical slats stay vertical + seamless.
+    "wall": ("wallslats", [0, 1, 4, 5, 6, 9, 10, 14], 8, 2, [0]),
 }
 # role -> (brightness, saturation) multipliers. Floor: flat + a bit darker (less white).
 TONE = {"floor": (1.0, 0.5)}

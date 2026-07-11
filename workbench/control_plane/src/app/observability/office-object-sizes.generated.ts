@@ -243,36 +243,36 @@ export const OBJ_SIZES: Record<string, Record<string, [number, number]>> = {
   },
   "counter-coffee": {
     "east": [
-      24,
-      63
+      36,
+      68
     ],
     "north": [
-      59,
-      52
+      41,
+      65
     ],
     "north-east": [
-      58,
-      60
+      53,
+      75
     ],
     "north-west": [
-      59,
-      60
+      52,
+      75
     ],
     "south": [
-      59,
-      57
+      41,
+      71
     ],
     "south-east": [
-      60,
-      64
+      52,
+      77
     ],
     "south-west": [
-      60,
-      67
+      52,
+      78
     ],
     "west": [
-      23,
-      63
+      37,
+      68
     ]
   },
   "desk-computer": {
@@ -719,36 +719,36 @@ export const OBJ_SIZES: Record<string, Record<string, [number, number]>> = {
   },
   "side-table": {
     "east": [
-      29,
-      56
+      63,
+      46
     ],
     "north": [
-      51,
-      53
+      62,
+      59
     ],
     "north-east": [
-      51,
-      51
+      63,
+      59
     ],
     "north-west": [
-      51,
-      51
+      63,
+      59
     ],
     "south": [
-      51,
-      53
+      62,
+      58
     ],
     "south-east": [
-      51,
-      52
+      63,
+      58
     ],
     "south-west": [
-      51,
-      52
+      63,
+      58
     ],
     "west": [
-      29,
-      56
+      62,
+      42
     ]
   },
   "table-plant": {

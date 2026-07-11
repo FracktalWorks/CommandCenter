@@ -181,12 +181,20 @@ const WALL_FIXTURES: ClItem[] = [
 // Pool of fixtures for the conference-room wall; each room picks 2 (deterministically
 // from its members, so it's stable per room across renders but varies between rooms).
 const CR_FIX_POOL = ["tv-screen", "wall-clock", "notice-board", "blackboard"];
-function crFixturesFor(members: OfficeAgent[]): string[] {
-  const key = members.map((m) => m.name).join("|");
+const CR_PLANT_POOL = ["plant-tall", "plant-palm", "plant-monstera", "plant-cactus"];
+function _hash(key: string): number {
   let h = 0;
   for (let i = 0; i < key.length; i++) h = (h * 31 + key.charCodeAt(i)) | 0;
-  const start = Math.abs(h) % CR_FIX_POOL.length;
+  return Math.abs(h);
+}
+function crFixturesFor(members: OfficeAgent[]): string[] {
+  const start = _hash(members.map((m) => m.name).join("|")) % CR_FIX_POOL.length;
   return [CR_FIX_POOL[start], CR_FIX_POOL[(start + 1) % CR_FIX_POOL.length]];
+}
+// Two (different) plants to flank the conference table, deterministic per room.
+function crPlantsFor(members: OfficeAgent[]): string[] {
+  const start = _hash(members.map((m) => m.name).join("#")) % CR_PLANT_POOL.length;
+  return [CR_PLANT_POOL[start], CR_PLANT_POOL[(start + 2) % CR_PLANT_POOL.length]];
 }
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
@@ -336,6 +344,21 @@ function ConferenceRoom({
             );
           })}
         </div>
+        {/* plants flanking the table, matching the office aesthetic */}
+        {crPlantsFor(members).map((obj, i) => {
+          const src = OFFICE_OBJECTS[obj]?.[i === 0 ? "north-east" : "north-west"] ?? OFFICE_OBJECTS[obj]?.south;
+          if (!src) return null;
+          return (
+            <img
+              key={`${obj}-${i}`}
+              className={`oc-cr-plant ${i === 0 ? "oc-cr-plant-l" : "oc-cr-plant-r"}`}
+              src={src}
+              alt=""
+              aria-hidden
+              // eslint-disable-next-line @next/next/no-img-element
+            />
+          );
+        })}
         {/* eslint-disable-next-line @next/next/no-img-element */}
         <img className="oc-cr-table" src="/office-props/conference-table.png" alt="" aria-hidden />
       </div>
@@ -598,9 +621,12 @@ export const TOPDOWN_STYLE = `
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
   background-size: cover, var(--oc-wall-bg,auto); background-repeat:no-repeat, repeat;
   image-rendering:pixelated; border-bottom:3px solid #b6a67f; }
+/* the collaboration name in a readable pill (matching the agent name pills) */
 .oc-cr-sign { flex-shrink:1; min-width:0; font-family:ui-monospace,monospace; font-size:10px;
-  letter-spacing:.12em; text-transform:uppercase; color:#5f5030;
-  text-shadow:0 1px 0 rgba(255,255,255,.5);
+  letter-spacing:.1em; text-transform:uppercase; font-weight:700; color:#2c2a24;
+  padding:2px 9px; border-radius:6px; border:1px solid rgba(0,0,0,.16);
+  background:rgba(255,255,255,.8); box-shadow:0 1px 2px rgba(0,0,0,.14);
+  text-shadow:0 1px 1px rgba(255,255,255,.6);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
 .oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:12px; }
 .oc-cr-fiximg { height:26px; display:block; image-rendering:pixelated;
@@ -626,6 +652,11 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-table { position:absolute; left:50%; bottom:12px; transform:translateX(-50%);
   z-index:2; width:min(300px, 86%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
+/* plants standing in the room's bottom corners (table draws in front of their base) */
+.oc-cr-plant { position:absolute; bottom:8px; z-index:1; height:62px; image-rendering:pixelated;
+  filter:drop-shadow(0 3px 3px rgba(0,0,0,.3)); pointer-events:none; }
+.oc-cr-plant-l { left:2px; }
+.oc-cr-plant-r { right:2px; }
 
 /* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. Tight
    cells + gap pack the agents' desks close together. */

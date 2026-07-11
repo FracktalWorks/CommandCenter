@@ -29,7 +29,8 @@ SPEC = {
     "plant-tall": f"a tall leafy potted plant in a white pot, {STYLE}",
     "plant-small": f"a small round potted fern in a terracotta pot, {STYLE}",
     "armchair": f"a comfy cushioned lounge armchair, {STYLE}",
-    "side-table": f"a small round wooden coffee side table, {STYLE}",
+    "side-table": f"a round wooden coffee table viewed from above with bold "
+                  f"simple clean shapes, {STYLE}",
     # --- more plant variety (make the room greener + more random) ---
     "plant-palm": f"a tall potted areca palm with wide fronds in a woven basket, {STYLE}",
     "plant-cactus": f"a small potted cactus in a painted clay pot, {STYLE}",
@@ -53,8 +54,8 @@ SPEC = {
                      f"keyboard on top of it, {STYLE}",
     "table-plant": f"a small round wooden side table with a green potted plant "
                    f"sitting on top of it, {STYLE}",
-    "counter-coffee": f"a small wooden coffee bar counter with a chrome espresso "
-                      f"machine and a mug clearly on top, crisp readable, {STYLE}",
+    "counter-coffee": f"a chrome espresso coffee machine on a small wooden cabinet, "
+                      f"front view, bold simple clean shapes, {STYLE}",
     # --- back-wall mounted fixtures (front-facing) ---
     "wall-clock": f"a round analog wall clock, {STYLE}",
     "tv-screen": f"a wall-mounted flat-screen TV showing a colourful picture, {STYLE}",

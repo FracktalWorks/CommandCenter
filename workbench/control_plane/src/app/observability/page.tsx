@@ -28,6 +28,7 @@ import {
 } from "lucide-react";
 
 import { AvatarStudio } from "./avatar-studio";
+import { OFFICE_CAST } from "./office-cast.generated";
 import { TopDownOffice, TOPDOWN_STYLE } from "./office-topdown";
 import { PIXEL_ART_STYLE } from "./pixel";
 import {
@@ -746,6 +747,12 @@ export default function ObservabilityPage() {
   const [selected, setSelected] = useState<string | null>(null);
   const [, forceTick] = useState(0);
   const seen = useRef<Set<string>>(new Set());
+  // Simulation mode (`/observability?sim=1`): populate the office with the
+  // pre-generated cast and cycle their states — lets you test the office live
+  // WITHOUT the gateway/roster backend running.
+  const [simMode] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("sim"),
+  );
 
   const pushEvents = useCallback((incoming: ActivityEvent[], prepend: boolean) => {
     if (!incoming.length) return;
@@ -786,8 +793,58 @@ export default function ObservabilityPage() {
     }
   }, []);
 
+  // ── Simulation: drive the office locally without the backend ──────────────
+  useEffect(() => {
+    if (!simMode) return;
+    let alive = true;
+    const names = Object.keys(OFFICE_CAST);
+    // Seed asynchronously (not synchronously in the effect body).
+    const seed = setTimeout(() => {
+      if (!alive) return;
+      setConnected(true);
+      setRoster(
+        names.map((n) => ({ name: n, description: `Simulated ${n}`, status: "idle", source: "chat" })),
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      setCost({
+        days: [{ date: today, cost: 4.2, tokens: 1_200_000, calls: 340, by_model: {} }],
+        by_model: {},
+        by_source: { chat: { cost: 2.1, calls: 180 }, email: { cost: 1.4, calls: 90 }, tasks: { cost: 0.7, calls: 70 } },
+        by_agent: {},
+        totals: { cost: 4.2, tokens: 1_200_000, calls: 340 },
+      });
+    }, 0);
+    const MODELS = [
+      { model: "deepseek/deepseek-chat", tier: "tier-balanced" },
+      { model: "openai/gpt-4o", tier: "tier-powerful" },
+      { model: "anthropic/claude-sonnet-4", tier: "tier-powerful" },
+    ];
+    const roll = (): AgentRow["status"] => {
+      const r = Math.random();
+      return r < 0.42 ? "working" : r < 0.5 ? "error" : "idle";
+    };
+    const id = setInterval(() => {
+      setRoster((prev) => prev.map((a) => (Math.random() < 0.4 ? { ...a, status: roll() } : a)));
+      const m = MODELS[Math.floor(Math.random() * MODELS.length)];
+      const agent = names[Math.floor(Math.random() * names.length)];
+      pushEvents(
+        [
+          { _id: `sim-a-${Date.now()}`, ts: new Date().toISOString(), kind: "agent", phase: "start", agent, source: "chat", model: m.model },
+          { _id: `sim-m-${Date.now()}`, ts: new Date().toISOString(), kind: "model", model: m.model, tier: m.tier, tokens: 800 + Math.floor(Math.random() * 4000), cost_usd: Math.random() * 0.02, source: "chat" },
+        ],
+        true,
+      );
+    }, 2200);
+    return () => {
+      alive = false;
+      clearTimeout(seed);
+      clearInterval(id);
+    };
+  }, [simMode, pushEvents]);
+
   // Backfill
   useEffect(() => {
+    if (simMode) return;
     let cancelled = false;
     (async () => {
       try {
@@ -801,10 +858,11 @@ export default function ObservabilityPage() {
     return () => {
       cancelled = true;
     };
-  }, [pushEvents]);
+  }, [pushEvents, simMode]);
 
   // Live tail
   useEffect(() => {
+    if (simMode) return;
     const es = new EventSource("/api/observability/activity/stream");
     es.onopen = () => setConnected(true);
     es.onmessage = (ev) => {
@@ -817,7 +875,7 @@ export default function ObservabilityPage() {
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [pushEvents]);
+  }, [pushEvents, simMode]);
 
   // Event-only roster refresh for the Avatar Studio (called from onSaved, never
   // from an effect body — keeps the set-state-in-effect lint happy).
@@ -833,6 +891,7 @@ export default function ObservabilityPage() {
 
   // Roster + cost polling
   useEffect(() => {
+    if (simMode) return;
     let cancelled = false;
     const loadRoster = async () => {
       try {
@@ -861,7 +920,7 @@ export default function ObservabilityPage() {
       clearInterval(r);
       clearInterval(c);
     };
-  }, []);
+  }, [simMode]);
 
   // Prune stale model blades + hot agents; keep timestamps fresh.
   useEffect(() => {

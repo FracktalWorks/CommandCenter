@@ -36,13 +36,13 @@ interface OfficeAgent {
 // fixed height would make a side-table look as big as a bookshelf; these keep the
 // relative scale faithful (and generally smaller so nothing reads "zoomed in").
 const OBJ_H: Record<string, number> = {
-  bookshelf: 92, "bookshelf-wide": 62, "shelf-files": 72,
-  couch: 74, armchair: 60, beanbag: 48, "side-table": 40,
-  "plant-tall": 76, "plant-palm": 84, "plant-monstera": 58,
-  "plant-small": 44, "plant-cactus": 38, "plant-hanging": 42,
-  "coffee-machine": 54, "water-cooler": 60, workstation: 50,
-  "printer-3d": 54, "printer-3d-large": 78, "printer-office": 50,
-  "filing-cabinet": 58, whiteboard: 72,
+  bookshelf: 66, "bookshelf-wide": 58, "shelf-files": 58,
+  couch: 54, armchair: 54, beanbag: 48, "side-table": 40,
+  "plant-tall": 76, "plant-palm": 72, "plant-monstera": 64,
+  "plant-small": 46, "plant-cactus": 50, "plant-hanging": 40,
+  "coffee-machine": 54, "water-cooler": 58, workstation: 52,
+  "printer-3d": 60, "printer-3d-large": 68, "printer-office": 46,
+  "filing-cabinet": 56, whiteboard: 60,
 };
 
 // Furniture scattered around the room's BORDER band (on the darker border tiles,
@@ -52,29 +52,39 @@ const OBJ_H: Record<string, number> = {
 // bottom -> north / diagonals. Coords are px/%, anchored to the floor edges.
 // Missing objects (not yet generated) are skipped, so this list can name any piece.
 type Placed = { obj: string; dir: Dir; css: React.CSSProperties };
+// Grouped into wall-hugging CLUSTERS (a library, a print/workstation corner, a
+// lounge, a kitchen, and two plant groves) rather than evenly spread. Sprites are
+// pre-cropped to content (crop_objects.py) so a 0-2px edge offset sits FLUSH against
+// the wall. Left/right clusters use calc(%±px) so members stay a fixed distance apart
+// (tight) while the cluster stays centered as the room grows.
 const DECOR: Placed[] = [
-  // top wall — front-facing, along the top border
-  { obj: "bookshelf", dir: "south", css: { top: 0, left: 14 } },
-  { obj: "shelf-files", dir: "south", css: { top: 14, left: 112 } },
-  { obj: "whiteboard", dir: "south", css: { top: 8, left: 208 } },
-  { obj: "printer-3d-large", dir: "south", css: { top: 6, right: 120 } },
-  { obj: "plant-palm", dir: "south", css: { top: -2, right: 18 } },
-  // left wall — faces right into the room
-  { obj: "filing-cabinet", dir: "east", css: { top: "13%", left: 6 } },
-  { obj: "couch", dir: "east", css: { top: "38%", left: 0 } },
-  { obj: "plant-monstera", dir: "east", css: { top: "63%", left: 8 } },
-  { obj: "water-cooler", dir: "east", css: { top: "84%", left: 6 } },
-  // right wall — faces left into the room
-  { obj: "printer-3d", dir: "west", css: { top: "13%", right: 8 } },
-  { obj: "armchair", dir: "west", css: { top: "38%", right: 2 } },
-  { obj: "plant-tall", dir: "west", css: { top: "62%", right: 6 } },
-  { obj: "workstation", dir: "west", css: { top: "86%", right: 10 } },
-  // bottom border — north / diagonal facings, scattered
-  { obj: "beanbag", dir: "north-east", css: { bottom: 6, left: 24 } },
-  { obj: "plant-cactus", dir: "north", css: { bottom: 8, left: 120 } },
-  { obj: "side-table", dir: "north", css: { bottom: 12, left: 214 } },
-  { obj: "coffee-machine", dir: "north", css: { bottom: 8, right: 132 } },
-  { obj: "plant-small", dir: "north-west", css: { bottom: 4, right: 22 } },
+  // TOP-LEFT — library nook (front-facing, flush to the top wall)
+  { obj: "bookshelf", dir: "south", css: { top: 2, left: 6 } },
+  { obj: "bookshelf-wide", dir: "south", css: { top: 6, left: 62 } },
+  { obj: "shelf-files", dir: "south", css: { top: 4, left: 124 } },
+  { obj: "whiteboard", dir: "south", css: { top: 6, left: 186 } },
+  // TOP-RIGHT — 3D-print & workstation corner
+  { obj: "printer-3d-large", dir: "south", css: { top: 2, right: 150 } },
+  { obj: "printer-3d", dir: "south", css: { top: 4, right: 100 } },
+  { obj: "workstation", dir: "south", css: { top: 4, right: 48 } },
+  { obj: "plant-palm", dir: "south", css: { top: -2, right: 2 } },
+  // LEFT WALL — lounge cluster (faces right), centered vertically
+  { obj: "couch", dir: "east", css: { left: 0, top: "calc(45% - 46px)" } },
+  { obj: "side-table", dir: "east", css: { left: 44, top: "calc(45% - 8px)" } },
+  { obj: "armchair", dir: "east", css: { left: 2, top: "calc(45% + 40px)" } },
+  // RIGHT WALL — kitchen / supply cluster (faces left)
+  { obj: "coffee-machine", dir: "west", css: { right: 2, top: "calc(44% - 62px)" } },
+  { obj: "water-cooler", dir: "west", css: { right: 6, top: "calc(44% - 14px)" } },
+  { obj: "printer-office", dir: "west", css: { right: 2, top: "calc(44% + 32px)" } },
+  { obj: "filing-cabinet", dir: "west", css: { right: 0, top: "calc(44% + 78px)" } },
+  // BOTTOM-LEFT — chill nook + greenery
+  { obj: "beanbag", dir: "north-east", css: { bottom: 2, left: 12 } },
+  { obj: "plant-cactus", dir: "north", css: { bottom: 8, left: 60 } },
+  { obj: "plant-monstera", dir: "north", css: { bottom: 2, left: 100 } },
+  // BOTTOM-RIGHT — plant grove
+  { obj: "plant-tall", dir: "north-west", css: { bottom: 0, right: 12 } },
+  { obj: "plant-small", dir: "north", css: { bottom: 6, right: 50 } },
+  { obj: "plant-hanging", dir: "north-east", css: { bottom: 2, right: 88 } },
 ];
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */

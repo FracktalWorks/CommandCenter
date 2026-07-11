@@ -706,8 +706,8 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
 /* discussion: the current speaker leans in + pops a chat bubble above the head */
 .oc-cr-speaking { transform:translateY(-4px) scale(1.07); transition:transform .3s; z-index:4; }
-.oc-cr-bubble { position:absolute; top:-3px; left:72%; margin-left:-9px;
-  width:18px; height:18px; border-radius:50% 50% 50% 3px; display:flex;
+.oc-cr-bubble { position:absolute; top:4px; left:40%; margin-left:-9px;
+  width:18px; height:18px; border-radius:50% 50% 3px 50%; display:flex;
   align-items:center; justify-content:center; color:#3a6ea5;
   background:rgba(255,255,255,.95); border:1px solid rgba(0,0,0,.16);
   box-shadow:0 1px 2px rgba(0,0,0,.28); z-index:5; animation:oc-pop .25s ease-out; }

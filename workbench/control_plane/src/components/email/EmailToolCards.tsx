@@ -136,6 +136,7 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   delete_rule: { icon: Trash2, label: "Rule deleted", danger: true },
   reset_rules: { icon: Sparkles, label: "Rules reset", danger: true },
   run_rules_now: { icon: Wrench, label: "Rules run" },
+  run_rules: { icon: Wrench, label: "Rules run" },
   update_rule_state: { icon: Sparkles, label: "Rule updated" },
   resolve_execution: { icon: CheckCircle2, label: "Execution resolved" },
   learn_rule_pattern: { icon: Sparkles, label: "Pattern learned" },
@@ -1539,6 +1540,7 @@ const INBOX_ACTION_META: Record<
   unread: { icon: Mail, verb: "Marked unread" },
   star: { icon: Star, verb: "Starred" },
   unstar: { icon: Star, verb: "Unstarred" },
+  move: { icon: FolderInput, verb: "Moved" },
 };
 
 /** manage_inbox result — names the action + email count ("Archived 3 emails")
@@ -1575,6 +1577,9 @@ function ManageInboxCard({ event: e }: { event: ToolEvent }) {
         <span className="text-[11px] font-medium text-foreground">
           {failed ? `Couldn't ${meta.verb.toLowerCase()}` : meta.verb}{" "}
           {count} email{count > 1 ? "s" : ""}
+          {action === "move" && args?.folder
+            ? ` → ${String(args.folder)}`
+            : ""}
         </span>
       </div>
     </div>

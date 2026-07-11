@@ -172,11 +172,13 @@ async def _account_labels() -> dict[str, str]:
 
 
 async def list_accounts() -> str:
-    """List the user's connected email accounts (id, address, unread count)."""
+    """List the user's connected email accounts (id, address, unread count) —
+    also answers "how many unread do I have?" via the per-account + total."""
     accounts = await _get("/email/accounts")
     if not accounts:
         return "No email accounts are connected."
-    lines = ["Connected accounts:"]
+    total = sum(a.get("unread_count", 0) for a in accounts)
+    lines = [f"Connected accounts ({total} unread total):"]
     for a in accounts:
         lines.append(
             f"• {a.get('label') or a.get('email_address')} "
@@ -371,18 +373,6 @@ async def find_priority(account_id: str, kind: str = "needs_reply") -> str:
         return await find_urgent(account_id)
     # Default and any unknown value → needs-reply (the most common ask).
     return await find_needs_reply(account_id)
-
-
-async def get_unread_count(account_id: str | None = None) -> str:
-    """Unread totals across the user's accounts."""
-    accounts = await _get("/email/accounts")
-    if account_id:
-        accounts = [a for a in accounts if a.get("id") == account_id]
-    total = sum(a.get("unread_count", 0) for a in accounts)
-    lines = [f"{total} unread across {len(accounts)} account(s):"]
-    for a in accounts:
-        lines.append(f"• {a.get('email_address')}: {a.get('unread_count', 0)} unread")
-    return "\n".join(lines)
 
 
 async def get_account_overview(account_id: str) -> str:
@@ -615,15 +605,32 @@ async def present_email_groups(groups_json: str) -> str:
 # ── Inbox action tools ───────────────────────────────────────────────────────
 
 async def manage_inbox(
-    action: str, message_ids: list[str], account_id: str | None = None
+    action: str,
+    message_ids: list[str],
+    account_id: str | None = None,
+    folder: str | None = None,
 ) -> str:
     """Apply an action to one or more messages.
 
     Args:
-        action: archive | trash | read | unread | star | unstar
+        action: archive | trash | read | unread | star | unstar | move
         message_ids: ids of the messages to act on
         account_id: optional account scope
+        folder: destination for ``action="move"`` (an existing folder/label —
+            e.g. "Archive" or a custom folder; create it with create_label).
     """
+    if action == "move":
+        if not folder:
+            return "Provide a `folder` to move messages to."
+        results = await asyncio.gather(
+            *(_patch(f"/email/messages/{mid}", {"folder": folder})
+              for mid in message_ids),
+            return_exceptions=True,
+        )
+        n = sum(1 for r in results if not isinstance(r, BaseException))
+        failed = len(message_ids) - n
+        note = f" ({failed} failed)" if failed else ""
+        return f"Moved {n} message(s) to '{folder}'{note}."
     body: dict[str, Any] = {"action": action, "message_ids": message_ids}
     if account_id:
         body["account_id"] = account_id
@@ -778,24 +785,37 @@ async def delete_rule(account_id: str, rule_id: str) -> str:
     return f"Deleted rule {rule_id}."
 
 
-async def reset_rules(account_id: str) -> str:
-    """Delete ALL of the account's rules and reinstall the default inbox-zero
-    set fresh. Destructive — always confirm with the user before running."""
-    res = await _post(f"/email/rules/reset?account_id={account_id}", {})
-    installed = res.get("installed", [])
-    return (
-        f"Reset rules: reinstalled {len(installed)} default rule(s) "
-        f"({', '.join(installed)})."
-    )
-
-
-async def run_rules_now(
-    account_id: str, dry_run: bool = True, limit: int = 20
+async def run_rules(
+    account_id: str,
+    scope: str = "new",
+    dry_run: bool = True,
+    days: int = 7,
+    limit: int = 20,
+    include_read: bool = True,
 ) -> str:
-    """Run the automation rules over recent unprocessed inbox mail now.
+    """Run the automation rules over inbox mail, by ``scope``:
 
-    dry_run=true previews matches (nothing changes); dry_run=false applies the
-    matched actions. Results stream into the History tab."""
+      • ``new`` (default) — recent UNPROCESSED mail. ``dry_run=true`` previews
+        matches (nothing changes); ``dry_run=false`` applies them. ``limit``
+        caps how many messages.
+      • ``past`` — PAST mail from the last ``days`` days (inbox-zero "Process
+        past emails"): applies matched rules + drafts. ``include_read=false``
+        limits it to unread mail.
+
+    Either way results stream into the History tab."""
+    if (scope or "new").strip().lower() == "past":
+        start = (date.today() - timedelta(days=max(1, days))).isoformat()
+        res = await _post("/email/rules/process-past", {
+            "account_id": account_id, "start_date": start,
+            "is_test": False, "include_read": include_read,
+        })
+        n = res.get("count", 0)
+        if not n:
+            return "No emails found in that range to process."
+        return (
+            f"Processing {n} past email(s) from the last {days} day(s) — applied "
+            "actions stream into the History tab."
+        )
     await _post(
         "/email/rules/run",
         {"account_id": account_id, "limit": limit, "dry_run": dry_run},
@@ -1036,10 +1056,20 @@ async def generate_writing_style(account_id: str) -> str:
     return "Could not derive a writing style yet (no sent mail to analyze)."
 
 
-async def install_default_rules(account_id: str) -> str:
+async def install_default_rules(account_id: str, reset: bool = False) -> str:
     """Install the recommended default rule set: To Reply, FYI, Newsletter,
-    Marketing, Calendar, Receipt, Notification, Cold Email. Skips any the user
-    already has."""
+    Marketing, Calendar, Receipt, Notification, Cold Email.
+
+    ``reset=false`` (default) adds the defaults, skipping any the user already
+    has. ``reset=true`` first DELETES all existing rules and reinstalls the
+    defaults fresh — destructive, so always confirm with the user first."""
+    if reset:
+        res = await _post(f"/email/rules/reset?account_id={account_id}", {})
+        installed = res.get("installed", [])
+        return (
+            f"Reset rules: reinstalled {len(installed)} default rule(s) "
+            f"({', '.join(installed)})."
+        )
     res = await _post(
         f"/email/rules/install-presets?account_id={account_id}", {}
     )
@@ -1079,31 +1109,6 @@ async def find_follow_ups(account_id: str) -> str:
     return (
         f"Found {scanned} follow-up(s); labelled {res.get('labeled', 0)} "
         f'"Follow-up"{note}. Drafts (if any) are in the Drafts folder for review.'
-    )
-
-
-async def process_past_emails(
-    account_id: str, days: int = 7, include_read: bool = True
-) -> str:
-    """Run the automation rules over PAST inbox mail from the last `days` days
-    (inbox-zero "Process past emails"): applies matched rules + drafts and logs
-    to History. Use when the user asks to apply rules to existing/old mail.
-
-    Args:
-        days: how far back to process (default 7).
-        include_read: false = only unread mail in the range.
-    """
-    start = (date.today() - timedelta(days=max(1, days))).isoformat()
-    res = await _post("/email/rules/process-past", {
-        "account_id": account_id, "start_date": start,
-        "is_test": False, "include_read": include_read,
-    })
-    n = res.get("count", 0)
-    if not n:
-        return "No emails found in that range to process."
-    return (
-        f"Processing {n} past email(s) from the last {days} day(s) — applied "
-        "actions stream into the History tab."
     )
 
 
@@ -1159,22 +1164,6 @@ async def apply_labels(
     failed = len(message_ids) - n
     note = f" ({failed} failed)" if failed else ""
     return f"Updated labels on {n} message(s){note}: {' '.join(bits)}."
-
-
-async def move_to_folder(
-    account_id: str, message_ids: list[str], folder: str
-) -> str:
-    """Move one or more messages to a folder/mailbox (e.g. 'Archive', a custom
-    folder). Creates nothing — the folder must exist (see create_label)."""
-    # Move all messages concurrently instead of one serial round-trip each.
-    results = await asyncio.gather(
-        *(_patch(f"/email/messages/{mid}", {"folder": folder}) for mid in message_ids),
-        return_exceptions=True,
-    )
-    n = sum(1 for r in results if not isinstance(r, BaseException))
-    failed = len(message_ids) - n
-    note = f" ({failed} failed)" if failed else ""
-    return f"Moved {n} message(s) to '{folder}'{note}."
 
 
 async def list_labels(account_id: str) -> str:
@@ -1759,13 +1748,11 @@ _TOOLS = [
     read_email,
     read_thread,
     find_priority,
-    get_unread_count,
     get_account_overview,
     present_email_groups,
     # Inbox actions
     manage_inbox,
     apply_labels,
-    move_to_folder,
     list_labels,
     create_label,
     # Drafting / sending
@@ -1784,14 +1771,12 @@ _TOOLS = [
     create_rules_from_prompt,
     update_rule,
     delete_rule,
-    reset_rules,
-    run_rules_now,
+    run_rules,
     test_rule_match,
     learn_rule_pattern,
     install_default_rules,
     list_rule_history,
     resolve_execution,
-    process_past_emails,
     # Assistant config
     update_assistant_settings,
     list_knowledge,

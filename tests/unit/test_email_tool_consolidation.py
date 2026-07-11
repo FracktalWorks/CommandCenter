@@ -98,7 +98,7 @@ def calls(monkeypatch):
 
 def test_surface_shrank_and_merged_names_gone() -> None:
     tools = agents._register_agent_tools()
-    assert len(tools) == 47
+    assert len(tools) == 43
     for gone in ("search_emails", "get_important_emails", "find_urgent",
                  "find_needs_reply", "get_full_body_email", "update_rule_state",
                  "approve_execution", "reject_execution", "undo_execution",
@@ -107,14 +107,44 @@ def test_surface_shrank_and_merged_names_gone() -> None:
                  "delete_learned_pattern", "delete_rule_pattern",
                  # aggressive pass
                  "send_reply", "get_sender_categories", "suggest_unsubscribes",
-                 "list_cold_senders", "keep_newsletter", "set_cold_sender"):
+                 "list_cold_senders", "keep_newsletter", "set_cold_sender",
+                 # final pass
+                 "get_unread_count", "move_to_folder", "reset_rules",
+                 "run_rules_now", "process_past_emails"):
         assert gone not in tools
     for new in ("find_priority", "resolve_execution", "digest", "save_knowledge",
-                "list_patterns", "forget_pattern", "set_sender_status"):
+                "list_patterns", "forget_pattern", "set_sender_status", "run_rules"):
         assert new in tools
     # Quick-action helpers stay importable even though they're unregistered.
     assert callable(agents.search_emails) and callable(agents.find_urgent)
     assert callable(agents.suggest_unsubscribes)  # /ai/quick-action=unsubscribe
+
+
+# ── run_rules(scope) + install_default_rules(reset) + manage_inbox(move) ──────
+
+async def test_run_rules_scope_dispatch(calls) -> None:
+    await agents.run_rules("acc", scope="new")
+    assert calls["post"][-1][0] == "/email/rules/run"
+    await agents.run_rules("acc", scope="past", days=14)
+    assert calls["post"][-1][0] == "/email/rules/process-past"
+
+
+async def test_install_default_rules_reset(calls) -> None:
+    await agents.install_default_rules("acc")
+    assert "install-presets" in calls["post"][-1][0]
+    await agents.install_default_rules("acc", reset=True)
+    assert "reset" in calls["post"][-1][0]
+
+
+async def test_manage_inbox_move_uses_patch(calls) -> None:
+    await agents.manage_inbox("archive", ["m1"], account_id="acc")
+    assert calls["post"][-1][0] == "/email/messages/bulk"
+    out = await agents.manage_inbox("move", ["m1", "m2"], folder="Archive")
+    # move goes through per-message PATCH, not the bulk endpoint.
+    assert any(p[0] == "/email/messages/m1" for p in calls["patch"])
+    assert "Moved" in out
+    # move without a folder is rejected.
+    assert "folder" in await agents.manage_inbox("move", ["m1"])
 
 
 # ── send_email absorbing send_reply ──────────────────────────────────────────

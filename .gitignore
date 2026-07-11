@@ -69,3 +69,11 @@ workbench/control_plane/test-results/
 # Local agent configuration and observation logs
 .claude/
 skill-observations/
+
+# Runtime caches / secrets / junk that must never be committed (foundation audit F2).
+# .zoho_token_cache.json is regenerated at runtime by ingestion/sources/zoho/client.py.
+*.pid
+*.bak
+*_dump.bak
+*token_cache*.json
+.zoho_token_cache.json

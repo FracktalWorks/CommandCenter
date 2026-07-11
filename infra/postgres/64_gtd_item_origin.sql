@@ -1,4 +1,4 @@
--- 50_gtd_item_origin.sql — where a capture came from (email → task, §2.1).
+-- 64_gtd_item_origin.sql — where a capture came from (email → task, §2.1).
 --
 -- What: gtd_items.origin JSONB — source linkage for captures created from
 --       another app, e.g. {"kind": "email", "account_id": …, "email_id": …,

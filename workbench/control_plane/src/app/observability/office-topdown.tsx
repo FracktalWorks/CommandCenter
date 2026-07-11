@@ -16,7 +16,7 @@
 
 import React from "react";
 
-import { Building2, Coins } from "lucide-react";
+import { Building2, Coins, Cog, TriangleAlert } from "lucide-react";
 
 import { OFFICE_CAST } from "./office-cast.generated";
 import { OFFICE_ENV } from "./office-env.generated";
@@ -192,16 +192,28 @@ function Seat({
           // eslint-disable-next-line @next/next/no-img-element
           <img className="oc-static" src={c?.seated} alt={agent.name} />
         )}
-        {state === "idle" && <span className="oc-zzz">z</span>}
-        {state === "working" && <span className="oc-ping" />}
+        {/* Status is shown ONLY by a small icon at the top-right that floats up and
+            fades (inspired by the sleep "z"): z when sleeping, a cog when working, an
+            alert triangle when errored. No text pill — the agent's pose says the rest. */}
+        {state === "idle" && <span className="oc-badge oc-b-idle">z</span>}
+        {state === "working" && (
+          <span className="oc-badge oc-b-working">
+            <Cog size={14} strokeWidth={2.5} />
+          </span>
+        )}
+        {state === "error" && (
+          <span className="oc-badge oc-b-error">
+            <TriangleAlert size={14} strokeWidth={2.5} />
+          </span>
+        )}
         {plant && (
           // eslint-disable-next-line @next/next/no-img-element
           <img className="oc-seat-plant" src={plant} alt="" aria-hidden />
         )}
       </div>
       <div className="oc-plate">
+        {/* the agent NAME now lives in the pill (styled like the old status indicator) */}
         <span className="oc-name">{agent.name}</span>
-        <span className={`oc-pill oc-${state}`}>{state === "idle" ? "sleeping" : state}</span>
       </div>
     </button>
   );
@@ -570,16 +582,28 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-idle .oc-static { animation: oc-breathe 3.4s ease-in-out infinite; }
 .oc-working .oc-static { animation: oc-bob .8s steps(2) infinite; }
 .oc-idle .oc-figure { filter:grayscale(.5) brightness(.72); }
-.oc-error .oc-anim, .oc-error .oc-static { animation: oc-shake .4s steps(2) 4; }
+/* (error no longer shakes — the floating alert-triangle badge conveys it) */
 .oc-seat:hover .oc-figure { transform:translateY(-3px); transition:transform .15s; }
-.oc-zzz { position:absolute; top:2px; right:24px; color:#6b7280; font-size:13px; text-shadow:0 1px 1px rgba(255,255,255,.6); animation: oc-zf 2.6s ease-in-out infinite; z-index:3; }
-.oc-ping { position:absolute; top:14px; right:26px; width:7px; height:7px; border-radius:50%; background:#58a6ff; box-shadow:0 0 8px #58a6ff; animation: oc-pl 1.2s steps(2) infinite; z-index:3; }
-.oc-plate { margin-top:-4px; text-align:center; z-index:3; }
-.oc-name { display:block; font-size:12px; color:#2c2a24; font-weight:700; text-shadow:0 1px 2px rgba(255,255,255,.75); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.oc-pill { display:inline-block; margin-top:2px; font-size:9px; text-transform:uppercase; padding:1px 6px; border-radius:5px; border:1px solid; font-family:ui-monospace,monospace; background:rgba(255,255,255,.55); }
-.oc-pill.oc-working { color:#a76a06; border-color:#e0a13066; }
-.oc-pill.oc-idle { color:#5f6672; border-color:#5f667255; }
-.oc-pill.oc-error { color:#c23b3b; border-color:#e06b6b77; }
+
+/* Status badge — the ONLY status cue: a small icon at the agent's top-right that
+   floats up and fades on a loop (inspired by the sleep "z"). z = sleeping,
+   cog = working/thinking, alert-triangle = error. No text pill. */
+.oc-badge { position:absolute; top:2px; right:28px; z-index:3; display:flex;
+  align-items:center; justify-content:center; line-height:0;
+  filter:drop-shadow(0 1px 1px rgba(255,255,255,.6));
+  animation: oc-float 2.6s ease-in-out infinite; }
+.oc-b-idle { font-family:ui-monospace,monospace; font-size:13px; color:#6b7280;
+  text-shadow:0 1px 1px rgba(255,255,255,.6); }
+.oc-b-working { color:#2a7fff; }
+.oc-b-error { color:#e0392f; animation-duration:1.5s; }
+
+.oc-plate { margin-top:-2px; text-align:center; z-index:3; }
+/* the agent NAME styled as a readable pill (like the old status indicator) */
+.oc-name { display:inline-block; max-width:132px; overflow:hidden; text-overflow:ellipsis;
+  white-space:nowrap; font-family:ui-monospace,monospace; font-size:11px; font-weight:700;
+  color:#2c2a24; padding:1px 8px; border-radius:6px; border:1px solid rgba(0,0,0,.14);
+  background:rgba(255,255,255,.72); box-shadow:0 1px 2px rgba(0,0,0,.08);
+  text-shadow:0 1px 1px rgba(255,255,255,.6); }
 
 /* Compact the room on small screens: smaller sprites, tighter grid, fewer props. */
 @media (max-width:560px){
@@ -601,8 +625,9 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 @keyframes oc-play { to { background-position-x: calc(-1 * var(--n) * var(--w)); } }
 @keyframes oc-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
 @keyframes oc-breathe { 0%,100%{transform:translateY(0) scale(1)} 50%{transform:translateY(1px) scale(.994)} }
-@keyframes oc-shake { 0%,100%{transform:translateX(0)} 25%{transform:translateX(-3px)} 75%{transform:translateX(3px)} }
-@keyframes oc-zf { 0%{opacity:0;transform:translateY(0)} 40%{opacity:.85} 100%{opacity:0;transform:translateY(-8px)} }
-@keyframes oc-pl { 0%,100%{opacity:1} 50%{opacity:.3} }
-@media (prefers-reduced-motion: reduce){ .oc-anim,.oc-static,.oc-zzz,.oc-ping { animation:none !important; } }
+/* status badge: rise up and fade out on a loop (the sleep-"z" motion, generalized) */
+@keyframes oc-float { 0%{opacity:0;transform:translateY(3px) scale(.8)}
+  25%{opacity:1} 60%{opacity:.9;transform:translateY(-5px) scale(1)}
+  100%{opacity:0;transform:translateY(-12px) scale(1)} }
+@media (prefers-reduced-motion: reduce){ .oc-anim,.oc-static,.oc-badge { animation:none !important; } }
 `;

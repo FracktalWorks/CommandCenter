@@ -14,10 +14,10 @@ OUT = "../../public/office-env"
 IDS = "floor_ids.json"
 
 TILESET = {
-    "lower_description": ("top-down office floor of checkered ceramic tiles, "
-                          "alternating deep navy-blue and slate-blue squares "
-                          "with subtle sheen and fine grout lines"),
-    "upper_description": "dark polished wood office wall",
+    "lower_description": ("bright modern startup office floor, clean light warm-grey "
+                          "and cream checkered ceramic tiles with soft subtle grout "
+                          "lines, airy and well-lit, top-down"),
+    "upper_description": "light natural oak wood office wall with a pale skirting board",
     "transition_size": 0.0,
     "tile_size": {"width": 32, "height": 32},
 }

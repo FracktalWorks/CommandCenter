@@ -17,9 +17,9 @@ import os
 
 from PIL import Image, ImageEnhance
 
-# The raw checkered tile is a vivid royal blue; tone it to fit the dark UI while
-# keeping the baked-in checker texture. (brightness, saturation) multipliers.
-FLOOR_TONE = (0.52, 0.80)
+# (brightness, saturation) multipliers applied to the floor tile. Light startup
+# floor: keep it bright, just slightly desaturate so it reads as clean/neutral.
+FLOOR_TONE = (1.0, 0.9)
 
 FLOOR_SHEET = "../../public/office-env/_floor_sheet.png"
 SHEET = "../../public/office-env/_sheet.png"
@@ -60,8 +60,10 @@ def main():
     floor = ImageEnhance.Color(ImageEnhance.Brightness(floor).enhance(b)).enhance(s)
     floor.save(f"{ENVDIR}/floor.png")
 
-    # Wall: full-wood tile from the original carpet+wall sheet.
-    wall, wall_rc, wall_wood = pick(SHEET, max)
+    # Wall: full-wood tile from the SAME sheet as the floor, so the wall matches
+    # the floor's palette (light oak for the startup theme). Falls back to _sheet.png.
+    wall_sheet = floor_sheet if os.path.exists(FLOOR_SHEET) else SHEET
+    wall, wall_rc, wall_wood = pick(wall_sheet, max)
     wall.save(f"{ENVDIR}/wall.png")
     print(f"floor tile {floor_rc} (wood={floor_wood:.2f}) from "
           f"{os.path.basename(floor_sheet)}, wall tile {wall_rc} (wood={wall_wood:.2f})")

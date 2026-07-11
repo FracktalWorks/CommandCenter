@@ -185,42 +185,42 @@ export function TopDownOffice({
 export const TOPDOWN_STYLE = `
 .oc-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing:.02em; }
 
-/* Outer room = the walls. Scales to whatever the floor grid needs. */
+/* Outer room = the walls. Bright startup-office palette (light wood + beige). */
 .oc-room {
   position:relative; border-radius:16px; overflow:hidden;
-  background:linear-gradient(#2a2336,#1f1929);
-  border:5px solid #3a2f4a;
-  box-shadow: inset 0 0 0 3px #1b1626, 0 10px 30px rgba(0,0,0,.35);
+  background:linear-gradient(#efe9dd,#e6ddcd);
+  border:5px solid #cbbfa4;
+  box-shadow: inset 0 0 0 3px #f5f0e4, 0 10px 30px rgba(0,0,0,.28);
 }
 /* Top wall band — holds the mounted whiteboard + room sign. */
 .oc-wall {
   position:relative; height:56px; z-index:3;
   background:
-    linear-gradient(rgba(0,0,0,.12), rgba(0,0,0,.42)),
-    var(--oc-wall, linear-gradient(#40354f,#2c2440));
+    linear-gradient(rgba(255,255,255,.22), rgba(0,0,0,.10)),
+    var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
   background-size: cover, 56px 56px;
   background-repeat: no-repeat, repeat;
   image-rendering:pixelated;
-  border-bottom:3px solid #1b1626;
+  border-bottom:3px solid #b6a67f;
   display:flex; align-items:center; gap:14px; padding:0 18px;
-  box-shadow: inset 0 -8px 14px rgba(0,0,0,.28);
+  box-shadow: inset 0 -6px 12px rgba(0,0,0,.10);
 }
-.oc-wallboard { height:40px; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.5)); }
+.oc-wallboard { height:40px; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 .oc-sign { font-family:ui-monospace,monospace; font-size:12px; letter-spacing:.28em;
-  color:#c7b8e0; text-shadow:0 1px 0 #12101a; }
+  color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
 
 /* Floor — the seamless tile repeats to fill; procedural fallback when no tile yet. */
 .oc-floor {
   position:relative; padding:58px 16px 54px;
-  background-color:#241d30;
+  background-color:#e9e2d3;
   background-image:
     var(--oc-floor, none),
-    repeating-linear-gradient(0deg, transparent, transparent 33px, rgba(255,255,255,.03) 33px, rgba(255,255,255,.03) 34px),
-    repeating-linear-gradient(90deg, transparent, transparent 33px, rgba(255,255,255,.03) 33px, rgba(255,255,255,.03) 34px);
+    repeating-linear-gradient(0deg, transparent, transparent 33px, rgba(0,0,0,.035) 33px, rgba(0,0,0,.035) 34px),
+    repeating-linear-gradient(90deg, transparent, transparent 33px, rgba(0,0,0,.035) 33px, rgba(0,0,0,.035) 34px);
   background-size: var(--oc-floor-size,64px) var(--oc-floor-size,64px), auto, auto;
   background-repeat: repeat, repeat, repeat;
   image-rendering:pixelated;
-  box-shadow: inset 0 22px 42px rgba(0,0,0,.42), inset 0 -18px 34px rgba(0,0,0,.30);
+  box-shadow: inset 0 14px 26px rgba(0,0,0,.08), inset 0 -12px 22px rgba(0,0,0,.06);
 }
 
 /* Corner props stay pinned to the room corners at ANY size. */
@@ -235,11 +235,11 @@ export const TOPDOWN_STYLE = `
    collaboration area; centered block so it stays responsive. */
 .oc-conf { position:relative; z-index:2; margin:0 auto 20px; width:min(420px, 100%);
   padding:20px 14px 14px; border-radius:14px;
-  background:radial-gradient(120% 90% at 50% 40%, rgba(88,166,255,.08), rgba(0,0,0,.22));
-  box-shadow: inset 0 0 0 2px rgba(255,255,255,.06), inset 0 0 26px rgba(0,0,0,.35);
+  background:radial-gradient(120% 90% at 50% 40%, rgba(255,255,255,.42), rgba(0,0,0,.05));
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.06), inset 0 0 22px rgba(0,0,0,.04);
   display:flex; flex-direction:column; align-items:center; gap:8px; }
 .oc-conf-label { font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.24em;
-  text-transform:uppercase; color:#c7b8e0; text-shadow:0 1px 0 #12101a; }
+  text-transform:uppercase; color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
 .oc-conf-stage { position:relative; width:220px; height:132px;
   display:flex; align-items:center; justify-content:center; }
 .oc-conf-rug { position:absolute; left:50%; top:52%; transform:translate(-50%,-50%);
@@ -249,7 +249,7 @@ export const TOPDOWN_STYLE = `
   filter:drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
 /* empty seats around the table (small cushioned stools) */
 .oc-chair { position:absolute; z-index:1; width:20px; height:16px; border-radius:5px;
-  background:linear-gradient(#7b6cb0,#5a4d86); box-shadow:inset 0 -3px 0 rgba(0,0,0,.28), 0 2px 3px rgba(0,0,0,.4); }
+  background:linear-gradient(#5bbcb0,#3f9a90); box-shadow:inset 0 -3px 0 rgba(0,0,0,.20), 0 2px 3px rgba(0,0,0,.28); }
 .oc-ch-t1 { top:14px; left:64px; } .oc-ch-t2 { top:14px; right:64px; }
 .oc-ch-b1 { bottom:16px; left:64px; } .oc-ch-b2 { bottom:16px; right:64px; }
 
@@ -273,14 +273,14 @@ export const TOPDOWN_STYLE = `
 .oc-idle .oc-figure { filter:grayscale(.5) brightness(.72); }
 .oc-error .oc-anim, .oc-error .oc-static { animation: oc-shake .4s steps(2) 4; }
 .oc-seat:hover .oc-figure { transform:translateY(-3px); transition:transform .15s; }
-.oc-zzz { position:absolute; top:2px; right:24px; color:#8b949e; font-size:13px; animation: oc-zf 2.6s ease-in-out infinite; z-index:3; }
+.oc-zzz { position:absolute; top:2px; right:24px; color:#6b7280; font-size:13px; text-shadow:0 1px 1px rgba(255,255,255,.6); animation: oc-zf 2.6s ease-in-out infinite; z-index:3; }
 .oc-ping { position:absolute; top:14px; right:26px; width:7px; height:7px; border-radius:50%; background:#58a6ff; box-shadow:0 0 8px #58a6ff; animation: oc-pl 1.2s steps(2) infinite; z-index:3; }
 .oc-plate { margin-top:-4px; text-align:center; z-index:3; }
-.oc-name { display:block; font-size:12px; color:var(--foreground,#e8e8ef); font-weight:600; max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.oc-pill { display:inline-block; margin-top:2px; font-size:9px; text-transform:uppercase; padding:1px 6px; border-radius:5px; border:1px solid; font-family:ui-monospace,monospace; }
-.oc-pill.oc-working { color:#f5b301; border-color:#f5b30155; background:#f5b30115; }
-.oc-pill.oc-idle { color:#8b949e; border-color:#8b949e33; background:#8b949e10; }
-.oc-pill.oc-error { color:#ff6b6b; border-color:#ff6b6b44; background:#ff6b6b12; }
+.oc-name { display:block; font-size:12px; color:#2c2a24; font-weight:700; text-shadow:0 1px 2px rgba(255,255,255,.75); max-width:150px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.oc-pill { display:inline-block; margin-top:2px; font-size:9px; text-transform:uppercase; padding:1px 6px; border-radius:5px; border:1px solid; font-family:ui-monospace,monospace; background:rgba(255,255,255,.55); }
+.oc-pill.oc-working { color:#a76a06; border-color:#e0a13066; }
+.oc-pill.oc-idle { color:#5f6672; border-color:#5f667255; }
+.oc-pill.oc-error { color:#c23b3b; border-color:#e06b6b77; }
 
 /* Compact the room on small screens: smaller sprites, tighter grid, fewer props. */
 @media (max-width:560px){

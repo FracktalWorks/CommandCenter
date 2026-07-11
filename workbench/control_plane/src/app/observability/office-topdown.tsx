@@ -272,12 +272,12 @@ function Seat({
         {state === "idle" && <span className="oc-badge oc-b-idle">z</span>}
         {state === "working" && (
           <span className="oc-badge oc-b-working" title={tool ? `Using ${tool}` : "working"}>
-            <WorkIcon size={14} strokeWidth={2.5} />
+            <WorkIcon size={12} strokeWidth={2.5} />
           </span>
         )}
         {state === "error" && (
           <span className="oc-badge oc-b-error">
-            <TriangleAlert size={14} strokeWidth={2.5} />
+            <TriangleAlert size={12} strokeWidth={2.5} />
           </span>
         )}
         {plant && (
@@ -759,7 +759,10 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   background:rgba(255,255,255,.95); border:1px solid rgba(0,0,0,.16);
   box-shadow:0 1px 2px rgba(0,0,0,.28);
   animation: oc-float 2.6s ease-in-out infinite; }
-.oc-b-idle { font-family:ui-monospace,monospace; font-size:13px; color:#6b7280; }
+/* the sleeping "z" floats on its own — no bubble */
+.oc-b-idle { font-family:ui-monospace,monospace; font-size:13px; color:#6b7280;
+  width:auto; height:auto; background:none; border:none; box-shadow:none;
+  text-shadow:0 1px 1px rgba(255,255,255,.6); }
 .oc-b-working { color:#2a7fff; }
 .oc-b-error { color:#e0392f; animation-duration:1.5s; }
 

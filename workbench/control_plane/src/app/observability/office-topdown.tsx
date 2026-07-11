@@ -44,7 +44,7 @@ const OBJ_H: Record<string, number> = {
   "printer-3d": 58, "printer-3d-large": 66, "printer-office": 46,
   "filing-cabinet": 56, whiteboard: 58,
   // equipment-on-a-surface + back-wall fixtures
-  "desk-computer": 58, "table-plant": 46, "counter-coffee": 54,
+  "desk-computer": 58, "table-plant": 54, "counter-coffee": 62,
   "wall-clock": 40, "tv-screen": 42, "notice-board": 44, blackboard: 44,
 };
 
@@ -131,6 +131,8 @@ const WALL_FIXTURES: ClItem[] = [
   { obj: "tv-screen", dir: "south" },
   { obj: "wall-clock", dir: "south" },
 ];
+// A couple of fixtures mounted on the conference-room wall too.
+const CR_FIXTURES = ["tv-screen", "wall-clock"];
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
 const ROLE_TO_CHAR: Record<string, string> = {
@@ -219,6 +221,16 @@ function ConferenceRoom({
     <div className="oc-cr">
       <div className="oc-cr-wall">
         <span className="oc-cr-sign">{members.map((m) => m.name).join("  +  ")}</span>
+        <div className="oc-cr-fix">
+          {CR_FIXTURES.map((obj) => {
+            const src = OFFICE_OBJECTS[obj]?.south;
+            if (!src) return null;
+            return (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={obj} className={`oc-cr-fiximg oc-fix-${obj}`} src={src} alt="" aria-hidden />
+            );
+          })}
+        </div>
       </div>
       <div className="oc-cr-floor">
         <div className="oc-cr-seats">
@@ -434,9 +446,10 @@ export const TOPDOWN_STYLE = `
 }
 .oc-sign { flex-shrink:0; font-family:ui-monospace,monospace; font-size:12px; letter-spacing:.28em;
   color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
-/* fixtures hang on the wall, right-aligned, bottoms sitting just above the trim */
-.oc-wall-fix { margin-left:auto; display:flex; align-items:flex-end; gap:20px; height:100%;
-  padding-bottom:5px; }
+/* fixtures hang on the wall, right-aligned, mounted HIGH on the band so floor
+   furniture can sit against the wall below them */
+.oc-wall-fix { margin-left:auto; display:flex; align-items:flex-start; gap:20px; height:100%;
+  padding-top:3px; }
 .oc-fix { display:inline-flex; align-items:flex-end; image-rendering:pixelated;
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.30)); }
 .oc-fix img { display:block; image-rendering:pixelated; }
@@ -444,42 +457,42 @@ export const TOPDOWN_STYLE = `
 .oc-fix-tv-screen img { animation: oc-tv 2.6s ease-in-out infinite; }
 @keyframes oc-tv { 0%,100%{filter:brightness(1)} 50%{filter:brightness(1.22) saturate(1.25)} }
 
-/* Floor — the darker lane tile frames the whole office as a BORDER; an inset
-   ::before field carries the main floor tile. */
+/* Floor — the darker lane tile frames the office as a thin BORDER (matching the
+   conference-room cards); an inset ::before field carries the main floor tile. */
 .oc-floor {
-  position:relative; padding:58px 92px 56px;
+  position:relative; padding:50px 82px 44px;
   background-color:#cbb89a;
   background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto);
   background-repeat: repeat;
   image-rendering:pixelated;
-  box-shadow: inset 0 14px 26px rgba(0,0,0,.08), inset 0 -12px 22px rgba(0,0,0,.06);
 }
 .oc-floor::before {
-  content:''; position:absolute; inset:34px; z-index:0; pointer-events:none;
+  content:''; position:absolute; inset:16px; z-index:0; pointer-events:none;
   background-image: var(--oc-floor, none);
   background-size: var(--oc-floor-bg, auto);
-  background-repeat: repeat; image-rendering:pixelated; border-radius:5px;
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,.10), 0 0 0 1px rgba(255,255,255,.10),
-    inset 0 12px 22px rgba(0,0,0,.05);
+  background-repeat: repeat; image-rendering:pixelated; border-radius:4px;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.10), inset 0 10px 18px rgba(0,0,0,.05);
 }
 
 /* Furniture clusters — each is a flex box anchored to a wall/corner so its members
    auto-space (fixed gap, no overlap) and sit on a common baseline. Heights come from
    the inline OBJ_H map (kept as downscales of the cropped sprites so pixels stay crisp
    and every object reads at a scale consistent with the agents). */
-.oc-cluster { position:absolute; z-index:1; display:flex; align-items:flex-end; gap:9px;
+.oc-cluster { position:absolute; z-index:1; display:flex; align-items:flex-end; gap:6px;
   pointer-events:none; }
 .oc-obj { display:block; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.30)); }
-.oc-cl-tl { top:2px; left:10px; }
-.oc-cl-tr { top:2px; right:10px; }
-.oc-cl-bl { bottom:6px; left:12px; }
-.oc-cl-br { bottom:6px; right:12px; }
-.oc-cl-lm { top:47%; left:4px; transform:translateY(-50%);
-  flex-direction:column; align-items:flex-start; gap:7px; }
-.oc-cl-rm { top:47%; right:4px; transform:translateY(-50%);
-  flex-direction:column; align-items:flex-end; gap:7px; }
+/* negative offsets tuck the wall-side pieces slightly UNDER the walls (behind the
+   opaque wall band / room border) so they read as sitting against the wall. */
+.oc-cl-tl { top:-12px; left:6px; }
+.oc-cl-tr { top:-12px; right:6px; }
+.oc-cl-bl { bottom:-6px; left:6px; }
+.oc-cl-br { bottom:-6px; right:6px; }
+.oc-cl-lm { top:47%; left:-8px; transform:translateY(-50%);
+  flex-direction:column; align-items:flex-start; gap:5px; }
+.oc-cl-rm { top:47%; right:-8px; transform:translateY(-50%);
+  flex-direction:column; align-items:flex-end; gap:5px; }
 /* small potted plant tucked beside a desk to green up the grid */
 .oc-seat-plant { position:absolute; right:2px; bottom:12px; height:38px; z-index:2;
   image-rendering:pixelated; filter:drop-shadow(0 3px 2px rgba(0,0,0,.45)); }
@@ -496,15 +509,21 @@ export const TOPDOWN_STYLE = `
   overflow:hidden; border:4px solid #cbbfa4;
   box-shadow: inset 0 0 0 2px #f5f0e4, 0 8px 22px rgba(0,0,0,.24);
   background:linear-gradient(#efe9dd,#e6ddcd); }
-.oc-cr-wall { position:relative; z-index:2; height:30px; display:flex; align-items:center;
-  padding:0 12px;
+.oc-cr-wall { position:relative; z-index:2; height:38px; display:flex; align-items:center;
+  gap:10px; padding:0 12px;
   background: linear-gradient(rgba(255,255,255,.22), rgba(0,0,0,.10)),
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
   background-size: cover, var(--oc-wall-bg,auto); background-repeat:no-repeat, repeat;
   image-rendering:pixelated; border-bottom:3px solid #b6a67f; }
-.oc-cr-sign { font-family:ui-monospace,monospace; font-size:10px; letter-spacing:.12em;
-  text-transform:uppercase; color:#5f5030; text-shadow:0 1px 0 rgba(255,255,255,.5);
+.oc-cr-sign { flex-shrink:1; min-width:0; font-family:ui-monospace,monospace; font-size:10px;
+  letter-spacing:.12em; text-transform:uppercase; color:#5f5030;
+  text-shadow:0 1px 0 rgba(255,255,255,.5);
   overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+.oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:12px; }
+.oc-cr-fiximg { height:26px; display:block; image-rendering:pixelated;
+  filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
+/* generic TV-screen glow pulse (wall band uses .oc-fix-tv-screen img above) */
+img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-floor { position:relative; height:150px; overflow:hidden;
   background-color:#cbb89a; background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto); background-repeat:repeat; image-rendering:pixelated; }
@@ -525,19 +544,19 @@ export const TOPDOWN_STYLE = `
   z-index:2; width:min(300px, 86%); image-rendering:pixelated;
   filter:drop-shadow(0 5px 5px rgba(0,0,0,.30)); }
 
-/* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. Tighter
-   cells + gap pull the agents' desks closer together. */
+/* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. Tight
+   cells + gap pack the agents' desks close together. */
 .oc-grid { position:relative; z-index:2;
-  display:grid; grid-template-columns:repeat(auto-fill, minmax(126px, 1fr));
-  gap:4px 6px; justify-items:center; }
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(108px, 1fr));
+  gap:0 2px; justify-items:center; }
 
 .oc-seat { position:relative; display:flex; flex-direction:column; align-items:center;
-  background:none; border:none; cursor:pointer; padding:4px 0; width:100%; }
-.oc-figure { position:relative; height:128px; display:flex; align-items:flex-end; justify-content:center; }
+  background:none; border:none; cursor:pointer; padding:2px 0; width:100%; }
+.oc-figure { position:relative; height:116px; display:flex; align-items:flex-end; justify-content:center; }
 .oc-static, .oc-anim { image-rendering:pixelated; filter:drop-shadow(0 5px 4px rgba(0,0,0,.55)); }
-.oc-static { height:128px; }
+.oc-static { height:116px; }
 /* animated sprite: the seated typing spritesheet (N frames wide) played via steps */
-.oc-anim { --w:128px; display:block; width:var(--w); height:var(--w);
+.oc-anim { --w:116px; display:block; width:var(--w); height:var(--w);
   background-image:var(--sheet); background-repeat:no-repeat;
   background-size:calc(var(--n) * var(--w)) var(--w); background-position:0 0;
   animation: oc-play calc(var(--n) * .12s) steps(var(--n)) infinite; }

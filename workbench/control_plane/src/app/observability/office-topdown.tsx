@@ -359,7 +359,7 @@ function ConferenceRoom({
   return (
     <div className="oc-cr">
       <div className="oc-cr-wall">
-        <span className="oc-cr-sign">{members.map((m) => m.name).join("  +  ")}</span>
+        <span className="oc-cr-sign">{members.map((m) => m.name).join(" + ")}</span>
         <div className="oc-cr-fix">
           {crFixturesFor(members).map((obj) => {
             const src = OFFICE_OBJECTS[obj]?.south;
@@ -666,22 +666,23 @@ export const TOPDOWN_STYLE = `
   overflow:hidden; border:4px solid #cbbfa4;
   box-shadow: inset 0 0 0 2px #f5f0e4, 0 8px 22px rgba(0,0,0,.24);
   background:linear-gradient(#efe9dd,#e6ddcd); }
-.oc-cr-wall { position:relative; z-index:2; height:38px; display:flex; align-items:center;
+.oc-cr-wall { position:relative; z-index:2; height:52px; display:flex; align-items:center;
   gap:10px; padding:0 12px;
   background: linear-gradient(rgba(255,255,255,.22), rgba(0,0,0,.10)),
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
   background-size: cover, var(--oc-wall-bg,auto); background-repeat:no-repeat, repeat;
   image-rendering:pixelated; border-bottom:3px solid #b6a67f; }
 /* the collaboration name in a readable pill (matching the agent name pills) */
-.oc-cr-sign { flex-shrink:1; min-width:0; max-width:calc(100% - 90px);
-  font-family:ui-monospace,monospace; font-size:10px;
+.oc-cr-sign { flex-shrink:1; min-width:0; max-width:calc(100% - 60px);
+  font-family:ui-monospace,monospace; font-size:10px; line-height:1.25;
   letter-spacing:.1em; text-transform:uppercase; font-weight:700; color:#2c2a24;
-  padding:2px 9px; border-radius:6px; border:1px solid rgba(0,0,0,.16);
+  padding:3px 9px; border-radius:7px; border:1px solid rgba(0,0,0,.16);
   background:rgba(255,255,255,.8); box-shadow:0 1px 2px rgba(0,0,0,.14);
   text-shadow:0 1px 1px rgba(255,255,255,.6);
-  overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
-.oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:12px; }
-.oc-cr-fiximg { height:26px; display:block; image-rendering:pixelated;
+  overflow:hidden; white-space:normal; display:-webkit-box; -webkit-box-orient:vertical;
+  -webkit-line-clamp:2; }
+.oc-cr-fix { margin-left:auto; flex-shrink:0; display:flex; align-items:center; gap:7px; }
+.oc-cr-fiximg { height:22px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 2px 2px rgba(0,0,0,.28)); }
 /* generic TV-screen glow pulse (wall band uses .oc-fix-tv-screen img above) */
 img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
@@ -705,7 +706,7 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
 /* discussion: the current speaker leans in + pops a chat bubble above the head */
 .oc-cr-speaking { transform:translateY(-4px) scale(1.07); transition:transform .3s; z-index:4; }
-.oc-cr-bubble { position:absolute; top:16px; left:62%; margin-left:-9px;
+.oc-cr-bubble { position:absolute; top:-3px; left:72%; margin-left:-9px;
   width:18px; height:18px; border-radius:50% 50% 50% 3px; display:flex;
   align-items:center; justify-content:center; color:#3a6ea5;
   background:rgba(255,255,255,.95); border:1px solid rgba(0,0,0,.16);

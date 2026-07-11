@@ -138,9 +138,16 @@ export function TopDownOffice({
   const roomStyle = OFFICE_ENV.floor
     ? ({
         "--oc-floor": `url(${OFFICE_ENV.floor})`,
-        ...(OFFICE_ENV.wall ? { "--oc-wall": `url(${OFFICE_ENV.wall})` } : {}),
-        ...(OFFICE_ENV.corner ? { "--oc-corner": `url(${OFFICE_ENV.corner})` } : {}),
-        ...(OFFICE_ENV.lane ? { "--oc-lane": `url(${OFFICE_ENV.lane})` } : {}),
+        "--oc-floor-bg": OFFICE_ENV.floorBg ?? "auto",
+        ...(OFFICE_ENV.wall
+          ? { "--oc-wall": `url(${OFFICE_ENV.wall})`, "--oc-wall-bg": OFFICE_ENV.wallBg ?? "auto" }
+          : {}),
+        ...(OFFICE_ENV.corner
+          ? { "--oc-corner": `url(${OFFICE_ENV.corner})`, "--oc-corner-bg": OFFICE_ENV.cornerBg ?? "auto" }
+          : {}),
+        ...(OFFICE_ENV.lane
+          ? { "--oc-lane": `url(${OFFICE_ENV.lane})`, "--oc-lane-bg": OFFICE_ENV.laneBg ?? "auto" }
+          : {}),
       } as React.CSSProperties)
     : undefined;
 
@@ -228,7 +235,7 @@ export const TOPDOWN_STYLE = `
   background:
     linear-gradient(rgba(255,255,255,.22), rgba(0,0,0,.10)),
     var(--oc-wall, linear-gradient(#e7dbc2,#d7c7a6));
-  background-size: cover, auto;
+  background-size: cover, var(--oc-wall-bg,auto);
   background-repeat: no-repeat, repeat;
   image-rendering:pixelated;
   border-bottom:3px solid #b6a67f;
@@ -247,7 +254,7 @@ export const TOPDOWN_STYLE = `
     var(--oc-floor, none),
     repeating-linear-gradient(0deg, transparent, transparent 33px, rgba(0,0,0,.035) 33px, rgba(0,0,0,.035) 34px),
     repeating-linear-gradient(90deg, transparent, transparent 33px, rgba(0,0,0,.035) 33px, rgba(0,0,0,.035) 34px);
-  background-size: auto, auto, auto;
+  background-size: var(--oc-floor-bg,auto), auto, auto;
   background-repeat: repeat, repeat, repeat;
   image-rendering:pixelated;
   box-shadow: inset 0 14px 26px rgba(0,0,0,.08), inset 0 -12px 22px rgba(0,0,0,.06);
@@ -265,7 +272,7 @@ export const TOPDOWN_STYLE = `
 /* Zoned floor — a different Honeytan tile in each corner over the base checker,
    plus a plank walkway lane, so the floor reads as a laid-out room not one repeat. */
 .oc-fz { position:absolute; z-index:0; pointer-events:none; image-rendering:pixelated;
-  background-repeat:repeat; background-size:auto; }
+  background-repeat:repeat; background-size: var(--oc-corner-bg,auto); }
 .oc-fz-corner { width:clamp(120px, 22%, 200px); height:clamp(96px, 20%, 168px);
   background-image: var(--oc-corner);
   box-shadow: inset 0 0 0 2px rgba(0,0,0,.05); }
@@ -275,7 +282,7 @@ export const TOPDOWN_STYLE = `
 .oc-fz-br { bottom:0; right:0; border-top-left-radius:16px; }
 .oc-lane { position:relative; z-index:2; height:76px; margin:0 -16px 16px;
   background-image: var(--oc-lane); image-rendering:pixelated; background-repeat:repeat;
-  background-size:auto;
+  background-size: var(--oc-lane-bg,auto);
   box-shadow: inset 0 7px 12px rgba(0,0,0,.10), inset 0 -7px 12px rgba(0,0,0,.10); }
 
 /* Conference zone — one table by default; wraps to a grid of tables as more

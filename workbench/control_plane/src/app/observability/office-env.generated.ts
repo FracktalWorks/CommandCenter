@@ -1,21 +1,17 @@
 // AUTO-GENERATED - zoned office floor mosaics (create_tiles_pro), gen_honeytan.py.
-// Each zone is a mosaic of similar tile variations. Pre-upscaled; use natural size.
+// Each zone mixes + rotates similar tile variations. *Bg = css background-size.
 // Do not edit by hand.
 
 export interface OfficeEnv {
-  /** Base floor mosaic (the majority of the room). */
-  floor?: string;
-  /** Decorative accent mosaic for the four room corners. */
-  corner?: string;
-  /** Darker mosaic for the walkway lanes. */
-  lane?: string;
-  /** Wood-plank mosaic for the top wall band. */
-  wall?: string;
+  floor?: string; floorBg?: string;
+  corner?: string; cornerBg?: string;
+  lane?: string; laneBg?: string;
+  wall?: string; wallBg?: string;
 }
 
 export const OFFICE_ENV: OfficeEnv = {
-  floor: "/office-env/floor-floor.png",
-  corner: "/office-env/floor-corner.png",
-  lane: "/office-env/floor-lane.png",
-  wall: "/office-env/floor-wall.png",
+  floor: "/office-env/floor-floor.png", floorBg: "320px",
+  corner: "/office-env/floor-corner.png", cornerBg: "80px",
+  lane: "/office-env/floor-lane.png", laneBg: "240px",
+  wall: "/office-env/floor-wall.png", wallBg: "320px",
 };

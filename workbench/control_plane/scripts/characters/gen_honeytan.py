@@ -14,35 +14,45 @@ import urllib.request
 
 import mcp
 
-TILES_ID = "72f290b6-b338-4e59-94e0-f20c3793ade3"
 OUT = "../../public/office-env"
 TS = "../../src/app/observability/office-env.generated.ts"
 
-# role -> Honeytan variation index (0-15). Tweak freely to re-mix the floor.
-ZONES = {
-    "floor": 6,    # base: bold cream/tan checker
-    "corner": 9,   # corners: warm wood-and-cream checker accent
-    "lane": 12,    # walkways between areas: horizontal wood planks
-    "wall": 15,    # top wall band: solid warm wood planks
+# The user's Pixel Lab create_tiles_pro sets (16 variations each).
+SETS = {
+    "cream": "7cd0feac-fc6f-47e5-b212-6f03a8ab2630",  # cream floor + darker tiles
+    "wood": "e2c6c06e-c847-463a-851b-04adae703fd8",   # warm wood planks
+    "honeytan": "72f290b6-b338-4e59-94e0-f20c3793ade3",  # 48px honey-tan checker
 }
-TILE_PX = 48       # native tile size
-RENDER_PX = 96     # on-screen repeat size
+
+# role -> (set, variation index 0-15). Tweak freely to re-mix the floor.
+ZONES = {
+    "floor": ("cream", 0),    # base: clean warm cream
+    "corner": ("cream", 13),  # corners: decorative patterned accent
+    "lane": ("cream", 12),    # walkways: the DARKER cream tile
+    "wall": ("wood", 2),      # top wall band: horizontal wood planks
+}
+RENDER_PX = 64     # on-screen repeat size (native tiles are 32px)
 
 _UA = urllib.request.build_opener()
 _UA.addheaders = [("User-Agent", "Mozilla/5.0")]
 
 
 def main():
-    out = mcp.call("get_tiles_pro", {"tile_id": TILES_ID})
-    urls = dict((int(n), u) for n, u in re.findall(r"tile_(\d+): (https://\S+?\.png)", out))
+    # Fetch tile URLs for each set we reference.
+    need = {s for s, _ in ZONES.values()}
+    urls = {}
+    for s in need:
+        out = mcp.call("get_tiles_pro", {"tile_id": SETS[s]})
+        urls[s] = dict((int(n), u) for n, u in
+                       re.findall(r"tile_(\d+): (https://\S+?\.png)", out))
     os.makedirs(OUT, exist_ok=True)
     saved = {}
-    for role, idx in ZONES.items():
-        data = _UA.open(urls[idx], timeout=60).read()
+    for role, (s, idx) in ZONES.items():
+        data = _UA.open(urls[s][idx], timeout=60).read()
         name = f"floor-{role}.png"
         open(f"{OUT}/{name}", "wb").write(data)
         saved[role] = f"/office-env/{name}"
-        print(f"{role} <- tile {idx} -> {name}")
+        print(f"{role} <- {s}#{idx} -> {name}")
 
     lines = [
         "// AUTO-GENERATED - Honeytan (create_tiles_pro) zoned floor, gen_honeytan.py.",

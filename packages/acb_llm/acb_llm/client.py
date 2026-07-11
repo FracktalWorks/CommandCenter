@@ -270,6 +270,14 @@ class LLMTier(StrEnum):
     TIER_3 = "tier3"
 
 
+# Models we dynamically registered with a PLACEHOLDER (zero) price purely so
+# litellm can ROUTE them (see ensure_model_registered). Their price is unknown,
+# NOT free — cost computation must report them as unknown ("—"), never a
+# misleading $0.00. Tracked here so _compute_cost can tell a real $0 (a
+# genuinely free known model) from "we never had a price."
+_DYNAMIC_STUB_PRICED_MODELS: set[str] = set()
+
+
 def ensure_model_registered(model: str) -> str | None:
     """Ensure *model* can be routed by litellm.
 
@@ -327,6 +335,9 @@ def ensure_model_registered(model: str) -> str | None:
                 "supports_tool_choice": True,
                 "supports_response_schema": True,
             }
+            # Remember this is a placeholder price, not a real $0 (H8): so the
+            # cost path reports "unknown" instead of a confident $0.00.
+            _DYNAMIC_STUB_PRICED_MODELS.add(model)
             _log.info(
                 "acb_llm.model_registered_dynamic",
                 model=model,
@@ -455,6 +466,12 @@ def _compute_cost(model: str, response: Any, stats: dict[str, int]) -> float | N
     isn't in litellm's catalogue (unknown price) so the UI can show "—" rather
     than a misleading $0. Never raises.
     """
+    # Models we registered with a placeholder zero price (for routing only) have
+    # NO known price — report unknown, never a confident $0.00 (H8). Without
+    # this guard litellm.completion_cost finds our 0-cost stub and returns 0.0,
+    # defeating the "unknown → None" contract for exactly the tier models in use.
+    if model in _DYNAMIC_STUB_PRICED_MODELS:
+        return None
     try:
         from litellm import completion_cost  # noqa: PLC0415
         c = completion_cost(completion_response=response, model=model)

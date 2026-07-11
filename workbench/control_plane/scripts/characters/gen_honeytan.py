@@ -40,9 +40,11 @@ ALL_ROT = [0, 90, 180, 270]
 ZONES = {
     "floor": ("cream", [13], 8, 8, ALL_ROT),         # the decorative tile everywhere
     "lane": ("cream", [12, 15], 6, 2, ALL_ROT),      # darker tile: office BORDER frame
-    # NEW wall slats — ONE row (full-height slats, no horizontal seam) of only the
-    # LIGHTEST planks (0/4/5), displayed big (WALL_TILE_PX) so slats are few + wide.
-    "wall": ("wallslats", [0, 4, 5], 6, 1, [0]),
+    # NEW wall slats — ONE row (full-height, no seam), displayed big (WALL_TILE_PX)
+    # for few + wide slats. Tiles chosen by COLOR: the cooler/cleaner light-tan planks
+    # (low R-B, low R-G) that cluster together — NOT the orange-brown ones (0/5) the
+    # user flagged. Many closely-colored tiles => subtle variation, uniform look.
+    "wall": ("wallslats", [1, 2, 6, 8, 10], 6, 1, [0]),
 }
 # role -> (brightness, saturation) multipliers. Floor: flat + a bit darker (less white).
 TONE = {"floor": (1.0, 0.5)}

@@ -20,6 +20,7 @@ import { Building2, Coins } from "lucide-react";
 
 import { OFFICE_CAST } from "./office-cast.generated";
 import { OFFICE_ENV } from "./office-env.generated";
+import { OBJ_SIZES } from "./office-object-sizes.generated";
 import { OFFICE_OBJECTS, type Dir } from "./office-objects.generated";
 import { roleFor } from "./scene";
 
@@ -32,20 +33,18 @@ interface OfficeAgent {
   source?: string | null;
 }
 
-// On-screen height (px) for each object type. Sprites share a 96px canvas, so a
-// fixed height would make a side-table look as big as a bookshelf; these keep the
-// relative scale faithful (and generally smaller so nothing reads "zoomed in").
-const OBJ_H: Record<string, number> = {
-  bookshelf: 64, "bookshelf-wide": 58, "shelf-files": 56,
-  couch: 54, armchair: 54, beanbag: 46, "side-table": 40,
-  "plant-tall": 74, "plant-palm": 70, "plant-monstera": 62,
-  "plant-small": 44, "plant-cactus": 48, "plant-hanging": 40,
-  "coffee-machine": 52, "water-cooler": 58, workstation: 50,
-  "printer-3d": 58, "printer-3d-large": 66, "printer-office": 46,
-  "filing-cabinet": 56, whiteboard: 58,
-  // equipment-on-a-surface + back-wall fixtures
-  "desk-computer": 58, "table-plant": 54, "counter-coffee": 62,
-  "wall-clock": 40, "tv-screen": 42, "notice-board": 44, blackboard: 44,
+// Every FLOOR object is drawn at native_size * ONE scale, so all objects share the
+// same pixel density and keep their TRUE relative sizes (this is what makes a small
+// plant vs a big bookshelf read correctly instead of hand-tuned per object). Height
+// comes from the object's native cropped size for the rendered direction.
+const OBJ_SCALE = 0.92;
+function objHeight(obj: string, dir: string): number {
+  const s = OBJ_SIZES[obj]?.[dir];
+  return Math.round((s ? s[1] : 60) * OBJ_SCALE);
+}
+// Wall-mounted fixtures are sized to the wall band explicitly (not floor-scaled).
+const WALL_FIX_H: Record<string, number> = {
+  blackboard: 36, "notice-board": 36, "tv-screen": 32, "wall-clock": 32,
 };
 
 // Furniture is grouped into wall-hugging CLUSTERS, each rendered as a flex box so its
@@ -59,7 +58,8 @@ const OBJ_H: Record<string, number> = {
 type ClItem = { obj: string; dir: Dir };
 type Cluster = { id: string; cls: string; items: ClItem[] };
 const CLUSTERS: Cluster[] = [
-  // TOP-LEFT — library
+  // TOP-LEFT (BACK) — library + coffee counter. Front-facing pieces live on the back
+  // wall (the coffee counter is front-facing, so it belongs here, not on a side wall).
   {
     id: "library",
     cls: "oc-cl-tl",
@@ -67,16 +67,16 @@ const CLUSTERS: Cluster[] = [
       { obj: "bookshelf", dir: "south" },
       { obj: "bookshelf-wide", dir: "south" },
       { obj: "shelf-files", dir: "south" },
+      { obj: "counter-coffee", dir: "south" },
     ],
   },
-  // TOP-RIGHT — 3D-print & workstation corner (computer sits ON a desk)
+  // TOP-RIGHT (BACK) — workstation corner (computer sits ON a desk)
   {
-    id: "printlab",
+    id: "workstation",
     cls: "oc-cl-tr",
     items: [
       { obj: "desk-computer", dir: "south" },
-      { obj: "printer-3d", dir: "south" },
-      { obj: "printer-3d-large", dir: "south" },
+      { obj: "printer-office", dir: "south" },
     ],
   },
   // LEFT WALL — lounge (couch + round coffee table + armchair)
@@ -89,15 +89,14 @@ const CLUSTERS: Cluster[] = [
       { obj: "armchair", dir: "east" },
     ],
   },
-  // RIGHT WALL — kitchen / supply (coffee machine sits ON a counter)
+  // RIGHT WALL — supply column
   {
-    id: "kitchen",
+    id: "supply",
     cls: "oc-cl-rm",
     items: [
-      { obj: "counter-coffee", dir: "south" },
       { obj: "water-cooler", dir: "west" },
-      { obj: "printer-office", dir: "west" },
       { obj: "filing-cabinet", dir: "west" },
+      { obj: "plant-monstera", dir: "west" },
     ],
   },
   // BOTTOM-LEFT — chill nook + greenery (plant sits ON a table)
@@ -108,7 +107,6 @@ const CLUSTERS: Cluster[] = [
       { obj: "beanbag", dir: "north-east" },
       { obj: "plant-cactus", dir: "north" },
       { obj: "table-plant", dir: "south" },
-      { obj: "plant-monstera", dir: "north" },
     ],
   },
   // BOTTOM-RIGHT — plant grove
@@ -358,10 +356,10 @@ export function TopDownOffice({
                   <span
                     key={it.obj}
                     className={`oc-fix oc-fix-${it.obj}`}
-                    style={{ height: OBJ_H[it.obj] ?? 40 }}
+                    style={{ height: WALL_FIX_H[it.obj] ?? 34 }}
                   >
                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                    <img src={src} alt="" aria-hidden style={{ height: OBJ_H[it.obj] ?? 40 }} />
+                    <img src={src} alt="" aria-hidden style={{ height: WALL_FIX_H[it.obj] ?? 34 }} />
                   </span>
                 );
               })}
@@ -377,7 +375,7 @@ export function TopDownOffice({
                     <img
                       key={`${it.obj}-${i}`}
                       className="oc-obj"
-                      style={{ height: OBJ_H[it.obj] ?? 58 }}
+                      style={{ height: objHeight(it.obj, it.dir) }}
                       src={src}
                       alt=""
                       aria-hidden
@@ -468,7 +466,7 @@ export const TOPDOWN_STYLE = `
 /* Floor — the darker lane tile frames the office as a thin BORDER (matching the
    conference-room cards); an inset ::before field carries the main floor tile. */
 .oc-floor {
-  position:relative; padding:60px 82px 46px;
+  position:relative; padding:56px 82px 46px;
   background-color:#cbb89a;
   background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto);
@@ -484,18 +482,18 @@ export const TOPDOWN_STYLE = `
 }
 
 /* Furniture clusters — each is a flex box anchored to a wall/corner so its members
-   auto-space (fixed gap, no overlap) and sit on a common baseline. Heights come from
-   the inline OBJ_H map (kept as downscales of the cropped sprites so pixels stay crisp
-   and every object reads at a scale consistent with the agents). */
+   auto-space (fixed gap, no overlap) and sit on a common baseline. Each object's height
+   is its native cropped size * OBJ_SCALE, so pixel density is uniform across objects. */
 .oc-cluster { position:absolute; z-index:1; display:flex; align-items:flex-end; gap:6px;
   pointer-events:none; }
 .oc-obj { display:block; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.30)); }
-/* small positive offsets keep the pieces IN FRONT of the wall band / room frame
-   (never behind it) so nothing gets clipped, while still sitting on the border tiles
-   right against the wall. */
-.oc-cl-tl { top:4px; left:10px; }
-.oc-cl-tr { top:4px; right:10px; }
+/* Back (top) clusters overlap the wall band slightly and sit ABOVE it (z-index > the
+   wall's) so they render IN FRONT of the wall for a 3D "standing against the wall"
+   effect (not clipped behind it). The floor has no stacking context, so this z-index
+   competes directly with the wall band. Side/bottom clusters stay flush + in front. */
+.oc-cl-tl { top:-8px; left:10px; z-index:5; }
+.oc-cl-tr { top:-8px; right:10px; z-index:5; }
 .oc-cl-bl { bottom:4px; left:10px; }
 .oc-cl-br { bottom:4px; right:10px; }
 .oc-cl-lm { top:47%; left:6px; transform:translateY(-50%);

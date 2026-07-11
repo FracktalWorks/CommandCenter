@@ -158,6 +158,7 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   unsubscribe_sender: { icon: Archive, label: "Unsubscribed", danger: true },
   keep_newsletter: { icon: Mail, label: "Newsletter kept" },
   set_cold_sender: { icon: Archive, label: "Cold sender updated" },
+  set_sender_status: { icon: Tag, label: "Sender updated" },
   categorize_senders: { icon: Tag, label: "Categorizing senders" },
   send_digest: { icon: Send, label: "Digest sent" },
   sync_account: { icon: RefreshCw, label: "Syncing" },
@@ -1704,8 +1705,20 @@ function PatternListCard({
  *  WHOLE result (no 160-char truncation) so the list is actually readable, with
  *  collapse + dismiss from ToolCardShell. Counts the bullet lines for the title.
  */
+/** Label for the consolidated list_senders tool, chosen by its `view` arg. */
+const SENDER_VIEW_META: Record<string, { icon: React.ElementType; label: string }> = {
+  top: { icon: Mail, label: "Top senders" },
+  categories: { icon: Tag, label: "Sender categories" },
+  unsubscribe: { icon: Archive, label: "Unsubscribe candidates" },
+  cold: { icon: Archive, label: "Cold senders" },
+};
+
 function InfoResultCard({ event: e }: { event: ToolEvent }) {
-  const meta = INFO_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  let meta = INFO_META[e.name] ?? { icon: Wrench, label: e.name.replace(/_/g, " ") };
+  if (e.name === "list_senders") {
+    const view = String((e.args as Record<string, unknown> | undefined)?.view ?? "top");
+    meta = SENDER_VIEW_META[view] ?? SENDER_VIEW_META.top;
+  }
   const Icon = meta.icon;
   const text = (e.result || "").trim();
   const bullets = text.split("\n").filter((l) => l.trim().startsWith("•")).length;

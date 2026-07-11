@@ -98,19 +98,71 @@ def calls(monkeypatch):
 
 def test_surface_shrank_and_merged_names_gone() -> None:
     tools = agents._register_agent_tools()
-    assert len(tools) == 52
+    assert len(tools) == 47
     for gone in ("search_emails", "get_important_emails", "find_urgent",
                  "find_needs_reply", "get_full_body_email", "update_rule_state",
                  "approve_execution", "reject_execution", "undo_execution",
                  "get_digest", "send_digest", "resync_account", "add_knowledge",
                  "update_knowledge", "list_learned_patterns", "list_rule_patterns",
-                 "delete_learned_pattern", "delete_rule_pattern"):
+                 "delete_learned_pattern", "delete_rule_pattern",
+                 # aggressive pass
+                 "send_reply", "get_sender_categories", "suggest_unsubscribes",
+                 "list_cold_senders", "keep_newsletter", "set_cold_sender"):
         assert gone not in tools
     for new in ("find_priority", "resolve_execution", "digest", "save_knowledge",
-                "list_patterns", "forget_pattern"):
+                "list_patterns", "forget_pattern", "set_sender_status"):
         assert new in tools
     # Quick-action helpers stay importable even though they're unregistered.
     assert callable(agents.search_emails) and callable(agents.find_urgent)
+    assert callable(agents.suggest_unsubscribes)  # /ai/quick-action=unsubscribe
+
+
+# ── send_email absorbing send_reply ──────────────────────────────────────────
+
+async def test_send_email_reply_derives_recipient_and_subject(calls, monkeypatch) -> None:
+    async def yes(**kw):
+        return True
+    monkeypatch.setattr("acb_skills.ask_tools.request_confirmation", yes)
+    out = await agents.send_email("acc", body="Thanks!", reply_to_email_id="m1")
+    # Derived to/subject from the original (fake_get returns from a@b.com / "Hi").
+    sent = [c for c in calls["post"] if c[0] == "/email/send"][-1][1]
+    assert sent["to"] == ["a@b.com"]
+    assert sent["subject"] == "Re: Hi"
+    assert sent["reply_to_message_id"] == "m1"
+    assert "Replied to" in out
+
+
+async def test_send_email_new_requires_recipient(calls, monkeypatch) -> None:
+    async def yes(**kw):
+        return True
+    monkeypatch.setattr("acb_skills.ask_tools.request_confirmation", yes)
+    out = await agents.send_email("acc", body="Hi", subject="S")
+    assert "No recipient" in out  # no `to` and no reply target
+
+
+# ── list_senders(view) + set_sender_status ───────────────────────────────────
+
+async def test_list_senders_view_dispatch(calls) -> None:
+    await agents.list_senders("acc", view="top")
+    assert calls["get"][-1][0] == "/email/senders"
+    await agents.list_senders("acc", view="categories")
+    assert calls["get"][-1][0] == "/email/senders/categories"
+    await agents.list_senders("acc", view="cold")
+    assert calls["get"][-1][0] == "/email/cold-senders"
+    await agents.list_senders("acc", view="unsubscribe")
+    assert calls["get"][-1][0] == "/email/senders"  # suggest_unsubscribes path
+
+
+async def test_set_sender_status_dispatch(calls) -> None:
+    await agents.set_sender_status("acc", "x@y.com", "cold")
+    assert calls["post"][-1][0] == "/email/cold-senders"
+    assert calls["post"][-1][1]["status"] == "AI_LABELED_COLD"
+    await agents.set_sender_status("acc", "x@y.com", "not_cold")
+    assert calls["post"][-1][1]["status"] == "USER_REJECTED_COLD"
+    await agents.set_sender_status("acc", "x@y.com", "keep")
+    assert calls["post"][-1][0] == "/email/newsletters"
+    bad = await agents.set_sender_status("acc", "x@y.com", "weird")
+    assert "cold" in bad
 
 
 # ── find_priority ────────────────────────────────────────────────────────────

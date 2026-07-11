@@ -1219,29 +1219,53 @@ def _attachment_refs(attachments: list[str] | None) -> list[dict[str, Any]]:
 @_annotate_risk(destructive=True, open_world=True)
 async def send_email(
     account_id: str,
-    to: list[str],
-    subject: str,
     body: str,
+    to: list[str] | None = None,
+    subject: str | None = None,
     cc: list[str] | None = None,
     bcc: list[str] | None = None,
     reply_to_email_id: str | None = None,
     attachments: list[str] | None = None,
 ) -> str:
-    """Send an email immediately. Outward-facing — ALWAYS confirm the recipients
-    and body with the user before calling this.
+    """Send an email immediately — a new message OR a reply. Outward-facing —
+    ALWAYS confirm the recipients and body with the user before calling this.
+
+    To REPLY to an email, pass ``reply_to_email_id`` (the original's local id);
+    the recipient and 'Re:' subject are derived from it automatically (and it's
+    threaded), so you can omit ``to`` and ``subject``. To send a NEW message,
+    pass ``to`` and ``subject``. (To leave a reply in Drafts instead of sending,
+    use draft_reply.)
 
     Args:
-        to: recipient address(es).
-        subject: subject line.
         body: plain-text body.
+        to: recipient address(es) — required for a new message; derived from the
+            original for a reply if omitted.
+        subject: subject line — derived as 'Re: …' for a reply if omitted.
         cc / bcc: optional carbon-copy recipients.
-        reply_to_email_id: local id of a message this is a reply to (threads it).
+        reply_to_email_id: local id of a message this is a reply to (threads it,
+            and derives to/subject when those are omitted).
         attachments: workspace artifact paths to attach. Each is either
             ``"outputs/file.pdf"`` (a file you made with write_artifact) or
             ``"<agent>:outputs/file.pdf"`` for a sub-agent's file (e.g.
             ``"sales-assistant:outputs/quote.pdf"``). Use list_artifacts to see
             what's available; write_artifact to create one first.
     """
+    to = list(to or [])
+    # Reply mode: fill missing recipient / subject from the original message.
+    if reply_to_email_id and (not to or not subject):
+        orig = await _get(f"/email/messages/{reply_to_email_id}")
+        frm = orig.get("from_address", {}) or {}
+        if not to:
+            addr = frm.get("email", "")
+            if addr:
+                to = [addr]
+        if not subject:
+            s = orig.get("subject", "") or ""
+            subject = s if s.lower().startswith("re:") else f"Re: {s}"
+    if not to:
+        return "No recipient — pass `to`, or `reply_to_email_id` to reply."
+    subject = subject or ""
+
     payload: dict[str, Any] = {
         "account_id": account_id,
         "to": to,
@@ -1263,64 +1287,17 @@ async def send_email(
     # "Send cancelled" instead of a silent send.
     from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
     _cc_note = f", cc {', '.join(cc)}" if cc else ""
+    verb = "reply" if reply_to_email_id else "email"
     if not await request_confirmation(
-        title="Send this email?",
+        title=f"Send this {verb}?",
         detail=f"To {', '.join(to)}{_cc_note} · Subject: {subject or '(none)'}",
         context=body,
     ):
-        return "Send cancelled — the email was not sent."
+        return f"Send cancelled — the {verb} was not sent."
     res = await _post("/email/send", payload)
     note = f" with {len(refs)} attachment(s)" if refs else ""
-    return f"Sent email to {', '.join(to)}{note} (id={res.get('id', '')})."
-
-
-@_annotate_risk(destructive=True, open_world=True)
-async def send_reply(
-    account_id: str,
-    email_id: str,
-    body: str,
-    cc: list[str] | None = None,
-    attachments: list[str] | None = None,
-) -> str:
-    """Reply to an email — derives the recipient + 'Re:' subject from the
-    original message and sends it threaded. ALWAYS confirm the body with the user
-    first. (To leave it in Drafts instead of sending, use draft_reply.)
-
-    ``attachments`` works exactly like send_email's (workspace artifact paths,
-    optionally ``"<agent>:<path>"`` for a sub-agent's file)."""
-    orig = await _get(f"/email/messages/{email_id}")
-    frm = orig.get("from_address", {}) or {}
-    to_addr = frm.get("email", "")
-    if not to_addr:
-        return "Couldn't resolve the original sender to reply to."
-    subj = orig.get("subject", "") or ""
-    if not subj.lower().startswith("re:"):
-        subj = f"Re: {subj}"
-    payload: dict[str, Any] = {
-        "account_id": account_id,
-        "to": [to_addr],
-        "subject": subj,
-        "body_text": body,
-        "reply_to_message_id": email_id,
-    }
-    if cc:
-        payload["cc"] = cc
-    refs = _attachment_refs(attachments)
-    if refs:
-        payload["artifacts"] = refs
-    # Confirm-before-send (see send_email): park on a HITL card before the
-    # reply actually goes out.
-    from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
-    _cc_note = f", cc {', '.join(cc)}" if cc else ""
-    if not await request_confirmation(
-        title="Send this reply?",
-        detail=f"To {to_addr}{_cc_note} · Subject: {subj}",
-        context=body,
-    ):
-        return "Send cancelled — the reply was not sent."
-    res = await _post("/email/send", payload)
-    note = f" with {len(refs)} attachment(s)" if refs else ""
-    return f"Replied to {to_addr}{note} (id={res.get('id', '')})."
+    lead = "Replied to" if reply_to_email_id else "Sent email to"
+    return f"{lead} {', '.join(to)}{note} (id={res.get('id', '')})."
 
 
 # ── Attachments / artifacts ──────────────────────────────────────────────────
@@ -1455,6 +1432,25 @@ async def set_cold_sender(
     })
     verb = "flagged as cold" if is_cold else "cleared (not cold)"
     return f"{from_email} {verb}."
+
+
+async def set_sender_status(account_id: str, email: str, status: str) -> str:
+    """Set how a sender is treated, by ``status``:
+
+      • ``cold``     — flag as a cold/unsolicited sender (the blocker handles it).
+      • ``not_cold`` — clear the cold flag ("this sender is NOT cold").
+      • ``keep``     — keep receiving their mail / approve them (undo a block or
+        unsubscribe; also called 'approved').
+
+    (To actually unsubscribe + archive a newsletter, use unsubscribe_sender.)"""
+    s = (status or "").strip().lower()
+    if s in ("cold", "is_cold"):
+        return await set_cold_sender(account_id, email, is_cold=True)
+    if s in ("not_cold", "notcold", "clear", "not cold"):
+        return await set_cold_sender(account_id, email, is_cold=False)
+    if s in ("keep", "approved", "approve", "keep_newsletter"):
+        return await keep_newsletter(account_id, email)
+    return "status must be one of: cold | not_cold | keep."
 
 
 # ── Reply Zero ───────────────────────────────────────────────────────────────
@@ -1650,11 +1646,31 @@ async def forget_pattern(pattern_id: str, kind: str = "draft") -> str:
 
 
 async def list_senders(
-    account_id: str | None = None, folder: str = "inbox", limit: int = 25
+    account_id: str | None = None,
+    view: str = "top",
+    folder: str = "inbox",
+    limit: int = 25,
 ) -> str:
-    """Who emails you the most — aggregate the inbox by sender (volume, unread
-    count, and whether a one-click unsubscribe is available). Use for "who are
-    my top senders?", high-volume triage, or finding newsletters to cut."""
+    """Look at who emails you, by ``view``:
+
+      • ``top`` (default) — the biggest senders by volume (with unread count and
+        whether a one-click unsubscribe exists). "Who emails me most?".
+      • ``categories`` — the sender-category vocabulary and how many senders fall
+        in each (run categorize_senders first if empty).
+      • ``unsubscribe`` — likely newsletters/subscriptions to consider cutting
+        (low read-rate or an unsubscribe link).
+      • ``cold`` — senders flagged by the cold-email blocker.
+
+    Act on a sender with set_sender_status (cold / not cold / keep) or
+    unsubscribe_sender.
+    """
+    v = (view or "top").strip().lower()
+    if v in ("categories", "category"):
+        return await get_sender_categories(account_id or "")
+    if v in ("unsubscribe", "unsubscribes", "newsletters"):
+        return await suggest_unsubscribes(account_id)
+    if v in ("cold", "cold_senders"):
+        return await list_cold_senders(account_id or "")
     params: dict[str, Any] = {
         "folder": folder, "limit": str(max(1, min(limit, 200))),
     }
@@ -1755,14 +1771,12 @@ _TOOLS = [
     # Drafting / sending
     draft_reply,
     send_email,
-    send_reply,
     send_draft,
     # Attachments / artifacts
     list_artifacts,
     import_artifact,
     # Senders / categorization
     categorize_senders,
-    get_sender_categories,
     list_senders,
     # Rules + history
     get_rules_and_settings,
@@ -1791,11 +1805,8 @@ _TOOLS = [
     mark_thread_done,
     reclassify_reply_zero,
     # Unsubscribe / cold senders
-    suggest_unsubscribes,
     unsubscribe_sender,
-    keep_newsletter,
-    list_cold_senders,
-    set_cold_sender,
+    set_sender_status,
     # Digest
     digest,
     # Account sync

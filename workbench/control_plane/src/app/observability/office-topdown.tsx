@@ -20,6 +20,7 @@ import { Building2, Coins } from "lucide-react";
 
 import { OFFICE_CAST } from "./office-cast.generated";
 import { OFFICE_ENV } from "./office-env.generated";
+import { OFFICE_OBJECTS, type Dir } from "./office-objects.generated";
 import { roleFor } from "./scene";
 
 export type OfficeState = "working" | "idle" | "error";
@@ -31,13 +32,17 @@ interface OfficeAgent {
   source?: string | null;
 }
 
-// Floor props sit in the room's corners; the whiteboard is wall-mounted. Each entry
-// is [prop file, corner class]. Corners keep them correctly placed at any room size.
-const CORNER_PROPS: Array<[string, string]> = [
-  ["bookshelf", "oc-tl"],
-  ["coffee", "oc-tr"],
-  ["plant", "oc-bl"],
-  ["water-cooler", "oc-br"],
+// Decorative furniture placed around the room. Each piece uses the 8-direction
+// sprite that faces INTO the room from its wall: top wall -> south (front),
+// left wall -> east (faces right), right wall -> west (faces left), etc.
+const DECOR: Array<{ obj: string; dir: Dir; pos: string }> = [
+  { obj: "bookshelf", dir: "south", pos: "tl" }, // top wall, left
+  { obj: "plant-tall", dir: "south", pos: "tr" }, // top wall, right
+  { obj: "couch", dir: "east", pos: "lm" }, // left wall, faces right
+  { obj: "armchair", dir: "west", pos: "rm" }, // right wall, faces left
+  { obj: "beanbag", dir: "north-east", pos: "bl" }, // bottom-left
+  { obj: "side-table", dir: "south", pos: "bc" }, // bottom-center
+  { obj: "plant-small", dir: "north-west", pos: "br" }, // bottom-right
 ];
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
@@ -171,10 +176,14 @@ export function TopDownOffice({
             <span className="oc-sign">THE OFFICE</span>
           </div>
           <div className="oc-floor">
-            {CORNER_PROPS.map(([p, corner]) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={p} className={`oc-prop ${corner}`} src={`/office-props/${p}.png`} alt="" aria-hidden />
-            ))}
+            {DECOR.map((it) => {
+              const src = OFFICE_OBJECTS[it.obj]?.[it.dir];
+              if (!src) return null;
+              return (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img key={it.pos} className={`oc-decor oc-d-${it.pos}`} src={src} alt="" aria-hidden />
+              );
+            })}
             {/* Conference room — one table by default; more tables spawn as more
                 agents collaborate concurrently (static seats for now; agents will
                 walk over in a later pass). */}
@@ -239,7 +248,7 @@ export const TOPDOWN_STYLE = `
 /* Floor — the darker lane tile frames the whole office as a BORDER; an inset
    ::before field carries the main floor tile. */
 .oc-floor {
-  position:relative; padding:58px 46px 54px;
+  position:relative; padding:58px 92px 56px;
   background-color:#cbb89a;
   background-image: var(--oc-lane, none);
   background-size: var(--oc-lane-bg, auto);
@@ -256,14 +265,17 @@ export const TOPDOWN_STYLE = `
     inset 0 12px 22px rgba(0,0,0,.05);
 }
 
-/* Corner props stay pinned to the room corners at ANY size. Scaled to sit in
-   proportion to the seated agents (~90px), not tiny. */
-.oc-prop { position:absolute; height:74px; z-index:1; image-rendering:pixelated;
+/* Directional furniture placed around the room. Each faces into the room via its
+   8-direction sprite. Anchored to the walls so they hold at any room size. */
+.oc-decor { position:absolute; z-index:1; height:82px; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.32)); pointer-events:none; }
-.oc-prop.oc-tl { top:40px;  left:44px; }
-.oc-prop.oc-tr { top:40px;  right:44px; }
-.oc-prop.oc-bl { bottom:42px; left:44px; }
-.oc-prop.oc-br { bottom:42px; right:44px; }
+.oc-d-tl { top:40px; left:26px; }
+.oc-d-tr { top:40px; right:26px; }
+.oc-d-lm { top:46%; left:22px; transform:translateY(-50%); height:88px; }
+.oc-d-rm { top:46%; right:22px; transform:translateY(-50%); height:88px; }
+.oc-d-bl { bottom:40px; left:26px; }
+.oc-d-br { bottom:40px; right:26px; }
+.oc-d-bc { bottom:18px; left:50%; transform:translateX(-50%); height:66px; }
 
 /* Conference zone — one table by default; wraps to a grid of tables as more
    collaborations spawn. */
@@ -331,12 +343,14 @@ export const TOPDOWN_STYLE = `
   .oc-figure { height:104px; }
   .oc-static { height:104px; }
   .oc-anim { --w:104px; }
-  .oc-floor { padding:48px 26px 42px; }
+  .oc-floor { padding:46px 30px 42px; }
   .oc-floor::before { inset:16px; }
-  .oc-prop { height:56px; }
-  .oc-prop.oc-tl { top:22px; left:22px; }
-  .oc-prop.oc-bl { bottom:24px; left:22px; }
-  .oc-prop.oc-tr, .oc-prop.oc-br { display:none; }
+  .oc-decor { height:54px; }
+  .oc-d-lm, .oc-d-rm, .oc-d-bc { display:none; }
+  .oc-d-tl { top:22px; left:12px; }
+  .oc-d-tr { top:22px; right:12px; }
+  .oc-d-bl { bottom:22px; left:12px; }
+  .oc-d-br { bottom:22px; right:12px; }
   .oc-sign { display:none; }
 }
 

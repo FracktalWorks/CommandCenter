@@ -1,12 +1,17 @@
 "use client";
 
 /**
- * Top-down RPG office — each agent is a real Pixel Lab character SEATED at their
- * desk in a shared room, gently breathing (breathing-idle animation). Working
- * agents get a lit "typing" ping + faster loop; idle ones dim and doze; errors
- * flash red. Sprites + idle spritesheets are the pre-generated library
- * (office-cast.generated.ts / public/characters-seated) — selection only, no
- * runtime generation. Office props (plant, cooler, whiteboard, …) dress the room.
+ * Top-down RPG office — every agent is a real Pixel Lab character SEATED at a desk
+ * in one shared, tiled room. Working agents play the seated typing animation; idle
+ * ones dim and doze; errors flash red. Sprites come from the pre-generated library
+ * (office-cast.generated.ts / public/characters-seated) — selection only, no runtime
+ * generation.
+ *
+ * The ROOM is self-scaling: the desk grid uses `auto-fill` so it reflows to any agent
+ * count AND any viewport (2 columns on a phone → 6+ on a wide desktop) with no JS.
+ * The floor is a seamless Pixel Lab tile (office-env.generated.ts) that repeats to
+ * fill whatever size the room grows to; props are anchored to the room's corners and
+ * wall so they stay correctly placed as it expands/contracts.
  */
 
 import React from "react";
@@ -14,6 +19,7 @@ import React from "react";
 import { Building2, Coins } from "lucide-react";
 
 import { OFFICE_CAST } from "./office-cast.generated";
+import { OFFICE_ENV } from "./office-env.generated";
 import { roleFor } from "./scene";
 
 export type OfficeState = "working" | "idle" | "error";
@@ -25,8 +31,14 @@ interface OfficeAgent {
   source?: string | null;
 }
 
-// Static office decorations (Pixel Lab map objects) shelved along the top wall.
-const PROPS = ["plant", "water-cooler", "whiteboard", "coffee", "bookshelf"];
+// Floor props sit in the room's corners; the whiteboard is wall-mounted. Each entry
+// is [prop file, corner class]. Corners keep them correctly placed at any room size.
+const CORNER_PROPS: Array<[string, string]> = [
+  ["bookshelf", "oc-tl"],
+  ["coffee", "oc-tr"],
+  ["plant", "oc-bl"],
+  ["water-cooler", "oc-br"],
+];
 
 /** Map an agent to a seated-character key: exact match wins, else its role's. */
 const ROLE_TO_CHAR: Record<string, string> = {
@@ -59,7 +71,11 @@ function Seat({
   // breathing-idle TEMPLATE animates a standing skeleton, so it isn't used.)
   const playTyping = state === "working" && Boolean(c?.working && c?.workingFrames);
   return (
-    <button onClick={() => onOpen(agent.name)} className={`oc-seat oc-${state}`} title={agent.description || agent.name}>
+    <button
+      onClick={() => onOpen(agent.name)}
+      className={`oc-seat oc-${state}`}
+      title={agent.description || agent.name}
+    >
       <div className="oc-figure">
         {playTyping ? (
           <span
@@ -101,6 +117,16 @@ export function TopDownOffice({
   };
   const workingCount = roster.filter((a) => stateOf(a) === "working").length;
 
+  // Seamless generated floor tile (repeats to fill any room size); undefined until
+  // the Pixel Lab tileset is built, in which case CSS falls back to a procedural floor.
+  const roomStyle = OFFICE_ENV.floor
+    ? ({
+        "--oc-floor": `url(${OFFICE_ENV.floor})`,
+        "--oc-floor-size": `${OFFICE_ENV.floorSize ?? 64}px`,
+        ...(OFFICE_ENV.wall ? { "--oc-wall": `url(${OFFICE_ENV.wall})` } : {}),
+      } as React.CSSProperties)
+    : undefined;
+
   return (
     <div className="h-full min-h-0 overflow-y-auto">
       <div className="flex items-center justify-between mb-3">
@@ -117,17 +143,22 @@ export function TopDownOffice({
           <p className="oc-mono text-sm text-muted-foreground">No agents registered yet.</p>
         </div>
       ) : (
-        <div className="oc-room">
+        <div className="oc-room" style={roomStyle}>
           <div className="oc-wall">
-            {PROPS.map((p) => (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img key={p} className="oc-prop" src={`/office-props/${p}.png`} alt="" aria-hidden />
-            ))}
+            {/* eslint-disable-next-line @next/next/no-img-element */}
+            <img className="oc-wallboard" src="/office-props/whiteboard.png" alt="" aria-hidden />
+            <span className="oc-sign">THE OFFICE</span>
           </div>
-          <div className="oc-grid">
-            {roster.map((a) => (
-              <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} />
+          <div className="oc-floor">
+            {CORNER_PROPS.map(([p, corner]) => (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img key={p} className={`oc-prop ${corner}`} src={`/office-props/${p}.png`} alt="" aria-hidden />
             ))}
+            <div className="oc-grid">
+              {roster.map((a) => (
+                <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} />
+              ))}
+            </div>
           </div>
         </div>
       )}
@@ -138,26 +169,64 @@ export function TopDownOffice({
 /** Injected once by the page. */
 export const TOPDOWN_STYLE = `
 .oc-mono { font-family: ui-monospace, "SFMono-Regular", Menlo, monospace; letter-spacing:.02em; }
+
+/* Outer room = the walls. Scales to whatever the floor grid needs. */
 .oc-room {
-  position:relative; padding:52px 24px 24px;
-  background:
-    linear-gradient(#2c2438,#241d30) padding-box,
-    repeating-linear-gradient(0deg, transparent, transparent 33px, rgba(255,255,255,.028) 33px, rgba(255,255,255,.028) 34px),
-    repeating-linear-gradient(90deg, transparent, transparent 33px, rgba(255,255,255,.028) 33px, rgba(255,255,255,.028) 34px);
-  border:5px solid #3a2f4a; border-radius:16px;
-  box-shadow: inset 0 0 0 3px #1b1626, inset 0 20px 44px rgba(0,0,0,.4);
+  position:relative; border-radius:16px; overflow:hidden;
+  background:linear-gradient(#2a2336,#1f1929);
+  border:5px solid #3a2f4a;
+  box-shadow: inset 0 0 0 3px #1b1626, 0 10px 30px rgba(0,0,0,.35);
 }
-.oc-wall { position:absolute; inset:5px 5px auto 5px; height:40px;
-  background:linear-gradient(#3a2f4a,#2c2440); border-radius:12px 12px 0 0; border-bottom:3px solid #1b1626;
-  display:flex; align-items:center; gap:18px; padding:0 18px; }
-.oc-prop { height:36px; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.4)); }
-.oc-grid { position:relative; display:grid; grid-template-columns:repeat(2,1fr); gap:8px 16px; z-index:2; }
-@media (min-width:820px){ .oc-grid { grid-template-columns:repeat(3,1fr); } }
-.oc-seat { position:relative; display:flex; flex-direction:column; align-items:center; background:none; border:none; cursor:pointer; padding:4px 0; }
-.oc-figure { position:relative; height:128px; display:flex; align-items:flex-end; }
+/* Top wall band — holds the mounted whiteboard + room sign. */
+.oc-wall {
+  position:relative; height:56px; z-index:3;
+  background:
+    linear-gradient(rgba(0,0,0,.12), rgba(0,0,0,.42)),
+    var(--oc-wall, linear-gradient(#40354f,#2c2440));
+  background-size: cover, 56px 56px;
+  background-repeat: no-repeat, repeat;
+  image-rendering:pixelated;
+  border-bottom:3px solid #1b1626;
+  display:flex; align-items:center; gap:14px; padding:0 18px;
+  box-shadow: inset 0 -8px 14px rgba(0,0,0,.28);
+}
+.oc-wallboard { height:40px; image-rendering:pixelated; filter:drop-shadow(0 2px 2px rgba(0,0,0,.5)); }
+.oc-sign { font-family:ui-monospace,monospace; font-size:12px; letter-spacing:.28em;
+  color:#c7b8e0; text-shadow:0 1px 0 #12101a; }
+
+/* Floor — the seamless tile repeats to fill; procedural fallback when no tile yet. */
+.oc-floor {
+  position:relative; padding:58px 16px 54px;
+  background-color:#241d30;
+  background-image:
+    var(--oc-floor, none),
+    repeating-linear-gradient(0deg, transparent, transparent 33px, rgba(255,255,255,.03) 33px, rgba(255,255,255,.03) 34px),
+    repeating-linear-gradient(90deg, transparent, transparent 33px, rgba(255,255,255,.03) 33px, rgba(255,255,255,.03) 34px);
+  background-size: var(--oc-floor-size,64px) var(--oc-floor-size,64px), auto, auto;
+  background-repeat: repeat, repeat, repeat;
+  image-rendering:pixelated;
+  box-shadow: inset 0 22px 42px rgba(0,0,0,.42), inset 0 -18px 34px rgba(0,0,0,.30);
+}
+
+/* Corner props stay pinned to the room corners at ANY size. */
+.oc-prop { position:absolute; height:46px; z-index:1; image-rendering:pixelated;
+  filter:drop-shadow(0 3px 3px rgba(0,0,0,.5)); pointer-events:none; }
+.oc-prop.oc-tl { top:8px;  left:12px; }
+.oc-prop.oc-tr { top:8px;  right:12px; }
+.oc-prop.oc-bl { bottom:10px; left:12px; }
+.oc-prop.oc-br { bottom:10px; right:12px; }
+
+/* Desk grid: auto-fill => reflows to agent count AND viewport with no JS. */
+.oc-grid { position:relative; z-index:2;
+  display:grid; grid-template-columns:repeat(auto-fill, minmax(148px, 1fr));
+  gap:10px 12px; justify-items:center; }
+
+.oc-seat { position:relative; display:flex; flex-direction:column; align-items:center;
+  background:none; border:none; cursor:pointer; padding:4px 0; width:100%; }
+.oc-figure { position:relative; height:128px; display:flex; align-items:flex-end; justify-content:center; }
 .oc-static, .oc-anim { image-rendering:pixelated; filter:drop-shadow(0 5px 4px rgba(0,0,0,.55)); }
 .oc-static { height:128px; }
-/* animated sprite: a breathing-idle spritesheet (N frames wide) played via steps */
+/* animated sprite: the seated typing spritesheet (N frames wide) played via steps */
 .oc-anim { --w:128px; display:block; width:var(--w); height:var(--w);
   background-image:var(--sheet); background-repeat:no-repeat;
   background-size:calc(var(--n) * var(--w)) var(--w); background-position:0 0;
@@ -175,6 +244,19 @@ export const TOPDOWN_STYLE = `
 .oc-pill.oc-working { color:#f5b301; border-color:#f5b30155; background:#f5b30115; }
 .oc-pill.oc-idle { color:#8b949e; border-color:#8b949e33; background:#8b949e10; }
 .oc-pill.oc-error { color:#ff6b6b; border-color:#ff6b6b44; background:#ff6b6b12; }
+
+/* Compact the room on small screens: smaller sprites, tighter grid, fewer props. */
+@media (max-width:560px){
+  .oc-grid { grid-template-columns:repeat(auto-fill, minmax(116px, 1fr)); gap:6px 8px; }
+  .oc-figure { height:104px; }
+  .oc-static { height:104px; }
+  .oc-anim { --w:104px; }
+  .oc-floor { padding:52px 8px 46px; }
+  .oc-prop { height:36px; }
+  .oc-prop.oc-tr, .oc-prop.oc-br { display:none; }
+  .oc-sign { display:none; }
+}
+
 @keyframes oc-play { to { background-position-x: calc(-1 * var(--n) * var(--w)); } }
 @keyframes oc-bob { 0%,100%{transform:translateY(0)} 50%{transform:translateY(-3px)} }
 @keyframes oc-breathe { 0%,100%{transform:translateY(0) scale(1)} 50%{transform:translateY(1px) scale(.994)} }

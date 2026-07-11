@@ -68,6 +68,7 @@ const CLUSTERS: Cluster[] = [
       { obj: "bookshelf-wide", dir: "south" },
       { obj: "shelf-files", dir: "south" },
       { obj: "counter-coffee", dir: "south" },
+      { obj: "water-cooler", dir: "south" }, // next to the coffee counter, front view
     ],
   },
   // TOP-RIGHT (BACK) — workstation corner (computer sits ON a desk)
@@ -94,7 +95,6 @@ const CLUSTERS: Cluster[] = [
     id: "supply",
     cls: "oc-cl-rm",
     items: [
-      { obj: "water-cooler", dir: "west" },
       { obj: "filing-cabinet", dir: "west" },
       { obj: "plant-monstera", dir: "west" },
     ],

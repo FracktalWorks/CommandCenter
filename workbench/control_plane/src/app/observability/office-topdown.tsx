@@ -753,12 +753,13 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 /* Status badge — the ONLY status cue: a small icon at the agent's top-right that
    floats up and fades on a loop (inspired by the sleep "z"). z = sleeping,
    cog = working/thinking, alert-triangle = error. No text pill. */
-.oc-badge { position:absolute; top:24px; right:26px; z-index:3; display:flex;
+.oc-badge { position:absolute; top:22px; right:22px; z-index:3; display:flex;
   align-items:center; justify-content:center; line-height:0;
-  filter:drop-shadow(0 1px 1px rgba(255,255,255,.6));
+  width:22px; height:22px; border-radius:50%;
+  background:rgba(255,255,255,.95); border:1px solid rgba(0,0,0,.16);
+  box-shadow:0 1px 2px rgba(0,0,0,.28);
   animation: oc-float 2.6s ease-in-out infinite; }
-.oc-b-idle { font-family:ui-monospace,monospace; font-size:13px; color:#6b7280;
-  text-shadow:0 1px 1px rgba(255,255,255,.6); }
+.oc-b-idle { font-family:ui-monospace,monospace; font-size:13px; color:#6b7280; }
 .oc-b-working { color:#2a7fff; }
 .oc-b-error { color:#e0392f; animation-duration:1.5s; }
 

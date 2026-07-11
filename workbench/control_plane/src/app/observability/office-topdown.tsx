@@ -27,6 +27,7 @@ import {
   Globe,
   ListTodo,
   Mail,
+  MessageCircle,
   MessageCircleQuestion,
   PenTool,
   PencilLine,
@@ -289,14 +290,29 @@ function Seat({
   );
 }
 
-/** One agent STANDING at the conference table, facing inward, gently breathing. */
+/** Rotating "who's speaking" index for a room — cycles every ~1.9s (client only, so
+ *  starts at 0 on the server to avoid a hydration mismatch). */
+function useSpeaker(count: number): number {
+  const [i, setI] = React.useState(0);
+  React.useEffect(() => {
+    if (count < 2) return;
+    const id = setInterval(() => setI((n) => n + 1), 1900);
+    return () => clearInterval(id);
+  }, [count]);
+  return count ? i % count : 0;
+}
+
+/** One agent STANDING at the conference table, facing inward, gently breathing. The
+ *  current speaker leans in and pops a chat bubble — the discussion passing around. */
 function CrStandee({
   agent,
   dir,
+  speaking,
   onOpen,
 }: {
   agent: OfficeAgent;
   dir: "south" | "north" | "east" | "west";
+  speaking?: boolean;
   onOpen: (name: string) => void;
 }) {
   const c = OFFICE_CAST[characterFor(agent.name)];
@@ -305,10 +321,15 @@ function CrStandee({
   if (!src) return null;
   return (
     <button
-      className="oc-cr-standee"
+      className={`oc-cr-standee${speaking ? " oc-cr-speaking" : ""}`}
       onClick={() => onOpen(agent.name)}
       title={agent.description || agent.name}
     >
+      {speaking && (
+        <span className="oc-cr-bubble">
+          <MessageCircle size={11} strokeWidth={2.6} />
+        </span>
+      )}
       {/* eslint-disable-next-line @next/next/no-img-element */}
       <img className="oc-cr-standimg" src={src} alt={agent.name} />
     </button>
@@ -328,8 +349,10 @@ function ConferenceRoom({
   members: OfficeAgent[];
   onOpen: (name: string) => void;
 }) {
-  const top = members.filter((_, i) => i % 2 === 0);
-  const bottom = members.filter((_, i) => i % 2 === 1);
+  const speaker = useSpeaker(members.length);
+  const idx = members.map((a, i) => ({ a, i }));
+  const top = idx.filter(({ i }) => i % 2 === 0);
+  const bottom = idx.filter(({ i }) => i % 2 === 1);
   return (
     <div className="oc-cr">
       <div className="oc-cr-wall">
@@ -347,8 +370,8 @@ function ConferenceRoom({
       </div>
       <div className="oc-cr-floor">
         <div className="oc-cr-row oc-cr-row-top">
-          {top.map((a) => (
-            <CrStandee key={a.name} agent={a} dir="south" onOpen={onOpen} />
+          {top.map(({ a, i }) => (
+            <CrStandee key={a.name} agent={a} dir="south" speaking={i === speaker} onOpen={onOpen} />
           ))}
         </div>
         {/* plants flanking the table, matching the office aesthetic */}
@@ -373,9 +396,11 @@ function ConferenceRoom({
           alt=""
           aria-hidden
         />
+        {/* the shared topic on the table — a soft pulse the discussion revolves around */}
+        <span className="oc-cr-focus" aria-hidden />
         <div className="oc-cr-row oc-cr-row-bottom">
-          {bottom.map((a) => (
-            <CrStandee key={a.name} agent={a} dir="north" onOpen={onOpen} />
+          {bottom.map(({ a, i }) => (
+            <CrStandee key={a.name} agent={a} dir="north" speaking={i === speaker} onOpen={onOpen} />
           ))}
         </div>
       </div>
@@ -664,12 +689,26 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   align-items:flex-end; gap:10px; pointer-events:none; }
 .oc-cr-row-top { top:8px; z-index:1; }        /* far side — behind the table */
 .oc-cr-row-bottom { bottom:6px; z-index:3; }  /* near side — in front of the table */
-.oc-cr-standee { background:none; border:none; cursor:pointer; padding:0; line-height:0;
-  pointer-events:auto; }
+.oc-cr-standee { position:relative; background:none; border:none; cursor:pointer;
+  padding:0; line-height:0; pointer-events:auto; }
 .oc-cr-standimg { height:70px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.4));
   animation: oc-breathe 3.4s ease-in-out infinite; }
 .oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
+/* discussion: the current speaker leans in + pops a chat bubble above the head */
+.oc-cr-speaking { transform:translateY(-4px) scale(1.07); transition:transform .3s; z-index:4; }
+.oc-cr-bubble { position:absolute; top:-2px; left:50%; margin-left:-9px;
+  width:18px; height:18px; border-radius:50% 50% 50% 3px; display:flex;
+  align-items:center; justify-content:center; color:#3a6ea5;
+  background:rgba(255,255,255,.95); border:1px solid rgba(0,0,0,.16);
+  box-shadow:0 1px 2px rgba(0,0,0,.28); z-index:5; animation:oc-pop .25s ease-out; }
+@keyframes oc-pop { 0%{opacity:0;transform:scale(.4)} 100%{opacity:1;transform:scale(1)} }
+/* the shared topic — a soft blue pulse centred on the table the discussion circles */
+.oc-cr-focus { position:absolute; left:50%; top:50%; z-index:2; pointer-events:none;
+  width:46px; height:46px; margin:-23px 0 0 -23px; border-radius:50%;
+  background:radial-gradient(circle, rgba(90,150,255,.34), rgba(90,150,255,0) 70%);
+  animation:oc-focus 2.4s ease-in-out infinite; }
+@keyframes oc-focus { 0%,100%{opacity:.25;transform:scale(.8)} 50%{opacity:.6;transform:scale(1.15)} }
 /* the shared conference table, centred in the room */
 .oc-cr-table { position:absolute; left:50%; top:50%; transform:translate(-50%,-50%);
   z-index:2; width:min(130px, 52%); image-rendering:pixelated;

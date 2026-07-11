@@ -46,6 +46,9 @@ export interface AvatarConfig {
   /** Optional real pixel-art sprite (data-URI). When set, the scene renders it
    *  instead of the procedural character; pinned per-agent by the Avatar Studio. */
   sprite?: string | null;
+  /** Optional id into the reusable CHARACTER_LIBRARY. When set, the top-down office
+   *  renders that library character's full animated set for the agent. */
+  libraryId?: string | null;
 }
 
 // ── Palettes + deterministic per-agent variation ────────────────────────────

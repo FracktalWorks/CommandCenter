@@ -20,8 +20,11 @@ import {
   Save,
   Sparkles,
   Trash2,
+  Users,
   Wand2,
 } from "lucide-react";
+
+import { CHARACTER_LIBRARY, LIBRARY_IDS } from "./character-library.generated";
 
 import {
   ACCESSORIES,
@@ -428,6 +431,66 @@ function AvatarEditor({
               transparent · waist-up · ~10-40s
             </span>
           </div>
+        </div>
+
+        {/* Assign a ready-made animated character from the reusable library */}
+        <div className="mb-5 rounded-xl border border-border bg-card/40 p-3">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <div className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Users size={14} className="text-primary" /> Assign from the character library
+            </div>
+            {draft.libraryId && (
+              <button
+                onClick={() => set({ libraryId: null })}
+                className="flex items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-[11px] text-muted-foreground transition-colors hover:border-destructive/40 hover:text-destructive"
+              >
+                <Trash2 size={12} /> Unassign
+              </button>
+            )}
+          </div>
+          {LIBRARY_IDS.length === 0 ? (
+            <p className="text-[11px] text-muted-foreground/70">
+              No library characters generated yet — run the generation campaign to
+              populate this bank.
+            </p>
+          ) : (
+            <>
+              <div className="grid max-h-44 grid-cols-6 gap-1.5 overflow-y-auto sm:grid-cols-8">
+                {LIBRARY_IDS.map((id) => {
+                  const ch = CHARACTER_LIBRARY[id];
+                  const active = draft.libraryId === id;
+                  return (
+                    <button
+                      key={id}
+                      onClick={() => {
+                        set({ libraryId: id });
+                        setSprite(null); // library character wins over a pinned sprite
+                      }}
+                      title={`${ch.role} · ${ch.gender}\n${ch.description}`}
+                      className={`flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-background/40 transition-transform hover:scale-105 ${
+                        active ? "border-primary ring-2 ring-primary ring-offset-1 ring-offset-background" : "border-border"
+                      }`}
+                    >
+                      {/* eslint-disable-next-line @next/next/no-img-element */}
+                      <img
+                        src={ch.portrait}
+                        alt={id}
+                        className="h-full w-full object-contain"
+                        style={{ imageRendering: "pixelated" }}
+                      />
+                    </button>
+                  );
+                })}
+              </div>
+              {draft.libraryId && CHARACTER_LIBRARY[draft.libraryId] && (
+                <p className="mt-2 text-[11px] text-primary">
+                  Assigned {labelize(CHARACTER_LIBRARY[draft.libraryId].role)} ·{" "}
+                  {CHARACTER_LIBRARY[draft.libraryId].gender}. Save to pin it — the
+                  office will show this character with its full animation set.
+                </p>
+              )}
+            </>
+          )}
         </div>
 
         {/* Look editor */}

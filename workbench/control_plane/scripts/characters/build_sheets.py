@@ -70,6 +70,35 @@ def main():
             if stand:
                 entry["standing"] = stand
 
+        # 'breathing' = the gentle standing-idle animation for the conference room.
+        # Per-direction frame PNGs -> one horizontal strip sheet per direction.
+        breathe_src = f"{SRC}/{a}/breathing"
+        if os.path.isdir(breathe_src):
+            breathe: dict[str, str] = {}
+            nframes = 0
+            bd = f"{out}/breathing"
+            for dr in ("south", "north"):
+                fdir = f"{breathe_src}/{dr}"
+                if not os.path.isdir(fdir):
+                    continue
+                frames = sorted(
+                    (f for f in os.listdir(fdir) if f.endswith(".png")),
+                    key=lambda f: int(f.split(".")[0]))
+                imgs = [Image.open(f"{fdir}/{f}").convert("RGBA") for f in frames]
+                if not imgs:
+                    continue
+                os.makedirs(bd, exist_ok=True)
+                w, h = imgs[0].size
+                sheet = Image.new("RGBA", (w * len(imgs), h), (0, 0, 0, 0))
+                for i, im in enumerate(imgs):
+                    sheet.alpha_composite(im, (i * w, 0))
+                sheet.save(f"{bd}/{dr}.png")
+                breathe[dr] = f"/characters-seated/{a}/breathing/{dr}.png"
+                nframes = max(nframes, len(imgs))
+            if breathe:
+                entry["breathing"] = breathe
+                entry["breathingFrames"] = nframes
+
         cast[a] = entry
         print(f"{a}: seated{' + working x' + str(entry.get('workingFrames', 0)) if 'working' in entry else ''}")
 
@@ -81,7 +110,8 @@ def main():
         '|"north-west"|"south-west";',
         "export interface OfficeChar { seated: string; working?: string;",
         "  workingFrames?: number; sleeping?: string;",
-        "  standing?: Partial<Record<Dir, string>> }",
+        "  standing?: Partial<Record<Dir, string>>;",
+        "  breathing?: Partial<Record<Dir, string>>; breathingFrames?: number }",
         "",
         "export const OFFICE_CAST: Record<string, OfficeChar> = {",
         *[f"  {json.dumps(a)}: {json.dumps(v)}," for a, v in cast.items()],

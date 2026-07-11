@@ -69,6 +69,7 @@ function toolIcon(tool: string): IconType {
 }
 
 import { OFFICE_CAST } from "./office-cast.generated";
+import { CHARACTER_LIBRARY } from "./character-library.generated";
 import { OFFICE_ENV } from "./office-env.generated";
 import { OBJ_SIZES } from "./office-object-sizes.generated";
 import { OFFICE_OBJECTS, type Dir } from "./office-objects.generated";
@@ -81,6 +82,10 @@ interface OfficeAgent {
   description?: string;
   status?: string;
   source?: string | null;
+  // An operator can assign a reusable library character (Avatar Studio) via the
+  // avatar override; when set, the office uses that character's full animated set
+  // (seated / typing / sleeping / breathing) instead of the role default.
+  avatar?: { config?: { libraryId?: string | null } | null } | null;
 }
 
 // Every FLOOR object is drawn at native_size * ONE scale, so all objects share the
@@ -219,6 +224,18 @@ export function characterFor(name: string): string {
   return ROLE_TO_CHAR[roleFor(name)] ?? "strategy";
 }
 
+// Resolve the sprite set an agent renders with: a library character explicitly
+// assigned in Avatar Studio wins (its full seated/typing/sleeping/breathing set);
+// otherwise fall back to the built-in role cast. LibChar is a structural superset
+// of OfficeChar, so consumers (all optional-chained) read either shape uniformly.
+type CastEntry = Partial<(typeof OFFICE_CAST)[string]> &
+  Partial<(typeof CHARACTER_LIBRARY)[string]>;
+function castFor(agent: OfficeAgent): CastEntry | undefined {
+  const libId = agent.avatar?.config?.libraryId;
+  if (libId && CHARACTER_LIBRARY[libId]) return CHARACTER_LIBRARY[libId];
+  return OFFICE_CAST[characterFor(agent.name)];
+}
+
 // A small potted plant tucked beside a desk (front-facing sprite), used to green up
 // the desk grid. Rotates through the small-plant variants so the room isn't uniform.
 const DESK_PLANTS = ["plant-small", "plant-cactus", "plant-monstera"];
@@ -236,11 +253,7 @@ function Seat({
   plant?: string | null;
   tool?: string | null;
 }) {
-  const key = characterFor(agent.name);
-  const c = OFFICE_CAST[key];
-  // When working, the badge is the CURRENT TOOL's icon (granular observability);
-  // a generic cog when the tool is unknown.
-  const WorkIcon = tool ? toolIcon(tool) : Cog;
+  const c = castFor(agent);
   // Working agents play the seated TYPING animation (custom v3 — keeps the seated
   // pose). Idle/error use the static seated sprite with CSS breathe/shake. (The
   // breathing-idle TEMPLATE animates a standing skeleton, so it isn't used.)
@@ -255,7 +268,7 @@ function Seat({
         {playTyping ? (
           <span
             className="oc-anim"
-            style={{ "--sheet": `url(${c.working})`, "--n": c.workingFrames } as React.CSSProperties}
+            style={{ "--sheet": `url(${c?.working})`, "--n": c?.workingFrames } as React.CSSProperties}
           />
         ) : (
           // idle → asleep-at-desk sprite (falls back to the plain seated sprite)
@@ -271,8 +284,11 @@ function Seat({
             alert triangle when errored. No text pill — the agent's pose says the rest. */}
         {state === "idle" && <span className="oc-badge oc-b-idle">z</span>}
         {state === "working" && (
+          // The badge is the CURRENT TOOL's icon (granular observability); a generic
+          // cog when the tool is unknown. createElement (not JSX) so the dynamic
+          // lucide component isn't flagged as a render-local component.
           <span className="oc-badge oc-b-working" title={tool ? `Using ${tool}` : "working"}>
-            <WorkIcon size={12} strokeWidth={2.5} />
+            {React.createElement(tool ? toolIcon(tool) : Cog, { size: 12, strokeWidth: 2.5 })}
           </span>
         )}
         {state === "error" && (
@@ -318,10 +334,14 @@ function CrStandee({
   speaking?: boolean;
   onOpen: (name: string) => void;
 }) {
-  const c = OFFICE_CAST[characterFor(agent.name)];
+  const c = castFor(agent);
   const stand = c?.standing as Record<string, string | undefined> | undefined;
-  const src = stand?.[dir] ?? c?.seated;
-  if (!src) return null;
+  // Prefer the real per-direction breathing spritesheet; fall back to the static
+  // standing sprite (with a CSS breathe) until the frames are generated.
+  const breathe = c?.breathing?.[dir as "south" | "north"];
+  const nFrames = c?.breathingFrames;
+  const staticSrc = stand?.[dir] ?? c?.seated;
+  if (!breathe && !staticSrc) return null;
   return (
     <button
       className={`oc-cr-standee${speaking ? " oc-cr-speaking" : ""}`}
@@ -333,8 +353,15 @@ function CrStandee({
           <MessageCircle size={11} strokeWidth={2.6} />
         </span>
       )}
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img className="oc-cr-standimg" src={src} alt={agent.name} />
+      {breathe && nFrames ? (
+        <span
+          className="oc-cr-standanim"
+          style={{ "--sheet": `url(${breathe})`, "--n": nFrames } as React.CSSProperties}
+        />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img className="oc-cr-standimg" src={staticSrc} alt={agent.name} />
+      )}
     </button>
   );
 }
@@ -703,6 +730,12 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 .oc-cr-standimg { height:90px; display:block; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.4));
   animation: oc-breathe 3.4s ease-in-out infinite; }
+/* real breathing spritesheet (N square frames wide) stepped gently */
+.oc-cr-standanim { --w:90px; display:block; width:var(--w); height:var(--w);
+  background-image:var(--sheet); background-repeat:no-repeat;
+  background-size:calc(var(--n) * var(--w)) var(--w); background-position:0 0;
+  image-rendering:pixelated; filter:drop-shadow(0 4px 3px rgba(0,0,0,.4));
+  animation: oc-play calc(var(--n) * .2s) steps(var(--n)) infinite; }
 .oc-cr-standee:hover { transform:translateY(-3px); transition:transform .15s; }
 /* discussion: the current speaker leans in + pops a chat bubble above the head */
 .oc-cr-speaking { transform:translateY(-4px) scale(1.07); transition:transform .3s; z-index:4; }
@@ -798,5 +831,6 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
 @keyframes oc-float { 0%{opacity:0;transform:translateY(3px) scale(.8)}
   25%{opacity:1} 60%{opacity:.9;transform:translateY(-5px) scale(1)}
   100%{opacity:0;transform:translateY(-12px) scale(1)} }
-@media (prefers-reduced-motion: reduce){ .oc-anim,.oc-static,.oc-badge { animation:none !important; } }
+@media (prefers-reduced-motion: reduce){ .oc-anim,.oc-static,.oc-badge,
+  .oc-cr-standanim,.oc-cr-standimg { animation:none !important; } }
 `;

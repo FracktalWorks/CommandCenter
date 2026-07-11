@@ -142,9 +142,6 @@ export function TopDownOffice({
         ...(OFFICE_ENV.wall
           ? { "--oc-wall": `url(${OFFICE_ENV.wall})`, "--oc-wall-bg": OFFICE_ENV.wallBg ?? "auto" }
           : {}),
-        ...(OFFICE_ENV.corner
-          ? { "--oc-corner": `url(${OFFICE_ENV.corner})`, "--oc-corner-bg": OFFICE_ENV.cornerBg ?? "auto" }
-          : {}),
         ...(OFFICE_ENV.lane
           ? { "--oc-lane": `url(${OFFICE_ENV.lane})`, "--oc-lane-bg": OFFICE_ENV.laneBg ?? "auto" }
           : {}),
@@ -174,11 +171,6 @@ export function TopDownOffice({
             <span className="oc-sign">THE OFFICE</span>
           </div>
           <div className="oc-floor">
-            {/* Zoned floor: a different Honeytan tile in each corner over the
-                base checker, so the floor reads as a laid-out room. */}
-            {["oc-fz-tl", "oc-fz-tr", "oc-fz-bl", "oc-fz-br"].map((z) => (
-              <span key={z} className={`oc-fz oc-fz-corner ${z}`} aria-hidden />
-            ))}
             {CORNER_PROPS.map(([p, corner]) => (
               // eslint-disable-next-line @next/next/no-img-element
               <img key={p} className={`oc-prop ${corner}`} src={`/office-props/${p}.png`} alt="" aria-hidden />
@@ -204,8 +196,6 @@ export function TopDownOffice({
                 </div>
               ))}
             </div>
-            {/* Walkway lane separating the meeting area from the desks. */}
-            <div className="oc-lane" aria-hidden />
             <div className="oc-grid">
               {roster.map((a) => (
                 <Seat key={a.name} agent={a} state={stateOf(a)} onOpen={onOpen} />
@@ -246,44 +236,34 @@ export const TOPDOWN_STYLE = `
 .oc-sign { font-family:ui-monospace,monospace; font-size:12px; letter-spacing:.28em;
   color:#6f5f3c; text-shadow:0 1px 0 rgba(255,255,255,.5); }
 
-/* Floor — the seamless tile repeats to fill; procedural fallback when no tile yet. */
+/* Floor — the darker lane tile frames the whole office as a BORDER; an inset
+   ::before field carries the main floor tile. */
 .oc-floor {
-  position:relative; padding:58px 16px 54px;
-  background-color:#e9e2d3;
-  background-image:
-    var(--oc-floor, none),
-    repeating-linear-gradient(0deg, transparent, transparent 33px, rgba(0,0,0,.035) 33px, rgba(0,0,0,.035) 34px),
-    repeating-linear-gradient(90deg, transparent, transparent 33px, rgba(0,0,0,.035) 33px, rgba(0,0,0,.035) 34px);
-  background-size: var(--oc-floor-bg,auto), auto, auto;
-  background-repeat: repeat, repeat, repeat;
+  position:relative; padding:58px 46px 54px;
+  background-color:#cbb89a;
+  background-image: var(--oc-lane, none);
+  background-size: var(--oc-lane-bg, auto);
+  background-repeat: repeat;
   image-rendering:pixelated;
   box-shadow: inset 0 14px 26px rgba(0,0,0,.08), inset 0 -12px 22px rgba(0,0,0,.06);
+}
+.oc-floor::before {
+  content:''; position:absolute; inset:34px; z-index:0; pointer-events:none;
+  background-image: var(--oc-floor, none);
+  background-size: var(--oc-floor-bg, auto);
+  background-repeat: repeat; image-rendering:pixelated; border-radius:5px;
+  box-shadow: inset 0 0 0 2px rgba(0,0,0,.10), 0 0 0 1px rgba(255,255,255,.10),
+    inset 0 12px 22px rgba(0,0,0,.05);
 }
 
 /* Corner props stay pinned to the room corners at ANY size. Scaled to sit in
    proportion to the seated agents (~90px), not tiny. */
 .oc-prop { position:absolute; height:74px; z-index:1; image-rendering:pixelated;
   filter:drop-shadow(0 4px 3px rgba(0,0,0,.32)); pointer-events:none; }
-.oc-prop.oc-tl { top:8px;  left:14px; }
-.oc-prop.oc-tr { top:8px;  right:14px; }
-.oc-prop.oc-bl { bottom:12px; left:14px; }
-.oc-prop.oc-br { bottom:12px; right:14px; }
-
-/* Zoned floor — a different Honeytan tile in each corner over the base checker,
-   plus a plank walkway lane, so the floor reads as a laid-out room not one repeat. */
-.oc-fz { position:absolute; z-index:0; pointer-events:none; image-rendering:pixelated;
-  background-repeat:repeat; background-size: var(--oc-corner-bg,auto); }
-.oc-fz-corner { width:clamp(120px, 22%, 200px); height:clamp(96px, 20%, 168px);
-  background-image: var(--oc-corner);
-  box-shadow: inset 0 0 0 2px rgba(0,0,0,.05); }
-.oc-fz-tl { top:0; left:0; border-bottom-right-radius:16px; }
-.oc-fz-tr { top:0; right:0; border-bottom-left-radius:16px; }
-.oc-fz-bl { bottom:0; left:0; border-top-right-radius:16px; }
-.oc-fz-br { bottom:0; right:0; border-top-left-radius:16px; }
-.oc-lane { position:relative; z-index:2; height:76px; margin:0 -16px 16px;
-  background-image: var(--oc-lane); image-rendering:pixelated; background-repeat:repeat;
-  background-size: var(--oc-lane-bg,auto);
-  box-shadow: inset 0 7px 12px rgba(0,0,0,.10), inset 0 -7px 12px rgba(0,0,0,.10); }
+.oc-prop.oc-tl { top:40px;  left:44px; }
+.oc-prop.oc-tr { top:40px;  right:44px; }
+.oc-prop.oc-bl { bottom:42px; left:44px; }
+.oc-prop.oc-br { bottom:42px; right:44px; }
 
 /* Conference zone — one table by default; wraps to a grid of tables as more
    collaborations spawn. */
@@ -351,10 +331,12 @@ export const TOPDOWN_STYLE = `
   .oc-figure { height:104px; }
   .oc-static { height:104px; }
   .oc-anim { --w:104px; }
-  .oc-floor { padding:52px 8px 46px; }
+  .oc-floor { padding:48px 26px 42px; }
+  .oc-floor::before { inset:16px; }
   .oc-prop { height:56px; }
+  .oc-prop.oc-tl { top:22px; left:22px; }
+  .oc-prop.oc-bl { bottom:24px; left:22px; }
   .oc-prop.oc-tr, .oc-prop.oc-br { display:none; }
-  .oc-lane { margin:0 -8px 12px; height:58px; }
   .oc-sign { display:none; }
 }
 

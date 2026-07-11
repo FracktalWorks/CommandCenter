@@ -18,7 +18,7 @@ import random
 import re
 import urllib.request
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 
 import mcp
 
@@ -36,11 +36,12 @@ SETS = {
 ALL_ROT = [0, 90, 180, 270]
 # role -> (set, [indices to mix], cols, rows, [allowed rotations])
 ZONES = {
-    "floor": ("cream", [0, 2, 3, 6, 7, 9, 10, 11, 14], 8, 8, ALL_ROT),
-    "corner": ("cream", [13], 2, 2, ALL_ROT),        # decorative accent
-    "lane": ("cream", [12, 15], 6, 2, ALL_ROT),      # darker walkway
+    "floor": ("cream", [13], 8, 8, ALL_ROT),         # the decorative tile everywhere
+    "lane": ("cream", [12, 15], 6, 2, ALL_ROT),      # darker tile: office BORDER frame
     "wall": ("wood", [0, 2, 3, 7, 9, 11], 8, 2, [0, 180]),  # keep planks vertical
 }
+# role -> (brightness, saturation) multipliers. Floor: lighter + a touch more saturated.
+TONE = {"floor": (1.08, 1.18)}
 
 _ROT = {0: None, 90: Image.ROTATE_90, 180: Image.ROTATE_180, 270: Image.ROTATE_270}
 _UA = urllib.request.build_opener()
@@ -74,6 +75,9 @@ def main():
     for role, (set_key, idxs, cols, rows, rots) in ZONES.items():
         tiles = fetch_tiles(set_key, idxs)
         img = mosaic(tiles, idxs, cols, rows, rots, rng)
+        if role in TONE:
+            tb, ts = TONE[role]
+            img = ImageEnhance.Color(ImageEnhance.Brightness(img).enhance(tb)).enhance(ts)
         name = f"floor-{role}.png"
         img.save(f"{OUT}/{name}")
         saved[role] = f"/office-env/{name}"
@@ -87,14 +91,12 @@ def main():
         "",
         "export interface OfficeEnv {",
         "  floor?: string; floorBg?: string;",
-        "  corner?: string; cornerBg?: string;",
         "  lane?: string; laneBg?: string;",
         "  wall?: string; wallBg?: string;",
         "}",
         "",
         "export const OFFICE_ENV: OfficeEnv = {",
         f'  floor: {json.dumps(saved["floor"])}, floorBg: {json.dumps(bg["floor"])},',
-        f'  corner: {json.dumps(saved["corner"])}, cornerBg: {json.dumps(bg["corner"])},',
         f'  lane: {json.dumps(saved["lane"])}, laneBg: {json.dumps(bg["lane"])},',
         f'  wall: {json.dumps(saved["wall"])}, wallBg: {json.dumps(bg["wall"])},',
         "};",

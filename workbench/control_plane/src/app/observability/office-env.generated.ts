@@ -4,14 +4,12 @@
 
 export interface OfficeEnv {
   floor?: string; floorBg?: string;
-  corner?: string; cornerBg?: string;
   lane?: string; laneBg?: string;
   wall?: string; wallBg?: string;
 }
 
 export const OFFICE_ENV: OfficeEnv = {
   floor: "/office-env/floor-floor.png", floorBg: "320px",
-  corner: "/office-env/floor-corner.png", cornerBg: "80px",
   lane: "/office-env/floor-lane.png", laneBg: "240px",
   wall: "/office-env/floor-wall.png", wallBg: "320px",
 };

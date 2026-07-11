@@ -252,6 +252,7 @@ class IMAPProvider(BaseEmailProvider):
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        thread_id: str | None = None,
     ) -> str:
         smtp_host = self.credentials.get("smtp_host", "")
         smtp_port = int(self.credentials.get("smtp_port", 587))
@@ -289,9 +290,13 @@ class IMAPProvider(BaseEmailProvider):
         msg["Subject"] = subject
         if cc:
             msg["Cc"] = ", ".join(cc)
-        if reply_to_message_id:
-            msg["In-Reply-To"] = reply_to_message_id
-            msg["References"] = reply_to_message_id
+        # Thread the reply via In-Reply-To/References. For IMAP a message's
+        # ``thread_id`` is its own RFC Message-ID, so the reply target's
+        # thread_id is exactly the header value we need to reference.
+        ref = reply_to_message_id or thread_id
+        if ref:
+            msg["In-Reply-To"] = ref
+            msg["References"] = ref
 
         def _send() -> str:
             if use_starttls and smtp_port == 587:

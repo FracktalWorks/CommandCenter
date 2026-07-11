@@ -1450,6 +1450,7 @@ async def upsert_draft(
                 provider_id = await provider.update_draft(
                     drow.provider_message_id, to=to or None,
                     subject=subject or None, body_text=req.body,
+                    thread_id=thread_id or None,
                 )
             except NotImplementedError:
                 # No in-place update primitive → make a fresh draft, drop the old.
@@ -1534,11 +1535,14 @@ async def send_draft_endpoint(
         if not await provider.authenticate():
             raise HTTPException(status_code=401, detail="Email account auth failed")
 
-        # The account signature is appended at send time. The native send-draft
-        # primitive ships the stored (signature-free) draft as-is, so when a
-        # signature is set we must send via send_message (which build_signed_bodies
-        # signs) and trash the obsolete draft. With no signature, keep the native
-        # no-duplicate path.
+        # The account signature is appended at send time; the stored draft is
+        # signature-free. The provider draft is already threaded onto its
+        # conversation (created via Gmail threadId / Outlook createReply), so we
+        # sign it IN PLACE (update_draft, which preserves the thread) and then
+        # send it natively — the reply lands in its conversation. Sending a fresh
+        # message instead would start a new thread (the "reply shows up as a
+        # separate email in Sent" bug). Providers without an update/send-draft
+        # primitive (IMAP) fall back to a thread-aware fresh send.
         from gateway.routes.email.signature import \
             build_signed_bodies  # noqa: PLC0415
         sig_row = (await db.execute(text(
@@ -1550,18 +1554,32 @@ async def send_draft_endpoint(
         to = [a.get("email") for a in recips if a.get("email")]
 
         async def _send_new_and_trash() -> None:
+            # Fallback (e.g. IMAP): send a fresh message threaded via the reply
+            # reference, then bin the leftover draft.
             send_text, send_html = build_signed_bodies(
                 signature, drow.body_text or "", None)
             await provider.send_message(
                 to=to, subject=drow.subject or "",
-                body_text=send_text, body_html=send_html)
+                body_text=send_text, body_html=send_html,
+                reply_to_message_id=drow.thread_id or None,
+                thread_id=drow.thread_id or None)
             try:
                 await provider.trash_message(drow.provider_message_id)
             except Exception:  # noqa: BLE001
                 pass
 
         if signature.strip():
-            await _send_new_and_trash()
+            send_text, send_html = build_signed_bodies(
+                signature, drow.body_text or "", None)
+            try:
+                await provider.update_draft(
+                    drow.provider_message_id, to=to or None,
+                    subject=drow.subject or None,
+                    body_text=send_text, body_html=send_html,
+                    thread_id=drow.thread_id or None)
+                await provider.send_draft(drow.provider_message_id)
+            except NotImplementedError:
+                await _send_new_and_trash()
         else:
             try:
                 await provider.send_draft(drow.provider_message_id)

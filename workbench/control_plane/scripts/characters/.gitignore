@@ -1,4 +1,5 @@
 char_seated/
+char_library/
 __pycache__/
 *.pyc
 _*.png

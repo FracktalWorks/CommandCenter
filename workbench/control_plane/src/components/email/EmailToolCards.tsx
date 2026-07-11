@@ -195,7 +195,16 @@ function renderCard(
   if (e.name === SETTINGS_TOOL) return <SettingsUpdatedCard event={e} />;
   // LIST_TOOLS are merged into ONE card by the caller (see EmailToolCards loop).
   if (e.name === "apply_labels") return <LabelUpdateCard event={e} />;
-  if (e.name === "manage_inbox") return <ManageInboxCard event={e} />;
+  if (e.name === "manage_inbox") {
+    // manage_inbox(action="label") gets the label-chip card; everything else
+    // (archive / trash / read / move / …) gets the inbox-action card.
+    const action = String(
+      (e.args as Record<string, unknown> | undefined)?.action ?? "",
+    ).toLowerCase();
+    return action === "label"
+      ? <LabelUpdateCard event={e} />
+      : <ManageInboxCard event={e} />;
+  }
   return <ActionResultCard event={e} />;
 }
 
@@ -1477,8 +1486,10 @@ function LabelUpdateCard({ event: e }: { event: ToolEvent }) {
   const args = e.args as Record<string, unknown> | undefined;
   const toList = (v: unknown) =>
     Array.isArray(v) ? v.map(String).map((s) => s.trim()).filter(Boolean) : [];
-  const add = toList(args?.add);
-  const remove = toList(args?.remove);
+  // apply_labels uses add/remove; manage_inbox(action="label") uses
+  // add_labels/remove_labels — accept either shape.
+  const add = toList(args?.add ?? args?.add_labels);
+  const remove = toList(args?.remove ?? args?.remove_labels);
   const ids = args?.message_ids;
   const count = Array.isArray(ids) ? ids.length : 0;
   // Nothing structured to show → fall back to the generic confirmation.

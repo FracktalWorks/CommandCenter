@@ -98,7 +98,7 @@ def calls(monkeypatch):
 
 def test_surface_shrank_and_merged_names_gone() -> None:
     tools = agents._register_agent_tools()
-    assert len(tools) == 43
+    assert len(tools) == 41
     for gone in ("search_emails", "get_important_emails", "find_urgent",
                  "find_needs_reply", "get_full_body_email", "update_rule_state",
                  "approve_execution", "reject_execution", "undo_execution",
@@ -110,7 +110,9 @@ def test_surface_shrank_and_merged_names_gone() -> None:
                  "list_cold_senders", "keep_newsletter", "set_cold_sender",
                  # final pass
                  "get_unread_count", "move_to_folder", "reset_rules",
-                 "run_rules_now", "process_past_emails"):
+                 "run_rules_now", "process_past_emails",
+                 # cleanup pass
+                 "apply_labels", "import_artifact"):
         assert gone not in tools
     for new in ("find_priority", "resolve_execution", "digest", "save_knowledge",
                 "list_patterns", "forget_pattern", "set_sender_status", "run_rules"):
@@ -145,6 +147,18 @@ async def test_manage_inbox_move_uses_patch(calls) -> None:
     assert "Moved" in out
     # move without a folder is rejected.
     assert "folder" in await agents.manage_inbox("move", ["m1"])
+
+
+async def test_manage_inbox_label_absorbs_apply_labels(calls) -> None:
+    out = await agents.manage_inbox(
+        "label", ["m1", "m2"], add_labels=["Finance"], remove_labels=["FYI"])
+    # label goes through per-message PATCH carrying add/remove labels.
+    patched = [p for p in calls["patch"] if p[0] == "/email/messages/m1"]
+    assert patched and patched[-1][1].get("add_labels") == ["Finance"]
+    assert patched[-1][1].get("remove_labels") == ["FYI"]
+    assert "Updated labels" in out
+    # label with nothing to change is rejected.
+    assert "add_labels" in await agents.manage_inbox("label", ["m1"])
 
 
 # ── send_email absorbing send_reply ──────────────────────────────────────────

@@ -609,15 +609,20 @@ async def manage_inbox(
     message_ids: list[str],
     account_id: str | None = None,
     folder: str | None = None,
+    add_labels: list[str] | None = None,
+    remove_labels: list[str] | None = None,
 ) -> str:
-    """Apply an action to one or more messages.
+    """Apply an action to one or more messages — the single "act on messages"
+    tool (state, folder, and labels).
 
     Args:
-        action: archive | trash | read | unread | star | unstar | move
+        action: archive | trash | read | unread | star | unstar | move | label
         message_ids: ids of the messages to act on
         account_id: optional account scope
         folder: destination for ``action="move"`` (an existing folder/label —
             e.g. "Archive" or a custom folder; create it with create_label).
+        add_labels / remove_labels: label NAMES to add/remove for
+            ``action="label"`` (syncs to the provider).
     """
     if action == "move":
         if not folder:
@@ -631,6 +636,28 @@ async def manage_inbox(
         failed = len(message_ids) - n
         note = f" ({failed} failed)" if failed else ""
         return f"Moved {n} message(s) to '{folder}'{note}."
+    if action == "label":
+        if not add_labels and not remove_labels:
+            return "Provide add_labels and/or remove_labels for action='label'."
+        patch: dict[str, Any] = {}
+        if add_labels:
+            patch["add_labels"] = add_labels
+        if remove_labels:
+            patch["remove_labels"] = remove_labels
+        results = await asyncio.gather(
+            *(_patch(f"/email/messages/{mid}", dict(patch))
+              for mid in message_ids),
+            return_exceptions=True,
+        )
+        n = sum(1 for r in results if not isinstance(r, BaseException))
+        bits = []
+        if add_labels:
+            bits.append(f"+{', '.join(add_labels)}")
+        if remove_labels:
+            bits.append(f"-{', '.join(remove_labels)}")
+        failed = len(message_ids) - n
+        note = f" ({failed} failed)" if failed else ""
+        return f"Updated labels on {n} message(s){note}: {' '.join(bits)}."
     body: dict[str, Any] = {"action": action, "message_ids": message_ids}
     if account_id:
         body["account_id"] = account_id
@@ -1135,37 +1162,6 @@ async def suggest_unsubscribes(account_id: str | None = None) -> str:
 
 # ── Labels / folders / send ──────────────────────────────────────────────────
 
-async def apply_labels(
-    account_id: str,
-    message_ids: list[str],
-    add: list[str] | None = None,
-    remove: list[str] | None = None,
-) -> str:
-    """Add and/or remove labels/categories on one or more messages (syncs to the
-    provider). Pass label NAMES in ``add`` / ``remove``."""
-    if not add and not remove:
-        return "Provide at least one label to add or remove."
-    body: dict[str, Any] = {}
-    if add:
-        body["add_labels"] = add
-    if remove:
-        body["remove_labels"] = remove
-    # Patch all messages concurrently instead of one serial round-trip each.
-    results = await asyncio.gather(
-        *(_patch(f"/email/messages/{mid}", dict(body)) for mid in message_ids),
-        return_exceptions=True,
-    )
-    n = sum(1 for r in results if not isinstance(r, BaseException))
-    bits = []
-    if add:
-        bits.append(f"+{', '.join(add)}")
-    if remove:
-        bits.append(f"-{', '.join(remove)}")
-    failed = len(message_ids) - n
-    note = f" ({failed} failed)" if failed else ""
-    return f"Updated labels on {n} message(s){note}: {' '.join(bits)}."
-
-
 async def list_labels(account_id: str) -> str:
     """List the user-applicable label/folder names on the account."""
     labels = await _get(f"/email/accounts/{account_id}/labels")
@@ -1294,9 +1290,9 @@ async def send_email(
 async def list_artifacts(agent_name: str = "email-assistant") -> str:
     """List files available to attach to emails. Defaults to your own workspace;
     pass another agent (e.g. 'sales-assistant', 'task-manager') to see files a
-    sub-agent produced. Attach them with the path shown — for another agent's
-    file use '<agent_name>:<path>', or import_artifact to copy it into your
-    workspace first. Create new files with write_artifact."""
+    sub-agent produced. Attach any file by passing its path in ``attachments`` —
+    for another agent's file use '<agent_name>:<path>' directly (no copy step
+    needed). Create new files with write_artifact."""
     data = await _get("/agent/artifacts", {"agent": agent_name})
     arts = [a for a in data.get("artifacts", []) if not a.get("is_dir")]
     if not arts:
@@ -1310,25 +1306,6 @@ async def list_artifacts(agent_name: str = "email-assistant") -> str:
         lines.append(f"• {spec}  ({size} bytes, {a.get('mime_type', '')})")
     lines.append("Attach any of these by passing its path in `attachments`.")
     return "\n".join(lines)
-
-
-async def import_artifact(
-    source_agent: str, source_path: str, name: str | None = None
-) -> str:
-    """Pull a file a sub-agent produced (e.g. a quote PDF from sales-assistant,
-    a report from task-manager) into your own workspace so you can attach it to
-    an email and the user can browse/download it. Returns the new path to pass
-    in `attachments`. You can also attach a sub-agent file directly without
-    importing by using '<agent>:<path>' in `attachments`."""
-    res = await _post("/email/artifacts/import", {
-        "source_agent": source_agent,
-        "source_path": source_path,
-        "name": name,
-    })
-    return (
-        f"Imported to '{res.get('path')}' — attach it by passing that path in "
-        "`attachments`."
-    )
 
 
 @_annotate_risk(destructive=True, open_world=True)
@@ -1752,7 +1729,6 @@ _TOOLS = [
     present_email_groups,
     # Inbox actions
     manage_inbox,
-    apply_labels,
     list_labels,
     create_label,
     # Drafting / sending
@@ -1761,7 +1737,6 @@ _TOOLS = [
     send_draft,
     # Attachments / artifacts
     list_artifacts,
-    import_artifact,
     # Senders / categorization
     categorize_senders,
     list_senders,

@@ -52,6 +52,9 @@ const RULE_TOOLS = new Set(["create_rule", "update_rule"]);
 // primary inbox tools (query_inbox / get_important_emails), not just search.
 const LIST_TOOLS = new Set([
   "query_inbox",
+  "find_priority",
+  // Legacy tool names (pre-consolidation) — kept so older transcripts still
+  // render as list cards. The live agent now emits find_priority / query_inbox.
   "get_important_emails",
   "search_emails",
   "find_urgent",
@@ -83,6 +86,7 @@ const INFO_META: Record<string, { icon: React.ElementType; label: string }> = {
   list_cold_senders: { icon: Archive, label: "Cold senders" },
   suggest_unsubscribes: { icon: Archive, label: "Unsubscribe candidates" },
   get_account_overview: { icon: Mail, label: "Account overview" },
+  digest: { icon: Send, label: "Digest" },
   get_digest: { icon: Send, label: "Digest" },
   create_rules_from_prompt: { icon: Sparkles, label: "Rules created" },
   test_rule_match: { icon: Wrench, label: "Rule match test" },
@@ -93,10 +97,12 @@ const INFO_TOOLS = new Set(Object.keys(INFO_META));
  *  delete (forget). Two separate systems — drafting style (list_learned_patterns)
  *  and rule classification pins from Fix (list_rule_patterns) — each with its own
  *  delete endpoint. */
-const PATTERN_META: Record<
-  string,
-  { icon: React.ElementType; label: string; remove: (id: string) => Promise<void> }
-> = {
+type PatternMeta = {
+  icon: React.ElementType;
+  label: string;
+  remove: (id: string) => Promise<void>;
+};
+const PATTERN_META: Record<string, PatternMeta> = {
   list_learned_patterns: {
     icon: PenLine, label: "Learned writing preferences", remove: deleteLearnedPattern,
   },
@@ -104,7 +110,19 @@ const PATTERN_META: Record<
     icon: Sparkles, label: "Learned rule patterns", remove: deleteRulePattern,
   },
 };
-const PATTERN_TOOLS = new Set(Object.keys(PATTERN_META));
+// The consolidated list_patterns tool selects the store via its `kind` arg;
+// legacy names keep their own entries above so old transcripts still render.
+const PATTERN_TOOLS = new Set([...Object.keys(PATTERN_META), "list_patterns"]);
+
+/** The right icon/label/delete-endpoint for a pattern-list event — from the
+ *  `kind` arg for the consolidated list_patterns, else from the tool name. */
+function patternMeta(e: ToolEvent): PatternMeta {
+  if (e.name === "list_patterns") {
+    const kind = String((e.args as Record<string, unknown> | undefined)?.kind ?? "draft");
+    return kind === "rule" ? PATTERN_META.list_rule_patterns : PATTERN_META.list_learned_patterns;
+  }
+  return PATTERN_META[e.name] ?? PATTERN_META.list_learned_patterns;
+}
 
 /** Friendly label + icon for the generic confirmation card (mutating tools). */
 const ACTION_META: Record<string, { icon: React.ElementType; label: string; danger?: boolean }> = {
@@ -119,6 +137,7 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   reset_rules: { icon: Sparkles, label: "Rules reset", danger: true },
   run_rules_now: { icon: Wrench, label: "Rules run" },
   update_rule_state: { icon: Sparkles, label: "Rule updated" },
+  resolve_execution: { icon: CheckCircle2, label: "Execution resolved" },
   learn_rule_pattern: { icon: Sparkles, label: "Pattern learned" },
   install_default_rules: { icon: Sparkles, label: "Default rules installed" },
   process_past_emails: { icon: Clock, label: "Processing past mail" },
@@ -128,9 +147,11 @@ const ACTION_META: Record<string, { icon: React.ElementType; label: string; dang
   import_artifact: { icon: BookOpen, label: "Artifact imported" },
   add_knowledge: { icon: BookOpen, label: "Knowledge added" },
   update_knowledge: { icon: BookOpen, label: "Knowledge updated" },
+  save_knowledge: { icon: BookOpen, label: "Knowledge saved" },
   delete_knowledge: { icon: Trash2, label: "Knowledge deleted", danger: true },
   delete_learned_pattern: { icon: Trash2, label: "Pattern forgotten" },
   delete_rule_pattern: { icon: Trash2, label: "Pattern forgotten" },
+  forget_pattern: { icon: Trash2, label: "Pattern forgotten" },
   find_follow_ups: { icon: Clock, label: "Follow-ups scanned" },
   mark_thread_done: { icon: CheckCircle2, label: "Thread updated" },
   reclassify_reply_zero: { icon: RefreshCw, label: "Reply Zero reclassifying" },
@@ -389,7 +410,7 @@ export default function EmailToolCards({
     }
     // Editable learned-pattern list (delete per row) — own chrome.
     if (PATTERN_TOOLS.has(e.name)) {
-      items.push(<PatternListCard key={e.id} event={e} meta={PATTERN_META[e.name]} />);
+      items.push(<PatternListCard key={e.id} event={e} meta={patternMeta(e)} />);
       continue;
     }
     // Info/list cards bring their own ToolCardShell chrome (collapse + X), so
@@ -827,6 +848,7 @@ function parseEmailRows(result: string): ParsedRow[] {
 
 const LIST_META: Record<string, { icon: React.ElementType; label: string }> = {
   query_inbox: { icon: Mail, label: "Inbox results" },
+  find_priority: { icon: Clock, label: "Priority emails" },
   get_important_emails: { icon: Clock, label: "Important to check" },
   search_emails: { icon: Search, label: "Search results" },
   find_urgent: { icon: Clock, label: "Urgent / needs attention" },
@@ -843,6 +865,24 @@ const LIST_PROV: Record<string, string> = {
   search_emails: "Search",
 };
 
+/** find_priority carries its "why" in the `kind` arg (one tool, many kinds), so
+ *  its chip is derived from the call args rather than the tool name. */
+const PRIORITY_CHIP: Record<string, string> = {
+  needs_reply: "Needs reply",
+  important: "Important",
+  urgent: "Urgent",
+};
+
+/** The provenance chip for a list event — from the `kind` arg for find_priority,
+ *  else from the tool name. */
+function listChip(e: ToolEvent): string | undefined {
+  if (e.name === "find_priority") {
+    const kind = String((e.args as Record<string, unknown> | undefined)?.kind ?? "needs_reply");
+    return PRIORITY_CHIP[kind] ?? "Priority";
+  }
+  return LIST_PROV[e.name];
+}
+
 /** Quick-categorize options offered per row (the rule-engine categories). */
 const QUICK_CATEGORIES = [
   "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
@@ -856,7 +896,7 @@ const QUICK_CATEGORIES = [
 function mergeListRows(events: ToolEvent[]): ParsedRow[] {
   const byId = new Map<string, ParsedRow>();
   for (const e of events) {
-    const chip = LIST_PROV[e.name];
+    const chip = listChip(e);
     for (const r of parseEmailRows(e.result || "")) {
       const existing = byId.get(r.id);
       if (existing) {
@@ -889,10 +929,15 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
   // heading and each row shows provenance chips (why it's listed).
   const names = [...new Set(events.map((e) => e.name))];
   const multi = names.length > 1;
+  // Show per-row "why it's here" chips when several tools merged OR when one
+  // tool (find_priority) produced rows of mixed provenance (different `kind`s).
+  const distinctProv = new Set(rows.flatMap((r) => r.prov ?? []));
+  const showProv = multi || distinctProv.size > 1;
   const meta = !multi
     ? LIST_META[names[0]] ?? { icon: Mail, label: "Emails" }
     : names.some((n) =>
-          n === "get_important_emails" || n === "find_needs_reply" || n === "find_urgent")
+          n === "find_priority" || n === "get_important_emails" ||
+          n === "find_needs_reply" || n === "find_urgent")
       ? { icon: Clock, label: "High-priority emails" }
       : { icon: Mail, label: "Emails" };
   const Icon = meta.icon;
@@ -958,7 +1003,7 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
           <EmailRow
             key={r.id}
             row={r}
-            showProv={multi}
+            showProv={showProv}
             status={statuses[r.id] ?? "idle"}
             onArchive={() => archive(r.id)}
             onMarkRead={() => markRead(r.id)}

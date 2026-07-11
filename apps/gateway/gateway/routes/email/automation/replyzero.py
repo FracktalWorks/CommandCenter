@@ -118,9 +118,9 @@ async def _build_chat_context(
                 f"- Needs reply (Reply Zero): {nr.c if nr else 0}\n"
                 f"- Sender categories: {cat_str}\n"
                 "To answer questions about the WHOLE inbox use query_inbox "
-                "(filter by date/category/sender/read-state), get_important_emails, "
-                "find_needs_reply, or get_account_overview; read_email for one "
-                "email's full content.")
+                "(filter by date/category/sender/read-state), "
+                "find_priority(kind=important|needs_reply|urgent), or "
+                "get_account_overview; read_email for one email's full content.")
 
         if email_context_id:
             row = (await db.execute(text(

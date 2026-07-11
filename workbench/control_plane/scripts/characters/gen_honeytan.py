@@ -25,7 +25,8 @@ import mcp
 OUT = "../../public/office-env"
 TS = "../../src/app/observability/office-env.generated.ts"
 TILE_PX = 40       # on-screen size of ONE tile (was ~64; smaller now)
-WALL_TILE_PX = 118  # walls: BIG tiles → few, wide, full-height slats (less busy)
+WALL_TILE_PX = 82  # walls: near the native 64px res so the slat detail shows (not
+#                    upscaled/chunky), while staying less busy than the tiny floor px
 SEED = 7           # deterministic mosaic layout
 
 SETS = {

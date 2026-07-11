@@ -1,16 +1,27 @@
 #!/usr/bin/env python3
-"""Slice the Pixel Lab office tileset sheet into the two seamless textures the room
+"""Slice the Pixel Lab office tileset sheets into the two seamless textures the room
 uses, and emit the office-env manifest.
 
-Input:  public/office-env/_sheet.png  (16-tile 4x4 Wang sheet, 32px, from gen_env.py)
-Output: public/office-env/floor.png   (pure-carpet tile -> repeating floor)
-        public/office-env/wall.png    (full-wood tile   -> repeating wall band)
+Input:  public/office-env/_floor_sheet.png (checkered ceramic floor, gen_floor.py)
+        public/office-env/_sheet.png        (carpet+wood wall Wang sheet, gen_env.py)
+Output: public/office-env/floor.png   (pure checkered-tile -> repeating floor)
+        public/office-env/wall.png    (full-wood tile      -> repeating wall band)
         src/app/observability/office-env.generated.ts
+
+The floor tile is used AS-IS (its checker pattern is baked in by Pixel Lab); no
+synthetic brightness checker. Falls back to _sheet.png for the floor if no
+dedicated floor sheet exists.
 """
 import io
+import os
 
-from PIL import Image
+from PIL import Image, ImageEnhance
 
+# The raw checkered tile is a vivid royal blue; tone it to fit the dark UI while
+# keeping the baked-in checker texture. (brightness, saturation) multipliers.
+FLOOR_TONE = (0.52, 0.80)
+
+FLOOR_SHEET = "../../public/office-env/_floor_sheet.png"
 SHEET = "../../public/office-env/_sheet.png"
 ENVDIR = "../../public/office-env"
 TS = "../../src/app/observability/office-env.generated.ts"
@@ -32,37 +43,32 @@ def wood_frac(im, r, c):
     return wood / max(tot, 1)
 
 
-def main():
-    im = Image.open(SHEET).convert("RGBA")
+def pick(sheet, chooser):
+    im = Image.open(sheet).convert("RGBA")
     scores = {(r, c): wood_frac(im, r, c) for r in range(4) for c in range(4)}
-    floor_rc = min(scores, key=scores.get)   # ~0% wood  -> pure carpet
-    wall_rc = max(scores, key=scores.get)     # ~100% wood -> full wall
+    rc = chooser(scores, key=scores.get)
+    r, c = rc
+    return im.crop((c * S, r * S, c * S + S, r * S + S)), rc, scores[rc]
 
-    def tile(rc):
-        r, c = rc
-        return im.crop((c * S, r * S, c * S + S, r * S + S))
 
-    # Wall tile stays a single seamless texture.
-    tile(wall_rc).save(f"{ENVDIR}/wall.png")
+def main():
+    # Floor: purest checkered tile (least wood) from the dedicated floor sheet,
+    # used AS-IS — the checker texture is already baked in by Pixel Lab.
+    floor_sheet = FLOOR_SHEET if os.path.exists(FLOOR_SHEET) else SHEET
+    floor, floor_rc, floor_wood = pick(floor_sheet, min)
+    b, s = FLOOR_TONE
+    floor = ImageEnhance.Color(ImageEnhance.Brightness(floor).enhance(b)).enhance(s)
+    floor.save(f"{ENVDIR}/floor.png")
 
-    # Floor becomes a Pokemon-style 2x2 CHECKERBOARD block of two brightness
-    # variants of the carpet tile — gives visible tiling texture, still seamless.
-    base = tile(floor_rc)
-    from PIL import ImageEnhance
-    light = ImageEnhance.Brightness(base).enhance(1.16)
-    dark = ImageEnhance.Brightness(base).enhance(0.90)
-    block = Image.new("RGBA", (S * 2, S * 2), (0, 0, 0, 0))
-    block.alpha_composite(light, (0, 0))
-    block.alpha_composite(dark, (S, 0))
-    block.alpha_composite(dark, (0, S))
-    block.alpha_composite(light, (S, S))
-    block.save(f"{ENVDIR}/floor.png")   # 64x64 checker block
-    print(f"floor tile {floor_rc} -> checker block, "
-          f"wall tile {wall_rc} (wood={scores[wall_rc]:.2f})")
+    # Wall: full-wood tile from the original carpet+wall sheet.
+    wall, wall_rc, wall_wood = pick(SHEET, max)
+    wall.save(f"{ENVDIR}/wall.png")
+    print(f"floor tile {floor_rc} (wood={floor_wood:.2f}) from "
+          f"{os.path.basename(floor_sheet)}, wall tile {wall_rc} (wood={wall_wood:.2f})")
 
     lines = [
         "// AUTO-GENERATED - Pixel Lab office environment tiles (create_topdown_tileset).",
-        "// Seamless carpet floor + wood wall sliced from the Wang sheet by build_env.py.",
+        "// Seamless checkered-ceramic floor + wood wall sliced by build_env.py.",
         "// Do not edit by hand.",
         "",
         "export interface OfficeEnv {",
@@ -76,7 +82,7 @@ def main():
         "",
         "export const OFFICE_ENV: OfficeEnv = {",
         '  floor: "/office-env/floor.png",',
-        "  floorSize: 96,",
+        "  floorSize: 64,",
         '  wall: "/office-env/wall.png",',
         "};",
         "",

@@ -1,5 +1,5 @@
 // AUTO-GENERATED - Pixel Lab office environment tiles (create_topdown_tileset).
-// Seamless carpet floor + wood wall sliced from the Wang sheet by build_env.py.
+// Seamless checkered-ceramic floor + wood wall sliced by build_env.py.
 // Do not edit by hand.
 
 export interface OfficeEnv {
@@ -13,6 +13,6 @@ export interface OfficeEnv {
 
 export const OFFICE_ENV: OfficeEnv = {
   floor: "/office-env/floor.png",
-  floorSize: 96,
+  floorSize: 64,
   wall: "/office-env/wall.png",
 };

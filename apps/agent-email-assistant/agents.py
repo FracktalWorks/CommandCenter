@@ -474,6 +474,105 @@ async def get_important_emails(account_id: str, days: int = 30) -> str:
     return "\n".join(lines)
 
 
+async def present_email_groups(groups_json: str) -> str:
+    """Render an INTERACTIVE, CATEGORIZED board of emails in the chat — use this
+    whenever you're presenting emails split into named categories (e.g. HR,
+    Finance, R&D; or Urgent / This-week / FYI; or per-project / per-sender).
+
+    This is the categorized counterpart to the flat list card: instead of one
+    undifferentiated list, the UI shows each group as its own titled, collapsible
+    section whose rows are fully interactive (open, archive, mark-read,
+    categorize). It lets YOU decide the categories and which emails go in each,
+    so the interactive board matches the breakdown you're describing in prose.
+
+    Pass ``groups_json``: a JSON array of groups, each an object with:
+      • ``title``     (str, required) — the category name, e.g. "Finance"
+      • ``email_ids`` (list[str], required) — the message ids in this group
+        (the ``id=…`` values from find_needs_reply / get_important_emails /
+        query_inbox / search_emails results)
+      • ``note``      (str, optional) — a short caption for the group
+
+    Example::
+
+        present_email_groups('[
+          {"title": "HR", "email_ids": ["a1b2", "c3d4"],
+           "note": "onboarding + leave requests"},
+          {"title": "Finance", "email_ids": ["e5f6"]},
+          {"title": "R&D", "email_ids": ["g7h8", "i9j0"]}
+        ]')
+
+    Gather the ids first (find_needs_reply / get_important_emails / query_inbox),
+    decide the categories, then call this ONCE with every group. An id may appear
+    in only one group; ids you don't own are skipped. Keep your prose summary
+    short — this board carries the categorized list, so don't also print it as a
+    markdown table."""
+    try:
+        parsed = json.loads(groups_json)
+    except (json.JSONDecodeError, TypeError) as exc:
+        return (
+            "Couldn't parse groups_json — it must be a JSON array of "
+            f"{{title, email_ids, note?}} objects. ({exc})"
+        )
+    if isinstance(parsed, dict):
+        parsed = [parsed]
+    if not isinstance(parsed, list) or not parsed:
+        return "No groups given. Pass a non-empty JSON array of groups."
+
+    # Normalise groups, preserving order and dropping duplicate ids across the
+    # whole board (an email belongs to one category).
+    groups: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    all_ids: list[str] = []
+    for g in parsed:
+        if not isinstance(g, dict):
+            continue
+        title = str(g.get("title") or "").strip() or "Untitled"
+        note = str(g.get("note") or "").strip()
+        ids_in = g.get("email_ids") or g.get("ids") or []
+        ids: list[str] = []
+        for i in ids_in if isinstance(ids_in, list) else []:
+            sid = str(i).strip()
+            if sid and sid not in seen:
+                seen.add(sid)
+                ids.append(sid)
+                all_ids.append(sid)
+        groups.append({"title": title, "note": note, "ids": ids})
+
+    if not all_ids:
+        return "No email ids in any group — nothing to show."
+
+    # One batched, side-effect-free lookup for every row's label.
+    meta: dict[str, dict[str, Any]] = {}
+    try:
+        res = await _post("/email/messages/summaries", {"ids": all_ids})
+        for s in res.get("summaries", []):
+            meta[str(s.get("id"))] = s
+    except Exception:  # noqa: BLE001 — fall back to id-only rows on lookup failure
+        pass
+
+    total = sum(len(g["ids"]) for g in groups)
+    out: list[str] = [
+        f"Categorized emails — {total} across {len(groups)} group(s):"
+    ]
+    for g in groups:
+        rows: list[str] = []
+        for sid in g["ids"]:
+            m = meta.get(sid)
+            if m:
+                sender = m.get("from") or "(unknown sender)"
+                subject = m.get("subject") or "(no subject)"
+                rows.append(f"• id={sid} | {sender}: {subject}")
+            else:
+                # Metadata missing (foreign/unknown id) — still render the row.
+                rows.append(f"• id={sid} | (unknown sender): (unavailable)")
+        header = f"## {g['title']} ({len(g['ids'])})"
+        if g["note"]:
+            header += f" — {g['note']}"
+        out.append(header)
+        out.extend(rows)
+    return "\n".join(out)
+
+
 # ── Inbox action tools ───────────────────────────────────────────────────────
 
 async def manage_inbox(
@@ -1591,6 +1690,7 @@ _TOOLS = [
     find_needs_reply,
     get_unread_count,
     get_account_overview,
+    present_email_groups,
     # Inbox actions
     manage_inbox,
     apply_labels,

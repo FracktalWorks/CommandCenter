@@ -27,7 +27,7 @@ import { useRouter } from "next/navigation";
 import {
   PenLine, Sparkles, CheckCircle2, Loader2, Send, Reply, Mail, MailOpen, Tag,
   Archive, FolderInput, Trash2, X, RefreshCw, ExternalLink, Settings2, BookOpen,
-  Clock, Wrench, Search, ChevronDown, Star,
+  Clock, Wrench, Search, ChevronDown, Star, Layers,
 } from "lucide-react";
 import type { ToolEvent } from "@/components/MarkdownMessage";
 import {
@@ -60,6 +60,9 @@ const LIST_TOOLS = new Set([
 const READ_TOOL = "read_email";
 const READ_THREAD_TOOL = "read_thread";
 const SETTINGS_TOOL = "update_assistant_settings";
+// The agent-driven categorized board: emails grouped under LLM-chosen headings
+// (HR / Finance / R&D, by project, by urgency…), each an interactive section.
+const GROUPS_TOOL = "present_email_groups";
 
 /** Tools that return a human-readable LIST / overview (a header + bullet lines,
  *  with no clickable email ids) — e.g. list_learned_patterns, list_senders.
@@ -151,6 +154,7 @@ function hasEmailCard(e: ToolEvent): boolean {
     INFO_TOOLS.has(e.name) ||
     PATTERN_TOOLS.has(e.name) ||
     e.name === READ_THREAD_TOOL ||
+    e.name === GROUPS_TOOL ||
     e.name === SETTINGS_TOOL ||
     e.name in ACTION_META
   );
@@ -321,6 +325,12 @@ export default function EmailToolCards({
   const hasThread = all.some(
     (e) => e.status === "done" && e.name === READ_THREAD_TOOL,
   );
+  // A categorized board supersedes the flat list tools it was built from — the
+  // agent gathers ids with find_needs_reply / query_inbox / … and then regroups
+  // them. Show only the board (one card, categorized), not the raw flat list too.
+  const hasGroups = all.some(
+    (e) => e.status === "done" && e.name === GROUPS_TOOL,
+  );
 
   const items: React.ReactNode[] = [];
   let readRun: ToolEvent[] = [];
@@ -342,8 +352,9 @@ export default function EmailToolCards({
       continue;
     }
     if (!hasEmailCard(e)) continue;
-    // Drop the search/list lookup card when a thread is shown.
-    if (hasThread && LIST_TOOLS.has(e.name)) continue;
+    // Drop the flat list/search cards when a thread OR a categorized board is
+    // shown — both subsume the raw list the lookup produced.
+    if ((hasThread || hasGroups) && LIST_TOOLS.has(e.name)) continue;
     flushReads();
     // Merge ALL list-tool results into ONE interactive card at the position of
     // the first list event; the rest are folded in (not rendered separately).
@@ -365,6 +376,15 @@ export default function EmailToolCards({
     }
     if (e.name === READ_THREAD_TOOL) {
       items.push(<ThreadCard key={e.id} event={e} accountId={accountId} />);
+      continue;
+    }
+    // Agent-driven categorized board — grouped, interactive sections.
+    if (e.name === GROUPS_TOOL) {
+      items.push(
+        <DismissableCard key={e.id} onDismiss={() => dismissToolCard(e.id)}>
+          <EmailGroupsCard event={e} />
+        </DismissableCard>,
+      );
       continue;
     }
     // Editable learned-pattern list (delete per row) — own chrome.
@@ -952,6 +972,185 @@ function EmailListCard({ events }: { events: ToolEvent[] }) {
         >
           {expanded ? "Show less" : `Show ${rows.length - 5} more`}
         </button>
+      )}
+    </div>
+  );
+}
+
+// ── Categorized email board (present_email_groups) ────────────────────────────
+
+interface EmailGroup {
+  title: string;
+  note?: string;
+  rows: ParsedRow[];
+}
+
+/** Parse present_email_groups output into titled groups of rows. The tool emits:
+ *    Categorized emails — <total> across <n> group(s):
+ *    ## <Title> (<count>)[ — <note>]
+ *    • id=<id> | <sender>: <subject>
+ *    …
+ *  Each "##" line opens a new group; the "• id=…" lines under it are its rows
+ *  (reusing the shared row parser). Empty groups are dropped. */
+function parseGroupedRows(result: string): EmailGroup[] {
+  const groups: EmailGroup[] = [];
+  let current: EmailGroup | null = null;
+  for (const line of result.split("\n")) {
+    const head = line.match(/^\s*##\s+(.*)$/);
+    if (head) {
+      let label = head[1].trim();
+      let note: string | undefined;
+      const dash = label.indexOf(" — ");
+      if (dash !== -1) {
+        note = label.slice(dash + 3).trim() || undefined;
+        label = label.slice(0, dash).trim();
+      }
+      // Drop a trailing "(count)" from the heading — the card recomputes it.
+      label = label.replace(/\s*\(\d+\)\s*$/, "").trim();
+      current = { title: label || "Untitled", note, rows: [] };
+      groups.push(current);
+      continue;
+    }
+    if (current) {
+      const parsed = parseEmailRows(line);
+      if (parsed.length) current.rows.push(...parsed);
+    }
+  }
+  return groups.filter((g) => g.rows.length > 0);
+}
+
+/** Interactive, categorized board of emails — the agent groups mail under its
+ *  own headings (HR / Finance / R&D, by project, by urgency…) and each group is
+ *  a titled, collapsible section of the same interactive rows as the flat list
+ *  (open / archive / mark-read / categorize). Triage state is lifted here so a
+ *  group's bulk actions and its rows stay in sync. Falls back to the generic
+ *  confirmation card when there's nothing parseable to group. */
+function EmailGroupsCard({ event: e }: { event: ToolEvent }) {
+  const groups = parseGroupedRows(e.result || "");
+  const [statuses, setStatuses] = useState<Record<string, RowStatus>>({});
+  if (groups.length === 0) return <ActionResultCard event={e} />;
+
+  const total = groups.reduce((n, g) => n + g.rows.length, 0);
+  const set = (id: string, s: RowStatus) =>
+    setStatuses((prev) => ({ ...prev, [id]: s }));
+  const archive = async (id: string) => {
+    set(id, "busy");
+    try {
+      await patchEmail(id, { folder: "archive" });
+      set(id, "archived");
+    } catch {
+      set(id, "idle");
+    }
+  };
+  const markRead = async (id: string) => {
+    set(id, "busy");
+    try {
+      await patchEmail(id, { isRead: true });
+      set(id, "read");
+    } catch {
+      set(id, "idle");
+    }
+  };
+
+  return (
+    <div className="rounded-lg border border-sidebar-border bg-secondary/40 px-2.5 py-2 min-w-0 overflow-hidden">
+      <div className="flex items-center gap-1.5 mb-2 pr-5">
+        <Layers size={12} className="text-primary" />
+        <span className="text-[11px] font-medium text-foreground">
+          Categorized emails
+        </span>
+        <span className="text-[10px] text-muted-foreground">
+          ({total} in {groups.length} group{groups.length > 1 ? "s" : ""})
+        </span>
+      </div>
+      <div className="space-y-1.5">
+        {groups.map((g, i) => (
+          <GroupSection
+            key={`${g.title}-${i}`}
+            group={g}
+            statuses={statuses}
+            onArchive={archive}
+            onMarkRead={markRead}
+          />
+        ))}
+      </div>
+    </div>
+  );
+}
+
+/** One category within the board: a titled header (count + optional note) with
+ *  Read-all / Archive-all shortcuts, collapsible, over its interactive rows. */
+function GroupSection({
+  group,
+  statuses,
+  onArchive,
+  onMarkRead,
+}: {
+  group: EmailGroup;
+  statuses: Record<string, RowStatus>;
+  onArchive: (id: string) => void;
+  onMarkRead: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  // Bulk acts on this group's not-yet-handled rows.
+  const actionable = group.rows.filter(
+    (r) => !["archived", "read", "busy"].includes(statuses[r.id] ?? "idle"),
+  );
+  return (
+    <div className="rounded-md border border-border/70 bg-background/40">
+      <div className="flex items-center gap-1.5 px-2 py-1.5">
+        <button
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+        >
+          <ChevronDown
+            size={11}
+            className={`text-muted-foreground flex-shrink-0 transition-transform ${open ? "" : "-rotate-90"}`}
+          />
+          <span className="text-[11px] font-semibold text-foreground truncate">
+            {group.title}
+          </span>
+          <span className="text-[10px] text-muted-foreground flex-shrink-0">
+            ({group.rows.length})
+          </span>
+          {group.note && (
+            <span className="text-[10px] text-muted-foreground/80 truncate hidden sm:inline">
+              — {group.note}
+            </span>
+          )}
+        </button>
+        {open && actionable.length > 1 && (
+          <div className="flex items-center gap-1 flex-shrink-0">
+            <button
+              onClick={() => actionable.forEach((r) => onMarkRead(r.id))}
+              title="Mark all in this group as read"
+              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <MailOpen size={10} /> Read all
+            </button>
+            <button
+              onClick={() => actionable.forEach((r) => onArchive(r.id))}
+              title="Archive all in this group"
+              className="flex items-center gap-0.5 text-[9px] px-1.5 py-0.5 rounded border border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            >
+              <Archive size={10} /> Archive all
+            </button>
+          </div>
+        )}
+      </div>
+      {open && (
+        <div className="px-1.5 pb-1.5 space-y-1">
+          {group.rows.map((r) => (
+            <EmailRow
+              key={r.id}
+              row={r}
+              status={statuses[r.id] ?? "idle"}
+              onArchive={() => onArchive(r.id)}
+              onMarkRead={() => onMarkRead(r.id)}
+            />
+          ))}
+        </div>
       )}
     </div>
   );

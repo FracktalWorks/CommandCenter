@@ -126,6 +126,19 @@ Instead write a short prose summary: the count, the themes, and the 1–3 worth
 looking at first (name them by sender/subject, never by raw `id`). Let the card
 carry the list.
 
+**Presenting emails split into categories:** when your answer is a *breakdown*
+— "emails to reply to, by department" (HR / Finance / R&D), by project, by
+sender, or by urgency (Urgent / This week / FYI) — do **not** hand-write those
+categories as markdown tables. Call **`present_email_groups`** instead: it
+renders each category as its own titled, collapsible section of fully
+interactive rows, so the board matches the breakdown you're describing. Flow:
+gather the ids first (`find_needs_reply` / `get_important_emails` /
+`query_inbox`), decide the categories yourself, then call `present_email_groups`
+ONCE with every group (`[{title, email_ids, note?}, …]`). Keep your prose to a
+one-line lead-in — the board is the categorized list, so don't also print it.
+Use the flat list card (the plain list tools) only when there's a single,
+uncategorized list.
+
 ## Drafting a reply — the playbook
 
 When the user asks you to reply to an email (and isn't sending it themselves),

@@ -21,17 +21,16 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Note:** Until this lands, either mark the write‑capable agents (`agent_registry.json` sales/delivery/triage/billing) as **not** autonomous‑write, or accept and document that #4 is waived.
 
 ### BO‑2 — Enforceable authentication + authorization *(P0)* ◑
-- **Missing:** `get_current_user` never rejects (`acb_auth/deps.py:76`); it only labels. So mutation‑approve (`agent.py:1852`, `git push`), the memory API (`memory.py`, IDOR), and `/agent/webhook/{source}` (`agent.py:2522`) are anonymous‑reachable. `/v1` had no auth at all (**✅ F1** fixes `/v1`).
-- **Why needed:** Prevents anonymous code‑push, cross‑tenant memory read/delete, and unauthenticated agent triggering. Closes C2/C6 and the H1 root cause.
-- **Dependencies:** Confirm each protected endpoint's caller sends the internal token or a real user session (the Next.js server routes and `memory.ts` already send `Bearer LITELLM_MASTER_KEY`).
-- **Approach:** (1) Add `acb_auth.require_authenticated` (rejects when neither a valid internal bearer nor a domain‑verified `X-User-Email` is present). (2) Apply it as a router‑level dependency on `agent.py` (esp. all `mutations/*`), `memory.py`, and `oauth.py` (whose claimed admin gate is absent). (3) Sign/verify `/agent/webhook/{source}` (per‑source HMAC like the ingestion receivers) or remove it. (4) Split the service‑identity token from `LITELLM_MASTER_KEY` (`deps.py:56`) so an LLM key ≠ an identity secret.
-- **Residual after F1:** the `/v1` open proxy is closed; the rest of BO‑2 remains.
+- **Missing:** `get_current_user` never rejects (`acb_auth/deps.py:76`); it only labels. So mutation‑approve (`agent.py:1852`, `git push`), the memory API (`memory.py`, IDOR), and `/agent/webhook/{source}` (`agent.py:2522`) were anonymous‑reachable. `/v1` had no auth at all.
+- **Done this pass:** **✅ F1** authenticates `/v1`; **✅ F7** adds `acb_auth.require_internal_auth` and gates the state‑changing mutation routes + the whole `/memory` router (401 anonymous). This closes C1/C2/C6 for the specific dangerous endpoints.
+- **Why needed:** Prevents anonymous code‑push, cross‑tenant memory read/delete, and unauthenticated agent triggering.
+- **Dependencies:** Confirm each protected endpoint's caller sends the internal token or a real user session (the Next.js server routes and `memory.ts` already send `Bearer LITELLM_MASTER_KEY` — verified).
+- **Residual (the systemic fix):** (1) Add `acb_auth.require_authenticated` (rejects when neither a valid internal bearer nor a domain‑verified `X-User-Email` is present) and make it the DEFAULT posture rather than opt‑in per route. (2) Cover the remaining `agent.py` routes and `oauth.py` (whose claimed admin gate is absent). (3) Sign/verify `/agent/webhook/{source}` (per‑source HMAC like the ingestion receivers) or remove it. (4) Split the service‑identity token from `LITELLM_MASTER_KEY` (`deps.py:56`) so an LLM key ≠ an identity secret.
 
-### BO‑3 — Self‑mutation governance: human gate + real test gate + attempt counter *(P0)* ☐
-- **Missing:** auto‑push without review (`mutation.py:210`); "success" = "a commit exists" not "tests passed" (`mutation_runner.py:151`); `_tests_passed("")==True` (`mutation.py:79`); `max_mutation_attempts` unenforced (H4).
-- **Why needed:** A self‑modifying platform that pushes unreviewed code to agent repos is the highest‑blast‑radius governance gap; contradicts the "human must merge" model.
-- **Dependencies:** `pending_commit` table (exists); Control Plane approval inbox; BO‑2 (authenticated approvals).
-- **Approach:** (1) Remove `_auto_push_commit`; always stage to the `pending_commit` inbox. (2) Define success as "a test command ran and exited 0 with ≥1 test"; treat empty test output as failure. (3) Persist a per‑failure‑event mutation counter (in `agent_run` or a `mutation_attempts` table) and pass it to `attempt_self_mutation`. (4) Wire mutation into the streaming path (H5) or explicitly scope it to structural failures and document that.
+### BO‑3 — Self‑mutation governance: human gate + real test gate + attempt counter *(P0)* ◑
+- **Done this pass:** **✅ F8** — auto‑push is now opt‑in (`MUTATION_AUTO_PUSH`, default off) so a green commit stages in the approval inbox by default; `_tests_passed("")`/"no tests" now returns False (empty output is no longer treated as green). This closes H3.
+- **Residual:** (1) Persist a per‑failure‑event mutation counter (in `agent_run` or a `mutation_attempts` table) and pass it to `attempt_self_mutation` — today both call sites pass 0 so `max_mutation_attempts` never triggers (H4). (2) Optionally define sandbox "success" as "a test command ran and exited 0 with ≥1 test" at the runner level (`mutation_runner.py:151`). (3) Wire mutation into the streaming path (H5) or explicitly scope it to structural failures and document that.
+- **Dependencies:** `pending_commit` table (exists); Control Plane approval inbox; BO‑2 (authenticated approvals — the approve endpoint is now gated by F7).
 
 ### BO‑7 — Sandbox for dynamic agent execution (HH‑6) *(P1)* ☐
 - **Missing:** cloned agent code runs in‑process (`loader.py:1247`) and installs deps into the shared gateway venv (`:1095`). No isolation.
@@ -66,11 +65,12 @@ This is the list of foundational capabilities that are **missing, partially impl
 
 ## C. Data layer
 
-### BO‑6 — Migration framework + auto‑apply + `started_at` *(P1)* ◑
-- **Missing:** 60+ raw numbered SQL files, no ledger/down‑migrations, not auto‑applied on `docker compose up` (H12); `agent_run.started_at` never written (M7). Duplicate #50 (**✅ F5**).
+### BO‑6 — Migration framework + auto‑apply *(P1)* ◑
+- **Done this pass:** **✅ F5** resolves the duplicate #50; **✅ M7** writes `agent_run.started_at` at true run start.
+- **Missing:** 60+ raw numbered SQL files, no ledger/down‑migrations, not auto‑applied on `docker compose up` (H12).
 - **Why needed:** At 60+ files with hand‑idempotency and no ledger, a migration incident is a matter of time; a fresh stack silently lacks most tables.
 - **Dependencies:** Alembic; a one‑time baseline of the current schema (`schema.generated.sql` exists as a start).
-- **Approach:** Adopt Alembic (autogenerate baselined against `schema.generated.sql`), run it in `lifespan`/entrypoint, keep the raw files as historical. Add a CI check for unique numeric prefixes until then. Write `started_at` at run start in `run_trace`.
+- **Approach:** Adopt Alembic (autogenerate baselined against `schema.generated.sql`), run it in `lifespan`/entrypoint, keep the raw files as historical. Add a CI check for unique numeric prefixes until then.
 
 ### BO‑10 — Consolidate DB access to one engine/pool *(P2)* ☐
 - **Missing:** three engines (`acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`), the foundational one unconfigured; sync `acb_audit.record()` blocks the async loop (H11).

@@ -124,7 +124,7 @@ Each finding cites `file:line`. Type ∈ {security, correctness, wiring‑gap, s
 **C6 — Memory API is an IDOR.** *(security)*
 `apps/gateway/gateway/routes/memory.py:52‑108` (`/memory/{user_id}`, `/search`, `DELETE /{memory_id}`, `/add`) take `user_id` from the path and are guarded only by non‑enforcing `get_current_user`. An anonymous caller can read or delete **any** user's memories.
 
-> C2/C6 share the same root cause as the auth story below (H1). They are fixable but touch several endpoints; they are itemized in the checklist (BO‑2) rather than changed blind in this pass, because the correct fix is the systemic one and each endpoint's frontend caller must be confirmed to send the internal token.
+> C2/C6 share the same root cause as the auth story below (H1). **→ both are now gated in this pass (F7):** the state‑changing mutation routes and the whole `/memory` router require the internal bearer token (401 anonymous), after verifying every caller is the Next.js proxy that forwards it. The *systemic* fix (make `get_current_user` able to reject globally, cover the remaining routes) remains BO‑2.
 
 ### 3.2 HIGH
 
@@ -260,5 +260,10 @@ These were executed after the audit, each verified against the `848‑passing` b
 | **F4** | Fix cost tracking so unpriced models report *unknown* (`None`), not a false `$0.00` | H8 | Low — contained to `acb_llm/client.py`, covered by tests |
 | **F5** | Resolve the duplicate migration number 50 | H12 (collision) | Low — idempotent SQL, renumbered only |
 | **F6** | Sweep stale docstrings/comments (LangGraph/placeholder), remove duplicate `ddgs` pin | L1, L3 | None (docs/metadata) |
+| **F7** | Gate the mutation approve/reject/remutate/delete routes and the whole `/memory` router on `require_internal_auth` (401 anonymous) | C2, C6 | Low — every caller is the Next.js proxy forwarding the internal token (verified); read‑only + public‑webhook routes untouched |
+| **F8** | Self‑mutation stages for human approval by default: `_tests_passed("")`→False, auto‑push opt‑in via `MUTATION_AUTO_PUSH` (default off) | H3 | Low — strictly *more* conservative (matches the documented "human must merge" model); unit‑tested helpers |
+| **M7** | Write `agent_run.started_at` at the true run start (was defaulting to ≈ run end, breaking `/observability` ordering) | M7 | Low — contained to `run_trace.py`, `now()` fallback preserves `NOT NULL`; covered by tests |
 
-> **Owner actions that this pass deliberately did NOT perform** (they require rotation, history rewrite, or an architectural decision, and are unsafe to do unattended): revoke the leaked Zoho token and `git filter-repo` C4/C5 out of history; the systemic auth fix for C2/C6 (BO‑2); the Action Broker decision (BO‑1); moving agent execution to a sandbox (BO‑7). All are itemized in the checklist.
+All fixes above are on `claude/foundation-architecture-audit-ftur3x`, each verified against the unit suite (grown to **859 passed** with the added regression + auth tests).
+
+> **Owner actions that this pass deliberately did NOT perform** (they require rotation, history rewrite, or an architectural decision, and are unsafe to do unattended): revoke the leaked Zoho token and `git filter-repo` C4/C5 out of history; the **systemic** auth fix — make `get_current_user` able to reject / add a global gate — for the remaining unauthenticated routes (H1/BO‑2; note the two most dangerous specific endpoints, C2/C6, ARE now gated by F7); the Action Broker decision (BO‑1); moving agent execution to a sandbox (BO‑7); the persistent `max_mutation_attempts` counter (H4/BO‑3). All are itemized in the checklist.

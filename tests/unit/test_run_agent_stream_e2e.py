@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import json
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -173,3 +174,118 @@ def test_agent_exception_surfaces_as_run_error_not_a_crash(monkeypatch):
     types = [e.get("type") for e in events]
     assert types[0] == "RUN_STARTED"
     assert "RUN_ERROR" in types
+
+
+# ── Tier-1: native MAF streaming ────────────────────────────────────────────
+# A native MAF agent's run(input, stream=True) returns an async iterator of
+# "update" objects (agent_framework AgentRunResponseUpdate shape). The executor
+# translates each update's contents into AG-UI events via the event_translator.
+# These builders mirror that shape (see event_translator.translate_update).
+
+def _text(t: str) -> SimpleNamespace:
+    return SimpleNamespace(type="text", text=t)
+
+
+def _fc(name: str, arguments: str, call_id: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="function_call", name=name, arguments=arguments, call_id=call_id,
+    )
+
+
+def _fr(call_id: str, result: str) -> SimpleNamespace:
+    return SimpleNamespace(
+        type="function_result", call_id=call_id, result=result, exception=None,
+    )
+
+
+def _update(contents: list[Any], *, role: str = "assistant",
+            message_id: str = "m1") -> SimpleNamespace:
+    return SimpleNamespace(role=role, contents=contents, message_id=message_id)
+
+
+class _NativeStreamingAgent:
+    """A native-MAF agent whose run(stream=True) yields real update objects, so
+    run_agent_stream takes its Tier-1 native-streaming path (not the batch
+    fallback) and translates the updates into AG-UI events."""
+
+    def __init__(self, updates: list[Any]) -> None:
+        self.name = "test-agent"
+        self.tools: list[Any] = []
+        self.default_options: dict[str, Any] = {}
+        self._updates = updates
+
+    def run(self, *_a: Any, **_k: Any) -> Any:
+        return self._stream()
+
+    async def _stream(self) -> Any:
+        for u in self._updates:
+            yield u
+
+    async def __aenter__(self) -> "_NativeStreamingAgent":
+        return self
+
+    async def __aexit__(self, *_a: Any) -> bool:
+        return False
+
+
+def _drive_native(monkeypatch, updates: list[Any]) -> list[dict[str, Any]]:
+    class _Loaded(_LoadedStub):
+        def build_agents(self_inner) -> list[Any]:  # noqa: N805
+            return [_NativeStreamingAgent(updates)]
+
+    class _Ctx:
+        def __enter__(self) -> _LoadedStub:
+            return _Loaded("")
+
+        def __exit__(self, *_a: Any) -> bool:
+            return False
+
+    monkeypatch.setattr(executor, "load_agent", lambda *a, **k: _Ctx())
+    monkeypatch.setattr(executor, "build_integrations", lambda *a, **k: ({}, {}))
+
+    async def _collect() -> list[str]:
+        out: list[str] = []
+        async for line in executor.run_agent_stream(
+            "test-agent-unregistered", {"message": "hi"},
+        ):
+            out.append(line)
+        return out
+
+    return _parse_frames(asyncio.run(_collect()))
+
+
+def test_native_streaming_emits_text_message_lifecycle(monkeypatch):
+    events = _drive_native(monkeypatch, [
+        _update([_text("the quick ")]),
+        _update([_text("brown fox")]),
+    ])
+    types = [e.get("type") for e in events]
+    assert types[0] == "RUN_STARTED"
+    assert "TEXT_MESSAGE_START" in types
+    assert "TEXT_MESSAGE_END" in types
+    assert types[-1] == "RUN_FINISHED"
+    text = "".join(
+        e.get("delta", "") for e in events if e.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+    assert text == "the quick brown fox"
+    assert not [e for e in events if e.get("type") == "RUN_ERROR"]
+
+
+def test_native_streaming_emits_tool_call_and_result_events(monkeypatch):
+    events = _drive_native(monkeypatch, [
+        _update([_fc("query_inbox", '{"account_id": "123"}', "call_1")]),
+        _update([_fr("call_1", "42 unread")], role="tool"),
+        _update([_text("you have 42 unread")]),
+    ])
+    starts = [e for e in events if e.get("type") == "TOOL_CALL_START"]
+    results = [e for e in events if e.get("type") == "TOOL_CALL_RESULT"]
+    assert len(starts) == 1
+    assert starts[0]["toolCallName"] == "query_inbox"
+    assert starts[0]["toolCallId"] == "call_1"
+    assert results and results[0]["toolCallId"] == "call_1"
+    assert results[0]["success"] is True
+    # The tool call closes the narration segment; the final answer still streams.
+    text = "".join(
+        e.get("delta", "") for e in events if e.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+    assert "42 unread" in text

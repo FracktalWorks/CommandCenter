@@ -79,7 +79,12 @@ async def save_note(path: str, fact: str) -> str:
     if not in_visible:
         clean = f"agent-data/{clean}"
 
-    target = root / clean
+    # Containment guard: refuse a path that escapes the workspace (embedded
+    # ``..`` etc.) — see write_artifact.resolve_in_workspace. Fail closed.
+    from acb_skills.write_artifact import resolve_in_workspace  # noqa: PLC0415
+    target = resolve_in_workspace(root, clean)
+    if target is None:
+        return f"Refused: path '{path}' escapes the workspace."
     target.parent.mkdir(parents=True, exist_ok=True)
 
     # Build the dated bullet.
@@ -111,7 +116,19 @@ async def recall_notes(path: str, query: str = "") -> str:
     """
     root = Path(_get_agent_dir())
     clean = path.replace("\\", "/").lstrip("/.")
-    target = root / clean
+    # Apply the SAME visible-dir prefixing as save_note so the documented
+    # round-trip works: recall_notes("NOTES.md") reads the agent-data/NOTES.md
+    # that save_note("NOTES.md", …) wrote (previously it looked at root/NOTES.md
+    # and never found it).
+    _visible = frozenset({"inputs", "outputs", "agent-data"})
+    if not any(clean == d or clean.startswith(d + "/") for d in _visible):
+        clean = f"agent-data/{clean}"
+    # Containment guard: recall_notes is a file-READ primitive — an embedded
+    # ``..`` would let an agent read arbitrary files outside the workspace.
+    from acb_skills.write_artifact import resolve_in_workspace  # noqa: PLC0415
+    target = resolve_in_workspace(root, clean)
+    if target is None:
+        return f"Refused: path '{path}' escapes the workspace."
 
     if not target.exists():
         return f"{clean}: (file not found)"

@@ -101,9 +101,10 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Residual:** the Tier‑1.5 Copilot‑SDK tier and the HITL‑parking / idle‑timeout / fall‑through control‑flow branches are not yet covered; and `run_agent_stream` is still one ~1,600‑line function.
 - **Approach for the residual:** (1) extend the harness to the Copilot tier + HITL/idle branches. (2) THEN extract the native / Copilot / batch tiers behind a `Runtime` strategy interface — the `return`‑to‑end vs fall‑through‑to‑batch control flow is the delicate part, so it needs those branches covered first — and move HITL/session‑store/cleanup into collaborators, guarded by this net + the trajectory evals. (3) Ratchet the xenon absolute ceiling down from F.
 
-### BO‑14 — Enforce the permission/risk model *(P1)* ☐
-- **Missing:** the injected‑tool gate can never deny (M5); the destructive registry is empty; fail‑closed is a convention, not an invariant.
-- **Approach:** Annotate the genuinely destructive platform tools (e.g. `install_dependency`, `write_artifact` with overwrite, any outward‑write tool) as `destructive`, pass full call context (not just the name) to `decide`, and make `enforce` mode actually block destructive/out‑of‑policy calls with a real confirmation. Add workspace‑path containment to `write_artifact`/`save_note`/`recall_notes` (currently `..`‑traversable).
+### BO‑14 — Enforce the permission/risk model *(P1)* ◑
+- **Done this pass:** **workspace‑path containment** shipped — `write_artifact`/`save_note`/`recall_notes` routed every caller path through a single `write_artifact.resolve_in_workspace` guard that fails closed on an embedded `..` or an absolute path resolving outside the workspace (previously `write_artifact` could write, and `recall_notes` could READ, arbitrary files). Also fixed a latent bug: `recall_notes` now applies the same `agent-data/` prefixing as `save_note`, so the documented `recall_notes("NOTES.md")` round‑trip actually works. 7 unit tests added.
+- **Missing (the enforcement redesign):** the injected‑tool gate still can never deny (M5) and the destructive platform registry is empty. This is deliberately deferred — `decide()` currently *defers* destructive tools (approves, relying on each tool's own `request_confirmation`), so forcing denials risks false‑blocking legitimate tool use across every agent; it needs a product decision on which tools hard‑block + the confirmation UX.
+- **Approach for the residual:** annotate the genuinely destructive platform tools (`install_dependency`, outward‑write tools) as `destructive`, pass full call context (not just the name) to `decide`, and make `enforce` mode block destructive/out‑of‑policy calls with a real confirmation card.
 
 ---
 

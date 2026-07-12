@@ -51,6 +51,11 @@ def _normalise_path(path: str) -> str:
     If *path* doesn't start with ``inputs/``, ``outputs/``, or ``agent-data/``,
     it is automatically prefixed with ``outputs/`` so the file appears in the
     Files Viewer sidebar.
+
+    NOTE: this only strips a LEADING ``/.`` — it does not neutralise an EMBEDDED
+    ``..`` (e.g. ``outputs/../../etc/x``). Containment is enforced separately by
+    :func:`resolve_in_workspace`; every tool that turns a caller path into a
+    filesystem path MUST route it through that guard.
     """
     clean = path.replace("\\", "/").lstrip("/.")
     # Already in a visible dir — use as-is.
@@ -59,6 +64,27 @@ def _normalise_path(path: str) -> str:
             return clean
     # Default: write to outputs/
     return f"outputs/{clean}"
+
+
+def resolve_in_workspace(root: str | Path, rel: str) -> Path | None:
+    """Resolve *rel* under *root*, returning it ONLY if it stays inside the root.
+
+    The single path-containment guard for every workspace read/write tool
+    (``write_artifact``, ``save_note``, ``recall_notes``, …). Returns ``None`` on
+    any traversal escape — an embedded ``..`` that climbs out, or an absolute
+    path that resolves outside the workspace — so callers fail closed instead of
+    reading/writing arbitrary files. Symlinks are resolved on both sides so a
+    symlinked escape is caught too.
+    """
+    root_r = Path(root).resolve()
+    # strict=False (the default): non-existent leaves still resolve lexically,
+    # so a not-yet-created target is contained-checked correctly.
+    target = (root_r / rel).resolve()
+    try:
+        target.relative_to(root_r)
+    except ValueError:
+        return None
+    return target
 
 
 async def write_artifact(
@@ -121,9 +147,15 @@ async def write_artifact(
         _WRITE_ARTIFACT_CONTEXT["workspace_root"] = workspace_root
 
     root = Path(workspace_root)
+    root_r = root.resolve()
     # Normalise path and auto-prefix with outputs/ if needed
     clean_path = _normalise_path(path)
-    target = root / clean_path
+    # Containment guard: refuse any path that escapes the workspace (embedded
+    # ``..`` or an absolute path resolving outside root). Fail closed.
+    target = resolve_in_workspace(root, clean_path)
+    if target is None:
+        return {"error": f"Path '{path}' escapes the workspace and was refused."}
+    clean_path = target.relative_to(root_r).as_posix()
 
     # Ensure parent directory exists
     target.parent.mkdir(parents=True, exist_ok=True)
@@ -138,7 +170,7 @@ async def write_artifact(
         while target.exists():
             target = target.parent / f"{stem} ({counter}){ext}"
             counter += 1
-        clean_path = target.relative_to(root).as_posix()
+        clean_path = target.relative_to(root_r).as_posix()
 
     # Write file
     if isinstance(content, str):

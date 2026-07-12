@@ -1,8 +1,8 @@
 ﻿"""SQLAlchemy ORM models — 1:1 mirror of infra/postgres/01_schema.sql.
 
-These are the runtime objects we hand to `Session` for upsert/query.
-The Pydantic shapes in `acb_schemas.entities` are the wire/API surface;
-this module is the storage surface.
+These are the runtime objects we hand to `Session` for upsert/query — the
+storage surface. (There is no separate Pydantic wire/API layer; routes use the
+ORM + ad-hoc dicts directly.)
 """
 from __future__ import annotations
 

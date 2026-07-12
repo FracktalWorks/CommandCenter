@@ -77,9 +77,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Missing:** three engines (`acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`), the foundational one unconfigured; sync `acb_audit.record()` blocks the async loop (H11).
 - **Approach:** Provide a single configured async engine in `acb_graph` (sized pool), funnel all callers through it, and make `acb_audit.record()` async (or always call via `to_thread`).
 
-### BO‑11 — Decide `acb_schemas`: wire in or delete *(P2)* ☐
-- **Missing:** the package has 0 production importers and has drifted from the ORM/SQL (H10).
-- **Approach:** Either adopt the Pydantic models as the real request/response surface for the entity API (and keep them aligned with `01_schema.sql`), or delete the package and its smoke‑test import. Deleting is the lower‑cost default.
+### BO‑11 — Decide `acb_schemas`: wire in or delete *(P2)* ✅
+- **Done:** deleted the package (0 production importers, drifted from the ORM — H10). Removed its 7 `pyproject` dependency declarations + `tool.uv.sources` entry, the smoke‑test import, and the stale "wire/API surface" comment in `acb_graph/models.py`; re‑locked. Bonus: this exposed a latent under‑declared dependency — `orchestrator/triage/schema.py` uses pydantic `EmailStr` (needs `email‑validator`) but only got it transitively via `acb_schemas`; now declared explicitly as `pydantic[email]` on the orchestrator.
 
 ---
 

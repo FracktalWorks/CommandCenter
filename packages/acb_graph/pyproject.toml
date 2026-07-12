@@ -9,7 +9,6 @@ dependencies = [
     "pgvector>=0.3",
     "alembic>=1.13",
     "acb-common",
-    "acb-schemas",
 ]
 
 [build-system]

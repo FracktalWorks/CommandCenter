@@ -13,7 +13,6 @@ authors = [{ name = "Fracktal Works" }]
 dependencies = [
     # Each member is brought in via the workspace; this top-level project is the umbrella.
     "acb-common",
-    "acb-schemas",
     "acb-graph",
     "acb-llm",
     "acb-audit",
@@ -59,7 +58,6 @@ members = [
 
 [tool.uv.sources]
 acb-common    = { workspace = true }
-acb-schemas   = { workspace = true }
 acb-graph     = { workspace = true }
 acb-llm       = { workspace = true }
 acb-audit     = { workspace = true }

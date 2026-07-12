@@ -493,7 +493,9 @@ export function TopDownOffice({
     : undefined;
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto">
+    // pb clears the fixed mobile bottom-nav bar (+ iOS safe area) so the last row
+    // of desks isn't hidden behind it; no extra padding on desktop.
+    <div className="h-full min-h-0 overflow-y-auto pb-24 sm:pb-2">
       <div className="flex items-center justify-between mb-3">
         <div className="oc-mono text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
           <Building2 size={13} /> The Office · {workingCount}/{roster.length} at work

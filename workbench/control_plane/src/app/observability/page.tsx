@@ -24,16 +24,13 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Sparkles,
+  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server,
 } from "lucide-react";
 
-import { AvatarStudio } from "./avatar-studio";
 import { OFFICE_CAST } from "./office-cast.generated";
 import { TopDownOffice, TOPDOWN_STYLE } from "./office-topdown";
 import { PIXEL_ART_STYLE } from "./pixel";
-import {
-  type AvatarConfig, SCENE_STYLE,
-} from "./scene";
+import type { AvatarConfig } from "./scene";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Types
@@ -745,7 +742,7 @@ function AgentDrawer({
 // Page
 // ───────────────────────────────────────────────────────────────────────────
 
-type Tab = "office" | "feed" | "cost" | "history" | "avatars";
+type Tab = "office" | "feed" | "cost" | "history";
 
 export default function ObservabilityPage() {
   const [tab, setTab] = useState<Tab>("office");
@@ -933,18 +930,6 @@ export default function ObservabilityPage() {
     return () => es.close();
   }, [pushEvents, simMode]);
 
-  // Event-only roster refresh for the Avatar Studio (called from onSaved, never
-  // from an effect body — keeps the set-state-in-effect lint happy).
-  const reloadRoster = useCallback(async () => {
-    try {
-      const res = await fetch("/api/observability/roster");
-      const data = await res.json();
-      if (Array.isArray(data.agents)) setRoster(data.agents);
-    } catch {
-      /* degrade */
-    }
-  }, []);
-
   // Roster + cost polling
   useEffect(() => {
     if (simMode) return;
@@ -1035,12 +1020,11 @@ export default function ObservabilityPage() {
     { id: "feed", label: "Live feed", Icon: Radio },
     { id: "history", label: "History", Icon: HistoryIcon },
     { id: "cost", label: "Cost", Icon: Coins },
-    { id: "avatars", label: "Avatars", Icon: Sparkles },
   ];
 
   return (
     <div className="flex flex-col h-full max-h-full">
-      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + SCENE_STYLE + TOPDOWN_STYLE}</style>
+      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + TOPDOWN_STYLE}</style>
 
       {/* Header */}
       <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border flex-wrap">
@@ -1065,13 +1049,13 @@ export default function ObservabilityPage() {
         </div>
       </header>
 
-      {/* Tabs */}
-      <div className="flex gap-1 px-4 py-2 border-b border-border">
+      {/* Tabs — compact, horizontally scrollable so they never wrap or eat height */}
+      <div className="flex gap-1 px-3 py-1 border-b border-border overflow-x-auto">
         {TABS.map((t) => (
           <button
             key={t.id}
             onClick={() => setTab(t.id)}
-            className={`flex items-center gap-1.5 text-sm px-3 py-1.5 rounded-lg transition-colors ${
+            className={`flex items-center gap-1.5 text-sm px-2.5 py-1 rounded-md whitespace-nowrap shrink-0 transition-colors ${
               tab === t.id ? "bg-secondary text-foreground font-medium" : "text-muted-foreground hover:bg-secondary/50"
             }`}
           >
@@ -1106,11 +1090,6 @@ export default function ObservabilityPage() {
         {tab === "cost" && (
           <div className="h-full overflow-y-auto">
             <CostView cost={cost} />
-          </div>
-        )}
-        {tab === "avatars" && (
-          <div className="h-full min-h-0">
-            <AvatarStudio agents={roster} onSaved={reloadRoster} />
           </div>
         )}
       </div>

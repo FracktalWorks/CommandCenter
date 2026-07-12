@@ -27,6 +27,13 @@ class Settings(BaseSettings):
     database_url: str = Field(
         default="postgresql+psycopg://acb:acb_dev_change_me@localhost:5432/acb"
     )
+    # Seconds libpq waits to ESTABLISH a connection before giving up. Bounds the
+    # worst case for every DB caller so a slow/firewalled DB host (or a
+    # best-effort audit write) can never hang an agent indefinitely — it fails
+    # fast and the caller's error handling takes over. Only the CONNECT phase is
+    # capped, not query duration; a healthy local DB connects in <100ms so this
+    # never trips in normal operation.
+    db_connect_timeout: int = 10
 
     # Redis (event bus)
     redis_url: str = "redis://localhost:6379/0"

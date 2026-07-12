@@ -11,10 +11,25 @@ from sqlalchemy.orm import Session, sessionmaker
 from acb_common import get_settings
 
 
+def _engine_kwargs(settings) -> dict:
+    """Engine kwargs, with a libpq connect_timeout for Postgres URLs.
+
+    Bounding the CONNECT phase means a slow/firewalled DB host can never hang a
+    caller indefinitely (e.g. a best-effort ``acb_audit.record`` write) — it
+    fails fast and the caller's error handling takes over. ``connect_timeout``
+    is a libpq/psycopg param, so it is only applied to Postgres URLs; sqlite or
+    other dialects used in tests are left untouched.
+    """
+    kwargs: dict = {"pool_pre_ping": True, "future": True}
+    if settings.database_url.startswith("postgresql"):
+        kwargs["connect_args"] = {"connect_timeout": settings.db_connect_timeout}
+    return kwargs
+
+
 @lru_cache(maxsize=1)
 def get_engine() -> Engine:
     settings = get_settings()
-    return create_engine(settings.database_url, pool_pre_ping=True, future=True)
+    return create_engine(settings.database_url, **_engine_kwargs(settings))
 
 
 @lru_cache(maxsize=1)

@@ -83,20 +83,6 @@
     },
     "done": true
   },
-  "sales-f": {
-    "gender": "female",
-    "role": "sales",
-    "desc": "a female sales lead in a burgundy blazer over a white top, small hoop earrings, straight shoulder-length brown hair, tan skin",
-    "base": "b6d4f644-9ef9-401f-887e-5dd5e6c5a53a",
-    "seated": "2b25c3f4-256c-4fc3-81d7-1c00248b8890",
-    "typing": 9,
-    "sleeping": "ec1c277d-4223-4ca7-ae64-6ba21e976618",
-    "breathing": {
-      "south": 9,
-      "north": 9
-    },
-    "done": true
-  },
   "sales-m": {
     "gender": "male",
     "role": "sales",

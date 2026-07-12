@@ -493,7 +493,9 @@ export function TopDownOffice({
     : undefined;
 
   return (
-    <div className="h-full min-h-0 overflow-y-auto">
+    // pb clears the fixed mobile bottom-nav bar (+ iOS safe area) so the last row
+    // of desks isn't hidden behind it; no extra padding on desktop.
+    <div className="h-full min-h-0 overflow-y-auto pb-24 sm:pb-2">
       <div className="flex items-center justify-between mb-3">
         <div className="oc-mono text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
           <Building2 size={13} /> The Office · {workingCount}/{roster.length} at work
@@ -822,6 +824,8 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   .oc-seat-plant { height:30px; }
   .oc-wall-fix { gap:10px; }
   .oc-sign { display:none; }
+  /* one conference room per row, full office width (no 3-up squeeze) */
+  .oc-cr { flex-basis:100%; max-width:100%; }
 }
 
 @keyframes oc-play { to { background-position-x: calc(-1 * var(--n) * var(--w)); } }

@@ -70,6 +70,7 @@ function toolIcon(tool: string): IconType {
 
 import { OFFICE_CAST } from "./office-cast.generated";
 import { CHARACTER_LIBRARY } from "./character-library.generated";
+import { ALL_CHARACTERS } from "./character-registry";
 import { OFFICE_ENV } from "./office-env.generated";
 import { OBJ_SIZES } from "./office-object-sizes.generated";
 import { OFFICE_OBJECTS, type Dir } from "./office-objects.generated";
@@ -232,7 +233,9 @@ type CastEntry = Partial<(typeof OFFICE_CAST)[string]> &
   Partial<(typeof CHARACTER_LIBRARY)[string]>;
 function castFor(agent: OfficeAgent): CastEntry | undefined {
   const libId = agent.avatar?.config?.libraryId;
-  if (libId && CHARACTER_LIBRARY[libId]) return CHARACTER_LIBRARY[libId];
+  // An explicitly-assigned character can be from EITHER the role library or the
+  // original office cast — both live in the unified registry.
+  if (libId && ALL_CHARACTERS[libId]) return ALL_CHARACTERS[libId];
   return OFFICE_CAST[characterFor(agent.name)];
 }
 

@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
+import re
 from typing import Any, AsyncIterator
 
 from acb_auth import UserContext, UserRole, require_role
@@ -33,8 +35,9 @@ from acb_common import (
     read_activity_since,
     recent_activity,
 )
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
+from pydantic import BaseModel
 
 _log = get_logger("gateway.observability")
 
@@ -44,6 +47,12 @@ _log = get_logger("gateway.observability")
 # dashboard and must not silently 403 for a non-"executive" logged-in operator.
 # EMPLOYEE is the default role the SSO proxy sends; AGENT is internal tooling.
 _VIEWER = require_role(UserRole.EXECUTIVE, UserRole.AGENT, UserRole.EMPLOYEE)
+# Avatar writes + Pixel Lab generation are cosmetic operator actions on this
+# internal dashboard. Gate them to any AUTHENTICATED caller (same set as the
+# viewer) rather than EXECUTIVE-only — the SSO proxy sends EMPLOYEE by default
+# unless the operator's email is in EXECUTIVE_EMAILS, so an EXECUTIVE gate would
+# silently 403 the very operator using the office (the Phase 6.3 lesson).
+_WRITER = require_role(UserRole.EXECUTIVE, UserRole.AGENT, UserRole.EMPLOYEE)
 
 router = APIRouter(prefix="/observability", tags=["observability"])
 
@@ -108,6 +117,10 @@ async def roster(
     for r in runs:
         live_by_agent.setdefault(str(r.get("agent") or ""), []).append(r)
 
+    # Avatar overrides (Avatar Studio) — merged so every viewer sees the pinned
+    # look/sprite. Best-effort; the office falls back to deriveAvatar() without it.
+    avatars = _load_avatars()
+
     seen: set[str] = set()
     agents: list[dict[str, Any]] = []
     for a in registry:
@@ -124,6 +137,7 @@ async def roster(
             "active_runs": len(live),
             "last_ts": live[0].get("ts") if live else None,
             "source": live[0].get("source") if live else None,
+            "avatar": avatars.get(name),
         })
 
     # Include agents that are LIVE but not in the registry — most importantly the
@@ -142,6 +156,7 @@ async def roster(
             "active_runs": len(live),
             "last_ts": live[0].get("ts") if live else None,
             "source": live[0].get("source") if live else None,
+            "avatar": avatars.get(name),
         })
 
     agents.sort(key=lambda e: (e["status"] != "working", e["name"]))
@@ -275,3 +290,176 @@ async def activity_stream(
             "X-Accel-Buffering": "no",  # disable nginx proxy buffering
         },
     )
+
+
+# ── Avatar customization (Office / Avatar Studio) ────────────────────────────
+# The office renders each agent as a pixel-art character (deriveAvatar + the
+# generated role sprites). These endpoints are the OVERRIDE layer: pin a custom
+# look or a Pixel Lab-generated sprite per agent, persisted in ``agent_avatars``
+# (migration 64) and merged into ``/roster`` so every viewer sees the same cast.
+
+_AGENT_NAME_RE = re.compile(r"^[a-z0-9][a-z0-9._-]{0,63}$")
+# Cap a stored sprite data-URI so a pathological payload can't bloat the row /
+# the roster response. A 200x200 transparent PNG is ~25-30KB base64.
+_MAX_SPRITE_CHARS = 600_000
+
+
+def _load_avatars() -> dict[str, dict[str, Any]]:
+    """All avatar overrides keyed by agent name. Best-effort → {} on any error."""
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as s:
+            rows = s.execute(
+                text("SELECT agent_name, config, sprite FROM agent_avatars")
+            ).fetchall()
+        out: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            cfg = r.config if isinstance(r.config, dict) else {}
+            out[r.agent_name] = {"config": cfg, "sprite": r.sprite}
+        return out
+    except Exception as exc:  # noqa: BLE001 — degrade to no overrides, never 500
+        _log.warning("observability.avatars_load_failed", error=str(exc))
+        return {}
+
+
+def _save_avatar(name: str, config: dict[str, Any], sprite: str | None) -> None:
+    """Upsert one agent's avatar override (raises on DB failure)."""
+    from acb_graph import get_session  # noqa: PLC0415
+    from sqlalchemy import text  # noqa: PLC0415
+
+    with get_session() as s:
+        s.execute(
+            text(
+                "INSERT INTO agent_avatars (agent_name, config, sprite, updated_at) "
+                "VALUES (:n, CAST(:c AS jsonb), :s, now()) "
+                "ON CONFLICT (agent_name) DO UPDATE SET "
+                "config = CAST(:c AS jsonb), sprite = :s, updated_at = now()"
+            ),
+            {"n": name, "c": json.dumps(config or {}), "s": sprite},
+        )
+        s.commit()
+
+
+def _delete_avatar(name: str) -> None:
+    from acb_graph import get_session  # noqa: PLC0415
+    from sqlalchemy import text  # noqa: PLC0415
+
+    with get_session() as s:
+        s.execute(
+            text("DELETE FROM agent_avatars WHERE agent_name = :n"), {"n": name}
+        )
+        s.commit()
+
+
+class AvatarPut(BaseModel):
+    config: dict[str, Any] = {}
+    sprite: str | None = None
+
+
+class AvatarGenerate(BaseModel):
+    description: str
+    size: int = 200
+
+
+@router.get("/avatars")
+async def avatars(_viewer: UserContext = _VIEWER) -> dict[str, Any]:
+    """Every stored avatar override (config + custom sprite), keyed by agent."""
+    return {"avatars": _load_avatars()}
+
+
+@router.put("/avatars/{name}")
+async def put_avatar(
+    name: str, body: AvatarPut, _writer: UserContext = _WRITER,
+) -> dict[str, Any]:
+    """Pin an agent's avatar override (partial config + optional custom sprite)."""
+    name = name.strip().lower()
+    if not _AGENT_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="invalid agent name")
+    if body.sprite and len(body.sprite) > _MAX_SPRITE_CHARS:
+        raise HTTPException(status_code=413, detail="sprite too large")
+    if body.sprite and not body.sprite.startswith("data:image/"):
+        raise HTTPException(status_code=400, detail="sprite must be an image data-URI")
+    try:
+        _save_avatar(name, body.config or {}, body.sprite)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("observability.avatar_save_failed", agent=name, error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to save avatar") from exc
+    return {"ok": True, "agent": name, "config": body.config, "sprite": body.sprite}
+
+
+@router.delete("/avatars/{name}")
+async def delete_avatar(
+    name: str, _writer: UserContext = _WRITER,
+) -> dict[str, Any]:
+    """Remove an agent's override → it reverts to the derived/role look."""
+    name = name.strip().lower()
+    if not _AGENT_NAME_RE.match(name):
+        raise HTTPException(status_code=400, detail="invalid agent name")
+    try:
+        _delete_avatar(name)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("observability.avatar_delete_failed", agent=name, error=str(exc))
+        raise HTTPException(status_code=500, detail="failed to delete avatar") from exc
+    return {"ok": True, "agent": name}
+
+
+@router.post("/avatars/generate")
+async def generate_avatar(
+    body: AvatarGenerate, _writer: UserContext = _WRITER,
+) -> dict[str, Any]:
+    """Generate a pixel-art sprite via Pixel Lab and return it as a data-URI.
+
+    The API key stays server-side (``PIXELLAB_API_KEY``); the browser never sees
+    it. The caller can then PUT the returned sprite onto an agent. Transparent
+    background, waist-up bust framing to match the office cast.
+    """
+    key = os.environ.get("PIXELLAB_API_KEY", "").strip()
+    if not key:
+        raise HTTPException(
+            status_code=503,
+            detail="Pixel Lab is not configured (set PIXELLAB_API_KEY on the gateway).",
+        )
+    desc = (body.description or "").strip()
+    if not desc:
+        raise HTTPException(status_code=400, detail="description is required")
+    size = max(64, min(int(body.size or 200), 400))
+    style = (
+        "cute chibi pixel art office worker, seated at a desk, waist up, facing "
+        "forward, symmetrical, clean dark outline, soft shading, centered"
+    )
+
+    import httpx  # noqa: PLC0415
+
+    try:
+        async with httpx.AsyncClient(timeout=120.0) as client:
+            resp = await client.post(
+                "https://api.pixellab.ai/v1/generate-image-pixflux",
+                headers={
+                    "Authorization": f"Bearer {key}",
+                    "Content-Type": "application/json",
+                },
+                json={
+                    "description": f"{desc}, {style}",
+                    "image_size": {"width": size, "height": size},
+                    "no_background": True,
+                    "text_guidance_scale": 7.5,
+                },
+            )
+    except Exception as exc:  # noqa: BLE001 — network/timeout
+        _log.warning("observability.avatar_generate_failed", error=str(exc))
+        raise HTTPException(status_code=502, detail="Pixel Lab request failed") from exc
+
+    if resp.status_code == 401:
+        raise HTTPException(status_code=502, detail="Pixel Lab rejected the API key")
+    if resp.status_code >= 400:
+        raise HTTPException(
+            status_code=502, detail=f"Pixel Lab error {resp.status_code}"
+        )
+    data = resp.json()
+    b64 = (data.get("image") or {}).get("base64") or ""
+    if not b64:
+        raise HTTPException(status_code=502, detail="Pixel Lab returned no image")
+    sprite = b64 if b64.startswith("data:") else f"data:image/png;base64,{b64}"
+    return {"sprite": sprite, "usage": data.get("usage")}

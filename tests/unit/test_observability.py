@@ -199,3 +199,51 @@ def test_no_folded_run_still_produces_a_row():
     assert row["error_message"] == "died immediately"
     assert row["tool_count"] == 0
     assert row["trace"] is None  # nothing to store, but the row exists
+
+
+# ── Phase 6.8: Avatar customization (Office / Avatar Studio) ─────────────────
+#
+# The avatar-override endpoints let an operator pin a per-agent look / custom
+# Pixel Lab sprite. These test the guards + best-effort contracts that don't
+# need a live DB or network (name validation, load-degradation, the generate
+# 503 when Pixel Lab isn't configured).
+
+import pytest  # noqa: E402
+from fastapi import HTTPException  # noqa: E402
+
+from gateway.routes import observability as _obs  # noqa: E402
+
+
+def test_agent_name_regex_accepts_valid_and_rejects_junk():
+    ok = ["orchestrator", "email-assistant", "task_manager", "a", "apis.config"]
+    bad = ["", "-leading", "UPPER", "has space", "x" * 65, "bad/slash"]
+    assert all(_obs._AGENT_NAME_RE.match(n) for n in ok)
+    assert not any(_obs._AGENT_NAME_RE.match(n) for n in bad)
+
+
+def test_load_avatars_degrades_to_empty_when_db_unavailable(monkeypatch):
+    # Best-effort contract: a DB failure must NOT raise (it would 500 the whole
+    # roster) — it returns {} so the office falls back to derived looks.
+    import acb_graph
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(acb_graph, "get_session", _boom)
+    assert _obs._load_avatars() == {}
+
+
+@pytest.mark.asyncio
+async def test_generate_avatar_503_without_api_key(monkeypatch):
+    monkeypatch.delenv("PIXELLAB_API_KEY", raising=False)
+    with pytest.raises(HTTPException) as ei:
+        await _obs.generate_avatar(_obs.AvatarGenerate(description="a coder"))
+    assert ei.value.status_code == 503
+
+
+@pytest.mark.asyncio
+async def test_generate_avatar_400_on_empty_description(monkeypatch):
+    monkeypatch.setenv("PIXELLAB_API_KEY", "test-key")
+    with pytest.raises(HTTPException) as ei:
+        await _obs.generate_avatar(_obs.AvatarGenerate(description="   "))
+    assert ei.value.status_code == 400

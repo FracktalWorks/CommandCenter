@@ -1,0 +1,38 @@
+{
+  "apis-config": {
+    "south": 4,
+    "north": 9
+  },
+  "orchestrator": {
+    "south": 9,
+    "north": 9
+  },
+  "sales": {
+    "south": 9,
+    "north": 9
+  },
+  "task-manager": {
+    "south": 9,
+    "north": 9
+  },
+  "delivery": {
+    "south": 9,
+    "north": 9
+  },
+  "billing": {
+    "south": 9,
+    "north": 9
+  },
+  "strategy": {
+    "south": 9,
+    "north": 9
+  },
+  "email-assistant": {
+    "south": 9,
+    "north": 9
+  },
+  "reconciler": {
+    "south": 9,
+    "north": 9
+  }
+}

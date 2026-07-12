@@ -1,0 +1,10 @@
+char_seated/
+char_library/
+__pycache__/
+*.pyc
+_*.png
+office-preview.html
+
+honeytan/
+gen3_ids.json
+dir_test/

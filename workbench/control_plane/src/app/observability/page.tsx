@@ -24,11 +24,16 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Users,
+  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server, Sparkles,
 } from "lucide-react";
 
+import { AvatarStudio } from "./avatar-studio";
+import { OFFICE_CAST } from "./office-cast.generated";
+import { TopDownOffice, TOPDOWN_STYLE } from "./office-topdown";
 import { PIXEL_ART_STYLE } from "./pixel";
-import { AgentScene, SCENE_STYLE, type SceneState, WarRoomScene } from "./scene";
+import {
+  type AvatarConfig, SCENE_STYLE,
+} from "./scene";
 
 // ───────────────────────────────────────────────────────────────────────────
 // Types
@@ -47,6 +52,7 @@ interface ActivityEvent {
   run_id?: string;
   source?: string;
   status?: string;
+  tool?: string; // for kind:"tool" events — the tool being called
   duration_ms?: number;
   tokens?: number;
   cost_usd?: number | null;
@@ -60,6 +66,7 @@ interface AgentRow {
   active_runs?: number;
   last_ts?: string | null;
   source?: string | null;
+  avatar?: { config?: Partial<AvatarConfig>; sprite?: string | null } | null;
 }
 
 interface RunRow {
@@ -101,6 +108,13 @@ interface CostData {
 const MAX_FEED = 300;
 const MODEL_TTL_MS = 12_000; // a model counts as "active" for this long after a call
 const AGENT_HOT_MS = 15_000; // an agent glows "working" this long after a start
+const TOOL_TTL_MS = 12_000; // a tool badge lingers this long after its last event
+// Realistic tool names used only by sim mode to demo the per-tool agent badges.
+const SIM_TOOLS = [
+  "read_email", "send_email", "draft_reply", "query_inbox", "web_search",
+  "run_diagnostics", "git_push", "gtd_add_task", "create_diagram",
+  "share_artifact", "ask_questions", "run_command", "schedule_meeting",
+];
 
 // ───────────────────────────────────────────────────────────────────────────
 // Helpers
@@ -207,58 +221,8 @@ const PIXEL_STYLE = `
 `;
 
 // ───────────────────────────────────────────────────────────────────────────
-// Office view
+// Office view — top-down RPG room (office-topdown.tsx) + model-server rack
 // ───────────────────────────────────────────────────────────────────────────
-
-function Desk({
-  agent,
-  hot,
-  onOpen,
-}: {
-  agent: AgentRow;
-  hot: boolean;
-  onOpen: (name: string) => void;
-}) {
-  const working = agent.status === "working" || hot;
-  const sceneState: SceneState =
-    agent.status === "error" ? "error" : working ? "working" : "idle";
-  return (
-    <button
-      onClick={() => onOpen(agent.name)}
-      className={`obs-desk group text-left rounded-xl border p-1.5 pb-2 flex flex-col items-center gap-1.5 w-full overflow-hidden ${
-        working
-          ? "border-amber-500/40 bg-amber-500/5 shadow-[0_0_0_1px_rgba(245,158,11,0.15)]"
-          : "border-border bg-card/60 hover:border-border"
-      }`}
-      title={agent.description || agent.name}
-    >
-      {/* Roomed, layered, configurable agent scene (working / sleeping / error) */}
-      <div className="w-full">
-        <AgentScene name={agent.name} state={sceneState} />
-      </div>
-
-      <div className="obs-pixel text-[11px] font-semibold text-foreground truncate max-w-full">
-        {agent.name}
-      </div>
-      <div className="flex items-center gap-1">
-        <span
-          className={`obs-pixel text-[9px] uppercase px-1.5 py-0.5 rounded border ${
-            working
-              ? "bg-amber-500/15 text-amber-500 border-amber-500/30"
-              : "bg-secondary/50 text-muted-foreground border-border"
-          }`}
-        >
-          {working ? "working" : "sleeping"}
-        </span>
-        {agent.source && working && (
-          <span className={`obs-pixel text-[9px] px-1 py-0.5 rounded border ${sourceClass(agent.source)}`}>
-            {agent.source}
-          </span>
-        )}
-      </div>
-    </button>
-  );
-}
 
 function ServerRack({ blades }: { blades: ModelBlade[] }) {
   return (
@@ -294,74 +258,32 @@ function ServerRack({ blades }: { blades: ModelBlade[] }) {
   );
 }
 
-// When ≥2 agents are working at once (multi-agent orchestration), pull them into
-// a shared "war room" card at a conference table — collaboration made visible.
-function ConferenceCard({ names, onOpen }: { names: string[]; onOpen: (name: string) => void }) {
-  return (
-    <div className="mb-4 rounded-2xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
-      <div className="obs-pixel text-[11px] uppercase tracking-wide text-amber-500 mb-2 flex items-center gap-1.5">
-        <Users size={13} className="obs-led" />
-        War room · {names.length} agents collaborating
-      </div>
-      <div className="flex flex-col sm:flex-row items-center gap-3">
-        <div className="w-full sm:w-80 shrink-0">
-          <WarRoomScene names={names} />
-        </div>
-        <div className="flex flex-wrap gap-1.5 min-w-0">
-          {names.map((n) => (
-            <button
-              key={n}
-              onClick={() => onOpen(n)}
-              className="obs-pixel text-[11px] px-2 py-1 rounded-lg border border-border bg-card/60 text-foreground hover:border-amber-500/40 transition-colors"
-            >
-              {n}
-            </button>
-          ))}
-        </div>
-      </div>
-    </div>
-  );
-}
-
 function OfficeView({
   roster,
   hotAgents,
+  agentTools,
   blades,
   todayCost,
   onOpen,
 }: {
   roster: AgentRow[];
   hotAgents: Set<string>;
+  agentTools: Record<string, string>;
   blades: ModelBlade[];
   todayCost: number;
   onOpen: (name: string) => void;
 }) {
-  const workingNames = roster
-    .filter((a) => a.status === "working" || hotAgents.has(a.name))
-    .map((a) => a.name);
-  const workingCount = workingNames.length;
   return (
     <div className="flex flex-col lg:flex-row gap-4 h-full min-h-0">
-      <div className="obs-room flex-1 min-w-0 overflow-y-auto rounded-2xl border border-border bg-background/40 p-4">
-        <div className="flex items-center justify-between mb-3">
-          <div className="obs-pixel text-[11px] uppercase tracking-wide text-muted-foreground flex items-center gap-1.5">
-            <Building2 size={13} /> The Office · {workingCount}/{roster.length} at work
-          </div>
-          <div className="obs-pixel text-[11px] text-emerald-500 flex items-center gap-1"><Coins size={12} /> Today {fmtCost(todayCost)}</div>
-        </div>
-        {workingCount >= 2 && <ConferenceCard names={workingNames} onOpen={onOpen} />}
-        {roster.length === 0 ? (
-          <div className="flex flex-col items-center justify-center h-48 text-center gap-2">
-            <Building2 size={30} className="text-muted-foreground/50" />
-            <p className="obs-pixel text-sm text-muted-foreground">No agents registered yet.</p>
-          </div>
-        ) : (
-          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-3">
-            {roster.map((a) => (
-              <Desk key={a.name} agent={a} hot={hotAgents.has(a.name)} onOpen={onOpen} />
-            ))}
-          </div>
-        )}
+      <div className="flex-1 min-w-0">
+        <TopDownOffice
+          roster={roster}
+          hotAgents={hotAgents}
+          agentTools={agentTools}
+          todayCost={todayCost}
+          fmtCost={fmtCost}
+          onOpen={onOpen}
+        />
       </div>
       <div className="lg:w-72 shrink-0">
         <ServerRack blades={blades} />
@@ -823,7 +745,7 @@ function AgentDrawer({
 // Page
 // ───────────────────────────────────────────────────────────────────────────
 
-type Tab = "office" | "feed" | "cost" | "history";
+type Tab = "office" | "feed" | "cost" | "history" | "avatars";
 
 export default function ObservabilityPage() {
   const [tab, setTab] = useState<Tab>("office");
@@ -832,10 +754,18 @@ export default function ObservabilityPage() {
   const [cost, setCost] = useState<CostData | null>(null);
   const [models, setModels] = useState<Record<string, ModelBlade>>({});
   const [hotAgents, setHotAgents] = useState<Record<string, number>>({});
+  // name -> the tool that agent is CURRENTLY calling (+ last-seen ts for TTL).
+  const [agentTool, setAgentTool] = useState<Record<string, { tool: string; ts: number }>>({});
   const [connected, setConnected] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [, forceTick] = useState(0);
   const seen = useRef<Set<string>>(new Set());
+  // Simulation mode (`/observability?sim=1`): populate the office with the
+  // pre-generated cast and cycle their states — lets you test the office live
+  // WITHOUT the gateway/roster backend running.
+  const [simMode] = useState(
+    () => typeof window !== "undefined" && new URLSearchParams(window.location.search).has("sim"),
+  );
 
   const pushEvents = useCallback((incoming: ActivityEvent[], prepend: boolean) => {
     if (!incoming.length) return;
@@ -873,11 +803,104 @@ export default function ObservabilityPage() {
         const name = e.agent;
         setHotAgents((prev) => ({ ...prev, [name]: Date.now() }));
       }
+      // Tool-level observability: a kind:"tool" start pins the agent's current tool;
+      // its end (or the agent run ending) clears it.
+      if (e.kind === "tool" && e.agent && e.tool) {
+        const name = e.agent;
+        if (e.phase === "end") {
+          setAgentTool((prev) => {
+            if (prev[name]?.tool !== e.tool) return prev;
+            const { [name]: _drop, ...rest } = prev;
+            return rest;
+          });
+        } else {
+          setAgentTool((prev) => ({ ...prev, [name]: { tool: e.tool as string, ts: Date.now() } }));
+        }
+      }
+      if (e.kind === "agent" && e.agent && e.phase === "end") {
+        const name = e.agent;
+        setAgentTool((prev) => {
+          if (!(name in prev)) return prev;
+          const { [name]: _drop, ...rest } = prev;
+          return rest;
+        });
+      }
     }
   }, []);
 
+  // ── Simulation: drive the office locally without the backend ──────────────
+  useEffect(() => {
+    if (!simMode) return;
+    let alive = true;
+    const names = Object.keys(OFFICE_CAST);
+    // Seed asynchronously (not synchronously in the effect body).
+    const seed = setTimeout(() => {
+      if (!alive) return;
+      setConnected(true);
+      setRoster(
+        names.map((n) => ({ name: n, description: `Simulated ${n}`, status: "idle", source: "chat" })),
+      );
+      const today = new Date().toISOString().slice(0, 10);
+      setCost({
+        days: [{ date: today, cost: 4.2, tokens: 1_200_000, calls: 340, by_model: {} }],
+        by_model: {},
+        by_source: { chat: { cost: 2.1, calls: 180 }, email: { cost: 1.4, calls: 90 }, tasks: { cost: 0.7, calls: 70 } },
+        by_agent: {},
+        totals: { cost: 4.2, tokens: 1_200_000, calls: 340 },
+      });
+    }, 0);
+    const MODELS = [
+      { model: "deepseek/deepseek-chat", tier: "tier-balanced" },
+      { model: "openai/gpt-4o", tier: "tier-powerful" },
+      { model: "anthropic/claude-sonnet-4", tier: "tier-powerful" },
+    ];
+    const roll = (): AgentRow["status"] => {
+      const r = Math.random();
+      return r < 0.42 ? "working" : r < 0.5 ? "error" : "idle";
+    };
+    const id = setInterval(() => {
+      setRoster((prev) => prev.map((a) => (Math.random() < 0.4 ? { ...a, status: roll() } : a)));
+      const m = MODELS[Math.floor(Math.random() * MODELS.length)];
+      const agent = names[Math.floor(Math.random() * names.length)];
+      pushEvents(
+        [
+          { _id: `sim-a-${Date.now()}`, ts: new Date().toISOString(), kind: "agent", phase: "start", agent, source: "chat", model: m.model },
+          { _id: `sim-m-${Date.now()}`, ts: new Date().toISOString(), kind: "model", model: m.model, tier: m.tier, tokens: 800 + Math.floor(Math.random() * 4000), cost_usd: Math.random() * 0.02, source: "chat" },
+        ],
+        true,
+      );
+    }, 2200);
+    return () => {
+      alive = false;
+      clearTimeout(seed);
+      clearInterval(id);
+    };
+  }, [simMode, pushEvents]);
+
+  // Sim: give each working agent a (stable) current tool so the per-tool badges
+  // demo end-to-end without the backend. A tool persists while the agent stays
+  // working and clears when it stops.
+  useEffect(() => {
+    if (!simMode) return;
+    setAgentTool((prev) => {
+      const now = Date.now();
+      const next: Record<string, { tool: string; ts: number }> = {};
+      for (const a of roster) {
+        const working = a.status === "working" || a.name in hotAgents;
+        if (!working) continue;
+        next[a.name] =
+          prev[a.name] ?? {
+            tool: SIM_TOOLS[Math.floor(Math.random() * SIM_TOOLS.length)],
+            ts: now,
+          };
+      }
+      return next;
+    });
+  }, [roster, hotAgents, simMode]);
+
   // Backfill
   useEffect(() => {
+    if (simMode) return;
     let cancelled = false;
     (async () => {
       try {
@@ -891,10 +914,11 @@ export default function ObservabilityPage() {
     return () => {
       cancelled = true;
     };
-  }, [pushEvents]);
+  }, [pushEvents, simMode]);
 
   // Live tail
   useEffect(() => {
+    if (simMode) return;
     const es = new EventSource("/api/observability/activity/stream");
     es.onopen = () => setConnected(true);
     es.onmessage = (ev) => {
@@ -907,10 +931,23 @@ export default function ObservabilityPage() {
     };
     es.onerror = () => setConnected(false);
     return () => es.close();
-  }, [pushEvents]);
+  }, [pushEvents, simMode]);
+
+  // Event-only roster refresh for the Avatar Studio (called from onSaved, never
+  // from an effect body — keeps the set-state-in-effect lint happy).
+  const reloadRoster = useCallback(async () => {
+    try {
+      const res = await fetch("/api/observability/roster");
+      const data = await res.json();
+      if (Array.isArray(data.agents)) setRoster(data.agents);
+    } catch {
+      /* degrade */
+    }
+  }, []);
 
   // Roster + cost polling
   useEffect(() => {
+    if (simMode) return;
     let cancelled = false;
     const loadRoster = async () => {
       try {
@@ -939,7 +976,7 @@ export default function ObservabilityPage() {
       clearInterval(r);
       clearInterval(c);
     };
-  }, []);
+  }, [simMode]);
 
   // Prune stale model blades + hot agents; keep timestamps fresh.
   useEffect(() => {
@@ -963,16 +1000,33 @@ export default function ObservabilityPage() {
         }
         return changed ? next : prev;
       });
+      if (!simMode) {
+        // In sim, tools are synced from the roster; only prune for the live path.
+        setAgentTool((prev) => {
+          const next: Record<string, { tool: string; ts: number }> = {};
+          let changed = false;
+          for (const [k, v] of Object.entries(prev)) {
+            if (now - v.ts < TOOL_TTL_MS) next[k] = v;
+            else changed = true;
+          }
+          return changed ? next : prev;
+        });
+      }
       forceTick((n) => n + 1);
     }, 1500);
     return () => clearInterval(id);
-  }, []);
+  }, [simMode]);
 
   const blades = useMemo(
     () => Object.values(models).sort((a, b) => b.lastTs - a.lastTs),
     [models],
   );
   const hotSet = useMemo(() => new Set(Object.keys(hotAgents)), [hotAgents]);
+  const agentTools = useMemo(() => {
+    const out: Record<string, string> = {};
+    for (const [name, v] of Object.entries(agentTool)) out[name] = v.tool;
+    return out;
+  }, [agentTool]);
   const todayCost = cost?.days.length ? cost.days[cost.days.length - 1].cost : 0;
   const workingNow = roster.filter((a) => a.status === "working" || hotSet.has(a.name)).length;
 
@@ -981,11 +1035,12 @@ export default function ObservabilityPage() {
     { id: "feed", label: "Live feed", Icon: Radio },
     { id: "history", label: "History", Icon: HistoryIcon },
     { id: "cost", label: "Cost", Icon: Coins },
+    { id: "avatars", label: "Avatars", Icon: Sparkles },
   ];
 
   return (
     <div className="flex flex-col h-full max-h-full">
-      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + SCENE_STYLE}</style>
+      <style>{PIXEL_STYLE + PIXEL_ART_STYLE + SCENE_STYLE + TOPDOWN_STYLE}</style>
 
       {/* Header */}
       <header className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border flex-wrap">
@@ -1032,6 +1087,7 @@ export default function ObservabilityPage() {
           <OfficeView
             roster={roster}
             hotAgents={hotSet}
+            agentTools={agentTools}
             blades={blades}
             todayCost={todayCost}
             onOpen={setSelected}
@@ -1050,6 +1106,11 @@ export default function ObservabilityPage() {
         {tab === "cost" && (
           <div className="h-full overflow-y-auto">
             <CostView cost={cost} />
+          </div>
+        )}
+        {tab === "avatars" && (
+          <div className="h-full min-h-0">
+            <AvatarStudio agents={roster} onSaved={reloadRoster} />
           </div>
         )}
       </div>

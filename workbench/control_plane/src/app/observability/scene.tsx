@@ -11,15 +11,19 @@
  * agent gets a fitting avatar with zero config — and any field can be overridden
  * once backend avatar config lands.
  *
- * ── Swap seam for real (e.g. Higgsfield) art ────────────────────────────────
- * This is procedural PLACEHOLDER art. The layer order + anchor grid here is the
- * contract: to use hand-authored/AI sprites, replace each layer's rects with an
- * <image href={dataUri}/> anchored to the same coordinates (see ASSET SPEC in
- * specs/observability_e2.md). States (working/idle/error) and the animation
- * classes (.sc-*) are the only thing the page depends on.
+ * ── Real art seam (Pixel Lab) ───────────────────────────────────────────────
+ * The procedural rects below are the FALLBACK. When a real pixel-art sprite is
+ * available for an agent — a per-role bust from `sprites.generated.ts`, or a
+ * custom per-agent sprite pinned via `config.sprite` (the Avatar Studio) — the
+ * scene renders that sprite as an <image> inside the themed room and keeps the
+ * working / idle / error state animations. `spriteFor()` resolves which. So the
+ * office is real art wherever a sprite exists and gracefully procedural where it
+ * doesn't (e.g. a brand-new agent before its avatar is generated).
  */
 
 import React from "react";
+
+import { ROLE_SPRITES } from "./sprites.generated";
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -39,20 +43,34 @@ export interface AvatarConfig {
   screen: string; screen2: string;
   accentA: string; accentA2: string;
   desk: string; desk2: string;
+  /** Optional real pixel-art sprite (data-URI). When set, the scene renders it
+   *  instead of the procedural character; pinned per-agent by the Avatar Studio. */
+  sprite?: string | null;
+  /** Optional id into the reusable CHARACTER_LIBRARY. When set, the top-down office
+   *  renders that library character's full animated set for the agent. */
+  libraryId?: string | null;
 }
 
 // ── Palettes + deterministic per-agent variation ────────────────────────────
 
-const SKIN = ["#f2c9a0", "#e0a878", "#c68642", "#8d5524", "#ffd9b3", "#e8b48a"];
-const HAIR = ["#2b2b32", "#5a3a22", "#8a5a2b", "#c9a227", "#b0b0b8", "#e8e8ee", "#6a3ea1"];
-const HAIR_STYLES: AvatarConfig["hair"]["style"][] = ["spiky", "bun", "short", "long"];
+export const SKIN = ["#f2c9a0", "#e0a878", "#c68642", "#8d5524", "#ffd9b3", "#e8b48a"];
+export const HAIR = ["#2b2b32", "#5a3a22", "#8a5a2b", "#c9a227", "#b0b0b8", "#e8e8ee", "#6a3ea1"];
+export const HAIR_STYLES: AvatarConfig["hair"]["style"][] = ["spiky", "bun", "short", "long"];
+export const OUTFIT_TYPES: AvatarConfig["outfit"]["type"][] = ["hoodie", "suit", "sweater"];
+export const ACCESSORIES: AvatarConfig["accessory"][] = [null, "glasses", "headset", "beanie"];
+export const WALL_PROPS: AvatarConfig["wallProp"][] = ["window", "board", "whiteboard"];
+export const DESK_PROPS = ["mug", "plant", "papers", "phone", "dual-monitor"] as const;
+/** Selectable outfit colours (a spread of hoodie/suit/sweater tones). */
+export const OUTFIT_COLORS = [
+  "#33507a", "#2b3340", "#c0563f", "#2f7d5f", "#4a5568", "#3a2f52", "#556070", "#7a5230",
+];
 function hash(s: string): number {
   let h = 0;
   for (let i = 0; i < s.length; i++) h = (h * 31 + s.charCodeAt(i)) >>> 0;
   return h;
 }
 
-const ROOMS: Record<string, RoomTheme> = {
+export const ROOMS: Record<string, RoomTheme> = {
   dev: { wall: "#241d33", wall2: "#191426", floor: "#2b2436", floor2: "#221b30", rug: "#3a2d52", rug2: "#463765" },
   sales: { wall: "#20304a", wall2: "#182338", floor: "#8a8f99", floor2: "#767b85", rug: "#2c5c8a", rug2: "#3a70a6" },
   planning: { wall: "#26332b", wall2: "#1c2721", floor: "#b7a888", floor2: "#a3947a", rug: "#6a8f5f", rug2: "#7ba86d" },
@@ -107,6 +125,13 @@ export function deriveAvatar(name: string, override?: Partial<AvatarConfig>): Av
     desk: p.desk, desk2: p.desk2,
   };
   return { ...base, ...override };
+}
+
+/** Resolve the real sprite for an agent, if any: a per-agent pinned sprite wins,
+ *  else the role's generated bust, else null (procedural fallback). */
+export function spriteFor(name: string, config?: AvatarConfig): string | null {
+  if (config?.sprite) return config.sprite;
+  return ROLE_SPRITES[roleFor(name)] ?? null;
 }
 
 // ── Rect helper ──────────────────────────────────────────────────────────────
@@ -205,14 +230,47 @@ function desk(c: AvatarConfig, state: SceneState): Desc[] {
 // ── Public component ─────────────────────────────────────────────────────────
 
 export function AgentScene({
-  name, state, config, className = "",
+  name, state, config, sprite: spriteProp, className = "",
 }: {
   name: string;
   state: SceneState;
   config?: AvatarConfig;
+  /** Explicit sprite control: a data-URI renders that sprite; `null` forces the
+   *  procedural character (ignoring the role sprite); `undefined` auto-resolves
+   *  via `spriteFor` (custom-in-config → role sprite → procedural). */
+  sprite?: string | null;
   className?: string;
 }) {
   const c = config ?? deriveAvatar(name);
+  const sprite = spriteProp === undefined ? spriteFor(name, c) : spriteProp;
+
+  // Real-art path: themed room behind, the pixel sprite as the character (state
+  // animations preserved), a soft contact shadow to ground it on the rug.
+  if (sprite) {
+    return (
+      <svg viewBox="0 0 64 56" shapeRendering="crispEdges" className={`sc-scene ${state} ${className}`}
+        xmlns="http://www.w3.org/2000/svg">
+        {room(c).map((d, i) => renderDesc(d, i))}
+        <ellipse cx={32} cy={53} rx={18} ry={3} fill="#000" opacity={0.22} />
+        <g className="sc-sprite">
+          <image href={sprite} x={6} y={2} width={52} height={54}
+            preserveAspectRatio="xMidYMax meet" style={{ imageRendering: "pixelated" }} />
+        </g>
+        {state === "error" && <rect x={0} y={0} width={64} height={56} fill="#ef4444" opacity={0.14} />}
+        {state === "idle" && (
+          <g className="sc-zzz">
+            <rect x={44} y={8} width={2} height={1} fill="#8b949e" />
+            <rect x={45} y={9} width={1} height={1} fill="#8b949e" />
+            <rect x={44} y={10} width={2} height={1} fill="#8b949e" />
+            <rect x={47} y={5} width={3} height={1} fill="#8b949e" />
+            <rect x={48} y={6} width={1} height={1} fill="#8b949e" />
+            <rect x={47} y={7} width={3} height={1} fill="#8b949e" />
+          </g>
+        )}
+      </svg>
+    );
+  }
+
   const parts = [...room(c), ...character(c, state), ...desk(c, state)];
   return (
     <svg viewBox="0 0 64 56" shapeRendering="crispEdges" className={`sc-scene ${state} ${className}`}
@@ -290,6 +348,10 @@ export const SCENE_STYLE = `
 .sc-scene,.sc-warroom{width:100%;height:auto;image-rendering:pixelated;display:block;border-radius:8px;overflow:hidden}
 .sc-scene.idle{filter:saturate(.55) brightness(.78)}
 .sc-scene.error{animation:sc-shake .45s steps(2) 3}
+/* real sprite: gentle "working" breathe/bob; sleeping settles lower */
+.sc-sprite{transform-box:fill-box;transform-origin:center bottom}
+.sc-scene.working .sc-sprite{animation:sc-spritework 2.6s ease-in-out infinite}
+.sc-scene.idle .sc-sprite{animation:sc-spritebreathe 4.5s ease-in-out infinite}
 .sc-hand-l{transform-box:fill-box;transform-origin:center;animation:sc-t1 .42s steps(2) infinite}
 .sc-hand-r{transform-box:fill-box;transform-origin:center;animation:sc-t2 .42s steps(2) infinite}
 .sc-eyes{transform-box:fill-box;transform-origin:center;animation:sc-blink 4s steps(1) infinite}
@@ -317,5 +379,7 @@ export const SCENE_STYLE = `
 @keyframes sc-shake{0%,100%{transform:translateX(0)}25%{transform:translateX(-2%)}75%{transform:translateX(2%)}}
 @keyframes sc-nod{0%,100%{transform:translateY(0) rotate(0deg)}50%{transform:translateY(-.6px) rotate(-3deg)}}
 @keyframes sc-blinkdot{0%,100%{opacity:1}50%{opacity:.2}}
-@media (prefers-reduced-motion: reduce){.sc-hand-l,.sc-hand-r,.sc-eyes,.sc-glow,.sc-steam,.sc-zzz,.sc-head,.sc-nod,.sc-talk circle,.sc-scene.error{animation:none}}
+@keyframes sc-spritework{0%,100%{transform:translateY(0) rotate(0deg)}30%{transform:translateY(-.5px) rotate(-.6deg)}70%{transform:translateY(-.5px) rotate(.6deg)}}
+@keyframes sc-spritebreathe{0%,100%{transform:translateY(.4px) scale(1)}50%{transform:translateY(1.1px) scale(.994)}}
+@media (prefers-reduced-motion: reduce){.sc-hand-l,.sc-hand-r,.sc-eyes,.sc-glow,.sc-steam,.sc-zzz,.sc-head,.sc-nod,.sc-talk circle,.sc-sprite,.sc-scene.error{animation:none}}
 `;

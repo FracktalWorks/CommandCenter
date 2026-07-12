@@ -1,0 +1,3 @@
+# Intermediate tileset artifacts (regenerable via scripts/characters/gen_env.py + build_env.py).
+# Only the sliced textures floor.png / wall.png are committed.
+_*

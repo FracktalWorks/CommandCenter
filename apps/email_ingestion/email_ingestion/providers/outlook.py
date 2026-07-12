@@ -381,7 +381,11 @@ class OutlookProvider(BaseEmailProvider):
         bcc: list[str] | None = None,
         reply_to_message_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        thread_id: str | None = None,
     ) -> str:
+        # ``thread_id`` (conversationId) is unused: Graph threads a reply via the
+        # /reply action on ``reply_to_message_id``; a fresh sendMail can't be
+        # forced into a conversation, so callers reply-thread through drafts.
         client = await self._get_client()
 
         message: dict[str, Any] = {
@@ -477,12 +481,16 @@ class OutlookProvider(BaseEmailProvider):
         subject: str | None = None,
         body_text: str | None = None,
         body_html: str | None = None,
+        thread_id: str | None = None,
     ) -> str:
         """Update an existing Outlook draft in place (PATCH /me/messages/{id}).
 
         Only the supplied fields are changed. Returns the (unchanged) draft id so
         callers can keep tracking the same provider message — this is what lets
         the editor save repeatedly without spawning duplicate drafts.
+
+        ``thread_id`` is ignored: a Graph reply-draft (createReply) keeps its
+        conversation across a PATCH, so threading needs no re-assertion.
         """
         client = await self._get_client()
         patch: dict[str, Any] = {}

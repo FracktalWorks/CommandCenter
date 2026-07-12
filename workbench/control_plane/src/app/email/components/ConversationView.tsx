@@ -283,17 +283,21 @@ export function DraftCard({
   // the reveal button only for a from-scratch draft.
   const [showCc, setShowCc] = useState(hasReplyTarget || replyAllCc.length > 0);
 
-  /** Flip Reply ↔ Reply All, recomputing To/Cc from the original message. */
+  /** Flip Reply ↔ Reply All, recomputing To/Cc from the original message.
+   *  Reply All reveals the Cc/Bcc fields; Reply (sender only) hides them and
+   *  clears their contents so you don't silently keep other recipients. */
   const applyReplyAll = (next: boolean) => {
     setReplyAll(next);
     dirty.current = true;
     if (next) {
       setTo(replyAllTo.join(", "));
       setCc(replyAllCc.join(", "));
-      if (replyAllCc.length) setShowCc(true);
+      setShowCc(true);
     } else {
       setTo(replyOnlyTo.join(", "));
       setCc("");
+      setBcc("");
+      setShowCc(false);
     }
   };
   const [sending, setSending] = useState(false);
@@ -477,21 +481,21 @@ export function DraftCard({
               type="button"
               onClick={() => applyReplyAll(false)}
               title="Reply to sender only"
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap transition-colors ${
                 !replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <Reply size={11} /> Reply
+              <Reply size={11} className="flex-shrink-0" /> Reply
             </button>
             <button
               type="button"
               onClick={() => applyReplyAll(true)}
               title="Reply to everyone"
-              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] transition-colors ${
+              className={`flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] whitespace-nowrap transition-colors ${
                 replyAll ? "bg-primary text-primary-foreground" : "text-muted-foreground hover:text-foreground"
               }`}
             >
-              <ReplyAll size={11} /> Reply All
+              <ReplyAll size={11} className="flex-shrink-0" /> Reply All
             </button>
           </div>
         )}

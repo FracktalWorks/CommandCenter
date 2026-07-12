@@ -56,6 +56,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [replyTo, setReplyTo] = useState("");
   const [replyCc, setReplyCc] = useState("");
   const [replyBcc, setReplyBcc] = useState("");
+  // Cc/Bcc rows are shown for Reply All (and Forward) and hidden for a
+  // sender-only Reply; the toggle below flips this so the fields appear/vanish
+  // with the reply mode. A manual reveal is offered when they're hidden.
+  const [showReplyCc, setShowReplyCc] = useState(false);
   // AI draft/improve bar (sparkles button in the composer footer).
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
@@ -377,6 +381,8 @@ export function EmailDetail({ email }: EmailDetailProps) {
     // chain is kept separate in `replyQuote`, shown collapsed below the box and
     // reattached on send — so it can never be edited or AI-rewritten by mistake.
     setReplyBody("");
+    // Reveal Cc/Bcc for Reply All / Forward; hide them for a sender-only Reply.
+    setShowReplyCc(mode !== "reply");
     if (mode === "forward") {
       setReplyTo("");
       setReplyCc("");
@@ -432,6 +438,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
         : [];
     setReplyTo(to.join(", "));
     setReplyCc(cc.join(", "));
+    // Reply All reveals Cc/Bcc; narrowing to Reply hides them (and drops Bcc).
+    setShowReplyCc(mode === "reply-all");
+    if (mode === "reply") setReplyBcc("");
     setReplyMode(mode);
     replyDirty.current = true;
   };
@@ -457,6 +466,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyTo("");
     setReplyCc("");
     setReplyBcc("");
+    setShowReplyCc(false);
     setReplyAttachments([]);
     setReplyArtifacts([]);
     setAiOpen(false);
@@ -1009,27 +1019,41 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 placeholder="Recipients (comma-separated)…"
                 className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
               />
+              {/* Reveal Cc/Bcc on a sender-only reply where they're hidden. */}
+              {!showReplyCc && (
+                <button
+                  type="button"
+                  onClick={() => setShowReplyCc(true)}
+                  className="text-[10px] text-muted-foreground hover:text-foreground whitespace-nowrap px-1 flex-shrink-0"
+                >
+                  Cc/Bcc
+                </button>
+              )}
             </div>
-            <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Cc</span>
-              <input
-                type="text"
-                value={replyCc}
-                onChange={(e) => { replyDirty.current = true; setReplyCc(e.target.value); }}
-                placeholder="Cc…"
-                className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
-              />
-            </div>
-            <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
-              <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Bcc</span>
-              <input
-                type="text"
-                value={replyBcc}
-                onChange={(e) => { replyDirty.current = true; setReplyBcc(e.target.value); }}
-                placeholder="Bcc…"
-                className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
-              />
-            </div>
+            {showReplyCc && (
+              <>
+                <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Cc</span>
+                  <input
+                    type="text"
+                    value={replyCc}
+                    onChange={(e) => { replyDirty.current = true; setReplyCc(e.target.value); }}
+                    placeholder="Cc…"
+                    className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                  />
+                </div>
+                <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
+                  <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Bcc</span>
+                  <input
+                    type="text"
+                    value={replyBcc}
+                    onChange={(e) => { replyDirty.current = true; setReplyBcc(e.target.value); }}
+                    placeholder="Bcc…"
+                    className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                  />
+                </div>
+              </>
+            )}
             <textarea
               value={replyBody}
               onChange={(e) => { replyDirty.current = true; setReplyBody(e.target.value); }}

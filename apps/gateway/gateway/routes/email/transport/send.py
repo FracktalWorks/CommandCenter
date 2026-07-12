@@ -167,6 +167,21 @@ async def send_email(
             (sig_row.signature if sig_row else "") or "",
             req.body_text, req.body_html)
 
+        # Resolve the conversation id of the message being replied to so the
+        # provider threads the reply. ``reply_to_message_id`` from the client is
+        # a provider *message* id; Gmail needs the *thread* id (passing a message
+        # id as threadId fails to thread — the "separate email" bug), while
+        # Outlook still replies via the message id. Look it up once and hand both
+        # to the provider, which uses whichever it needs.
+        reply_thread_id: str | None = None
+        if req.reply_to_message_id:
+            trow0 = (await db.execute(text(
+                "SELECT thread_id FROM email_messages "
+                "WHERE account_id = :aid AND provider_message_id = :pmid"
+            ), {"aid": req.account_id,
+                "pmid": req.reply_to_message_id})).fetchone()
+            reply_thread_id = trow0.thread_id if trow0 else None
+
         msg_id = await provider.send_message(
             to=req.to,
             subject=req.subject,
@@ -176,6 +191,7 @@ async def send_email(
             bcc=req.bcc,
             reply_to_message_id=req.reply_to_message_id,
             attachments=attachments,
+            thread_id=reply_thread_id,
         )
 
         # Persist any refreshed/rotated OAuth token from authenticate().
@@ -184,31 +200,25 @@ async def send_email(
             await db.commit()
 
         # If this was a reply, learn from how the user edited the AI's draft.
-        if req.reply_to_message_id and req.body_text:
+        if req.reply_to_message_id and req.body_text and reply_thread_id:
             try:
-                trow = (await db.execute(text(
-                    "SELECT thread_id FROM email_messages "
-                    "WHERE account_id = :aid AND provider_message_id = :pmid"
-                ), {"aid": req.account_id,
-                    "pmid": req.reply_to_message_id})).fetchone()
-                if trow and trow.thread_id:
-                    from gateway.routes.email.automation import (  # noqa: PLC0415
-                        _cleanup_thread_drafts,
-                        _learn_from_sent,
-                        _mark_thread_replied,
-                    )
-                    background.add_task(
-                        _learn_from_sent, req.account_id, trow.thread_id,
-                        req.body_text)
-                    # Move the thread out of "Reply" → Awaiting Reply /
-                    # Done. Pass the just-sent reply so the AI judges the
-                    # thread WITH it (the send isn't mirrored locally yet).
-                    background.add_task(
-                        _mark_thread_replied, req.account_id, trow.thread_id,
-                        req.body_text, req.subject)
-                    # Trash leftover drafts in the thread (AI draft / auto-save).
-                    background.add_task(
-                        _cleanup_thread_drafts, req.account_id, trow.thread_id)
+                from gateway.routes.email.automation import (  # noqa: PLC0415
+                    _cleanup_thread_drafts,
+                    _learn_from_sent,
+                    _mark_thread_replied,
+                )
+                background.add_task(
+                    _learn_from_sent, req.account_id, reply_thread_id,
+                    req.body_text)
+                # Move the thread out of "Reply" → Awaiting Reply /
+                # Done. Pass the just-sent reply so the AI judges the
+                # thread WITH it (the send isn't mirrored locally yet).
+                background.add_task(
+                    _mark_thread_replied, req.account_id, reply_thread_id,
+                    req.body_text, req.subject)
+                # Trash leftover drafts in the thread (AI draft / auto-save).
+                background.add_task(
+                    _cleanup_thread_drafts, req.account_id, reply_thread_id)
             except Exception:  # noqa: BLE001
                 pass
 

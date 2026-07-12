@@ -400,6 +400,59 @@ async def _hydrate_attachments(
         return []
 
 
+class MessageSummariesRequest(BaseModel):
+    ids: list[str]
+
+
+@router.post("/messages/summaries")
+async def message_summaries(
+    req: MessageSummariesRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Resolve a batch of message ids to lightweight row metadata (sender,
+    subject, date, thread) in ONE query — no bodies, no read-state mutation.
+
+    Powers the assistant's categorized email board (``present_email_groups``):
+    the agent supplies the ids it grouped and we hydrate each row's label
+    server-side, so the card is self-contained regardless of which list tool
+    (or none) surfaced the id. Owner-scoped; unknown/foreign ids are omitted.
+    Order follows the input ``ids`` so the agent's grouping is preserved."""
+    ids = [i for i in (req.ids or []) if i]
+    if not ids:
+        return {"summaries": []}
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text(
+                """SELECT em.id, em.thread_id, em.subject, em.from_address,
+                          em.received_at, em.is_read, em.has_attachments
+                   FROM email_messages em
+                   JOIN email_accounts ea ON em.account_id = ea.id
+                   WHERE ea.user_id = :user_id AND em.id = ANY(:ids)"""
+            ),
+            {"user_id": user.email or "anonymous", "ids": ids},
+        )).fetchall()
+        by_id: dict[str, dict[str, Any]] = {}
+        for r in rows:
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            by_id[str(r.id)] = {
+                "id": str(r.id),
+                "thread_id": r.thread_id,
+                "subject": r.subject or "(no subject)",
+                "from": frm.get("name") or frm.get("email") or "(unknown sender)",
+                "from_email": frm.get("email", ""),
+                "received_at": r.received_at.isoformat() if r.received_at else None,
+                "is_read": r.is_read,
+                "has_attachments": r.has_attachments,
+            }
+        # Preserve caller order (and drop ids the user doesn't own).
+        summaries = [by_id[i] for i in ids if i in by_id]
+        return {"summaries": summaries}
+    finally:
+        await db.close()
+
+
 @router.get("/messages/{message_id}", response_model=EmailMessageModel)
 async def get_message(
     message_id: str,

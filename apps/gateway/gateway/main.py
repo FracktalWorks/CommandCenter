@@ -724,6 +724,14 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # BO-1 / A2 — Action Broker approval inbox over the pending_actions queue.
+    from gateway.routes.actions import router as _actions_router
+
+    app.include_router(_actions_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.v1_compat import routers as _v1_routers
 
     for _r in _v1_routers:

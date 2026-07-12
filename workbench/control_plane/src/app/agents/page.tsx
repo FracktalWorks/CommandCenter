@@ -39,11 +39,11 @@ import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 import FilterPills from "@/components/FilterPills";
-import { type LibChar } from "@/app/observability/character-library.generated";
 import {
-  ALL_CHARACTERS,
-  ALL_CHARACTER_IDS,
-} from "@/app/observability/character-registry";
+  CHARACTER_LIBRARY,
+  LIBRARY_IDS,
+  type LibChar,
+} from "@/app/observability/character-library.generated";
 
 // ---------------------------------------------------------------------------
 // Pending commits panel (GitHub Copilot agents only)
@@ -1207,7 +1207,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
     return () => { alive = false; };
   }, [agentName]);
 
-  const chars = ALL_CHARACTER_IDS.map((id) => ALL_CHARACTERS[id]);
+  const chars = LIBRARY_IDS.map((id) => CHARACTER_LIBRARY[id]);
   const roles = Array.from(new Set(chars.map((c) => c.role)));
   const shown = cat === "all" ? chars : chars.filter((c) => c.role === cat);
 
@@ -1240,7 +1240,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
       active ? "border-primary ring-2 ring-primary ring-offset-1 ring-offset-card" : "border-border"
     }`;
 
-  const current = libraryId ? ALL_CHARACTERS[libraryId] : null;
+  const current = libraryId ? CHARACTER_LIBRARY[libraryId] : null;
 
   return (
     <div>
@@ -1297,7 +1297,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
               </button>
             </div>
             <div className="overflow-y-auto p-4">
-              {ALL_CHARACTER_IDS.length === 0 ? (
+              {LIBRARY_IDS.length === 0 ? (
                 <p className="text-[11px] text-muted-foreground/70">
                   No library characters available yet.
                 </p>

@@ -27,7 +27,7 @@ import {
   Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server,
 } from "lucide-react";
 
-import { OFFICE_CAST } from "./office-cast.generated";
+import { CHARACTER_LIBRARY } from "./character-library.generated";
 import { TopDownOffice, TOPDOWN_STYLE } from "./office-topdown";
 import { PIXEL_ART_STYLE } from "./pixel";
 import type { AvatarConfig } from "./scene";
@@ -829,7 +829,10 @@ export default function ObservabilityPage() {
   useEffect(() => {
     if (!simMode) return;
     let alive = true;
-    const names = Object.keys(OFFICE_CAST);
+    // The original per-agent avatars (role "agent") drive the local sim roster.
+    const names = Object.values(CHARACTER_LIBRARY)
+      .filter((c) => c.role === "agent")
+      .map((c) => c.id);
     // Seed asynchronously (not synchronously in the effect body).
     const seed = setTimeout(() => {
       if (!alive) return;

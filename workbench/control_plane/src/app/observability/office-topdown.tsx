@@ -3,8 +3,8 @@
 /**
  * Top-down RPG office — every agent is a real Pixel Lab character SEATED at a desk
  * in one shared, tiled room. Working agents play the seated typing animation; idle
- * ones dim and doze; errors flash red. Sprites come from the pre-generated library
- * (office-cast.generated.ts / public/characters-seated) — selection only, no runtime
+ * ones dim and doze; errors flash red. Sprites come from the single pre-generated
+ * CHARACTER_LIBRARY (character-library.generated.ts) — selection only, no runtime
  * generation.
  *
  * The ROOM is self-scaling: the desk grid uses `auto-fill` so it reflows to any agent
@@ -68,9 +68,7 @@ function toolIcon(tool: string): IconType {
   return Wrench;
 }
 
-import { OFFICE_CAST } from "./office-cast.generated";
 import { CHARACTER_LIBRARY } from "./character-library.generated";
-import { ALL_CHARACTERS } from "./character-registry";
 import { OFFICE_ENV } from "./office-env.generated";
 import { OBJ_SIZES } from "./office-object-sizes.generated";
 import { OFFICE_OBJECTS, type Dir } from "./office-objects.generated";
@@ -221,22 +219,19 @@ const ROLE_TO_CHAR: Record<string, string> = {
   default: "strategy",
 };
 export function characterFor(name: string): string {
-  if (OFFICE_CAST[name]) return name;
+  if (CHARACTER_LIBRARY[name]) return name;
   return ROLE_TO_CHAR[roleFor(name)] ?? "strategy";
 }
 
-// Resolve the sprite set an agent renders with: a library character explicitly
-// assigned in Avatar Studio wins (its full seated/typing/sleeping/breathing set);
-// otherwise fall back to the built-in role cast. LibChar is a structural superset
-// of OfficeChar, so consumers (all optional-chained) read either shape uniformly.
-type CastEntry = Partial<(typeof OFFICE_CAST)[string]> &
-  Partial<(typeof CHARACTER_LIBRARY)[string]>;
+// Resolve the sprite set an agent renders with: a character explicitly assigned in
+// the Agent Settings picker wins (its full seated/typing/sleeping/breathing set);
+// otherwise fall back to the agent's default character. Everything — the role library
+// AND the original per-agent avatars — lives in the ONE CHARACTER_LIBRARY.
+type CastEntry = Partial<(typeof CHARACTER_LIBRARY)[string]>;
 function castFor(agent: OfficeAgent): CastEntry | undefined {
   const libId = agent.avatar?.config?.libraryId;
-  // An explicitly-assigned character can be from EITHER the role library or the
-  // original office cast — both live in the unified registry.
-  if (libId && ALL_CHARACTERS[libId]) return ALL_CHARACTERS[libId];
-  return OFFICE_CAST[characterFor(agent.name)];
+  if (libId && CHARACTER_LIBRARY[libId]) return CHARACTER_LIBRARY[libId];
+  return CHARACTER_LIBRARY[characterFor(agent.name)];
 }
 
 // A small potted plant tucked beside a desk (front-facing sprite), used to green up

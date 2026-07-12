@@ -1,8 +1,8 @@
 /**
  * Agent role mapping + avatar config type for the observability office.
  *
- * The office renders real Pixel Lab pixel-art (office-cast.generated + the
- * character library) via office-topdown.tsx. `roleFor()` maps an agent name to a
+ * The office renders real Pixel Lab pixel-art from the single CHARACTER_LIBRARY
+ * (character-library.generated) via office-topdown.tsx. `roleFor()` maps an agent name to a
  * role so a brand-new agent gets a fitting default character with zero config;
  * `AvatarConfig` is the shape of a per-agent avatar override (now just carries
  * `libraryId` — the assigned library character — plus legacy look fields kept for

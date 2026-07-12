@@ -76,6 +76,19 @@ def test_v1_compat_nonstreaming_emits_priced_model_activation(monkeypatch):
     assert isinstance(ev["cost_usd"], float) and ev["cost_usd"] > 0
 
 
+def test_v1_compat_populates_tier_label_from_alias(monkeypatch):
+    # A tier alias in the request now populates the usage event's tier label,
+    # so the per-tier cost/usage breakdown is no longer blank for agent traffic.
+    captured: list[dict] = []
+    client = _mk_app(monkeypatch, captured)
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "model": "tier-balanced",
+        "messages": [{"role": "user", "content": "hi"}], "stream": False})
+    assert resp.status_code == 200
+    ev = next(e for e in captured if e.get("kind") == "model")
+    assert ev.get("tier") == "tier-balanced"
+
+
 def test_v1_compat_attributes_agent_from_header(monkeypatch):
     # The agent runtime stamps X-CC-Agent / X-CC-Source via default_headers so
     # the model call + cost tie back to the specific agent (not just the app).

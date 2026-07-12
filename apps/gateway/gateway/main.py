@@ -850,8 +850,16 @@ async def embeddings(
         inputs = req.input if isinstance(req.input, list) else [req.input]
         resp = client.embeddings.create(model=req.model, input=inputs)
         return resp.model_dump()
-    # Dummy embedding: 1536-dimensional zero vector.
+    # No embedding provider configured → return a zero vector so Mem0's add()
+    # can still complete, but WARN loudly: semantic search is silently degraded
+    # (every "similarity" is identical), which otherwise looks like memory works
+    # when it doesn't (M13). Set OPENAI_API_KEY to restore real embeddings.
     inputs = req.input if isinstance(req.input, list) else [req.input]
+    _log.warning(
+        "gateway.embeddings_degraded_zero_vector",
+        model=req.model, count=len(inputs),
+        detail="OPENAI_API_KEY unset — returning zero vectors; semantic search disabled",
+    )
     dummy = [0.0] * 1536
     return {
         "object": "list",

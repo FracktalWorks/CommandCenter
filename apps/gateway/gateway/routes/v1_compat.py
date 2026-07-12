@@ -33,17 +33,12 @@ _ALLOW_CALLER_ENDPOINT_OVERRIDE = os.environ.get(
 router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
 router_root = APIRouter(tags=["openai-compat"])
 
-# Tier name → tier id mapping (constant; the model per tier id is dynamic).
-# IMPORTANT: must stay in sync with acb_llm.client._TIER_MODEL.
-# The orchestrator (agents.py, executor.py) passes these alias names as the
-# "model" field — if an alias is missing here, litellm rejects it with
-# "BadRequestError: LLM Provider NOT provided".
-_TIER_NAME_TO_ID: dict[str, str] = {
-    # Model-agnostic tier names (used by settings UI, orchestrator, and agents)
-    "tier-fast": "tier1",
-    "tier-balanced": "tier2",
-    "tier-powerful": "tier3",
-}
+# Tier name → tier id mapping. Single source of truth is
+# acb_llm.client._TIER_ALIAS_MAP (also used by context.py); imported here rather
+# than duplicated so the two can never drift. The orchestrator (agents.py,
+# executor.py) passes these alias names as the "model" field — if an alias is
+# missing, litellm rejects it with "BadRequestError: LLM Provider NOT provided".
+from acb_llm.client import _TIER_ALIAS_MAP as _TIER_NAME_TO_ID  # noqa: E402
 
 
 def _resolve_model(requested: str) -> str:
@@ -166,7 +161,12 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     _obs_source = request.headers.get("x-cc-source") or "chat"
 
     body = await request.json()
-    model = _resolve_model(body.get("model", "tier-balanced"))
+    _requested_model = body.get("model", "tier-balanced")
+    model = _resolve_model(_requested_model)
+    # Preserve the tier alias (if the caller asked for one) so per-tier cost/
+    # usage breakdowns populate — this is the choke point for all agent traffic,
+    # so a blank tier here left the whole per-tier view empty (obs gap).
+    _tier = _requested_model if _requested_model in _TIER_NAME_TO_ID else ""
     messages = body.get("messages", [])
     tools = body.get("tools")
     tool_choice = body.get("tool_choice", "auto")
@@ -270,7 +270,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                         rebuilt = stream_chunk_builder(_chunks, messages=messages)
                         if rebuilt is not None:
                             from acb_llm.client import _emit_usage  # noqa: PLC0415
-                            _emit_usage(model, "", rebuilt,
+                            _emit_usage(model, _tier, rebuilt,
                                         source=_obs_source, agent=_obs_agent)
                     except Exception:  # noqa: BLE001
                         pass
@@ -291,7 +291,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
         # completion. Best-effort; never affects the response.
         try:
             from acb_llm.client import _emit_usage  # noqa: PLC0415
-            _emit_usage(model, "", response, source=_obs_source, agent=_obs_agent)
+            _emit_usage(model, _tier, response, source=_obs_source, agent=_obs_agent)
         except Exception:  # noqa: BLE001
             pass
         return dict(response) if hasattr(response, "items") else response  # type: ignore[return-value]

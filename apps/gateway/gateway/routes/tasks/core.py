@@ -127,6 +127,10 @@ def _get_session_factory():
         _ENGINE = create_async_engine(
             db_url, echo=False, pool_pre_ping=True,
             pool_size=10, max_overflow=20, pool_recycle=1800,
+            # Bound the CONNECT phase (asyncpg's `timeout`) so a slow/unreachable
+            # DB fails fast instead of stalling request handlers — same ceiling
+            # as acb_graph's engine (settings.db_connect_timeout).
+            connect_args={"timeout": settings.db_connect_timeout},
         )
         _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
     return _SESSION_FACTORY

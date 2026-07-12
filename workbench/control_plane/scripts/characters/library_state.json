@@ -106,5 +106,12 @@
     "sleeping": "ec1c277d-4223-4ca7-ae64-6ba21e976618",
     "typing": 9,
     "done": true
+  },
+  "test-coder": {
+    "gender": "",
+    "role": "engineer",
+    "desc": "a developer in a blue hoodie and cap wearing headphones, carrying a laptop bag",
+    "base": "65136a2a-a157-4f62-b228-3e1f584b6e4d",
+    "seated": "e8ed8c75-6b88-4ced-acec-6796c8976b23"
   }
 }

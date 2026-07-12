@@ -263,6 +263,8 @@ These were executed after the audit, each verified against the `848‑passing` b
 | **F7** | Gate the mutation approve/reject/remutate/delete routes and the whole `/memory` router on `require_internal_auth` (401 anonymous) | C2, C6 | Low — every caller is the Next.js proxy forwarding the internal token (verified); read‑only + public‑webhook routes untouched |
 | **F8** | Self‑mutation stages for human approval by default: `_tests_passed("")`→False, auto‑push opt‑in via `MUTATION_AUTO_PUSH` (default off) | H3 | Low — strictly *more* conservative (matches the documented "human must merge" model); unit‑tested helpers |
 | **M7** | Write `agent_run.started_at` at the true run start (was defaulting to ≈ run end, breaking `/observability` ordering) | M7 | Low — contained to `run_trace.py`, `now()` fallback preserves `NOT NULL`; covered by tests |
+| **R1–R4** | Refactor: extract 4 cohesive concerns from the 5,094‑line `executor.py` (`_todo_tracker`, `_copilot_session`, `_tool_injection`, `_model_resolution`) → **4,069 lines**, each re‑exported (no importer changed) | M1 (partial) | Low — behaviour‑preserving whole‑function moves; full suite + trajectory evals green after each |
+| **E1** | Reconcile the email‑assistant `own_tool_scope` with its post‑consolidation tools (pre‑existing failing eval) | (app‑scope drift) | Low — config + stale eval name; trajectory evals now fully green |
 
 All fixes above are on `claude/foundation-architecture-audit-ftur3x`, each verified against the unit suite (grown to **859 passed** with the added regression + auth tests).
 

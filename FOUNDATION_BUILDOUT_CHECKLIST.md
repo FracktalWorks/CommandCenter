@@ -88,9 +88,14 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Missing:** two coexisting runtimes while docs claim MAF is sole and Copilot is sandbox‑only (H6); MAF Workflow engine advertised but unused (M2).
 - **Approach:** Either (a) update `AGENTS.md`/README to acknowledge Copilot‑SDK as a first‑class interactive runtime and define when each is used, or (b) migrate the Copilot‑SDK agents to native MAF. Remove the unused `WorkflowBuilder`/`as_tool()` claims or actually adopt the Workflow engine for the multi‑step pipelines it's advertised for.
 
-### BO‑13 — Break up the executor monolith *(P2)* ☐
-- **Missing:** `run_agent_stream` is one ~1,690‑line function inside a 5,094‑line file (M1).
-- **Approach:** Extract Tier‑1/1.5/2 behind a `Runtime` strategy interface; move HITL parking, session store, and cleanup into collaborators. Then ratchet the xenon absolute ceiling down from F. Regression‑guarded by the existing trajectory evals.
+### BO‑13 — Break up the executor monolith *(P2)* ◑
+- **Done this pass (behaviour‑preserving extractions, each verified green):** the 5,094‑line file is down to **4,069 lines** via four cohesive‑concern extractions, each re‑exported from `executor` so no importer changed:
+  - `orchestrator/_todo_tracker.py` — todo‑SQL parsing.
+  - `orchestrator/_copilot_session.py` — Copilot permission handler + infinite‑session policy.
+  - `orchestrator/_tool_injection.py` — platform tool injection + system‑prompt addendum (~630 lines, the biggest cohesive concern).
+  - `orchestrator/_model_resolution.py` — BYOK model resolution.
+- **Residual:** `run_agent_stream` itself is still a ~1,690‑line function (the 3‑tier dispatch + HITL parking + session store + cleanup). Splitting its BODY safely needs behavioural test scaffolding first (it is woven with shared ContextVars/mutable run‑state), so it was deliberately left for a focused, human‑in‑the‑loop effort.
+- **Approach for the residual:** add golden behavioural coverage of a full streamed run, then extract Tier‑1/1.5/2 behind a `Runtime` strategy interface and move HITL/session‑store/cleanup into collaborators. Then ratchet the xenon absolute ceiling down from F.
 
 ### BO‑14 — Enforce the permission/risk model *(P1)* ☐
 - **Missing:** the injected‑tool gate can never deny (M5); the destructive registry is empty; fail‑closed is a convention, not an invariant.

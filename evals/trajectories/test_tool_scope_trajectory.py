@@ -83,8 +83,9 @@ def test_email_assistant_own_tool_scope_names_are_all_real_baked_tools():
     assert not missing, f"own_tool_scope names not defined in agents.py: {missing}"
     # Must actually shrink the surface (63 baked → far fewer).
     assert len(scope) < 40, f"own_tool_scope not lean enough ({len(scope)} kept)"
-    # Core send/read actions survive.
-    for essential in ("read_email", "draft_reply", "send_reply", "search_emails"):
+    # Core send/read actions survive (post-consolidation the send tool is
+    # send_email / send_draft — the old send_reply was folded away).
+    for essential in ("read_email", "draft_reply", "send_email", "search_emails"):
         assert essential in scope, f"email-assistant own_tool_scope dropped essential {essential}"
 
 

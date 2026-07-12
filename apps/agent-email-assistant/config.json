@@ -24,21 +24,16 @@
     "get_important_emails",
     "read_email",
     "read_thread",
-    "get_full_body_email",
     "find_urgent",
     "find_needs_reply",
-    "get_unread_count",
     "get_account_overview",
     "manage_inbox",
-    "apply_labels",
-    "move_to_folder",
     "list_labels",
     "create_label",
     "draft_reply",
     "send_email",
-    "send_reply",
     "send_draft",
     "find_follow_ups",
-    "get_digest"
+    "digest"
   ]
 }

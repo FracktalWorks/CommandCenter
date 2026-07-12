@@ -50,7 +50,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 ## B. Observability & operability
 
 ### BO‑5 — Real distributed tracing + honest cost tracking *(P1)* ◑
-- **Missing:** OTel is disabled and exports nowhere (H9); the OTLP exporter isn't installed; no collector in infra. Cost tracking reported a false `$0` for tier models (**✅ F4** fixes the $0→unknown correctness bug).
+- **Done this pass:** **✅ F4** (unpriced models report *unknown*, not `$0`); tier label is now populated on agent‑traffic usage events (was blank, so per‑tier cost was empty); `/v1/embeddings` zero‑vector fallback now warns loudly (M13) instead of silently disabling semantic search.
+- **Missing:** OTel is disabled and exports nowhere (H9); the OTLP exporter isn't installed; no collector in infra.
 - **Why needed:** Production requires trace‑level debugging of multi‑agent runs and trustworthy spend numbers; today neither exists end‑to‑end.
 - **Dependencies:** `opentelemetry-exporter-otlp` dep; an `otel-collector` (or Langfuse, already half‑present) service in `docker-compose.yml`; a real price map for the tier models.
 - **Approach:** (1) Add the exporter dep + a collector service (Langfuse or Tempo/Jaeger). (2) Re‑enable MAF instrumentation once a backend exists and fix the ContextVar‑reset bug the kill‑switch was hiding (`executor.py:311`). (3) Set `OTEL_EXPORTER_OTLP_ENDPOINT` in deploy env. (4) Seed real per‑model prices for the tier models (or wire a pricing source) so cost is populated, and stamp the tier label on agent‑path usage (`_emit_usage(model, "", …)` → real tier, `v1_compat.py:245`).
@@ -105,9 +106,10 @@ This is the list of foundational capabilities that are **missing, partially impl
 
 ## E. LLM configuration
 
-### BO‑15 — Single source of truth for tier→model + context windows *(P1)* ☐
-- **Missing:** four disagreeing definitions (M3); `_TIER_CONTEXT_WINDOWS` a stale second copy.
-- **Approach:** Make the DB `model_config` table authoritative; delete `tier_overrides.yaml`, `enabled_models.json`, and the proxy directives in `config.yaml` once seeded; have `settings.py` read windows from `context.py`'s dynamic resolver instead of a hardcoded map. De‑dup the two tier‑alias maps (`client.py:44` / `v1_compat.py:30`).
+### BO‑15 — Single source of truth for tier→model + context windows *(P1)* ◑
+- **Done this pass:** the two hand‑synced tier‑alias maps are collapsed — `v1_compat` now imports `acb_llm.client._TIER_ALIAS_MAP` (the map `context.py` and the tests already use) instead of duplicating it.
+- **Missing:** the tier→**model** mapping still has four disagreeing definitions (M3: `client._TIER_DEFAULTS`, `config.yaml`, `tier_overrides.yaml`, `settings.py` comment); `_TIER_CONTEXT_WINDOWS` a stale second copy of what `context.py` computes.
+- **Approach:** Make the DB `model_config` table authoritative; delete `tier_overrides.yaml`, `enabled_models.json`, and the proxy directives in `config.yaml` once seeded; have `settings.py` read windows from `context.py`'s dynamic resolver instead of a hardcoded map.
 
 ### BO‑16 — Retire the vestigial LiteLLM proxy config *(P3)* ☐
 - **Missing:** `infra/litellm/config.yaml` is a full proxy config but no proxy runs; only its tier rows are read (M6). `provider_models_cache.json` is a rotting committed cache.

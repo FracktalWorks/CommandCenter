@@ -1,7 +1,9 @@
 # Foundation Build‑Out Checklist — CommandCenter
 
-**Date:** 2026-07-11
-**Companion to:** `FOUNDATION_AUDIT_REPORT.md`
+**Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13
+**Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block).
+
+> **🚀 Deploy status:** All ✅/◑ items below are **merged to `main` and LIVE on prod** (`origin/main` = `ccccdc8`, deploy succeeded, VPS + gateway health verified 2026‑07‑13). One local-only commit `1684e1a` (BO‑10 connect_timeout on the gateway engines) is **not yet pushed**. Next recommended P0: **BO‑1** (Action Broker persistence + wiring, Postgres‑unblocked).
 
 This is the list of foundational capabilities that are **missing, partially implemented, or not yet wired up**. It excludes application features. Each item states what is missing, why it matters, what it depends on, a suggested approach, and a recommended priority. Items already addressed in the review pass are marked **✅ done (Fx)** and are retained here for completeness with any residual follow‑up.
 
@@ -74,8 +76,9 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Dependencies:** Alembic; a one‑time baseline of the current schema (`schema.generated.sql` exists as a start).
 - **Approach:** Adopt Alembic (autogenerate baselined against `schema.generated.sql`), run it in `lifespan`/entrypoint, keep the raw files as historical. Add a CI check for unique numeric prefixes until then.
 
-### BO‑10 — Consolidate DB access to one engine/pool *(P2)* ☐
-- **Missing:** three engines (`acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`), the foundational one unconfigured; sync `acb_audit.record()` blocks the async loop (H11).
+### BO‑10 — Consolidate DB access to one engine/pool *(P2)* ◑
+- **Done (Session 2, 2026‑07‑13):** every engine now bounds the CONNECT phase so a slow/unreachable DB can't hang callers — `settings.db_connect_timeout` (default 10s) on `acb_graph.get_engine()` (`ccccdc8`, live in prod) and on the two gateway asyncpg engines via `connect_args={"timeout": …}` (`1684e1a`, committed local, unpushed). This makes `acb_audit.record()`'s "never block the caller" guarantee real against a hung connect. Test: `tests/unit/test_db_connect_timeout.py`.
+- **Missing:** still three+ engines (`acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, plus per‑call engines in `email_ingestion/{scheduler,inbound}.py` that also leak — BO‑9), the foundational one otherwise unconfigured; sync `acb_audit.record()` still blocks the async loop (H11) — connect_timeout bounds the hang but the call is still synchronous.
 - **Approach:** Provide a single configured async engine in `acb_graph` (sized pool), funnel all callers through it, and make `acb_audit.record()` async (or always call via `to_thread`).
 
 ### BO‑11 — Decide `acb_schemas`: wire in or delete *(P2)* ✅

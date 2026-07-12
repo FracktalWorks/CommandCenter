@@ -2,8 +2,47 @@
 
 **Purpose:** everything still needed to finish the foundational audit + fixing, written so it can be picked up on a machine **with Postgres access**. Read this alongside `FOUNDATION_AUDIT_REPORT.md` (findings) and `FOUNDATION_BUILDOUT_CHECKLIST.md` (item tracker). This doc is the *executable* plan — concrete files, DDL, code sketches, test approach, and verification commands.
 
-**Branch:** `claude/foundation-architecture-audit-ftur3x` (all work below builds on it).
+**Branch:** originally `claude/foundation-architecture-audit-ftur3x`; **now merged to `main`** (see status block below).
 **Status at handoff:** 30 commits, unit suite **887 passed**, trajectory evals **118 passed**, both CI blocking gates (ruff-correctness, xenon) green. Everything shipped so far is behaviour-safe and additive/non-breaking.
+
+---
+
+## ⏱️ LATEST STATUS — updated 2026-07-13 (Session 2)
+
+**The whole foundation branch is MERGED to `main`, DEPLOYED, and VERIFIED LIVE on prod.** Everything in Section 0 is running in production.
+
+**Deployment / git state**
+- `origin/main` = **`ccccdc8`** — deployed successfully (GitHub Actions `deploy.yml`, 5m20s) and confirmed live on the VPS (`/opt/acb/app` HEAD = ccccdc8, gateway `/health` = ok).
+  - `1991f43` = the foundation merge (auth/mutation/broker/refactors + office#31-33). Deployed ✅.
+  - `ccccdc8` = **new this session**: DB `connect_timeout` on the `acb_graph` engine (see below). Deployed ✅.
+- **`local main` = `1684e1a`** — one commit **ahead of origin/main, NOT pushed**: extends `connect_timeout` to the two gateway request-path engines (`routes/tasks/core.py`, `routes/email/core.py`). **DECISION PENDING: push (= another ~5min deploy) or batch with the next work.**
+
+**Prod verification done this session (all ✅, read-only):**
+- Migrations applied: `gtd_items.origin` JSONB + index, `agent_avatars`, `agent_run` trace table.
+- **Internal-auth gating (F1/F7):** `/v1/chat/completions` → **401** with no auth *and* with a bogus bearer (does not fail open).
+- **Action Broker (BO-1):** policy correct, **0 handlers registered = inert** (cannot write — as designed).
+- **Executor refactor (BO-13):** re-exports + all 4 extracted submodules import cleanly in prod.
+- **Containment (BO-14)** `resolve_in_workspace` present; **mutation counter (BO-3)** `_register_mutation_attempt` present.
+- `audit_event` table has ~17k rows → the audit happy-path writes fine; the connect_timeout only bounds pathological hangs.
+
+**New robustness fix this session — DB `connect_timeout` (BO-10 partial):**
+- **Problem found:** `acb_audit.record()` promises "never block the caller" and wraps its DB write in try/except, but a hanging TCP/TLS connect is **not** an exception, and the engines had **no connect timeout** → a slow/firewalled DB could hang an agent indefinitely (observed: a unit run wedged 90s on one audit write).
+- **Shipped:** `settings.db_connect_timeout` (default 10s), threaded into `acb_graph.get_engine()` via `_engine_kwargs()` for Postgres URLs only (ccccdc8, LIVE), and into the two gateway asyncpg engines via `connect_args={"timeout": …}` (1684e1a, committed-local-unpushed). Test: `tests/unit/test_db_connect_timeout.py`.
+- **Still open under BO-10:** the per-call async engines in `email_ingestion/{scheduler,inbound}.py` (also leak an engine per call — BO-9), consolidating to **one** shared engine, and making `acb_audit.record()` non-blocking (`async`/`to_thread`).
+
+**⚠️ Windows test-runner caveat (important for the next session):**
+Running the **full** `tests/unit/` on Windows against a live/localhost DB **hangs** — several non-hermetic "unit" tests (`test_memory_e2e`, `test_action_broker` via the audit write, others) make real DB/network connects that **Linux/CI fast-refuses but Windows does not** (Windows doesn't fast-refuse `::1`/`127.0.0.1:5432` with no listener). And pytest-timeout's only Windows method is `thread`, which `os._exit`s the whole run on the first hang. **Workarounds:**
+- Point the DB at a fast-refusing IPv4 and deselect the e2e tests:
+  ```bash
+  DATABASE_URL="postgresql+psycopg://acb:x@127.0.0.1:1/acb" REDIS_URL="redis://127.0.0.1:1/0" \
+  uv run --with pytest-timeout python -m pytest tests/unit/ --timeout=60 --timeout-method=thread \
+    --ignore=tests/unit/test_memory_e2e.py --ignore=tests/unit/test_memory_integration.py \
+    --ignore=tests/unit/test_run_agent_stream_e2e.py --ignore=tests/unit/test_integration_env_scoping.py -q
+  ```
+  → last clean run: **816 passed, 9 deselected, 0 failed**.
+- Or treat **CI (Linux) as the authoritative full-suite oracle** — push the branch and let `pr-check.yml` run it.
+
+**Recommended next work:** **BO-1 Action Broker persistence + wiring (§A2)** — the top P0, now Postgres-unblocked; needs the §B1 authority decision first. Pair with the small remaining BO-10 items above. (Secret rotation **BO-8** is the other P0 but needs owner credentials to rotate the Zoho token.)
 
 ---
 
@@ -159,7 +198,7 @@ Two runtimes coexist (native MAF + GitHub Copilot SDK) while `AGENTS.md` claims 
 | **BO-4** event bus | Redis Streams producer (`ingestion/queue.py`) has **no consumer**; `ingestion.worker` referenced but missing; webhook→agent flow not wired | `apps/ingestion/` | Ship `ingestion/worker.py` (`xreadgroup` loop → dispatch to executor) OR drop the "event bus" claim. Connect provider webhooks → agent dispatch. Needs Redis. |
 | **BO-5** observability | OTel disabled + exporter not installed + no collector | `acb_common` deps, `infra/docker-compose.yml`, `executor` kill-switch | Either add `opentelemetry-exporter-otlp` + a collector (Langfuse half-present under `obs` profile) and re-enable MAF/LiteLLM tracing, or delete the OTel deps + "OTLP-ready" claim. |
 | **BO-9** lifecycle | Fire-and-forget `ensure_future` warmups untracked/never cancelled; no engine/Neo4j dispose on shutdown; Redis per-call in ingestion | `apps/gateway/gateway/main.py`, `ingestion/queue.py` | Hold task refs + cancel after `yield`; create/dispose a shared engine + Redis pool in `lifespan`. |
-| **BO-10** DB engines | 3 engines; base `acb_graph` engine unconfigured; **sync `acb_audit.record()` blocks the event loop** on async paths | `acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, `acb_audit/log.py` | Provide one configured async engine in `acb_graph`; funnel all callers; make `record()` async (or always `to_thread`). |
+| **BO-10** DB engines ◑ | **Partial (Session 2):** `connect_timeout` now on `acb_graph` (live, ccccdc8) + the two gateway engines (local 1684e1a). **Left:** per-call engines in `email_ingestion/{scheduler,inbound}.py`; consolidate to ONE shared async engine; **make sync `acb_audit.record()` non-blocking** (it still blocks the event loop on async paths) | `acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, `email_ingestion/*`, `acb_audit/log.py` | Provide one configured async engine in `acb_graph`; funnel all callers; make `record()` async (or always `to_thread`). |
 | **BO-15** LLM SoT | tier→model still defined in 4 disagreeing places; `_TIER_CONTEXT_WINDOWS` a stale copy | `acb_llm/client.py`, `infra/litellm/*.yaml`, `settings.py`, DB `model_config` | Make DB `model_config` authoritative; delete `tier_overrides.yaml`/`enabled_models.json`/proxy directives once seeded; have `settings.py` read windows from `context.py`. |
 | **BO-16** vestigial proxy | `infra/litellm/config.yaml` is a full proxy config but no proxy runs; `provider_models_cache.json` a rotting committed cache | `infra/litellm/`, `infra/provider_models_cache.json` | Reduce to the tier map (or DB); delete the cache; align `infra/AGENTS.md`. |
 | **BO-7** sandbox | Dynamic agent code runs in-process w/ full gateway privileges; deps install into shared venv | `acb_skills/loader.py` | Run agent execution in the mutation-style container / restricted subprocess w/ per-run venv. Big; security-critical. |
@@ -192,3 +231,5 @@ Track item-level status in `FOUNDATION_BUILDOUT_CHECKLIST.md` (updated live: ✅
 - **Behaviour-preserving refactors** re-export moved symbols so importers don't change (see the R1–R4 executor extractions for the pattern).
 - **Update the checklist** (`FOUNDATION_BUILDOUT_CHECKLIST.md`) status marker with each change.
 - When a combined `pytest tests/unit evals/trajectories` run hangs, it's local-runner contention from orphaned processes — run the two suites separately (they pass cleanly apart).
+- **On Windows, the full `tests/unit/` hangs against a live/localhost DB** (non-hermetic tests + Windows not fast-refusing `::1:5432`). Use the DB-override + deselect recipe in the LATEST STATUS block, or lean on CI (Linux) as the full-suite oracle. Kill orphaned `pytest`/`python` processes between runs (they starve CPU and cause false "hangs").
+- **`git push origin main` = auto-deploy.** Commit freely to `main` locally, but treat every push as a production deploy — get explicit go-ahead, then watch `gh run list --workflow=deploy.yml` + the gateway `/health` on the VPS.

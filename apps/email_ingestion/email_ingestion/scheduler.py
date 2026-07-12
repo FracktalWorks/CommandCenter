@@ -65,6 +65,16 @@ def _get_db_url() -> str:
         )
 
 
+def _connect_timeout() -> int:
+    """Seconds to bound the asyncpg CONNECT phase so a slow/unreachable DB
+    fails fast instead of stalling a sync tick (see settings.db_connect_timeout)."""
+    try:
+        from acb_common.settings import get_settings
+        return get_settings().db_connect_timeout
+    except Exception:
+        return 10
+
+
 # -- Core sync logic (shared with manual /email/sync endpoint) ---------------
 
 
@@ -74,7 +84,9 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
     This is the same logic as POST /email/sync but usable from background tasks.
     """
     db_url = _get_db_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(
+        db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+    )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
     async with session_factory() as db:
@@ -544,7 +556,9 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
 async def _get_account_sync_interval(account_id: str) -> int | None:
     """Read the current sync_interval_secs for an account."""
     db_url = _get_db_url()
-    engine = create_async_engine(db_url, echo=False)
+    engine = create_async_engine(
+        db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+    )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
     try:
         async with session_factory() as db:
@@ -575,7 +589,9 @@ async def start_background_sync() -> dict[str, int]:
             return {}
 
         db_url = _get_db_url()
-        engine = create_async_engine(db_url, echo=False)
+        engine = create_async_engine(
+            db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+        )
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
         try:

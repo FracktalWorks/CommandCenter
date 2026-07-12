@@ -7,7 +7,7 @@ Both were custom-v3 idle animations that misfired. Regenerate ONLY the broken
 direction using Pixel Lab's fixed `breathing-idle` TEMPLATE animation (1 gen /
 direction, a stable skeleton so no walk cycle / no colour glitch), then pack the
 new frames straight into the committed public sheet
-`public/characters-seated/<agent>/breathing/<dir>.png`. ~2 generations total.
+`public/character-library/<agent>/breathing/<dir>.png`. ~2 generations total.
 """
 import json
 import os
@@ -24,7 +24,7 @@ FIXES = [
     ("email-assistant", "f9d86491-7fb9-4d05-a312-1aeb07c273cc", "north"),
     ("strategy", "8201c4bb-29e8-4069-8dd3-c8d5d3209247", "south"),
 ]
-PUB = "../../public/characters-seated"
+PUB = "../../public/character-library"
 _UA = urllib.request.build_opener()
 _UA.addheaders = [("User-Agent", "Mozilla/5.0")]
 

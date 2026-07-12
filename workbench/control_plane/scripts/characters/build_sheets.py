@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """Assemble the original per-agent office avatar ASSETS from char_seated/ into
-public/characters-seated/<agent>/ (seated / working strip / sleeping / standing
+public/character-library/<agent>/ (seated / working strip / sleeping / standing
 rotations / breathing strips).
 
 These agents are folded into the SINGLE character library by build_library.py
@@ -13,7 +13,7 @@ from PIL import Image
 AGENTS = ["orchestrator", "apis-config", "sales", "task-manager", "email-assistant",
           "reconciler", "delivery", "billing", "strategy"]
 SRC = "char_seated"
-PUB = "../../public/characters-seated"
+PUB = "../../public/character-library"
 DIRS = ["south", "east", "north", "west", "south-east", "north-east", "north-west",
         "south-west"]
 
@@ -28,7 +28,7 @@ def main():
         out = f"{PUB}/{a}"
         os.makedirs(out, exist_ok=True)
         Image.open(seated).convert("RGBA").save(f"{out}/seated.png")
-        entry = {"seated": f"/characters-seated/{a}/seated.png"}
+        entry = {"seated": f"/character-library/{a}/seated.png"}
         # Drop any earlier standing breathing-idle sheet (it broke the seated pose).
         for stale in (f"{out}/idle.png",):
             if os.path.exists(stale):
@@ -47,14 +47,14 @@ def main():
                 for i, im in enumerate(imgs):
                     sheet.alpha_composite(im, (i * w, 0))
                 sheet.save(f"{out}/working.png")
-                entry["working"] = f"/characters-seated/{a}/working.png"
+                entry["working"] = f"/character-library/{a}/working.png"
                 entry["workingFrames"] = len(imgs)
 
         # 'sleeping' = asleep-at-desk seated sprite (used when idle).
         sleep_src = f"{SRC}/{a}/sleeping.png"
         if os.path.exists(sleep_src):
             Image.open(sleep_src).convert("RGBA").save(f"{out}/sleeping.png")
-            entry["sleeping"] = f"/characters-seated/{a}/sleeping.png"
+            entry["sleeping"] = f"/character-library/{a}/sleeping.png"
 
         # 'standing' = the base char's 8 rotations (agents standing round the table).
         stand_src = f"{SRC}/{a}/standing"
@@ -66,7 +66,7 @@ def main():
                 p = f"{stand_src}/{dr}.png"
                 if os.path.exists(p):
                     Image.open(p).convert("RGBA").save(f"{sd}/{dr}.png")
-                    stand[dr] = f"/characters-seated/{a}/standing/{dr}.png"
+                    stand[dr] = f"/character-library/{a}/standing/{dr}.png"
             if stand:
                 entry["standing"] = stand
 
@@ -93,7 +93,7 @@ def main():
                 for i, im in enumerate(imgs):
                     sheet.alpha_composite(im, (i * w, 0))
                 sheet.save(f"{bd}/{dr}.png")
-                breathe[dr] = f"/characters-seated/{a}/breathing/{dr}.png"
+                breathe[dr] = f"/character-library/{a}/breathing/{dr}.png"
                 nframes = max(nframes, len(imgs))
             if breathe:
                 entry["breathing"] = breathe

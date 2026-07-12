@@ -1,11 +1,23 @@
 # Pixel-Art Agent Office — Asset Pipeline & Continuation Guide
 
-> **Status:** composition engine + procedural placeholders shipped (see
-> `observability_e2.md` Phases 6.3–6.7). **Real art is pending** — the current
-> environment's egress policy blocks `pixellab.ai`, so sprite generation must
-> continue on a system (SPC) with outbound access to the Pixel Lab API.
-> **This doc is the handoff:** everything needed to generate real sprites and
-> plug them into the existing engine, plus the open TODOs.
+> **Status:** ✅ **Real art SHIPPED** (2026-07-10, Phase 6.8). Pixel Lab was
+> reachable from the operator's own machine (the egress block was only on the
+> web env), so the whole pipeline was unblocked: a real waist-up pixel-art bust
+> per role now renders in the office (`sprites.generated.ts`), plus a full
+> **Avatar Studio** to customize/generate per-agent avatars. See
+> `observability_e2.md` §6.8. This doc remains the reference for the ASSET SPEC,
+> anchors, seam, and how to regenerate the cast.
+>
+> **What shipped:** `scripts/gen_office_sprites.py` (regenerates the 7-role
+> cast), the `spriteFor()` seam in `scene.tsx` (real `<image>` in the themed room
+> with state animations; procedural fallback when no sprite), the `agent_avatars`
+> table (migration 64) + `/observability/avatars` GET/PUT/DELETE/generate
+> endpoints (Pixel Lab key stays server-side), roster merge, and the Avatar
+> Studio tab (live preview · look controls · Pixel Lab generation).
+>
+> **Still open (nice-to-have):** true per-LAYER composition (current sprites are
+> whole busts, not mix-and-match layers — see §4/§5); animation frame-strips;
+> room tilesets; the Higgsfield room-scene path; Langfuse/OTel deep tracing (§8.5).
 
 ---
 
@@ -152,16 +164,30 @@ Lab** for the mix-and-match **character/prop sprite layers**.
 
 ---
 
-## 8. Next-session TODO (in order)
+## 8. TODO — status
 
-1. **On SPC:** set `PIXELLAB_API_KEY`; confirm `pixellab.ai` is reachable.
-2. **Generate** the layer set to the §4 ASSET SPEC; validate each headless.
-3. **Implement the manifest loader + `partSprite()` seam** in `scene.tsx`; embed
-   the generated assets; flip the office to real art.
-4. **Backend avatar config:** per-agent `avatar` block in `config.json` → surface
-   via `/observability/roster` → pass as `deriveAvatar` `override`; add a small
-   config UI in `/agents` (hair/skin/outfit/accessory/props/room).
-5. **Observability plumbing** (independent, high-leverage): wire the **dormant
+1. ~~Set `PIXELLAB_API_KEY`; confirm `pixellab.ai` reachable.~~ ✅ Done — reachable
+   from the operator's machine; key bills in subscription "generations" (USD
+   balance irrelevant). `POST /v1/generate-image-pixflux` is the endpoint.
+2. ~~Generate + validate the cast.~~ ✅ Done — `scripts/gen_office_sprites.py`
+   generates 7 role busts (200×200, `no_background`, waist-up), trims transparent
+   margins, embeds as data-URIs in `sprites.generated.ts`. Validated headless.
+3. ~~Seam in `scene.tsx`; flip the office to real art.~~ ✅ Done — `spriteFor(name,
+   config)` resolves per-agent sprite → role sprite → null; `AgentScene` renders
+   the sprite as an `<image>` in the themed room with a contact shadow + the
+   working/idle/error animations, and falls back to procedural rects when there's
+   no sprite. (This is seam option #1 applied at the whole-character level; the
+   §5 manifest/`partSprite()` per-layer path is still the future upgrade.)
+4. ~~Backend avatar config + config UI.~~ ✅ Done — but via a dedicated
+   `agent_avatars` table (migration 64) keyed by agent name (covers built-ins like
+   `orchestrator`, not just `dynamic_agents`) rather than `config.json`. Endpoints
+   `GET/PUT/DELETE /observability/avatars[/{name}]` + `POST .../generate` (Pixel
+   Lab key server-side). Merged into `/observability/roster` as `avatar:{config,
+   sprite}` → `deriveAvatar` override. UI is the **Avatar Studio** tab on
+   `/observability` (not `/agents`): agent picker · live `AgentScene` preview ·
+   look controls (skin/hair/outfit/accessory/props/room/wall) · Pixel Lab prompt→
+   generate→pin. `avatar-studio.tsx`.
+5. **Observability plumbing** (independent, still open): wire the **dormant
    Langfuse** (LiteLLM native `langfuse` callback, gated on `LANGFUSE_*` keys —
    mirror `acb_llm.client._init_telemetry`), adopt **OTel GenAI semantic
    conventions**, and deep-link our `run_id` ↔ Langfuse `trace_id` (see

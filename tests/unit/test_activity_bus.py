@@ -84,6 +84,43 @@ def test_publish_schedules_write_on_the_running_loop(monkeypatch):
     assert recorded[0]["run_id"] == "r9"
 
 
+def test_tool_event_carries_tool_and_agent(monkeypatch):
+    # Granular observability: a kind:"tool" event must keep the exact `tool` name
+    # and the `agent` it belongs to so /observability can pin the tool's icon on
+    # that agent's avatar. `tool` is a non-inherited field; `agent` inherits from
+    # the run context when the emit site omits it.
+    bind_run_context(run_id="r7", agent="email-assistant", source="email")
+    try:
+        evt = _build_event({"kind": "tool", "phase": "start", "tool": "draft_reply"})
+    finally:
+        clear_run_context()
+    assert evt["kind"] == "tool"
+    assert evt["phase"] == "start"
+    assert evt["tool"] == "draft_reply"
+    assert evt["agent"] == "email-assistant"  # keyed to the office cast member
+
+
+def test_publish_schedules_tool_event(monkeypatch):
+    recorded: list[dict] = []
+
+    async def _fake_axadd(evt):
+        recorded.append(evt)
+
+    monkeypatch.setattr("acb_common.activity._axadd", _fake_axadd)
+
+    async def _run():
+        publish_activity(kind="tool", phase="start", tool="run_diagnostics",
+                         agent="apis-config", run_id="r8")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert recorded, "publish_activity should schedule the tool event write"
+    assert recorded[0]["kind"] == "tool"
+    assert recorded[0]["tool"] == "run_diagnostics"
+    assert recorded[0]["agent"] == "apis-config"
+
+
 def test_publish_never_raises_even_if_shaping_fails(monkeypatch):
     def _boom(_fields):
         raise RuntimeError("shape failed")

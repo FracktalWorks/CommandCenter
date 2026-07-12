@@ -39,6 +39,11 @@ import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 import FilterPills from "@/components/FilterPills";
+import {
+  CHARACTER_LIBRARY,
+  LIBRARY_IDS,
+  type LibChar,
+} from "@/app/observability/character-library.generated";
 
 // ---------------------------------------------------------------------------
 // Pending commits panel (GitHub Copilot agents only)
@@ -1131,6 +1136,232 @@ function AgentTile({
 }
 
 // ---------------------------------------------------------------------------
+// Avatar picker — assign a character from the generated library
+// ---------------------------------------------------------------------------
+
+// Steps a library character's breathing spritesheet (south, N frames) so the
+// picker previews show the same gentle breathing as the office. The sprite frames
+// carry a lot of transparent padding, so we render the sprite ~1.35x the tile and
+// clip it (overflow hidden) — the character reads much bigger without cropping.
+const LIB_PICKER_STYLE = `
+.lib-breathe-wrap { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.lib-breathe { display:block; flex:0 0 auto; image-rendering:pixelated;
+  background-repeat:no-repeat; background-position:0 0;
+  background-size: calc(var(--n) * var(--w)) var(--w);
+  animation: lib-play calc(var(--n) * .2s) steps(var(--n)) infinite; }
+@keyframes lib-play { to { background-position-x: calc(-1 * var(--n) * var(--w)); } }
+@media (prefers-reduced-motion: reduce){ .lib-breathe { animation: none; } }
+`;
+
+function labelizeRole(s: string): string {
+  return s.charAt(0).toUpperCase() + s.slice(1);
+}
+
+function LibBreathingSprite({ char, box, scale = 1.35 }: { char: LibChar; box: number; scale?: number }) {
+  const sheet = char.breathing?.south;
+  const frames = char.breathingFrames;
+  const w = Math.round(box * scale);
+  return (
+    <span className="lib-breathe-wrap" style={{ width: box, height: box }}>
+      {sheet && frames ? (
+        <span
+          className="lib-breathe"
+          style={{
+            width: w,
+            height: w,
+            backgroundImage: `url(${sheet})`,
+            "--n": frames,
+            "--w": `${w}px`,
+          } as React.CSSProperties}
+        />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={char.portrait} alt="" style={{ width: w, height: w, imageRendering: "pixelated" }} />
+      )}
+    </span>
+  );
+}
+
+function AgentAvatarPicker({ agentName }: { agentName: string }) {
+  // undefined = still loading the current assignment; null = default (no library char)
+  const [libraryId, setLibraryId] = useState<string | null | undefined>(undefined);
+  const [open, setOpen] = useState(false);
+  const [cat, setCat] = useState<string>("all");
+  const [saving, setSaving] = useState(false);
+  const [err, setErr] = useState<string | null>(null);
+
+  // The component is keyed by agentName at the render site, so it mounts fresh per
+  // agent (initial state `undefined` = loading) — no synchronous reset needed here.
+  useEffect(() => {
+    let alive = true;
+    (async () => {
+      try {
+        const res = await fetch("/api/observability/avatars");
+        const data = await res.json();
+        const cfg = data?.avatars?.[agentName]?.config as { libraryId?: string | null } | undefined;
+        if (alive) setLibraryId(cfg?.libraryId ?? null);
+      } catch {
+        if (alive) setLibraryId(null);
+      }
+    })();
+    return () => { alive = false; };
+  }, [agentName]);
+
+  const chars = LIBRARY_IDS.map((id) => CHARACTER_LIBRARY[id]);
+  const roles = Array.from(new Set(chars.map((c) => c.role)));
+  const shown = cat === "all" ? chars : chars.filter((c) => c.role === cat);
+
+  const assign = async (id: string | null) => {
+    if (saving) return;
+    const prev = libraryId;
+    setSaving(true);
+    setErr(null);
+    setLibraryId(id); // optimistic
+    try {
+      const url = `/api/observability/avatars/${encodeURIComponent(agentName)}`;
+      const res = id === null
+        ? await fetch(url, { method: "DELETE" })
+        : await fetch(url, {
+            method: "PUT",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ config: { libraryId: id }, sprite: null }),
+          });
+      if (!res.ok) throw new Error(String(res.status));
+    } catch {
+      setLibraryId(prev ?? null);
+      setErr("Couldn't save — try again.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const tileCls = (active: boolean) =>
+    `flex items-center justify-center overflow-hidden rounded-lg border bg-background/40 transition-transform hover:scale-105 ${
+      active ? "border-primary ring-2 ring-primary ring-offset-1 ring-offset-card" : "border-border"
+    }`;
+
+  const current = libraryId ? CHARACTER_LIBRARY[libraryId] : null;
+
+  return (
+    <div>
+      <style>{LIB_PICKER_STYLE}</style>
+      <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Avatar</div>
+
+      {/* Compact trigger — opens the picker in a popup so it doesn't crowd the panel */}
+      <button
+        onClick={() => setOpen(true)}
+        className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-card/40 p-2 text-left transition-colors hover:border-primary/40"
+      >
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background/40">
+          {current ? (
+            <LibBreathingSprite char={current} box={44} />
+          ) : (
+            <Bot size={20} className="text-muted-foreground" />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium text-foreground">
+            {libraryId === undefined
+              ? "Loading…"
+              : current
+              ? [labelizeRole(current.role), current.gender].filter(Boolean).join(" · ")
+              : "Default character"}
+          </span>
+          <span className="block text-[10px] text-muted-foreground">
+            Tap to choose from the library
+          </span>
+        </span>
+        <ChevronRight size={15} className="shrink-0 text-muted-foreground" />
+      </button>
+
+      {/* Popup picker — bottom sheet on mobile, centered dialog on desktop */}
+      {open && (
+        <div
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 sm:items-center sm:p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="mb-14 flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:mb-0 sm:rounded-2xl sm:border"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-foreground">Choose avatar</div>
+                <div className="truncate text-[11px] text-muted-foreground">{agentName}</div>
+              </div>
+              <button
+                onClick={() => setOpen(false)}
+                className="rounded-md p-1 text-muted-foreground hover:bg-secondary transition-colors"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="overflow-y-auto p-4">
+              {LIBRARY_IDS.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/70">
+                  No library characters available yet.
+                </p>
+              ) : (
+                <>
+                  {/* Broad categories + show-all */}
+                  <div className="mb-3 flex flex-wrap gap-1">
+                    {["all", ...roles].map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setCat(r)}
+                        className={`rounded-lg border px-2.5 py-1 text-xs capitalize transition-colors ${
+                          cat === r
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border bg-card/60 text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                        }`}
+                      >
+                        {r === "all" ? "All" : labelizeRole(r)}
+                      </button>
+                    ))}
+                  </div>
+                  {/* Fixed-size tiles in a centered wrap — 3-up on the mobile sheet,
+                      3–4-up on the desktop dialog. Bigger sprites read clearly. */}
+                  <div className="flex flex-wrap justify-center gap-2.5">
+                    {/* Default (no library character — office uses the role default) */}
+                    <button
+                      onClick={() => assign(null)}
+                      disabled={saving}
+                      title="Default role character"
+                      style={{ width: 104, height: 104 }}
+                      className={`${tileCls(libraryId === null)} flex-col gap-1 disabled:opacity-60`}
+                    >
+                      <Bot size={26} className="text-muted-foreground" />
+                      <span className="text-[10px] text-muted-foreground">Default</span>
+                    </button>
+                    {shown.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => assign(c.id)}
+                        disabled={saving}
+                        title={`${[labelizeRole(c.role), c.gender].filter(Boolean).join(" · ")}\n${c.description}`}
+                        style={{ width: 104, height: 104 }}
+                        className={`${tileCls(libraryId === c.id)} disabled:opacity-60`}
+                      >
+                        <LibBreathingSprite char={c} box={98} />
+                      </button>
+                    ))}
+                  </div>
+                  {err && <p className="mt-2 text-[11px] text-destructive">{err}</p>}
+                  <p className="mt-3 text-[11px] text-muted-foreground/70">
+                    Assigned characters appear in the office with their full breathing /
+                    typing / sleeping animation.
+                  </p>
+                </>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
 // AgentSidePanel
 // ---------------------------------------------------------------------------
 
@@ -1272,6 +1503,9 @@ function AgentSidePanel({
             ))}
           </div>
         )}
+
+        {/* Avatar — assign a character from the generated library */}
+        <AgentAvatarPicker key={agent.name} agentName={agent.name} />
 
         {missingDeps.length > 0 && (
           <div className="flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2.5">

@@ -13,10 +13,13 @@
 
 **Deployment / git state**
 - `origin/main` = **`2965944`** — includes the foundation merge (`1991f43`), the `acb_graph` connect_timeout (`ccccdc8`, deployed+verified live), and the two gateway-engine connect_timeouts (`1684e1a`).
-- **`local main` is 2 commits AHEAD of origin/main — NOT pushed** (autonomous Session-2b work, held for review; a push = a prod deploy):
+- **`local main` is 4 commits AHEAD of origin/main — NOT pushed** (autonomous Session-2b work, held for review; a push = a prod deploy):
   - `1ff6c0d` — `connect_timeout` on the four `email_ingestion` async engines (completes BO-10 connect_timeout across every engine).
-  - `e59cc6a` — **A2 additive**: `pending_actions` migration (66) + broker `enqueue/list_pending/approve/reject/submit` + tests (8→17). Purely additive; **no live write path rerouted** (that needs the B1 authority decision), so the broker stays inert.
-- **ACTION FOR NEXT SESSION:** review the 2 local commits, then `git push origin main` (watch `deploy.yml` + `/health`) when ready.
+  - `e59cc6a` — **A2**: `pending_actions` migration (66) + broker `enqueue/list_pending/approve/reject/submit` + tests (8→17).
+  - `0cc5228` — docs for the above.
+  - `9d0888e` — **A2**: gateway `/actions` approval-inbox routes (`GET /actions/pending`, `POST …/approve`, `…/reject`), all `require_internal_auth`-gated + 4 tests. App verified to import with the routes registered.
+  - All additive; **no live write path rerouted** (that needs the B1 authority decision), so the broker stays inert. The new SQL is unit-tested (mocked) but **not yet integration-verified against a live Postgres**.
+- **ACTION FOR NEXT SESSION:** review the 4 local commits + integration-verify against a live PG; then `git push origin main` (watch `deploy.yml` + `/health`) when ready.
 
 **Prod verification done this session (all ✅, read-only):**
 - Migrations applied: `gtd_items.origin` JSONB + index, `agent_avatars`, `agent_run` trace table.
@@ -141,7 +144,7 @@ The **core + persistence layer are built** (`apps/action_broker/action_broker/br
    ```
 2. ~~**`enqueue` / `list_pending` / `approve` / `reject`**~~ ✅ done (`e59cc6a`). `approve()` loads the row → `execute()` → marks `applied`/`failed` + `result`; fails closed on missing/non-pending rows.
 3. ~~**`submit(proposal)`**~~ ✅ done (`e59cc6a`): `AUTO_APPLY`→`execute()`, `NEEDS_APPROVAL`→`enqueue()`, `REJECTED`→refuse.
-4. **Gateway routes** ← **NEXT** (new `apps/gateway/gateway/routes/actions.py`, gated with `require_internal_auth` like the mutation routes): `GET /actions/pending`, `POST /actions/pending/{id}/approve`, `POST /actions/pending/{id}/reject`. Add a Next.js proxy + an inbox pane (mirror the mutation inbox).
+4. ~~**Gateway routes**~~ ✅ done (`9d0888e`): `apps/gateway/gateway/routes/actions.py` — `GET /actions/pending`, `POST …/approve`, `…/reject`, all `require_internal_auth`-gated, registered in `main.py`. **Still to do:** the Next.js proxy + an inbox pane (mirror the mutation inbox).
 5. **Register real handlers** and **route existing writes through the broker** — the actual bypassing sites:
    - ClickUp: `apps/gateway/gateway/routes/tasks/providers.py:261,365` (`http.post`).
    - Email send: `apps/email_ingestion/email_ingestion/providers/{gmail,outlook,imap}.py` (`base.py` send path).

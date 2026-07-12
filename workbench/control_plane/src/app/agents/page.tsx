@@ -1140,10 +1140,14 @@ function AgentTile({
 // ---------------------------------------------------------------------------
 
 // Steps a library character's breathing spritesheet (south, N frames) so the
-// picker previews show the same gentle breathing as the office.
+// picker previews show the same gentle breathing as the office. The sprite frames
+// carry a lot of transparent padding, so we render the sprite ~1.35x the tile and
+// clip it (overflow hidden) — the character reads much bigger without cropping.
 const LIB_PICKER_STYLE = `
-.lib-breathe { display:block; image-rendering:pixelated; background-repeat:no-repeat;
-  background-position:0 0; background-size: calc(var(--n) * var(--w)) var(--w);
+.lib-breathe-wrap { display:flex; align-items:center; justify-content:center; overflow:hidden; }
+.lib-breathe { display:block; flex:0 0 auto; image-rendering:pixelated;
+  background-repeat:no-repeat; background-position:0 0;
+  background-size: calc(var(--n) * var(--w)) var(--w);
   animation: lib-play calc(var(--n) * .2s) steps(var(--n)) infinite; }
 @keyframes lib-play { to { background-position-x: calc(-1 * var(--n) * var(--w)); } }
 @media (prefers-reduced-motion: reduce){ .lib-breathe { animation: none; } }
@@ -1153,25 +1157,29 @@ function labelizeRole(s: string): string {
   return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
-function LibBreathingSprite({ char, size }: { char: LibChar; size: number }) {
+function LibBreathingSprite({ char, box, scale = 1.35 }: { char: LibChar; box: number; scale?: number }) {
   const sheet = char.breathing?.south;
   const frames = char.breathingFrames;
-  if (sheet && frames) {
-    return (
-      <span
-        className="lib-breathe"
-        style={{
-          width: size,
-          height: size,
-          backgroundImage: `url(${sheet})`,
-          "--n": frames,
-          "--w": `${size}px`,
-        } as React.CSSProperties}
-      />
-    );
-  }
-  // eslint-disable-next-line @next/next/no-img-element
-  return <img src={char.portrait} alt="" style={{ height: size, imageRendering: "pixelated" }} />;
+  const w = Math.round(box * scale);
+  return (
+    <span className="lib-breathe-wrap" style={{ width: box, height: box }}>
+      {sheet && frames ? (
+        <span
+          className="lib-breathe"
+          style={{
+            width: w,
+            height: w,
+            backgroundImage: `url(${sheet})`,
+            "--n": frames,
+            "--w": `${w}px`,
+          } as React.CSSProperties}
+        />
+      ) : (
+        // eslint-disable-next-line @next/next/no-img-element
+        <img src={char.portrait} alt="" style={{ width: w, height: w, imageRendering: "pixelated" }} />
+      )}
+    </span>
+  );
 }
 
 function AgentAvatarPicker({ agentName }: { agentName: string }) {
@@ -1228,7 +1236,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
   };
 
   const tileCls = (active: boolean) =>
-    `flex aspect-square items-center justify-center overflow-hidden rounded-lg border bg-background/40 transition-transform hover:scale-105 ${
+    `flex items-center justify-center overflow-hidden rounded-lg border bg-background/40 transition-transform hover:scale-105 ${
       active ? "border-primary ring-2 ring-primary ring-offset-1 ring-offset-card" : "border-border"
     }`;
 
@@ -1244,9 +1252,9 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
         onClick={() => setOpen(true)}
         className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-card/40 p-2 text-left transition-colors hover:border-primary/40"
       >
-        <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background/40">
+        <span className="flex h-12 w-12 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background/40">
           {current ? (
-            <LibBreathingSprite char={current} size={44} />
+            <LibBreathingSprite char={current} box={44} />
           ) : (
             <Bot size={20} className="text-muted-foreground" />
           )}
@@ -1311,16 +1319,19 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
                       </button>
                     ))}
                   </div>
-                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                  {/* Fixed-size tiles in a centered wrap — 3-up on the mobile sheet,
+                      3–4-up on the desktop dialog. Bigger sprites read clearly. */}
+                  <div className="flex flex-wrap justify-center gap-2.5">
                     {/* Default (no library character — office uses the role default) */}
                     <button
                       onClick={() => assign(null)}
                       disabled={saving}
                       title="Default role character"
+                      style={{ width: 104, height: 104 }}
                       className={`${tileCls(libraryId === null)} flex-col gap-1 disabled:opacity-60`}
                     >
-                      <Bot size={22} className="text-muted-foreground" />
-                      <span className="text-[9px] text-muted-foreground">Default</span>
+                      <Bot size={26} className="text-muted-foreground" />
+                      <span className="text-[10px] text-muted-foreground">Default</span>
                     </button>
                     {shown.map((c) => (
                       <button
@@ -1328,9 +1339,10 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
                         onClick={() => assign(c.id)}
                         disabled={saving}
                         title={`${labelizeRole(c.role)} · ${c.gender}\n${c.description}`}
+                        style={{ width: 104, height: 104 }}
                         className={`${tileCls(libraryId === c.id)} disabled:opacity-60`}
                       >
-                        <LibBreathingSprite char={c} size={72} />
+                        <LibBreathingSprite char={c} box={98} />
                       </button>
                     ))}
                   </div>

@@ -45,6 +45,34 @@ _log = get_logger("orchestrator.mutation")
 
 MAX_MUTATION_ATTEMPTS: int = 1  # ADR-021: exactly one commit per failure event
 
+# Per-run mutation-attempt tally. The guarantee "≤ MAX_MUTATION_ATTEMPTS per
+# failure event" was previously only an emergent property of control flow — both
+# call sites pass mutation_attempts=0, so the old `0 >= 1` guard never fired
+# (audit H4). This makes it a REAL enforced counter keyed by run_id, so a
+# re-entry for the same run is actually refused. In-process (a process restart
+# is a fresh slate, which is the correct scope — a human must merge the pending
+# commit before the live system retries anyway).
+_MUTATION_ATTEMPTS: dict[str, int] = {}
+_MUTATION_ATTEMPTS_MAX_KEYS = 10_000  # crude unbounded-growth guard (rare path)
+
+
+def _register_mutation_attempt(run_id: str, explicit_prior: int = 0) -> tuple[bool, int]:
+    """Enforce MAX_MUTATION_ATTEMPTS for *run_id*. Pure except for the counter.
+
+    Combines any caller-supplied ``explicit_prior`` with the internal per-run
+    tally. Returns ``(allowed, attempts_after)``: when allowed it has already
+    recorded this attempt (so a concurrent re-entry for the same run is refused
+    even while the first is still in flight); when not allowed the counter is
+    left unchanged.
+    """
+    prior = max(int(explicit_prior or 0), _MUTATION_ATTEMPTS.get(run_id, 0))
+    if prior >= MAX_MUTATION_ATTEMPTS:
+        return False, prior
+    if len(_MUTATION_ATTEMPTS) > _MUTATION_ATTEMPTS_MAX_KEYS:
+        _MUTATION_ATTEMPTS.clear()  # bound memory; mutations are rare
+    _MUTATION_ATTEMPTS[run_id] = prior + 1
+    return True, prior + 1
+
 
 # ---------------------------------------------------------------------------
 # Public data types
@@ -179,7 +207,8 @@ async def attempt_self_mutation(
     Returns:
         A :class:`MutationResult` describing what happened.
     """
-    if mutation_attempts >= MAX_MUTATION_ATTEMPTS:
+    _allowed, _attempt_no = _register_mutation_attempt(run_id, mutation_attempts)
+    if not _allowed:
         reason = (
             f"max_mutation_attempts={MAX_MUTATION_ATTEMPTS} already reached. "
             "A human must merge the pending PR before the live system can retry."

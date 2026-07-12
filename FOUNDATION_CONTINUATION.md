@@ -12,10 +12,11 @@
 **The whole foundation branch is MERGED to `main`, DEPLOYED, and VERIFIED LIVE on prod.** Everything in Section 0 is running in production.
 
 **Deployment / git state**
-- `origin/main` = **`ccccdc8`** — deployed successfully (GitHub Actions `deploy.yml`, 5m20s) and confirmed live on the VPS (`/opt/acb/app` HEAD = ccccdc8, gateway `/health` = ok).
-  - `1991f43` = the foundation merge (auth/mutation/broker/refactors + office#31-33). Deployed ✅.
-  - `ccccdc8` = **new this session**: DB `connect_timeout` on the `acb_graph` engine (see below). Deployed ✅.
-- **`local main` = `1684e1a`** — one commit **ahead of origin/main, NOT pushed**: extends `connect_timeout` to the two gateway request-path engines (`routes/tasks/core.py`, `routes/email/core.py`). **DECISION PENDING: push (= another ~5min deploy) or batch with the next work.**
+- `origin/main` = **`2965944`** — includes the foundation merge (`1991f43`), the `acb_graph` connect_timeout (`ccccdc8`, deployed+verified live), and the two gateway-engine connect_timeouts (`1684e1a`).
+- **`local main` is 2 commits AHEAD of origin/main — NOT pushed** (autonomous Session-2b work, held for review; a push = a prod deploy):
+  - `1ff6c0d` — `connect_timeout` on the four `email_ingestion` async engines (completes BO-10 connect_timeout across every engine).
+  - `e59cc6a` — **A2 additive**: `pending_actions` migration (66) + broker `enqueue/list_pending/approve/reject/submit` + tests (8→17). Purely additive; **no live write path rerouted** (that needs the B1 authority decision), so the broker stays inert.
+- **ACTION FOR NEXT SESSION:** review the 2 local commits, then `git push origin main` (watch `deploy.yml` + `/health`) when ready.
 
 **Prod verification done this session (all ✅, read-only):**
 - Migrations applied: `gtd_items.origin` JSONB + index, `agent_avatars`, `agent_run` trace table.
@@ -117,8 +118,8 @@ uv run python -m pytest -m integration -q              # NEW: needs the docker s
 - **Keep** the unique-prefix guard test until Alembic fully owns ordering.
 
 ### A2. Action Broker — persistence + wiring (BO-1 residual) *(P0, ~2–3 days; needs §B1 decisions)*
-The **core is built** (`apps/action_broker/action_broker/broker.py`: `decide_disposition`, `propose`, `register_action_handler`, `execute`, all unit-tested). What remains needs the DB + the authority decisions from §B1.
-1. **`pending_actions` table** — mirror `infra/postgres/03_pending_commits.sql`. New migration `infra/postgres/65_pending_actions.sql`:
+The **core + persistence layer are built** (`apps/action_broker/action_broker/broker.py`, all unit-tested, 17 tests). **Done (commit `e59cc6a`, additive, unpushed):** migration `66_pending_actions.sql`, and `enqueue` / `list_pending` / `approve` / `reject` / `submit`. **Remaining = steps 4–5 below** (gateway routes + inbox, then registering real handlers and rerouting the bypassing writes) — these need §B1 and touch live paths, plus **integration verification against a live Postgres** (the mocked unit tests prove the logic, not the SQL against PG).
+1. ~~**`pending_actions` table**~~ ✅ shipped as `infra/postgres/66_pending_actions.sql`. *(Original sketch below for reference.)*
    ```sql
    CREATE TABLE IF NOT EXISTS pending_actions (
        id           UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
@@ -138,9 +139,9 @@ The **core is built** (`apps/action_broker/action_broker/broker.py`: `decide_dis
    );
    CREATE INDEX IF NOT EXISTS pending_actions_status_idx ON pending_actions (status, created_at DESC);
    ```
-2. **`enqueue(proposal)` / `list_pending()` / `approve(id, reviewer)` / `reject(id, reviewer)`** in `broker.py`, mirroring `mutation._register_pending_commit` (`apps/orchestrator/orchestrator/mutation.py:810`) for the INSERT and the mutation approve endpoint for the status transition. `approve()` → set status `approved` → call `execute()` → set `applied`/`failed` + `result`.
-3. **`submit(proposal)`** convenience: `AUTO_APPLY` → `execute()` now; `NEEDS_APPROVAL` → `enqueue()`; `REJECTED` → audit + return.
-4. **Gateway routes** (new `apps/gateway/gateway/routes/actions.py`, gated with `require_internal_auth` like the mutation routes): `GET /actions/pending`, `POST /actions/pending/{id}/approve`, `POST /actions/pending/{id}/reject`. Add a Next.js proxy + an inbox pane (mirror the mutation inbox).
+2. ~~**`enqueue` / `list_pending` / `approve` / `reject`**~~ ✅ done (`e59cc6a`). `approve()` loads the row → `execute()` → marks `applied`/`failed` + `result`; fails closed on missing/non-pending rows.
+3. ~~**`submit(proposal)`**~~ ✅ done (`e59cc6a`): `AUTO_APPLY`→`execute()`, `NEEDS_APPROVAL`→`enqueue()`, `REJECTED`→refuse.
+4. **Gateway routes** ← **NEXT** (new `apps/gateway/gateway/routes/actions.py`, gated with `require_internal_auth` like the mutation routes): `GET /actions/pending`, `POST /actions/pending/{id}/approve`, `POST /actions/pending/{id}/reject`. Add a Next.js proxy + an inbox pane (mirror the mutation inbox).
 5. **Register real handlers** and **route existing writes through the broker** — the actual bypassing sites:
    - ClickUp: `apps/gateway/gateway/routes/tasks/providers.py:261,365` (`http.post`).
    - Email send: `apps/email_ingestion/email_ingestion/providers/{gmail,outlook,imap}.py` (`base.py` send path).
@@ -198,7 +199,7 @@ Two runtimes coexist (native MAF + GitHub Copilot SDK) while `AGENTS.md` claims 
 | **BO-4** event bus | Redis Streams producer (`ingestion/queue.py`) has **no consumer**; `ingestion.worker` referenced but missing; webhook→agent flow not wired | `apps/ingestion/` | Ship `ingestion/worker.py` (`xreadgroup` loop → dispatch to executor) OR drop the "event bus" claim. Connect provider webhooks → agent dispatch. Needs Redis. |
 | **BO-5** observability | OTel disabled + exporter not installed + no collector | `acb_common` deps, `infra/docker-compose.yml`, `executor` kill-switch | Either add `opentelemetry-exporter-otlp` + a collector (Langfuse half-present under `obs` profile) and re-enable MAF/LiteLLM tracing, or delete the OTel deps + "OTLP-ready" claim. |
 | **BO-9** lifecycle | Fire-and-forget `ensure_future` warmups untracked/never cancelled; no engine/Neo4j dispose on shutdown; Redis per-call in ingestion | `apps/gateway/gateway/main.py`, `ingestion/queue.py` | Hold task refs + cancel after `yield`; create/dispose a shared engine + Redis pool in `lifespan`. |
-| **BO-10** DB engines ◑ | **Partial (Session 2):** `connect_timeout` now on `acb_graph` (live, ccccdc8) + the two gateway engines (local 1684e1a). **Left:** per-call engines in `email_ingestion/{scheduler,inbound}.py`; consolidate to ONE shared async engine; **make sync `acb_audit.record()` non-blocking** (it still blocks the event loop on async paths) | `acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, `email_ingestion/*`, `acb_audit/log.py` | Provide one configured async engine in `acb_graph`; funnel all callers; make `record()` async (or always `to_thread`). |
+| **BO-10** DB engines ◑ | **Partial:** `connect_timeout` now on **every** engine — `acb_graph` (ccccdc8), the two gateway engines (1684e1a), and the four `email_ingestion` engines (`1ff6c0d`, local). **Left:** consolidate to ONE shared async engine; **make sync `acb_audit.record()` non-blocking** (still blocks the loop on async paths). | `acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, `email_ingestion/*`, `acb_audit/log.py` | Provide one configured async engine in `acb_graph`; funnel all callers; make `record()` async (or always `to_thread`). |
 | **BO-15** LLM SoT | tier→model still defined in 4 disagreeing places; `_TIER_CONTEXT_WINDOWS` a stale copy | `acb_llm/client.py`, `infra/litellm/*.yaml`, `settings.py`, DB `model_config` | Make DB `model_config` authoritative; delete `tier_overrides.yaml`/`enabled_models.json`/proxy directives once seeded; have `settings.py` read windows from `context.py`. |
 | **BO-16** vestigial proxy | `infra/litellm/config.yaml` is a full proxy config but no proxy runs; `provider_models_cache.json` a rotting committed cache | `infra/litellm/`, `infra/provider_models_cache.json` | Reduce to the tier map (or DB); delete the cache; align `infra/AGENTS.md`. |
 | **BO-7** sandbox | Dynamic agent code runs in-process w/ full gateway privileges; deps install into shared venv | `acb_skills/loader.py` | Run agent execution in the mutation-style container / restricted subprocess w/ per-run venv. Big; security-critical. |

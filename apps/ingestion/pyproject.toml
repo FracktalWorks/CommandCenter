@@ -10,7 +10,6 @@ dependencies = [
     "redis>=5.2",
     "apscheduler>=3.10",
     "acb-common",
-    "acb-schemas",
     "acb-graph",
 ]
 

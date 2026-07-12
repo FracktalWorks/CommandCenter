@@ -13,15 +13,6 @@ def test_settings_load() -> None:
     assert s.database_url.startswith("postgresql")
 
 
-def test_schemas_roundtrip() -> None:
-    from acb_schemas import Person
-
-    p = Person(canonical_name="Jane Doe", email="jane@fracktal.in")
-    dumped = p.model_dump_json()
-    restored = Person.model_validate_json(dumped)
-    assert restored.canonical_name == "Jane Doe"
-
-
 def test_router_tiers() -> None:
     from acb_llm import LLMTier
     from orchestrator.router import pick_tier

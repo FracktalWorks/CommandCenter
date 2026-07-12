@@ -34,6 +34,7 @@ Typical call site (orchestrator.executor)::
 from __future__ import annotations
 
 import json
+import os
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -43,6 +44,34 @@ from acb_common import get_logger, get_settings
 _log = get_logger("orchestrator.mutation")
 
 MAX_MUTATION_ATTEMPTS: int = 1  # ADR-021: exactly one commit per failure event
+
+# Per-run mutation-attempt tally. The guarantee "≤ MAX_MUTATION_ATTEMPTS per
+# failure event" was previously only an emergent property of control flow — both
+# call sites pass mutation_attempts=0, so the old `0 >= 1` guard never fired
+# (audit H4). This makes it a REAL enforced counter keyed by run_id, so a
+# re-entry for the same run is actually refused. In-process (a process restart
+# is a fresh slate, which is the correct scope — a human must merge the pending
+# commit before the live system retries anyway).
+_MUTATION_ATTEMPTS: dict[str, int] = {}
+_MUTATION_ATTEMPTS_MAX_KEYS = 10_000  # crude unbounded-growth guard (rare path)
+
+
+def _register_mutation_attempt(run_id: str, explicit_prior: int = 0) -> tuple[bool, int]:
+    """Enforce MAX_MUTATION_ATTEMPTS for *run_id*. Pure except for the counter.
+
+    Combines any caller-supplied ``explicit_prior`` with the internal per-run
+    tally. Returns ``(allowed, attempts_after)``: when allowed it has already
+    recorded this attempt (so a concurrent re-entry for the same run is refused
+    even while the first is still in flight); when not allowed the counter is
+    left unchanged.
+    """
+    prior = max(int(explicit_prior or 0), _MUTATION_ATTEMPTS.get(run_id, 0))
+    if prior >= MAX_MUTATION_ATTEMPTS:
+        return False, prior
+    if len(_MUTATION_ATTEMPTS) > _MUTATION_ATTEMPTS_MAX_KEYS:
+        _MUTATION_ATTEMPTS.clear()  # bound memory; mutations are rare
+    _MUTATION_ATTEMPTS[run_id] = prior + 1
+    return True, prior + 1
 
 
 # ---------------------------------------------------------------------------
@@ -68,19 +97,22 @@ class MutationResult:
 # ---------------------------------------------------------------------------
 
 def _tests_passed(test_summary: str) -> bool:
-    """Return True when the sandbox test output shows no failures.
+    """Return True ONLY when the sandbox output shows tests demonstrably passed.
 
-    Rules:
-    - Empty / no-tests output → True (nothing failed).
+    A self-mutation must not be treated as verified without POSITIVE evidence
+    that tests ran and passed (audit H3). Previously empty / "no tests" output
+    counted as "passed", so an agent repo with no tests would auto-approve any
+    commit the sandbox produced. Rules now:
+    - Empty / "no tests" / "skipped" output → False (no evidence → needs a human).
     - Any "failed" / "error" / "traceback" keyword → False.
     - Explicit "passed" keyword without failure keywords → True.
     - Ambiguous output → False (require human review).
     """
     if not test_summary:
-        return True
+        return False
     s = test_summary.lower().strip()
     if s in ("no tests", "no tests found", "no test files", "skipped"):
-        return True
+        return False
     failure_words = ("failed", " error", "errors", "traceback", "exception")
     if any(w in s for w in failure_words):
         return False
@@ -88,6 +120,20 @@ def _tests_passed(test_summary: str) -> bool:
         return True
     # Ambiguous — hold for human review
     return False
+
+
+def _auto_push_enabled() -> bool:
+    """Whether a green mutation may push to origin WITHOUT human approval.
+
+    Default OFF (audit H3): the documented governance model is that a human
+    approves every self-mutation before it is pushed (README / AGENTS.md #5).
+    Auto-push is an explicit opt-in escape hatch (``MUTATION_AUTO_PUSH=1``) for
+    trusted, well-tested agent repos. When off, a green commit is staged in the
+    approval inbox as ``pending`` instead of being pushed by ``system:auto``.
+    """
+    return os.environ.get("MUTATION_AUTO_PUSH", "0").strip().lower() in (
+        "1", "true", "yes", "on",
+    )
 
 
 async def _auto_push_commit(agent_dir: str, commit_sha: str) -> bool:
@@ -161,7 +207,8 @@ async def attempt_self_mutation(
     Returns:
         A :class:`MutationResult` describing what happened.
     """
-    if mutation_attempts >= MAX_MUTATION_ATTEMPTS:
+    _allowed, _attempt_no = _register_mutation_attempt(run_id, mutation_attempts)
+    if not _allowed:
         reason = (
             f"max_mutation_attempts={MAX_MUTATION_ATTEMPTS} already reached. "
             "A human must merge the pending PR before the live system can retry."
@@ -204,12 +251,14 @@ async def attempt_self_mutation(
         agent_name, run_id, short_run, telemetry, settings
     )
 
-    # Eval gate: auto-push if tests passed; hold for human review if tests failed.
+    # Eval gate: a green commit is STAGED for human approval by default; it is
+    # pushed automatically only when auto-push is explicitly opted in (H3).
+    # Otherwise every commit — green or not — waits in the approval inbox.
     pending_commit_id: str | None = None
     auto_pushed = False
     if commit_staged and commit_sha and agent_dir:
-        if _tests_passed(test_summary):
-            # Tests green → push immediately without human intervention.
+        if _tests_passed(test_summary) and _auto_push_enabled():
+            # Tests green AND operator opted into auto-push → push immediately.
             auto_pushed = await _auto_push_commit(agent_dir, commit_sha)
 
         commit_status = "approved" if auto_pushed else ("eval_failed" if not _tests_passed(test_summary) else "pending")

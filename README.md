@@ -1,145 +1,118 @@
 # CommandCenter v2
 
-> **Fracktal Works** — a distributed, self-mutating agent platform. Every specialist agent lives in its own GitHub repository. Every skill is a pip-installable Python package in its own repo. The Core engine dynamically clones agent and skill repos at runtime, executes tasks via the Microsoft Agent Framework (MAF) runtime, and — when errors occur — spawns a GitHub Copilot SDK mutation container that opens a GitHub PR against the failing agent's own repo so humans can review and merge the fix.
+> **Fracktal Works** — a headless, self‑mutating multi‑agent orchestration platform. Specialist agents live in their own GitHub repositories; skills are pip‑installable Python packages. The Core engine dynamically clones agent and skill repos at runtime, executes tasks on the **Microsoft Agent Framework (MAF)** runtime, and — when a repo is structurally broken — spawns an isolated GitHub Copilot SDK mutation container that patches the failing agent's own repo and stages the fix for human review.
 
 ---
 
 ## What is CommandCenter?
 
-CommandCenter is the operating system for Fracktal Works. It coordinates a fleet of specialist AI agents (sales, triage, delivery, billing, reconciler, strategy) over company data in ClickUp, Zoho CRM, Odoo ERP, Gmail, WhatsApp, and meetings — with full human-in-the-loop approval for all writes.
+CommandCenter is the operating system for Fracktal Works. It coordinates a fleet of specialist AI agents (sales, triage, delivery, billing, reconciler, strategy, task‑manager, email‑assistant) over company data in ClickUp, Zoho CRM, Odoo ERP, Gmail/IMAP, and meetings — with human‑in‑the‑loop approval for outward writes.
 
-**Architecture in one sentence:** A FastAPI Core server listens for events, dynamically clones the target `agent-<name>` repository and its declared `skill-<name>` dependencies, imports the agent's `agents.py` at runtime via `importlib`, and runs the agents on the Microsoft Agent Framework (MAF) runtime.
+**Architecture in one sentence:** A FastAPI gateway receives chat / webhook / cron events, dynamically clones the target `agent-<name>` repository and its declared `skill-<name>` dependencies, imports the agent's `agents.py` at runtime via `importlib`, and runs it on the MAF runtime — either as a native MAF `ChatAgent` (routed through the gateway's own OpenAI‑compatible `/v1` endpoint via the LiteLLM SDK) or, for Copilot‑SDK‑backed agents, via `agent_framework_github_copilot`.
 
-**Self-mutation:** when a skill or agent fails, a `Self_Mutation_Node` in the LangGraph clones the failing agent's own repo, reads the error telemetry, proposes a code fix, runs tests, and opens a GitHub PR. `max_mutation_attempts = 1` per failure event. A human must merge the PR before the live system adopts the change.
+**Self‑mutation:** when an agent repo fails to load or run (structural incompatibility), the orchestrator spawns a Docker mutation sandbox that drives the Copilot SDK to read the error telemetry, propose a code fix, and produce a commit. The commit is staged to the Control Plane approval inbox — **a human approves before it is pushed.**
 
-**No in-app editor:** agents and skills are developed in VS Code (locally or via GitHub Codespaces), committed to their respective repos, and merged through the standard PR flow. The Control Plane is for chat, HITL approvals, and observability — not editing.
+**No in‑app editor:** agents and skills are developed in VS Code (locally or via GitHub Codespaces), committed to their repos, and merged through the standard PR flow. The Control Plane is for chat, HITL approvals, and observability — not editing.
 
 ---
 
-## Distributed Repo Layout
+## Distributed repo layout
 
 ```
-FracktalWorks/CommandCenter-Core        ← This repo: Core engine + infra
-FracktalWorks/agent-task-manager        ← Agent: ClickUp task management
-FracktalWorks/agent-sales               ← Agent: Zoho CRM sales workflows
-FracktalWorks/agent-delivery            ← Agent: project delivery + push
-FracktalWorks/agent-triage              ← Agent: email/WhatsApp/meeting triage
-FracktalWorks/agent-reconciler          ← Agent: nightly source-of-truth diff
-FracktalWorks/agent-strategy            ← Agent: weekly digest + planning
-FracktalWorks/skill-clickup-sync        ← Skill: ClickUp read/write via MCP
-FracktalWorks/skill-zoho-ingest         ← Skill: Zoho CRM webhooks + REST
-FracktalWorks/skill-gmail-capture       ← Skill: Gmail Pub/Sub ingest
-FracktalWorks/skill-whatsapp-send       ← Skill: WhatsApp Meta Cloud API
-FracktalWorks/skill-meeting-transcribe  ← Skill: Vexa + WhisperX + Pyannote
-FracktalWorks/skill-graph-write         ← Skill: entity graph upsert
-FracktalWorks/skill-action-broker       ← Skill: approval queue + audit writes
+FracktalWorks/CommandCenter          ← This repo: Core engine + infra
+FracktalWorks/agent-task-manager     ← Agent: ClickUp task management
+FracktalWorks/agent-sales            ← Agent: Zoho CRM sales workflows
+FracktalWorks/agent-delivery         ← Agent: project delivery + push
+FracktalWorks/agent-triage           ← Agent: email/WhatsApp/meeting triage
+FracktalWorks/agent-reconciler       ← Agent: nightly source-of-truth diff
+FracktalWorks/agent-strategy         ← Agent: weekly digest + planning
+FracktalWorks/skill-*                ← Skills: pip-installable Python packages
 ```
 
-Each **agent repo** contains: `config.json` (model tier, budget, triggers, required skills), `graph.py` (LangGraph StateGraph), `instructions.md` (persona), `tests/`, `evals/`.
+Each **agent repo** contains: `config.json` (runtime, model tier, tool scope, required skills, triggers), `agents.py` (a `build_agents()` factory returning the MAF/Copilot agent list), `instructions.md` (persona), `tests/`, `evals/`.
 
-Each **skill repo** is a Python package — pip-installable, single well-typed entry function, `tests/`, `evals/`.
+Each **skill repo** is a Python package — pip‑installable, well‑typed entry functions, `tests/`, `evals/`.
 
 ---
 
 ## Architecture overview
 
 ```
-[ Webhook / Cron Event ]
-         │
-         ▼
-┌─────────────────────────────────────────────────┐
-│  1. Core Engine: FastAPI (CommandCenter-Core)   │
-│  • Listens for events                           │
-│  • Clones agent-<name> + skill repos from GitHub│
-│  • Imports agents.py via importlib at runtime   │
-└────────────────────────┬────────────────────────┘
-                         │
-                         ▼
-┌────────────────────────────────────────────┐
-│  2. Orchestration: MAF workflow engine          │
-│  • Runs the agent's MAF workflow                 │
-│  • Persists state + error telemetry to Postgres │
-│  • Routes to Self_Mutation_Node on failure      │
-└────────────────────────┬────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────┐
-│  3. Self-mutation: Copilot SDK container         │
-│  • Dev sandbox: agent fixes own code → opens PR │
-│  • acb-mutation-runner, destroyed after each run│
-└─────────────────────────────────────────────────┘
+[ Webhook / Cron / Chat event ]
+              │
+              ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 1. Gateway: FastAPI (apps/gateway)                          │
+│    • Receives events; /copilot/chat (AG-UI) + /v1 (OpenAI)  │
+│    • Dynamically clones agent-<name> + skill repos          │
+│    • Imports agents.py via importlib at runtime             │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 2. Orchestrator: MAF runtime (apps/orchestrator)            │
+│    • executor.run_agent_stream — 3-tier dispatch:           │
+│        Tier 1   native MAF ChatAgent (→ gateway /v1)        │
+│        Tier 1.5 GitHub Copilot SDK (interactive)            │
+│        Tier 2   batch shim fallback                         │
+│    • Streams AG-UI events; tees to Redis for reconnect      │
+│    • On structural failure → mutation sandbox               │
+└───────────────────────────┬─────────────────────────────────┘
+                            │
+                            ▼
+┌─────────────────────────────────────────────────────────────┐
+│ 3. Self-mutation: Copilot SDK container (docker run --rm)   │
+│    • Patches the failing repo → commit                      │
+│    • Staged to the approval inbox (human approves the push) │
+└─────────────────────────────────────────────────────────────┘
 ```
 
 **Key principles:**
-- **Source of truth = ClickUp/Zoho/Odoo.** The Core is a read-mostly mirror; writes are approval-gated.
+- **Source of truth = ClickUp / Zoho / Odoo.** The Core is a read‑mostly mirror; outward writes are approval‑gated.
 - **Decoupled repositories.** Each agent and skill is an independent GitHub repo, versioned and tested independently.
-- **Dynamic loading.** Core never needs a redeploy to adopt new agent logic — repos are cloned at event time.
-- **Self-mutation with a human gate.** Agents propose their own bug fixes via PRs; `max_mutation_attempts = 1`; humans must merge.
-- **Git is the source of truth** for all agent-editable artefacts (`graph.py`, `instructions.md`, skill packages, model-routing config). All changes are PRs with an eval gate.
+- **Dynamic loading.** Core adopts new agent logic on the next event — repos are cloned/pulled at event time (no redeploy).
+- **Self‑mutation with a human gate.** A structurally broken repo gets an auto‑proposed fix; a human approves before it is pushed.
+- **Git is the source of truth** for all agent‑editable artefacts (`agents.py`, `instructions.md`, skill packages, model‑routing config).
+
+> **Runtime note:** MAF is the primary runtime. Copilot‑SDK‑backed agents (`agent_framework_github_copilot`) run interactive tasks as well as the mutation sandbox — see `AGENTS.md` for the current runtime policy.
 
 ---
 
-## This repo layout (CommandCenter-Core)
+## This repo layout (CommandCenter Core)
 
 ```
-ai-company-brain/        # Planning docs — start here
-  AGENTS.md              # Navigation + current build status (read first)
-  project_plan.md        # Requirements + roadmap + WBS (single source)
+ai-company-brain/        # Planning docs — start with AGENTS.md
+  project_plan.md        # Requirements + roadmap + WBS
   system_architecture.md # C4 diagrams, data model, ADRs
-  agent_repo_compatibility.md  # How to build a compatible agent repo
-  reference.md           # MAF / Copilot SDK / memory library notes
-  specs/                 # Per-feature specs (email app, chat UX, etc.)
+  reference.md           # MAF / Copilot SDK / memory notes
+  specs/                 # Per-feature specs
 
-apps/                    # Deployable services (one container each)
-  gateway/               # FastAPI + Google SSO — event routing, pull queries, approvals
-  orchestrator/          # LangGraph executor, Dynamic Agent Loader (importlib), PostgresSaver
-  ingestion/             # ClickUp / Zoho / Gmail / WhatsApp / meeting ingest workers
-  reconciler/            # Nightly diff + escalation queue
-  action_broker/         # Approval queue + audit + source-of-truth write executor
-  escalation_ui/         # Lightweight escalation surface
+apps/                    # Deployable services / app modules
+  gateway/               # FastAPI: events, /v1 LLM proxy, approvals, email + tasks routes
+  orchestrator/          # MAF executor, dynamic agent loader, self-mutation
+  ingestion/             # ClickUp / Zoho / Gmail webhook receivers + queue
+  email_ingestion/       # Email sync workers (Gmail / Outlook / IMAP)
+  reconciler/            # Nightly diff + escalation
+  action_broker/         # Approval-gated source-of-truth write executor (see AGENTS.md)
+  agent-*/               # First-party agents shipped in-repo
 
 packages/                # Shared Python libs (uv workspace members)
-  acb_common/            # Settings, logging, OTel bootstrap
-  acb_schemas/           # Pydantic models for the entity graph
+  acb_common/            # Settings, structlog logging, Redis activity/cost feed
+  acb_schemas/           # Pydantic entity models
   acb_graph/             # Postgres + pgvector access layer
-  acb_llm/               # LiteLLM client + tiered routing + guardrails
+  acb_llm/               # LiteLLM SDK client + tiered routing + BYOK key store + guardrails
   acb_audit/             # Append-only audit log
-  acb_skills/            # Skill repo cloning + dynamic import helpers
-  acb_auth/              # Auth helpers (Google SSO)
+  acb_skills/            # Skill/agent loader, tool injection, permission policy, integrations
+  acb_memory/            # mem0 (episodic) + graphiti (bi-temporal KG) + session cache
+  acb_auth/              # Auth helpers (header-trust SSO + internal token)
 
-infra/                   # docker-compose, Postgres init SQL, LiteLLM config
-workbench/               # Next.js Control Plane (chat, observability, HITL approvals)
-  control_plane/         # Next.js 16 + CopilotKit + AG-UI (port 3001)
-ide/                     # Forked Eclipse Theia (L1 IDE shell)
-evals/                   # Promptfoo + Inspect AI evaluation harness
-deploy/                  # Hostinger VPS + Caddy deploy scripts
-scripts/                 # One-off ops / migration helpers
-tests/                   # Cross-cutting integration + unit tests
-```
-
----
-
-## Running locally
-  escalation_ui/         # Lightweight escalation surface
-
-packages/                # Shared Python libs (uv workspace members)
-  acb_common/            # Settings, logging, OTel bootstrap
-  acb_schemas/           # Pydantic models for the entity graph
-  acb_graph/             # Postgres + pgvector access layer
-  acb_llm/               # LiteLLM client + tiered routing + guardrails
-  acb_audit/             # Append-only audit log (input for the Annealer)
-  acb_skills/            # Skills runtime loader
-  acb_auth/              # Auth helpers (Google SSO)
-
-infra/                   # docker-compose, Postgres init SQL, LiteLLM config
+infra/                   # docker-compose, Postgres init/migrations, LiteLLM tier config
 skills/                  # Anthropic SKILL.md registry
-workbench/               # Next.js Control Plane (Phase 0.5+)
-  control_plane/         # Next.js 16 + CopilotKit + AG-UI (port 3001)
-ide/                     # Forked Eclipse Theia (L1 IDE shell)
-evals/                   # Promptfoo + Inspect AI evaluation harness
+workbench/control_plane/ # Next.js Control Plane (chat, observability, HITL approvals)
+evals/                   # Promptfoo + Inspect AI + golden trajectory evals
 deploy/                  # Hostinger VPS + Caddy deploy scripts
-scripts/                 # One-off ops / migration helpers
-tests/                   # Cross-cutting integration + unit tests
+scripts/                 # Ops / migration helpers
+tests/                   # Cross-cutting unit + integration tests
 ```
 
 ---
@@ -155,24 +128,25 @@ tests/                   # Cross-cutting integration + unit tests
 | Docker + Docker Compose | latest | Infra stack |
 | Node.js | 20+ | Control plane (`workbench/`) |
 
-### 1. Install Python workspace
+### 1. Install the Python workspace
 
-```powershell
+```bash
 uv sync
 ```
 
 ### 2. Configure environment
 
-```powershell
-Copy-Item .env.example .env
-# Edit .env — fill in LiteLLM keys, model provider secrets, etc.
+```bash
+cp .env.example .env
+# Edit .env — set LITELLM_MASTER_KEY, ACB_MASTER_KEY, provider secrets, etc.
 ```
 
 ### 3. Start the infra stack
 
-```powershell
-# Core (Postgres, Redis, LiteLLM)
-docker compose -f infra/docker-compose.yml --profile core up -d
+```bash
+docker compose -f infra/docker-compose.yml up -d
+# then apply the numbered SQL migrations (compose only auto-loads 00/01):
+bash scripts/apply_migrations.sh
 ```
 
 Services once running:
@@ -181,11 +155,12 @@ Services once running:
 |---|---|
 | Postgres (pgvector) | `localhost:5432` |
 | Redis | `localhost:6379` |
-| LLM routing | Gateway /v1 (litellm Python SDK directly — no separate proxy) |
+| Neo4j (optional; graphiti) | `localhost:7687` |
+| LLM routing | in‑process **LiteLLM SDK** via the gateway `/v1` endpoint (no separate proxy) |
 
 ### 4. Start the gateway
 
-```powershell
+```bash
 uv run uvicorn gateway.main:app --reload --host 0.0.0.0 --port 8000 --app-dir apps/gateway
 ```
 
@@ -193,18 +168,15 @@ uv run uvicorn gateway.main:app --reload --host 0.0.0.0 --port 8000 --app-dir ap
 
 ### 5. Start the Control Plane
 
-```powershell
-Set-Location workbench/control_plane
+```bash
+cd workbench/control_plane
 npm run dev          # http://localhost:3001
 ```
 
-Control Plane panes:
-
 | Pane | Path | Description |
 |---|---|---|
-| Chat / Agent Inbox | `/` | CopilotKit + AG-UI (MAF agents); HITL queue |
-| Observability | `/observability` | Audit log, spend, mutation PR history |
-| Workflows | `/workflows` | MAF workflow view (coming L3) |
+| Chat / Agent Inbox | `/` | CopilotKit + AG‑UI (MAF orchestrator); HITL queue |
+| Observability | `/observability` | Activity feed, spend, mutation approval history |
 
 ---
 
@@ -214,8 +186,9 @@ Control Plane panes:
 |---|---|
 | Lint | `uv run ruff check .` |
 | Format | `uv run ruff format .` |
-| Type-check | `uv run mypy apps packages` |
-| Tests | `uv run pytest` |
+| Type‑check | `uv run mypy apps packages` |
+| Tests (unit) | `uv run pytest tests/unit/` |
+| Tests (all, needs docker stack) | `uv run pytest -m integration` |
 | Coverage | `uv run pytest --cov=apps --cov=packages` |
 | Add dep to a package | `uv add --package <name> <dep>` |
 | Upgrade lockfile | `uv lock --upgrade` |
@@ -229,42 +202,42 @@ See [`Makefile`](Makefile) for convenience targets.
 
 | Layer | Technology |
 |---|---|
-| IDE shell | Eclipse Theia (forked, browser target) |
-| Control plane | Next.js 16, React 19, Tailwind v4, CopilotKit, AG-UI |
-| Orchestration | Microsoft Agent Framework (MAF) |
-| Dynamic loading | Python `importlib` + `sys.path.append()` (per-run agent clone) |
-| Self-mutation | GitHub Copilot SDK (mutation container only) |
-| LLM routing | Gateway /v1 via litellm SDK + Anthropic/OpenAI/DeepSeek/Copilot models |
+| Control plane | Next.js 16, React 19, Tailwind v4, CopilotKit, AG‑UI |
+| Agent runtime | Microsoft Agent Framework (MAF) + GitHub Copilot SDK |
+| Dynamic loading | Python `importlib` + git clone/pull (per‑event agent clone) |
+| Self‑mutation | GitHub Copilot SDK (isolated Docker mutation container) |
+| LLM routing | **LiteLLM SDK in‑process** (gateway `/v1`), BYOK via encrypted Postgres key store — Anthropic / OpenAI / DeepSeek / Groq / OpenRouter / … |
 | Database | Postgres 16 + pgvector |
-| Cache / queue | Redis 7 |
-| Evals | Promptfoo + Inspect AI |
-| Deploy | Docker Compose, Caddy reverse proxy, Hostinger KVM 4 VPS |
+| Cache / event streams | Redis 7 |
+| Memory | mem0 (episodic) + graphiti + Neo4j (bi‑temporal KG, optional) |
+| Evals | Promptfoo + Inspect AI + golden trajectory tests |
+| Deploy | Docker Compose (data plane) + host systemd units behind Caddy (Hostinger VPS) |
 
 ---
 
-## Agent + Skill Development
+## Agent + Skill development
 
-**Authoring environment:** VS Code (locally or GitHub Codespaces). No in-app editor.
+**Authoring environment:** VS Code (locally or GitHub Codespaces). No in‑app editor.
 
-1. Create a new repo from the agent or skill template.
-2. Edit `graph.py` / `instructions.md` / skill `impl.py` in VS Code.
+1. Create a repo from the agent or skill template.
+2. Edit `agents.py` / `instructions.md` / skill `impl.py` in VS Code.
 3. Add evals in `evals/` (Promptfoo golden cases + Inspect AI scenarios).
-4. Open a PR — CI runs `pytest` + evals; merge when green.
-5. Core picks up the new version on the next event (no redeploy needed).
+4. Open a PR — CI runs `pytest` (+ path‑gated evals); merge when green.
+5. Core picks up the new version on the next event (no redeploy).
 
-**Self-mutation:** if the live system encounters an error, the `Self_Mutation_Node` opens a PR on the failing agent's own repo automatically. You review the diff and merge. Core picks it up on the next run.
+**Self‑mutation:** if the live system hits a structural failure loading/running an agent, the mutation sandbox proposes a fix on the failing agent's own repo and stages the commit. You review and approve; Core picks it up on the next run.
 
 ---
 
 ## Planning docs
 
-All planning artefacts live in [`ai-company-brain/`](ai-company-brain/) (consolidated 2026-06-20). Start with `AGENTS.md`.
+All planning artefacts live in [`ai-company-brain/`](ai-company-brain/). Start with `AGENTS.md`.
 
 | Doc | Purpose |
 |---|---|
-| [`AGENTS.md`](ai-company-brain/AGENTS.md) | Navigation + current build status + glossary (read first) |
-| [`project_plan.md`](ai-company-brain/project_plan.md) | Requirements (L1–L4) + milestones + phased WBS + risks — single source |
-| [`system_architecture.md`](ai-company-brain/system_architecture.md) | C4 diagrams, data model, ADRs |
-| [`agent_repo_compatibility.md`](ai-company-brain/agent_repo_compatibility.md) | How to build a compatible agent repo |
-| [`reference.md`](ai-company-brain/reference.md) | MAF / Copilot SDK / memory library notes |
-| [`specs/`](ai-company-brain/specs/) | Per-feature specs (email app, chat UX, stream reconnection, VS Code tools, LLM caching, MCP/plugins, artifact viewer) |
+| [`AGENTS.md`](AGENTS.md) | Root project contract + constraints + conventions (read first) |
+| [`ai-company-brain/project_plan.md`](ai-company-brain/project_plan.md) | Requirements + milestones + WBS + risks |
+| [`ai-company-brain/system_architecture.md`](ai-company-brain/system_architecture.md) | C4 diagrams, data model, ADRs |
+| [`ai-company-brain/reference.md`](ai-company-brain/reference.md) | MAF / Copilot SDK / memory library notes |
+| [`FOUNDATION_AUDIT_REPORT.md`](FOUNDATION_AUDIT_REPORT.md) | Foundational architecture audit (findings by severity) |
+| [`FOUNDATION_BUILDOUT_CHECKLIST.md`](FOUNDATION_BUILDOUT_CHECKLIST.md) | Missing/partial foundational capabilities + priorities |

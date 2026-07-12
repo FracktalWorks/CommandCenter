@@ -176,6 +176,10 @@ def test_duration_derived_from_event_stream_ids():
         events=events, folded=_folded(),
     )
     assert row["duration_ms"] == 2500  # 3500 - 1000
+    # M7: started_ms is now carried on the row so _persist_row can write the
+    # true started_at (was defaulting to now() ≈ run end, breaking ordering).
+    assert row["started_ms"] == 1000
+    assert row["ended_ms"] == 3500
 
 
 def test_explicit_times_win_over_event_derivation():

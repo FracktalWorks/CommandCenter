@@ -126,6 +126,7 @@ def build_run_trace_row(
         "user_id": user_id or None,
         "model": model or None,
         "status": status,
+        "started_ms": started_ms,
         "ended_ms": ended_ms,
         "duration_ms": duration_ms,
         "tool_count": len(tool_summary),
@@ -151,22 +152,35 @@ def _persist_row(row: dict[str, Any]) -> None:
             row["ended_ms"] / 1000.0, tz=UTC,
         )
 
+    # started_at derived from the first event's stream-id ms. Previously never
+    # written, so the NOT NULL DEFAULT now() stamped it to ≈ run END — the
+    # /observability feed orders/filters by started_at, so ordering was by end
+    # time (M7). COALESCE keeps the DEFAULT now() when we can't derive a start.
+    started_at = None
+    if row.get("started_ms"):
+        started_at = datetime.fromtimestamp(
+            row["started_ms"] / 1000.0, tz=UTC,
+        )
+
     with get_session() as s:
         s.execute(
             text(
                 """
                 INSERT INTO agent_run (
                     run_id, thread_id, agent_name, user_id, model, status,
-                    ended_at, duration_ms, tool_count, tool_summary,
+                    started_at, ended_at, duration_ms, tool_count, tool_summary,
                     error_message, error_type, error_traceback, trace, flagged
                 ) VALUES (
                     :run_id, :thread_id, :agent_name, :user_id, :model, :status,
+                    COALESCE(:started_at, now()),
                     :ended_at, :duration_ms, :tool_count,
                     CAST(:tool_summary AS JSONB),
                     :error_message, :error_type, :error_traceback,
                     CAST(:trace AS JSONB), :flagged
                 )
                 ON CONFLICT (run_id) DO UPDATE SET
+                    -- started_at is intentionally NOT updated: the first write
+                    -- (at run end) records the true start; keep it stable.
                     status          = EXCLUDED.status,
                     ended_at        = EXCLUDED.ended_at,
                     duration_ms     = EXCLUDED.duration_ms,
@@ -189,6 +203,7 @@ def _persist_row(row: dict[str, Any]) -> None:
                 "user_id": row.get("user_id"),
                 "model": row.get("model"),
                 "status": row["status"],
+                "started_at": started_at,
                 "ended_at": ended_at,
                 "duration_ms": row.get("duration_ms"),
                 "tool_count": row.get("tool_count", 0),

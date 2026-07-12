@@ -9,30 +9,36 @@ Serves both /v1/chat/completions (OpenAI standard) and /chat/completions (some S
 from __future__ import annotations
 
 import json
+import os
 from typing import Any
 
+from acb_auth import require_internal_auth
 from acb_common import get_logger
 from acb_llm.client import _ensure_keys_loaded
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import StreamingResponse
 
 _log = get_logger("v1")
+
+# Whether to honour a caller-supplied ``api_base``/``api_key`` in the request
+# body (for Ollama / vLLM / self-hosted endpoints). OFF by default: an
+# untrusted body could point the server at an arbitrary URL (SSRF/relay). No
+# internal caller sends these in the body today — they configure the provider
+# on their own client — so default-off is safe. Opt in per deployment.
+_ALLOW_CALLER_ENDPOINT_OVERRIDE = os.environ.get(
+    "V1_ALLOW_CALLER_ENDPOINT_OVERRIDE", "0"
+).strip().lower() in ("1", "true", "yes", "on")
 
 # Mount at /v1 (OpenAI standard) and also at root for SDKs that omit the prefix.
 router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
 router_root = APIRouter(tags=["openai-compat"])
 
-# Tier name → tier id mapping (constant; the model per tier id is dynamic).
-# IMPORTANT: must stay in sync with acb_llm.client._TIER_MODEL.
-# The orchestrator (agents.py, executor.py) passes these alias names as the
-# "model" field — if an alias is missing here, litellm rejects it with
-# "BadRequestError: LLM Provider NOT provided".
-_TIER_NAME_TO_ID: dict[str, str] = {
-    # Model-agnostic tier names (used by settings UI, orchestrator, and agents)
-    "tier-fast": "tier1",
-    "tier-balanced": "tier2",
-    "tier-powerful": "tier3",
-}
+# Tier name → tier id mapping. Single source of truth is
+# acb_llm.client._TIER_ALIAS_MAP (also used by context.py); imported here rather
+# than duplicated so the two can never drift. The orchestrator (agents.py,
+# executor.py) passes these alias names as the "model" field — if an alias is
+# missing, litellm rejects it with "BadRequestError: LLM Provider NOT provided".
+from acb_llm.client import _TIER_ALIAS_MAP as _TIER_NAME_TO_ID  # noqa: E402
 
 
 def _resolve_model(requested: str) -> str:
@@ -155,16 +161,28 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     _obs_source = request.headers.get("x-cc-source") or "chat"
 
     body = await request.json()
-    model = _resolve_model(body.get("model", "tier-balanced"))
+    _requested_model = body.get("model", "tier-balanced")
+    model = _resolve_model(_requested_model)
+    # Preserve the tier alias (if the caller asked for one) so per-tier cost/
+    # usage breakdowns populate — this is the choke point for all agent traffic,
+    # so a blank tier here left the whole per-tier view empty (obs gap).
+    _tier = _requested_model if _requested_model in _TIER_NAME_TO_ID else ""
     messages = body.get("messages", [])
     tools = body.get("tools")
     tool_choice = body.get("tool_choice", "auto")
     temperature = body.get("temperature", 0.2)
     max_tokens = body.get("max_tokens", 4096)
     stream = body.get("stream", False)
-    # Passthrough: custom api_base for Ollama / vLLM / self-hosted endpoints.
-    api_base = body.get("api_base") or None
-    api_key = body.get("api_key") or None
+    # Passthrough: custom api_base/api_key for Ollama / vLLM / self-hosted
+    # endpoints — only when explicitly enabled (SSRF guard; see module top).
+    if _ALLOW_CALLER_ENDPOINT_OVERRIDE:
+        api_base = body.get("api_base") or None
+        api_key = body.get("api_key") or None
+    else:
+        api_base = None
+        api_key = None
+        if body.get("api_base") or body.get("api_key"):
+            _log.warning("v1.caller_endpoint_override_ignored")
 
     import litellm as _litellm  # type: ignore[import-untyped]
     from litellm import acompletion  # type: ignore[import-untyped]
@@ -229,8 +247,18 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                     yield f"data: {json.dumps(data)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as exc:
+                # Log the detail server-side; return a generic message so
+                # provider payloads / URLs / key fragments in the exception
+                # string are not disclosed to the caller.
                 _log.exception("v1.stream_error")
-                yield f"data: {json.dumps({'error': str(exc)})}\n\n"
+                yield (
+                    "data: "
+                    + json.dumps({"error": {
+                        "message": "upstream completion error",
+                        "type": type(exc).__name__,
+                    }})
+                    + "\n\n"
+                )
             finally:
                 # Observability (E2): rebuild usage from the streamed chunks
                 # (litellm's own stream aggregator) → emit the model activation +
@@ -242,7 +270,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                         rebuilt = stream_chunk_builder(_chunks, messages=messages)
                         if rebuilt is not None:
                             from acb_llm.client import _emit_usage  # noqa: PLC0415
-                            _emit_usage(model, "", rebuilt,
+                            _emit_usage(model, _tier, rebuilt,
                                         source=_obs_source, agent=_obs_agent)
                     except Exception:  # noqa: BLE001
                         pass
@@ -263,24 +291,34 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
         # completion. Best-effort; never affects the response.
         try:
             from acb_llm.client import _emit_usage  # noqa: PLC0415
-            _emit_usage(model, "", response, source=_obs_source, agent=_obs_agent)
+            _emit_usage(model, _tier, response, source=_obs_source, agent=_obs_agent)
         except Exception:  # noqa: BLE001
             pass
         return dict(response) if hasattr(response, "items") else response  # type: ignore[return-value]
     except Exception as exc:
+        # Log detail server-side; return a generic message (no raw provider
+        # exception string) to avoid leaking URLs / payloads / key fragments.
         _log.exception("v1.completion_error")
         return {
             "error": {
-                "message": str(exc),
+                "message": "upstream completion error",
                 "type": type(exc).__name__,
             }
         }
 
 
 # Register on both /v1/chat/completions and /chat/completions
-# response_model=None because we return either StreamingResponse or dict
-router_v1.post("/chat/completions", response_model=None)(_handle_chat_completions)
-router_root.post("/chat/completions", response_model=None)(_handle_chat_completions)
+# response_model=None because we return either StreamingResponse or dict.
+# require_internal_auth 401s any caller without the internal Bearer token —
+# this endpoint bills the server's stored provider keys, so it must not be
+# world-reachable. Every internal caller already forwards the token.
+_auth = [Depends(require_internal_auth)]
+router_v1.post(
+    "/chat/completions", response_model=None, dependencies=_auth,
+)(_handle_chat_completions)
+router_root.post(
+    "/chat/completions", response_model=None, dependencies=_auth,
+)(_handle_chat_completions)
 
 # Export both routers — callers include both
 routers = [router_v1, router_root]

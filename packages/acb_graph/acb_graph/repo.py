@@ -1,7 +1,7 @@
 ﻿"""Tiny repository / query helpers. Keep DB access funnelled through here.
 
-These are deliberately thin — just enough for the Phase-0 Pull agent. Bigger
-query patterns will arrive with the LangGraph + Deep Agents harness in 0.5.
+These are deliberately thin — just enough for the Pull agent. Richer query
+patterns are added here as the MAF agents need them.
 """
 from __future__ import annotations
 

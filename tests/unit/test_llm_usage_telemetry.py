@@ -83,6 +83,23 @@ def test_compute_cost_returns_none_for_unknown_model():
     assert _compute_cost("totally-made-up-model-xyz", resp, resp["usage"]) is None
 
 
+def test_compute_cost_none_for_dynamically_stub_priced_model():
+    # H8: ensure_model_registered() injects a PLACEHOLDER zero price so litellm
+    # can route a new provider model — but that price is unknown, not $0. The
+    # cost path must report unknown (None), not a confident $0.00, otherwise the
+    # spend dashboard shows $0 for exactly the tier models in use.
+    from acb_llm.client import ensure_model_registered
+
+    # A model with a known provider prefix but NOT in litellm's price catalogue,
+    # so ensure_model_registered takes the dynamic-stub path (a real, priced
+    # model would return early and keep its real price — verified separately).
+    model = "deepseek/deepseek-v99-unpriced-test"
+    provider = ensure_model_registered(model)  # registers the zero-cost routing stub
+    assert provider == "deepseek"
+    resp = {"usage": {"prompt_tokens": 1000, "completion_tokens": 500}}
+    assert _compute_cost(model, resp, resp["usage"]) is None
+
+
 def test_emit_usage_from_v1_compat_prices_and_tags_source(monkeypatch):
     # v1_compat (the agent-completion choke point) calls _emit_usage with an
     # explicit source and, on the streaming path, a bare {"usage": …} dict. This

@@ -24,7 +24,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_internal_auth
 from acb_common import get_logger, get_settings
 from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
                      Request, status)
@@ -1849,7 +1849,10 @@ async def get_pending_commit_diff(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/mutations/pending/{commit_id}/approve", status_code=200)
+@router.post(
+    "/mutations/pending/{commit_id}/approve", status_code=200,
+    dependencies=[Depends(require_internal_auth)],
+)
 async def approve_pending_commit(
     commit_id: str,
     user: UserContext = Depends(get_current_user),
@@ -2055,7 +2058,10 @@ async def approve_pending_commit(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/mutations/pending/{commit_id}/reject", status_code=200)
+@router.post(
+    "/mutations/pending/{commit_id}/reject", status_code=200,
+    dependencies=[Depends(require_internal_auth)],
+)
 async def reject_pending_commit(
     commit_id: str,
     user: UserContext = Depends(get_current_user),
@@ -2141,7 +2147,10 @@ async def reject_pending_commit(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.post("/mutations/pending/{commit_id}/remutate", status_code=200)
+@router.post(
+    "/mutations/pending/{commit_id}/remutate", status_code=200,
+    dependencies=[Depends(require_internal_auth)],
+)
 async def remutate_pending_commit(
     commit_id: str,
     user: UserContext = Depends(get_current_user),
@@ -2240,7 +2249,10 @@ async def remutate_pending_commit(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.delete("/mutations/pending/{commit_id}", status_code=200)
+@router.delete(
+    "/mutations/pending/{commit_id}", status_code=200,
+    dependencies=[Depends(require_internal_auth)],
+)
 async def delete_pending_commit(
     commit_id: str,
     user: UserContext = Depends(get_current_user),
@@ -2270,7 +2282,10 @@ async def delete_pending_commit(
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 
-@router.delete("/mutations/audit/{run_id}", status_code=200)
+@router.delete(
+    "/mutations/audit/{run_id}", status_code=200,
+    dependencies=[Depends(require_internal_auth)],
+)
 async def dismiss_mutation_event(
     run_id: str,
     user: UserContext = Depends(get_current_user),

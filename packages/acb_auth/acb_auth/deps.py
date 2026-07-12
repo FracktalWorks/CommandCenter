@@ -123,6 +123,39 @@ async def get_current_user(
     )
 
 
+async def require_internal_auth(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> None:
+    """Reject callers that do not present a valid internal Bearer token.
+
+    Unlike :func:`get_current_user` (which never rejects — it only *labels* the
+    caller), this dependency 401s anyone without the internal service token. Use
+    it on server-to-server endpoints that must not be world-reachable — notably
+    the OpenAI-compatible ``/v1/chat/completions`` proxy, which otherwise bills
+    the server's stored provider keys for any anonymous caller.
+
+    SSO ``X-User-*`` headers are deliberately NOT accepted here: they are
+    spoofable without the Next.js proxy, and every legitimate caller of these
+    endpoints (MAF agents, Copilot BYOK, mem0/graphiti, the Next.js server
+    routes) already forwards ``Authorization: Bearer <internal token>``.
+
+    If no internal token is configured (``_get_internal_token()`` returns ""),
+    Bearer auth is disabled and the call is allowed — matching that function's
+    documented contract. This means a mis-provisioned deployment fails OPEN
+    rather than bricking; since the endpoint was fully open before this guard,
+    that is strictly no worse, while any real deployment (which always sets
+    ``LITELLM_MASTER_KEY``) is now closed.
+    """
+    expected = _get_internal_token()
+    if not expected:
+        return  # Bearer auth disabled (unconfigured) — preserve prior behaviour.
+    if authorization and authorization.startswith("Bearer "):
+        submitted = authorization.removeprefix("Bearer ").strip()
+        if submitted and submitted == expected:
+            return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
 def require_role(*allowed: UserRole) -> Depends:
     """Return a FastAPI Depends that 403s if the caller role is not in allowed."""
     allowed_set = frozenset(allowed)

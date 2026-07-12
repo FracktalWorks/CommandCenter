@@ -12,7 +12,6 @@ dependencies = [
     # AG-UI streaming endpoint (replaces copilot_chat.py SSE path — WBS 0.7)
     "agent-framework-ag-ui",
     "acb-common",
-    "acb-schemas",
     "acb-llm",
     "acb-auth",
     "orchestrator",

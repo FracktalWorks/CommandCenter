@@ -450,12 +450,15 @@ def test_memory_list_endpoint_exists() -> None:
     )
 
 
-def test_memory_status_endpoint_returns_valid_json() -> None:
+def test_memory_status_endpoint_returns_valid_json(monkeypatch) -> None:
     """GET /memory/{user_id}/status returns flat fields with bools + count."""
     from gateway.main import app
 
+    # /memory/* now requires the internal Bearer token (audit C6/BO-2).
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "test-internal-token")
+    _auth = {"Authorization": "Bearer test-internal-token"}
     with TestClient(app) as client:
-        r = client.get("/memory/test@example.com/status")
+        r = client.get("/memory/test@example.com/status", headers=_auth)
         assert r.status_code == 200
         data = r.json()
         assert "mem0_enabled" in data
@@ -466,13 +469,16 @@ def test_memory_status_endpoint_returns_valid_json() -> None:
         assert isinstance(data["count"], int)
 
 
-def test_memory_search_endpoint_exists() -> None:
+def test_memory_search_endpoint_exists(monkeypatch) -> None:
     """POST /memory/{user_id}/search must be registered."""
     from gateway.main import app
 
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "test-internal-token")
+    _auth = {"Authorization": "Bearer test-internal-token"}
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.post(
             "/memory/test@example.com/search",
+            headers=_auth,
             json={"query": "deal status", "limit": 5},
         )
         # 200 if Mem0 enabled, 422 if validation fails, never 404
@@ -481,13 +487,16 @@ def test_memory_search_endpoint_exists() -> None:
         )
 
 
-def test_memory_add_endpoint_returns_202() -> None:
+def test_memory_add_endpoint_returns_202(monkeypatch) -> None:
     """POST /memory/{user_id}/add → 202 queued or 200 mem0_disabled."""
     from gateway.main import app
 
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "test-internal-token")
+    _auth = {"Authorization": "Bearer test-internal-token"}
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.post(
             "/memory/test@example.com/add",
+            headers=_auth,
             json={
                 "messages": [
                     {"role": "user", "content": "hello"},

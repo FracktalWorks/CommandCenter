@@ -16,8 +16,11 @@ dependencies = [
     # RedisHistoryProvider + RedisContextProvider (pre-release)
     "agent-framework-redis",
     "httpx>=0.27",
+    # triage/schema.py uses pydantic EmailStr, which needs email-validator at
+    # runtime. Declared explicitly here (was previously pulled in only
+    # transitively via acb_schemas, now removed — see FOUNDATION audit BO-11).
+    "pydantic[email]>=2.9",
     "acb-common",
-    "acb-schemas",
     "acb-graph",
     "acb-llm",
     "acb-audit",

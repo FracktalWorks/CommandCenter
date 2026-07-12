@@ -95,8 +95,9 @@ This is the list of foundational capabilities that are **missing, partially impl
   - `orchestrator/_copilot_session.py` — Copilot permission handler + infinite‑session policy.
   - `orchestrator/_tool_injection.py` — platform tool injection + system‑prompt addendum (~630 lines, the biggest cohesive concern).
   - `orchestrator/_model_resolution.py` — BYOK model resolution.
-- **Residual:** `run_agent_stream` itself is still a ~1,690‑line function (the 3‑tier dispatch + HITL parking + session store + cleanup). Splitting its BODY safely needs behavioural test scaffolding first (it is woven with shared ContextVars/mutable run‑state), so it was deliberately left for a focused, human‑in‑the‑loop effort.
-- **Approach for the residual:** add golden behavioural coverage of a full streamed run, then extract Tier‑1/1.5/2 behind a `Runtime` strategy interface and move HITL/session‑store/cleanup into collaborators. Then ratchet the xenon absolute ceiling down from F.
+- **Regression net started:** `tests/unit/test_run_agent_stream_e2e.py` now drives `run_agent_stream` end‑to‑end with a mocked agent/loader (no git clone, no LLM, no Redis) and pins the AG‑UI envelope contract: `RUN_STARTED` first → assistant text streamed → `RUN_FINISHED` terminal, run_id/thread_id propagation, and agent‑exception → `RUN_ERROR` (not an unhandled crash). This is the FIRST end‑to‑end coverage of the streamed run; it currently exercises the Tier‑2 batch path (the "proven" fallback the code documents).
+- **Residual:** `run_agent_stream` is still a ~1,600‑line function; its Tier‑1 native‑streaming, Tier‑1.5 Copilot, HITL‑parking, and tool‑event paths are not yet covered by the e2e net.
+- **Approach for the residual:** (1) extend the harness to the native‑streaming + Copilot tiers and the tool‑event/HITL flows (a mock agent that yields MAF‑shaped `run(..., stream=True)` updates + a shimmed tool). (2) THEN extract Tier‑1/1.5/2 behind a `Runtime` strategy interface and move HITL/session‑store/cleanup into collaborators, guarded by that net + the trajectory evals. (3) Ratchet the xenon absolute ceiling down from F.
 
 ### BO‑14 — Enforce the permission/risk model *(P1)* ☐
 - **Missing:** the injected‑tool gate can never deny (M5); the destructive registry is empty; fail‑closed is a convention, not an invariant.

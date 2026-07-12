@@ -96,5 +96,176 @@
       "north": 9
     },
     "done": true
+  },
+  "sales-f": {
+    "gender": "female",
+    "role": "sales",
+    "desc": "a female sales lead in a burgundy blazer over a white top, small hoop earrings, straight shoulder-length brown hair, tan skin, full body standing character shown head to toe, small character sprite",
+    "base": "c07f5665-63b8-4efd-b6ed-d4bb300ddc34",
+    "seated": "2b25c3f4-256c-4fc3-81d7-1c00248b8890",
+    "sleeping": "ec1c277d-4223-4ca7-ae64-6ba21e976618",
+    "typing": 9,
+    "done": true
+  },
+  "test-coder": {
+    "gender": "",
+    "role": "engineer",
+    "desc": "a developer in a blue hoodie and cap wearing headphones, carrying a laptop bag",
+    "base": "65136a2a-a157-4f62-b228-3e1f584b6e4d",
+    "seated": "e8ed8c75-6b88-4ced-acec-6796c8976b23"
+  },
+  "marketing-f": {
+    "gender": "female",
+    "role": "marketing",
+    "desc": "a female marketer in a coral blouse and cream cardigan, a colorful patterned headscarf, warm medium-brown skin",
+    "base": "6ee33bff-20d3-406e-b9da-eeef0215220c",
+    "seated": "e03b9273-5985-439f-8729-400b0d8ec6cb",
+    "typing": 9,
+    "sleeping": "5c7fbd88-1e5d-4d75-afeb-87de0a6f6bdd",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "marketing-m": {
+    "gender": "male",
+    "role": "marketing",
+    "desc": "a male marketing manager in a teal polo shirt, trendy undercut hairstyle, light-brown skin",
+    "base": "247b62e9-9f73-458f-93ef-c103a5b46e34",
+    "seated": "58974820-a492-41cc-aeb9-67699577c4bf",
+    "typing": 9,
+    "sleeping": "2a08b394-6aee-4ee9-ab00-65c366fa97cf",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "finance-f": {
+    "gender": "female",
+    "role": "finance",
+    "desc": "a female accountant in a grey waistcoat over a white blouse, thin-rimmed glasses, brown hair in a low ponytail, fair skin",
+    "base": "4dd2ae14-7adc-466d-9ac4-42ad0bb3ffb4",
+    "seated": "cda028d1-50a0-407f-8eae-70e4813c60c4",
+    "typing": 9,
+    "sleeping": "db6c4dab-01e0-42f4-8e49-14afd725f5d7",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "finance-m": {
+    "gender": "male",
+    "role": "finance",
+    "desc": "a male finance analyst in a dark-blue dress shirt and tie holding a calculator, short neat brown hair, olive skin",
+    "base": "ca180957-aaf0-4d22-b371-e3b9825fa1cc",
+    "seated": "6d1c5cc7-e44b-4389-99e7-26d07bd22deb",
+    "typing": 9,
+    "sleeping": "da475768-6c41-4729-97ef-e7710c682baa",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "hr-f": {
+    "gender": "female",
+    "role": "hr",
+    "desc": "a friendly female HR manager in a soft-green blazer, shoulder-length wavy chestnut hair, medium skin",
+    "base": "9c0212d5-707c-48de-aae3-70e21653be87",
+    "seated": "3d3a4eb0-53e5-4c6b-a863-6619ea0f4305",
+    "typing": 9,
+    "sleeping": "7a67bd50-ef7e-442d-bc14-ae4444a5f61c",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "hr-m": {
+    "gender": "male",
+    "role": "hr",
+    "desc": "a warm male HR coordinator in a beige cardigan over a collared shirt, short curly black hair, dark skin",
+    "base": "a45bf537-04e2-46e6-8671-2f6878b4039a",
+    "seated": "1099f2a5-25b8-4a19-a472-0aba4c7032b4",
+    "typing": 9,
+    "sleeping": "e6bdabe0-d6bc-4e5e-92b4-aa1cdddbe2a9",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "ops-f": {
+    "gender": "female",
+    "role": "operations",
+    "desc": "a female operations lead in an orange utility vest over a shirt and a cap, brown ponytail, tan skin",
+    "base": "8dbe5781-712a-4632-a525-fdecbdb0c80e",
+    "seated": "805e087d-f85e-46df-a57c-a7ed834ea933",
+    "typing": 9,
+    "sleeping": "363ebd88-504b-49ae-bf9d-bde8bed749ae",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "ops-m": {
+    "gender": "male",
+    "role": "operations",
+    "desc": "a male operations coordinator in a khaki work shirt with a headset, buzz-cut hair, medium brown skin",
+    "base": "287c96d8-6209-4d9c-a755-4428472e87be",
+    "seated": "3e1f2bd0-7739-4f66-839b-3ecf3b9fb683",
+    "typing": 9,
+    "sleeping": "a7179614-6fe9-472f-9c62-1b769eb7a664",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "product-f": {
+    "gender": "female",
+    "role": "product",
+    "desc": "a female product manager in a maroon turtleneck holding a tablet, dark bob haircut, light skin",
+    "base": "56dc5dfb-2eb2-4f8b-b7df-a93b4073a702",
+    "seated": "9909a533-3ee9-4178-9671-3731b6441334",
+    "typing": 9,
+    "sleeping": "4ac08b99-861e-4ad9-b8d6-787dc558c3d5",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "product-m": {
+    "gender": "male",
+    "role": "product",
+    "desc": "a male product manager in a slate button-down shirt with a lanyard badge, glasses, short dark hair, olive skin",
+    "base": "a27b5e2f-3b4a-4e9c-8a11-271b9729921e",
+    "seated": "14796640-6eae-493f-9d4a-f8c409ca3de9",
+    "typing": 9,
+    "sleeping": "081c8a2c-f9dc-470a-9cf5-3bc3598240f4",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
+  },
+  "data-f": {
+    "gender": "female",
+    "role": "data",
+    "desc": "a female data scientist in a purple hoodie wearing over-ear headphones, glasses, black hair in a high bun, brown skin",
+    "base": "7167868e-ef6b-45bd-8576-3e519e77cd39",
+    "seated": "802718e4-cb46-46e7-83bf-f2f79810ffee",
+    "typing": 9,
+    "sleeping": "91dd1728-a491-4fc0-bfdf-6b669651d0bd",
+    "breathing": {
+      "south": 4,
+      "north": 4
+    },
+    "done": true
   }
 }

@@ -1264,7 +1264,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
             {libraryId === undefined
               ? "Loading…"
               : current
-              ? `${labelizeRole(current.role)} · ${current.gender}`
+              ? [labelizeRole(current.role), current.gender].filter(Boolean).join(" · ")
               : "Default character"}
           </span>
           <span className="block text-[10px] text-muted-foreground">
@@ -1338,7 +1338,7 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
                         key={c.id}
                         onClick={() => assign(c.id)}
                         disabled={saving}
-                        title={`${labelizeRole(c.role)} · ${c.gender}\n${c.description}`}
+                        title={`${[labelizeRole(c.role), c.gender].filter(Boolean).join(" · ")}\n${c.description}`}
                         style={{ width: 104, height: 104 }}
                         className={`${tileCls(libraryId === c.id)} disabled:opacity-60`}
                       >

@@ -1177,6 +1177,7 @@ function LibBreathingSprite({ char, size }: { char: LibChar; size: number }) {
 function AgentAvatarPicker({ agentName }: { agentName: string }) {
   // undefined = still loading the current assignment; null = default (no library char)
   const [libraryId, setLibraryId] = useState<string | null | undefined>(undefined);
+  const [open, setOpen] = useState(false);
   const [cat, setCat] = useState<string>("all");
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -1231,59 +1232,118 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
       active ? "border-primary ring-2 ring-primary ring-offset-1 ring-offset-card" : "border-border"
     }`;
 
+  const current = libraryId ? CHARACTER_LIBRARY[libraryId] : null;
+
   return (
     <div>
       <style>{LIB_PICKER_STYLE}</style>
       <div className="text-[10px] text-muted uppercase tracking-wider mb-1.5">Avatar</div>
-      {LIBRARY_IDS.length === 0 ? (
-        <p className="text-[11px] text-muted-foreground/70">No library characters available yet.</p>
-      ) : (
-        <>
-          {/* Broad categories + show-all */}
-          <div className="flex flex-wrap gap-1 mb-2">
-            {["all", ...roles].map((r) => (
+
+      {/* Compact trigger — opens the picker in a popup so it doesn't crowd the panel */}
+      <button
+        onClick={() => setOpen(true)}
+        className="flex w-full items-center gap-2.5 rounded-lg border border-border bg-card/40 p-2 text-left transition-colors hover:border-primary/40"
+      >
+        <span className="flex h-11 w-11 shrink-0 items-center justify-center overflow-hidden rounded-md bg-background/40">
+          {current ? (
+            <LibBreathingSprite char={current} size={44} />
+          ) : (
+            <Bot size={20} className="text-muted-foreground" />
+          )}
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block truncate text-xs font-medium text-foreground">
+            {libraryId === undefined
+              ? "Loading…"
+              : current
+              ? `${labelizeRole(current.role)} · ${current.gender}`
+              : "Default character"}
+          </span>
+          <span className="block text-[10px] text-muted-foreground">
+            Tap to choose from the library
+          </span>
+        </span>
+        <ChevronRight size={15} className="shrink-0 text-muted-foreground" />
+      </button>
+
+      {/* Popup picker — bottom sheet on mobile, centered dialog on desktop */}
+      {open && (
+        <div
+          className="fixed inset-0 z-[80] flex items-end justify-center bg-black/70 sm:items-center sm:p-4"
+          onClick={() => setOpen(false)}
+        >
+          <div
+            className="mb-14 flex max-h-[85vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:mb-0 sm:rounded-2xl sm:border"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex shrink-0 items-center justify-between border-b border-border px-4 py-3">
+              <div className="min-w-0">
+                <div className="text-sm font-semibold text-foreground">Choose avatar</div>
+                <div className="truncate text-[11px] text-muted-foreground">{agentName}</div>
+              </div>
               <button
-                key={r}
-                onClick={() => setCat(r)}
-                className={`rounded-lg border px-2 py-0.5 text-[11px] capitalize transition-colors ${
-                  cat === r
-                    ? "border-primary bg-primary/10 text-primary"
-                    : "border-border bg-card/60 text-muted-foreground hover:border-primary/40 hover:text-foreground"
-                }`}
+                onClick={() => setOpen(false)}
+                className="rounded-md p-1 text-muted-foreground hover:bg-secondary transition-colors"
               >
-                {r === "all" ? "All" : labelizeRole(r)}
+                <X size={16} />
               </button>
-            ))}
+            </div>
+            <div className="overflow-y-auto p-4">
+              {LIBRARY_IDS.length === 0 ? (
+                <p className="text-[11px] text-muted-foreground/70">
+                  No library characters available yet.
+                </p>
+              ) : (
+                <>
+                  {/* Broad categories + show-all */}
+                  <div className="mb-3 flex flex-wrap gap-1">
+                    {["all", ...roles].map((r) => (
+                      <button
+                        key={r}
+                        onClick={() => setCat(r)}
+                        className={`rounded-lg border px-2.5 py-1 text-xs capitalize transition-colors ${
+                          cat === r
+                            ? "border-primary bg-primary/10 text-primary"
+                            : "border-border bg-card/60 text-muted-foreground hover:border-primary/40 hover:text-foreground"
+                        }`}
+                      >
+                        {r === "all" ? "All" : labelizeRole(r)}
+                      </button>
+                    ))}
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 sm:grid-cols-4">
+                    {/* Default (no library character — office uses the role default) */}
+                    <button
+                      onClick={() => assign(null)}
+                      disabled={saving}
+                      title="Default role character"
+                      className={`${tileCls(libraryId === null)} flex-col gap-1 disabled:opacity-60`}
+                    >
+                      <Bot size={22} className="text-muted-foreground" />
+                      <span className="text-[9px] text-muted-foreground">Default</span>
+                    </button>
+                    {shown.map((c) => (
+                      <button
+                        key={c.id}
+                        onClick={() => assign(c.id)}
+                        disabled={saving}
+                        title={`${labelizeRole(c.role)} · ${c.gender}\n${c.description}`}
+                        className={`${tileCls(libraryId === c.id)} disabled:opacity-60`}
+                      >
+                        <LibBreathingSprite char={c} size={72} />
+                      </button>
+                    ))}
+                  </div>
+                  {err && <p className="mt-2 text-[11px] text-destructive">{err}</p>}
+                  <p className="mt-3 text-[11px] text-muted-foreground/70">
+                    Assigned characters appear in the office with their full breathing /
+                    typing / sleeping animation.
+                  </p>
+                </>
+              )}
+            </div>
           </div>
-          <div className="grid grid-cols-4 gap-1.5">
-            {/* Default (no library character — office uses the role default) */}
-            <button
-              onClick={() => assign(null)}
-              disabled={saving}
-              title="Default role character"
-              className={`${tileCls(libraryId === null)} flex-col gap-0.5 disabled:opacity-60`}
-            >
-              <Bot size={18} className="text-muted-foreground" />
-              <span className="text-[8px] text-muted-foreground">Default</span>
-            </button>
-            {shown.map((c) => (
-              <button
-                key={c.id}
-                onClick={() => assign(c.id)}
-                disabled={saving}
-                title={`${labelizeRole(c.role)} · ${c.gender}\n${c.description}`}
-                className={`${tileCls(libraryId === c.id)} disabled:opacity-60`}
-              >
-                <LibBreathingSprite char={c} size={56} />
-              </button>
-            ))}
-          </div>
-          {err && <p className="mt-1 text-[10px] text-destructive">{err}</p>}
-          <p className="mt-1.5 text-[10px] text-muted-foreground/70">
-            The office shows the assigned character with its full breathing / typing /
-            sleeping animation.
-          </p>
-        </>
+        </div>
       )}
     </div>
   );

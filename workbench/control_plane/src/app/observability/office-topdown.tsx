@@ -824,6 +824,8 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   .oc-seat-plant { height:30px; }
   .oc-wall-fix { gap:10px; }
   .oc-sign { display:none; }
+  /* one conference room per row, full office width (no 3-up squeeze) */
+  .oc-cr { flex-basis:100%; max-width:100%; }
 }
 
 @keyframes oc-play { to { background-position-x: calc(-1 * var(--n) * var(--w)); } }

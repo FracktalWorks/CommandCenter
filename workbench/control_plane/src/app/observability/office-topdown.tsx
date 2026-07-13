@@ -78,6 +78,8 @@ export type OfficeState = "working" | "idle" | "error";
 
 interface OfficeAgent {
   name: string;
+  /** Friendly alias for the visible nameplate; `name` stays the avatar key. */
+  display_name?: string;
   description?: string;
   status?: string;
   source?: string | null;
@@ -301,7 +303,7 @@ function Seat({
       </div>
       <div className="oc-plate">
         {/* the agent NAME now lives in the pill (styled like the old status indicator) */}
-        <span className="oc-name">{agent.name}</span>
+        <span className="oc-name">{agent.display_name || agent.name}</span>
       </div>
     </button>
   );
@@ -384,7 +386,7 @@ function ConferenceRoom({
   return (
     <div className="oc-cr">
       <div className="oc-cr-wall">
-        <span className="oc-cr-sign">{members.map((m) => m.name).join(" + ")}</span>
+        <span className="oc-cr-sign">{members.map((m) => m.display_name || m.name).join(" + ")}</span>
         <div className="oc-cr-fix">
           {crFixturesFor(members).map((obj) => {
             const src = OFFICE_OBJECTS[obj]?.south;

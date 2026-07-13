@@ -42,6 +42,9 @@ function readDynamicAgentsFallback(): AgentEntry[] {
 
 export interface AgentEntry {
   name: string;
+  /** User-set friendly alias shown in the UI. Falls back to `name` when empty.
+   *  A pure display overlay — `name` stays the key for runs/localStorage/DB. */
+  display_name?: string;
   description: string;
   tags: string[];
   status: string;

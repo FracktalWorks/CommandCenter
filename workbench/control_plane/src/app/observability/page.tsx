@@ -57,6 +57,8 @@ interface ActivityEvent {
 
 interface AgentRow {
   name: string;
+  /** Friendly alias from the roster; falls back to `name` when empty. */
+  display_name?: string;
   description?: string;
   runtime?: string;
   status?: "working" | "idle" | string;
@@ -293,7 +295,7 @@ function OfficeView({
 // Feed view
 // ───────────────────────────────────────────────────────────────────────────
 
-function ActivityRow({ e, onOpen }: { e: ActivityEvent; onOpen: (name: string) => void }) {
+function ActivityRow({ e, onOpen, aliases }: { e: ActivityEvent; onOpen: (name: string) => void; aliases?: Record<string, string> }) {
   const isAgent = e.kind === "agent";
   const isEnd = e.phase === "end";
   const isError = e.status === "error";
@@ -304,7 +306,7 @@ function ActivityRow({ e, onOpen }: { e: ActivityEvent; onOpen: (name: string) =
         : "bg-success/70"
       : "bg-amber-500 obs-led"
     : "bg-violet-500";
-  const label = isAgent ? e.agent ?? "agent" : shortModel(e.model);
+  const label = isAgent ? (aliases?.[e.agent ?? ""] || e.agent || "agent") : shortModel(e.model);
   const verb = isAgent ? (isEnd ? (isError ? "failed" : "finished") : "started") : "called";
 
   return (
@@ -367,7 +369,7 @@ function ActivityRow({ e, onOpen }: { e: ActivityEvent; onOpen: (name: string) =
   );
 }
 
-function FeedView({ feed, onOpen }: { feed: ActivityEvent[]; onOpen: (name: string) => void }) {
+function FeedView({ feed, onOpen, aliases }: { feed: ActivityEvent[]; onOpen: (name: string) => void; aliases?: Record<string, string> }) {
   if (feed.length === 0) {
     return (
       <div className="flex flex-col items-center justify-center h-full text-center gap-2">
@@ -380,7 +382,7 @@ function FeedView({ feed, onOpen }: { feed: ActivityEvent[]; onOpen: (name: stri
   return (
     <ul className="flex flex-col divide-y divide-border/40">
       {feed.map((e, i) => (
-        <ActivityRow key={e._id ?? `${e.kind}:${e.run_id ?? e.model}:${e.ts ?? i}`} e={e} onOpen={onOpen} />
+        <ActivityRow key={e._id ?? `${e.kind}:${e.run_id ?? e.model}:${e.ts ?? i}`} e={e} onOpen={onOpen} aliases={aliases} />
       ))}
     </ul>
   );
@@ -493,7 +495,7 @@ function Stat({ label, value, accent }: { label: string; value: string; accent?:
 // History view — DURABLE run log (agent_run), survives restarts / Redis flush
 // ───────────────────────────────────────────────────────────────────────────
 
-function HistoryView({ onOpen }: { onOpen: (name: string) => void }) {
+function HistoryView({ onOpen, aliases }: { onOpen: (name: string) => void; aliases?: Record<string, string> }) {
   const [runs, setRuns] = useState<RunRow[] | null>(null);
   const [filter, setFilter] = useState<"all" | "error">("all");
 
@@ -564,7 +566,7 @@ function HistoryView({ onOpen }: { onOpen: (name: string) => void }) {
                 onClick={() => r.agent && onOpen(r.agent)}
                 className="font-mono text-sm text-foreground truncate hover:underline shrink-0 max-w-[28%]"
               >
-                {r.agent ?? "agent"}
+                {(r.agent && aliases?.[r.agent]) || r.agent || "agent"}
               </button>
               {r.model && (
                 <span className="font-mono text-[11px] text-muted-foreground/70 truncate shrink-0">{shortModel(r.model)}</span>
@@ -598,11 +600,14 @@ function HistoryView({ onOpen }: { onOpen: (name: string) => void }) {
 
 function AgentDrawer({
   name,
+  displayName,
   onClose,
   spend,
   windowDays,
 }: {
   name: string;
+  /** Friendly alias for the header; `name` stays the key for the runs fetch. */
+  displayName?: string;
   onClose: () => void;
   spend?: { cost: number; calls: number } | null;
   windowDays?: number;
@@ -644,7 +649,7 @@ function AgentDrawer({
         <header className="flex items-center gap-3 p-4 border-b border-border">
           <span className="text-2xl">{agentEmoji(name)}</span>
           <div className="min-w-0 flex-1">
-            <h2 className="font-semibold text-foreground truncate">{name}</h2>
+            <h2 className="font-semibold text-foreground truncate">{displayName || name}</h2>
             <p className="text-xs text-muted-foreground">Recent runs &amp; errors</p>
           </div>
           <div className="text-right shrink-0">
@@ -756,6 +761,16 @@ export default function ObservabilityPage() {
   const [connected, setConnected] = useState(false);
   const [selected, setSelected] = useState<string | null>(null);
   const [, forceTick] = useState(0);
+  // canonical agent name → friendly alias (from the roster), for the feed,
+  // history and drawer, which only carry bare name strings from the event log.
+  const agentAliases = useMemo(
+    () => Object.fromEntries(
+      roster
+        .filter((a) => a.display_name)
+        .map((a) => [a.name, a.display_name as string]),
+    ),
+    [roster],
+  );
   const seen = useRef<Set<string>>(new Set());
   // Simulation mode (`/observability?sim=1`): populate the office with the
   // pre-generated cast and cycle their states — lets you test the office live
@@ -1082,12 +1097,12 @@ export default function ObservabilityPage() {
         )}
         {tab === "feed" && (
           <div className="h-full overflow-y-auto">
-            <FeedView feed={feed} onOpen={setSelected} />
+            <FeedView feed={feed} onOpen={setSelected} aliases={agentAliases} />
           </div>
         )}
         {tab === "history" && (
           <div className="h-full overflow-y-auto">
-            <HistoryView onOpen={setSelected} />
+            <HistoryView onOpen={setSelected} aliases={agentAliases} />
           </div>
         )}
         {tab === "cost" && (
@@ -1101,6 +1116,7 @@ export default function ObservabilityPage() {
         <AgentDrawer
           key={selected}
           name={selected}
+          displayName={agentAliases[selected] || selected}
           spend={cost?.by_agent?.[selected] ?? null}
           windowDays={cost?.days.length}
           onClose={() => setSelected(null)}

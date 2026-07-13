@@ -18,6 +18,7 @@ import type { Mem0Memory } from "@/lib/memory";
 import { buildEmailAssistantPersona } from "@/app/email/lib/emailAssistantPersona";
 import { getAssistantSettings } from "@/app/email/lib/api";
 import AgentChat from "@/components/AgentChat";
+import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
 import type { ArtifactEntry } from "@/hooks/useAgentChat";
 import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
@@ -54,6 +55,7 @@ function AgentPickerModal({
 }) {
   const [agents, setAgents] = useState<AgentEntry[]>([]);
   const [loading, setLoading] = useState(true);
+  const agentAvatars = useAgentAvatars();
   // Integration statuses fetched in background to show "needs setup" badges
   const [allStatuses, setAllStatuses] = useState<IntegrationStatus[]>([]);
 
@@ -142,7 +144,10 @@ function AgentPickerModal({
                     className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="text-sm font-medium text-foreground truncate">{a.name}</div>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <AgentAvatar libraryId={agentAvatars[a.name]} size={22} fallback={null} />
+                        <div className="text-sm font-medium text-foreground truncate">{a.display_name || a.name}</div>
+                      </div>
                       <div className="flex items-center gap-1.5 flex-wrap shrink-0">
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-primary whitespace-nowrap">
                           Copilot SDK
@@ -184,7 +189,10 @@ function AgentPickerModal({
                     className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
                   >
                     <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="text-sm font-medium text-foreground truncate">{a.name}</div>
+                      <div className="flex items-center gap-2 min-w-0">
+                        <AgentAvatar libraryId={agentAvatars[a.name]} size={22} fallback={null} />
+                        <div className="text-sm font-medium text-foreground truncate">{a.display_name || a.name}</div>
+                      </div>
                       <div className="flex items-center gap-1.5 flex-wrap shrink-0">
                         <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent whitespace-nowrap">
                           MAF
@@ -299,6 +307,7 @@ function SessionList({
   onSelect,
   onNew,
   onDelete,
+  agentAliases,
 }: {
   sessions: ChatSession[];
   activeId: string;
@@ -306,6 +315,8 @@ function SessionList({
   onSelect: (id: string) => void;
   onNew: () => void;
   onDelete: (id: string) => void;
+  /** canonical agent name → friendly display name, for group headers. */
+  agentAliases?: Record<string, string>;
 }) {
   // Group sessions by agentName
   const groups = useMemo(() => {
@@ -395,7 +406,7 @@ function SessionList({
                 ▼
               </span>
               <span className="flex-1 text-xs font-medium truncate">
-                {agentName}
+                {agentAliases?.[agentName] || agentName}
               </span>
               {/* Active run count badge */}
               {agentSessions.some((s) => activeRunIds.has(s.id)) && (
@@ -597,6 +608,15 @@ function ChatPageInner() {
       .then((data: AgentEntry[]) => { if (Array.isArray(data)) setAgentList(data); })
       .catch(() => {});
   }, []);
+  // canonical name → friendly display name, for the session-list group headers.
+  const agentAliasMap = useMemo(
+    () => Object.fromEntries(
+      agentList
+        .filter((a) => a.display_name)
+        .map((a) => [a.name, a.display_name as string]),
+    ),
+    [agentList],
+  );
 
   // Load sessions from localStorage on mount.
   // If ?agent=<name> is in the URL, immediately open a new session for that agent.
@@ -759,6 +779,7 @@ function ChatPageInner() {
           onSelect={(id) => { handleSelectSession(id); closeDrawer(); }}
           onNew={() => { handleNewSession(); closeDrawer(); }}
           onDelete={handleDeleteSession}
+          agentAliases={agentAliasMap}
         />
         {memoriesLoaded && (
           <MemoryPanel
@@ -892,6 +913,7 @@ function ChatPageInner() {
                 onSelect={handleSelectSession}
                 onNew={handleNewSession}
                 onDelete={handleDeleteSession}
+                agentAliases={agentAliasMap}
               />
 
               {memoriesLoaded && (

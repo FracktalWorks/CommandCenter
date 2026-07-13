@@ -607,6 +607,55 @@ async def get_agent_config(
     )
 
 
+# ---------------------------------------------------------------------------
+# Agent display-name (alias) overlay.
+#
+# An alias is a user-editable friendly name shown in the Agents page, chat, and
+# observability.  It is a pure DISPLAY overlay: the canonical ``name`` stays the
+# key for runs, avatars, localStorage, dispatch and DB rows.  Stored as ONE blob
+# in the model_config table (survives deploys/reboots) keyed by canonical name,
+# so it works uniformly for BOTH static built-in and dynamically-registered
+# agents — the dynamic_agents.display_name column is deliberately NOT used (it
+# can't cover built-ins).
+# ---------------------------------------------------------------------------
+_AGENT_ALIASES_KEY = "agent_aliases"
+
+
+def _load_agent_aliases() -> dict[str, str]:
+    """Return ``{canonical_name: alias}``.  Best-effort → ``{}`` on any error."""
+    try:
+        from acb_llm.model_config import load_blob  # noqa: PLC0415
+        blob = load_blob(_AGENT_ALIASES_KEY, {})
+        if isinstance(blob, dict):
+            return {
+                str(k): str(v).strip()
+                for k, v in blob.items()
+                if str(v).strip()
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return {}
+
+
+def _set_agent_alias(name: str, alias: str) -> str:
+    """Set (or clear, when *alias* is empty/blank) an agent's display name.
+
+    Returns the stored alias ("" when cleared).  Raises only on a real DB write
+    failure so the caller can surface it.
+    """
+    from acb_llm.model_config import load_blob, save_blob  # noqa: PLC0415
+    blob = load_blob(_AGENT_ALIASES_KEY, {})
+    if not isinstance(blob, dict):
+        blob = {}
+    alias = (alias or "").strip()
+    if alias:
+        blob[name] = alias
+    else:
+        blob.pop(name, None)
+    save_blob(_AGENT_ALIASES_KEY, blob)
+    return alias
+
+
 @router.get("", summary="List all registered agents")
 async def list_agents(
     user: UserContext = Depends(get_current_user),
@@ -678,6 +727,12 @@ async def list_agents(
                 continue
     except Exception:  # noqa: BLE001
         pass
+
+    # Overlay the user-set display name (alias) onto every agent, static or
+    # dynamic.  Empty string when unset — the UI falls back to ``name``.
+    aliases = _load_agent_aliases()
+    for a in merged:
+        a["display_name"] = aliases.get(a["name"], "")
 
     return merged
 
@@ -1043,6 +1098,7 @@ async def remove_agent(
 
 
 class PatchAgentRequest(BaseModel):
+    display_name: str | None = None
     description: str | None = None
     tags: list[str] | None = None
     integrations: list[str] | None = None
@@ -1056,50 +1112,78 @@ async def patch_agent(
     req: PatchAgentRequest,
     user: UserContext = Depends(get_current_user),
 ) -> dict:
-    """Partially update a dynamic agent's metadata.
+    """Partially update an agent's metadata.
 
-    When an agent's status is changed from ``"live"`` to anything else,
-    its workspace files on disk are automatically cleaned up so stale
-    artifacts don't linger in the file browser.
+    The **display name (alias)** can be set for ANY known agent — static
+    built-in or dynamic — because it is a separate display overlay that never
+    mutates the built-in's code definition.  All OTHER metadata edits
+    (description/tags/integrations/status) remain dynamic-only: built-ins are
+    defined in code.
+
+    When an agent's status is changed from ``"live"`` to anything else, its
+    workspace files on disk are automatically cleaned up so stale artifacts
+    don't linger in the file browser.
     """
-    if name in _KNOWN_AGENTS:
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail=f"Built-in agent {name!r} cannot be modified via the API.",
-        )
     dynamic = _load_dynamic_agents()
     entry = next((a for a in dynamic if a["name"] == name), None)
-    if entry is None:
+    is_builtin = name in _KNOWN_AGENTS
+    if entry is None and not is_builtin:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail=f"Agent {name!r} not found.",
         )
-    prev_status = entry.get("status", "live")
-    if req.description is not None:
-        entry["description"] = req.description
-    if req.tags is not None:
-        entry["tags"] = req.tags
-    if req.integrations is not None:
-        entry["integrations"] = req.integrations
-    if req.optional_integrations is not None:
-        entry["optional_integrations"] = req.optional_integrations
-    if req.status is not None:
-        entry["status"] = req.status
-    _save_dynamic_agents(dynamic)
 
-    # ── Clean up workspace when deactivating ─────────────────────────
-    if (
-        req.status is not None
-        and prev_status == "live"
-        and req.status != "live"
-    ):
-        import asyncio as _asyncio  # noqa: PLC0415
-        await _asyncio.get_event_loop().run_in_executor(
-            None, _cleanup_agent_workspace, name,
-        )
+    # ── Display name (alias) — allowed for built-ins AND dynamic agents ──
+    if req.display_name is not None:
+        _set_agent_alias(name, req.display_name)
+
+    # ── Other metadata edits are dynamic-only ────────────────────────
+    other_fields = (
+        req.description,
+        req.tags,
+        req.integrations,
+        req.optional_integrations,
+        req.status,
+    )
+    if any(f is not None for f in other_fields):
+        if entry is None:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=(
+                    f"Built-in agent {name!r}: only the display name can be "
+                    "changed via the API."
+                ),
+            )
+        prev_status = entry.get("status", "live")
+        if req.description is not None:
+            entry["description"] = req.description
+        if req.tags is not None:
+            entry["tags"] = req.tags
+        if req.integrations is not None:
+            entry["integrations"] = req.integrations
+        if req.optional_integrations is not None:
+            entry["optional_integrations"] = req.optional_integrations
+        if req.status is not None:
+            entry["status"] = req.status
+        _save_dynamic_agents(dynamic)
+
+        # ── Clean up workspace when deactivating ─────────────────────
+        if (
+            req.status is not None
+            and prev_status == "live"
+            and req.status != "live"
+        ):
+            import asyncio as _asyncio  # noqa: PLC0415
+            await _asyncio.get_event_loop().run_in_executor(
+                None, _cleanup_agent_workspace, name,
+            )
 
     _log.info("agent.patched", name=name, actor=user.email)
-    return entry
+    # Return the current view (entry for dynamic; a minimal dict for built-ins),
+    # always carrying the resolved display name.
+    result = dict(entry) if entry is not None else {"name": name}
+    result["display_name"] = _load_agent_aliases().get(name, "")
+    return result
 
 
 @router.post("/run/stream", summary="Stream a named agent run as AG-UI SSE events")

@@ -39,16 +39,20 @@ def is_urgent(
     return delta_hours <= window_hours  # overdue (<=0) included
 
 
-# ── The 8 cells (the user's Notion formula, verbatim) ────────────────────────
+# ── The 8 cells (the user's revised Notion formula, verbatim) ────────────────
 
-# cell key → (order 1..8, emoji, label, mode). Order 1 = act first.
+# cell key → (order 1..8, emoji, label, mode). Order 1 = act first; the sequence
+# INTERLEAVES leveraged and non-leveraged cells by true priority. `mode` is the
+# SUGGESTION badge the cell nudges toward (delegate/schedule/drop) — never a
+# status the task lives in; "do" carries no nudge. Byte-parity with
+# lib/priority.ts CELL_META.
 CELL_META: dict[str, tuple[int, str, str, str]] = {
-    "founder-fire": (1, "🔥", "Founder Fire", "do"),
-    "deep-work": (2, "📈", "High-Leverage Deep Work", "do"),
-    "quick-leverage": (3, "📤", "Quick Leverage Win", "do"),
-    "delegate-important": (4, "🚨", "Delegate / Schedule ASAP", "delegate"),
-    "schedule-important": (5, "🔁", "Delegate / Schedule", "schedule"),
-    "delegate-urgent": (6, "🚨", "Delegate ASAP", "delegate"),
+    "founder-fire": (1, "🔥", "Founder Fire / Schedule", "do"),
+    "delegate-important": (2, "🚨", "Delegate / Attend to ASAP", "delegate"),
+    "deep-work": (3, "📈", "High-Leverage Deep Work", "do"),
+    "schedule-important": (4, "🔁", "Important / Delegate / Schedule", "schedule"),
+    "quick-leverage": (5, "📤", "Quick Leverage Win / Schedule", "do"),
+    "delegate-urgent": (6, "🚨", "Eliminate / Ignore / Delegate ASAP", "drop"),
     "leverage-bet": (7, "🧪", "Leverage Bet / Optional", "do"),
     "eliminate": (8, "🗑", "Eliminate / Ignore", "drop"),
 }
@@ -67,19 +71,19 @@ def cell_for_inputs(inp: PriorityInputs) -> str:
     """The user's Notion formula, verbatim, as a pure function of the 3 bools."""
     if inp.leveraged:
         if inp.important and inp.urgent:
-            return "founder-fire"        # 1
+            return "founder-fire"        # order 1
         if inp.important and not inp.urgent:
-            return "deep-work"           # 2
+            return "deep-work"           # order 3
         if not inp.important and inp.urgent:
-            return "quick-leverage"      # 3
-        return "leverage-bet"            # 7
+            return "quick-leverage"      # order 5
+        return "leverage-bet"            # order 7
     if inp.important and inp.urgent:
-        return "delegate-important"      # 4
+        return "delegate-important"      # order 2
     if inp.important and not inp.urgent:
-        return "schedule-important"      # 5
+        return "schedule-important"      # order 4
     if not inp.important and inp.urgent:
-        return "delegate-urgent"         # 6
-    return "eliminate"                   # 8
+        return "delegate-urgent"         # order 6
+    return "eliminate"                   # order 8
 
 
 def priority_inputs(

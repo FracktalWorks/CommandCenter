@@ -24,7 +24,7 @@ import {
   Sparkles,
 } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
-import { modeSuggestion, isUntagged } from "../lib/priority";
+import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
 import { isOverdue } from "../lib/utils";
 import { applyFilters, applySort, type GroupBy } from "../lib/ordering";
@@ -33,7 +33,6 @@ import { TaskCard } from "./TaskCard";
 import { TaskBoard } from "./TaskBoard";
 import { TaskListGrouped } from "./TaskListGrouped";
 import { LensGroupedList } from "./LensGroupedList";
-import { ModeHintBar } from "./PriorityControls";
 import { TaskToolbar } from "./TaskToolbar";
 
 // View mode (list vs kanban board) for the processed-task views, sticky per
@@ -85,8 +84,6 @@ export function ItemList() {
   const loading = useTaskStore((s) => s.loading);
   const view = useTaskStore((s) => s.selectedView);
   const context = useTaskStore((s) => s.selectedContext);
-  const selectedMode = useTaskStore((s) => s.selectedMode);
-  const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const filters = useTaskStore((s) => s.filters);
   const sort = useTaskStore((s) => s.sort);
@@ -117,20 +114,18 @@ export function ItemList() {
   // context/assignee filter, then the active sort. `inView` is the pre-toolbar
   // set — used to populate the toolbar's context/assignee dropdowns so they
   // never offer an option that returns nothing.
-  const inView = useMemo(() => {
-    const base = itemsForView(items, view, context, sourceFilter);
-    // Drilled into a delegate/schedule bucket → narrow to those suggestions.
-    if (view === "next" && selectedMode) {
-      return base.filter(
-        (i) => modeSuggestion(i, urgentWindowHours)?.mode === selectedMode,
-      );
-    }
-    return base;
-  }, [items, view, context, sourceFilter, selectedMode, urgentWindowHours]);
-  const visible = useMemo(
-    () => applySort(applyFilters(inView, filters), sort),
-    [inView, filters, sort],
+  const inView = useMemo(
+    () => itemsForView(items, view, context, sourceFilter),
+    [items, view, context, sourceFilter],
   );
+  // The Priority view is a RANKED LIST (Founder Fire → Eliminate by matrix
+  // rank), not status-like cell buckets — the cell shows as a badge per card.
+  // It forces the priority sort; every other view honours the toolbar sort.
+  const visible = useMemo(() => {
+    const effectiveSort =
+      view === "priority" ? ({ field: "priority", dir: "asc" } as const) : sort;
+    return applySort(applyFilters(inView, filters), effectiveSort);
+  }, [inView, filters, sort, view]);
   // Offer "auto-assign contexts" when Next Actions has context-less tasks (the
   // synced ClickUp tasks that never went through Clarify → @no context bucket).
   const contextlessCount = useMemo(
@@ -158,18 +153,15 @@ export function ItemList() {
   // its own triage UI; projects is a different surface). Calendar/Archive get
   // it too — search/sort still help there — but they stay list-only.
   const showToolbar = view !== "inbox";
-  // Status-segmented list: only Next Actions groups (by the global workflow
-  // stages). @context is NOT a grouping axis here — it drives the left sidebar.
-  // A delegate/schedule mode bucket renders as a flat list (with hint bars),
-  // not the workflow board.
-  const grouped = view === "next" && !selectedMode;
-  // The toolbar "lens": an explicit group-by overrides the view's default. ""
-  // = default (workflow stages on Next Actions, flat elsewhere). "none"/context/
-  // priority/mode/energy render via LensGroupedList (read-only sections). The
-  // board only applies to the default Next Actions grouping.
-  // The Priority view is intrinsically the 8-cell matrix grouping; it ignores
-  // the toolbar group-by (always priority). Elsewhere the toolbar choice wins.
-  const lens: GroupBy | "" = view === "priority" ? "priority" : groupByChoice;
+  // Status-segmented list: only Next Actions groups (by the status axis — local
+  // stages ∪ ClickUp statuses). @context is NOT a grouping axis here — it drives
+  // the left sidebar.
+  const grouped = view === "next";
+  // The toolbar "lens": an explicit group-by slices a view into labelled
+  // sections via LensGroupedList. "" = default (status axis on Next Actions,
+  // flat elsewhere). The Priority view is a flat RANKED list (no cell buckets),
+  // so it does NOT use a lens — the toolbar group-by only applies elsewhere.
+  const lens: GroupBy | "" = view === "priority" ? "" : groupByChoice;
   const useLens = lens !== "" && lens !== "none" && !(boardable && mode === "board");
   // Bulk multi-select (archive / restore / delete) is offered on the flat-list
   // views — where a "done pile" or backlog builds up. Not on the inbox (its own
@@ -188,11 +180,6 @@ export function ItemList() {
             {context && (
               <span className="ml-2 font-mono text-sm font-normal text-primary/80">
                 {context}
-              </span>
-            )}
-            {selectedMode && (
-              <span className="ml-2 text-sm font-normal text-primary/80">
-                · {selectedMode === "delegate" ? "To delegate" : "To schedule"}
               </span>
             )}
           </h1>
@@ -348,13 +335,13 @@ export function ItemList() {
                   <TaskCard item={item} variant="row" />
                 </div>
               </label>
-            ) : selectedMode ? (
-              <div key={item.id}>
-                <ModeHintBar item={item} mode={selectedMode} />
-                <TaskCard item={item} variant="row" />
-              </div>
             ) : (
-              <TaskCard key={item.id} item={item} variant="row" />
+              <TaskCard
+                key={item.id}
+                item={item}
+                variant="row"
+                showPriority={view === "priority"}
+              />
             ),
           )}
         </div>

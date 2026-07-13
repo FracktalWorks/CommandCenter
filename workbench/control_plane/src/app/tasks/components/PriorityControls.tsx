@@ -124,14 +124,13 @@ function FlagToggle({
 }
 
 const CELL_TONE: Record<PriorityCell, string> = {
-  "founder-fire": "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400",
-  "deep-work": "border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  critical: "border-red-500/40 bg-red-500/10 text-red-600 dark:text-red-400",
+  urgent: "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  "high-leverage": "border-violet-500/40 bg-violet-500/10 text-violet-600 dark:text-violet-400",
+  important: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   "quick-leverage": "border-sky-500/40 bg-sky-500/10 text-sky-600 dark:text-sky-400",
-  "delegate-important": "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
-  "schedule-important": "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
-  "delegate-urgent": "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
-  "leverage-bet": "border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-400",
-  eliminate: "border-border bg-secondary/40 text-muted-foreground",
+  "speculative-bet": "border-teal-500/40 bg-teal-500/10 text-teal-600 dark:text-teal-400",
+  "low-priority": "border-border bg-secondary/40 text-muted-foreground",
 };
 
 /** The single matrix-cell badge (emoji + label). Render this ONLY in the

@@ -12,14 +12,14 @@
 **The whole foundation branch is MERGED to `main`, DEPLOYED, and VERIFIED LIVE on prod.** Everything in Section 0 is running in production.
 
 **Deployment / git state**
-- `origin/main` = **`2965944`** — includes the foundation merge (`1991f43`), the `acb_graph` connect_timeout (`ccccdc8`, deployed+verified live), and the two gateway-engine connect_timeouts (`1684e1a`).
-- **`local main` is 4 commits AHEAD of origin/main — NOT pushed** (autonomous Session-2b work, held for review; a push = a prod deploy):
-  - `1ff6c0d` — `connect_timeout` on the four `email_ingestion` async engines (completes BO-10 connect_timeout across every engine).
+- `origin/main` = **`60d2807`** — DEPLOYED + VERIFIED LIVE (deploy.yml success, 5m17s). Session-2b work (5 commits) is in prod:
+  - `1ff6c0d` — `connect_timeout` on the four `email_ingestion` async engines (BO-10 connect_timeout now on every engine).
   - `e59cc6a` — **A2**: `pending_actions` migration (66) + broker `enqueue/list_pending/approve/reject/submit` + tests (8→17).
-  - `0cc5228` — docs for the above.
-  - `9d0888e` — **A2**: gateway `/actions` approval-inbox routes (`GET /actions/pending`, `POST …/approve`, `…/reject`), all `require_internal_auth`-gated + 4 tests. App verified to import with the routes registered.
-  - All additive; **no live write path rerouted** (that needs the B1 authority decision), so the broker stays inert. The new SQL is unit-tested (mocked) but **not yet integration-verified against a live Postgres**.
-- **ACTION FOR NEXT SESSION:** review the 4 local commits + integration-verify against a live PG; then `git push origin main` (watch `deploy.yml` + `/health`) when ready.
+  - `9d0888e` — **A2**: gateway `/actions` approval-inbox routes, all `require_internal_auth`-gated + 4 tests.
+  - `0cc5228`, `60d2807` — docs.
+- **Prod verification (2026-07-13):** migration 66 applied against real PG *before* push (rollback-txn syntax check) and confirmed live after (`pending_actions` table + 3 indexes present); `/actions/pending` and `…/approve` return **401** anonymous; gateway `/health` = ok.
+- The broker is still **inert** — **no live write path rerouted** (needs the B1 authority decision), so non-negotiable #4 is unchanged.
+- **NEXT:** the last A2 mile — register real ClickUp/email handlers + reroute the bypassing writes through `submit()` (needs B1) + the Next.js inbox pane.
 
 **Prod verification done this session (all ✅, read-only):**
 - Migrations applied: `gtd_items.origin` JSONB + index, `agent_avatars`, `agent_run` trace table.

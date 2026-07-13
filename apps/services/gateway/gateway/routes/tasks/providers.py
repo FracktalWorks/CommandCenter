@@ -153,6 +153,12 @@ class BaseTaskProvider(ABC):
         silently dropping the edit."""
         raise ProviderError(self.provider, "update_task not supported", 501)
 
+    async def delete_task(self, provider_task_id: str) -> None:
+        """Delete a task in the tool (user-approved, propagated deletion). A
+        connector that hasn't implemented deletes raises rather than silently
+        leaving the upstream task behind."""
+        raise ProviderError(self.provider, "delete_task not supported", 501)
+
     async def get_task_detail(self, provider_task_id: str) -> dict[str, Any]:
         """Fetch the rich, on-demand detail of one task for the detail view:
 
@@ -436,6 +442,30 @@ class ClickUpProvider(BaseTaskProvider):
             "provider_url": t.get("url"),
             "provider_status": (t.get("status") or {}).get("status"),
         }
+
+    async def delete_task(self, provider_task_id: str) -> None:
+        """DELETE the task on ClickUp — an irreversible upstream write, so it
+        goes through the broker gate like every other outward mutation."""
+        await self._broker_gate(
+            "clickup.delete_task", f"task:{provider_task_id}",
+            {"account_id": self._account_id,
+             "args": {"provider_task_id": provider_task_id}},
+            lambda: self._raw_delete_task(provider_task_id),
+        )
+
+    async def _raw_delete_task(self, provider_task_id: str) -> None:
+        """The actual ClickUp DELETE — bypasses the broker gate. Called by the
+        gate on auto-apply AND by the persistent handler on approval. A 404 is
+        treated as success: the task is already gone, which is the goal."""
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.delete(
+                f"{_CLICKUP}/task/{provider_task_id}", headers=self._headers(),
+            )
+        if r.status_code == 404:
+            return
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"delete task → {r.status_code}: {r.text[:200]}")
 
     async def _closed_status_for(self, provider_task_id: str) -> str | None:
         """The closed/done-type status name of a task's list (varies per

@@ -91,14 +91,10 @@ export function InboxView() {
   const undoLastCapture = useTaskStore((s) => s.undoLastCapture);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const bulkDispose = useTaskStore((s) => s.bulkDispose);
-  const deleteItem = useTaskStore((s) => s.deleteItem);
-  const deleteItems = useTaskStore((s) => s.deleteItems);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const undeferItem = useTaskStore((s) => s.undeferItem);
-  const undoSnapshot = useTaskStore((s) => s.undoSnapshot);
-  const undoLastChange = useTaskStore((s) => s.undoLastChange);
   const dupNotice = useTaskStore((s) => s.dupNotice);
   const resolveDupNotice = useTaskStore((s) => s.resolveDupNotice);
-  const dismissUndo = useTaskStore((s) => s.dismissUndo);
   const processed = useTaskStore((s) => s.processedThisSession);
   const clarifyModalOpen = useTaskStore((s) => s.clarifyModalOpen);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
@@ -202,7 +198,7 @@ export function InboxView() {
     clearSelection();
   };
   const bulkDelete = () => {
-    deleteItems([...selectedIds]);
+    requestDelete([...selectedIds]);
     clearSelection();
   };
 
@@ -233,7 +229,7 @@ export function InboxView() {
       const deleteAdvance = () => {
         const nextId =
           visible[idx + 1]?.id ?? visible[idx - 1]?.id ?? null;
-        deleteItem(cur.id);
+        requestDelete([cur.id]);
         setCursorId(nextId);
       };
 
@@ -278,12 +274,8 @@ export function InboxView() {
           e.preventDefault();
           disposeAdvance("DONE");
           break;
-        case "u":
-          if (undoSnapshot) {
-            e.preventDefault();
-            undoLastChange();
-          }
-          break;
+        // `u` (undo) is handled globally by <UndoToast/> so it works in every
+        // view, not just the inbox.
         case "Escape":
           clearSelection();
           setCursorId(null);
@@ -301,17 +293,8 @@ export function InboxView() {
     quickCaptureOpen,
     openClarify,
     quickDispose,
-    deleteItem,
-    undoSnapshot,
-    undoLastChange,
+    requestDelete,
   ]);
-
-  // Auto-dismiss the undo affordance after a few seconds (async → effect-safe).
-  useEffect(() => {
-    if (!undoSnapshot) return;
-    const t = setTimeout(() => dismissUndo(), 7000);
-    return () => clearTimeout(t);
-  }, [undoSnapshot, dismissUndo]);
 
   const submit = () => {
     const t = value.trim();
@@ -758,33 +741,8 @@ export function InboxView() {
         </div>
       </div>
 
-      {/* Undo safety net — makes fast triage feel safe (one-level undo) */}
-      {undoSnapshot && (
-        <div className="chat-fade-in fixed bottom-20 left-1/2 z-[70] flex -translate-x-1/2 items-center gap-3 rounded-full border border-border bg-popover px-4 py-2 shadow-2xl sm:bottom-6">
-          <span className="whitespace-nowrap text-[13px] text-foreground">
-            {undoSnapshot.label}
-          </span>
-          <button
-            type="button"
-            onClick={undoLastChange}
-            className="tech-transition inline-flex items-center gap-1 whitespace-nowrap text-[13px] font-semibold text-primary hover:underline"
-          >
-            <Undo2 className="h-3.5 w-3.5" />
-            Undo
-            <kbd className="ml-0.5 hidden rounded border border-border px-1 py-0.5 font-mono text-[9px] text-muted-foreground sm:inline">
-              u
-            </kbd>
-          </button>
-          <button
-            type="button"
-            onClick={dismissUndo}
-            aria-label="Dismiss"
-            className="tech-transition rounded-md p-0.5 text-muted-foreground hover:text-foreground"
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
-        </div>
-      )}
+      {/* The one-level undo toast is now global (<UndoToast/> in page.tsx) so it
+          shows in every view — the inbox no longer renders its own. */}
 
       <ClarifyModal />
     </div>

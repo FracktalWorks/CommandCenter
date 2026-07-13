@@ -58,6 +58,9 @@ function mapItem(raw: Raw): GtdItem {
       ? Number(raw.time_estimate_mins)
       : undefined,
     isTwoMinute: Boolean(raw.is_two_minute),
+    important: Boolean(raw.important),
+    leveraged: Boolean(raw.leveraged),
+    keptMine: Boolean(raw.kept_mine),
     projectId: raw.project_id ? String(raw.project_id) : undefined,
     isMine: Boolean(raw.is_mine ?? true),
     waitingOn: asPerson(raw.waiting_on),
@@ -320,6 +323,9 @@ export async function apiPatchItem(
     assignee?: { name: string; email?: string; provider_user_id?: string };
     clear_assignee?: boolean;
     is_mine?: boolean;
+    important?: boolean;
+    leveraged?: boolean;
+    kept_mine?: boolean;
   }
 ): Promise<GtdItem> {
   return mapItem(
@@ -350,6 +356,19 @@ export async function apiBulkDispose(
   const rows = await gatewayFetch<Raw[]>(`/items/bulk`, {
     method: "POST",
     body: JSON.stringify({ ids, disposition }),
+  });
+  return rows.map(mapItem);
+}
+
+/** Archive (or un-archive) many tasks at once — the bulk "Archive selected"
+ *  action. Local overlay; never touches the connected tool. */
+export async function apiBulkArchive(
+  ids: string[],
+  archived: boolean
+): Promise<GtdItem[]> {
+  const rows = await gatewayFetch<Raw[]>(`/items/bulk-archive`, {
+    method: "POST",
+    body: JSON.stringify({ ids, archived }),
   });
   return rows.map(mapItem);
 }
@@ -400,8 +419,24 @@ export async function apiPushItem(id: string): Promise<GtdItem> {
   return mapItem(await gatewayFetch<Raw>(`/items/${id}/push`, { method: "POST" }));
 }
 
+/** Soft-delete: the task vanishes from every view but stays intact server-side
+ *  for a lossless undo. Call apiPurgeItem after the undo window to finalize
+ *  (and propagate the deletion to ClickUp for synced tasks). */
 export async function apiDeleteItem(id: string): Promise<void> {
   await gatewayFetch<void>(`/items/${id}`, { method: "DELETE" });
+}
+
+/** Undo a soft delete — returns the restored task, exactly as it was. */
+export async function apiRestoreItem(id: string): Promise<GtdItem> {
+  return mapItem(
+    await gatewayFetch<Raw>(`/items/${id}/restore`, { method: "POST" })
+  );
+}
+
+/** Finalize a soft delete: remove the row and (for a synced task) propagate the
+ *  deletion to ClickUp. Idempotent — a row that's already gone is a no-op. */
+export async function apiPurgeItem(id: string): Promise<void> {
+  await gatewayFetch<void>(`/items/${id}/purge`, { method: "POST" });
 }
 
 export async function apiListWorkspaces(
@@ -610,6 +645,9 @@ export interface TaskSettings {
   backgroundSync: boolean;
   mirrorDoneTasks: boolean;
   workflowStages: string[];
+  /** hours from now within which a due task is URGENT (drives the matrix's ⏰
+   *  axis). Overdue is always urgent. */
+  urgentWindowHours: number;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -626,6 +664,7 @@ function mapSettings(r: Raw): TaskSettings {
     workflowStages: Array.isArray(r.workflow_stages)
       ? (r.workflow_stages as unknown[]).map(String).filter(Boolean)
       : ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
+    urgentWindowHours: Number(r.urgent_window_hours ?? 48) || 48,
   };
 }
 
@@ -654,6 +693,8 @@ export async function updateTaskSettings(
     body.mirror_done_tasks = patch.mirrorDoneTasks;
   if (patch.workflowStages !== undefined)
     body.workflow_stages = patch.workflowStages;
+  if (patch.urgentWindowHours !== undefined)
+    body.urgent_window_hours = patch.urgentWindowHours;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",
@@ -780,6 +821,13 @@ export async function apiClarifyPropose(
     isVague: Boolean(r.is_vague),
     suggestedTitle: r.suggested_title ? String(r.suggested_title) : undefined,
     dueDate: r.due_date ? String(r.due_date) : undefined,
+    important: Boolean(r.important),
+    leveraged: Boolean(r.leveraged),
+    weightReason: r.leveraged
+      ? "Looks high-leverage — a potential 100x outcome."
+      : r.important
+        ? "Reads as important — something stalls if it slips."
+        : "No strong importance/leverage signal.",
     duplicate: r.duplicate
       ? (() => {
           const d = r.duplicate as Raw;

@@ -156,6 +156,157 @@ export async function captureEmailToTask(
   };
 }
 
+// ── Email → Task capture popup (preview → enhance → create) ────────────────
+// The editable draft the popup renders. All fields are strings so the popup
+// hands the same shape straight back on confirm (dates stay ISO strings, the
+// backend parses them). `disposition` is the GTD routing bucket.
+export interface TaskCaptureDraft {
+  title: string;
+  notes: string;
+  disposition: string;
+  nextAction: string;
+  assigneeName: string;
+  dueAt: string;
+  deferUntil: string;
+  context: string;
+}
+
+export interface SimilarTask {
+  id: string;
+  title: string;
+  disposition: string;
+  reason: "same-thread" | "similar-title";
+  score: number;
+}
+
+export interface AlreadyCapturedTask {
+  id: string;
+  title: string;
+  disposition: string;
+}
+
+export interface TaskCapturePreview {
+  alreadyCaptured: AlreadyCapturedTask | null;
+  draft: TaskCaptureDraft;
+  similar: SimilarTask[];
+  fromName: string;
+  subject: string;
+}
+
+function mapDraft(raw: Record<string, unknown>): TaskCaptureDraft {
+  return {
+    title: String(raw.title ?? ""),
+    notes: String(raw.notes ?? ""),
+    disposition: String(raw.disposition ?? "INBOX"),
+    nextAction: String(raw.next_action ?? ""),
+    assigneeName: String(raw.assignee_name ?? ""),
+    dueAt: String(raw.due_at ?? ""),
+    deferUntil: String(raw.defer_until ?? ""),
+    context: String(raw.context ?? ""),
+  };
+}
+
+function draftToWire(d: TaskCaptureDraft): Record<string, unknown> {
+  return {
+    title: d.title,
+    notes: d.notes,
+    disposition: d.disposition,
+    next_action: d.nextAction,
+    assignee_name: d.assigneeName,
+    due_at: d.dueAt,
+    defer_until: d.deferUntil,
+    context: d.context,
+  };
+}
+
+/** Step 1 — open the popup: subject-derived default title + "you may already
+ *  have this" (same-thread / fuzzy-title) list. No LLM, no write. */
+export async function previewEmailCapture(
+  accountId: string,
+  emailId: string
+): Promise<TaskCapturePreview> {
+  const res = await gatewayFetch<Record<string, unknown>>(
+    "/tasks/capture/from-email/preview",
+    {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId, email_id: emailId }),
+    }
+  );
+  const ac = res.already_captured as Record<string, unknown> | null;
+  return {
+    alreadyCaptured: ac
+      ? {
+          id: String(ac.id ?? ""),
+          title: String(ac.title ?? ""),
+          disposition: String(ac.disposition ?? "INBOX"),
+        }
+      : null,
+    draft: mapDraft((res.draft ?? {}) as Record<string, unknown>),
+    similar: ((res.similar ?? []) as Record<string, unknown>[]).map((s) => ({
+      id: String(s.id ?? ""),
+      title: String(s.title ?? ""),
+      disposition: String(s.disposition ?? "INBOX"),
+      reason: (s.reason === "same-thread" ? "same-thread" : "similar-title"),
+      score: Number(s.score ?? 0),
+    })),
+    fromName: String(res.from_name ?? ""),
+    subject: String(res.subject ?? ""),
+  };
+}
+
+/** Step 2 — "Enhance with AI": the LLM reads the whole email + thread and
+ *  returns a routed draft. Still no write. */
+export async function enhanceEmailCapture(
+  accountId: string,
+  emailId: string
+): Promise<{ draft: TaskCaptureDraft; usedLlm: boolean; assigneeResolved: string | null }> {
+  const res = await gatewayFetch<Record<string, unknown>>(
+    "/tasks/capture/from-email/enhance",
+    {
+      method: "POST",
+      body: JSON.stringify({ account_id: accountId, email_id: emailId }),
+    }
+  );
+  return {
+    draft: mapDraft((res.draft ?? {}) as Record<string, unknown>),
+    usedLlm: Boolean(res.used_llm),
+    assigneeResolved: res.assignee_resolved ? String(res.assignee_resolved) : null,
+  };
+}
+
+/** Step 3 — confirm: write the (possibly edited) task. Idempotent per email. */
+export async function createEmailCapture(
+  accountId: string,
+  emailId: string,
+  draft: TaskCaptureDraft
+): Promise<{
+  title: string;
+  created: boolean;
+  disposition: string;
+  assigneeName: string | null;
+  dueAt: string | null;
+}> {
+  const res = await gatewayFetch<Record<string, unknown>>(
+    "/tasks/capture/from-email/create",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        account_id: accountId,
+        email_id: emailId,
+        draft: draftToWire(draft),
+      }),
+    }
+  );
+  const item = (res.item ?? {}) as Record<string, unknown>;
+  return {
+    title: String(item.title ?? ""),
+    created: Boolean(res.created),
+    disposition: String(res.disposition ?? "INBOX"),
+    assigneeName: res.assignee_name ? String(res.assignee_name) : null,
+    dueAt: res.due_at ? String(res.due_at) : null,
+  };
+}
+
 export async function listEmailAccounts(): Promise<EmailAccount[]> {
   const raw = await gatewayFetch<Record<string, unknown>[]>("/email/accounts");
   return (raw ?? []).map(mapAccount);

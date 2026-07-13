@@ -62,6 +62,13 @@ export interface ClarifyProposal {
   /** a model-inferred hard deadline (ISO date), when the item implies one
    *  (server proposal only). Feeds the "When" axis. */
   dueDate?: string;
+  /** Prioritization matrix reads (AI proposes, user confirms). `urgent` is NOT
+   *  proposed — it derives from the due date. `important` = something stalls if
+   *  skipped (downside); `leveraged` = asymmetric 100x upside. `weightReason`
+   *  is a short why shown next to the toggles. */
+  important?: boolean;
+  leveraged?: boolean;
+  weightReason?: string;
   /** a likely-existing PM-tool (ClickUp) task this inbox capture may duplicate
    *  — set only on a fresh inbox clarify (server proposal, token-free lexical
    *  match). Lets the card offer "already on ClickUp: merge into it, or drop
@@ -254,6 +261,45 @@ const REFERENCE_HINTS = ["receipt", "invoice", "statement", "fyi", "file", "for 
 const SOMEDAY_HINTS = ["idea:", "someday", "maybe", "one day", "learn ", "explore", "evaluate", "wish", "consider "];
 const CALENDAR_HINTS = ["today", "tomorrow", "tonight", "monday", "tuesday", "wednesday", "thursday", "friday", "saturday", "sunday", "deadline", "due ", " at ", "o'clock", "appointment", "meeting on", "next week"];
 
+// Prioritization signals (heuristic; the LLM path reads these more richly).
+// IMPORTANT = downside — something stalls/breaks or a real obligation. Money,
+// contracts, blockers, compliance, the team/company being held up.
+const IMPORTANT_HINTS = [
+  "blocker", "blocking", "blocked", "urgent", "critical", "deadline", "overdue",
+  "payroll", "invoice", "payment", "pay ", "contract", "legal", "compliance",
+  "tax", "gst", "renew", "expire", "expiry", "lapse", "outage", "down", "bug",
+  "production", "customer", "client", "launch", "ship", "release", "hire",
+  "offer letter", "board", "audit", "penalty", "fine",
+];
+// LEVERAGED = asymmetric 100x upside — the rare, trajectory-changing tasks.
+const LEVERAGED_HINTS = [
+  "investor", "vc ", "raise", "fundraise", "fundraising", "term sheet",
+  "grant", "pitch", "partnership", "partner with", "acquisition", "acquire",
+  "key hire", "cofounder", "co-founder", "intro to", "introduction to",
+  "keynote", "press", "pr ", "media", "podcast", "conference", "demo day",
+  "strategic", "distribution deal", "enterprise deal", "big customer",
+];
+
+/** Heuristic read of the two manual matrix flags from the wording. Conservative
+ *  — leveraged especially stays rare (it's the scarce flag). The LLM clarify
+ *  path overrides this with a richer read; this keeps the offline heuristic and
+ *  the "AI proposes" contract coherent. */
+function readWeight(item: GtdItem): {
+  important: boolean;
+  leveraged: boolean;
+  weightReason: string;
+} {
+  const t = `${item.title} ${item.notes ?? ""}`.toLowerCase();
+  const leveraged = has(t, ...LEVERAGED_HINTS);
+  const important = leveraged || has(t, ...IMPORTANT_HINTS);
+  const reason = leveraged
+    ? "Looks high-leverage — a potential 100x outcome."
+    : important
+      ? "Reads as important — something stalls if it slips."
+      : "No strong importance/leverage signal — left unflagged.";
+  return { important, leveraged, weightReason: reason };
+}
+
 // A capture that packs several actions into one line ("book flights and hotel,
 // then email the team") reads as needing a break-down into steps, not a single
 // action. Conservative: needs a clear separator AND at least two parts that
@@ -422,5 +468,21 @@ export function proposeClarification(
     ? `${core.rationale} Looks like it belongs to “${matched.outcome}”.`
     : core.rationale;
 
-  return { ...core, target, projectId: project?.id, projectInferred, rationale };
+  // AI-proposed matrix flags (user confirms). Skip for non-actionable outcomes
+  // — reference/someday/trash don't get prioritized.
+  const weight =
+    core.actionable && core.disposition !== "SOMEDAY"
+      ? readWeight(item)
+      : { important: false, leveraged: false, weightReason: "" };
+
+  return {
+    ...core,
+    target,
+    projectId: project?.id,
+    projectInferred,
+    rationale,
+    important: weight.important,
+    leveraged: weight.leveraged,
+    weightReason: weight.weightReason,
+  };
 }

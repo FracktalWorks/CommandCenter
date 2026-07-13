@@ -37,7 +37,7 @@ export function InboxTable({
   const projects = useTaskStore((s) => s.projects);
   const openClarify = useTaskStore((s) => s.openClarify);
   const quickDispose = useTaskStore((s) => s.quickDispose);
-  const deleteItem = useTaskStore((s) => s.deleteItem);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const selectItem = useTaskStore((s) => s.selectItem);
 
   return (
@@ -188,7 +188,7 @@ export function InboxTable({
                       aria-label="Delete"
                       onClick={(e) => {
                         e.stopPropagation();
-                        deleteItem(item.id);
+                        requestDelete([item.id]);
                       }}
                       className="tech-transition rounded p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
                     >

@@ -7,11 +7,13 @@ import {
   ArrowUpNarrowWide,
   ArrowDownWideNarrow,
   ListFilter,
+  Rows3,
 } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
   filtersActive,
+  type GroupBy,
   type SortField,
 } from "../lib/ordering";
 
@@ -23,13 +25,30 @@ import {
 
 const SORT_LABEL: Record<SortField, string> = {
   manual: "Manual",
+  priority: "Priority",
   due: "Due date",
+  urgency: "Urgency",
   created: "Created",
   title: "Title",
   energy: "Energy",
 };
 
-const SORT_FIELDS: SortField[] = ["manual", "due", "created", "title", "energy"];
+const SORT_FIELDS: SortField[] = [
+  "manual", "priority", "due", "urgency", "created", "title", "energy",
+];
+
+const GROUP_LABEL: Record<GroupBy | "", string> = {
+  "": "Default grouping",
+  none: "No grouping",
+  context: "Context",
+  priority: "Priority",
+  mode: "Action mode",
+  energy: "Energy",
+};
+
+const GROUP_OPTIONS: (GroupBy | "")[] = [
+  "", "context", "priority", "mode", "energy", "none",
+];
 
 export function TaskToolbar({ items }: { items: GtdItem[] }) {
   const filters = useTaskStore((s) => s.filters);
@@ -37,6 +56,8 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
   const clearFilters = useTaskStore((s) => s.clearFilters);
   const sort = useTaskStore((s) => s.sort);
   const setSort = useTaskStore((s) => s.setSort);
+  const groupBy = useTaskStore((s) => s.groupBy);
+  const setGroupBy = useTaskStore((s) => s.setGroupBy);
   // When already drilled into a single @context (a Next Actions subfolder),
   // every visible task IS that context — the Context dropdown is redundant, so
   // it only appears at the top-level Next Actions where all contexts are mixed.
@@ -117,8 +138,28 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
         </button>
       )}
 
-      {/* Sort — pushed to the right */}
+      {/* Group-by (the list "lens") + Sort — pushed to the right */}
       <div className="ml-auto flex items-center gap-1">
+        <Rows3 className="h-3.5 w-3.5 text-muted-foreground" />
+        <select
+          value={groupBy}
+          onChange={(e) => setGroupBy(e.target.value as GroupBy | "")}
+          aria-label="Group by"
+          className={[
+            "tech-transition h-7 rounded-md border bg-background pl-2 pr-6 text-xs focus:border-primary focus:outline-none",
+            groupBy
+              ? "border-primary/50 text-foreground"
+              : "border-border text-muted-foreground",
+          ].join(" ")}
+        >
+          {GROUP_OPTIONS.map((g) => (
+            <option key={g || "default"} value={g}>
+              {GROUP_LABEL[g]}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="flex items-center gap-1">
         <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
         <div className="relative">
           <select

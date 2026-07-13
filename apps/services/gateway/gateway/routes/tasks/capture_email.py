@@ -66,6 +66,60 @@ class CaptureFromEmailResponse(BaseModel):
     due_at: str | None = None
 
 
+# ── Popup ("clarify before capture") request/response shapes ─────────────────
+# The email → task flow is a REVIEW popup, not a blind one-click. The frontend
+# drives it in three steps, each a small endpoint on top of the same machinery:
+#   1. /preview  — open the popup with a programmatic default title (from the
+#                  subject) + a same-thread/fuzzy-title "you may already have
+#                  this" warning. No LLM, no write.
+#   2. /enhance  — the "Enhance with AI" button: the LLM reads the whole email
+#                  + thread and returns a routed draft (title/notes/disposition
+#                  /due/delegate/context). Still no write.
+#   3. /create   — the user confirms; the (possibly edited) fields are written
+#                  through the SAME persist path the one-click endpoint uses.
+
+class SimilarTaskModel(BaseModel):
+    id: str
+    title: str
+    disposition: str
+    reason: str            # "same-thread" | "similar-title"
+    score: float = 0.0     # title similarity 0..1 ("" for same-thread)
+
+
+class CaptureDraftModel(BaseModel):
+    """The editable task the popup renders. Mirrors the fields the create step
+    accepts, so a preview draft can be handed straight back after editing."""
+    title: str
+    notes: str = ""
+    disposition: str = "INBOX"
+    next_action: str = ""
+    assignee_name: str = ""
+    due_at: str = ""
+    defer_until: str = ""
+    context: str = ""
+
+
+class CapturePreviewResponse(BaseModel):
+    already_captured: GtdItemModel | None = None   # exact-email idempotent hit
+    draft: CaptureDraftModel                        # programmatic default
+    similar: list[SimilarTaskModel] = []
+    # Echoed so /enhance and /create don't re-resolve the email.
+    from_name: str = ""
+    subject: str = ""
+
+
+class CaptureEnhanceResponse(BaseModel):
+    draft: CaptureDraftModel
+    used_llm: bool
+    assignee_resolved: str | None = None   # a delegate matched to a real person
+
+
+class CaptureCreateRequest(BaseModel):
+    account_id: str
+    email_id: str
+    draft: CaptureDraftModel
+
+
 def _clean_title(raw: str, fallback: str) -> str:
     t = re.sub(r"\s+", " ", (raw or "")).strip()
     return (t[:200] or fallback)
@@ -307,6 +361,211 @@ def _parse_dt(val: str) -> datetime | None:
         return None
 
 
+# ── Shared machinery (used by the one-click endpoint AND the popup steps) ─────
+
+_STOPWORDS = {
+    "the", "a", "an", "to", "for", "of", "and", "or", "on", "in", "with",
+    "re", "fwd", "fw", "please", "pls", "email", "from", "about", "your",
+    "our", "my", "this", "that", "is", "are", "be", "get", "need", "needs",
+}
+
+
+def _title_tokens(text_val: str) -> set[str]:
+    """Lowercased, stopword-stripped word set for fuzzy title comparison.
+    Reply prefixes are already noise; the stopword list drops the filler that
+    'Email from X: …' style titles share so the overlap reflects real subject
+    words, not scaffolding."""
+    words = re.findall(r"[a-z0-9]+", (text_val or "").lower())
+    return {w for w in words if len(w) > 2 and w not in _STOPWORDS}
+
+
+def _title_similarity(a: str, b: str) -> float:
+    """Jaccard overlap of the two titles' significant tokens (0..1). Cheap,
+    dependency-free (no pg_trgm), and good enough to flag near-duplicate asks
+    like 'Approve vendor quote' vs 'Review the vendor quote'."""
+    ta, tb = _title_tokens(a), _title_tokens(b)
+    if not ta or not tb:
+        return 0.0
+    return len(ta & tb) / len(ta | tb)
+
+
+_SIMILAR_TITLE_THRESHOLD = 0.5
+_SIMILAR_MAX = 4
+
+
+async def _load_email(db: Any, uid: str, account_id: str, email_id: str) -> Any:
+    """Owner-checked email fetch THROUGH the mailbox (see the endpoint note).
+    Raises 404 if it isn't one of the user's messages."""
+    email = (await db.execute(text(
+        """SELECT m.id, m.subject, m.from_address, m.to_addresses,
+                  m.cc_addresses, m.snippet, m.body_text, m.account_id,
+                  m.thread_id, a.email_address AS owner_email
+             FROM email_messages m
+             JOIN email_accounts a ON a.id = m.account_id
+            WHERE m.id = :eid AND m.account_id = :aid
+              AND a.user_id = :uid"""),
+        {"eid": email_id, "aid": account_id, "uid": uid},
+    )).fetchone()
+    if email is None:
+        raise HTTPException(status_code=404, detail="Email not found")
+    return email
+
+
+async def _find_existing_capture(db: Any, uid: str, email_id: str) -> Any:
+    """The OPEN item already captured from THIS exact email, or None
+    (idempotency by origin->>'email_id')."""
+    return (await db.execute(text(
+        ITEM_SELECT + """
+            WHERE i.user_id = :uid AND i.origin->>'email_id' = :eid
+              AND i.disposition NOT IN ('DONE', 'TRASH')
+            LIMIT 1"""),
+        {"uid": uid, "eid": str(email_id)},
+    )).fetchone()
+
+
+async def _find_similar_tasks(
+    db: Any, uid: str, thread_id: str, this_email_id: str, draft_title: str,
+) -> list[SimilarTaskModel]:
+    """"You may already have this" — flags OPEN items that are either captured
+    from the SAME email thread (a different message in the conversation) or
+    whose title is fuzzily similar to the drafted one. Thread hits rank first;
+    title hits are ordered by score. Bounded to a handful of rows."""
+    out: list[SimilarTaskModel] = []
+    seen: set[str] = set()
+
+    if thread_id:
+        rows = (await db.execute(text(
+            ITEM_SELECT + """
+                WHERE i.user_id = :uid
+                  AND i.origin->>'thread_id' = :tid
+                  AND coalesce(i.origin->>'email_id', '') <> :eid
+                  AND i.disposition NOT IN ('DONE', 'TRASH')
+                ORDER BY i.created_at DESC
+                LIMIT :lim"""),
+            {"uid": uid, "tid": str(thread_id), "eid": str(this_email_id),
+             "lim": _SIMILAR_MAX},
+        )).fetchall()
+        for r in rows:
+            item = _row_to_item(r)
+            seen.add(item.id)
+            out.append(SimilarTaskModel(
+                id=item.id, title=item.title, disposition=item.disposition,
+                reason="same-thread", score=1.0))
+
+    # Fuzzy title match over the user's other OPEN items. Capture is a
+    # low-frequency action, so scanning open titles in Python is fine and keeps
+    # us off a pg_trgm migration.
+    rows = (await db.execute(text(
+        """SELECT id, title, disposition FROM gtd_items
+            WHERE user_id = :uid
+              AND disposition NOT IN ('DONE', 'TRASH')
+              AND parent_item_id IS NULL
+              AND archived_at IS NULL
+            ORDER BY created_at DESC
+            LIMIT 400"""),
+        {"uid": uid},
+    )).fetchall()
+    scored: list[tuple[float, Any]] = []
+    for r in rows:
+        if str(r.id) in seen:
+            continue
+        score = _title_similarity(draft_title, r.title or "")
+        if score >= _SIMILAR_TITLE_THRESHOLD:
+            scored.append((score, r))
+    scored.sort(key=lambda s: s[0], reverse=True)
+    for score, r in scored[:_SIMILAR_MAX]:
+        out.append(SimilarTaskModel(
+            id=str(r.id), title=r.title or "", disposition=r.disposition,
+            reason="similar-title", score=round(score, 2)))
+    return out
+
+
+async def _route_and_persist(
+    db: Any, uid: str, email: Any, draft: dict[str, Any], people: list[dict],
+) -> tuple[str, str, str | None]:
+    """The shared WRITE: takes a resolved draft (from the LLM, the fallback, or
+    the popup's edited fields), applies the delegate/destination routing rules,
+    inserts the gtd_items row (+ gtd_waiting for follow-ups) and returns
+    (item_id, disposition, assignee_name). Caller commits."""
+    from_addr = _parse_addr(email.from_address)
+    from_name = str(from_addr.get("name") or from_addr.get("email") or "")
+    from_email_ = str(from_addr.get("email") or "")
+
+    # Resolve a delegate to a real person; a WAITING with a resolved teammate is
+    # a delegation, WAITING without one is a follow-up (waiting on the sender).
+    assignee = _resolve_assignee(draft.get("assignee_name", ""), people)
+    disposition = str(draft.get("disposition") or "INBOX").strip().upper()
+    if disposition not in _CAPTURE_DISPOSITIONS:
+        disposition = "INBOX"
+
+    # Destination rule (see the long note on the one-click endpoint): a task
+    # handed to SOMEONE ELSE must live on the PM tool; if no connected account
+    # has them, don't strand an invisible local delegated task — keep it mine.
+    source, account_id, sync_state = "LOCAL", None, "local"
+    if disposition == "WAITING" and assignee is not None:
+        placed = await _find_pm_account_for_person(db, uid, assignee)
+        if placed is not None:
+            account_id, assignee = placed
+            source, sync_state = "SYNCED", "pending"
+        else:
+            assignee, disposition = None, "INBOX"
+
+    is_mine = disposition != "WAITING"
+    due_at = _parse_dt(draft.get("due_at", ""))
+    defer_until = _parse_dt(draft.get("defer_until", ""))
+    is_hard = bool(due_at) and disposition in ("NEXT", "CALENDAR")
+    clarified = disposition != "INBOX"
+    ctx = str(draft.get("context") or "").strip()
+    ctx = ctx if ctx.startswith("@") else ""
+
+    origin = {
+        "kind": "email",
+        "account_id": str(email.account_id),
+        "email_id": str(email.id),
+        "thread_id": str(email.thread_id or ""),
+        "subject": (email.subject or "")[:300],
+        "from_name": from_name[:120],
+        "from_email": from_email_[:200],
+    }
+    item_id = str(uuid4())
+    await db.execute(text(
+        """INSERT INTO gtd_items
+               (id, user_id, title, description, disposition, next_action,
+                context, assignee, is_mine, due_at, is_hard_date,
+                defer_until, source, account_id, sync_state,
+                clarified_at, origin)
+           VALUES
+               (:id, :uid, :title, :notes, :disp, :next_action,
+                :context, :assignee, :is_mine, :due_at, :is_hard,
+                :defer_until, :source, :account_id, :sync_state,
+                :clarified_at, :origin)"""),
+        {"id": item_id, "uid": uid,
+         "title": _clean_title(str(draft.get("title") or ""), "Handle email"),
+         "notes": (draft.get("notes") or None), "disp": disposition,
+         "next_action": draft.get("next_action") or None,
+         "context": ctx or None,
+         "assignee": json.dumps(assignee) if assignee else None,
+         "is_mine": is_mine, "due_at": due_at, "is_hard": is_hard,
+         "defer_until": defer_until,
+         "source": source, "account_id": account_id, "sync_state": sync_state,
+         "clarified_at": datetime.now(tz=UTC) if clarified else None,
+         "origin": json.dumps(origin)},
+    )
+    if disposition == "WAITING":
+        waiting_on = assignee or {
+            "name": from_name or "the sender", "email": from_email_ or None,
+            "provider_user_id": None}
+        await db.execute(text(
+            """INSERT INTO gtd_waiting
+                   (item_id, waiting_on, delegated_at, expected_by)
+               VALUES (:iid, :who, :now, :expected)"""),
+            {"iid": item_id, "who": json.dumps(waiting_on),
+             "now": datetime.now(tz=UTC), "expected": due_at},
+        )
+    assignee_name = assignee.get("name") if assignee else None
+    return item_id, disposition, assignee_name
+
+
 @router.post("/capture/from-email", response_model=CaptureFromEmailResponse)
 async def capture_from_email(
     req: CaptureFromEmailRequest,
@@ -397,7 +656,7 @@ async def capture_from_email(
             else:
                 assignee, disposition = None, "INBOX"
 
-        is_mine = not (disposition == "WAITING")
+        is_mine = disposition != "WAITING"
         due_at = _parse_dt(draft.get("due_at", ""))
         defer_until = _parse_dt(draft.get("defer_until", ""))
         # A due date the owner must hit (NEXT/CALENDAR) is a HARD date — it
@@ -459,6 +718,154 @@ async def capture_from_email(
         item = _row_to_item(row)
         return CaptureFromEmailResponse(
             item=item, created=True, used_llm=used_llm,
+            disposition=item.disposition,
+            assignee_name=item.assignee.name if item.assignee else None,
+            due_at=item.due_at)
+    finally:
+        await db.close()
+
+
+# ── Popup flow: preview → enhance → create ───────────────────────────────────
+# These three drive the "clarify before capture" popup. They share the owner
+# check, thread reader, LLM drafter and write path with the one-click endpoint
+# above; the difference is only WHEN the write happens (on explicit confirm)
+# and WHAT the user sees first (an editable default, not a fait accompli).
+
+
+@router.post("/capture/from-email/preview",
+             response_model=CapturePreviewResponse)
+async def preview_capture_from_email(
+    req: CaptureFromEmailRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Open the popup: a programmatic default title (from the subject, cheap and
+    instant — no LLM), plus a "you may already have this" list (same-thread +
+    fuzzy title). If this exact email was already captured, surface the existing
+    item so the popup can offer to open it instead of duplicating."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        email = await _load_email(db, uid, req.account_id, req.email_id)
+        from_addr = _parse_addr(email.from_address)
+        from_name = str(from_addr.get("name") or from_addr.get("email") or "")
+
+        existing = await _find_existing_capture(db, uid, str(email.id))
+        already = _row_to_item(existing) if existing is not None else None
+
+        # The default draft is the deterministic fallback — subject-derived,
+        # never interprets the body. "Enhance with AI" upgrades it on demand.
+        fb = draft_task_fallback(email.subject or "", from_name,
+                                 email.snippet or "")
+        draft = CaptureDraftModel(
+            title=fb["title"], notes=fb["notes"],
+            disposition="INBOX", next_action="", assignee_name="",
+            due_at="", defer_until="", context="")
+
+        similar = await _find_similar_tasks(
+            db, uid, str(email.thread_id or ""), str(email.id), draft.title)
+
+        return CapturePreviewResponse(
+            already_captured=already, draft=draft, similar=similar,
+            from_name=from_name, subject=email.subject or "")
+    finally:
+        await db.close()
+
+
+@router.post("/capture/from-email/enhance",
+             response_model=CaptureEnhanceResponse)
+async def enhance_capture_from_email(
+    req: CaptureFromEmailRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """The "Enhance with AI" button: the LLM reads the whole email + thread and
+    returns a routed draft (title/notes/disposition/due/delegate/context). No
+    write — the user still reviews and confirms in the popup."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        email = await _load_email(db, uid, req.account_id, req.email_id)
+        from_addr = _parse_addr(email.from_address)
+        from_name = str(from_addr.get("name") or from_addr.get("email") or "")
+        from_email_ = str(from_addr.get("email") or "")
+        to_list = _parse_addr_list(email.to_addresses)
+        cc_list = _parse_addr_list(email.cc_addresses)
+        owner_addrs = {str(email.owner_email or "").strip().lower()}
+        owner_addrs.discard("")
+
+        thread = await _fetch_thread(db, str(email.account_id),
+                                     str(email.thread_id or ""), str(email.id))
+
+        from gateway.routes.tasks.people import fetch_people_for_clarify
+        from gateway.routes.tasks.settings import gtd_models
+        people = await fetch_people_for_clarify(db)
+        models = await gtd_models(db, uid)
+
+        drafted = await _llm_capture(
+            subject=email.subject or "", from_name=from_name,
+            from_email=from_email_, to_line=_fmt_addrs(to_list),
+            cc_line=_fmt_addrs(cc_list), owner_addrs=owner_addrs,
+            body=email.body_text or email.snippet or "", thread=thread,
+            people=people, model=models["email_capture"],
+        )
+        used_llm = drafted is not None
+        if drafted is None:
+            # LLM unavailable — hand back the deterministic default so the popup
+            # still has something coherent to show (the button is a no-op then).
+            drafted = draft_task_fallback(email.subject or "", from_name,
+                                          email.snippet or "")
+
+        # Show the user whether the named delegate maps to a real teammate.
+        resolved = _resolve_assignee(drafted.get("assignee_name", ""), people)
+        draft = CaptureDraftModel(
+            title=drafted.get("title", ""), notes=drafted.get("notes", ""),
+            disposition=str(drafted.get("disposition") or "INBOX").upper(),
+            next_action=drafted.get("next_action", ""),
+            assignee_name=(resolved["name"] if resolved
+                           else drafted.get("assignee_name", "")),
+            due_at=drafted.get("due_at", ""),
+            defer_until=drafted.get("defer_until", ""),
+            context=drafted.get("context", ""))
+        return CaptureEnhanceResponse(
+            draft=draft, used_llm=used_llm,
+            assignee_resolved=resolved["name"] if resolved else None)
+    finally:
+        await db.close()
+
+
+@router.post("/capture/from-email/create",
+             response_model=CaptureFromEmailResponse)
+async def create_capture_from_email(
+    req: CaptureCreateRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Confirm the popup: write the (possibly edited) task. Still idempotent —
+    if the user left the popup open and the email was captured meanwhile, the
+    existing item wins rather than creating a duplicate."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        email = await _load_email(db, uid, req.account_id, req.email_id)
+
+        existing = await _find_existing_capture(db, uid, str(email.id))
+        if existing is not None:
+            item = _row_to_item(existing)
+            return CaptureFromEmailResponse(
+                item=item, created=False, disposition=item.disposition,
+                assignee_name=item.assignee.name if item.assignee else None,
+                due_at=item.due_at)
+
+        from gateway.routes.tasks.people import fetch_people_for_clarify
+        people = await fetch_people_for_clarify(db)
+
+        item_id, _disp, _assignee = await _route_and_persist(
+            db, uid, email, req.draft.model_dump(), people)
+        await db.commit()
+        row = (await db.execute(
+            text(ITEM_SELECT + " WHERE i.id = :id"), {"id": item_id},
+        )).fetchone()
+        item = _row_to_item(row)
+        return CaptureFromEmailResponse(
+            item=item, created=True, used_llm=False,
             disposition=item.disposition,
             assignee_name=item.assignee.name if item.assignee else None,
             due_at=item.due_at)

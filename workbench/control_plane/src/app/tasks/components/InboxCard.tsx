@@ -67,7 +67,7 @@ export function InboxCard({
 }: InboxCardProps) {
   const openClarify = useTaskStore((s) => s.openClarify);
   const quickDispose = useTaskStore((s) => s.quickDispose);
-  const deleteItem = useTaskStore((s) => s.deleteItem);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const deferItem = useTaskStore((s) => s.deferItem);
   const updateItem = useTaskStore((s) => s.updateItem);
   const people = useTaskStore((s) => s.people);
@@ -283,7 +283,7 @@ export function InboxCard({
         aria-label="Delete"
         onClick={(e) => {
           e.stopPropagation();
-          deleteItem(item.id);
+          requestDelete([item.id]);
         }}
         className="tech-transition mt-0.5 shrink-0 rounded-md p-1.5 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
       >

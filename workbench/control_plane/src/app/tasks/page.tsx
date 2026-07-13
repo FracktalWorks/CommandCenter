@@ -11,11 +11,14 @@ import { ItemList } from "./components/ItemList";
 import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
 import { InboxView } from "./components/InboxView";
+import { EngageView } from "./components/EngageView";
 import { QuickCapture } from "./components/QuickCapture";
 import { WorkspacesModal } from "./components/WorkspacesModal";
 import { TaskSettingsModal } from "./components/TaskSettingsModal";
 import { TaskFocusModal } from "./components/TaskFocusModal";
 import { ReclarifyModal } from "./components/ReclarifyModal";
+import { UndoToast } from "./components/UndoToast";
+import { DeleteConfirmModal } from "./components/DeleteConfirmModal";
 
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
@@ -38,6 +41,7 @@ export default function TasksPage() {
   const [assistantOpen, setAssistantOpen] = useState(false);
   const isInbox = selectedView === "inbox";
   const isProjects = selectedView === "projects";
+  const isEngage = selectedView === "engage";
 
   // Load live data from the gateway once; stays on the bundled mock data when
   // the backend isn't reachable (UI-first demo mode).
@@ -112,6 +116,8 @@ export default function TasksPage() {
       <div className="flex h-full w-full flex-col overflow-hidden bg-background">
         {isInbox ? (
           <InboxView />
+        ) : isEngage ? (
+          <EngageView />
         ) : isProjects && selectedProjectId ? (
           // A selected project → full-screen roll-up with a Back affordance.
           <div className="flex h-full flex-col">
@@ -135,6 +141,8 @@ export default function TasksPage() {
         <TaskSettingsModal />
         <TaskFocusModal />
         <ReclarifyModal />
+        <UndoToast />
+        <DeleteConfirmModal />
       </div>
     );
   }
@@ -200,6 +208,12 @@ export default function TasksPage() {
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <InboxView />
           </div>
+        ) : isEngage ? (
+          /* Engage: the energy-first "right now" surface — its own full-width
+             view (like the inbox), no list/detail split. */
+          <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
+            <EngageView />
+          </div>
         ) : isProjects ? (
           /* Projects keep the list + project-detail split (a project isn't a
              task card — its detail is a roll-up of its actions). */
@@ -232,6 +246,8 @@ export default function TasksPage() {
       <TaskSettingsModal />
       <TaskFocusModal />
       <ReclarifyModal />
+      <UndoToast />
+      <DeleteConfirmModal />
     </div>
   );
 }

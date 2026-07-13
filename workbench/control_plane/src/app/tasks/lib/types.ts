@@ -90,6 +90,12 @@ export interface GtdItem {
   energy?: Energy;
   timeEstimateMins?: number;
   isTwoMinute?: boolean;
+  /** Prioritization matrix inputs. `urgent` is NOT stored — derive it from
+   *  dueAt via isUrgent(); the 8-cell label comes from priorityCell(). */
+  important?: boolean;
+  leveraged?: boolean;
+  /** the user dismissed the delegate/schedule suggestion ("this one's mine") */
+  keptMine?: boolean;
   projectId?: string;
 
   // people / delegation
@@ -157,13 +163,15 @@ export interface Target {
 export type ViewKey =
   | "inbox"
   | "next"
+  | "priority"
   | "waiting"
   | "calendar"
   | "projects"
   | "someday"
   | "reference"
-  | "archive"
+  | "done"
   | "engage"
+  | "archive"
   | "horizons";
 
 /** A context reference kept with a capture. Files/images are served from the

@@ -208,6 +208,10 @@ export function ClarifyPanel({
   const [outcome, setOutcome] = useState(proposal.outcome ?? `${item.title} — done`);
   const [context, setContext] = useState(proposal.context ?? "@computer");
   const [energy, setEnergy] = useState<Energy>(proposal.energy ?? "medium");
+  // Prioritization flags — AI-prefilled, user confirms (urgent is derived from
+  // the due date, so it isn't a toggle here).
+  const [important, setImportant] = useState<boolean>(!!proposal.important);
+  const [leveraged, setLeveraged] = useState<boolean>(!!proposal.leveraged);
   const [assignee, setAssignee] = useState<Person | null>(proposal.suggestedAssignee ?? null);
   const [dueAt, setDueAt] = useState("");
   const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
@@ -247,6 +251,8 @@ export function ClarifyPanel({
         setOutcome(sp.outcome ?? `${item.title} — done`);
         setContext(sp.context ?? "@computer");
         setEnergy(sp.energy ?? "medium");
+        setImportant(!!sp.important);
+        setLeveraged(!!sp.leveraged);
         setAssignee(sp.suggestedAssignee ?? null);
         if (sp.target) setDest(sp.target);
         setProjectId(sp.projectId);
@@ -467,12 +473,20 @@ export function ClarifyPanel({
     }
     const decision = buildDecision();
     if (decision) {
-      clarify(item.id, decision);
+      // Carry the confirmed matrix flags for actionable outcomes (trash/
+      // reference/someday don't get prioritized).
+      const weightful =
+        decision.kind !== "trash" && decision.kind !== "reference";
+      clarify(
+        item.id,
+        decision,
+        weightful ? { important, leveraged } : undefined,
+      );
       onDone?.();
     }
   }, [sort, size, projectId, newListName, nextAction, item.id, item.title, dest,
       targetSpaceId, targetFolderId, destAccount, createWorkspaceProject,
-      createLocalProject, buildDecision, clarify, onDone]);
+      createLocalProject, buildDecision, clarify, onDone, important, leveraged]);
 
   const canApply =
     sort !== "actionable"
@@ -981,6 +995,26 @@ export function ClarifyPanel({
                         {c.name}
                       </Pill>
                     ))}
+                  </div>
+                </SubField>
+
+                {/* Priority — the matrix inputs (AI-prefilled, you confirm).
+                    Urgent is derived from the due date, so it isn't a toggle. */}
+                <SubField label="Priority">
+                  <div className="flex flex-col gap-1">
+                    <div className="flex flex-wrap gap-1.5">
+                      <Pill active={important} onClick={() => setImportant((v) => !v)}>
+                        ❗ Important
+                      </Pill>
+                      <Pill active={leveraged} onClick={() => setLeveraged((v) => !v)}>
+                        ⚖️ Leveraged
+                      </Pill>
+                    </div>
+                    {proposal.weightReason && (
+                      <span className="text-[11px] text-muted-foreground/70">
+                        {proposal.weightReason}
+                      </span>
+                    )}
                   </div>
                 </SubField>
 

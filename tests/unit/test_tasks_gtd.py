@@ -488,6 +488,218 @@ def test_list_items_excludes_subtasks_and_selects_subtask_count():
     assert "c.parent_item_id = i.id" in core_mod.ITEM_SELECT
 
 
+# ---------------------------------------------------------------------------
+# Delete (soft-delete + undo/restore + purge propagation) & bulk archive
+# ---------------------------------------------------------------------------
+
+
+def test_delete_is_soft_and_hidden_from_every_view():
+    """DELETE must set a tombstone (deleted_at), not remove the row — so Undo
+    can restore it losslessly. And every list read must hide tombstoned rows."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.delete_item)
+    assert "deleted_at = now()" in src          # soft delete
+    assert "DELETE FROM gtd_items" not in src   # not a hard delete anymore
+    # Reads exclude tombstones.
+    assert items_mod._DELETED_EXCLUDE == "i.deleted_at IS NULL"
+    assert "_DELETED_EXCLUDE" in inspect.getsource(items_mod.list_items)
+    assert "include_deleted" in inspect.getsource(items_mod._fetch_item)
+
+
+def test_restore_clears_the_tombstone_only_for_deleted_rows():
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.restore_item)
+    assert "deleted_at = NULL" in src
+    assert "deleted_at IS NOT NULL" in src   # only a deleted row can be restored
+
+
+def test_purge_hard_deletes_and_propagates_clickup_deletion():
+    """Purge finalizes a soft delete: it removes the row AND, for a pushed
+    SYNCED task, deletes the upstream ClickUp task — best-effort, before the
+    local removal so the provider linkage is still available."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.purge_item)
+    assert "DELETE FROM gtd_items" in src
+    assert "_delete_upstream" in src
+    # Upstream deletion is gated on a pushed synced task.
+    assert 'row.source != "LOCAL"' in src
+    assert "provider_task_id" in src
+
+    up = inspect.getsource(items_mod._delete_upstream)
+    assert "provider.delete_task" in up
+    # Best-effort: an upstream failure must not block the local purge.
+    assert "except Exception" in up
+
+
+def test_clickup_delete_task_goes_through_the_broker_gate():
+    """The ClickUp deletion is an irreversible outward write → it must route
+    through the broker gate like every other mutation, and a 404 counts as
+    success (already gone)."""
+    import inspect
+
+    from gateway.routes.tasks import providers
+
+    dt = inspect.getsource(providers.ClickUpProvider.delete_task)
+    assert "_broker_gate" in dt
+    assert "clickup.delete_task" in dt
+    raw = inspect.getsource(providers.ClickUpProvider._raw_delete_task)
+    assert "http.delete" in raw
+    assert "404" in raw   # idempotent: already-gone is success
+
+
+def test_base_provider_delete_task_defaults_to_unsupported():
+    """A connector that hasn't implemented delete must fail loudly, not
+    silently leave the upstream task behind."""
+    import inspect
+
+    from gateway.routes.tasks import providers
+
+    src = inspect.getsource(providers.BaseTaskProvider.delete_task)
+    assert "not supported" in src and "501" in src
+
+
+def test_bulk_archive_is_a_local_overlay():
+    """Bulk archive flips archived_at for many rows and never touches the
+    connected tool (safe for ClickUp tasks) — mirrors single archive."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.bulk_archive)
+    assert "archived_at = CASE WHEN :on THEN now() ELSE NULL END" in src
+    assert "id::text = ANY(:ids)" in src
+    # No provider call in the archive path.
+    assert "build_provider" not in src
+    assert "delete_task" not in src
+
+
+# ---------------------------------------------------------------------------
+# Prioritization engine — the 8-cell matrix + urgency derivation
+# ---------------------------------------------------------------------------
+
+
+def test_priority_formula_matches_the_notion_matrix_all_8_cells():
+    """The 3 booleans → cell mapping must be the user's Notion formula verbatim,
+    for every one of the 8 combinations."""
+    from gateway.routes.tasks.priority import PriorityInputs, cell_for_inputs
+
+    I, U, L = True, True, True  # noqa: E741 (mirror the flag names)
+    n = False
+    cases = {
+        # leveraged branch
+        (I, U, L): "founder-fire",       # 1
+        (I, n, L): "deep-work",          # 2
+        (n, U, L): "quick-leverage",     # 3
+        (n, n, L): "leverage-bet",       # 7
+        # non-leveraged branch
+        (I, U, n): "delegate-important",  # 4
+        (I, n, n): "schedule-important",  # 5
+        (n, U, n): "delegate-urgent",     # 6
+        (n, n, n): "eliminate",           # 8
+    }
+    for (important, urgent, leveraged), expected in cases.items():
+        got = cell_for_inputs(PriorityInputs(
+            important=important, urgent=urgent, leveraged=leveraged))
+        assert got == expected, f"{(important, urgent, leveraged)} → {got}"
+
+
+def test_priority_cells_carry_the_right_action_mode():
+    """Cells collapse into do / delegate / schedule / drop — the action-mode
+    slicing that drives the Next Actions buckets."""
+    from gateway.routes.tasks.priority import CELL_META
+
+    mode = {c: CELL_META[c][3] for c in CELL_META}
+    assert mode["founder-fire"] == "do"
+    assert mode["deep-work"] == "do"
+    assert mode["quick-leverage"] == "do"
+    assert mode["leverage-bet"] == "do"
+    assert mode["delegate-important"] == "delegate"
+    assert mode["delegate-urgent"] == "delegate"
+    assert mode["schedule-important"] == "schedule"
+    assert mode["eliminate"] == "drop"
+
+
+def test_urgency_is_derived_overdue_or_within_window():
+    from datetime import UTC, datetime, timedelta
+
+    from gateway.routes.tasks.priority import is_urgent
+
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+    assert is_urgent(None, now=now) is False               # no due date
+    assert is_urgent(now - timedelta(days=2), now=now) is True   # overdue
+    assert is_urgent(now + timedelta(hours=6), now=now) is True  # within 48h
+    assert is_urgent(now + timedelta(hours=47), now=now) is True
+    assert is_urgent(now + timedelta(hours=72), now=now) is False  # outside
+    # Window is configurable.
+    assert is_urgent(now + timedelta(hours=72), window_hours=96, now=now) is True
+
+
+def test_priority_cell_end_to_end_uses_derived_urgency():
+    """priority_cell must combine the manual flags with derived urgency: an
+    important+leveraged task with a deadline 6h out is a Founder Fire; move the
+    deadline out a week and it becomes Deep Work."""
+    from datetime import UTC, datetime, timedelta
+
+    from gateway.routes.tasks.priority import priority_cell
+
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+    soon = now + timedelta(hours=6)
+    later = now + timedelta(days=7)
+    assert priority_cell(important=True, leveraged=True,
+                         due_at=soon, now=now) == "founder-fire"
+    assert priority_cell(important=True, leveraged=True,
+                         due_at=later, now=now) == "deep-work"
+    assert priority_cell(important=True, leveraged=True,
+                         due_at=None, now=now) == "deep-work"   # no date → not urgent
+
+
+def test_priority_flags_are_patchable_and_local_only():
+    """important/leveraged/kept_mine are editable via PATCH and live in the
+    local overlay (never back-synced — not in the ClickUp-writable set)."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    build = inspect.getsource(items_mod._build_item_update)
+    assert "important = :important" in build
+    assert "leveraged = :leveraged" in build
+    assert "kept_mine = :kept_mine" in build
+    # Back-sync must NOT push these (they're personal prioritization).
+    backsync = inspect.getsource(items_mod._push_patch_upstream)
+    assert "important" not in backsync
+    assert "leveraged" not in backsync
+
+
+def test_llm_clarify_proposes_matrix_flags_and_they_propagate():
+    """The LLM clarify prompt asks for important/leveraged, and propose_with_llm
+    carries them into the merged proposal (so the card can pre-fill them)."""
+    import inspect
+
+    from gateway.routes.tasks import ai as tasks_ai
+
+    llm = inspect.getsource(tasks_ai._llm_propose)
+    assert '"important": bool' in llm and '"leveraged": bool' in llm
+    # Urgency must NOT be an LLM judgment — it's derived from the due date.
+    assert "it's derived from the due date" in llm
+    merged = inspect.getsource(tasks_ai.propose_with_llm)
+    assert '"important", "leveraged"' in merged
+
+
+def test_urgent_window_setting_defaults_to_48h():
+    from gateway.routes.tasks.settings import GtdSettingsModel
+
+    assert GtdSettingsModel().urgent_window_hours == 48
+
+
 def test_organize_request_accepts_subtasks():
     from gateway.routes.tasks.items import OrganizeRequest
 
@@ -1037,6 +1249,68 @@ def test_agent_item_format_shows_email_origin():
     plain = _fmt_item({"id": "y" * 12, "title": "buy tape",
                        "disposition": "INBOX", "source": "LOCAL"})
     assert "from email" not in plain
+
+
+# ---------------------------------------------------------------------------
+# Email → task capture: clarify-before-capture popup (preview/enhance/create)
+# ---------------------------------------------------------------------------
+
+
+def test_title_similarity_flags_near_duplicate_asks_and_ignores_scaffolding():
+    """The fuzzy matcher (Jaccard over significant tokens) should score a
+    near-duplicate ask high and an unrelated one low — and stopwords/reply
+    scaffolding must not inflate the overlap."""
+    from gateway.routes.tasks.capture_email import _title_similarity
+
+    high = _title_similarity("Approve the vendor quote",
+                             "Review vendor quote")
+    assert high >= 0.5
+    low = _title_similarity("Approve the vendor quote",
+                            "Book flights to Delhi")
+    assert low < 0.5
+    # 'Email from X:' scaffolding words are stopwords → don't manufacture a
+    # match between two unrelated 'Email from …' titles.
+    scaffold = _title_similarity("Email from Sanjay: budget",
+                                 "Email from Rahul: hiring")
+    assert scaffold < 0.5
+
+
+def test_route_and_persist_is_the_shared_write_used_by_popup_create():
+    """The popup's /create endpoint must write through the SAME routing/persist
+    helper (delegate destination rules, gtd_waiting for follow-ups) rather than
+    a divergent second code path."""
+    import inspect
+
+    from gateway.routes.tasks import capture_email as ce
+
+    persist = inspect.getsource(ce._route_and_persist)
+    # Same destination rule as the one-click endpoint.
+    assert 'source, sync_state = "SYNCED", "pending"' in persist
+    assert 'assignee, disposition = None, "INBOX"' in persist
+    assert "INSERT INTO gtd_items" in persist
+    assert "INSERT INTO gtd_waiting" in persist
+
+    create = inspect.getsource(ce.create_capture_from_email)
+    assert "_route_and_persist" in create
+    # Still idempotent per source email.
+    assert "_find_existing_capture" in create
+
+
+def test_preview_uses_deterministic_default_not_the_llm():
+    """Opening the popup must be instant: the default title comes from the
+    subject-derived fallback, and the LLM is only invoked by /enhance."""
+    import inspect
+
+    from gateway.routes.tasks import capture_email as ce
+
+    preview = inspect.getsource(ce.preview_capture_from_email)
+    assert "draft_task_fallback" in preview
+    assert "_llm_capture" not in preview        # no LLM on open
+    assert "_find_similar_tasks" in preview     # similar-task warnings
+
+    enhance = inspect.getsource(ce.enhance_capture_from_email)
+    assert "_llm_capture" in enhance            # AI enrich lives here
+    assert "INSERT INTO gtd_items" not in enhance  # never writes
 
 
 # ---------------------------------------------------------------------------

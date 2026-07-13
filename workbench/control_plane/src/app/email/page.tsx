@@ -27,6 +27,7 @@ import { EmailDetail } from "./components/EmailDetail";
 import { EmailAssistantChat } from "./components/EmailAssistantChat";
 import { ComposePanel } from "./components/ComposePanel";
 import { CommandPalette, Command } from "./components/CommandPalette";
+import { TaskCaptureModal } from "./components/TaskCaptureModal";
 import { AutomationView } from "./components/automation/AutomationView";
 import { useEmailStore } from "./lib/emailStore";
 import { Email, AutomationFeature } from "./lib/types";
@@ -76,6 +77,9 @@ export default function EmailPage() {
     composeDefaults,
     pendingSend,
     taskCaptureNotice,
+    taskCapturePopupEmailId,
+    closeTaskCapturePopup,
+    notifyTaskCaptured,
     pendingChatPrompt,
     error,
     authErrors,
@@ -906,6 +910,21 @@ export default function EmailPage() {
         onClose={() => setPaletteOpen(false)}
         commands={commands}
       />
+
+      {/* Add-to-Tasks clarify popup */}
+      {taskCapturePopupEmailId && (() => {
+        const popupEmail = emails.find((e) => e.id === taskCapturePopupEmailId);
+        const acctId = popupEmail?.accountId ?? selectedAccountId;
+        if (!acctId) return null;
+        return (
+          <TaskCaptureModal
+            accountId={acctId}
+            emailId={taskCapturePopupEmailId}
+            onClose={closeTaskCapturePopup}
+            onCaptured={notifyTaskCaptured}
+          />
+        );
+      })()}
 
       {/* Captured-to-Tasks toast */}
       {taskCaptureNotice && (() => {

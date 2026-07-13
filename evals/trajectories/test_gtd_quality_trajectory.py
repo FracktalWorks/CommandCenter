@@ -24,7 +24,7 @@ from pathlib import Path
 from types import SimpleNamespace
 
 REPO = Path(__file__).resolve().parents[2]
-sys.path.insert(0, str(REPO / "apps" / "skill-clickup-sync"))
+sys.path.insert(0, str(REPO / "apps" / "skills" / "skill-clickup-sync"))
 
 from gateway.routes.tasks import ai as tasks_ai  # noqa: E402
 from gateway.routes.tasks.sync import map_pulled_task  # noqa: E402
@@ -288,7 +288,7 @@ def test_tool_scope_is_declared_and_lean():
     """HH-5: the task-manager declares an explicit platform-tool scope —
     no web browsing, no parallel/background delegation fan-out."""
     import json
-    cfg = json.loads((REPO / "apps/agent-task-manager/config.json").read_text())
+    cfg = json.loads((REPO / "apps/agents/agent-task-manager/config.json").read_text())
     scope = cfg.get("tool_scope")
     assert scope, "task-manager must declare tool_scope"
     banned = {"web_search", "fetch_page", "install_dependency",
@@ -305,7 +305,7 @@ def test_legacy_single_workspace_clickup_skill_is_retired():
     agent run honours the right per-workspace token instead of one global one.
     """
     import json
-    cfg = json.loads((REPO / "apps/agent-task-manager/config.json").read_text())
+    cfg = json.loads((REPO / "apps/agents/agent-task-manager/config.json").read_text())
     assert cfg.get("skill_repos") == ["skill-task-gtd"], cfg.get("skill_repos")
     assert "skill-clickup-sync" not in (cfg.get("skill_repos") or [])
 

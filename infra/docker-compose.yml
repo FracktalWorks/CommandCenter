@@ -117,7 +117,7 @@ services:
   # Build only: docker compose --profile sandbox build mutation
   mutation:
     build:
-      context: ../apps/orchestrator
+      context: ../apps/services/orchestrator
       dockerfile: Dockerfile.mutation
     image: acb-mutation-runner:latest
     profiles: ["sandbox"]

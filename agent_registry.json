@@ -5,7 +5,7 @@
     "tags": ["tasks", "clickup", "project-management"],
     "status": "live",
     "agent_runtime": "maf",
-    "local_path": "apps/agent-task-manager",
+    "local_path": "apps/agents/agent-task-manager",
     "integrations": ["clickup"],
     "optional_integrations": [],
     "webhook_routes": [

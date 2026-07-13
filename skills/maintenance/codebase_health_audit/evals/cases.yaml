@@ -7,7 +7,7 @@ prompts:
   - "Audit {{target_path}} — {{reason}}"
 tests:
   - vars:
-      target_path: "apps/orchestrator/orchestrator/executor.py"
+      target_path: "apps/services/orchestrator/orchestrator/executor.py"
       reason: "cc 223 in run_agent_stream, file > 5000 LOC"
     assert:
       # Must cite the file it audited.

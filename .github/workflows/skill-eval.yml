@@ -11,7 +11,7 @@ on:
     paths:
       - "skills/**"
       - "evals/**"
-      - "apps/orchestrator/**"
+      - "apps/services/orchestrator/**"
       - "packages/acb_skills/**"
       - "packages/acb_llm/**"
       - ".github/workflows/skill-eval.yml"

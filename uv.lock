@@ -181,7 +181,7 @@ requires-dist = [
 [[package]]
 name = "action-broker"
 version = "0.0.1"
-source = { editable = "apps/action_broker" }
+source = { editable = "apps/services/action_broker" }
 dependencies = [
     { name = "acb-audit" },
     { name = "acb-common" },
@@ -214,7 +214,7 @@ wheels = [
 [[package]]
 name = "agent-apis-config"
 version = "0.1.0"
-source = { editable = "apps/agent-apis-config" }
+source = { editable = "apps/agents/agent-apis-config" }
 dependencies = [
     { name = "agent-framework-github-copilot" },
     { name = "httpx" },
@@ -229,7 +229,7 @@ requires-dist = [
 [[package]]
 name = "agent-email-assistant"
 version = "0.1.0"
-source = { editable = "apps/agent-email-assistant" }
+source = { editable = "apps/agents/agent-email-assistant" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-skills" },
@@ -319,12 +319,12 @@ wheels = [
 [[package]]
 name = "agent-orchestrator"
 version = "0.1.0"
-source = { editable = "apps/agent-orchestrator" }
+source = { editable = "apps/agents/agent-orchestrator" }
 
 [[package]]
 name = "agent-task-manager"
 version = "0.1.0"
-source = { editable = "apps/agent-task-manager" }
+source = { editable = "apps/agents/agent-task-manager" }
 dependencies = [
     { name = "agent-framework-github-copilot" },
     { name = "httpx" },
@@ -392,15 +392,15 @@ requires-dist = [
     { name = "acb-llm", editable = "packages/acb_llm" },
     { name = "acb-memory", editable = "packages/acb_memory" },
     { name = "acb-skills", editable = "packages/acb_skills" },
-    { name = "action-broker", editable = "apps/action_broker" },
+    { name = "action-broker", editable = "apps/services/action_broker" },
     { name = "bcrypt", specifier = ">=5.0.0" },
-    { name = "gateway", editable = "apps/gateway" },
-    { name = "ingestion", editable = "apps/ingestion" },
-    { name = "orchestrator", editable = "apps/orchestrator" },
+    { name = "gateway", editable = "apps/services/gateway" },
+    { name = "ingestion", editable = "apps/services/ingestion" },
+    { name = "orchestrator", editable = "apps/services/orchestrator" },
     { name = "python-multipart", specifier = ">=0.0.32" },
-    { name = "reconciler", editable = "apps/reconciler" },
-    { name = "skill-clickup-sync", editable = "apps/skill-clickup-sync" },
-    { name = "skill-task-gtd", editable = "apps/skill-task-gtd" },
+    { name = "reconciler", editable = "apps/services/reconciler" },
+    { name = "skill-clickup-sync", editable = "apps/skills/skill-clickup-sync" },
+    { name = "skill-task-gtd", editable = "apps/skills/skill-task-gtd" },
 ]
 
 [package.metadata.requires-dev]
@@ -1018,7 +1018,7 @@ wheels = [
 [[package]]
 name = "email-ingestion"
 version = "0.1.0"
-source = { editable = "apps/email_ingestion" }
+source = { editable = "apps/services/email_ingestion" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-llm" },
@@ -1195,7 +1195,7 @@ wheels = [
 [[package]]
 name = "gateway"
 version = "0.0.1"
-source = { editable = "apps/gateway" }
+source = { editable = "apps/services/gateway" }
 dependencies = [
     { name = "acb-auth" },
     { name = "acb-common" },
@@ -1217,11 +1217,11 @@ requires-dist = [
     { name = "acb-llm", editable = "packages/acb_llm" },
     { name = "agent-framework-ag-ui" },
     { name = "authlib", specifier = ">=1.3" },
-    { name = "email-ingestion", editable = "apps/email_ingestion" },
+    { name = "email-ingestion", editable = "apps/services/email_ingestion" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.27" },
     { name = "itsdangerous", specifier = ">=2.2" },
-    { name = "orchestrator", editable = "apps/orchestrator" },
+    { name = "orchestrator", editable = "apps/services/orchestrator" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
 ]
 
@@ -1498,7 +1498,7 @@ wheels = [
 [[package]]
 name = "ingestion"
 version = "0.0.1"
-source = { editable = "apps/ingestion" }
+source = { editable = "apps/services/ingestion" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-graph" },
@@ -2156,7 +2156,7 @@ wheels = [
 [[package]]
 name = "orchestrator"
 version = "0.0.1"
-source = { editable = "apps/orchestrator" }
+source = { editable = "apps/services/orchestrator" }
 dependencies = [
     { name = "acb-audit" },
     { name = "acb-common" },
@@ -2809,7 +2809,7 @@ wheels = [
 [[package]]
 name = "reconciler"
 version = "0.0.1"
-source = { editable = "apps/reconciler" }
+source = { editable = "apps/services/reconciler" }
 dependencies = [
     { name = "acb-common" },
     { name = "acb-graph" },
@@ -3047,7 +3047,7 @@ wheels = [
 [[package]]
 name = "skill-clickup-sync"
 version = "0.1.0"
-source = { editable = "apps/skill-clickup-sync" }
+source = { editable = "apps/skills/skill-clickup-sync" }
 dependencies = [
     { name = "httpx" },
 ]
@@ -3069,7 +3069,7 @@ provides-extras = ["dev"]
 [[package]]
 name = "skill-task-gtd"
 version = "0.1.0"
-source = { editable = "apps/skill-task-gtd" }
+source = { editable = "apps/skills/skill-task-gtd" }
 dependencies = [
     { name = "acb-common" },
     { name = "httpx" },

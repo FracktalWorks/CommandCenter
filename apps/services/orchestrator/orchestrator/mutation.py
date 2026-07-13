@@ -16,7 +16,7 @@ Design constraints (ADR-006, ADR-021):
 - Merge conflicts during ``git pull`` before the commit are auto-resolved
   (see ``acb_skills.loader._pull_latest``).
 
-Sandbox implementation: ``apps/orchestrator/Dockerfile.mutation`` —
+Sandbox implementation: ``apps/services/orchestrator/Dockerfile.mutation`` —
 a slim Python 3.12 image with ``github-copilot-sdk`` installed.
 
 Typical call site (orchestrator.executor)::

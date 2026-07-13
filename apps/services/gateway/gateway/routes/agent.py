@@ -105,7 +105,7 @@ _AGENT_REGISTRY: list[dict] = [
         "status": "live",
         # Runs through MAF (CommandCenterCopilotAgent wrapper) with BYOK model support.
         "agent_runtime": "github-copilot",
-        "local_path": "apps/agent-task-manager",
+        "local_path": "apps/agents/agent-task-manager",
         "integrations": ["clickup"],
         "optional_integrations": [],
         "webhook_routes": [
@@ -124,7 +124,7 @@ _AGENT_REGISTRY: list[dict] = [
         "tags": ["configuration", "apis", "setup", "admin"],
         "status": "live",
         "agent_runtime": "github-copilot",
-        "local_path": "apps/agent-apis-config",
+        "local_path": "apps/agents/agent-apis-config",
         "integrations": [],
         "optional_integrations": ["serpapi"],
     },
@@ -137,13 +137,13 @@ _AGENT_REGISTRY: list[dict] = [
         ),
         "tags": ["email", "gmail", "outlook", "drafting", "apps"],
         "status": "live",
-        # email-assistant is a MAF agent (see apps/agent-email-assistant:
+        # email-assistant is a MAF agent (see apps/agents/agent-email-assistant:
         # agents.py build_agents() + config.json "runtime": "maf"). It must NOT
         # be labelled github-copilot — that routes it through the Copilot SDK
         # session, which fails with a GitHub 402 quota error instead of using
         # the BYOK LiteLLM tiers (tier-balanced → deepseek). Keep this "maf".
         "agent_runtime": "maf",
-        "local_path": "apps/agent-email-assistant",
+        "local_path": "apps/agents/agent-email-assistant",
         "integrations": [],
         "optional_integrations": [],
     },

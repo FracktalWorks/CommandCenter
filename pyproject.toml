@@ -52,7 +52,9 @@ dev = [
 
 [tool.uv.workspace]
 members = [
-    "apps/*",
+    "apps/services/*",
+    "apps/agents/*",
+    "apps/skills/*",
     "packages/*",
 ]
 

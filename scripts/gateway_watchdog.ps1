@@ -41,7 +41,7 @@ while ($true) {
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Starting gateway on port $Port (attempt $attempt)..." -ForegroundColor Cyan
     
     Set-Location $Root
-    & uv run uvicorn gateway.main:app --host 0.0.0.0 --port $Port --app-dir apps/gateway
+    & uv run uvicorn gateway.main:app --host 0.0.0.0 --port $Port --app-dir apps/services/gateway
     
     $exitCode = $LASTEXITCODE
     Write-Host "[$(Get-Date -Format 'HH:mm:ss')] Gateway exited (code $exitCode). Restarting in 3s..." -ForegroundColor Yellow

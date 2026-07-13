@@ -289,7 +289,7 @@ class ProviderKeyStore:
         credentials via os.environ / get_settings() without code changes.
 
         Integration → env var mapping mirrors _SETUP_GUIDES in
-        apps/gateway/gateway/routes/integrations.py.
+        apps/services/gateway/gateway/routes/integrations.py.
         """
         # Service name → {provider suffix → env var name}
         _integration_env_map: dict[str, dict[str, str]] = {

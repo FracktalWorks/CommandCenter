@@ -12,8 +12,8 @@ import pytest
 
 from gateway.routes import email as m
 
-# Imported by apps/email_ingestion/email_ingestion/scheduler.py and
-# apps/gateway/gateway/main.py — these MUST stay importable from
+# Imported by apps/services/email_ingestion/email_ingestion/scheduler.py and
+# apps/services/gateway/gateway/main.py — these MUST stay importable from
 # ``gateway.routes.email`` regardless of how the module is organised internally.
 SCHEDULER_AND_APP_NAMES = [
     "router",

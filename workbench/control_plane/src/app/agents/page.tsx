@@ -39,6 +39,7 @@ import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 import FilterPills from "@/components/FilterPills";
+import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
 import {
   CHARACTER_LIBRARY,
   LIBRARY_IDS,
@@ -1037,12 +1038,14 @@ function AgentTile({
   statuses,
   onClick,
   onRefresh,
+  avatarLibraryId,
 }: {
   agent: AgentEntry;
   selected: boolean;
   statuses: IntegrationStatus[];
   onClick: () => void;
   onRefresh?: () => void;
+  avatarLibraryId?: string | null;
 }) {
   const Icon      = getAgentIcon(agent);
   const color     = getAgentColor(agent);
@@ -1106,7 +1109,11 @@ function AgentTile({
       )}
 
       <div className="flex items-start justify-between mb-3">
-        <Icon size={28} className={`${color} shrink-0`} />
+        <AgentAvatar
+          libraryId={avatarLibraryId}
+          size={28}
+          fallback={<Icon size={28} className={`${color} shrink-0`} />}
+        />
         <span
           className={`w-2 h-2 mt-1 rounded-full shrink-0 ${
             readiness === "ready"   ? "bg-success" :
@@ -1118,7 +1125,7 @@ function AgentTile({
           }
         />
       </div>
-      <div className="font-medium text-sm text-foreground leading-tight">{agent.name}</div>
+      <div className="font-medium text-sm text-foreground leading-tight">{agent.display_name || agent.name}</div>
       <div className={`text-[10px] mt-0.5 ${
         readiness === "ready"   ? "text-success" :
         readiness === "blocked" ? "text-warning"  : "text-muted-foreground"
@@ -1372,6 +1379,7 @@ function AgentSidePanel({
   onRemove,
   onRefresh,
   compact = false,
+  avatarLibraryId,
 }: {
   agent: AgentEntry;
   statuses: IntegrationStatus[];
@@ -1379,6 +1387,7 @@ function AgentSidePanel({
   onRemove: (name: string) => void;
   onRefresh?: () => void;
   compact?: boolean;
+  avatarLibraryId?: string | null;
 }) {
   const Icon  = getAgentIcon(agent);
   const color = getAgentColor(agent);
@@ -1458,15 +1467,58 @@ function AgentSidePanel({
     finally { setRemoving(false); setConfirming(false); }
   };
 
+  // Display name (alias) editing — allowed for every agent (built-in + custom);
+  // a pure display overlay, saved via PATCH. The canonical `agent.name` never
+  // changes. Re-seed when a different agent is selected.
+  const [alias, setAlias] = useState(agent.display_name ?? "");
+  const [savingAlias, setSavingAlias] = useState(false);
+  const [aliasSaved, setAliasSaved] = useState(false);
+  useEffect(() => {
+    setAlias(agent.display_name ?? "");
+    setAliasSaved(false);
+  }, [agent.name, agent.display_name]);
+
+  const aliasDirty = alias.trim() !== (agent.display_name ?? "").trim();
+  const saveAlias = async () => {
+    setSavingAlias(true);
+    setAliasSaved(false);
+    try {
+      const res = await fetch(`/api/agent/${encodeURIComponent(agent.name)}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ display_name: alias.trim() }),
+      });
+      if (res.ok) {
+        setAliasSaved(true);
+        onRefresh?.();
+      } else {
+        const d = await res.json().catch(() => ({}));
+        alert(String(d?.detail ?? d?.error ?? "Failed to save display name"));
+      }
+    } catch {
+      alert("Network error while saving display name");
+    } finally {
+      setSavingAlias(false);
+    }
+  };
+
   return (
     <div className="flex flex-col h-full">
       {/* Header — hidden in compact (mobile) mode since the wrapper provides its own */}
       {!compact && (
         <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
           <div className="flex items-start gap-3">
-            <Icon size={36} className={`${color} mt-0.5 shrink-0`} />
+            <AgentAvatar
+              libraryId={avatarLibraryId}
+              size={36}
+              className="mt-0.5"
+              fallback={<Icon size={36} className={`${color} mt-0.5 shrink-0`} />}
+            />
             <div>
-              <div className="font-semibold text-foreground text-base">{agent.name}</div>
+              <div className="font-semibold text-foreground text-base">{agent.display_name || agent.name}</div>
+              {agent.display_name ? (
+                <div className="text-[11px] text-muted-foreground font-mono mt-0.5">{agent.name}</div>
+              ) : null}
               <div className="flex items-center gap-1.5 mt-1 flex-wrap">
                 {agent.agent_runtime === "github-copilot" ? (
                   <>
@@ -1492,6 +1544,35 @@ function AgentSidePanel({
       )}
 
       <div className={`flex-1 overflow-y-auto space-y-4 ${compact ? "p-3" : "p-5"}`}>
+        {/* Display name (alias) — editable for every agent (built-in + custom) */}
+        <div>
+          <label className="mb-1 block text-xs font-medium text-muted-foreground">
+            Display name
+          </label>
+          <div className="flex items-center gap-2">
+            <input
+              type="text"
+              placeholder={agent.name}
+              value={alias}
+              onChange={(e) => { setAlias(e.target.value); setAliasSaved(false); }}
+              onKeyDown={(e) => { if (e.key === "Enter" && aliasDirty && !savingAlias) saveAlias(); }}
+              className="w-full rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
+            />
+            <button
+              onClick={saveAlias}
+              disabled={!aliasDirty || savingAlias}
+              className="shrink-0 rounded-lg border border-border bg-secondary px-3 py-2 text-sm text-foreground hover:bg-accent/10 disabled:opacity-40 disabled:cursor-not-allowed transition-colors"
+            >
+              {savingAlias ? "Saving…" : "Save"}
+            </button>
+          </div>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Friendly nickname shown in chat, observability, and here. The technical name{" "}
+            <span className="font-mono">{agent.name}</span> stays the same.
+            {aliasSaved && !aliasDirty ? <span className="ml-1 text-success">Saved.</span> : null}
+          </p>
+        </div>
+
         {agent.description && (
           <p className="text-sm text-muted-foreground leading-relaxed">{agent.description}</p>
         )}
@@ -1511,7 +1592,7 @@ function AgentSidePanel({
           <div className="flex items-start gap-2 rounded-lg border border-warning/20 bg-warning/5 px-3 py-2.5">
             <AlertTriangle className="w-3.5 h-3.5 text-warning mt-0.5 shrink-0" />
             <div className="text-xs text-warning">
-              <span className="font-medium">Agent blocked</span> \u2014 needs{" "}
+              <span className="font-medium">Agent blocked</span> — needs{" "}
               <Link href="/integrations" className="underline hover:opacity-80">
                 {missingDeps.map((i) => statuses.find((s) => s.service === i)?.label ?? i).join(", ")}
               </Link>
@@ -1773,6 +1854,7 @@ export default function AgentsPage() {
   const [agents, setAgents]     = useState<AgentEntry[]>([]);
   const [intgs, setIntgs]       = useState<IntegrationStatus[]>([]);
   const [loading, setLoading]   = useState(true);
+  const agentAvatars            = useAgentAvatars();
   const [filter, setFilter]     = useState<"all" | "builtin" | "custom">("all");
   const [selected, setSelected] = useState<string | null>(null);
   const [showAdd, setShowAdd]   = useState(false);
@@ -1904,7 +1986,7 @@ export default function AgentsPage() {
         <div className={`flex-1 p-4 overflow-y-auto ${selectedAgent ? "sm:min-w-0" : ""}`}>
           {loading ? (
             <div className="flex items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
-              <Loader2 className="w-4 h-4 animate-spin" /> Loading agents\u2026
+              <Loader2 className="w-4 h-4 animate-spin" /> Loading agents…
             </div>
           ) : filtered.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-48 gap-3 text-muted-foreground text-sm">
@@ -1923,6 +2005,7 @@ export default function AgentsPage() {
                   statuses={intgs}
                   onClick={() => setSelected(agent.name)}
                   onRefresh={load}
+                  avatarLibraryId={agentAvatars[agent.name]}
                 />
               ))}
               <button
@@ -1946,9 +2029,15 @@ export default function AgentsPage() {
                     {(() => {
                       const Icon = getAgentIcon(selectedAgent);
                       const color = getAgentColor(selectedAgent);
-                      return <Icon size={20} className={color} />;
+                      return (
+                        <AgentAvatar
+                          libraryId={agentAvatars[selectedAgent.name]}
+                          size={20}
+                          fallback={<Icon size={20} className={color} />}
+                        />
+                      );
                     })()}
-                    <span className="text-sm font-semibold truncate">{selectedAgent.name}</span>
+                    <span className="text-sm font-semibold truncate">{selectedAgent.display_name || selectedAgent.name}</span>
                   </div>
                   <button onClick={() => setSelected(null)} className="p-1 rounded-md hover:bg-secondary text-muted-foreground shrink-0">
                     <X size={16} />
@@ -1962,6 +2051,7 @@ export default function AgentsPage() {
                     onRemove={handleRemove}
                     onRefresh={load}
                     compact
+                    avatarLibraryId={agentAvatars[selectedAgent.name]}
                   />
                 </div>
               </aside>
@@ -1974,6 +2064,7 @@ export default function AgentsPage() {
                 onClose={() => setSelected(null)}
                 onRemove={handleRemove}
                 onRefresh={load}
+                avatarLibraryId={agentAvatars[selectedAgent.name]}
               />
             </div>
           </>

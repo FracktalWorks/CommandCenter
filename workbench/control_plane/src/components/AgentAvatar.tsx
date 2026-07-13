@@ -7,35 +7,55 @@ import { CHARACTER_LIBRARY } from "@/app/observability/character-library.generat
 /** canonical agent name → assigned character libraryId (null = none set). */
 export type AgentAvatarMap = Record<string, string | null | undefined>;
 
+/** Window event that tells every mounted useAgentAvatars() hook to refetch. */
+export const AGENT_AVATARS_CHANGED = "agent-avatars-changed";
+
 /**
- * Fetch the agent → avatar (libraryId) assignments once. Keyed by canonical
- * agent name; value is the assigned character id, or null when the agent has no
- * avatar set. Best-effort — returns {} on error (callers fall back to an icon).
+ * Announce that an agent's avatar assignment changed so every surface using
+ * useAgentAvatars() (Agents grid, detail header, chat) refreshes immediately.
+ * Call after a successful save/delete in the Avatar picker.
+ */
+export function notifyAgentAvatarsChanged(): void {
+  if (typeof window !== "undefined") {
+    window.dispatchEvent(new Event(AGENT_AVATARS_CHANGED));
+  }
+}
+
+/**
+ * Live map of agent → avatar (libraryId) assignments, keyed by canonical agent
+ * name; value is the assigned character id, or null when none set. Best-effort —
+ * {} on error (callers fall back to an icon). Refetches when
+ * `notifyAgentAvatarsChanged()` fires, so a newly-assigned avatar shows up right
+ * away without a page reload.
  *
  * Source: GET /api/observability/avatars → { avatars: { name: { config: { libraryId } } } }
- * — the same store the Avatar picker in Agent Settings writes to.
  */
 export function useAgentAvatars(): AgentAvatarMap {
   const [map, setMap] = useState<AgentAvatarMap>({});
   useEffect(() => {
     let alive = true;
-    fetch("/api/observability/avatars")
-      .then((r) => r.json())
-      .then((data) => {
-        if (!alive) return;
-        const avatars = (data?.avatars ?? {}) as Record<
-          string,
-          { config?: { libraryId?: string | null } | null } | null
-        >;
-        const out: AgentAvatarMap = {};
-        for (const [name, entry] of Object.entries(avatars)) {
-          out[name] = entry?.config?.libraryId ?? null;
-        }
-        setMap(out);
-      })
-      .catch(() => {});
+    const load = () => {
+      fetch("/api/observability/avatars")
+        .then((r) => r.json())
+        .then((data) => {
+          if (!alive) return;
+          const avatars = (data?.avatars ?? {}) as Record<
+            string,
+            { config?: { libraryId?: string | null } | null } | null
+          >;
+          const out: AgentAvatarMap = {};
+          for (const [name, entry] of Object.entries(avatars)) {
+            out[name] = entry?.config?.libraryId ?? null;
+          }
+          setMap(out);
+        })
+        .catch(() => {});
+    };
+    load();
+    window.addEventListener(AGENT_AVATARS_CHANGED, load);
     return () => {
       alive = false;
+      window.removeEventListener(AGENT_AVATARS_CHANGED, load);
     };
   }, []);
   return map;
@@ -52,9 +72,10 @@ export function avatarCharacterId(libraryId?: string | null): string | null {
  * generic Lucide icon) when the agent has no avatar assigned.
  *
  * The source sprites are 124×124 standing figures with the head near the top,
- * so an oversized background (≈185%) positioned near the top shows only the
- * face + upper torso inside the circle; the legs fall outside the crop.
- * `focusX`/`focusY`/`zoom` are exposed so the framing can be nudged per surface.
+ * so an oversized background (default ≈265%) positioned near the top zooms into
+ * the head + shoulders inside the circle; the torso and legs fall outside the
+ * crop. `focusX`/`focusY`/`zoom` are exposed so the framing can be nudged per
+ * surface (lower `zoom` to show more of the body).
  */
 export function AgentAvatar({
   libraryId,
@@ -62,9 +83,9 @@ export function AgentAvatar({
   className = "",
   fallback = null,
   title,
-  zoom = 185,
+  zoom = 265,
   focusX = 50,
-  focusY = 16,
+  focusY = 10,
 }: {
   libraryId?: string | null;
   size?: number;

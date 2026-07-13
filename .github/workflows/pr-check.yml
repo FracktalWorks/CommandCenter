@@ -96,3 +96,29 @@ jobs:
 
       - name: Run unit tests
         run: uv run python -m pytest tests/unit/ -x -v
+
+  secret-scan:
+    name: "Secret scan"
+    runs-on: ubuntu-latest
+    # Report-only initially (ratchet, like mypy/ruff-full above): surfaces any
+    # credential in a PR's NEW commits without blocking on an install/config
+    # hiccup. Graduate to blocking once proven on a few PRs. Scans only the PR's
+    # commit range, so it does NOT trip on the historical leak (BO-8) that still
+    # needs a coordinated filter-repo purge — see scripts/scan_secrets_history.sh.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Install gitleaks
+        run: go install github.com/gitleaks/gitleaks/v8@v8.18.4
+
+      - name: Scan PR commits for secrets
+        run: |
+          RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
+          "$(go env GOPATH)/bin/gitleaks" detect \
+            --source . \
+            --config .gitleaks.toml \
+            --log-opts="--no-merges $RANGE" \
+            --redact --verbose --exit-code 1

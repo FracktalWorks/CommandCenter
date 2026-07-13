@@ -1,0 +1,31 @@
+# gitleaks secret-scanning config (audit BO-8 / BO-18).
+#
+# Used by the pr-check `secret-scan` job (scans a PR's NEW commits) and by
+# scripts/scan_secrets_history.sh (one-time full-history audit before/after the
+# git filter-repo purge of the leaked Zoho token + DB dump).
+#
+# Extends gitleaks' built-in rule set; the allowlist below suppresses the
+# DOCUMENTED dev placeholders and test fixtures so they don't produce false
+# positives. Real leaked credentials are NOT allowlisted — they must be rotated
+# and purged from history.
+
+title = "CommandCenter gitleaks config"
+
+[extend]
+useDefault = true
+
+[allowlist]
+description = "Documented dev defaults + fixtures that are not real secrets"
+paths = [
+    '''(^|/)tests?/''',            # unit-test fixtures / mock tokens
+    '''\.env\.example$''',         # documented placeholder values
+    '''package-lock\.json$''',
+    '''uv\.lock$''',
+    '''\.gitleaks\.toml$''',       # this file (the regexes below are literals)
+]
+regexes = [
+    '''sk-local-dev-change-me''',  # documented LLM/internal dev default
+    '''acb_dev_change_me''',       # documented dev Postgres password default
+    '''change-me-dev-only''',      # documented dev session-secret default
+    '''sk-local''',                # documented litellm_master_key dev default
+]

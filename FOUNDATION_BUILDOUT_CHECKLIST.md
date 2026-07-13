@@ -131,9 +131,9 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Missing:** mypy and full‑ruff are report‑only; evals are path‑gated (skip gateway/ingestion/reconciler); `deploy.yml` allows `skip_tests`; no coverage threshold (M10).
 - **Approach:** Ratchet mypy/ruff to blocking per the existing plan; broaden the eval trigger paths or run a fast eval subset on every PR; remove `skip_tests` from production deploy; add `--cov-fail-under` for foundation packages. Reconcile README's CI claims.
 
-### BO‑18 — Secret‑scanning + large‑file gates that actually catch history *(P1)* ☐
-- **Missing:** the large‑file hook only inspects new additions (it missed `acb_dump.bak`); no secret scanner.
-- **Approach:** Add `gitleaks`/`detect-secrets` to pre‑commit and CI; add `.gitignore` rules for `*.pid`/`*.bak`/`*token_cache*` (**✅ F2**); add a CI job that fails on any tracked file > 1 MB.
+### BO‑18 — Secret‑scanning + large‑file gates that actually catch history *(P1)* ◑
+- **Done:** **gitleaks secret scanner** wired into CI — `.gitleaks.toml` (default rules + dev‑placeholder allowlist) + a `secret-scan` job in `pr-check.yml` that scans each PR's NEW commits (report‑only initially, per the ratchet; scoped to the PR range so it doesn't trip on the historical leak). Plus `scripts/scan_secrets_history.sh` for the one‑time full‑history audit around the purge. `.gitignore` rules for `*.pid`/`*.bak`/`*token_cache*` shipped earlier (**✅ F2**).
+- **Missing:** graduate `secret-scan` to **blocking** after a few green PRs; a CI job that fails on any tracked file > 1 MB; and the actual **history purge + token rotation** (BO‑8, owner‑gated).
 
 ---
 

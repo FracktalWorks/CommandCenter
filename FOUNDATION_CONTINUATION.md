@@ -2,37 +2,58 @@
 
 **Purpose:** everything still needed to finish the foundational audit + fixing, written so it can be picked up on a machine **with Postgres access**. Read this alongside `FOUNDATION_AUDIT_REPORT.md` (findings) and `FOUNDATION_BUILDOUT_CHECKLIST.md` (item tracker). This doc is the *executable* plan — concrete files, DDL, code sketches, test approach, and verification commands.
 
-**Branch:** originally `claude/foundation-architecture-audit-ftur3x`; **now merged to `main`** (see status block below).
-**Status at handoff:** 30 commits, unit suite **887 passed**, trajectory evals **118 passed**, both CI blocking gates (ruff-correctness, xenon) green. Everything shipped so far is behaviour-safe and additive/non-breaking.
+**Branch:** originally `claude/foundation-architecture-audit-ftur3x`; **long since merged to `main`.** Current prod = `origin/main` = **`93e04be`** (deployed + verified live).
+**⇩ For the current state + where to start, read the "LATEST STATUS" + "HANDOFF" blocks immediately below** (they supersede the older per-section notes further down, which are kept as the executable detail for each item).
 
 ---
 
-## ⏱️ LATEST STATUS — updated 2026-07-13 (Session 2)
+## ⏱️ LATEST STATUS — end of Session 2 (2026-07-13). NEXT SESSION: START AT §"HANDOFF" BELOW.
 
-**The whole foundation branch is MERGED to `main`, DEPLOYED, and VERIFIED LIVE on prod.** Everything in Section 0 is running in production.
+**The whole foundation audit is MERGED to `main`, DEPLOYED, and VERIFIED LIVE on prod.** `origin/main` = **`93e04be`** (gateway `/health` = ok, `env=dev`). Everything below is running in production. Nothing is half-broken or committed-but-unpushed.
 
-**Deployment / git state**
-- `origin/main` = **`60d2807`** — DEPLOYED + VERIFIED LIVE (deploy.yml success, 5m17s). Session-2b work (5 commits) is in prod:
-  - `1ff6c0d` — `connect_timeout` on the four `email_ingestion` async engines (BO-10 connect_timeout now on every engine).
-  - `e59cc6a` — **A2**: `pending_actions` migration (66) + broker `enqueue/list_pending/approve/reject/submit` + tests (8→17).
-  - `9d0888e` — **A2**: gateway `/actions` approval-inbox routes, all `require_internal_auth`-gated + 4 tests.
-  - `0cc5228`, `60d2807` — docs.
-- **Prod verification (2026-07-13):** migration 66 applied against real PG *before* push (rollback-txn syntax check) and confirmed live after (`pending_actions` table + 3 indexes present); `/actions/pending` and `…/approve` return **401** anonymous; gateway `/health` = ok.
-- The broker is still **inert** — **no live write path rerouted** (needs the B1 authority decision), so non-negotiable #4 is unchanged.
-- **NEXT:** the last A2 mile — register real ClickUp/email handlers + reroute the bypassing writes through `submit()` (needs B1) + the Next.js inbox pane.
+**The headline: the Action Broker is now a FULL, ENFORCEABLE loop (was a 46-line inert stub).**
+Non-negotiable #4 went from *false* → *enforceable on demand*:
+- authority policy + fail-closed executor (`a26bda4`), `pending_actions` queue + `submit/approve/reject` (`e59cc6a`), gateway `/actions` routes (`9d0888e`), the Control Plane **Approvals** page (`6ff4b14`), ClickUp writes routed through the broker as an audited chokepoint with a kill-switch (`b1a5070`), and **persistent handlers so a queued write actually executes on approval** — re-resolving the account token, never persisting it (`f377d5f`).
+- **Kill-switch:** `ACTION_BROKER_ENFORCE` (default OFF → every write auto-applies, audited, zero behaviour change). Set to `all` or a comma-list of action names + restart to hold those writes for human approval in the inbox. Flippable without a redeploy.
 
-**Prod verification done this session (all ✅, read-only):**
-- Migrations applied: `gtd_items.origin` JSONB + index, `agent_avatars`, `agent_run` trace table.
-- **Internal-auth gating (F1/F7):** `/v1/chat/completions` → **401** with no auth *and* with a bogus bearer (does not fail open).
-- **Action Broker (BO-1):** policy correct, **0 handlers registered = inert** (cannot write — as designed).
-- **Executor refactor (BO-13):** re-exports + all 4 extracted submodules import cleanly in prod.
-- **Containment (BO-14)** `resolve_in_workspace` present; **mutation counter (BO-3)** `_register_mutation_attempt` present.
-- `audit_event` table has ~17k rows → the audit happy-path writes fine; the connect_timeout only bounds pathological hangs.
+**Also shipped + live this session (all verified):**
+- **DB resilience (BO-10):** `connect_timeout` on **every** engine (acb_graph `ccccdc8`, 2 gateway `1684e1a`, 4 email_ingestion `1ff6c0d`) — a slow DB can no longer hang an agent. `tests/unit/test_db_connect_timeout.py`.
+- **Secret-scanning (BO-8/BO-18):** gitleaks CI gate + `.gitleaks.toml` + `scripts/scan_secrets_history.sh` (`8d45dc4`, report-only initially).
+- **Docs↔code (BO-12/BO-19):** runtime story reconciled (Copilot SDK is a first-class interactive runtime, not sandbox-only); dead `WorkflowBuilder` import removed; Python 3.12 (`63591b5`).
+- **Executor net (BO-13):** HITL-parking branch now covered (`93e04be`) on top of the batch+native regression net.
+- Earlier in the audit: auth gating F1/F7, mutation counter BO-3, path containment BO-14, dead `acb_schemas` removed BO-11, cost honesty F4.
 
-**New robustness fix this session — DB `connect_timeout` (BO-10 partial):**
-- **Problem found:** `acb_audit.record()` promises "never block the caller" and wraps its DB write in try/except, but a hanging TCP/TLS connect is **not** an exception, and the engines had **no connect timeout** → a slow/firewalled DB could hang an agent indefinitely (observed: a unit run wedged 90s on one audit write).
-- **Shipped:** `settings.db_connect_timeout` (default 10s), threaded into `acb_graph.get_engine()` via `_engine_kwargs()` for Postgres URLs only (ccccdc8, LIVE), and into the two gateway asyncpg engines via `connect_args={"timeout": …}` (1684e1a, committed-local-unpushed). Test: `tests/unit/test_db_connect_timeout.py`.
-- **Still open under BO-10:** the per-call async engines in `email_ingestion/{scheduler,inbound}.py` (also leak an engine per call — BO-9), consolidating to **one** shared engine, and making `acb_audit.record()` non-blocking (`async`/`to_thread`).
+**Prod verification (read-only):** migration 66 `pending_actions` + 3 indexes present; `/actions/pending` + `/approve` → **401** anonymous; `/v1` → 401 no-auth & bogus-bearer; the 3 broker handlers register at startup (`broker.task_handlers_registered`); `audit_event` ~17k rows.
+
+---
+
+## 🚦 HANDOFF — where the NEXT session should start
+
+**Status: 2 done · 12 in progress (several effectively done) · 4 not started.** The remaining work is now **mostly gated on the owner** (credentials / a decision / supervised deploy). In priority order:
+
+### 1. BO-8 — Rotate the leaked Zoho token + purge history *(OWNER — active security exposure, do first)*
+- **Owner-only (cannot be automated):** the `.zoho_token_cache.json` refresh token was committed live and is still recoverable from history (6 commits) — plus `acb_dump.bak` (2 commits). **Rotate it:** Zoho API console → revoke the cached refresh token → generate a new one → update `ZOHO_REFRESH_TOKEN` in the VPS `.env` + integration store. Purging history does NOT un-leak it — rotation is the real fix.
+- **Then purge (VERIFIED — the command works, confirmed on a scratch clone: both files vanish from all history, rest intact):**
+  ```bash
+  git filter-repo --path .zoho_token_cache.json --path acb_dump.bak --invert-paths
+  git push origin --force --all       # team-coordination event: everyone re-clones; VPS `git reset --hard` picks it up
+  ```
+  Do this **after** rotation, with the team aware. Re-run `scripts/scan_secrets_history.sh` to confirm gone. (An agent must NOT run this force-push unsupervised.)
+- Optional hardening (M4): make signing/DB/master keys raise on empty in non-dev — **note: prod currently reports `env=dev`, so any non-dev fail-closed guard is a no-op there until `acb_env=prod` is set. Confirm whether prod SHOULD be `prod`.**
+
+### 2. BO-2 — Default-deny auth *(DECISION + supervised deploy; then buildable)*
+- Dangerous endpoints are gated (F1/F7), but the default posture is still fail-open (`get_current_user` never rejects). **Decision:** flip to default-deny + a small public allow-list (`/health`, OAuth callbacks, signed webhooks), or keep per-route? (Recommended: default-deny.)
+- **Build after decision:** `acb_auth.require_authenticated` as a router-level default; HMAC the agent webhook (`routes/agent.py:2522`); split the service token from `LITELLM_MASTER_KEY` (`deps.py:56`). **Ship env-gated/dormant so deploy can't lock out prod; flip it on in a supervised window.**
+
+### 3. Turn ON broker enforcement *(OPERATIONAL — owner's call)*
+- The kill-switch works end-to-end. To actually hold writes: set `ACTION_BROKER_ENFORCE` + restart. **Caveat first:** while enforced, a queued `create_task` returns `{pending}` with no ID, so the local item shows unlinked — add a UI "awaiting approval" state (`items.py` callers of `create_task`) before enabling, or the mirror looks desynced.
+
+### 4. The larger P1/P2 (buildable autonomously, no owner gate — good next-session work)
+- **BO-7** sandbox dynamic agent execution (security-critical, big — needs a substrate call: reuse the mutation container vs nsjail).
+- **BO-6** Alembic + auto-apply (start with the `schema_migrations` ledger, the smallest safe win).
+- **BO-10 rest:** consolidate to ONE shared async engine + make `acb_audit.record()` non-blocking (`to_thread`).
+- **BO-13 finish:** decompose `run_agent_stream` (~1,600 lines) behind a `Runtime` interface — extend the harness to the **Copilot tier + idle-timeout** branches FIRST (can only be exercised on Linux/CI, not the Windows dev box — see the caveat below).
+- **BO-15** tier→model single source of truth (then **BO-16** can retire the now-load-bearing `config.yaml`), **BO-5** OTLP export, **BO-9** lifecycle, **BO-17** graduate CI gates + broaden eval paths, **BO-14** destructive-tool registry.
 
 **⚠️ Windows test-runner caveat (important for the next session):**
 Running the **full** `tests/unit/` on Windows against a live/localhost DB **hangs** — several non-hermetic "unit" tests (`test_memory_e2e`, `test_action_broker` via the audit write, others) make real DB/network connects that **Linux/CI fast-refuses but Windows does not** (Windows doesn't fast-refuse `::1`/`127.0.0.1:5432` with no listener). And pytest-timeout's only Windows method is `thread`, which `os._exit`s the whole run on the first hang. **Workarounds:**

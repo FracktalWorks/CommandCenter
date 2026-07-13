@@ -36,6 +36,28 @@ class ProviderError(HTTPException):
         super().__init__(status_code=status_code, detail=f"{provider}: {detail}")
 
 
+def _broker_enforced(action: str) -> bool:
+    """Whether ``ACTION_BROKER_ENFORCE`` routes *action* to the approval QUEUE.
+
+    Default (unset / ``none`` / ``off``) → ``False`` → writes AUTO-APPLY: they
+    are already user-approved (staged ``sync_state='pending'`` → the user pushes),
+    so the broker only audits + chokepoints them. Set the env var to
+    ``1``/``all``/``on`` to queue every write, or to a comma-list of action names
+    to queue specific ones. This is the kill-switch — flip it without a redeploy
+    (env var + service restart). NOTE: the queue path needs a persistent handler
+    to execute on approval (a follow-up); until then, enforcing queues a write
+    but it won't run until that lands.
+    """
+    import os
+
+    raw = (os.environ.get("ACTION_BROKER_ENFORCE") or "").strip().lower()
+    if not raw or raw in ("0", "none", "off", "false"):
+        return False
+    if raw in ("1", "all", "on", "true"):
+        return True
+    return action in {a.strip() for a in raw.split(",") if a.strip()}
+
+
 class BaseTaskProvider(ABC):
     """The canonical contract every connector implements (§5.5).
 
@@ -45,6 +67,60 @@ class BaseTaskProvider(ABC):
     """
 
     provider: str = "base"
+
+    def _broker_actor(self) -> str:
+        """Identity recorded on the audit/proposal for an outward write.
+        Never a secret — subclasses may add a workspace/account id."""
+        return f"tasks:{self.provider}"
+
+    async def _broker_gate(
+        self, action: str, target: str,
+        audit_payload: dict[str, Any], do_write,
+    ) -> dict[str, Any]:
+        """Route an outward provider write through the Action Broker — the single
+        audited chokepoint for source-of-truth writes (AGENTS.md #4).
+
+        These writes are already user-approved (staged → the user pushes), so the
+        DEFAULT disposition AUTO-APPLIES: the broker audits the write and
+        ``do_write`` runs immediately, returning the provider result unchanged.
+        ``ACTION_BROKER_ENFORCE`` can flip an action to the approval QUEUE
+        (returns a ``pending`` marker; the write does not run until approved).
+
+        Fail-safe: a broker-layer error never blocks a user-approved write —
+        ``do_write`` still runs. ``do_write`` executes **exactly once** (its own
+        errors, e.g. an HTTP failure, propagate untouched).
+        """
+        try:
+            from action_broker import (
+                AuthorityTier,
+                Disposition,
+                enqueue,
+                propose,
+            )
+
+            queued = _broker_enforced(action)
+            proposal = propose(
+                self._broker_actor(), action, target, audit_payload,
+                authority=(AuthorityTier.SUGGEST_APPLY if queued
+                           else AuthorityTier.AUTONOMOUS),
+                destructive=queued,
+            )
+            disposition = proposal.disposition
+        except Exception as exc:  # broker unavailable → never lose a user write
+            _log.warning("broker.gate_bypass", action=action, error=str(exc))
+            return await do_write()
+
+        if disposition == Disposition.NEEDS_APPROVAL:
+            action_id = None
+            with contextlib.suppress(Exception):
+                action_id = enqueue(proposal)
+            _log.info("broker.write_queued", action=action, action_id=action_id)
+            return {"pending": True, "pending_action_id": action_id,
+                    "provider_task_id": ""}
+        if disposition == Disposition.REJECTED:
+            raise ProviderError(
+                self.provider, f"write {action} rejected by authority policy")
+        return await do_write()
 
     @abstractmethod
     async def verify(self) -> dict[str, Any]:
@@ -141,6 +217,11 @@ class ClickUpProvider(BaseTaskProvider):
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": self._token, "Content-Type": "application/json"}
+
+    def _broker_actor(self) -> str:
+        # Workspace id is a non-secret account discriminator (never the token).
+        ws = self._workspace_id or "?"
+        return f"tasks:clickup:ws:{ws}"
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         async with httpx.AsyncClient(timeout=20.0) as http:
@@ -257,19 +338,28 @@ class ClickUpProvider(BaseTaskProvider):
         # subtask still POSTs to its parent's LIST, so project_ref = the list.
         if payload.get("parent"):
             body["parent"] = str(payload["parent"])
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.post(
-                f"{_CLICKUP}/list/{project_ref}/task",
-                headers=self._headers(), json=body,
-            )
-        if r.status_code >= 400:
-            raise ProviderError("clickup", f"create task → {r.status_code}: {r.text[:200]}")
-        t = r.json()
-        return {
-            "provider_task_id": str(t.get("id", "")),
-            "provider_url": t.get("url"),
-            "provider_status": (t.get("status") or {}).get("status"),
-        }
+
+        async def _do() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=20.0) as http:
+                r = await http.post(
+                    f"{_CLICKUP}/list/{project_ref}/task",
+                    headers=self._headers(), json=body,
+                )
+            if r.status_code >= 400:
+                raise ProviderError("clickup", f"create task → {r.status_code}: {r.text[:200]}")
+            t = r.json()
+            return {
+                "provider_task_id": str(t.get("id", "")),
+                "provider_url": t.get("url"),
+                "provider_status": (t.get("status") or {}).get("status"),
+            }
+
+        return await self._broker_gate(
+            "clickup.create_task", f"list:{project_ref}",
+            {"title": body.get("name"), "status": body.get("status"),
+             "parent": body.get("parent")},
+            _do,
+        )
 
     async def update_task(
         self, provider_task_id: str, payload: dict[str, Any]
@@ -306,22 +396,31 @@ class ClickUpProvider(BaseTaskProvider):
                        != str(payload["assignee_id"]) else [])
                 body["assignees"] = {"add": add, "rem": rem}
         if not body:
-            # Nothing ClickUp-writable changed (e.g. a local-only field).
+            # Nothing ClickUp-writable changed (e.g. a local-only field) — no
+            # outward write, so it does not go through the broker.
             return {"provider_task_id": provider_task_id}
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.put(
-                f"{_CLICKUP}/task/{provider_task_id}",
-                headers=self._headers(), json=body,
-            )
-        if r.status_code >= 400:
-            raise ProviderError(
-                "clickup", f"update task → {r.status_code}: {r.text[:200]}")
-        t = r.json()
-        return {
-            "provider_task_id": str(t.get("id", provider_task_id)),
-            "provider_url": t.get("url"),
-            "provider_status": (t.get("status") or {}).get("status"),
-        }
+
+        async def _do() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=20.0) as http:
+                r = await http.put(
+                    f"{_CLICKUP}/task/{provider_task_id}",
+                    headers=self._headers(), json=body,
+                )
+            if r.status_code >= 400:
+                raise ProviderError(
+                    "clickup", f"update task → {r.status_code}: {r.text[:200]}")
+            t = r.json()
+            return {
+                "provider_task_id": str(t.get("id", provider_task_id)),
+                "provider_url": t.get("url"),
+                "provider_status": (t.get("status") or {}).get("status"),
+            }
+
+        return await self._broker_gate(
+            "clickup.update_task", f"task:{provider_task_id}",
+            {"fields": sorted(body.keys())},
+            _do,
+        )
 
     async def _closed_status_for(self, provider_task_id: str) -> str | None:
         """The closed/done-type status name of a task's list (varies per
@@ -361,19 +460,28 @@ class ClickUpProvider(BaseTaskProvider):
         else directly in the space (folderless)."""
         path = (f"/folder/{folder_id}/list" if folder_id
                 else f"/space/{space_id}/list")
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.post(f"{_CLICKUP}{path}", headers=self._headers(),
-                                json={"name": name})
-        if r.status_code >= 400:
-            raise ProviderError(
-                "clickup", f"create list → {r.status_code}: {r.text[:200]}")
-        lst = r.json()
-        return {
-            "id": str(lst.get("id", "")),
-            "name": lst.get("name", name),
-            "space_id": space_id,
-            "folder_id": folder_id,
-        }
+
+        async def _do() -> dict[str, Any]:
+            async with httpx.AsyncClient(timeout=20.0) as http:
+                r = await http.post(f"{_CLICKUP}{path}", headers=self._headers(),
+                                    json={"name": name})
+            if r.status_code >= 400:
+                raise ProviderError(
+                    "clickup", f"create list → {r.status_code}: {r.text[:200]}")
+            lst = r.json()
+            return {
+                "id": str(lst.get("id", "")),
+                "name": lst.get("name", name),
+                "space_id": space_id,
+                "folder_id": folder_id,
+            }
+
+        return await self._broker_gate(
+            "clickup.create_project",
+            f"space:{space_id}" + (f"/folder:{folder_id}" if folder_id else ""),
+            {"name": name},
+            _do,
+        )
 
     async def list_tasks(
         self, workspace_id: str, *, updated_since_ms: int | None = None

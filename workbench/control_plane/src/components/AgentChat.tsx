@@ -1359,7 +1359,8 @@ export default function AgentChat({
       {!compact && (
       <div className="flex items-center gap-2 h-9 px-4 border-b border-border bg-card/40 shrink-0">
         <div className={`w-2 h-2 rounded-full shrink-0 ${isLoading ? "bg-warning animate-pulse" : "bg-success"}`} />
-        <span className="text-xs font-medium text-foreground truncate">{currentAgentName}</span>
+        <AgentAvatar libraryId={agentAvatars[currentAgentName]} size={20} fallback={null} />
+        <span className="text-xs font-medium text-foreground truncate">{currentAgentLabel}</span>
         {isLoading && (
           <span className="hidden sm:inline text-[10px] text-warning/70 animate-pulse">thinking…</span>
         )}
@@ -1600,13 +1601,13 @@ export default function AgentChat({
               <textarea ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
                 disabled={loadingHistory}
-                aria-label={`Message ${currentAgentName}`}
+                aria-label={`Message ${currentAgentLabel}`}
                 placeholder={
                   loadingHistory
                     ? "Loading previous messages…"
                     : isLoading
-                      ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
-                      : `Message ${currentAgentName}…`
+                      ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentLabel}…`
+                      : `Message ${currentAgentLabel}…`
                 }
                 className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-foreground placeholder-muted-foreground focus:outline-none max-h-40 overflow-y-auto scrollbar-thin disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ minHeight: "32px" }}

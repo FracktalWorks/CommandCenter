@@ -39,7 +39,7 @@ import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 import FilterPills from "@/components/FilterPills";
-import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
+import { AgentAvatar, useAgentAvatars, notifyAgentAvatarsChanged } from "@/components/AgentAvatar";
 import {
   CHARACTER_LIBRARY,
   LIBRARY_IDS,
@@ -1234,6 +1234,9 @@ function AgentAvatarPicker({ agentName }: { agentName: string }) {
             body: JSON.stringify({ config: { libraryId: id }, sprite: null }),
           });
       if (!res.ok) throw new Error(String(res.status));
+      // Tell every surface (grid tiles, detail header, chat) to refetch so the
+      // new avatar shows immediately without a page reload.
+      notifyAgentAvatarsChanged();
     } catch {
       setLibraryId(prev ?? null);
       setErr("Couldn't save — try again.");

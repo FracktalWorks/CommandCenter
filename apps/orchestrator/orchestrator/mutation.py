@@ -639,9 +639,16 @@ async def _run_mutation_sandbox(
     import asyncio
 
     github_token: str | None = getattr(settings, "github_token", None) or None
-    gateway_key: str | None = getattr(settings, "litellm_master_key", None) or None
+    # Same internal-token precedence as acb_auth.require_internal_auth
+    # (gateway_internal_token → litellm_master_key) so the sandbox's /v1 calls
+    # aren't 401'd when the two values diverge.
+    gateway_key: str | None = (
+        getattr(settings, "gateway_internal_token", None)
+        or getattr(settings, "litellm_master_key", None)
+        or None
+    )
     gateway_url: str = getattr(settings, "litellm_base_url", "http://host.docker.internal:8080")
-    mutation_model: str = getattr(settings, "mutation_model", "openai/tier-powerful")
+    mutation_model: str = getattr(settings, "mutation_model", "tier-powerful")
     sandbox_image: str = getattr(settings, "mutation_sandbox_image", "acb-mutation-runner:latest")
     timeout_s: int = int(getattr(settings, "mutation_timeout_seconds", 600))
     agent_dir: str | None = telemetry.get("local_clone_dir")

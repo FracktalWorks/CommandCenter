@@ -786,9 +786,10 @@ async def test_tier(
     import time
 
     from acb_llm.client import LLMTier, complete
+    # Resolve alias → tier id from the ONE canonical map (no local literal copy).
+    from acb_llm.client import _TIER_ALIAS_MAP
 
-    tier_map = {"tier-fast": "tier1", "tier-balanced": "tier2", "tier-powerful": "tier3"}
-    tier_id = tier_map.get(req.tier_name)
+    tier_id = _TIER_ALIAS_MAP.get(req.tier_name)
     if not tier_id:
         raise HTTPException(status_code=400, detail=f"Unknown tier: {req.tier_name}")
 
@@ -1563,7 +1564,8 @@ async def get_context_windows(
     #    configured model (Settings UI changes propagate immediately).
     try:
         from acb_llm.context import context_window_for as _cwf  # noqa: PLC0415
-        for alias in ("tier-fast", "tier-balanced", "tier-powerful"):
+        from acb_llm.client import _TIER_ALIAS_MAP  # noqa: PLC0415
+        for alias in _TIER_ALIAS_MAP:
             cw = _cwf(alias)
             if cw > 0:
                 _put_with_bare(alias, cw)

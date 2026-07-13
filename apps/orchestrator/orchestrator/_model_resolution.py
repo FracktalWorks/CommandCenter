@@ -13,11 +13,16 @@ from __future__ import annotations
 from typing import Any
 
 from acb_common import get_logger
+# Single source of truth for the gateway tier vocabulary. Derived from the
+# canonical alias map in acb_llm (same object v1_compat and the Settings UI
+# resolve against) so a tier is added/renamed in ONE place and can never drift
+# out of sync here. NOT re-listed as literals.
+from acb_llm.client import _TIER_ALIAS_MAP as _CANON_TIER_ALIAS_MAP
 
 _log = get_logger("orchestrator.model_resolution")
 
 
-_GATEWAY_TIER_ALIASES = frozenset({"tier-fast", "tier-balanced", "tier-powerful"})
+_GATEWAY_TIER_ALIASES = frozenset(_CANON_TIER_ALIAS_MAP)
 
 
 def _is_gateway_model(model: str) -> bool:
@@ -84,8 +89,14 @@ def _apply_byok_provider_for_copilot_sdk(
         gw_base = (
             getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:8080"
         ).rstrip("/")
+        # Internal-token precedence must match acb_auth.require_internal_auth
+        # (gateway_internal_token → litellm_master_key); presenting only the
+        # master key 401s when the two values diverge, which surfaces on the
+        # Copilot session as "Authorization error, run /login".
         gw_key = (
-            getattr(settings, "litellm_master_key", "") or "sk-local"
+            getattr(settings, "gateway_internal_token", "")
+            or getattr(settings, "litellm_master_key", "")
+            or "sk-local"
         ).strip()
         agent._default_options["provider"] = {
             "type": "openai", "base_url": f"{gw_base}/v1", "api_key": gw_key,

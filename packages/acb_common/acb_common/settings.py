@@ -42,6 +42,14 @@ class Settings(BaseSettings):
     # All LLM calls use the litellm Python SDK directly (no separate proxy).
     litellm_base_url: str = "http://127.0.0.1:8080"
     litellm_master_key: str = "sk-local"
+    # Internal service token the gateway's /v1 + server-to-server endpoints
+    # authenticate against (acb_auth.require_internal_auth). Reads
+    # GATEWAY_INTERNAL_TOKEN; when unset the gateway falls back to
+    # litellm_master_key. Every BYOK/internal caller MUST present this token
+    # with the SAME precedence (gateway_internal_token → litellm_master_key),
+    # else a divergence between the two values yields a 401 that surfaces on
+    # Copilot BYOK agents as the misleading "Authorization error, run /login".
+    gateway_internal_token: str = ""
 
     # Master encryption key for the provider key store (ADR-008).
     # Generate: python -c "import secrets; print(secrets.token_urlsafe(32))"
@@ -130,7 +138,10 @@ class Settings(BaseSettings):
     openhands_api_url: str = ""   # e.g. http://openhands:3000; leave blank to disable mutation
 
     # Copilot SDK Self-Mutation Sandbox (acb-mutation-runner) — WBS 1.2/1.3
-    mutation_model: str = "openai/tier-powerful"       # model the sandbox agent uses
+    # A gateway tier alias (resolved dynamically to the configured model), NOT a
+    # concrete provider/model. "openai/tier-powerful" was malformed — litellm
+    # read it as provider=openai, model="tier-powerful" and 400'd.
+    mutation_model: str = "tier-powerful"              # model the sandbox agent uses
     mutation_sandbox_image: str = "acb-mutation-runner:latest"
     mutation_timeout_seconds: int = 600              # hard cap on a single mutation run
     mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix

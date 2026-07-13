@@ -338,6 +338,27 @@ async def _db_query(sql: str, **params: Any) -> list[dict[str, Any]]:
     return await get_key_store()._execute(sql, **params)
 
 
+async def _clickup_account_count() -> int:
+    """Count connected ClickUp workspaces in the System-B store.
+
+    ClickUp is multi-account: its "connected" state lives in ``task_accounts``
+    (per-account encrypted tokens), NOT a process-wide env var — which is why
+    :func:`_is_configured` hardcodes ``clickup`` to ``False``. The APIs-tab
+    tile already overrides ``configured`` from this count on the client, but the
+    Agents view trusts the server value, so it wrongly showed a connected
+    workspace as "not connected" / the agent as "not fully configured". Resolve
+    the real count server-side so BOTH surfaces agree. Fail-soft: 0 on error.
+    """
+    try:
+        rows = await _db_query(
+            "SELECT count(*) AS n FROM task_accounts WHERE provider = :p",
+            p="clickup",
+        )
+        return int(rows[0]["n"]) if rows else 0
+    except Exception:  # noqa: BLE001 — status must never 500 on a count
+        return 0
+
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -530,6 +551,11 @@ async def integration_status(
     for svc in services:
         guide = _SETUP_GUIDES.get(svc, {})
         configured = _is_configured(svc, settings)
+        # ClickUp is multi-account (System B / task_accounts): _is_configured
+        # can't see it, so resolve the real connection count here. Keeps the
+        # Agents view in agreement with the APIs-tab tile.
+        if svc == "clickup":
+            configured = await _clickup_account_count() > 0
         # For GitHub, always compute missing_keys from actual env vars
         # because the service can be "configured" via PAT (GITHUB_TOKEN)
         # alone, but the OAuth device flow (Option B) needs

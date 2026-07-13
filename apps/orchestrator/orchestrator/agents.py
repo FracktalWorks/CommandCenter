@@ -405,7 +405,14 @@ def _make_openai_client(
     """
     settings = get_settings()
     gateway_base = getattr(settings, "litellm_base_url", "http://127.0.0.1:8080")
-    gateway_key = getattr(settings, "litellm_master_key", "sk-local") or "sk-local"
+    # Present the gateway's internal token with the SAME precedence as
+    # acb_auth.require_internal_auth (gateway_internal_token → litellm_master_key),
+    # else a token divergence 401s every completion this client makes.
+    gateway_key = (
+        getattr(settings, "gateway_internal_token", "")
+        or getattr(settings, "litellm_master_key", "")
+        or "sk-local"
+    )
     return OpenAIChatCompletionClient(
         base_url=f"{gateway_base}/v1",
         api_key=gateway_key,

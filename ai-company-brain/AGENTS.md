@@ -90,27 +90,29 @@ The planning folder was consolidated on 2026-06-20 (15 files → 5 + `specs/`).
 
 ### Per-feature specs (`specs/`)
 
-Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index refreshed 2026-06-29.)*
+Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index reconciled against code 2026-07-13.)*
+
+**Only forward-looking / living specs are listed here.** 13 shipped-or-historical specs were moved to
+[`specs/archive/`](specs/archive/README.md) (each verified live in code, with residual open work carried
+forward). Foundation status of record is `FOUNDATION_BUILDOUT_CHECKLIST.md` (BO-*) — the specs below defer
+to it and to `competitive_hardening_2026-07.md` (CH-*) rather than re-describe those gaps.
 
 | Spec | Concern | Status |
 |---|---|---|
-| [`email_ai_assistant.md`](specs/email_ai_assistant.md) | **Email app** — overview, architecture, full classified feature inventory + pending work (the master email doc) | 🟢 live |
-| [`email_inbox_zero_parity_plan.md`](specs/email_inbox_zero_parity_plan.md) | Email — inbox-zero parity audit, remaining roadmap, deferred backend hardening | 🟢 / 🔄 |
-| [`email_app_review.md`](specs/email_app_review.md) | Email — milestone build log (chronological history M0→M9) | 🟢 log |
-| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager app (GTD)** — PM-agnostic GTD client + `task-manager` agent; provider interface layer (API/MCP connectors), LOCAL-vs-SYNCED dual source, delegation/monitoring | 🔄 capture/clarify live (UI+backend) |
-| [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, components, tickets ST-DRW-01…13, roadmap (master) | 🔲 proposed |
-| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — wire contract for `diagram-svc` / `create_diagram` / `DrawioEditor` (freeze-gated) | 🔲 proposed |
-| [`chat_ux.md`](specs/chat_ux.md) | Chat thinking/progress/tool rendering UI | 🔄 Phase 1 ✅, Phase 2 |
-| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | **Task manager × harness engineering** — app-level review vs awesome-harness-engineering; tool risk annotations, trifecta guards, GTD golden evals, tool_scope | 🔄 Tier 1 ✅ (2026-07-03), Tier 2 planned |
-| [`chat_implementation_review_2026-07.md`](specs/chat_implementation_review_2026-07.md) | **Chat stack audit** (SSE · HITL · resume · handoffs, MAF + Copilot SDK) — prioritized P0/P1 fixes, 3 strategic refactors, doc-drift list | 🔨 in progress — batches 1–3 landed (see doc's status block); remaining: P0-3, P1-2/5/6/7/9, P2, §5 refactors |
-| [`stream_reconnection.md`](specs/stream_reconnection.md) | Fire-and-forget chat + Redis stream replay/reconnect | 🟢 implemented |
-| [`vscode_tool_integration.md`](specs/vscode_tool_integration.md) | 6 VS Code Copilot-Chat tools (HITL, errors, memory, history, GitHub search) | 🔄 impl. done, verify |
-| [`artifact_viewer.md`](specs/artifact_viewer.md) | Right-sidebar file browser + inline document viewer | 🔲 M3 target |
-| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching + session-scoped memory (ADR-008) | 🔲 Phase 2 |
-| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / organization account research — identity, roles, permissions, memory, agent sharing, data-heavy app scoping (email, tasks), and SaaS multi-tenancy scaling | 🔲 research done |
-| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST — design proposal | 🔲 brainstorm |
-| [`dev_velocity_tooling_2026-07.md`](specs/dev_velocity_tooling_2026-07.md) | **Dev-velocity tooling** — keeping a large codebase agent-developable: L1 complexity/correctness/mypy gates (grandfather-and-ratchet), L2 CodeGraph MCP (`.mcp.json`), L3 weekly code-health workflow + `codebase_health_audit` skill (flag-only) | 🟢 Phases 1-3 shipped (2026-07-04) |
-| [`competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) | **Competitive hardening** — learnings from Hermes Agent & OpenClaw (`CH-*`) annealed into the backlog: proven reference implementations attached to BO-1/5/7/12/14, two new gaps (BO-20 event-bus/queue, BO-21 memory activation), Phase-5 Annealer = the self-improving-skills home. Companion to `harness_hardening`; source is `/COMPETITIVE_COMPARISON.md` | 🔲 planned (annealed, no code) |
+| [`core_module_map.md`](specs/core_module_map.md) | **Living architecture hub** — orchestrator module→file map, the parent of the (now-archived) core-loop/context zoom-ins | 🟢 living reference |
+| [`competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) | **Competitive hardening** — Hermes/OpenClaw learnings (`CH-*`) annealed onto BO-1/5/7/12/14 + new BO-20/BO-21; Phase-5 Annealer = self-improving-skills home. Source `/COMPETITIVE_COMPARISON.md` | 🔲 planned (annealed, no code) |
+| [`harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md) | **Harness gap queue** (HH-1..8) vs awesome-harness-engineering | 🔄 HH-1/4/5 shipped; HH-2/HH-3 mechanism-only, **not enforced** (audit M5/H9); HH-6/7 deferred |
+| [`permissions_sandbox_b6.md`](specs/permissions_sandbox_b6.md) | Permission policy + sandbox design | 🔄 policy layer shipped but audit gate is a name-only **no-op (M5)**; sandbox not started → **BO-7 / BO-14** |
+| [`observability_e2.md`](specs/observability_e2.md) | Observability — activity feed, cost, agent office | 🔄 Redis activity/cost feed **shipped**; distributed/OTel tracing **dead** → **BO-5** |
+| [`chat_ux.md`](specs/chat_ux.md) | **Chat master** — thinking/progress/tool rendering (absorbed the two archived chat audits) | 🔄 Phase 1 shipped; §12 AG-UI event backlog open |
+| [`email_ai_assistant.md`](specs/email_ai_assistant.md) | **Email master** — architecture + feature inventory + pending work | 🟢 live; open gaps (Pub/Sub push, calendar, notify) tracked in `project_plan.md` |
+| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager (GTD)** — client + `task-manager` agent + provider layer | 🔄 capture/clarify/organize + provider **sync-pull live**; Engage "Now" + Action-Broker-gated push open |
+| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | Task-manager × harness engineering (app-layer sibling) | 🔄 Tier 1 shipped (2026-07-03); Tier 2 planned |
+| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching (ADR-008) + session memory | 🔄 caching **shipped & wired**; session-memory shipped but **inert by default** (→ BO-21); Phase 7 open |
+| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST | 🔄 MCP half **built** (`_inject_mcp_servers`); plugin store not started |
+| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / org account research — identity, roles, tenancy | 🔲 research done, not implemented |
+| [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, tickets ST-DRW-01…13 (master) | 🔲 proposed — **genuinely unbuilt** |
+| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — `diagram-svc` wire contract (sub-doc of the master) | 🔲 proposed — unbuilt |
 
 ---
 

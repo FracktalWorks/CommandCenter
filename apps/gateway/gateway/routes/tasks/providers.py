@@ -211,9 +211,15 @@ class ClickUpProvider(BaseTaskProvider):
 
     provider = "clickup"
 
-    def __init__(self, token: str, workspace_id: str | None = None):
+    def __init__(
+        self, token: str, workspace_id: str | None = None,
+        account_id: str | None = None,
+    ):
         self._token = token
         self._workspace_id = workspace_id
+        # The task_accounts id this provider was built from — needed so a QUEUED
+        # write can re-resolve the token at approval time (see broker_handlers).
+        self._account_id = account_id
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": self._token, "Content-Type": "application/json"}
@@ -339,27 +345,31 @@ class ClickUpProvider(BaseTaskProvider):
         if payload.get("parent"):
             body["parent"] = str(payload["parent"])
 
-        async def _do() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=20.0) as http:
-                r = await http.post(
-                    f"{_CLICKUP}/list/{project_ref}/task",
-                    headers=self._headers(), json=body,
-                )
-            if r.status_code >= 400:
-                raise ProviderError("clickup", f"create task → {r.status_code}: {r.text[:200]}")
-            t = r.json()
-            return {
-                "provider_task_id": str(t.get("id", "")),
-                "provider_url": t.get("url"),
-                "provider_status": (t.get("status") or {}).get("status"),
-            }
-
         return await self._broker_gate(
             "clickup.create_task", f"list:{project_ref}",
-            {"title": body.get("name"), "status": body.get("status"),
-             "parent": body.get("parent")},
-            _do,
+            {"account_id": self._account_id,
+             "args": {"project_ref": project_ref, "body": body}},
+            lambda: self._raw_create_task(project_ref, body),
         )
+
+    async def _raw_create_task(
+        self, project_ref: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The actual ClickUp create — bypasses the broker gate. Called by the
+        gate on auto-apply AND by the persistent handler on approval."""
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.post(
+                f"{_CLICKUP}/list/{project_ref}/task",
+                headers=self._headers(), json=body,
+            )
+        if r.status_code >= 400:
+            raise ProviderError("clickup", f"create task → {r.status_code}: {r.text[:200]}")
+        t = r.json()
+        return {
+            "provider_task_id": str(t.get("id", "")),
+            "provider_url": t.get("url"),
+            "provider_status": (t.get("status") or {}).get("status"),
+        }
 
     async def update_task(
         self, provider_task_id: str, payload: dict[str, Any]
@@ -400,27 +410,32 @@ class ClickUpProvider(BaseTaskProvider):
             # outward write, so it does not go through the broker.
             return {"provider_task_id": provider_task_id}
 
-        async def _do() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=20.0) as http:
-                r = await http.put(
-                    f"{_CLICKUP}/task/{provider_task_id}",
-                    headers=self._headers(), json=body,
-                )
-            if r.status_code >= 400:
-                raise ProviderError(
-                    "clickup", f"update task → {r.status_code}: {r.text[:200]}")
-            t = r.json()
-            return {
-                "provider_task_id": str(t.get("id", provider_task_id)),
-                "provider_url": t.get("url"),
-                "provider_status": (t.get("status") or {}).get("status"),
-            }
-
         return await self._broker_gate(
             "clickup.update_task", f"task:{provider_task_id}",
-            {"fields": sorted(body.keys())},
-            _do,
+            {"account_id": self._account_id,
+             "args": {"provider_task_id": provider_task_id, "body": body}},
+            lambda: self._raw_update_task(provider_task_id, body),
         )
+
+    async def _raw_update_task(
+        self, provider_task_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The actual ClickUp PUT — bypasses the broker gate. Called by the gate
+        on auto-apply AND by the persistent handler on approval."""
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.put(
+                f"{_CLICKUP}/task/{provider_task_id}",
+                headers=self._headers(), json=body,
+            )
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"update task → {r.status_code}: {r.text[:200]}")
+        t = r.json()
+        return {
+            "provider_task_id": str(t.get("id", provider_task_id)),
+            "provider_url": t.get("url"),
+            "provider_status": (t.get("status") or {}).get("status"),
+        }
 
     async def _closed_status_for(self, provider_task_id: str) -> str | None:
         """The closed/done-type status name of a task's list (varies per
@@ -458,30 +473,34 @@ class ClickUpProvider(BaseTaskProvider):
     ) -> dict[str, Any]:
         """ClickUp: a project = a List, created in a folder when given,
         else directly in the space (folderless)."""
-        path = (f"/folder/{folder_id}/list" if folder_id
-                else f"/space/{space_id}/list")
-
-        async def _do() -> dict[str, Any]:
-            async with httpx.AsyncClient(timeout=20.0) as http:
-                r = await http.post(f"{_CLICKUP}{path}", headers=self._headers(),
-                                    json={"name": name})
-            if r.status_code >= 400:
-                raise ProviderError(
-                    "clickup", f"create list → {r.status_code}: {r.text[:200]}")
-            lst = r.json()
-            return {
-                "id": str(lst.get("id", "")),
-                "name": lst.get("name", name),
-                "space_id": space_id,
-                "folder_id": folder_id,
-            }
-
         return await self._broker_gate(
             "clickup.create_project",
             f"space:{space_id}" + (f"/folder:{folder_id}" if folder_id else ""),
-            {"name": name},
-            _do,
+            {"account_id": self._account_id,
+             "args": {"name": name, "space_id": space_id, "folder_id": folder_id}},
+            lambda: self._raw_create_project(name, space_id, folder_id),
         )
+
+    async def _raw_create_project(
+        self, name: str, space_id: str, folder_id: str | None = None,
+    ) -> dict[str, Any]:
+        """The actual ClickUp list-create — bypasses the broker gate. Called by
+        the gate on auto-apply AND by the persistent handler on approval."""
+        path = (f"/folder/{folder_id}/list" if folder_id
+                else f"/space/{space_id}/list")
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.post(f"{_CLICKUP}{path}", headers=self._headers(),
+                                json={"name": name})
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"create list → {r.status_code}: {r.text[:200]}")
+        lst = r.json()
+        return {
+            "id": str(lst.get("id", "")),
+            "name": lst.get("name", name),
+            "space_id": space_id,
+            "folder_id": folder_id,
+        }
 
     async def list_tasks(
         self, workspace_id: str, *, updated_since_ms: int | None = None
@@ -618,13 +637,17 @@ def connector_names() -> list[str]:
 
 
 def build_provider(
-    provider: str, creds: dict[str, Any], workspace_id: str | None = None
+    provider: str, creds: dict[str, Any], workspace_id: str | None = None,
+    account_id: str | None = None,
 ) -> BaseTaskProvider:
-    """Instantiate a connector from its name + decrypted credentials."""
+    """Instantiate a connector from its name + decrypted credentials.
+
+    ``account_id`` (the ``task_accounts`` row) is optional — pass it on WRITE
+    paths so a broker-queued write can re-resolve the token on approval."""
     cls = _CONNECTORS.get(provider)
     if cls is None:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     token = creds.get("api_token") or creds.get("token") or ""
     if not token:
         raise HTTPException(status_code=400, detail=f"{provider}: missing api_token")
-    return cls(token, workspace_id)
+    return cls(token, workspace_id, account_id)

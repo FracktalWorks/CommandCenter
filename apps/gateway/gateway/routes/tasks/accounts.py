@@ -322,7 +322,8 @@ async def create_account_project(
     try:
         row = await _assert_account_owner(db, account_id, _uid(user))
         creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
-        provider = build_provider(row.provider, creds, row.workspace_id)
+        provider = build_provider(
+            row.provider, creds, row.workspace_id, str(row.id))
         created = await provider.create_project(
             row.workspace_id, name, req.space_id, req.folder_id)
 

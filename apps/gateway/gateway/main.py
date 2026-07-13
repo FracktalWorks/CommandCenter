@@ -41,8 +41,8 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # put its bin first on PATH so runtime dependency installs land here and are
     # importable in-process.
     try:
-        import sys as _sys  # noqa: PLC0415
-        from pathlib import Path as _Path  # noqa: PLC0415
+        import sys as _sys
+        from pathlib import Path as _Path
         # sys.prefix IS the venv root in a venv — do NOT derive it from
         # sys.executable, whose bin/python is often a symlink to the system
         # python (resolving it lands on /usr and misses the venv).
@@ -52,7 +52,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             _bin = str(_venv / "bin")
             if _bin not in os.environ.get("PATH", "").split(os.pathsep):
                 os.environ["PATH"] = _bin + os.pathsep + os.environ.get("PATH", "")
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     settings = get_settings()
@@ -81,9 +81,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             if not _gh:
                 return
             os.environ.setdefault("GITHUB_TOKEN", _gh)
-            import time as _t  # noqa: PLC0415
+            import time as _t
 
-            from copilot import CopilotClient as _CC  # noqa: PLC0415
+            from copilot import CopilotClient as _CC
             _c = _CC(options={"github_token": _gh}); await _c.start()
             try:
                 _m = await _c.list_models()
@@ -97,7 +97,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 }
                 _copilot_models_cache["ts"] = _t.monotonic()
                 _log.info("gateway.copilot_models_cache_warmed", count=len(_m))
-        except Exception as _e:  # noqa: BLE001
+        except Exception as _e:
             _log.warning("gateway.copilot_models_warmup_failed", error=str(_e))
 
     import asyncio as _asyncio
@@ -110,15 +110,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     # them on startup so their workspace is browsable without a manual pull.
     async def _warm_clone_agents() -> None:
         try:
-            from acb_skills.loader import _install_agent_deps, load_agent  # noqa: PLC0415
+            from acb_skills.loader import _install_agent_deps, load_agent
 
-            from gateway.routes.agent import _AGENT_REGISTRY, _load_dynamic_agents  # noqa: PLC0415
-            from gateway.routes.workspace import _agent_workspace_dir  # noqa: PLC0415
+            from gateway.routes.agent import _AGENT_REGISTRY, _load_dynamic_agents
+            from gateway.routes.workspace import _agent_workspace_dir
 
             entries = list(_AGENT_REGISTRY)
             try:
                 entries = _load_dynamic_agents() + entries
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             seen: set[str] = set()
@@ -136,7 +136,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                     continue
                 try:
                     _ws = _agent_workspace_dir(name)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     continue
                 if _ws is not None:
                     # Already cloned — ensure its declared deps are installed
@@ -146,7 +146,7 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                         await _asyncio.to_thread(
                             _install_agent_deps, _ws, settings
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     continue
 
@@ -157,11 +157,11 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
                 try:
                     await _asyncio.to_thread(_clone, name, repo_name, local_path)
                     _log.info("gateway.warm_clone_done", agent=name)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     _log.warning(
                         "gateway.warm_clone_failed", agent=name, error=str(exc)
                     )
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _log.warning("gateway.warm_clone_skipped", error=str(exc))
 
     _asyncio.ensure_future(_warm_clone_agents())
@@ -251,8 +251,8 @@ async def _prewarm_prompt_cache() -> None:
     try:
         from acb_llm.client import _TIER_MODEL, ensure_model_registered
         from acb_llm.prompt_cache import is_anthropic_model
-        from litellm import acompletion  # noqa: PLC0415
-        from orchestrator.agents import build_orchestrator_agent  # noqa: PLC0415
+        from litellm import acompletion
+        from orchestrator.agents import build_orchestrator_agent
 
         agent = build_orchestrator_agent(with_history=False)
         opts = agent.default_options
@@ -294,13 +294,13 @@ async def _prewarm_prompt_cache() -> None:
                 _log.info(
                     "gateway.cache_prewarm_complete", tier=tier_id, model=model
                 )
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _log.warning(
                     "gateway.cache_prewarm_failed",
                     model=model,
                     error=str(exc)[:150],
                 )
-    except Exception as exc:  # noqa: BLE001 — never block startup on warming
+    except Exception as exc:
         _log.debug("gateway.cache_prewarm_skipped", error=str(exc)[:150])
 
 
@@ -393,7 +393,7 @@ if _HAS_MAF:
 
             # ── Set user context for memory tools (remember / save_memory / etc.) ──
             try:
-                from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+                from acb_skills.memory_tools import _set_memory_user_id
                 _set_memory_user_id(user_id)
             except ImportError:
                 pass
@@ -439,10 +439,10 @@ if _HAS_MAF:
             # policy (empty/bare → tier-balanced or copilot_chat_model).
             _resolved_model = ""
             try:
-                from orchestrator.executor import _apply_model_for_maf_agent  # noqa: PLC0415
+                from orchestrator.executor import _apply_model_for_maf_agent
                 _resolved_model = _apply_model_for_maf_agent(
                     agent, (model or "").strip(), get_settings())
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             protocol_runner = _AgentFrameworkAgent(agent=agent)
@@ -453,15 +453,15 @@ if _HAS_MAF:
                 # HERE (inside the streaming generator) so the tools' ContextVar
                 # lookup sees it — the handler body runs in a different context.
                 try:
-                    from orchestrator.executor import _active_run_model  # noqa: PLC0415
+                    from orchestrator.executor import _active_run_model
                     if _resolved_model:
                         _active_run_model.set(_resolved_model)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 try:
                     async for event in protocol_runner.run(input_data):
                         yield encoder.encode(event)
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     _log.exception("copilot_chat.stream_error")
                     try:
                         yield encoder.encode(_RunErrorEvent(
@@ -488,7 +488,7 @@ if _HAS_MAF:
             # against the translator's own time-based fallback id.
             _persist_cb = None
             if _thread_id and assistant_message_id:
-                from gateway.chat_fold import persist_final_assistant_message  # noqa: PLC0415
+                from gateway.chat_fold import persist_final_assistant_message
 
                 # Snapshot the input conversation for run-boundary memory
                 # extraction (P1-9) — captured here so the callback below has it
@@ -517,12 +517,12 @@ if _HAS_MAF:
                     if not (user_id and _mem_conv_in):
                         return
                     try:
-                        from acb_memory import (  # noqa: PLC0415
+                        from acb_memory import (
                             add_episode,
                             add_memories_background,
                         )
 
-                        from gateway.chat_fold import (  # noqa: PLC0415
+                        from gateway.chat_fold import (
                             build_extraction_conversation,
                         )
                         # _mem_conv_in already includes the current user turn
@@ -542,7 +542,7 @@ if _HAS_MAF:
                             )
                     except ImportError:
                         pass
-                    except Exception:  # noqa: BLE001 — never kill the relay
+                    except Exception:
                         _log.warning(
                             "copilot_chat.run_end_memory_extraction_failed",
                             thread_id=_thread_id[:12],
@@ -555,18 +555,18 @@ if _HAS_MAF:
             # (the primary agent) never appears working in the live office/feed.
             # End fires from run_detached's shielded on_complete (every terminal
             # outcome); a missed end self-heals via the presence-key TTL.
-            import time as _obs_time  # noqa: PLC0415
+            import time as _obs_time
             _obs_run_id = assistant_message_id or _thread_id or None
             _obs_started = _obs_time.monotonic()
             try:
-                from acb_common import publish_activity  # noqa: PLC0415
+                from acb_common import publish_activity
                 publish_activity(
                     kind="agent", phase="start", agent="orchestrator",
                     run_id=_obs_run_id, thread_id=_thread_id or None,
                     user=user_id or None, model=(_resolved_model or model or None),
                     source="chat",
                 )
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             _prior_cb = _persist_cb
@@ -577,7 +577,7 @@ if _HAS_MAF:
                         await _prior_cb()
                 finally:
                     try:
-                        from acb_common import publish_activity  # noqa: PLC0415
+                        from acb_common import publish_activity
                         publish_activity(
                             kind="agent", phase="end", agent="orchestrator",
                             run_id=_obs_run_id, thread_id=_thread_id or None,
@@ -585,13 +585,13 @@ if _HAS_MAF:
                             duration_ms=int((_obs_time.monotonic() - _obs_started) * 1000),
                             source="chat",
                         )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
             async def relayed_generator():
-                import json as _json  # noqa: PLC0415
+                import json as _json
 
-                from orchestrator.stream_relay import (  # noqa: PLC0415
+                from orchestrator.stream_relay import (
                     get_detached_task,
                     run_detached,
                 )
@@ -601,7 +601,7 @@ if _HAS_MAF:
                         on_complete=_obs_on_complete,
                     ):
                         yield f"data: {_json.dumps(evt)}\n\n"
-                except Exception:  # noqa: BLE001
+                except Exception:
                     if get_detached_task(_thread_id) is not None:
                         _log.warning("copilot_chat.stream_subscribe_lost")
                         return
@@ -619,7 +619,7 @@ if _HAS_MAF:
             if _persist_cb is None:
                 try:
                     from acb_memory import (
-                        add_episode,  # noqa: PLC0415
+                        add_episode,
                         add_memories_background,
                     )
                     if last_user_msg and messages:
@@ -728,6 +728,15 @@ try:
     from gateway.routes.actions import router as _actions_router
 
     app.include_router(_actions_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # BO-1 / A2 — persistent handlers so a QUEUED task write executes on approval
+    # (re-resolves the account token). Dormant unless ACTION_BROKER_ENFORCE is on.
+    from gateway.routes.tasks.broker_handlers import register_task_broker_handlers
+
+    register_task_broker_handlers()
 except Exception:  # pragma: no cover
     pass
 
@@ -853,7 +862,7 @@ async def embeddings(
     """
     oai_key = os.environ.get("OPENAI_API_KEY", "").strip()
     if oai_key:
-        from openai import OpenAI  # noqa: PLC0415
+        from openai import OpenAI
         client = OpenAI(api_key=oai_key)
         inputs = req.input if isinstance(req.input, list) else [req.input]
         resp = client.embeddings.create(model=req.model, input=inputs)
@@ -977,7 +986,7 @@ async def copilot_models() -> dict:
     if github_token:
         try:
             os.environ.setdefault("GITHUB_TOKEN", github_token)
-            from copilot import CopilotClient  # noqa: PLC0415
+            from copilot import CopilotClient
             _sdk = CopilotClient(options={"github_token": github_token})
             await _sdk.start()
             try:
@@ -1002,7 +1011,7 @@ async def copilot_models() -> dict:
                 _copilot_models_cache["data"] = result
                 _copilot_models_cache["ts"] = _now
                 return result
-        except Exception as _e:  # noqa: BLE001
+        except Exception as _e:
             _log.warning("gateway.copilot_models_failed", error=str(_e))
     static = {
         "models": [
@@ -1060,7 +1069,7 @@ async def pull(req: PullRequest, _user: UserContext = Depends(get_current_user))
     # Background: extract facts from this exchange into Mem0
     try:
         from acb_memory import (
-            add_episode,  # noqa: PLC0415
+            add_episode,
             add_memories_background,
         )
         messages = [

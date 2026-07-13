@@ -160,6 +160,61 @@ export function overdueCount(items: GtdItem[], now: number): number {
   return items.filter((i) => isOverdue(i, now)).length;
 }
 
+// ── Status axis (workflow-stage / ClickUp-status columns) ────────────────────
+//
+// The Next-Actions board and grouped list slice tasks into STATUS columns. A
+// LOCAL task's status is its local Kanban stage (`workflowStage`); a SYNCED
+// ClickUp task's status is the tool's own stage (`providerStatus`). Historically
+// both surfaces grouped by `workflowStage` ALONE — which is always null on
+// synced rows, so every ClickUp task collapsed into the first column ("Backlog").
+// These helpers fix that: the column set is the union of the local stages and
+// the connected tool's statuses, and each task lands in the column that matches
+// whichever status it actually carries.
+
+/** Case/space-insensitive key for matching a status name against a column set
+ *  ("To Do" ≡ "to do" ≡ "TODO" would NOT collapse — only case+trim, not spaces,
+ *  since ClickUp treats "to do" and "todo" as distinct statuses). */
+function normStatus(s: string): string {
+  return s.trim().toLowerCase();
+}
+
+/** The ordered status columns for a status-grouped view: the connected tool's
+ *  statuses first (in the tool's own workflow order), then any LOCAL workflow
+ *  stages the tool doesn't already cover. De-duplicated case-insensitively,
+ *  keeping the first (provider) spelling. Falls back to the local stages alone
+ *  when there are no provider statuses (e.g. no ClickUp account connected). */
+export function statusColumns(
+  localStages: string[],
+  providerStatuses: string[],
+): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const s of [...providerStatuses, ...localStages]) {
+    const key = normStatus(s);
+    if (!s.trim() || seen.has(key)) continue;
+    seen.add(key);
+    out.push(s);
+  }
+  return out.length ? out : localStages;
+}
+
+/** The status column a task belongs in, given the ordered column set. A SYNCED
+ *  task keys off its ClickUp `providerStatus`; a LOCAL task off its
+ *  `workflowStage`. Returns the matching column (in the column set's own
+ *  spelling) or `firstStage` when the task has no status yet / it isn't a known
+ *  column — so unstaged tasks gather in the first column instead of vanishing. */
+export function statusColumnForItem(
+  item: GtdItem,
+  columns: string[],
+  firstStage: string,
+): string {
+  const raw = item.source === "LOCAL" ? item.workflowStage : item.providerStatus;
+  if (!raw) return firstStage;
+  const key = normStatus(raw);
+  const hit = columns.find((c) => normStatus(c) === key);
+  return hit ?? firstStage;
+}
+
 // ── Group-by (the toolbar "lens" that slices a list into labelled sections) ──
 
 import {

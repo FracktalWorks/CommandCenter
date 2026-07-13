@@ -5,7 +5,12 @@ import { ChevronRight, GripVertical, CornerDownRight, Loader2, Circle, CheckCirc
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
-import { applySort, byManualOrder } from "../lib/ordering";
+import {
+  applySort,
+  byManualOrder,
+  statusColumns,
+  statusColumnForItem,
+} from "../lib/ordering";
 import { stageAccent } from "../lib/stageColors";
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
@@ -24,34 +29,33 @@ import { stageAccent } from "../lib/stageColors";
 
 const UNSET = "—";
 
-type GroupKind = "workflow" | "provider" | "none";
-
-function groupKindFor(view: ViewKey): GroupKind {
-  return view === "next" ? "workflow" : "none";
-}
-
 export function TaskListGrouped({
   items,
   view,
-  stageMode,
   stages,
 }: {
   items: GtdItem[];
   view: ViewKey;
-  /** Override the grouping axis. "provider" groups by the connected tool's
-   *  status and drags re-file `providerStatus` (back-syncs to ClickUp). */
-  stageMode?: "workflow" | "provider";
-  /** Explicit ordered stage set (e.g. a project's ClickUp statuses). */
+  /** Explicit ordered stage set (e.g. a project's ClickUp statuses). When
+   *  omitted on Next Actions, the groups are the union of the local workflow
+   *  stages and the connected tools' statuses. */
   stages?: string[];
 }) {
   const workflowSettingStages = useTaskStore((s) => s.settings.workflowStages);
-  const workflowStages = stages ?? workflowSettingStages;
+  const providerStatuses = useTaskStore((s) => s.providerStatuses);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
 
-  const kind: GroupKind = stageMode ?? groupKindFor(view);
+  // Next Actions groups by the STATUS axis (local stages ∪ ClickUp statuses);
+  // other views render a single flat group. A LOCAL row keys off `workflowStage`,
+  // a SYNCED row off `providerStatus` (statusColumnForItem).
+  const grouped = view === "next";
+  const stageKeys = useMemo(
+    () => stages ?? statusColumns(workflowSettingStages, providerStatuses),
+    [stages, workflowSettingStages, providerStatuses],
+  );
   const manual = sort.field === "manual";
-  const firstStage = workflowStages[0];
+  const firstStage = stageKeys[0];
 
   const [dragId, setDragId] = useState<string | null>(null);
   // The drop target as "<groupKey>:<index>" so a highlight can mark the exact
@@ -59,24 +63,15 @@ export function TaskListGrouped({
   const [dropAt, setDropAt] = useState<string | null>(null);
 
   const groupOf = useCallback(
-    (i: GtdItem): string => {
-      if (kind === "workflow")
-        return i.workflowStage && workflowStages.includes(i.workflowStage)
-          ? i.workflowStage
-          : firstStage;
-      if (kind === "provider")
-        return i.providerStatus && workflowStages.includes(i.providerStatus)
-          ? i.providerStatus
-          : firstStage;
-      return UNSET;
-    },
-    [kind, workflowStages, firstStage],
+    (i: GtdItem): string =>
+      grouped ? statusColumnForItem(i, stageKeys, firstStage) : UNSET,
+    [grouped, stageKeys, firstStage],
   );
 
   const groups = useMemo(() => {
-    if (kind === "none") return [{ key: UNSET, label: "" }];
-    return workflowStages.map((s) => ({ key: s, label: s }));
-  }, [kind, workflowStages]);
+    if (!grouped) return [{ key: UNSET, label: "" }];
+    return stageKeys.map((s) => ({ key: s, label: s }));
+  }, [grouped, stageKeys]);
 
   const byGroup = useMemo(() => {
     const m = new Map<string, GtdItem[]>();
@@ -105,15 +100,15 @@ export function TaskListGrouped({
     setDragId(null);
     if (!id || !manual) return;
     const dest = byManualOrder(byGroup.get(groupKey) ?? []);
-    // Dropping into a stage group re-files the stage: workflow stage (Next
-    // Actions / local project) or provider status (ClickUp project — back-syncs);
-    // the flat "none" view just reorders.
-    const refile =
-      kind === "workflow"
+    // Dropping into a stage group re-files the status, SOURCE-AWARE: a SYNCED
+    // (ClickUp) row sets `providerStatus` (back-syncs to the tool); a LOCAL row
+    // sets its `workflowStage`. The flat (non-grouped) view just reorders.
+    const dragged = items.find((i) => i.id === id);
+    const refile = !grouped
+      ? undefined
+      : dragged?.source === "LOCAL"
         ? { workflowStage: groupKey }
-        : kind === "provider"
-          ? { providerStatus: groupKey }
-          : undefined;
+        : { providerStatus: groupKey };
     reorderItem(id, dest, index, refile);
   };
 
@@ -124,7 +119,7 @@ export function TaskListGrouped({
       {groups.map((g, gi) => {
         const rows = byGroup.get(g.key) ?? [];
         const isCollapsed = collapsed.has(g.key);
-        const showHeader = kind !== "none";
+        const showHeader = grouped;
         const accent = stageAccent(g.label || g.key, gi, total);
         const isDone = gi === total - 1;
         // Highlight the whole group while a card hovers anywhere over it, so a

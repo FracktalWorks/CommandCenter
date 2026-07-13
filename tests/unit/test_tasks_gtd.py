@@ -724,6 +724,47 @@ def test_organize_owner_axis_independent_of_size():
     assert '"is_mine": not delegated' in src
 
 
+def test_organize_synced_delegate_requires_a_project():
+    """A clarify-delegate to a connected tool must carry a destination project —
+    the teammate has to SEE the task there, which needs a list to create it in.
+    organize_item refuses (before any write) a synced delegation with no project,
+    so it can't commit a WAITING row that strands invisibly (the Veena bug)."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.organize_item)
+    # The guard keys off delegated + SYNCED + missing project, and it lives
+    # BEFORE the UPDATE (fail-closed, no partial write).
+    assert 'delegated and source == "SYNCED"' in src
+    assert "req.kind == \"project\" or not req.project_id" in src
+    guard = src.index("delegate into")
+    write = src.index("UPDATE gtd_items")
+    assert guard < write, "the project guard must precede the row write"
+
+
+def test_organize_synced_delegate_auto_pushes_to_the_tool():
+    """Parity with POST /items/{id}/delegate: a clarify-delegate to a connected
+    workspace pushes upstream in the same request (so the teammate sees it),
+    rather than leaving it 'pending' and invisible. A push hiccup is caught and
+    the delegation is still saved (WAITING) with the manual Push affordance."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    organize_src = inspect.getsource(tasks_items.organize_item)
+    push_src = inspect.getsource(tasks_items._maybe_push_delegated)
+    # organize commits the local clarify first, THEN runs the auto-push helper.
+    assert "_maybe_push_delegated(" in organize_src
+    assert organize_src.index("await db.commit()") < organize_src.index(
+        "_maybe_push_delegated(")
+    # The helper only pushes a SYNCED delegation with a chosen project, and a
+    # push failure is tolerated (deferred), not fatal to the clarify.
+    assert 'delegated and source == "SYNCED" and project_id' in push_src
+    assert "_push_pending_item(db, item_id, uid)" in push_src
+    assert "delegate_push_deferred" in push_src
+
+
 def test_item_patch_is_mine_is_local_overlay_never_pushed_upstream():
     """Removing a handed-off/unassigned task from "My Next Actions" is a purely
     LOCAL overlay: is_mine patches the row, but is NEVER a ClickUp-writable
@@ -731,7 +772,9 @@ def test_item_patch_is_mine_is_local_overlay_never_pushed_upstream():
     import inspect
 
     from gateway.routes.tasks.items import (
-        ItemPatch, _build_item_update, _push_patch_upstream,
+        ItemPatch,
+        _build_item_update,
+        _push_patch_upstream,
     )
 
     sets, params = _build_item_update("item1", "u1", ItemPatch(is_mine=False))

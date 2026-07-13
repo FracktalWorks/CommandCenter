@@ -8,8 +8,7 @@ Reusable Python packages shared across all CommandCenter services.
 - acb_llm/ -- LiteLLM integration, unified credential store (LLM + integration keys), model routing
 - acb_memory/ -- Mem0 and Graphiti memory providers
 - acb_graph/ -- Postgres entity graph (SQLAlchemy sessions)
-- acb_common/ -- Shared settings, logging, utilities
-- acb_schemas/ -- Pydantic data models
+- acb_common/ -- Shared settings, logging, activity/cost feed, utilities
 - acb_audit/ -- Audit event recording
 - acb_auth/ -- Authentication and role-based access
 

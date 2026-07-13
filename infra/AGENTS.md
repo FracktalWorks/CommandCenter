@@ -1,7 +1,7 @@
 # Infrastructure
 
 ## Purpose
-Docker Compose, Postgres schema, LiteLLM config (legacy — LLM routing is via gateway /v1 endpoint; no proxy files remain).
+Docker Compose, Postgres schema, LiteLLM tier config. LLM routing is via the gateway `/v1` endpoint (in-process litellm SDK, no proxy process). The legacy proxy files `litellm/config.yaml` + `litellm/tier_overrides.yaml` are **still on disk but vestigial** — only their tier rows are read; retiring them is tracked as BO-16.
 
 ## Key Files
 - docker-compose.yml -- core services (Postgres 16 + pgvector, Redis 7)
@@ -14,7 +14,8 @@ Docker Compose, Postgres schema, LiteLLM config (legacy — LLM routing is via g
 - **LiteLLM uses Prisma internally → `DATABASE_URL` MUST be `postgresql://` (plain, no `+psycopg` suffix)**
 - All LLM calls go through the gateway `/v1/chat/completions` endpoint (Python litellm SDK, no proxy)
 - Redis is vanilla alpine (redis-stack deferred)
-- No Langfuse container (OTel-ready, backend TBD)
+- Langfuse container is defined but **opt-in behind `--profile obs`** and dormant (no OTLP export wired by default; the `langfuse` Python package is not installed). Distributed tracing is tracked as BO-5.
+- Compose profiles: `core` (postgres+redis), `memory` (neo4j, for Graphiti), `obs` (langfuse + postgres/redis), `sandbox`
 
 ## Verification
 - docker compose up must start all services

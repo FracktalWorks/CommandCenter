@@ -35,8 +35,8 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | Control Plane shell (Next.js, chat, SSO) | ✅ Done | `workbench/control_plane/` |
 | Control Plane rich chat UI (SSE streaming, markdown, syntax highlight, tool-call blocks) | ✅ Done | `workbench/control_plane/src/components/MarkdownMessage.tsx`, `useAgentChat.ts`, `AgentChat.tsx`, `api/agent/chat/route.ts` |
 | Control Plane model picker + agent switcher + stop-generation button | ✅ Done | `AgentChat.tsx` — VS Code Copilot-style UX |
-| LiteLLM gateway + tiered routing | ✅ Done | `infra/litellm/config.yaml` |
-| LiteLLM GitHub Copilot model routes (`copilot/gpt-4o`, `copilot/claude-sonnet`, `copilot/o3-mini`) | ✅ Done | `infra/litellm/config.yaml` |
+| LLM routing + tiered models | ✅ Done | **In-process litellm SDK** via the gateway `/v1` endpoint (`apps/gateway/gateway/routes/v1_compat.py`, `packages/acb_llm/`). No proxy process; `infra/litellm/config.yaml` is vestigial (tier rows only, → BO-16). |
+| GitHub Copilot model routes (`copilot/*`) | ✅ Done | Resolved in-process by `acb_llm` / the Copilot-SDK tier — not via a proxy config |
 | Skills monorepo + loader | ✅ Done | `skills/`, `packages/acb_skills/` |
 | Self-mutation GitHub PR automation | 🔲 Next | Phase 1 (WBS 1.3) |
 | Eval CI gate on agent/skill PRs | 🔲 Next | Phase 1 (WBS 1.4) |
@@ -49,10 +49,10 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | **LLM settings UI (tier picker, Gemini/OpenAI key save)** | ✅ Done | `workbench/control_plane/src/app/settings/models/` — per-tier model assignment; provider key save; LiteLLM health |
 | **AG-UI → SSE translation (chat properly streams tool calls)** | ✅ Done | `workbench/control_plane/src/app/api/agent/chat/route.ts` — translates AG-UI events to delta/tool_start/tool_end for the UI hook |
 | **Memory: Mem0 episodic + Graphiti bi-temporal KG** | ✅ Done | M2.8 — pgvector backend, Neo4j `--profile memory`, `/memory/*` API, injected into orchestrator + Copilot agents. See [`reference.md`](reference.md) §3 |
-| **Fire-and-forget chat + live stream reconnection** | ✅ Done | Redis Streams + Postgres; agent continues after tab close, resumes live on reopen. See [`specs/stream_reconnection.md`](specs/stream_reconnection.md) |
+| **Fire-and-forget chat + live stream reconnection** | ✅ Done | Redis Streams + Postgres; agent continues after tab close, resumes live on reopen. See [`specs/archive/stream_reconnection.md`](specs/archive/stream_reconnection.md) |
 | **Chat session history (auto-title + last-turn preview)** | ✅ Done | M2.6 — `chat_sessions.title`/`last_preview`; session list UI |
 | **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
-| **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/vscode_tool_integration.md`](specs/vscode_tool_integration.md) |
+| **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/archive/vscode_tool_integration.md`](specs/archive/vscode_tool_integration.md) |
 | **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email.py`, `apps/email_ingestion/`. Outlook display bugs fixed (PR #4). See [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md) |
 | **Task Manager app — GTD-philosophy client + `task-manager` agent (PM-agnostic: any tool via API or MCP)** | 🔄 capture/clarify live end-to-end | Frontend slices 1–2.5 + the capture/clarify **backend**: migration `48_task_manager_gtd.sql`, gateway `routes/tasks/` (20 endpoints), provider interface layer + **ClickUp connector** (multi-workspace `task_accounts`, encrypted tokens), `apps/skill-task-gtd/` + rewritten `apps/agent-task-manager/`, frontend wired live with mock fallback; **org-knowledge layer live** (`gtd_people` from agent-project-manager HR data → capability-aware delegation, §6.1). Resume: Slice 3 (Engage) · `/tasks/sync` pull. See [`specs/task_manager_app.md`](specs/task_manager_app.md) §9.1 |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
@@ -90,26 +90,29 @@ The planning folder was consolidated on 2026-06-20 (15 files → 5 + `specs/`).
 
 ### Per-feature specs (`specs/`)
 
-Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index refreshed 2026-06-29.)*
+Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Index reconciled against code 2026-07-13.)*
+
+**Only forward-looking / living specs are listed here.** 13 shipped-or-historical specs were moved to
+[`specs/archive/`](specs/archive/README.md) (each verified live in code, with residual open work carried
+forward). Foundation status of record is `FOUNDATION_BUILDOUT_CHECKLIST.md` (BO-*) — the specs below defer
+to it and to `competitive_hardening_2026-07.md` (CH-*) rather than re-describe those gaps.
 
 | Spec | Concern | Status |
 |---|---|---|
-| [`email_ai_assistant.md`](specs/email_ai_assistant.md) | **Email app** — overview, architecture, full classified feature inventory + pending work (the master email doc) | 🟢 live |
-| [`email_inbox_zero_parity_plan.md`](specs/email_inbox_zero_parity_plan.md) | Email — inbox-zero parity audit, remaining roadmap, deferred backend hardening | 🟢 / 🔄 |
-| [`email_app_review.md`](specs/email_app_review.md) | Email — milestone build log (chronological history M0→M9) | 🟢 log |
-| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager app (GTD)** — PM-agnostic GTD client + `task-manager` agent; provider interface layer (API/MCP connectors), LOCAL-vs-SYNCED dual source, delegation/monitoring | 🔄 capture/clarify live (UI+backend) |
-| [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, components, tickets ST-DRW-01…13, roadmap (master) | 🔲 proposed |
-| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — wire contract for `diagram-svc` / `create_diagram` / `DrawioEditor` (freeze-gated) | 🔲 proposed |
-| [`chat_ux.md`](specs/chat_ux.md) | Chat thinking/progress/tool rendering UI | 🔄 Phase 1 ✅, Phase 2 |
-| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | **Task manager × harness engineering** — app-level review vs awesome-harness-engineering; tool risk annotations, trifecta guards, GTD golden evals, tool_scope | 🔄 Tier 1 ✅ (2026-07-03), Tier 2 planned |
-| [`chat_implementation_review_2026-07.md`](specs/chat_implementation_review_2026-07.md) | **Chat stack audit** (SSE · HITL · resume · handoffs, MAF + Copilot SDK) — prioritized P0/P1 fixes, 3 strategic refactors, doc-drift list | 🔨 in progress — batches 1–3 landed (see doc's status block); remaining: P0-3, P1-2/5/6/7/9, P2, §5 refactors |
-| [`stream_reconnection.md`](specs/stream_reconnection.md) | Fire-and-forget chat + Redis stream replay/reconnect | 🟢 implemented |
-| [`vscode_tool_integration.md`](specs/vscode_tool_integration.md) | 6 VS Code Copilot-Chat tools (HITL, errors, memory, history, GitHub search) | 🔄 impl. done, verify |
-| [`artifact_viewer.md`](specs/artifact_viewer.md) | Right-sidebar file browser + inline document viewer | 🔲 M3 target |
-| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching + session-scoped memory (ADR-008) | 🔲 Phase 2 |
-| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / organization account research — identity, roles, permissions, memory, agent sharing, data-heavy app scoping (email, tasks), and SaaS multi-tenancy scaling | 🔲 research done |
-| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST — design proposal | 🔲 brainstorm |
-| [`dev_velocity_tooling_2026-07.md`](specs/dev_velocity_tooling_2026-07.md) | **Dev-velocity tooling** — keeping a large codebase agent-developable: L1 complexity/correctness/mypy gates (grandfather-and-ratchet), L2 CodeGraph MCP (`.mcp.json`), L3 weekly code-health workflow + `codebase_health_audit` skill (flag-only) | 🟢 Phases 1-3 shipped (2026-07-04) |
+| [`core_module_map.md`](specs/core_module_map.md) | **Living architecture hub** — orchestrator module→file map, the parent of the (now-archived) core-loop/context zoom-ins | 🟢 living reference |
+| [`competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) | **Competitive hardening** — Hermes/OpenClaw learnings (`CH-*`) annealed onto BO-1/5/7/12/14 + new BO-20/BO-21; Phase-5 Annealer = self-improving-skills home. Source `/COMPETITIVE_COMPARISON.md` | 🔲 planned (annealed, no code) |
+| [`harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md) | **Harness gap queue** (HH-1..8) vs awesome-harness-engineering | 🔄 HH-1/4/5 shipped; HH-2/HH-3 mechanism-only, **not enforced** (audit M5/H9); HH-6/7 deferred |
+| [`permissions_sandbox_b6.md`](specs/permissions_sandbox_b6.md) | Permission policy + sandbox design | 🔄 policy layer shipped but audit gate is a name-only **no-op (M5)**; sandbox not started → **BO-7 / BO-14** |
+| [`observability_e2.md`](specs/observability_e2.md) | Observability — activity feed, cost, agent office | 🔄 Redis activity/cost feed **shipped**; distributed/OTel tracing **dead** → **BO-5** |
+| [`chat_ux.md`](specs/chat_ux.md) | **Chat master** — thinking/progress/tool rendering (absorbed the two archived chat audits) | 🔄 Phase 1 shipped; §12 AG-UI event backlog open |
+| [`email_ai_assistant.md`](specs/email_ai_assistant.md) | **Email master** — architecture + feature inventory + pending work | 🟢 live; open gaps (Pub/Sub push, calendar, notify) tracked in `project_plan.md` |
+| [`task_manager_app.md`](specs/task_manager_app.md) | **Task Manager (GTD)** — client + `task-manager` agent + provider layer | 🔄 capture/clarify/organize + provider **sync-pull live**; Engage "Now" + Action-Broker-gated push open |
+| [`task_manager_harness_2026-07.md`](specs/task_manager_harness_2026-07.md) | Task-manager × harness engineering (app-layer sibling) | 🔄 Tier 1 shipped (2026-07-03); Tier 2 planned |
+| [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching (ADR-008) + session memory | 🔄 caching **shipped & wired**; session-memory shipped but **inert by default** (→ BO-21); Phase 7 open |
+| [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST | 🔄 MCP half **built** (`_inject_mcp_servers`); plugin store not started |
+| [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / org account research — identity, roles, tenancy | 🔲 research done, not implemented |
+| [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, tickets ST-DRW-01…13 (master) | 🔲 proposed — **genuinely unbuilt** |
+| [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — `diagram-svc` wire contract (sub-doc of the master) | 🔲 proposed — unbuilt |
 
 ---
 
@@ -144,11 +147,11 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 
 ### Resolved / Current State
 
-1. **AG-UI wiring (WBS 0.6)** — ✅ Done. `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` is wired in gateway startup (`apps/gateway/gateway/main.py`). Control Plane `CopilotKitProvider` points at the gateway AG-UI URL.
+1. **AG-UI wiring (WBS 0.6)** — ✅ Done. `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` is wired in gateway startup (`apps/gateway/gateway/main.py`). (CopilotKit was removed in M2.5; the Control Plane chat now consumes AG-UI over SSE via `api/agent/chat/route.ts`.)
 
 2. **Webhook → MAF dispatch (WBS 0.7)** — ✅ Done. `agent.py` dispatches webhook events to the MAF executor (`orchestrator.executor.run_agent`). The old Copilot-runtime dispatch arm (`runtime: copilot`) has been removed.
 
-3. **Observability** — Langfuse has been **removed** from the stack (no container, no `langfuse` package, no OTel exporter). Re-introduce a self-hosted OTLP backend later if/when tracing is needed.
+3. **Observability** — the `langfuse` Python package is not installed and no OTLP exporter is wired; a Langfuse **container** exists in `infra/docker-compose.yml` but is **opt-in behind `--profile obs` and dormant**. Real telemetry today is the bespoke Redis activity/cost feed (`acb_common/activity.py`). Standing up distributed tracing is tracked as **BO-5** (audit H9).
 
 4. **Self_Mutation_Node** — implemented as a standalone async module (`apps/orchestrator/orchestrator/mutation.py`); no LangGraph. Formalising it as a MAF workflow step is pending (WBS 1.1).
 
@@ -167,20 +170,22 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 | **Self_Mutation_Node** | Implemented as a standalone async module (`apps/orchestrator/orchestrator/mutation.py`); no LangGraph. Formalisation as a MAF workflow step is pending (WBS 1.1). Spawns an isolated Copilot SDK mutation container (`acb-mutation-runner` Docker image), reads failure telemetry, applies a code fix to the live clone, and opens a GitHub PR. The container receives the mutation prompt and LiteLLM BYOK credentials via env vars; the agent repo is mounted at `/workspace/repo`. |
 | **Hot-patch model** | Fix is applied to the live persistent clone immediately (recovery in minutes). The PR is the audit record + rollback trigger (close = auto rollback). |
 | **Control Plane** | Next.js browser UI at `workbench/control_plane/`. Provides chat and HITL approval queue. Not an editor. |
-| **Action Broker** | The only write path to source systems (ClickUp/Zoho/Odoo). Enforces per-action authority tiers. Lives at `apps/action_broker/`. |
-| **Reconciler** | Nightly agent that diffs entity graph vs source systems and escalates drift. Lives at `apps/reconciler/` and `level4/apps/reconciler/`. |
+| **Action Broker** | The *intended* single write path to source systems (ClickUp/Zoho/Odoo), enforcing per-action authority tiers. Lives at `apps/action_broker/`. **Current reality:** the authority-tier decision core exists but ships with **zero handlers and is not yet wired into the write path** — real ClickUp/email writes bypass it today. Wiring it is **BO-1** (P0). |
+| **Reconciler** | Nightly agent that diffs entity graph vs source systems and escalates drift. Lives at `apps/reconciler/`. |
 | **HITL** | Human-in-the-loop. Approval requests delivered via Control Plane or email/WhatsApp when operator is not at the UI. |
 | **authority tier** | read / suggest / suggest+apply / autonomous — the allowed scope of an agent's action on a specific resource type. |
-| **Annealer** | Phase 5 sub-agent that mines successful run patterns, proposes new reusable skills as PRs, and manages shadow → canary → full rollout. |
+| **Annealer** | Phase 5 sub-agent that mines successful run patterns, proposes new reusable skills as PRs, and manages shadow → canary → full rollout. **Reference implementation:** Hermes Agent's "Curator" (auto-authors + prunes skills on a cycle) — see CH-7 in [`specs/competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md). Our differentiator is that skill proposals go through the human PR/approval gate; self-improvement *plus* enterprise HITL is something neither Hermes nor OpenClaw offers. |
 
 ---
 
 ## Current Phase
 
-Phases 0, 1, 1.5, 1.6 are complete and **M2 is closed**. Active work is **M2.9 (email app)** plus **Phase 2 (Full Agent Ecosystem)** platform work toward **M3**. See [`project_plan.md`](project_plan.md) §6 for the full phased WBS and status.
+Phases 0, 1, 1.5, 1.6 are complete and **M2 is closed**. A **foundation architecture audit (2026-07)** is now the active workstream — it found the platform's documented guarantees are materially ahead of what the code enforces, and its P0 items gate the feature roadmap. **Two backlogs, read both:**
+- **Foundation hardening (do first):** [`/FOUNDATION_BUILDOUT_CHECKLIST.md`](../FOUNDATION_BUILDOUT_CHECKLIST.md) — `BO-1..21` (+ `CH-*` in `specs/competitive_hardening_2026-07.md`, `HH-*` in `specs/harness_hardening_2026-07.md`).
+- **Feature roadmap:** [`project_plan.md`](project_plan.md) §6 — M2.9 email → M3 agent ecosystem → M4 capture → M5 write authority → M6 intelligence.
 
-**Immediate priorities:**
-- M2.9 — email app: post-deploy mailbox reconnect, Drafts/Junk sync, entity-graph linkage.
-- Phase 2 — Zoho + Gmail ingestion pipelines (WBS 2.1/2.2), cross-source entity resolution (2.3), Action Broker hardening (2.4).
-- Phase 1 cleanup — GitHub PR automation (WBS 1.3), BYOK-forced metering (WBS 1.7).
-- Hardening — **SEC-1: lock down public Postgres/Redis (5432/6379) on the VPS** (see project_plan §6 / R-06).
+**Immediate priorities (P0 foundation first):**
+- **BO-8** rotate/purge committed secrets · **BO-2** enforce auth (never-reject → require) · **BO-1** wire the Action Broker into the write path (non-negotiable #4 is currently false) · **BO-3** mutation governance residuals.
+- **SEC-1 / R-06** — lock down public Postgres/Redis (5432/6379) on the VPS (bind `127.0.0.1`).
+- Then P1: **BO-7** sandbox, **BO-5** observability+cost, **BO-20** event-bus consumer + job queue, **BO-6** migrations.
+- Feature track (in parallel where unblocked): M2.9 email residuals; Phase 2 Zoho/Gmail ingestion (2.1/2.2) + entity resolution (2.3); Phase 1 cleanup (PR automation 1.3, BYOK metering 1.7).

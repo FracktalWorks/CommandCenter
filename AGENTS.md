@@ -51,7 +51,7 @@ Remove stale or contradictory text immediately.
 Organisation: Fracktal Works
 Project: CommandCenter v2 -- Headless, self-mutating agent orchestration platform
 Runtime: MAF (Microsoft Agent Framework) native, plus the GitHub Copilot SDK as a second runtime for interactive coworker chat + the self-mutation sandbox. No LangGraph. No deepagents. No n8n.
-Last updated: 2026-06-14
+Last updated: 2026-07-13
 
 ## Purpose
 
@@ -114,6 +114,12 @@ best practice:
 - Our gap analysis + work queue: ai-company-brain/specs/harness_hardening_2026-07.md
   (HH-1..8). Check it before starting harness work — the gap may already be
   queued, in-progress, or explicitly deferred with rationale.
+- Competitor reference implementations: ai-company-brain/specs/competitive_hardening_2026-07.md
+  (CH-1..9, sourced from COMPETITIVE_COMPARISON.md) — proven patterns from Hermes
+  Agent (fail-closed approval, container sandbox flags, self-improving Curator,
+  typed sub-agent messaging) and OpenClaw (durable job queue, hub-and-spoke
+  channels; and its CVEs as the cautionary case). Consult it for "what good looks
+  like" when hardening security, plumbing, or multi-agent coordination.
 - Standing rules derived from it:
   1. New platform/agent tools declare risk annotations
      (acb_skills.tool_annotations: read_only/destructive/idempotent/open_world).
@@ -126,14 +132,12 @@ best practice:
   5. Keep the system-prompt prefix byte-stable (cache-friendly); don't
      inject volatile content before the stable blocks.
 
-## Package Versions (as of 2026-06-10)
+## Package Versions
 
-- agent-framework-core: 1.8.0
-- agent-framework-github-copilot: 1.0.0rc1
-- agent-framework-ag-ui: 1.0.0rc3
-- agent-framework-openai: 1.7.0
-- agent-framework-redis: 1.0.0b260521
-- github-copilot-sdk: 1.0.0
+`uv.lock` is the single source of truth for pinned versions — do not maintain a
+hand-copied table here (it drifts: the previous snapshot was stale on 3 of 6 pins).
+Check with `uv tree` / `uv pip list`. Key runtime pins: `agent-framework-*`
+(core / github-copilot / ag-ui / openai / redis) and `github-copilot-sdk`.
 
 ## User Preferences
 
@@ -156,8 +160,8 @@ best practice:
 
 | Scope | Path | Covers |
 |---|---|---|
-| Application services | apps/AGENTS.md | Gateway, orchestrator, ingestion, reconciler |
-| Shared packages | packages/AGENTS.md | acb_skills, acb_llm, acb_memory, acb_graph, acb_common |
+| Application services | apps/AGENTS.md | Gateway, orchestrator, ingestion, email_ingestion, reconciler, action_broker |
+| Shared packages | packages/AGENTS.md | acb_skills, acb_llm, acb_memory, acb_graph, acb_common, acb_audit, acb_auth |
 | Skills | skills/AGENTS.md | Skill definitions and SKILL.md patterns |
 | Infrastructure | infra/AGENTS.md | Docker Compose, Postgres, LLM tier config, Redis |
 | Deployment | deploy/AGENTS.md | Hostinger VPS deployment |

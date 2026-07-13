@@ -40,7 +40,7 @@ CI runs `uv run python -m pytest tests/unit/ -x -v` on every PR
 ## Email automation tests
 
 The email app is the most actively tested area (inbox-zero parity work — see
-`ai-company-brain/specs/email_inbox_zero_parity_plan.md` §7). Files:
+`ai-company-brain/specs/archive/email_inbox_zero_parity_plan.md` §7). Files:
 
 | File | Covers |
 |---|---|

@@ -98,13 +98,13 @@ apps/                    # Deployable services / app modules
 
 packages/                # Shared Python libs (uv workspace members)
   acb_common/            # Settings, structlog logging, Redis activity/cost feed
-  acb_schemas/           # Pydantic entity models
   acb_graph/             # Postgres + pgvector access layer
   acb_llm/               # LiteLLM SDK client + tiered routing + BYOK key store + guardrails
   acb_audit/             # Append-only audit log
   acb_skills/            # Skill/agent loader, tool injection, permission policy, integrations
   acb_memory/            # mem0 (episodic) + graphiti (bi-temporal KG) + session cache
   acb_auth/              # Auth helpers (header-trust SSO + internal token)
+  # (acb_schemas was removed — 0 production importers; entity models live in acb_graph)
 
 infra/                   # docker-compose, Postgres init/migrations, LiteLLM tier config
 skills/                  # Anthropic SKILL.md registry
@@ -175,7 +175,7 @@ npm run dev          # http://localhost:3001
 
 | Pane | Path | Description |
 |---|---|---|
-| Chat / Agent Inbox | `/` | CopilotKit + AG‑UI (MAF orchestrator); HITL queue |
+| Chat / Agent Inbox | `/` | AG‑UI + SSE (MAF orchestrator); HITL queue |
 | Observability | `/observability` | Activity feed, spend, mutation approval history |
 
 ---
@@ -202,7 +202,7 @@ See [`Makefile`](Makefile) for convenience targets.
 
 | Layer | Technology |
 |---|---|
-| Control plane | Next.js 16, React 19, Tailwind v4, CopilotKit, AG‑UI |
+| Control plane | Next.js 16, React 19, Tailwind v4, AG‑UI + SSE |
 | Agent runtime | Microsoft Agent Framework (MAF) + GitHub Copilot SDK |
 | Dynamic loading | Python `importlib` + git clone/pull (per‑event agent clone) |
 | Self‑mutation | GitHub Copilot SDK (isolated Docker mutation container) |
@@ -240,4 +240,5 @@ All planning artefacts live in [`ai-company-brain/`](ai-company-brain/). Start w
 | [`ai-company-brain/system_architecture.md`](ai-company-brain/system_architecture.md) | C4 diagrams, data model, ADRs |
 | [`ai-company-brain/reference.md`](ai-company-brain/reference.md) | MAF / Copilot SDK / memory library notes |
 | [`FOUNDATION_AUDIT_REPORT.md`](FOUNDATION_AUDIT_REPORT.md) | Foundational architecture audit (findings by severity) |
-| [`FOUNDATION_BUILDOUT_CHECKLIST.md`](FOUNDATION_BUILDOUT_CHECKLIST.md) | Missing/partial foundational capabilities + priorities |
+| [`FOUNDATION_BUILDOUT_CHECKLIST.md`](FOUNDATION_BUILDOUT_CHECKLIST.md) | Missing/partial foundational capabilities + priorities (incl. `CH-*` competitive refs, BO‑20/BO‑21) |
+| [`COMPETITIVE_COMPARISON.md`](COMPETITIVE_COMPARISON.md) | Three‑way comparison vs Hermes Agent & OpenClaw — where we stand + what to learn (annealed into `ai-company-brain/specs/competitive_hardening_2026-07.md`) |

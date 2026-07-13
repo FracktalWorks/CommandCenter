@@ -5,6 +5,16 @@
 > **Read first:** [`AGENTS.md`](AGENTS.md) — current build status, file index, glossary.
 > **Companions:** [`system_architecture.md`](system_architecture.md) (design + ADRs) · [`reference.md`](reference.md) (MAF / Copilot SDK / memory library notes) · [`agent_repo_compatibility.md`](agent_repo_compatibility.md) (how to build an agent) · [`specs/`](specs/) (per-feature specs).
 
+> **⚠️ Two work surfaces — this doc is the FEATURE roadmap (M3→M6). It is NOT the whole "what's left":**
+> A foundation architecture audit (2026-07) surfaced trust-boundary / plumbing / observability gaps that
+> gate the feature work. Those are tracked separately and take priority:
+> - **Foundation hardening (P0 first):** [`/FOUNDATION_BUILDOUT_CHECKLIST.md`](../FOUNDATION_BUILDOUT_CHECKLIST.md) — `BO-1..21`
+>   (Action Broker wiring, auth enforcement, sandboxing, event-bus consumer, memory activation, …).
+> - **Competitor-informed refs + 2 new items:** [`specs/competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) — `CH-1..9`.
+> - **Harness practices:** [`specs/harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md) — `HH-1..8`.
+> Read those for the *foundation* backlog; read this doc for the *feature* backlog. The P0 foundation items
+> (esp. **BO-1 Action Broker**) are prerequisites for L3/M5 write-authority milestones below.
+
 ---
 
 ## 1. What We Are Building
@@ -142,8 +152,8 @@ Zero-credential `web_search`/`fetch_page`; `normalize_tools()` wrapping across a
 - 🔲 **2.1** Zoho CRM ingestion pipeline (webhooks + REST → entity graph).
 - 🔲 **2.2** Gmail ingestion pipeline (Pub/Sub push → MESSAGE entity).
 - 🔲 **2.3** Customer/person entity resolution (deterministic + LLM fallback, cross-source dedup).
-- 🔲 **2.4** Action Broker hardening (approval queue + API, authority tiers, audit + rollback, kill switch).
-- ✅ **2.5** Mem0 + Graphiti memory integration (pgvector backend, Neo4j `--profile memory`, `/memory/*` API, injected into orchestrator + Copilot agents).
+- 🔲 **2.4** Action Broker hardening (approval queue + API, authority tiers, audit + rollback, kill switch). *(The authority-tier decision core now exists but is inert/unwired — see **BO-1**, the P0 foundation item.)*
+- ◑ **2.5** Mem0 + Graphiti memory integration — code shipped (pgvector backend, Neo4j `--profile memory`, `/memory/*` API, injected into orchestrator + Copilot agents) **but default-OFF and inert** (`mem0_enabled=False`, zero-vector embeddings fallback). Activation = **BO-21**.
 - 🔲 **2.6** Semantic cache + token compression (LiteLLM cache 1h TTL; LLMLingua-2 on >1k-token tool outputs). See [`specs/llm_caching_memory.md`](specs/llm_caching_memory.md).
 
 ### Phase 3 — Capture Expansion 🔲 (~9 ew · M4)
@@ -161,7 +171,7 @@ Gap-closure workstream from the best-practices audit against [awesome-harness-en
 - 🔄 **HH-2** Fail-closed `request_confirmation` for destructive actions + risk annotations (`read_only`/`destructive`/`idempotent`/`open_world`) on platform tools.
 - 🔄 **HH-3** Telemetry export path: LiteLLM OTEL callbacks (gated on `OTEL_EXPORTER_OTLP_ENDPOINT`), per-call cache/token usage into `audit_event`; backend selection stays in Phase 5.
 - ✅ **HH-4** Automatic compaction — verified already shipped: `AgentChat.tsx` auto-compacts at 80% of the model's real context window (75/80 hysteresis, checkpoint model). Full token budgeting stays with [`specs/llm_caching_memory.md`](specs/llm_caching_memory.md).
-- ✅ **HH-5** `own_tool_scope` config key filters agent-baked tools (executor `_apply_own_tool_scope`, all three build sites); the email-assistant subset itself lands with [`specs/email_tool_consolidation.md`](specs/email_tool_consolidation.md).
+- ✅ **HH-5** `own_tool_scope` config key filters agent-baked tools (executor `_apply_own_tool_scope`, all three build sites); the email-assistant subset itself lands with [`specs/archive/email_tool_consolidation.md`](specs/archive/email_tool_consolidation.md).
 - 🔲 **HH-6** Sandbox normal agent runs (allowlist permission handler now; container isolation with Phase 5 hardening).
 - 🔲 **HH-7** Typed sub-agent handoffs + namespaced sub-agent events (after chat-review strategic refactors).
 
@@ -240,4 +250,4 @@ VS Code + Git authoring (ongoing); mutation PR review (~2 h/wk when active); pro
 
 **AI-powered integration code generation** — upgrade the `apis-config` agent to generate the full 6-file integration stack (client, normaliser, sync script, webhook receiver, agent tools, settings) from API docs via web search + LLM, committed as a `skill-<name>` repo through the eval gate. Credentials stay in the Integration Registry. Gated on code-gen fidelity + automated eval; deferred until L3+.
 
-**Artifact Viewer** — file-tree sidebar + inline document viewer for agent-generated files. Detailed spec: [`specs/artifact_viewer.md`](specs/artifact_viewer.md).
+**Artifact Viewer** — ✅ **SHIPPED** (file-tree sidebar + inline document viewer + DOCX; `ArtifactViewerModal` + `write_artifact` backend). Spec archived: [`specs/archive/artifact_viewer.md`](specs/archive/artifact_viewer.md).

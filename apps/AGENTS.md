@@ -10,6 +10,7 @@ and dynamically loadable agent definitions.
 - ingestion/ -- ClickUp/Zoho webhook receivers, MCP servers
 - email_ingestion/ -- Multi-provider email sync engine (Gmail, Microsoft 365, IMAP/SMTP, aiosmtpd inbound, background scheduler)
 - reconciler/ -- Nightly source-of-truth diff and escalation
+- action_broker/ -- Approval-gated source-of-truth write executor: authority-tier disposition + fail-closed handler registry. **Decision core exists but ships with zero handlers and is not yet wired into the write path** — tracked as BO-1 (see `FOUNDATION_BUILDOUT_CHECKLIST.md`)
 
 ## Agent Definitions (dynamically loaded at runtime)
 - agent-orchestrator/ -- Wraps the built-in orchestrator Agent so it goes through the same `/agent/run/stream` path as all other agents. Eliminates the separate `/copilot/chat` code path in the frontend.
@@ -17,6 +18,7 @@ and dynamically loadable agent definitions.
 - agent-apis-config/ -- API discovery and configuration assistant
 - agent-email-assistant/ -- Email AI assistant: read, search, summarize, draft replies across Gmail and Microsoft accounts
 - skill-clickup-sync/ -- ClickUp read/write MCP skill
+- skill-task-gtd/ -- GTD task tools (capture/clarify/organize/engage) over the gateway `/tasks` API
 
 ## Conventions
 - Each service / agent has its own pyproject.toml

@@ -1,7 +1,7 @@
 # Foundation Build‑Out Checklist — CommandCenter
 
-**Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13
-**Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block).
+**Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13 · **Competitive refs added:** 2026-07-13
+**Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block) · competitive learnings (proven reference implementations from Hermes Agent & OpenClaw) in `ai-company-brain/specs/competitive_hardening_2026-07.md` (`CH-*`) and `COMPETITIVE_COMPARISON.md`.
 
 > **🚀 Deploy status:** All ✅/◑ items below are **merged to `main` and LIVE on prod** (`origin/main` = `ccccdc8`, deploy succeeded, VPS + gateway health verified 2026‑07‑13). One local-only commit `1684e1a` (BO‑10 connect_timeout on the gateway engines) is **not yet pushed**. Next recommended P0: **BO‑1** (Action Broker persistence + wiring, Postgres‑unblocked).
 
@@ -23,6 +23,7 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Dependencies:** `03_pending_commits.sql`‑style queue table (add `pending_actions`); `acb_audit`; the Control Plane approval inbox; the auth fix (BO‑2) so approvals are authenticated.
 - **Approach:** (1) Add a `pending_actions` table (proposal, actor, authority, payload, status, approved_by). (2) Make `propose()` enqueue and, per authority tier, either auto‑apply (read/idempotent), queue for approval, or reject. (3) Add an `execute(proposal)` that performs the provider write and is the *only* code path allowed to do so. (4) Route the existing ClickUp/email writes through it. (5) Reconcile docs with whichever model ships.
 - **Note:** Until this lands, either mark the write‑capable agents (`agent_registry.json` sales/delivery/triage/billing) as **not** autonomous‑write, or accept and document that #4 is waived.
+- **Competitive ref (CH‑2):** Hermes Agent routes every risky action through a **single fail‑closed approval gate** — the pattern to copy is "one choke point that a write physically cannot bypass," which is exactly what `execute()`‑only‑writes enforces. See `specs/competitive_hardening_2026-07.md`.
 
 ### BO‑2 — Enforceable authentication + authorization *(P0)* ◑
 - **Missing:** `get_current_user` never rejects (`acb_auth/deps.py:76`); it only labels. So mutation‑approve (`agent.py:1852`, `git push`), the memory API (`memory.py`, IDOR), and `/agent/webhook/{source}` (`agent.py:2522`) were anonymous‑reachable. `/v1` had no auth at all.
@@ -41,6 +42,7 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Why needed:** Any compromised/malicious `agent-*` or `skill-*` repo (cross‑org clones allowed, `loader.py:1504`) gets arbitrary in‑process execution with access to all injected secrets and the DB. The mutation path is containerised; execution is not.
 - **Dependencies:** the mutation sandbox image (`acb-mutation-runner`) as a reusable execution substrate; an IPC/result protocol; integration‑secret scoping so only the running agent's creds are exposed.
 - **Approach:** Run each agent in the mutation‑style container (or a `nsjail`/subprocess with a per‑run venv and a dropped‑privilege user), stream results back over the existing event protocol. Interim mitigation: pin allowed orgs to `github_org`, and install deps into a per‑agent venv rather than the shared one.
+- **Competitive ref (CH‑1):** Hermes Agent's container sandbox runs with `--cap-drop ALL` + `no-new-privileges` + pids/mem/disk limits — a concrete flag set to adopt for the `acb-mutation-runner`‑as‑execution‑substrate work. OpenClaw's CVE‑2026‑25253 (42K+ exposed host‑level panels) is the cautionary case for *not* doing this. See `specs/competitive_hardening_2026-07.md`.
 
 ### BO‑8 — Secret hygiene: rotate, purge history, fail closed *(P0)* ◑
 - **Missing:** committed live Zoho token + 1.7 MB DB dump (**✅ F2** removes from tree + gitignore); but they remain in **git history**, and the token is (was) live. Weak in‑code secret defaults fail open (M4).
@@ -59,6 +61,7 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Why needed:** Production requires trace‑level debugging of multi‑agent runs and trustworthy spend numbers; today neither exists end‑to‑end.
 - **Dependencies:** `opentelemetry-exporter-otlp` dep; an `otel-collector` (or Langfuse, already half‑present) service in `docker-compose.yml`; a real price map for the tier models.
 - **Approach:** (1) Add the exporter dep + a collector service (Langfuse or Tempo/Jaeger). (2) Re‑enable MAF instrumentation once a backend exists and fix the ContextVar‑reset bug the kill‑switch was hiding (`executor.py:311`). (3) Set `OTEL_EXPORTER_OTLP_ENDPOINT` in deploy env. (4) Seed real per‑model prices for the tier models (or wire a pricing source) so cost is populated, and stamp the tier label on agent‑path usage (`_emit_usage(model, "", …)` → real tier, `v1_compat.py:245`).
+- **Competitive ref (CH‑8):** Hermes surfaces **per‑turn cost** + `/usage`/`/insights` as a first‑class user‑visible feature; both competitors lean on third‑party OTel (SigNoz/Langfuse). Either finish the collector or formalize the bespoke Redis feed — do not keep advertising a disabled OTel. See `specs/competitive_hardening_2026-07.md`.
 
 ### BO‑9 — Resource lifecycle in the gateway shell *(P2)* ☐
 - **Missing:** fire‑and‑forget `ensure_future` warmups are untracked and never cancelled on shutdown (`main.py:104,167,216`); no DB `engine.dispose()` / Neo4j `close()` on shutdown; Redis opened per‑call in ingestion (`queue.py:48`).
@@ -85,12 +88,20 @@ This is the list of foundational capabilities that are **missing, partially impl
 ### BO‑11 — Decide `acb_schemas`: wire in or delete *(P2)* ✅
 - **Done:** deleted the package (0 production importers, drifted from the ORM — H10). Removed its 7 `pyproject` dependency declarations + `tool.uv.sources` entry, the smoke‑test import, and the stale "wire/API surface" comment in `acb_graph/models.py`; re‑locked. Bonus: this exposed a latent under‑declared dependency — `orchestrator/triage/schema.py` uses pydantic `EmailStr` (needs `email‑validator`) but only got it transitively via `acb_schemas`; now declared explicitly as `pydantic[email]` on the orchestrator.
 
+### BO‑21 — Activate memory by default + local‑embeddings fallback *(P2)* ☐ *(new — competitive‑informed, CH‑6)*
+- **Missing:** all three memory layers are real code but **default‑OFF and inert out of the box** — `mem0_enabled=False` (`settings.py:220`), `graphiti_enabled=False` (`settings.py:224`). Worse, `/v1/embeddings` returns a **zero‑vector** when `OPENAI_API_KEY` is unset (BO‑5 made this warn loudly, M13), so even if mem0 were enabled without an embeddings provider it would store facts with **no usable semantic search**.
+- **Why needed:** Persistent cross‑session memory is a headline capability we advertise but ship disabled; a platform whose memory does nothing until an operator finds two hidden flags + an embeddings key is effectively memory‑less in practice.
+- **Dependencies:** a local‑embeddings path (e.g. a small sentence‑transformer / `fastembed` served via the gateway, or an Ollama embeddings model) so semantic search works without a cloud key; `acb_memory` clients (exist).
+- **Approach:** (1) Provide a **local‑embeddings fallback** wired into `/v1/embeddings` so the zero‑vector landmine is gone. (2) Flip mem0 on by default once (1) lands (graphiti stays opt‑in — it needs Neo4j). (3) Add a **human‑readable memory layer** (a curated `MEMORY.md`‑style artefact per subject) so stored memory is auditable, not just an opaque vector table.
+- **Competitive ref (CH‑6):** **Hermes** memory works day one — SQLite + FTS5 full‑text over past sessions + a human‑readable `MEMORY.md` the agent curates + Honcho user‑modeling — one memory across all channels. The lesson: a *simple always‑on auditable* memory beats a *sophisticated disabled* one. See `specs/competitive_hardening_2026-07.md`.
+
 ---
 
 ## D. Orchestration & runtime
 
 ### BO‑12 — Reconcile the runtime story (MAF vs Copilot) *(P1)* ✅
 - **Done (path a):** `AGENTS.md` reconciled to reality — runtime line, Purpose, and non‑negotiables **#6/#9** now describe MAF as the PRIMARY native runtime and the Copilot SDK as the supported second runtime for interactive coworker chat (Tier 1.5, `/copilot/chat`, BYOK‑routed) + the mutation sandbox, rather than "MAF sole / Copilot sandbox‑only" (closed H6). The unused **`WorkflowBuilder`** import + its "used for pipelines" docstring claim were removed from `orchestrator/agents.py` (closed M2 — it was imported, never instantiated). `as_tool()` is genuinely used, so that claim stays.
+- **Competitive ref (CH‑5):** Hermes's multi‑agent layer (orchestrator + isolated sub‑agents exchanging **typed result objects**, resource‑aware concurrency limits, Kanban dispatch) is more built‑out than ours on coordination mechanics — the reference when we finally instantiate the Workflow engine and replace bare‑string sub‑agent handoffs (ties to HH‑7). See `specs/competitive_hardening_2026-07.md`.
 
 ### BO‑13 — Break up the executor monolith *(P2)* ◑
 - **Done this pass (behaviour‑preserving extractions, each verified green):** the 5,094‑line file is down to **4,069 lines** via four cohesive‑concern extractions, each re‑exported from `executor` so no importer changed:
@@ -109,6 +120,14 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Done this pass:** **workspace‑path containment** shipped — `write_artifact`/`save_note`/`recall_notes` routed every caller path through a single `write_artifact.resolve_in_workspace` guard that fails closed on an embedded `..` or an absolute path resolving outside the workspace (previously `write_artifact` could write, and `recall_notes` could READ, arbitrary files). Also fixed a latent bug: `recall_notes` now applies the same `agent-data/` prefixing as `save_note`, so the documented `recall_notes("NOTES.md")` round‑trip actually works. 7 unit tests added.
 - **Missing (the enforcement redesign):** the injected‑tool gate still can never deny (M5) and the destructive platform registry is empty. This is deliberately deferred — `decide()` currently *defers* destructive tools (approves, relying on each tool's own `request_confirmation`), so forcing denials risks false‑blocking legitimate tool use across every agent; it needs a product decision on which tools hard‑block + the confirmation UX.
 - **Approach for the residual:** annotate the genuinely destructive platform tools (`install_dependency`, outward‑write tools) as `destructive`, pass full call context (not just the name) to `decide`, and make `enforce` mode block destructive/out‑of‑policy calls with a real confirmation card.
+- **Competitive ref (CH‑1):** Hermes ships an always‑on **hardline blocklist** (`rm -rf /`, fork bombs, `mkfs`, disk‑zeroing `dd`) that no mode can override, plus **fail‑closed timeout→deny** on the approval prompt — both worth adopting as the floor. NVIDIA **NemoClaw**'s key idea for OpenClaw is **out‑of‑process policy enforcement**: evaluate the gate *outside* the agent's own tool surface so a prompt‑injected agent can't route around it. See `specs/competitive_hardening_2026-07.md`.
+
+### BO‑20 — Event‑bus consumer + durable job queue *(P1)* ☐ *(new — competitive‑informed, CH‑3)*
+- **Missing (H7):** the advertised "Redis Streams event bus" has **no consumer** — `ingestion/queue.py` `xadd`s but the promised `python -m ingestion.worker` module **does not exist**, so real provider webhooks normalise inline via `BackgroundTasks` and **trigger no agent**. There is no backoff/retry, no dead‑letter, no rate‑limit handling, no concurrency control on inbound work.
+- **Why needed:** This is the foundational plumbing that makes CommandCenter actually *event‑driven*. Without a consumer the webhook→agent path is unwired; without durable queueing, a provider burst or a transient failure silently drops work.
+- **Dependencies:** the existing Redis Streams `xadd` producer (`ingestion/queue.py`); the MAF executor entry point (`orchestrator.executor.run_agent`); BO‑9 (shared Redis pool).
+- **Approach:** Build the `ingestion.worker` consumer (Redis Streams consumer group) that pulls normalised events and dispatches to the executor. Add **automatic backoff/retry with a dead‑letter stream, per‑source rate‑limit handling, and a bounded concurrency pool**.
+- **Competitive ref (CH‑3):** **OpenClaw's job queue** (automatic backoff, retry, rate‑limit + concurrent‑job handling) is repeatedly cited as its single hardest‑to‑replicate strength — it is the reference design here. This queue is also the substrate the messaging‑channel work (WBS 3.3 / CH‑4) needs. See `specs/competitive_hardening_2026-07.md`.
 
 ---
 
@@ -149,7 +168,9 @@ This is the list of foundational capabilities that are **missing, partially impl
 ## Suggested sequencing
 
 1. **P0 hardening sprint (do first):** BO‑8 (rotate+purge secrets), BO‑2 (auth enforcement), BO‑1 (Action Broker), BO‑3 (mutation governance). These close the Critical trust‑boundary and governance gaps that everything else sits on.
-2. **P1 sprint:** BO‑7 (sandbox), BO‑5 (observability+cost), BO‑6 (migrations), BO‑12/BO‑14 (runtime + permission model), BO‑15 (LLM config SoT), BO‑17/BO‑18 (gates), BO‑19 residual.
-3. **P2/P3:** BO‑9, BO‑10, BO‑11, BO‑13, BO‑16.
+2. **P1 sprint:** BO‑7 (sandbox), BO‑5 (observability+cost), BO‑6 (migrations), BO‑12/BO‑14 (runtime + permission model), BO‑15 (LLM config SoT), BO‑17/BO‑18 (gates), BO‑19 residual, **BO‑20 (event‑bus consumer + job queue)**.
+3. **P2/P3:** BO‑9, BO‑10, BO‑11, BO‑13, BO‑16, **BO‑21 (memory activation)**.
+
+**Competitive‑informed items** (proven reference implementations from Hermes Agent / OpenClaw — full mapping in `ai-company-brain/specs/competitive_hardening_2026-07.md`): CH‑1→BO‑7/BO‑14, CH‑2→BO‑1, CH‑3→BO‑20, CH‑4→WBS 3.3, CH‑5→BO‑12, CH‑6→BO‑21, CH‑7→Phase‑5 Annealer, CH‑8→BO‑5. These do not change the sequencing above — they attach a "what good looks like" reference to items we already have, plus the two new items (BO‑20/BO‑21) the comparison surfaced.
 
 The review pass already delivered F1–F6 (see report §6), which knock out the open LLM proxy, the on‑disk secret/junk exposure, the false‑$0 cost bug, the migration‑number collision, and the worst doc drift — clearing the cheapest Critical/High items so the P0 sprint can focus on the architectural ones.

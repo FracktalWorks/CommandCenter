@@ -52,7 +52,7 @@ SCOPED_AGENTS = {
 
 
 def _cfg(agent_dir: str) -> dict:
-    return json.loads((REPO / "apps" / agent_dir / "config.json").read_text(encoding="utf-8"))
+    return json.loads((REPO / "apps" / "agents" / agent_dir / "config.json").read_text(encoding="utf-8"))
 
 
 # ── 1. STATIC: the three agents declare lean, valid tool_scope ───────────────

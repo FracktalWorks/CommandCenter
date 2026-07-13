@@ -61,6 +61,10 @@ class GtdSettingsModel(BaseModel):
     # style). The LAST stage is the "done" stage — dropping a card there marks
     # the task DONE. Configurable in settings.
     workflow_stages: list[str] = list(DEFAULT_WORKFLOW_STAGES)
+    # Prioritization: hours from now within which a due task counts as URGENT
+    # (also always urgent once overdue). Drives the matrix's ⏰ axis so urgency
+    # never goes stale. Default 48h.
+    urgent_window_hours: int = 48
 
 
 class GtdSettingsPatch(BaseModel):
@@ -74,6 +78,7 @@ class GtdSettingsPatch(BaseModel):
     background_sync: bool | None = None
     mirror_done_tasks: bool | None = None
     workflow_stages: list[str] | None = None
+    urgent_window_hours: int | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -150,6 +155,7 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         background_sync=bool(getattr(row, "background_sync", True)),
         mirror_done_tasks=bool(getattr(row, "mirror_done_tasks", False)),
         workflow_stages=_stages(getattr(row, "workflow_stages", None)),
+        urgent_window_hours=int(getattr(row, "urgent_window_hours", 48) or 48),
     )
 
 

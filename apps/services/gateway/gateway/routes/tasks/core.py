@@ -67,6 +67,13 @@ class GtdItemModel(BaseModel):
     energy: str | None = None
     time_estimate_mins: int | None = None
     is_two_minute: bool = False
+    # Prioritization matrix inputs (see infra/postgres/68). urgent is NOT stored
+    # — it's derived from due_at at read time; the 8-cell label is computed from
+    # important x urgent x leveraged, never stored.
+    important: bool = False
+    leveraged: bool = False
+    # The user dismissed the delegate/schedule suggestion ("this one's mine").
+    kept_mine: bool = False
     project_id: str | None = None
     defer_until: str | None = None
     sync_state: str = "local"
@@ -210,6 +217,9 @@ def _row_to_item(row: Any) -> GtdItemModel:
         energy=row.energy,
         time_estimate_mins=row.time_estimate_mins,
         is_two_minute=bool(row.is_two_minute),
+        important=bool(getattr(row, "important", False)),
+        leveraged=bool(getattr(row, "leveraged", False)),
+        kept_mine=bool(getattr(row, "kept_mine", False)),
         project_id=str(row.project_id) if row.project_id else None,
         defer_until=_iso(row.defer_until),
         sync_state=row.sync_state or "local",

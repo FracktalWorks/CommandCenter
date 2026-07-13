@@ -26,6 +26,7 @@ import {
   Sparkles,
   Archive,
   CheckCircle2,
+  Target,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -33,6 +34,7 @@ import {
   useTaskStore,
   viewCounts,
   contextCounts,
+  modeSuggestionCounts,
   NO_CONTEXT,
 } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
@@ -54,6 +56,8 @@ type NavRow = {
 const PRIMARY: NavRow[] = [
   { view: "inbox", label: "Inbox", icon: Inbox, showCount: true },
   { view: "next", label: "My Next Actions", icon: ListChecks, showCount: true },
+  { view: "priority", label: "Priority", icon: Target, showCount: true },
+  { view: "engage", label: "Engage · Now", icon: Zap, showCount: true },
   { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },
@@ -63,7 +67,6 @@ const PRIMARY: NavRow[] = [
 ];
 
 const SECONDARY: NavRow[] = [
-  { view: "engage", label: "Engage · Now", icon: Zap, soon: true },
   { view: "horizons", label: "Horizons of Focus", icon: Mountain, soon: true },
 ];
 
@@ -107,9 +110,20 @@ export function ListsSidebar({
     selectContextRaw(c);
     onNavigate?.();
   };
+  const selectedMode = useTaskStore((s) => s.selectedMode);
+  const selectModeRaw = useTaskStore((s) => s.selectMode);
+  const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
+  const selectMode = (m: "delegate" | "schedule" | null) => {
+    selectModeRaw(m);
+    onNavigate?.();
+  };
 
   const counts = useMemo(() => viewCounts(items), [items]);
   const ctxCounts = useMemo(() => contextCounts(items), [items]);
+  const modeCounts = useMemo(
+    () => modeSuggestionCounts(items, urgentWindowHours),
+    [items, urgentWindowHours],
+  );
   const [nextExpanded, setNextExpanded] = useState(true);
 
   return (
@@ -162,28 +176,52 @@ export function ListsSidebar({
       {PRIMARY.map((row) => {
         if (row.view === "next") {
           return (
-            <NextActionsRow
-              key="next"
-              row={row}
-              active={selectedView === "next"}
-              activeContext={selectedContext}
-              count={counts.next}
-              // Append the "@no context" bucket last when it holds tasks — the
-              // synced ClickUp tasks that arrive without a @context.
-              contexts={[
-                ...contexts.map((c) => c.name),
-                ...(ctxCounts[NO_CONTEXT] ? [NO_CONTEXT] : []),
-              ]}
-              contextIcons={Object.fromEntries([
-                ...contexts.map((c) => [c.name, CONTEXT_ICONS[c.icon] ?? Circle]),
-                [NO_CONTEXT, CircleDashed],
-              ])}
-              ctxCounts={ctxCounts}
-              expanded={nextExpanded}
-              onToggle={() => setNextExpanded((v) => !v)}
-              onSelectAll={() => selectView("next")}
-              onSelectContext={(c) => selectContext(c)}
-            />
+            <div key="next">
+              <NextActionsRow
+                row={row}
+                active={
+                  selectedView === "next" && !selectedContext && !selectedMode
+                }
+                activeContext={selectedContext}
+                count={counts.next}
+                // Append the "@no context" bucket last when it holds tasks — the
+                // synced ClickUp tasks that arrive without a @context.
+                contexts={[
+                  ...contexts.map((c) => c.name),
+                  ...(ctxCounts[NO_CONTEXT] ? [NO_CONTEXT] : []),
+                ]}
+                contextIcons={Object.fromEntries([
+                  ...contexts.map((c) => [c.name, CONTEXT_ICONS[c.icon] ?? Circle]),
+                  [NO_CONTEXT, CircleDashed],
+                ])}
+                ctxCounts={ctxCounts}
+                expanded={nextExpanded}
+                onToggle={() => setNextExpanded((v) => !v)}
+                onSelectAll={() => selectView("next")}
+                onSelectContext={(c) => selectContext(c)}
+              />
+              {/* Suggested-action-mode buckets — the matrix's delegate/schedule
+                  hints, surfaced as sub-rows of My Next Actions. Only shown when
+                  they hold tasks. Nothing moves — they filter the same list. */}
+              {nextExpanded && modeCounts.delegate > 0 && (
+                <ModeSubRow
+                  icon={Zap}
+                  label="To delegate"
+                  count={modeCounts.delegate}
+                  active={selectedView === "next" && selectedMode === "delegate"}
+                  onClick={() => selectMode("delegate")}
+                />
+              )}
+              {nextExpanded && modeCounts.schedule > 0 && (
+                <ModeSubRow
+                  icon={Calendar}
+                  label="To schedule"
+                  count={modeCounts.schedule}
+                  active={selectedView === "next" && selectedMode === "schedule"}
+                  onClick={() => selectMode("schedule")}
+                />
+              )}
+            </div>
           );
         }
         const count = row.view === "projects" ? projects.length : counts[row.view];
@@ -314,6 +352,50 @@ function NavButton({
           {count}
         </span>
       ) : null}
+    </button>
+  );
+}
+
+/** An indented sub-row under My Next Actions for a suggested-action-mode bucket
+ *  ("To delegate" / "To schedule"). Styled like a @context sub-row but with a
+ *  distinct icon so the hint reads as a mode, not a context. */
+function ModeSubRow({
+  icon: Icon,
+  label,
+  count,
+  active,
+  onClick,
+}: {
+  icon: LucideIcon;
+  label: string;
+  count: number;
+  active: boolean;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={`${label} — the matrix suggests these; nothing moves until you act`}
+      className={[
+        "tech-transition flex w-full items-center gap-2 rounded-lg py-1.5 pl-9 pr-2.5 text-left text-[13px]",
+        active
+          ? "bg-primary/10 text-primary"
+          : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+      ].join(" ")}
+    >
+      <Icon className="h-3.5 w-3.5 shrink-0 opacity-80" />
+      <span className="flex-1 truncate">{label}</span>
+      {count > 0 && (
+        <span
+          className={[
+            "min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold",
+            active ? "bg-primary/20 text-primary" : "bg-muted text-muted-foreground",
+          ].join(" ")}
+        >
+          {count}
+        </span>
+      )}
     </button>
   );
 }

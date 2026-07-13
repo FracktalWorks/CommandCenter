@@ -465,7 +465,17 @@ async def _llm_propose(
         "When the title is already clear, is_vague=false and suggested_title "
         "may still offer a tidier phrasing (or null).\n"
         "4. `due_date`: an ISO date (YYYY-MM-DD) ONLY when the item implies a "
-        "real deadline; else null. Do not invent dates.\n\n"
+        "real deadline; else null. Do not invent dates.\n"
+        "5. Prioritization (the owner is a founder). Judge TWO independent "
+        "flags — do NOT judge urgency, it's derived from the due date:\n"
+        "   `important`: true when skipping this stalls or breaks something "
+        "real — a blocker, money/contract/legal, a customer or the team held "
+        "up, a launch. It's about DOWNSIDE. Be discriminating: not everything "
+        "is important.\n"
+        "   `leveraged`: true ONLY for the rare, asymmetric 100x-upside task — "
+        "an investor conversation, a grant, a key hire, a pivotal partnership "
+        "or intro, fundraising. It's about UPSIDE and it is SCARCE — most "
+        "tasks are false. When unsure, false.\n\n"
         "Rules: next_action is PHYSICAL and visible ('Call Sanjay re: quote', "
         "not 'handle quote'). Only delegate to a person in the list. Give a "
         "one-sentence `rationale`. Do not invent projects or people.\n"
@@ -475,8 +485,8 @@ async def _llm_propose(
         '"assignee_name": str|null, "project_match": str|null, '
         '"complexity": "single"|"subtasks"|"project", '
         '"subtasks": [str], "is_vague": bool, "suggested_title": str|null, '
-        '"due_date": str|null, "confidence": "low"|"medium"|"high", '
-        '"rationale": str}'
+        '"due_date": str|null, "important": bool, "leveraged": bool, '
+        '"confidence": "low"|"medium"|"high", "rationale": str}'
     )
     user = (
         f"CAPTURED ITEM:\n\"{item.title}\""
@@ -580,6 +590,13 @@ async def _llm_propose(
     due = str(data.get("due_date") or "").strip()
     if re.fullmatch(r"\d{4}-\d{2}-\d{2}", due):
         core["due_date"] = due
+
+    # Prioritization matrix flags (AI proposes, user confirms in the card).
+    # Urgency is NOT here — it's derived from the due date. Set unconditionally
+    # (the card only surfaces them for actionable work); a SOMEDAY/REFERENCE
+    # item just carries False/False harmlessly.
+    core["important"] = bool(actionable and data.get("important"))
+    core["leveraged"] = bool(actionable and data.get("leveraged"))
     return core
 
 
@@ -622,7 +639,7 @@ def propose_with_llm(
     }
     for k in ("outcome", "context", "energy", "suggested_assignee",
               "complexity", "subtasks", "is_vague", "suggested_title",
-              "due_date"):
+              "due_date", "important", "leveraged"):
         if k in llm_core:
             merged[k] = llm_core[k]
 

@@ -113,6 +113,11 @@ class ItemPatch(BaseModel):
     # A LOCAL overlay only — never back-synced to the connected tool.
     is_mine: bool | None = None
     attachments: list[dict] | None = None  # replaces the whole list
+    # Prioritization matrix flags (local overlay, never back-synced). urgent is
+    # derived from due_at, so it is NOT a patchable field.
+    important: bool | None = None
+    leveraged: bool | None = None
+    kept_mine: bool | None = None          # dismiss the delegate/schedule hint
 
 
 class OrganizeRequest(BaseModel):
@@ -455,8 +460,13 @@ def _build_item_update(
         (patch.workflow_stage, "workflow_stage = :wstage",
          (patch.workflow_stage or None)),
         (patch.sort_key, "sort_key = :sortkey", patch.sort_key),
+        # Prioritization matrix flags (local overlay).
+        (patch.important, "important = :important", patch.important),
+        (patch.leveraged, "leveraged = :leveraged", patch.leveraged),
+        (patch.kept_mine, "kept_mine = :kept_mine", patch.kept_mine),
     ]
-    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage", "sortkey"]
+    keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage",
+            "sortkey", "important", "leveraged", "kept_mine"]
     for (present, clause, value), key in zip(simple, keys, strict=True):
         if present is not None:
             sets.append(clause)

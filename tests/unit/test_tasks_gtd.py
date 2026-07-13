@@ -582,6 +582,124 @@ def test_bulk_archive_is_a_local_overlay():
     assert "delete_task" not in src
 
 
+# ---------------------------------------------------------------------------
+# Prioritization engine — the 8-cell matrix + urgency derivation
+# ---------------------------------------------------------------------------
+
+
+def test_priority_formula_matches_the_notion_matrix_all_8_cells():
+    """The 3 booleans → cell mapping must be the user's Notion formula verbatim,
+    for every one of the 8 combinations."""
+    from gateway.routes.tasks.priority import PriorityInputs, cell_for_inputs
+
+    I, U, L = True, True, True  # noqa: E741 (mirror the flag names)
+    n = False
+    cases = {
+        # leveraged branch
+        (I, U, L): "founder-fire",       # 1
+        (I, n, L): "deep-work",          # 2
+        (n, U, L): "quick-leverage",     # 3
+        (n, n, L): "leverage-bet",       # 7
+        # non-leveraged branch
+        (I, U, n): "delegate-important",  # 4
+        (I, n, n): "schedule-important",  # 5
+        (n, U, n): "delegate-urgent",     # 6
+        (n, n, n): "eliminate",           # 8
+    }
+    for (important, urgent, leveraged), expected in cases.items():
+        got = cell_for_inputs(PriorityInputs(
+            important=important, urgent=urgent, leveraged=leveraged))
+        assert got == expected, f"{(important, urgent, leveraged)} → {got}"
+
+
+def test_priority_cells_carry_the_right_action_mode():
+    """Cells collapse into do / delegate / schedule / drop — the action-mode
+    slicing that drives the Next Actions buckets."""
+    from gateway.routes.tasks.priority import CELL_META
+
+    mode = {c: CELL_META[c][3] for c in CELL_META}
+    assert mode["founder-fire"] == "do"
+    assert mode["deep-work"] == "do"
+    assert mode["quick-leverage"] == "do"
+    assert mode["leverage-bet"] == "do"
+    assert mode["delegate-important"] == "delegate"
+    assert mode["delegate-urgent"] == "delegate"
+    assert mode["schedule-important"] == "schedule"
+    assert mode["eliminate"] == "drop"
+
+
+def test_urgency_is_derived_overdue_or_within_window():
+    from datetime import UTC, datetime, timedelta
+
+    from gateway.routes.tasks.priority import is_urgent
+
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+    assert is_urgent(None, now=now) is False               # no due date
+    assert is_urgent(now - timedelta(days=2), now=now) is True   # overdue
+    assert is_urgent(now + timedelta(hours=6), now=now) is True  # within 48h
+    assert is_urgent(now + timedelta(hours=47), now=now) is True
+    assert is_urgent(now + timedelta(hours=72), now=now) is False  # outside
+    # Window is configurable.
+    assert is_urgent(now + timedelta(hours=72), window_hours=96, now=now) is True
+
+
+def test_priority_cell_end_to_end_uses_derived_urgency():
+    """priority_cell must combine the manual flags with derived urgency: an
+    important+leveraged task with a deadline 6h out is a Founder Fire; move the
+    deadline out a week and it becomes Deep Work."""
+    from datetime import UTC, datetime, timedelta
+
+    from gateway.routes.tasks.priority import priority_cell
+
+    now = datetime(2026, 7, 13, 12, 0, tzinfo=UTC)
+    soon = now + timedelta(hours=6)
+    later = now + timedelta(days=7)
+    assert priority_cell(important=True, leveraged=True,
+                         due_at=soon, now=now) == "founder-fire"
+    assert priority_cell(important=True, leveraged=True,
+                         due_at=later, now=now) == "deep-work"
+    assert priority_cell(important=True, leveraged=True,
+                         due_at=None, now=now) == "deep-work"   # no date → not urgent
+
+
+def test_priority_flags_are_patchable_and_local_only():
+    """important/leveraged/kept_mine are editable via PATCH and live in the
+    local overlay (never back-synced — not in the ClickUp-writable set)."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    build = inspect.getsource(items_mod._build_item_update)
+    assert "important = :important" in build
+    assert "leveraged = :leveraged" in build
+    assert "kept_mine = :kept_mine" in build
+    # Back-sync must NOT push these (they're personal prioritization).
+    backsync = inspect.getsource(items_mod._push_patch_upstream)
+    assert "important" not in backsync
+    assert "leveraged" not in backsync
+
+
+def test_llm_clarify_proposes_matrix_flags_and_they_propagate():
+    """The LLM clarify prompt asks for important/leveraged, and propose_with_llm
+    carries them into the merged proposal (so the card can pre-fill them)."""
+    import inspect
+
+    from gateway.routes.tasks import ai as tasks_ai
+
+    llm = inspect.getsource(tasks_ai._llm_propose)
+    assert '"important": bool' in llm and '"leveraged": bool' in llm
+    # Urgency must NOT be an LLM judgment — it's derived from the due date.
+    assert "it's derived from the due date" in llm
+    merged = inspect.getsource(tasks_ai.propose_with_llm)
+    assert '"important", "leveraged"' in merged
+
+
+def test_urgent_window_setting_defaults_to_48h():
+    from gateway.routes.tasks.settings import GtdSettingsModel
+
+    assert GtdSettingsModel().urgent_window_hours == 48
+
+
 def test_organize_request_accepts_subtasks():
     from gateway.routes.tasks.items import OrganizeRequest
 

@@ -19,10 +19,12 @@ import {
   type ConnectedProvider,
 } from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
+import { modeSuggestion } from "./priority";
 import {
   DEFAULT_FILTERS,
   DEFAULT_SORT,
   rankForDrop,
+  type GroupBy,
   type TaskFilters,
   type TaskSort,
 } from "./ordering";
@@ -158,6 +160,11 @@ export interface ItemMetaPatch {
    *  false drops a handed-off/unassigned task from my list without deleting it
    *  on ClickUp; a LOCAL overlay only — never back-synced. */
   isMine?: boolean;
+  /** prioritization matrix flags (local overlay; urgent is derived, not here) */
+  important?: boolean;
+  leveraged?: boolean;
+  /** dismiss the delegate/schedule suggestion ("this one's mine") */
+  keptMine?: boolean;
 }
 
 /** Resolve a storage target into item source/provider/syncState fields.
@@ -399,6 +406,9 @@ interface TaskState {
   selectedView: ViewKey;
   /** when drilled into a single @context under Next Actions */
   selectedContext: string | null;
+  /** when drilled into a suggested-action-mode bucket under Next Actions
+   *  ("delegate" / "schedule"). Mutually exclusive with selectedContext. */
+  selectedMode: "delegate" | "schedule" | null;
   selectedItemId: string | null;
   selectedProjectId: string | null;
   /** A task opened FULL-PAGE (focused overlay) — the ClickUp/Linear-style
@@ -419,6 +429,11 @@ interface TaskState {
    *  sort overrides manual position and disables dragging. */
   sort: TaskSort;
   setSort: (patch: Partial<TaskSort>) => void;
+  /** The list "lens" — how the current view is sliced into sections. "" defers
+   *  to the view's built-in grouping (context on Next Actions, flat elsewhere);
+   *  a chosen value overrides it (priority / mode / energy / context / none). */
+  groupBy: GroupBy | "";
+  setGroupBy: (g: GroupBy | "") => void;
 
   /** ids of the most recent capture batch (for undo). */
   lastCaptureIds: string[];
@@ -438,6 +453,9 @@ interface TaskState {
   // actions
   selectView: (view: ViewKey) => void;
   selectContext: (context: string | null) => void;
+  /** Drill Next Actions into a suggested-action-mode bucket (delegate/schedule),
+   *  or null to clear back to all Next Actions. */
+  selectMode: (mode: "delegate" | "schedule" | null) => void;
   selectItem: (id: string | null) => void;
   selectProject: (id: string | null) => void;
   /** Capture a new inbox item (frictionless quick-add). */
@@ -447,7 +465,13 @@ interface TaskState {
   /** Undo the most recent capture batch (only items still in the inbox). */
   undoLastCapture: () => void;
   /** Clarify an inbox item — apply the GTD decision and advance to the next. */
-  clarify: (id: string, decision: ClarifyDecision) => void;
+  clarify: (
+    id: string,
+    decision: ClarifyDecision,
+    /** the confirmed prioritization flags (from the clarify card's Weight
+     *  toggles). Applied as a local overlay alongside the GTD decision. */
+    weight?: { important: boolean; leveraged: boolean },
+  ) => void;
   /** Skip the current item (leave it in the inbox to process later) and move on. */
   skipToNextInbox: () => void;
   /** One-tap disposition (hover / keyboard triage) — no full decision tree. */
@@ -643,6 +667,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   selectedView: "inbox",
   selectedContext: null,
+  selectedMode: null,
   focusedItemId: null,
   openFocus: (id) => set({ focusedItemId: id, selectedItemId: id }),
   closeFocus: () => set({ focusedItemId: null }),
@@ -653,6 +678,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   clearFilters: () => set({ filters: DEFAULT_FILTERS }),
   sort: DEFAULT_SORT,
   setSort: (patch) => set((s) => ({ sort: { ...s.sort, ...patch } })),
+  groupBy: "",
+  setGroupBy: (g) => set({ groupBy: g }),
   selectedItemId: null,
   selectedProjectId: null,
   lastCaptureIds: [],
@@ -668,6 +695,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set({
       selectedView: view,
       selectedContext: null,
+      selectedMode: null,
       selectedItemId: null,
       selectedProjectId: null,
       // A search/filter is scoped to the view you set it in — reset on nav so a
@@ -676,7 +704,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }),
 
   selectContext: (context) =>
-    set({ selectedView: "next", selectedContext: context, selectedItemId: null }),
+    set({ selectedView: "next", selectedContext: context,
+          selectedMode: null, selectedItemId: null }),
+
+  selectMode: (mode) =>
+    set({ selectedView: "next", selectedMode: mode,
+          selectedContext: null, selectedItemId: null }),
 
   selectItem: (id) => set({ selectedItemId: id }),
 
@@ -876,8 +909,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   openWorkspaces: () => set({ workspacesModalOpen: true }),
   closeWorkspaces: () => set({ workspacesModalOpen: false }),
 
-  clarify: (id, decision) => {
+  clarify: (id, decision, weight) => {
     flushPendingPurge(get().undoSnapshot, get().backend);
+    // The confirmed matrix flags overlay the decision. Applied locally to the
+    // clarified row and (live) patched after organize, independent of the GTD
+    // disposition so the golden-eval organize path stays untouched.
+    const applyWeight = (i: GtdItem): GtdItem =>
+      weight ? { ...i, important: weight.important, leveraged: weight.leveraged } : i;
     set((s) => {
       const snapshot: UndoSnapshot = {
         items: s.items,
@@ -936,6 +974,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       } else {
         items = s.items.map((i) => (i.id === id ? applyDecision(i, decision) : i));
       }
+      // Overlay the confirmed matrix flags on the clarified row.
+      if (weight) items = items.map((i) => (i.id === id ? applyWeight(i) : i));
       // Re-clarify (the item wasn't in the inbox) is an in-place edit — don't
       // walk the inbox, bump the session counter, or close the reclarify modal
       // out from under the wizard's own close handler.
@@ -961,6 +1001,24 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     });
     if (get().backend === "live") {
       const apply = apiOrganize(id, decisionToOrganizeBody(decision));
+      // Persist the confirmed matrix flags as a local overlay (best-effort;
+      // independent of organize so a flag hiccup never blocks the decision).
+      if (weight) {
+        sync(
+          apply
+            .then(() =>
+              apiPatchItem(id, {
+                important: weight.important,
+                leveraged: weight.leveraged,
+              }),
+            )
+            .then((updated) =>
+              set((s) => ({
+                items: s.items.map((i) => (i.id === id ? updated : i)),
+              })),
+            ),
+        );
+      }
       if (decision.kind === "project") {
         // The server mints its own project id — reconcile both lists so the
         // optimistic local project/id drift doesn't linger.
@@ -1435,6 +1493,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               ? patch.assignee ?? undefined
               : i.assignee,
           isMine: patch.isMine !== undefined ? patch.isMine : i.isMine,
+          important:
+            patch.important !== undefined ? patch.important : i.important,
+          leveraged:
+            patch.leveraged !== undefined ? patch.leveraged : i.leveraged,
+          keptMine:
+            patch.keptMine !== undefined ? patch.keptMine : i.keptMine,
           updatedAt: new Date().toISOString(),
         };
       }),
@@ -1465,6 +1529,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           };
       }
       if (patch.isMine !== undefined) body.is_mine = patch.isMine;
+      if (patch.important !== undefined) body.important = patch.important;
+      if (patch.leveraged !== undefined) body.leveraged = patch.leveraged;
+      if (patch.keptMine !== undefined) body.kept_mine = patch.keptMine;
       if (Object.keys(body).length) {
         // Swap in the server row (authoritative — e.g. a ClickUp back-sync may
         // normalize the stage) so the optimistic edit reconciles.
@@ -1714,6 +1781,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     backgroundSync: true,
     mirrorDoneTasks: false,
     workflowStages: ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
+    urgentWindowHours: 48,
   },
 
   updateSettings: async (patch) => {
@@ -1806,6 +1874,20 @@ export function itemsForView(
       return items
         .filter((i) => i.disposition === "DONE")
         .sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
+    case "priority":
+      // The matrix map: every open, actionable task that's mine — NEXT (mine)
+      // or WAITING I'm tracking — grouped into the 8 cells by the Priority
+      // lens. Excludes inbox (unclarified), done, reference, someday.
+      return items.filter(
+        (i) =>
+          (i.disposition === "NEXT" && i.isMine) ||
+          i.disposition === "WAITING",
+      );
+    case "engage":
+      // "Right now": actionable work I can pick up (NEXT & mine). The Engage
+      // surface filters this further by energy/time/context and ranks by the
+      // matrix (see the Engage view component).
+      return items.filter((i) => i.disposition === "NEXT" && i.isMine);
     case "calendar":
       return items
         .filter(isCalendarItem)
@@ -1818,8 +1900,8 @@ export function itemsForView(
 /** Per-view counts for the sidebar badges. */
 export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
   const c = {
-    inbox: 0, next: 0, waiting: 0, calendar: 0, projects: 0,
-    someday: 0, reference: 0, done: 0, archive: 0, engage: 0, horizons: 0,
+    inbox: 0, next: 0, priority: 0, waiting: 0, calendar: 0, projects: 0,
+    someday: 0, reference: 0, done: 0, engage: 0, archive: 0, horizons: 0,
   } as Record<ViewKey, number>;
   for (const i of items) {
     if (i.archivedAt) continue; // archived rows never count toward active views
@@ -1829,9 +1911,33 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
     else if (i.disposition === "SOMEDAY") c.someday++;
     else if (i.disposition === "REFERENCE") c.reference++;
     else if (i.disposition === "DONE") c.done++;
+    // Priority = every open actionable task that's mine (NEXT mine + WAITING);
+    // engage = the do-able-now subset (NEXT mine). Independent of the above.
+    if ((i.disposition === "NEXT" && i.isMine) || i.disposition === "WAITING")
+      c.priority++;
+    if (i.disposition === "NEXT" && i.isMine) c.engage++;
     if (isCalendarItem(i)) c.calendar++;
   }
   return c;
+}
+
+/** Count of NEXT items the matrix SUGGESTS delegating / scheduling (the two
+ *  hint buckets under My Next Actions). Uses modeSuggestion so it matches
+ *  exactly what each bucket's filtered list shows (respects keptMine dismissal).
+ *  windowHours comes from settings so urgency-driven modes stay in sync. */
+export function modeSuggestionCounts(
+  items: GtdItem[],
+  windowHours?: number,
+): { delegate: number; schedule: number } {
+  let delegate = 0;
+  let schedule = 0;
+  for (const i of items) {
+    if (i.archivedAt) continue;
+    const s = modeSuggestion(i, windowHours);
+    if (s?.mode === "delegate") delegate++;
+    else if (s?.mode === "schedule") schedule++;
+  }
+  return { delegate, schedule };
 }
 
 /** Count of MY NEXT items per context (for the expandable @context sub-list).

@@ -52,6 +52,8 @@ import { ClarifyPanel } from "./ClarifyPanel";
 import { ProjectTasksView } from "./ProjectTasksView";
 import { AiTaskActions } from "./AiTaskActions";
 import { DelegateDialog } from "./DelegateDialog";
+import { WeightToggles, PriorityBadge } from "./PriorityControls";
+import { isUntagged } from "../lib/priority";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -150,6 +152,7 @@ export function TaskDetail({
   const contexts = useTaskStore((s) => s.contexts);
   const people = useTaskStore((s) => s.people);
   const accounts = useTaskStore((s) => s.accounts);
+  const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
   const updateItem = useTaskStore((s) => s.updateItem);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const requestDelete = useTaskStore((s) => s.requestDelete);
@@ -430,6 +433,33 @@ export function TaskDetail({
             )}
           </div>
         </section>
+
+        {/* Priority — the matrix inputs (Important/Leveraged manual, Urgent
+            derived) + the computed cell. Not shown for unprocessed inbox items
+            (they get prioritized in the clarify card). */}
+        {item.disposition !== "INBOX" && (
+          <section className="rounded-lg border border-border bg-card px-3 py-2.5">
+            <div className="flex items-center justify-between gap-2">
+              <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Priority
+              </span>
+              <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
+            </div>
+            <div className="mt-2">
+              <WeightToggles
+                item={item}
+                urgentWindowHours={urgentWindowHours}
+                onChange={(w) => updateItem(item.id, w)}
+              />
+            </div>
+            {isUntagged(item) && (
+              <p className="mt-1.5 text-[11px] text-muted-foreground/70">
+                Not yet judged — flag it important or leveraged, or leave it to
+                default low priority.
+              </p>
+            )}
+          </section>
+        )}
 
         {/* Offer to drop a just-reassigned/unassigned task from My Next Actions.
             It stays on ClickUp — only the personal list changes. The regular

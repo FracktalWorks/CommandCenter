@@ -5,6 +5,7 @@
 
 import { GtdItem } from "./types";
 import { isOverdue } from "./utils";
+import { isUrgent, priorityRank } from "./priority";
 
 /** The step between freshly-assigned ranks (also the re-spread gap). */
 const RANK_STEP = 1000;
@@ -66,7 +67,9 @@ export function rankForDrop(ordered: GtdItem[], toIndex: number): number {
  *  sort overrides manual position, so dragging is disabled in those modes. */
 export type SortField =
   | "manual"
+  | "priority"
   | "due"
+  | "urgency"
   | "created"
   | "title"
   | "energy";
@@ -132,6 +135,12 @@ export function applySort(items: GtdItem[], s: TaskSort): GtdItem[] {
 
 function sortKeyFor(i: GtdItem, field: SortField): string | number | null {
   switch (field) {
+    case "priority":
+      // Matrix rank 1..8 (1 = highest). Asc puts Founder Fire first.
+      return priorityRank(i);
+    case "urgency":
+      // Urgent first: 0 = urgent, 1 = not. Overdue/soon float up on asc.
+      return isUrgent(i) ? 0 : 1;
     case "due":
       return i.dueAt ?? null;
     case "created":
@@ -149,4 +158,107 @@ function sortKeyFor(i: GtdItem, field: SortField): string | number | null {
  *  the same "needs attention" signal). */
 export function overdueCount(items: GtdItem[], now: number): number {
   return items.filter((i) => isOverdue(i, now)).length;
+}
+
+// ── Group-by (the toolbar "lens" that slices a list into labelled sections) ──
+
+import {
+  CELL_META,
+  CELLS_IN_ORDER,
+  NO_CONTEXT_GROUP,
+  actionMode,
+  priorityCell,
+} from "./priority";
+
+export type GroupBy = "none" | "context" | "priority" | "mode" | "energy";
+
+export interface TaskGroup {
+  key: string;
+  label: string;
+  /** emoji/icon token for the header (optional). */
+  emoji?: string;
+  items: GtdItem[];
+}
+
+const ENERGY_LABEL: Record<string, string> = {
+  low: "Low energy",
+  medium: "Medium energy",
+  high: "High energy",
+};
+const MODE_LABEL: Record<string, { label: string; emoji: string }> = {
+  do: { label: "Do — my work", emoji: "🎯" },
+  delegate: { label: "Delegate", emoji: "⚡" },
+  schedule: { label: "Schedule", emoji: "📅" },
+  drop: { label: "Consider dropping", emoji: "🗑" },
+};
+
+/** Slice items into ordered, labelled groups for the chosen lens. Group ORDER
+ *  is meaningful (priority → matrix order; mode → do/delegate/schedule/drop;
+ *  energy → high→low). Items within a group keep their incoming order (already
+ *  sorted by the caller). Returns a single unlabelled group for "none". */
+export function groupItems(
+  items: GtdItem[],
+  by: GroupBy,
+  urgentWindowHours?: number,
+): TaskGroup[] {
+  if (by === "none") return [{ key: "all", label: "", items }];
+
+  if (by === "priority") {
+    const buckets = new Map<string, GtdItem[]>();
+    for (const i of items) {
+      const cell = priorityCell(i, urgentWindowHours);
+      (buckets.get(cell) ?? buckets.set(cell, []).get(cell)!).push(i);
+    }
+    return CELLS_IN_ORDER.filter((c) => buckets.has(c)).map((c) => ({
+      key: c,
+      label: CELL_META[c].label,
+      emoji: CELL_META[c].emoji,
+      items: buckets.get(c)!,
+    }));
+  }
+
+  if (by === "mode") {
+    const order = ["do", "delegate", "schedule", "drop"];
+    const buckets = new Map<string, GtdItem[]>();
+    for (const i of items) {
+      const m = actionMode(i, urgentWindowHours);
+      (buckets.get(m) ?? buckets.set(m, []).get(m)!).push(i);
+    }
+    return order
+      .filter((m) => buckets.has(m))
+      .map((m) => ({
+        key: m,
+        label: MODE_LABEL[m].label,
+        emoji: MODE_LABEL[m].emoji,
+        items: buckets.get(m)!,
+      }));
+  }
+
+  if (by === "energy") {
+    const order = ["high", "medium", "low", "none"];
+    const buckets = new Map<string, GtdItem[]>();
+    for (const i of items) {
+      const e = i.energy ?? "none";
+      (buckets.get(e) ?? buckets.set(e, []).get(e)!).push(i);
+    }
+    return order
+      .filter((e) => buckets.has(e))
+      .map((e) => ({
+        key: e,
+        label: e === "none" ? "No energy set" : ENERGY_LABEL[e],
+        items: buckets.get(e)!,
+      }));
+  }
+
+  // context
+  const buckets = new Map<string, GtdItem[]>();
+  for (const i of items) {
+    const c = i.context || NO_CONTEXT_GROUP;
+    (buckets.get(c) ?? buckets.set(c, []).get(c)!).push(i);
+  }
+  return Array.from(buckets.keys())
+    .sort((a, b) =>
+      a === NO_CONTEXT_GROUP ? 1 : b === NO_CONTEXT_GROUP ? -1 : a.localeCompare(b),
+    )
+    .map((c) => ({ key: c, label: c, items: buckets.get(c)! }));
 }

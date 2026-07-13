@@ -71,11 +71,12 @@ export function avatarCharacterId(libraryId?: string | null): string | null {
  * anywhere the agent's icon/logo appears. Renders `fallback` (typically the
  * generic Lucide icon) when the agent has no avatar assigned.
  *
- * The source sprites are 124×124 standing figures with the head near the top,
- * so an oversized background (default ≈265%) positioned near the top zooms into
- * the head + shoulders inside the circle; the torso and legs fall outside the
- * crop. `focusX`/`focusY`/`zoom` are exposed so the framing can be nudged per
- * surface (lower `zoom` to show more of the body).
+ * The source sprites are 128×128 standing figures, but the character only
+ * occupies the middle band (≈25–74% vertically, horizontally centred); the rest
+ * is transparent margin. The default framing (`zoom` ≈170%, `focusY` 50%) sizes
+ * the crop to that band and centres it, so the whole figure — head to feet —
+ * sits inside the circle. `focusX`/`focusY`/`zoom` are exposed so the framing
+ * can be nudged per surface (raise `zoom` for a tighter head-and-shoulders crop).
  */
 export function AgentAvatar({
   libraryId,
@@ -83,9 +84,9 @@ export function AgentAvatar({
   className = "",
   fallback = null,
   title,
-  zoom = 265,
+  zoom = 170,
   focusX = 50,
-  focusY = 10,
+  focusY = 50,
 }: {
   libraryId?: string | null;
   size?: number;

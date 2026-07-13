@@ -873,6 +873,22 @@ async def organize_item(
             await _assert_account_owner(db, req.account_id, uid)
             source, sync_state = "SYNCED", "pending"
 
+        # Delegating to a connected tool means the teammate has to SEE the task
+        # there — which needs a list/project to create it in. Refuse up front
+        # (before any write) when a synced delegation has no destination project,
+        # rather than committing a WAITING row that can never be pushed and
+        # strands invisibly (the clarify-delegate gap). `kind="project"` mints a
+        # LOCAL project row with no provider_ref, so it can't host a push either.
+        if delegated and source == "SYNCED" and (
+            req.kind == "project" or not req.project_id
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail="Pick a project/list in the workspace to delegate into — "
+                       "the tool needs a list to create the task in so your "
+                       "teammate can see it.",
+            )
+
         project_id = req.project_id or None
         if req.kind == "project":
             project_id = str(uuid4())
@@ -946,9 +962,37 @@ async def organize_item(
                 db, uid, item_id, req.subtasks, source, req.account_id,
                 project_id, sync_state)
         await db.commit()
-        return _row_to_item(await _fetch_item(db, item_id, uid))
+
+        # Delegating to a connected tool auto-pushes so the teammate actually
+        # sees it (parity with POST /items/{id}/delegate). Extracted so the tail
+        # stays flat.
+        pushed = await _maybe_push_delegated(
+            db, item_id, uid, delegated=delegated, source=source,
+            project_id=project_id)
+        return pushed or _row_to_item(await _fetch_item(db, item_id, uid))
     finally:
         await db.close()
+
+
+async def _maybe_push_delegated(
+    db: Any, item_id: str, uid: str, *,
+    delegated: bool, source: str, project_id: str | None,
+) -> GtdItemModel | None:
+    """Auto-push a clarify-delegation to the connected tool so the teammate can
+    see it — parity with POST /items/{id}/delegate; a clarify-delegate must not
+    stay local-only and invisible upstream. Only fires for a SYNCED delegation
+    with a chosen project; a push hiccup (e.g. the project isn't in the tool yet)
+    is deferred — the delegation is saved and WAITING with the manual Push
+    affordance, never fatal to the clarify. Returns the pushed row, or None to
+    signal the caller to return the un-pushed row (staged / not a delegation)."""
+    if not (delegated and source == "SYNCED" and project_id):
+        return None
+    try:
+        return await _push_pending_item(db, item_id, uid)
+    except HTTPException:
+        _log.warning("tasks.organize.delegate_push_deferred",
+                     item_id=str(item_id)[:12])
+        return None
 
 
 async def _create_subtasks(

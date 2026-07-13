@@ -80,7 +80,6 @@ export function ProjectTasksView({ project }: { project: GtdProject }) {
   const openCount = projectTasks.filter(
     (t) => t.disposition === "NEXT",
   ).length;
-  const stageMode = isSynced ? "provider" : "workflow";
 
   return (
     <div className="flex h-full flex-col">
@@ -145,20 +144,10 @@ export function ProjectTasksView({ project }: { project: GtdProject }) {
         </div>
       ) : mode === "board" ? (
         <div className="min-h-0 flex-1">
-          <TaskBoard
-            items={visible}
-            view="next"
-            stageMode={stageMode}
-            stages={providerStages}
-          />
+          <TaskBoard items={visible} view="next" stages={providerStages} />
         </div>
       ) : (
-        <TaskListGrouped
-          items={visible}
-          view="next"
-          stageMode={stageMode}
-          stages={providerStages}
-        />
+        <TaskListGrouped items={visible} view="next" stages={providerStages} />
       )}
     </div>
   );

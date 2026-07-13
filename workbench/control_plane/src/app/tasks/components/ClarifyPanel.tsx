@@ -488,12 +488,23 @@ export function ClarifyPanel({
       targetSpaceId, targetFolderId, destAccount, createWorkspaceProject,
       createLocalProject, buildDecision, clarify, onDone, important, leveraged]);
 
+  // Delegating to a connected tool needs a destination list so the teammate
+  // can see it there — otherwise the task can't be pushed and would strand
+  // locally (the clarify-delegate gap). Require a project (existing or a new
+  // one being created) whenever we're handing a synced task off to someone.
+  const delegatingToSynced =
+    sort === "actionable" && owner === "delegate" && !!assignee && isSynced;
+  const needsProjectForDelegate =
+    delegatingToSynced && !projectId && !targetSpaceId;
+
   const canApply =
     sort !== "actionable"
       ? true
-      : size === "project"
-        ? !!(projectId || targetSpaceId) && !!buildDecision()
-        : !!buildDecision();
+      : needsProjectForDelegate
+        ? false
+        : size === "project"
+          ? !!(projectId || targetSpaceId) && !!buildDecision()
+          : !!buildDecision();
 
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -1117,6 +1128,14 @@ export function ClarifyPanel({
               </div>
             </Field>
 
+            {needsProjectForDelegate && (
+              <p className="inline-flex items-center gap-1 text-[11px] font-medium text-warning">
+                <AlertTriangle className="h-3 w-3 shrink-0" />
+                Pick a {destAccount?.provider === "clickup" ? "ClickUp list" : "list"}{" "}
+                to delegate into — {assignee?.name.split(/\s+/)[0]} needs it in the
+                tool to see it.
+              </p>
+            )}
             <button
               type="button"
               disabled={!canApply || creatingTarget}

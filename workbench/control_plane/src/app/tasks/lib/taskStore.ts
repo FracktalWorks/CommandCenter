@@ -402,6 +402,10 @@ interface TaskState {
   providers: ConnectedProvider[];
   /** Connected PM-tool workspaces (live mode). */
   accounts: TaskAccount[];
+  /** Every connected tool's statuses, de-duplicated + ordered — the ClickUp
+   *  half of the status-column axis (see statusColumns). Recomputed whenever
+   *  accounts are (re)fetched; empty when nothing is connected. */
+  providerStatuses: string[];
 
   selectedView: ViewKey;
   /** when drilled into a single @context under Next Actions */
@@ -663,6 +667,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   loading: true,
   providers: CONNECTED_PROVIDERS,
   accounts: [],
+  providerStatuses: [],
   localHierarchy: null,
 
   selectedView: "inbox",
@@ -1703,6 +1708,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         items,
         projects,
         accounts,
+        providerStatuses: providerStatusesFrom(accounts),
         providers,
         people,
       });
@@ -1741,6 +1747,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const projects = await fetchProjects();
       set({
         accounts,
+        providerStatuses: providerStatusesFrom(accounts),
         providers,
         projects,
         people: orgPeople.length
@@ -1938,6 +1945,24 @@ export function modeSuggestionCounts(
     else if (s?.mode === "schedule") schedule++;
   }
   return { delegate, schedule };
+}
+
+/** Flatten every connected account's statuses into one ordered, de-duplicated
+ *  list (case-insensitive), preserving each tool's own workflow order. This is
+ *  the ClickUp half of the board/list status axis (unioned with the local
+ *  workflow stages by statusColumns). */
+export function providerStatusesFrom(accounts: TaskAccount[]): string[] {
+  const out: string[] = [];
+  const seen = new Set<string>();
+  for (const a of accounts) {
+    for (const s of a.statuses ?? []) {
+      const key = s.trim().toLowerCase();
+      if (!key || seen.has(key)) continue;
+      seen.add(key);
+      out.push(s);
+    }
+  }
+  return out;
 }
 
 /** Count of MY NEXT items per context (for the expandable @context sub-list).

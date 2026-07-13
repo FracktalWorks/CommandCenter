@@ -89,9 +89,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 
 ## D. Orchestration & runtime
 
-### BO‑12 — Reconcile the runtime story (MAF vs Copilot) *(P1)* ☐
-- **Missing:** two coexisting runtimes while docs claim MAF is sole and Copilot is sandbox‑only (H6); MAF Workflow engine advertised but unused (M2).
-- **Approach:** Either (a) update `AGENTS.md`/README to acknowledge Copilot‑SDK as a first‑class interactive runtime and define when each is used, or (b) migrate the Copilot‑SDK agents to native MAF. Remove the unused `WorkflowBuilder`/`as_tool()` claims or actually adopt the Workflow engine for the multi‑step pipelines it's advertised for.
+### BO‑12 — Reconcile the runtime story (MAF vs Copilot) *(P1)* ✅
+- **Done (path a):** `AGENTS.md` reconciled to reality — runtime line, Purpose, and non‑negotiables **#6/#9** now describe MAF as the PRIMARY native runtime and the Copilot SDK as the supported second runtime for interactive coworker chat (Tier 1.5, `/copilot/chat`, BYOK‑routed) + the mutation sandbox, rather than "MAF sole / Copilot sandbox‑only" (closed H6). The unused **`WorkflowBuilder`** import + its "used for pipelines" docstring claim were removed from `orchestrator/agents.py` (closed M2 — it was imported, never instantiated). `as_tool()` is genuinely used, so that claim stays.
 
 ### BO‑13 — Break up the executor monolith *(P2)* ◑
 - **Done this pass (behaviour‑preserving extractions, each verified green):** the 5,094‑line file is down to **4,069 lines** via four cohesive‑concern extractions, each re‑exported from `executor` so no importer changed:
@@ -140,7 +139,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 ## G. Documentation
 
 ### BO‑19 — Doc↔code reconciliation *(P1)* ◑
-- **Missing:** README described LangGraph/Theia/PostgresSaver/escalation_ui and had a garbled layout (**✅ F3** rewrites it); stale "placeholder"/LangGraph docstrings across packages (**✅ F6** sweeps the worst); `AGENTS.md` version pins lag; `AGENTS.md`/README Python‑version mismatch.
+- **Missing:** README described LangGraph/Theia/PostgresSaver/escalation_ui and had a garbled layout (**✅ F3** rewrites it); stale "placeholder"/LangGraph docstrings across packages (**✅ F6** sweeps the worst); `AGENTS.md` version pins lag.
+- **Done this pass:** `AGENTS.md` Python‑version mismatch fixed — "Python 3.11+" → "3.12+" to match `pyproject` (`>=3.12,<3.14`) and CI/prod (3.12).
 - **Residual:** update `AGENTS.md` package versions to the lockfile (`agent-framework-core 1.8.1`), fix the 3.11/3.12 mismatch, and update `infra/AGENTS.md`'s "no proxy files / no Langfuse" claims to match reality.
 
 ---

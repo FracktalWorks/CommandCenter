@@ -17,7 +17,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 
 ### BO‑1 — Action Broker: real approval‑gated write path *(P0)* ◑
 - **Done this pass (the decision + execution core, non‑breaking):** the 46‑line stub is now a real component: `decide_disposition(authority, destructive)` — the pure authority‑tier policy (READ→rejected, AUTONOMOUS→auto, SUGGEST→needs‑approval, SUGGEST_APPLY→auto for reversible / needs‑approval for destructive, i.e. FAIL CLOSED); `propose()` computes + audits the disposition (defaults `destructive=True`); and a **fail‑closed executor registry** (`register_action_handler` / `execute`) where a real source‑of‑truth write happens ONLY inside a registered handler and an action with no handler is REFUSED. Ships with **zero** handlers so it cannot write anything yet — inert + non‑breaking. 8 unit tests.
-- **Missing (needs decisions + a queue table):** persist `needs_approval` proposals to a `pending_actions` table (mirror `pending_commit`); bind the Control Plane approval inbox to `execute`; register real handlers for ClickUp/email/Zoho; and route the existing bypassing writes (`routes/tasks/providers.py:365`, `email_ingestion/providers/*`) through `propose`→`execute`. Until that wiring lands, either mark the write‑capable agents non‑autonomous or formally waive non‑negotiable #4.
+- **Persistence layer added (commit `e59cc6a`, additive, unpushed):** migration `66_pending_actions.sql` + `enqueue` / `list_pending` / `approve` / `reject` / `submit` in `broker.py` (17 unit tests, DB‑hermetic). No live path rerouted, so still inert.
+- **Missing (needs decisions + live rerouting):** bind the Control Plane approval inbox to `approve`/`reject` (gateway `/actions` routes); register real handlers for ClickUp/email/Zoho; and route the existing bypassing writes (`routes/tasks/providers.py:365`, `email_ingestion/providers/*`) through `submit`. Plus **integration‑verify** the new SQL against a live Postgres. Until the wiring lands, either mark the write‑capable agents non‑autonomous or formally waive non‑negotiable #4.
 - **Why needed:** It is non‑negotiable #4 ("no autonomous writes to source systems until the Action Broker is live") and the single control point for HITL over all outward writes. Today the guarantee is false.
 - **Dependencies:** `03_pending_commits.sql`‑style queue table (add `pending_actions`); `acb_audit`; the Control Plane approval inbox; the auth fix (BO‑2) so approvals are authenticated.
 - **Approach:** (1) Add a `pending_actions` table (proposal, actor, authority, payload, status, approved_by). (2) Make `propose()` enqueue and, per authority tier, either auto‑apply (read/idempotent), queue for approval, or reject. (3) Add an `execute(proposal)` that performs the provider write and is the *only* code path allowed to do so. (4) Route the existing ClickUp/email writes through it. (5) Reconcile docs with whichever model ships.
@@ -80,7 +81,7 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Approach:** Adopt Alembic (autogenerate baselined against `schema.generated.sql`), run it in `lifespan`/entrypoint, keep the raw files as historical. Add a CI check for unique numeric prefixes until then.
 
 ### BO‑10 — Consolidate DB access to one engine/pool *(P2)* ◑
-- **Done (Session 2, 2026‑07‑13):** every engine now bounds the CONNECT phase so a slow/unreachable DB can't hang callers — `settings.db_connect_timeout` (default 10s) on `acb_graph.get_engine()` (`ccccdc8`, live in prod) and on the two gateway asyncpg engines via `connect_args={"timeout": …}` (`1684e1a`, committed local, unpushed). This makes `acb_audit.record()`'s "never block the caller" guarantee real against a hung connect. Test: `tests/unit/test_db_connect_timeout.py`.
+- **Done (Session 2, 2026‑07‑13):** **every** engine now bounds the CONNECT phase so a slow/unreachable DB can't hang callers — `settings.db_connect_timeout` (default 10s) on `acb_graph.get_engine()` (`ccccdc8`, live in prod), the two gateway asyncpg engines (`1684e1a`), and the four `email_ingestion` async engines (`1ff6c0d`, local, unpushed) via `connect_args={"timeout": …}`. This makes `acb_audit.record()`'s "never block the caller" guarantee real against a hung connect. Test: `tests/unit/test_db_connect_timeout.py`.
 - **Missing:** still three+ engines (`acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, plus per‑call engines in `email_ingestion/{scheduler,inbound}.py` that also leak — BO‑9), the foundational one otherwise unconfigured; sync `acb_audit.record()` still blocks the async loop (H11) — connect_timeout bounds the hang but the call is still synchronous.
 - **Approach:** Provide a single configured async engine in `acb_graph` (sized pool), funnel all callers through it, and make `acb_audit.record()` async (or always call via `to_thread`).
 
@@ -98,9 +99,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 
 ## D. Orchestration & runtime
 
-### BO‑12 — Reconcile the runtime story (MAF vs Copilot) *(P1)* ☐
-- **Missing:** two coexisting runtimes while docs claim MAF is sole and Copilot is sandbox‑only (H6); MAF Workflow engine advertised but unused (M2).
-- **Approach:** Either (a) update `AGENTS.md`/README to acknowledge Copilot‑SDK as a first‑class interactive runtime and define when each is used, or (b) migrate the Copilot‑SDK agents to native MAF. Remove the unused `WorkflowBuilder`/`as_tool()` claims or actually adopt the Workflow engine for the multi‑step pipelines it's advertised for.
+### BO‑12 — Reconcile the runtime story (MAF vs Copilot) *(P1)* ✅
+- **Done (path a):** `AGENTS.md` reconciled to reality — runtime line, Purpose, and non‑negotiables **#6/#9** now describe MAF as the PRIMARY native runtime and the Copilot SDK as the supported second runtime for interactive coworker chat (Tier 1.5, `/copilot/chat`, BYOK‑routed) + the mutation sandbox, rather than "MAF sole / Copilot sandbox‑only" (closed H6). The unused **`WorkflowBuilder`** import + its "used for pipelines" docstring claim were removed from `orchestrator/agents.py` (closed M2 — it was imported, never instantiated). `as_tool()` is genuinely used, so that claim stays.
 - **Competitive ref (CH‑5):** Hermes's multi‑agent layer (orchestrator + isolated sub‑agents exchanging **typed result objects**, resource‑aware concurrency limits, Kanban dispatch) is more built‑out than ours on coordination mechanics — the reference when we finally instantiate the Workflow engine and replace bare‑string sub‑agent handoffs (ties to HH‑7). See `specs/competitive_hardening_2026-07.md`.
 
 ### BO‑13 — Break up the executor monolith *(P2)* ◑
@@ -112,7 +112,8 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Regression net (`tests/unit/test_run_agent_stream_e2e.py`):** drives `run_agent_stream` end‑to‑end with mocked agents/loader (no git clone, no LLM, no Redis) and now covers BOTH tiers:
   - **Tier‑2 batch:** envelope contract (`RUN_STARTED` first → text streamed → `RUN_FINISHED` terminal), run_id/thread_id propagation, agent‑exception → `RUN_ERROR` (not a crash).
   - **Tier‑1 native streaming:** a mock agent that yields MAF‑shaped `run(..., stream=True)` updates → asserts the `TEXT_MESSAGE_START/CONTENT/END` lifecycle and `TOOL_CALL_START/ARGS/RESULT` events (via the real event_translator).
-- **Residual:** the Tier‑1.5 Copilot‑SDK tier and the HITL‑parking / idle‑timeout / fall‑through control‑flow branches are not yet covered; and `run_agent_stream` is still one ~1,600‑line function.
+  - **HITL parking (new this pass):** `resolve_user_input` (found / not‑found) and the full `_make_user_input_handler` round‑trip — emits the `user_input_requested` frame to the relay, parks a Future, and returns the answer once `resolve_user_input` fires. Locks the ask_user → prompt → resolve contract.
+- **Residual:** the Tier‑1.5 Copilot‑SDK tier and the idle‑timeout / fall‑through control‑flow branches are still not covered (the Copilot/full‑stream branches can't be exercised on the Windows dev box — they hit the same multi‑point infra hang that deselects this file locally — so they need a Linux/CI‑run harness to add safely); and `run_agent_stream` is still one ~1,600‑line function.
 - **Approach for the residual:** (1) extend the harness to the Copilot tier + HITL/idle branches. (2) THEN extract the native / Copilot / batch tiers behind a `Runtime` strategy interface — the `return`‑to‑end vs fall‑through‑to‑batch control flow is the delicate part, so it needs those branches covered first — and move HITL/session‑store/cleanup into collaborators, guarded by this net + the trajectory evals. (3) Ratchet the xenon absolute ceiling down from F.
 
 ### BO‑14 — Enforce the permission/risk model *(P1)* ◑
@@ -149,16 +150,17 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Missing:** mypy and full‑ruff are report‑only; evals are path‑gated (skip gateway/ingestion/reconciler); `deploy.yml` allows `skip_tests`; no coverage threshold (M10).
 - **Approach:** Ratchet mypy/ruff to blocking per the existing plan; broaden the eval trigger paths or run a fast eval subset on every PR; remove `skip_tests` from production deploy; add `--cov-fail-under` for foundation packages. Reconcile README's CI claims.
 
-### BO‑18 — Secret‑scanning + large‑file gates that actually catch history *(P1)* ☐
-- **Missing:** the large‑file hook only inspects new additions (it missed `acb_dump.bak`); no secret scanner.
-- **Approach:** Add `gitleaks`/`detect-secrets` to pre‑commit and CI; add `.gitignore` rules for `*.pid`/`*.bak`/`*token_cache*` (**✅ F2**); add a CI job that fails on any tracked file > 1 MB.
+### BO‑18 — Secret‑scanning + large‑file gates that actually catch history *(P1)* ◑
+- **Done:** **gitleaks secret scanner** wired into CI — `.gitleaks.toml` (default rules + dev‑placeholder allowlist) + a `secret-scan` job in `pr-check.yml` that scans each PR's NEW commits (report‑only initially, per the ratchet; scoped to the PR range so it doesn't trip on the historical leak). Plus `scripts/scan_secrets_history.sh` for the one‑time full‑history audit around the purge. `.gitignore` rules for `*.pid`/`*.bak`/`*token_cache*` shipped earlier (**✅ F2**).
+- **Missing:** graduate `secret-scan` to **blocking** after a few green PRs; a CI job that fails on any tracked file > 1 MB; and the actual **history purge + token rotation** (BO‑8, owner‑gated).
 
 ---
 
 ## G. Documentation
 
 ### BO‑19 — Doc↔code reconciliation *(P1)* ◑
-- **Missing:** README described LangGraph/Theia/PostgresSaver/escalation_ui and had a garbled layout (**✅ F3** rewrites it); stale "placeholder"/LangGraph docstrings across packages (**✅ F6** sweeps the worst); `AGENTS.md` version pins lag; `AGENTS.md`/README Python‑version mismatch.
+- **Missing:** README described LangGraph/Theia/PostgresSaver/escalation_ui and had a garbled layout (**✅ F3** rewrites it); stale "placeholder"/LangGraph docstrings across packages (**✅ F6** sweeps the worst); `AGENTS.md` version pins lag.
+- **Done this pass:** `AGENTS.md` Python‑version mismatch fixed — "Python 3.11+" → "3.12+" to match `pyproject` (`>=3.12,<3.14`) and CI/prod (3.12).
 - **Residual:** update `AGENTS.md` package versions to the lockfile (`agent-framework-core 1.8.1`), fix the 3.11/3.12 mismatch, and update `infra/AGENTS.md`'s "no proxy files / no Langfuse" claims to match reality.
 
 ---

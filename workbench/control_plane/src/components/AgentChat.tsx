@@ -20,6 +20,7 @@ import type { UnifiedModel } from "@/app/api/models/all/route";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
+import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
 import SuggestionPills from "@/components/SuggestionPills";
 import ConfirmationCard from "@/components/ConfirmationCard";
 import ElicitationCard from "@/components/ElicitationCard";
@@ -287,6 +288,11 @@ export default function AgentChat({
   // NOTE: computed here (before useAgentChat) so we can override the routing mode.
   const currentAgentEntry = agents.find((a) => a.name === currentAgentName);
   const agentRuntime: string = currentAgentEntry?.agent_runtime ?? "maf";
+  // Friendly display name (alias) for UI labels only — dispatch, localStorage
+  // and routing keep using the canonical `currentAgentName`.
+  const currentAgentLabel = currentAgentEntry?.display_name || currentAgentName;
+  // Assigned pixel-art avatars (name → libraryId) for the agent switcher/header.
+  const agentAvatars = useAgentAvatars();
 
   // All named agents route through the Copilot SDK executor (/agent/run/stream)
   // regardless of the model selected. The model is forwarded as a hint for
@@ -1353,7 +1359,8 @@ export default function AgentChat({
       {!compact && (
       <div className="flex items-center gap-2 h-9 px-4 border-b border-border bg-card/40 shrink-0">
         <div className={`w-2 h-2 rounded-full shrink-0 ${isLoading ? "bg-warning animate-pulse" : "bg-success"}`} />
-        <span className="text-xs font-medium text-foreground truncate">{currentAgentName}</span>
+        <AgentAvatar libraryId={agentAvatars[currentAgentName]} size={20} fallback={null} />
+        <span className="text-xs font-medium text-foreground truncate">{currentAgentLabel}</span>
         {isLoading && (
           <span className="hidden sm:inline text-[10px] text-warning/70 animate-pulse">thinking…</span>
         )}
@@ -1441,11 +1448,18 @@ export default function AgentChat({
           )}
           {!loadingHistory && messages.length === 0 && (
             <div className="flex flex-col items-center justify-center min-h-[50vh] gap-3 text-center">
-              <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center tech-glow">
-                <div className="w-2.5 h-2.5 rounded-full bg-success" />
-              </div>
+              <AgentAvatar
+                libraryId={agentAvatars[currentAgentName]}
+                size={48}
+                className="tech-glow"
+                fallback={
+                  <div className="w-12 h-12 rounded-2xl bg-primary/10 border border-primary/20 flex items-center justify-center tech-glow">
+                    <div className="w-2.5 h-2.5 rounded-full bg-success" />
+                  </div>
+                }
+              />
               <div className="text-muted-foreground text-sm font-medium">
-                Chat with <span className="text-foreground">{currentAgentName}</span>
+                Chat with <span className="text-foreground">{currentAgentLabel}</span>
               </div>
               {agentDescription && currentAgentName === agentName && (
                 <div className="text-muted-foreground/60 text-xs max-w-sm leading-relaxed">{agentDescription}</div>
@@ -1587,13 +1601,13 @@ export default function AgentChat({
               <textarea ref={inputRef} value={input}
                 onChange={(e) => setInput(e.target.value)} onKeyDown={handleKeyDown} rows={1}
                 disabled={loadingHistory}
-                aria-label={`Message ${currentAgentName}`}
+                aria-label={`Message ${currentAgentLabel}`}
                 placeholder={
                   loadingHistory
                     ? "Loading previous messages…"
                     : isLoading
-                      ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentName}…`
-                      : `Message ${currentAgentName}…`
+                      ? `${SEND_MODE_LABELS[sendMode]} a follow-up to ${currentAgentLabel}…`
+                      : `Message ${currentAgentLabel}…`
                 }
                 className="flex-1 resize-none bg-transparent px-1 py-1.5 text-[16px] sm:text-sm text-foreground placeholder-muted-foreground focus:outline-none max-h-40 overflow-y-auto scrollbar-thin disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{ minHeight: "32px" }}
@@ -1698,7 +1712,7 @@ export default function AgentChat({
                   <button onClick={() => setShowAgentMenu((v) => !v)}
                     className="flex items-center gap-1.5 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition">
                     <span className="w-1.5 h-1.5 rounded-full bg-success shrink-0" />
-                    <span className="truncate max-w-[72px] sm:max-w-[90px] font-medium">{currentAgentName}</span>
+                    <span className="truncate max-w-[72px] sm:max-w-[90px] font-medium">{currentAgentLabel}</span>
                     <span className="text-muted-foreground/50">▾</span>
                   </button>
                   {showAgentMenu && (
@@ -1711,7 +1725,10 @@ export default function AgentChat({
                           <button key={a.name} onClick={() => handleSwitchAgent(a)}
                             className={`w-full text-left px-3 py-1.5 text-xs hover:bg-secondary tech-transition ${a.name === currentAgentName ? "text-foreground bg-secondary/60" : "text-muted-foreground"}`}>
                             <div className="flex items-center justify-between gap-1">
-                              <span className="font-medium">{a.name}</span>
+                              <span className="flex items-center gap-1.5 min-w-0">
+                                <AgentAvatar libraryId={agentAvatars[a.name]} size={18} fallback={null} />
+                                <span className="font-medium truncate">{a.display_name || a.name}</span>
+                              </span>
                               {a.name === currentAgentName && <span className="text-emerald-400 text-[10px]">✓</span>}
                             </div>
                           </button>

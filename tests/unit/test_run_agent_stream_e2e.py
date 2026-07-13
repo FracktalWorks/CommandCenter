@@ -289,3 +289,64 @@ def test_native_streaming_emits_tool_call_and_result_events(monkeypatch):
         e.get("delta", "") for e in events if e.get("type") == "TEXT_MESSAGE_CONTENT"
     )
     assert "42 unread" in text
+
+
+# ── HITL: ask_user parking → user_input_requested frame → resolve ───────────
+# The Copilot SDK's native ask_user is bridged by _make_user_input_handler: it
+# emits a `user_input_requested` frame to the relay, parks a Future, and blocks
+# until the gateway's /agent/respond-input calls resolve_user_input. These pin
+# that round-trip (the branch the batch/native tests don't exercise).
+
+def test_resolve_user_input_unknown_request_returns_false():
+    assert executor.resolve_user_input("no-such-request", "x") is False
+
+
+def test_resolve_user_input_sets_the_pending_future():
+    async def _run() -> dict[str, Any]:
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        executor._pending_user_input["req-1"] = fut
+        try:
+            assert executor.resolve_user_input("req-1", "the answer", was_freeform=True)
+            return await asyncio.wait_for(fut, timeout=1)
+        finally:
+            executor._pending_user_input.pop("req-1", None)
+
+    assert asyncio.run(_run()) == {"answer": "the answer", "wasFreeform": True}
+
+
+def test_hitl_handler_emits_prompt_parks_then_returns_answer(monkeypatch):
+    captured: list[tuple[str, str]] = []
+
+    async def _fake_push(thread_id: str, line: str) -> None:
+        captured.append((thread_id, line))
+
+    monkeypatch.setattr(executor, "_push_sse_to_stream", _fake_push)
+    handler = executor._make_user_input_handler("thread-x")
+
+    async def _run() -> dict[str, Any]:
+        task = asyncio.ensure_future(
+            handler({"question": "Pick one?", "choices": ["a", "b"],
+                     "allowFreeform": False}, None)
+        )
+        # Wait for the handler to register a parked request, then resolve it.
+        req_id = None
+        for _ in range(400):
+            if executor._pending_user_input:
+                req_id = next(iter(executor._pending_user_input))
+                break
+            await asyncio.sleep(0.005)
+        assert req_id, "handler never parked a pending request"
+        assert executor.resolve_user_input(req_id, "b", was_freeform=False)
+        return await asyncio.wait_for(task, timeout=2)
+
+    result = asyncio.run(_run())
+    assert result == {"answer": "b", "wasFreeform": False}
+
+    # The prompt frame reached the relay with the question + choices intact.
+    assert captured and captured[0][0] == "thread-x"
+    frame = _parse_frames([captured[0][1]])[0]
+    assert frame.get("name") == "user_input_requested"
+    assert frame["value"]["question"] == "Pick one?"
+    assert frame["value"]["choices"] == ["a", "b"]
+    assert frame["value"]["allowFreeform"] is False

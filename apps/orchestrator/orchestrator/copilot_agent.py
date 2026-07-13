@@ -81,6 +81,11 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         token = (
             os.environ.get("COPILOT_GITHUB_TOKEN")
             or os.environ.get("GITHUB_COPILOT_TOKEN")
+            # GITHUB_TOKEN is the canonical secret the connect UI / settings
+            # store / DB hydration populate; COPILOT_GITHUB_TOKEN is rarely set
+            # in practice, so fall back to it to match the models + mutation
+            # paths (else headless runs hit "Authorization error, run /login").
+            or os.environ.get("GITHUB_TOKEN")
             or ""
         ).strip()
         if self._client is None and token:

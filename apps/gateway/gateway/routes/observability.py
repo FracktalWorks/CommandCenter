@@ -96,12 +96,20 @@ async def roster(
     try:
         from gateway.routes.agent import (  # noqa: PLC0415
             _AGENT_REGISTRY,
+            _load_agent_aliases,
             _load_dynamic_agents,
         )
         registry = list(_load_dynamic_agents()) + list(_AGENT_REGISTRY)
     except Exception as exc:  # noqa: BLE001
         _log.warning("observability.roster_registry_failed", error=str(exc))
         registry = []
+
+    # Display-name (alias) overlay, keyed by canonical name — same source the
+    # Agents page uses.  Best-effort → {} so the office still renders on error.
+    try:
+        aliases = _load_agent_aliases()
+    except Exception:  # noqa: BLE001
+        aliases = {}
 
     # The orchestrator is the default-chat agent but isn't a registered
     # specialist — seed it so it's always on stage (idle between chats, working
@@ -131,6 +139,7 @@ async def roster(
         live = live_by_agent.get(name, [])
         agents.append({
             "name": name,
+            "display_name": aliases.get(name, ""),
             "description": str(a.get("description") or ""),
             "runtime": a.get("agent_runtime") or a.get("runtime") or "maf",
             "status": "working" if live else "idle",
@@ -150,6 +159,7 @@ async def roster(
         seen.add(name)
         agents.append({
             "name": name,
+            "display_name": aliases.get(name, ""),
             "description": "Core orchestrator" if name == "orchestrator" else "",
             "runtime": "maf",
             "status": "working",

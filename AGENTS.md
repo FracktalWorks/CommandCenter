@@ -50,15 +50,16 @@ Remove stale or contradictory text immediately.
 
 Organisation: Fracktal Works
 Project: CommandCenter v2 -- Headless, self-mutating agent orchestration platform
-Runtime: Unified MAF (Microsoft Agent Framework). No LangGraph. No deepagents. No n8n.
+Runtime: MAF (Microsoft Agent Framework) native, plus the GitHub Copilot SDK as a second runtime for interactive coworker chat + the self-mutation sandbox. No LangGraph. No deepagents. No n8n.
 Last updated: 2026-07-13
 
 ## Purpose
 
 CommandCenter is a headless, self-mutating, multi-agent orchestration platform
 for running a company. Events trigger specialist agents dynamically loaded
-from GitHub repos or local folders, executed via MAF, and self-healing on
-failure via isolated Copilot SDK sandboxes.
+from GitHub repos or local folders, executed via MAF (native) or the Copilot
+SDK (interactive coworker sessions), and self-healing on failure via isolated
+Copilot SDK sandboxes.
 
 ## Global Constraints (Non-Negotiable)
 
@@ -67,15 +68,15 @@ failure via isolated Copilot SDK sandboxes.
 3. Self-mutation max_mutation_attempts = 1 per failure event
 4. No autonomous writes to source systems until Action Broker is live
 5. Git is the single source of truth for all agent artefacts
-6. MAF is the sole agent execution runtime -- Copilot SDK is mutation-sandbox only
+6. MAF is the PRIMARY native agent runtime. The Copilot SDK is the supported second runtime for interactive coworker chat (Tier 1.5, /copilot/chat, BYOK-routed through the gateway) and the self-mutation sandbox -- not a general execution path for event-driven specialist agents
 7. No Theia / browser IDE
 8. Source systems are authoritative -- CommandCenter is a read-mostly mirror
-9. All new execution features MUST use MAF paths -- no raw Copilot SDK entrypoints
+9. New event-driven / specialist-agent execution features default to MAF paths; the Copilot-SDK runtime is reserved for interactive chat + mutation (both gateway-routed), not new autonomous execution entrypoints
 10. All gateway endpoints require auth (Bearer token + optional user identity)
 
 ## Global Conventions
 
-- Python 3.12+ with uv package manager (`requires-python = ">=3.12,<3.14"`)
+- Python 3.12+ with uv package manager (pyproject: requires-python >=3.12,<3.14; CI + prod run 3.12)
 - FastAPI for all HTTP/WS endpoints
 - Postgres + pgvector for entity graph, memory, audit, integrations
 - Redis Streams for event bus

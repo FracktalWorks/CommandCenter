@@ -474,7 +474,8 @@ async def _push_patch_upstream(
     try:
         account = await _assert_account_owner(db, str(before.account_id), uid)
         creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
-        provider = build_provider(account.provider, creds, account.workspace_id)
+        provider = build_provider(
+        account.provider, creds, account.workspace_id, str(account.id))
         payload: dict[str, Any] = {}
         if patch.title is not None:
             payload["title"] = patch.title.strip()
@@ -951,7 +952,8 @@ async def _push_pending_item(db: Any, item_id: str, uid: str) -> Any:
         )
 
     creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
-    provider = build_provider(account.provider, creds, account.workspace_id)
+    provider = build_provider(
+        account.provider, creds, account.workspace_id, str(account.id))
     assignee = _parse_jsonb(row.assignee) or {}
     due_ms = int(row.due_at.timestamp() * 1000) if row.due_at else None
     # Email-origin items carry their source reference INTO the PM tool so
@@ -1142,7 +1144,8 @@ async def item_detail(
             return empty
         account = await _assert_account_owner(db, str(row.account_id), uid)
         creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
-        provider = build_provider(account.provider, creds, account.workspace_id)
+        provider = build_provider(
+        account.provider, creds, account.workspace_id, str(account.id))
         try:
             return await provider.get_task_detail(str(row.provider_task_id))
         except Exception as exc:  # provider hiccup — panel still renders

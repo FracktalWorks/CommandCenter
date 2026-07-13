@@ -25,7 +25,7 @@ BO-1.
 from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import Any
 from uuid import UUID, uuid4
@@ -173,3 +173,201 @@ async def execute(proposal: ActionProposal) -> dict[str, Any]:
     ))
     result = await handler(proposal)
     return {"ok": True, "result": result}
+
+
+# ── Approval queue — persistence for NEEDS_APPROVAL proposals ─────────────────
+# Mirrors ``pending_commit`` (self-mutation): a proposal the broker cannot
+# auto-apply is parked in ``pending_actions`` until an operator approves it, at
+# which point :func:`execute` runs the registered handler. DB access uses the
+# same sync ``acb_graph.get_session`` + ``text()`` recipe as
+# ``mutation._register_pending_commit``; each write is best-effort and returns a
+# sentinel (never raises) so a broker call is not lost on a DB blip.
+
+
+def enqueue(proposal: ActionProposal) -> str | None:
+    """Persist *proposal* to ``pending_actions`` (status ``pending``).
+
+    Returns the row id (the proposal's own UUID) or ``None`` if the DB write
+    fails. Call this for a ``NEEDS_APPROVAL`` disposition.
+    """
+    import json
+
+    try:
+        from acb_graph import get_session
+        from sqlalchemy import text
+
+        row_id = str(proposal.id)
+        with get_session() as sess:
+            sess.execute(
+                text(
+                    "INSERT INTO pending_actions "
+                    "(id, actor, action, target, payload, authority, "
+                    " destructive, disposition, status) "
+                    "VALUES (:id, :actor, :action, :target, CAST(:payload AS jsonb), "
+                    "        :authority, :destructive, :disposition, 'pending')"
+                ),
+                {
+                    "id": row_id,
+                    "actor": proposal.actor,
+                    "action": proposal.action,
+                    "target": proposal.target,
+                    "payload": json.dumps(proposal.payload or {}),
+                    "authority": proposal.authority.value,
+                    "destructive": proposal.destructive,
+                    "disposition": (proposal.disposition or Disposition.NEEDS_APPROVAL).value,
+                },
+            )
+            sess.commit()
+        record(AuditEvent(
+            actor="system:action_broker",
+            action=f"enqueue:{proposal.action}",
+            target=proposal.target,
+            payload={"pending_action_id": row_id, "authority": proposal.authority.value},
+        ))
+        return row_id
+    except Exception as exc:  # best-effort: never lose the caller on a DB blip
+        record(AuditEvent(
+            actor="system:action_broker",
+            action=f"enqueue_failed:{proposal.action}",
+            target=proposal.target,
+            payload={"error": str(exc)},
+        ))
+        return None
+
+
+def list_pending() -> list[dict[str, Any]]:
+    """Return the pending approval queue (newest first). ``[]`` on DB failure."""
+    try:
+        from acb_graph import get_session
+        from sqlalchemy import text
+
+        with get_session() as sess:
+            rows = sess.execute(
+                text(
+                    "SELECT id, actor, action, target, payload, authority, "
+                    "       destructive, disposition, status, created_at "
+                    "FROM pending_actions WHERE status = 'pending' "
+                    "ORDER BY created_at DESC"
+                )
+            ).mappings().all()
+        return [dict(r) for r in rows]
+    except Exception:
+        return []
+
+
+def _load_proposal(action_id: str) -> tuple[ActionProposal | None, str | None]:
+    """Load a queued row and rebuild its :class:`ActionProposal` + current status."""
+    from acb_graph import get_session
+    from sqlalchemy import text
+
+    with get_session() as sess:
+        row = sess.execute(
+            text(
+                "SELECT id, actor, action, target, payload, authority, "
+                "       destructive, disposition, status "
+                "FROM pending_actions WHERE id = :id"
+            ),
+            {"id": action_id},
+        ).mappings().first()
+    if row is None:
+        return None, None
+    proposal = ActionProposal(
+        id=UUID(str(row["id"])),
+        actor=row["actor"],
+        action=row["action"],
+        target=row["target"],
+        payload=row["payload"] or {},
+        authority=AuthorityTier(row["authority"]),
+        destructive=row["destructive"],
+        disposition=Disposition(row["disposition"]),
+    )
+    return proposal, row["status"]
+
+
+def _mark(
+    action_id: str, status: str, *, reviewed_by: str | None = None,
+    result: dict[str, Any] | None = None,
+) -> None:
+    """Update a queued row's status (+ reviewer / result). Best-effort."""
+    import json
+
+    try:
+        from acb_graph import get_session
+        from sqlalchemy import text
+
+        reviewed_at_expr = "now()" if reviewed_by is not None else "reviewed_at"
+        with get_session() as sess:
+            sess.execute(
+                text(
+                    "UPDATE pending_actions SET status = :status, "
+                    "reviewed_by = COALESCE(:reviewed_by, reviewed_by), "
+                    f"reviewed_at = {reviewed_at_expr}, "
+                    "result = CAST(:result AS jsonb) "
+                    "WHERE id = :id"
+                ),
+                {
+                    "id": action_id,
+                    "status": status,
+                    "reviewed_by": reviewed_by,
+                    "result": json.dumps(result) if result is not None else None,
+                },
+            )
+            sess.commit()
+    except Exception:
+        pass
+
+
+def reject(action_id: str, reviewed_by: str) -> dict[str, Any]:
+    """Reject a pending action — it is never executed. Audited."""
+    _mark(action_id, "rejected", reviewed_by=reviewed_by)
+    record(AuditEvent(
+        actor=reviewed_by,
+        action="action_rejected",
+        target=action_id,
+        payload={},
+    ))
+    return {"ok": True, "status": "rejected", "action_id": action_id}
+
+
+async def approve(action_id: str, reviewed_by: str) -> dict[str, Any]:
+    """Approve a pending action and execute it via its registered handler.
+
+    Fails CLOSED: a missing/non-pending row is not run; a handler error marks
+    the row ``failed`` (not ``applied``). The handler result is persisted.
+    """
+    proposal, status = _load_proposal(action_id)
+    if proposal is None:
+        return {"ok": False, "error": f"no pending action {action_id!r}"}
+    if status != "pending":
+        return {"ok": False, "error": f"action {action_id!r} is {status}, not pending"}
+
+    _mark(action_id, "approved", reviewed_by=reviewed_by)
+    res = await execute(proposal)
+    if res.get("ok"):
+        _mark(action_id, "applied", result=res)
+        return {"ok": True, "status": "applied", "action_id": action_id, "result": res.get("result")}
+    _mark(action_id, "failed", result=res)
+    return {"ok": False, "status": "failed", "action_id": action_id, "error": res.get("error")}
+
+
+async def submit(proposal: ActionProposal) -> dict[str, Any]:
+    """Route a proposal by its disposition — the one entry point callers use.
+
+    * ``AUTO_APPLY``     → execute now (still audited).
+    * ``NEEDS_APPROVAL`` → enqueue for a human; nothing is written yet.
+    * ``REJECTED``       → refused (audited by ``execute``).
+    """
+    disposition = proposal.disposition or decide_disposition(
+        proposal.authority, destructive=proposal.destructive
+    )
+    if disposition == Disposition.AUTO_APPLY:
+        res = await execute(proposal)
+        return {"status": "applied" if res.get("ok") else "failed",
+                "disposition": disposition.value, **res}
+    if disposition == Disposition.NEEDS_APPROVAL:
+        action_id = enqueue(proposal)
+        return {"ok": True, "status": "pending", "disposition": disposition.value,
+                "action_id": action_id}
+    # REJECTED
+    res = await execute(proposal)  # execute() refuses + audits a rejected proposal
+    return {"status": "rejected", "disposition": disposition.value, **res}

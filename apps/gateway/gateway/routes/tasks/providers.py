@@ -36,6 +36,28 @@ class ProviderError(HTTPException):
         super().__init__(status_code=status_code, detail=f"{provider}: {detail}")
 
 
+def _broker_enforced(action: str) -> bool:
+    """Whether ``ACTION_BROKER_ENFORCE`` routes *action* to the approval QUEUE.
+
+    Default (unset / ``none`` / ``off``) → ``False`` → writes AUTO-APPLY: they
+    are already user-approved (staged ``sync_state='pending'`` → the user pushes),
+    so the broker only audits + chokepoints them. Set the env var to
+    ``1``/``all``/``on`` to queue every write, or to a comma-list of action names
+    to queue specific ones. This is the kill-switch — flip it without a redeploy
+    (env var + service restart). NOTE: the queue path needs a persistent handler
+    to execute on approval (a follow-up); until then, enforcing queues a write
+    but it won't run until that lands.
+    """
+    import os
+
+    raw = (os.environ.get("ACTION_BROKER_ENFORCE") or "").strip().lower()
+    if not raw or raw in ("0", "none", "off", "false"):
+        return False
+    if raw in ("1", "all", "on", "true"):
+        return True
+    return action in {a.strip() for a in raw.split(",") if a.strip()}
+
+
 class BaseTaskProvider(ABC):
     """The canonical contract every connector implements (§5.5).
 
@@ -45,6 +67,60 @@ class BaseTaskProvider(ABC):
     """
 
     provider: str = "base"
+
+    def _broker_actor(self) -> str:
+        """Identity recorded on the audit/proposal for an outward write.
+        Never a secret — subclasses may add a workspace/account id."""
+        return f"tasks:{self.provider}"
+
+    async def _broker_gate(
+        self, action: str, target: str,
+        audit_payload: dict[str, Any], do_write,
+    ) -> dict[str, Any]:
+        """Route an outward provider write through the Action Broker — the single
+        audited chokepoint for source-of-truth writes (AGENTS.md #4).
+
+        These writes are already user-approved (staged → the user pushes), so the
+        DEFAULT disposition AUTO-APPLIES: the broker audits the write and
+        ``do_write`` runs immediately, returning the provider result unchanged.
+        ``ACTION_BROKER_ENFORCE`` can flip an action to the approval QUEUE
+        (returns a ``pending`` marker; the write does not run until approved).
+
+        Fail-safe: a broker-layer error never blocks a user-approved write —
+        ``do_write`` still runs. ``do_write`` executes **exactly once** (its own
+        errors, e.g. an HTTP failure, propagate untouched).
+        """
+        try:
+            from action_broker import (
+                AuthorityTier,
+                Disposition,
+                enqueue,
+                propose,
+            )
+
+            queued = _broker_enforced(action)
+            proposal = propose(
+                self._broker_actor(), action, target, audit_payload,
+                authority=(AuthorityTier.SUGGEST_APPLY if queued
+                           else AuthorityTier.AUTONOMOUS),
+                destructive=queued,
+            )
+            disposition = proposal.disposition
+        except Exception as exc:  # broker unavailable → never lose a user write
+            _log.warning("broker.gate_bypass", action=action, error=str(exc))
+            return await do_write()
+
+        if disposition == Disposition.NEEDS_APPROVAL:
+            action_id = None
+            with contextlib.suppress(Exception):
+                action_id = enqueue(proposal)
+            _log.info("broker.write_queued", action=action, action_id=action_id)
+            return {"pending": True, "pending_action_id": action_id,
+                    "provider_task_id": ""}
+        if disposition == Disposition.REJECTED:
+            raise ProviderError(
+                self.provider, f"write {action} rejected by authority policy")
+        return await do_write()
 
     @abstractmethod
     async def verify(self) -> dict[str, Any]:
@@ -135,12 +211,23 @@ class ClickUpProvider(BaseTaskProvider):
 
     provider = "clickup"
 
-    def __init__(self, token: str, workspace_id: str | None = None):
+    def __init__(
+        self, token: str, workspace_id: str | None = None,
+        account_id: str | None = None,
+    ):
         self._token = token
         self._workspace_id = workspace_id
+        # The task_accounts id this provider was built from — needed so a QUEUED
+        # write can re-resolve the token at approval time (see broker_handlers).
+        self._account_id = account_id
 
     def _headers(self) -> dict[str, str]:
         return {"Authorization": self._token, "Content-Type": "application/json"}
+
+    def _broker_actor(self) -> str:
+        # Workspace id is a non-secret account discriminator (never the token).
+        ws = self._workspace_id or "?"
+        return f"tasks:clickup:ws:{ws}"
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
         async with httpx.AsyncClient(timeout=20.0) as http:
@@ -257,6 +344,19 @@ class ClickUpProvider(BaseTaskProvider):
         # subtask still POSTs to its parent's LIST, so project_ref = the list.
         if payload.get("parent"):
             body["parent"] = str(payload["parent"])
+
+        return await self._broker_gate(
+            "clickup.create_task", f"list:{project_ref}",
+            {"account_id": self._account_id,
+             "args": {"project_ref": project_ref, "body": body}},
+            lambda: self._raw_create_task(project_ref, body),
+        )
+
+    async def _raw_create_task(
+        self, project_ref: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The actual ClickUp create — bypasses the broker gate. Called by the
+        gate on auto-apply AND by the persistent handler on approval."""
         async with httpx.AsyncClient(timeout=20.0) as http:
             r = await http.post(
                 f"{_CLICKUP}/list/{project_ref}/task",
@@ -306,8 +406,22 @@ class ClickUpProvider(BaseTaskProvider):
                        != str(payload["assignee_id"]) else [])
                 body["assignees"] = {"add": add, "rem": rem}
         if not body:
-            # Nothing ClickUp-writable changed (e.g. a local-only field).
+            # Nothing ClickUp-writable changed (e.g. a local-only field) — no
+            # outward write, so it does not go through the broker.
             return {"provider_task_id": provider_task_id}
+
+        return await self._broker_gate(
+            "clickup.update_task", f"task:{provider_task_id}",
+            {"account_id": self._account_id,
+             "args": {"provider_task_id": provider_task_id, "body": body}},
+            lambda: self._raw_update_task(provider_task_id, body),
+        )
+
+    async def _raw_update_task(
+        self, provider_task_id: str, body: dict[str, Any]
+    ) -> dict[str, Any]:
+        """The actual ClickUp PUT — bypasses the broker gate. Called by the gate
+        on auto-apply AND by the persistent handler on approval."""
         async with httpx.AsyncClient(timeout=20.0) as http:
             r = await http.put(
                 f"{_CLICKUP}/task/{provider_task_id}",
@@ -359,6 +473,19 @@ class ClickUpProvider(BaseTaskProvider):
     ) -> dict[str, Any]:
         """ClickUp: a project = a List, created in a folder when given,
         else directly in the space (folderless)."""
+        return await self._broker_gate(
+            "clickup.create_project",
+            f"space:{space_id}" + (f"/folder:{folder_id}" if folder_id else ""),
+            {"account_id": self._account_id,
+             "args": {"name": name, "space_id": space_id, "folder_id": folder_id}},
+            lambda: self._raw_create_project(name, space_id, folder_id),
+        )
+
+    async def _raw_create_project(
+        self, name: str, space_id: str, folder_id: str | None = None,
+    ) -> dict[str, Any]:
+        """The actual ClickUp list-create — bypasses the broker gate. Called by
+        the gate on auto-apply AND by the persistent handler on approval."""
         path = (f"/folder/{folder_id}/list" if folder_id
                 else f"/space/{space_id}/list")
         async with httpx.AsyncClient(timeout=20.0) as http:
@@ -510,13 +637,17 @@ def connector_names() -> list[str]:
 
 
 def build_provider(
-    provider: str, creds: dict[str, Any], workspace_id: str | None = None
+    provider: str, creds: dict[str, Any], workspace_id: str | None = None,
+    account_id: str | None = None,
 ) -> BaseTaskProvider:
-    """Instantiate a connector from its name + decrypted credentials."""
+    """Instantiate a connector from its name + decrypted credentials.
+
+    ``account_id`` (the ``task_accounts`` row) is optional — pass it on WRITE
+    paths so a broker-queued write can re-resolve the token on approval."""
     cls = _CONNECTORS.get(provider)
     if cls is None:
         raise HTTPException(status_code=400, detail=f"Unknown provider: {provider}")
     token = creds.get("api_token") or creds.get("token") or ""
     if not token:
         raise HTTPException(status_code=400, detail=f"{provider}: missing api_token")
-    return cls(token, workspace_id)
+    return cls(token, workspace_id, account_id)

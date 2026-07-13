@@ -271,7 +271,9 @@ async def _persist_message(msg: EmailMessage) -> None:
         from sqlalchemy import text
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
-        engine = create_async_engine(db_url, echo=False)
+        engine = create_async_engine(
+            db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+        )
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
         async with session_factory() as db:
@@ -380,6 +382,16 @@ def _get_db_url() -> str | None:
         )
     except Exception:
         return None
+
+
+def _connect_timeout() -> int:
+    """Seconds to bound the asyncpg CONNECT phase so a slow/unreachable DB
+    fails fast instead of stalling inbound persistence (settings.db_connect_timeout)."""
+    try:
+        from acb_common.settings import get_settings
+        return get_settings().db_connect_timeout
+    except Exception:
+        return 10
 
 
 # -- Lifecycle management -----------------------------------------------------

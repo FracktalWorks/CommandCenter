@@ -9,8 +9,6 @@ Architecture:
     agents are loaded and exposed as tools. The LLM routes to the right one
     based on the description in each agent's config.json.
 
-    WorkflowBuilder is used for explicit multi-step pipelines (fan-out/fan-in).
-
 Exports:
     build_orchestrator_agent(*, with_history: bool = True) -> Agent
     build_agents() -> list[Agent]   ← Dynamic Agent Loader entry point
@@ -22,7 +20,7 @@ from typing import Any
 
 from acb_common import get_logger, get_settings
 from acb_graph import get_session
-from agent_framework import Agent, WorkflowBuilder
+from agent_framework import Agent
 from agent_framework.openai import OpenAIChatCompletionClient
 
 from orchestrator.retrieval import format_context, retrieve

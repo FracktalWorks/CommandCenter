@@ -39,22 +39,23 @@ def is_urgent(
     return delta_hours <= window_hours  # overdue (<=0) included
 
 
-# ── The 8 cells (the user's revised Notion formula, verbatim) ────────────────
+# ── The 7 priority levels ────────────────────────────────────────────────────
 
-# cell key → (order 1..8, emoji, label, mode). Order 1 = act first; the sequence
-# INTERLEAVES leveraged and non-leveraged cells by true priority. `mode` is the
-# SUGGESTION badge the cell nudges toward (delegate/schedule/drop) — never a
-# status the task lives in; "do" carries no nudge. Byte-parity with
-# lib/priority.ts CELL_META.
+# cell key → (order 1..7, emoji, label, mode). Order 1 = act first; the sequence
+# INTERLEAVES leveraged and non-leveraged levels by true priority. LABELS carry
+# only the priority CHARACTER (no action-words) — the action to take
+# (delegate/schedule/eliminate) is the `mode`, surfaced as a competing card
+# badge, never in the label. The two "not important to you" cases (urgent-only
+# and neither) fold into one Low Priority level → 7 levels, not 8. Byte-parity
+# with lib/priority.ts CELL_META.
 CELL_META: dict[str, tuple[int, str, str, str]] = {
-    "founder-fire": (1, "🔥", "Founder Fire / Schedule", "do"),
-    "delegate-important": (2, "🚨", "Delegate / Attend to ASAP", "delegate"),
-    "deep-work": (3, "📈", "High-Leverage Deep Work", "do"),
-    "schedule-important": (4, "🔁", "Important / Delegate / Schedule", "schedule"),
-    "quick-leverage": (5, "📤", "Quick Leverage Win / Schedule", "do"),
-    "delegate-urgent": (6, "🚨", "Eliminate / Ignore / Delegate ASAP", "drop"),
-    "leverage-bet": (7, "🧪", "Leverage Bet / Optional", "do"),
-    "eliminate": (8, "🗑", "Eliminate / Ignore", "drop"),
+    "critical": (1, "🔥", "Critical", "do"),
+    "urgent": (2, "🚨", "Urgent", "delegate"),
+    "high-leverage": (3, "📈", "High-Leverage", "do"),
+    "important": (4, "❗", "Important", "schedule"),
+    "quick-leverage": (5, "📤", "Quick Leverage Win", "do"),
+    "speculative-bet": (6, "🧪", "Speculative Bet", "do"),
+    "low-priority": (7, "🗑", "Low Priority", "drop"),
 }
 
 CELLS_IN_ORDER: list[str] = sorted(CELL_META, key=lambda c: CELL_META[c][0])
@@ -71,19 +72,18 @@ def cell_for_inputs(inp: PriorityInputs) -> str:
     """The user's Notion formula, verbatim, as a pure function of the 3 bools."""
     if inp.leveraged:
         if inp.important and inp.urgent:
-            return "founder-fire"        # order 1
+            return "critical"            # order 1
         if inp.important and not inp.urgent:
-            return "deep-work"           # order 3
+            return "high-leverage"       # order 3
         if not inp.important and inp.urgent:
             return "quick-leverage"      # order 5
-        return "leverage-bet"            # order 7
+        return "speculative-bet"         # order 6
     if inp.important and inp.urgent:
-        return "delegate-important"      # order 2
+        return "urgent"                  # order 2
     if inp.important and not inp.urgent:
-        return "schedule-important"      # order 4
-    if not inp.important and inp.urgent:
-        return "delegate-urgent"         # order 6
-    return "eliminate"                   # order 8
+        return "important"               # order 4
+    # Not important to you — urgent-only OR neither → one Low Priority level.
+    return "low-priority"                # order 7
 
 
 def priority_inputs(

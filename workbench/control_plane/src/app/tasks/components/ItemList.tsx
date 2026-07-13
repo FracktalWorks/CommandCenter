@@ -118,9 +118,10 @@ export function ItemList() {
     () => itemsForView(items, view, context, sourceFilter),
     [items, view, context, sourceFilter],
   );
-  // The Priority view is a RANKED LIST (Founder Fire → Eliminate by matrix
-  // rank), not status-like cell buckets — the cell shows as a badge per card.
-  // It forces the priority sort; every other view honours the toolbar sort.
+  // The Priority view is GROUPED by priority level (Critical → Low Priority
+  // section headers, ranked 1→7 by LensGroupedList). It forces the priority
+  // sort so within each section tasks are rank-ordered; every other view honours
+  // the toolbar sort.
   const visible = useMemo(() => {
     const effectiveSort =
       view === "priority" ? ({ field: "priority", dir: "asc" } as const) : sort;
@@ -159,9 +160,9 @@ export function ItemList() {
   const grouped = view === "next";
   // The toolbar "lens": an explicit group-by slices a view into labelled
   // sections via LensGroupedList. "" = default (status axis on Next Actions,
-  // flat elsewhere). The Priority view is a flat RANKED list (no cell buckets),
-  // so it does NOT use a lens — the toolbar group-by only applies elsewhere.
-  const lens: GroupBy | "" = view === "priority" ? "" : groupByChoice;
+  // flat elsewhere). The Priority view always groups by priority LEVEL (the
+  // 7-level matrix), ignoring the toolbar group-by; elsewhere the toolbar wins.
+  const lens: GroupBy | "" = view === "priority" ? "priority" : groupByChoice;
   const useLens = lens !== "" && lens !== "none" && !(boardable && mode === "board");
   // Bulk multi-select (archive / restore / delete) is offered on the flat-list
   // views — where a "done pile" or backlog builds up. Not on the inbox (its own

@@ -3,10 +3,10 @@
 import { useMemo, useState } from "react";
 import { Battery, BatteryLow, BatteryMedium, Clock, Tag, Zap } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
-import { GtdItem, Energy } from "../lib/types";
+import { Energy } from "../lib/types";
 import { priorityRank } from "../lib/priority";
+import { groupItems } from "../lib/ordering";
 import { TaskCard } from "./TaskCard";
-import { PriorityBadge } from "./PriorityControls";
 
 // The GTD "Engage" surface — "what can I do right NOW?" — energy-first (the
 // user's stated priority). You pick your current energy; it shows the do-able
@@ -58,7 +58,7 @@ export function EngageView() {
       if (context && i.context !== context) return false;
       return true;
     });
-    // Rank by the matrix (Founder Fire → …), then by due date within a tie.
+    // Rank by the matrix (Critical → …), then by due date within a tie.
     return rows.sort((a, b) => {
       const pr =
         priorityRank(a, urgentWindowHours) - priorityRank(b, urgentWindowHours);
@@ -66,6 +66,14 @@ export function EngageView() {
       return (a.dueAt ?? "￿").localeCompare(b.dueAt ?? "￿");
     });
   }, [base, energy, maxMins, context, urgentWindowHours]);
+
+  // Grouped by priority level (Critical → Low Priority) so the pickable set
+  // reads as ranked buckets, matching the Priority view. Sections come back in
+  // rank order; the header carries the level, so cards don't repeat it.
+  const groups = useMemo(
+    () => groupItems(matched, "priority", urgentWindowHours),
+    [matched, urgentWindowHours],
+  );
 
   return (
     <div className="flex h-full flex-col">
@@ -157,24 +165,24 @@ export function EngageView() {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-          {matched.map((item) => (
-            <EngageRow key={item.id} item={item} windowHours={urgentWindowHours} />
+          {groups.map((g) => (
+            <section key={g.key}>
+              <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-card/95 px-3 py-1.5 backdrop-blur">
+                {g.emoji && <span aria-hidden>{g.emoji}</span>}
+                <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-foreground">
+                  {g.label}
+                </span>
+                <span className="shrink-0 rounded-full bg-background/60 px-1.5 py-0.5 text-[10px] font-semibold text-muted-foreground">
+                  {g.items.length}
+                </span>
+              </div>
+              {g.items.map((item) => (
+                <TaskCard key={item.id} item={item} variant="row" />
+              ))}
+            </section>
           ))}
         </div>
       )}
-    </div>
-  );
-}
-
-// A row that pairs the task with its single priority badge — here the matrix
-// cell IS the relevant signal (you're picking by importance), so we show it.
-function EngageRow({ item, windowHours }: { item: GtdItem; windowHours: number }) {
-  return (
-    <div className="flex items-center gap-2 border-b border-border pr-3.5">
-      <div className="min-w-0 flex-1">
-        <TaskCard item={item} variant="row" />
-      </div>
-      <PriorityBadge item={item} urgentWindowHours={windowHours} showLabel={false} />
     </div>
   );
 }

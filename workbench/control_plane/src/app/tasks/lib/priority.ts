@@ -52,55 +52,59 @@ export function isNewlyUrgent(
   return due > now && due <= now + windowHours * HOUR_MS; // close, not overdue
 }
 
-// ── The 8 cells (the user's Notion formula, verbatim) ───────────────────────
+// ── The 7 priority levels ────────────────────────────────────────────────────
+//
+// LABELS describe the priority CHARACTER of a task (how important / leveraged /
+// urgent it is). The action to take about it — delegate / schedule / eliminate —
+// is NOT in the label; it surfaces separately as the competing card badge (see
+// SUGGESTION_BADGE). Removing the action-words collapses the two "eliminate"
+// cases (urgent-but-not-important AND neither) into a single "Low Priority"
+// level, so there are 7 levels, not 8.
 
 export type PriorityCell =
-  | "founder-fire" // 1. ❗⏰⚖️  Important + Urgent + Leveraged
-  | "deep-work" // 2. ❗⚖️   Important + Leveraged, not Urgent
-  | "quick-leverage" // 3. ⏰⚖️   Urgent + Leveraged, not Important
-  | "delegate-important" // 4. ❗⏰   Important + Urgent, not Leveraged
-  | "schedule-important" // 5. ❗    Important, not Urgent, not Leveraged
-  | "delegate-urgent" // 6. ⏰    Urgent, not Important, not Leveraged
-  | "leverage-bet" // 7. ⚖️    Leveraged only
-  | "eliminate"; // 8.        none of the three
+  | "critical" // 1. ❗⏰⚖️  Important + Urgent + Leveraged
+  | "urgent" // 2. ❗⏰   Important + Urgent, not Leveraged
+  | "high-leverage" // 3. ❗⚖️   Important + Leveraged, not Urgent
+  | "important" // 4. ❗    Important, not Urgent, not Leveraged
+  | "quick-leverage" // 5. ⏰⚖️   Urgent + Leveraged, not Important
+  | "speculative-bet" // 6. ⚖️    Leveraged only
+  | "low-priority"; // 7. ⏰ only OR none — not important to you
 
 export interface CellMeta {
   cell: PriorityCell;
-  /** 1..8 — the user's own numbering / rank order (1 = act first). Interleaves
-   *  leveraged and non-leveraged cells by TRUE priority (an important+urgent
-   *  fire outranks leveraged-but-not-urgent deep work). */
+  /** 1..7 — rank order (1 = act first). Interleaves leveraged and non-leveraged
+   *  levels by TRUE priority (an important+urgent fire outranks leveraged-but-
+   *  not-urgent high-leverage work). */
   order: number;
   emoji: string;
   label: string;
-  /** which action SUGGESTION this cell nudges toward. NEVER a status the task
-   *  lives in — it surfaces as a competing badge on the card. */
+  /** which action SUGGESTION this level nudges toward — surfaced as a competing
+   *  badge, NEVER a status the task lives in, and NEVER part of the label. */
   mode: ActionMode;
 }
 
-/** do = my deep/leverage work (no nudge) · delegate = hand off · schedule =
- *  calendar it · drop = eliminate/ignore first (then maybe delegate). All of
+/** do = my leverage/important work (no nudge) · delegate = hand off · schedule =
+ *  calendar it · drop = eliminate/ignore (or delegate if it must happen). All of
  *  delegate/schedule/drop are SUGGESTIONS surfaced as card badges, never a
- *  forced status change. */
+ *  forced status change and never in the label. */
 export type ActionMode = "do" | "delegate" | "schedule" | "drop";
 
-// The user's revised Notion formula (order + labels verbatim). The `order` is
-// their priority sequence 1→8; `mode` is the badge the cell nudges toward.
-//   1 Founder Fire (do) · 2 Important+Urgent (delegate/attend) ·
-//   3 Deep Work (do) · 4 Important (schedule/delegate) ·
-//   5 Quick Leverage (do) · 6 Urgent-only (eliminate-first) ·
-//   7 Leverage Bet (do, optional) · 8 none (eliminate)
+// Labels are the priority CHARACTER only (no action-words). `order` is the rank
+// 1→7; `mode` is the badge the level nudges toward.
+//   1 Critical (do) · 2 Urgent (delegate) · 3 High-Leverage (do) ·
+//   4 Important (schedule) · 5 Quick Leverage Win (do) ·
+//   6 Speculative Bet (do) · 7 Low Priority (eliminate/delegate)
 export const CELL_META: Record<PriorityCell, CellMeta> = {
-  "founder-fire": { cell: "founder-fire", order: 1, emoji: "🔥", label: "Founder Fire / Schedule", mode: "do" },
-  "delegate-important": { cell: "delegate-important", order: 2, emoji: "🚨", label: "Delegate / Attend to ASAP", mode: "delegate" },
-  "deep-work": { cell: "deep-work", order: 3, emoji: "📈", label: "High-Leverage Deep Work", mode: "do" },
-  "schedule-important": { cell: "schedule-important", order: 4, emoji: "🔁", label: "Important / Delegate / Schedule", mode: "schedule" },
-  "quick-leverage": { cell: "quick-leverage", order: 5, emoji: "📤", label: "Quick Leverage Win / Schedule", mode: "do" },
-  "delegate-urgent": { cell: "delegate-urgent", order: 6, emoji: "🚨", label: "Eliminate / Ignore / Delegate ASAP", mode: "drop" },
-  "leverage-bet": { cell: "leverage-bet", order: 7, emoji: "🧪", label: "Leverage Bet / Optional", mode: "do" },
-  eliminate: { cell: "eliminate", order: 8, emoji: "🗑", label: "Eliminate / Ignore", mode: "drop" },
+  critical: { cell: "critical", order: 1, emoji: "🔥", label: "Critical", mode: "do" },
+  urgent: { cell: "urgent", order: 2, emoji: "🚨", label: "Urgent", mode: "delegate" },
+  "high-leverage": { cell: "high-leverage", order: 3, emoji: "📈", label: "High-Leverage", mode: "do" },
+  important: { cell: "important", order: 4, emoji: "❗", label: "Important", mode: "schedule" },
+  "quick-leverage": { cell: "quick-leverage", order: 5, emoji: "📤", label: "Quick Leverage Win", mode: "do" },
+  "speculative-bet": { cell: "speculative-bet", order: 6, emoji: "🧪", label: "Speculative Bet", mode: "do" },
+  "low-priority": { cell: "low-priority", order: 7, emoji: "🗑", label: "Low Priority", mode: "drop" },
 };
 
-/** The 8 cells in the user's rank order (1 → 8). */
+/** The 7 levels in rank order (1 → 7). */
 export const CELLS_IN_ORDER: PriorityCell[] = (
   Object.values(CELL_META) as CellMeta[]
 )
@@ -128,18 +132,20 @@ export function priorityInputs(
   };
 }
 
-/** The user's Notion formula, verbatim, as a pure function of the 3 booleans. */
+/** The priority level as a pure function of the 3 booleans (7 levels: the two
+ *  "not important to you" cases — urgent-only and neither — both fold into
+ *  low-priority). */
 export function cellForInputs({ important, urgent, leveraged }: PriorityInputs): PriorityCell {
   if (leveraged) {
-    if (important && urgent) return "founder-fire"; // 1
-    if (important && !urgent) return "deep-work"; // 2
-    if (!important && urgent) return "quick-leverage"; // 3
-    return "leverage-bet"; // 7
+    if (important && urgent) return "critical"; // 1
+    if (important && !urgent) return "high-leverage"; // 3
+    if (!important && urgent) return "quick-leverage"; // 5
+    return "speculative-bet"; // 6
   }
-  if (important && urgent) return "delegate-important"; // 4
-  if (important && !urgent) return "schedule-important"; // 5
-  if (!important && urgent) return "delegate-urgent"; // 6
-  return "eliminate"; // 8
+  if (important && urgent) return "urgent"; // 2
+  if (important && !urgent) return "important"; // 4
+  // Not important to you — urgent-only OR neither → one Low Priority level.
+  return "low-priority"; // 7
 }
 
 /** The priority cell for a task (inputs resolved + formula applied). */
@@ -207,15 +213,15 @@ export const SUGGESTION_BADGE: Record<
   },
   schedule: {
     emoji: "🔁",
-    label: "Schedule / delegate?",
+    label: "Schedule?",
     prompt: "Important but not urgent — put it on the calendar or delegate it.",
   },
-  // Cell 6 (urgent, not important) + cell 8 (neither): eliminate-first — is this
-  // even worth doing? If it must happen, hand it off.
+  // Low Priority (urgent-only OR neither): not important to you — kill it, or
+  // hand it off if it genuinely has to happen.
   drop: {
     emoji: "🗑",
     label: "Eliminate?",
-    prompt: "Not important to you — eliminate or ignore it, or delegate it ASAP.",
+    prompt: "Not important to you — eliminate it, or delegate it if it must happen.",
   },
 };
 

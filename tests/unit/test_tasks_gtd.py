@@ -587,24 +587,26 @@ def test_bulk_archive_is_a_local_overlay():
 # ---------------------------------------------------------------------------
 
 
-def test_priority_formula_matches_the_notion_matrix_all_8_cells():
-    """The 3 booleans → cell mapping must be the user's Notion formula verbatim,
-    for every one of the 8 combinations."""
+def test_priority_formula_maps_all_8_input_combos_to_7_levels():
+    """The 3 booleans → level mapping, for all 8 combinations. The two "not
+    important to you" cases (urgent-only AND neither) both fold into
+    low-priority, so 8 input combos resolve to 7 distinct levels."""
     from gateway.routes.tasks.priority import PriorityInputs, cell_for_inputs
 
     I, U, L = True, True, True  # noqa: E741 (mirror the flag names)
     n = False
     cases = {
-        # leveraged branch (order 1/3/5/7 in the revised sequence)
-        (I, U, L): "founder-fire",
-        (I, n, L): "deep-work",
+        # leveraged branch (rank 1/3/5/6)
+        (I, U, L): "critical",
+        (I, n, L): "high-leverage",
         (n, U, L): "quick-leverage",
-        (n, n, L): "leverage-bet",
-        # non-leveraged branch (order 2/4/6/8)
-        (I, U, n): "delegate-important",
-        (I, n, n): "schedule-important",
-        (n, U, n): "delegate-urgent",
-        (n, n, n): "eliminate",
+        (n, n, L): "speculative-bet",
+        # non-leveraged branch (rank 2/4/7)
+        (I, U, n): "urgent",
+        (I, n, n): "important",
+        # the merge: urgent-only AND neither → one low-priority level.
+        (n, U, n): "low-priority",
+        (n, n, n): "low-priority",
     }
     for (important, urgent, leveraged), expected in cases.items():
         got = cell_for_inputs(PriorityInputs(
@@ -612,42 +614,52 @@ def test_priority_formula_matches_the_notion_matrix_all_8_cells():
         assert got == expected, f"{(important, urgent, leveraged)} → {got}"
 
 
-def test_priority_cells_carry_the_right_action_mode():
-    """Cells collapse into do / delegate / schedule / drop — the SUGGESTION each
-    cell nudges toward (surfaced as a competing card badge, never a status)."""
+def test_priority_levels_carry_the_right_action_mode():
+    """Each level nudges toward do / delegate / schedule / drop — the SUGGESTION
+    (a competing card badge, never a status, never in the label)."""
     from gateway.routes.tasks.priority import CELL_META
 
     mode = {c: CELL_META[c][3] for c in CELL_META}
     # "do" = genuinely mine, no nudge.
-    assert mode["founder-fire"] == "do"
-    assert mode["deep-work"] == "do"
+    assert mode["critical"] == "do"
+    assert mode["high-leverage"] == "do"
     assert mode["quick-leverage"] == "do"
-    assert mode["leverage-bet"] == "do"
-    # Important+urgent (not leveraged) → delegate/attend nudge.
-    assert mode["delegate-important"] == "delegate"
+    assert mode["speculative-bet"] == "do"
+    # Important+urgent → delegate/attend nudge.
+    assert mode["urgent"] == "delegate"
     # Important-only → schedule (or delegate) nudge.
-    assert mode["schedule-important"] == "schedule"
-    # Urgent-but-not-important AND neither → eliminate-first (drop). This is the
-    # user's revision: urgent-only is no longer a "delegate" — it's challenged.
-    assert mode["delegate-urgent"] == "drop"
-    assert mode["eliminate"] == "drop"
+    assert mode["important"] == "schedule"
+    # Low priority (urgent-only or neither) → eliminate (or delegate if it must
+    # happen).
+    assert mode["low-priority"] == "drop"
 
 
-def test_priority_cell_order_matches_the_revised_sequence():
-    """The user's revised 1→8 priority sequence interleaves leveraged and
-    non-leveraged cells (an important+urgent fire outranks leveraged deep work).
-    This ordering drives the ranked Priority view + priority sort."""
+def test_priority_labels_have_no_action_words():
+    """Labels are the priority CHARACTER only — the action (delegate/schedule/
+    eliminate) lives in the badge, not the label. Guards the reframe so a future
+    edit can't sneak an action-word back into a level name."""
+    from gateway.routes.tasks.priority import CELL_META
+
+    banned = ("delegate", "schedule", "eliminate", "ignore")
+    for cell, (_order, _emoji, label, _mode) in CELL_META.items():
+        low = label.lower()
+        assert not any(w in low for w in banned), f"{cell}: {label!r}"
+
+
+def test_priority_level_order_is_the_7_level_sequence():
+    """The revised 1→7 sequence interleaves leveraged and non-leveraged levels
+    (an important+urgent fire outranks leveraged high-leverage work). Drives the
+    grouped Priority/Engage views + the priority sort."""
     from gateway.routes.tasks.priority import CELLS_IN_ORDER
 
     assert CELLS_IN_ORDER == [
-        "founder-fire",         # 1
-        "delegate-important",   # 2  (important + urgent)
-        "deep-work",            # 3
-        "schedule-important",   # 4  (important)
-        "quick-leverage",       # 5
-        "delegate-urgent",      # 6  (urgent only → eliminate-first)
-        "leverage-bet",         # 7
-        "eliminate",            # 8
+        "critical",         # 1
+        "urgent",           # 2  (important + urgent)
+        "high-leverage",    # 3
+        "important",        # 4
+        "quick-leverage",   # 5
+        "speculative-bet",  # 6
+        "low-priority",     # 7  (urgent-only OR neither)
     ]
 
 
@@ -668,8 +680,8 @@ def test_urgency_is_derived_overdue_or_within_window():
 
 def test_priority_cell_end_to_end_uses_derived_urgency():
     """priority_cell must combine the manual flags with derived urgency: an
-    important+leveraged task with a deadline 6h out is a Founder Fire; move the
-    deadline out a week and it becomes Deep Work."""
+    important+leveraged task with a deadline 6h out is Critical; move the
+    deadline out a week and it becomes High-Leverage."""
     from datetime import UTC, datetime, timedelta
 
     from gateway.routes.tasks.priority import priority_cell
@@ -678,11 +690,11 @@ def test_priority_cell_end_to_end_uses_derived_urgency():
     soon = now + timedelta(hours=6)
     later = now + timedelta(days=7)
     assert priority_cell(important=True, leveraged=True,
-                         due_at=soon, now=now) == "founder-fire"
+                         due_at=soon, now=now) == "critical"
     assert priority_cell(important=True, leveraged=True,
-                         due_at=later, now=now) == "deep-work"
+                         due_at=later, now=now) == "high-leverage"
     assert priority_cell(important=True, leveraged=True,
-                         due_at=None, now=now) == "deep-work"   # no date → not urgent
+                         due_at=None, now=now) == "high-leverage"  # no date → not urgent
 
 
 def test_priority_flags_are_patchable_and_local_only():

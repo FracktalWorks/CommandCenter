@@ -52,7 +52,7 @@ import { ClarifyPanel } from "./ClarifyPanel";
 import { ProjectTasksView } from "./ProjectTasksView";
 import { AiTaskActions } from "./AiTaskActions";
 import { DelegateDialog } from "./DelegateDialog";
-import { WeightToggles, PriorityBadge } from "./PriorityControls";
+import { WeightToggles, PriorityBadge, SuggestionBadge } from "./PriorityControls";
 import { isUntagged } from "../lib/priority";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
@@ -451,6 +451,12 @@ export function TaskDetail({
                 urgentWindowHours={urgentWindowHours}
                 onChange={(w) => updateItem(item.id, w)}
               />
+            </div>
+            {/* The competing action nudge (delegate / schedule / eliminate) —
+                the same suggestion shown on the card, here in full. A suggestion,
+                not a status; dismiss with its × ("keep mine"). */}
+            <div className="mt-2 empty:hidden">
+              <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} />
             </div>
             {isUntagged(item) && (
               <p className="mt-1.5 text-[11px] text-muted-foreground/70">

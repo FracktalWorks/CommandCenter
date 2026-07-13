@@ -66,25 +66,36 @@ export type PriorityCell =
 
 export interface CellMeta {
   cell: PriorityCell;
-  /** 1..8 — the user's own numbering / rank order (1 = act first). */
+  /** 1..8 — the user's own numbering / rank order (1 = act first). Interleaves
+   *  leveraged and non-leveraged cells by TRUE priority (an important+urgent
+   *  fire outranks leveraged-but-not-urgent deep work). */
   order: number;
   emoji: string;
   label: string;
-  /** which action mode this cell collapses into. */
+  /** which action SUGGESTION this cell nudges toward. NEVER a status the task
+   *  lives in — it surfaces as a competing badge on the card. */
   mode: ActionMode;
 }
 
-/** do = my deep/leverage work · delegate = hand off · schedule = calendar it ·
- *  drop = eliminate. Delegate/schedule are SUGGESTED, never auto-applied. */
+/** do = my deep/leverage work (no nudge) · delegate = hand off · schedule =
+ *  calendar it · drop = eliminate/ignore first (then maybe delegate). All of
+ *  delegate/schedule/drop are SUGGESTIONS surfaced as card badges, never a
+ *  forced status change. */
 export type ActionMode = "do" | "delegate" | "schedule" | "drop";
 
+// The user's revised Notion formula (order + labels verbatim). The `order` is
+// their priority sequence 1→8; `mode` is the badge the cell nudges toward.
+//   1 Founder Fire (do) · 2 Important+Urgent (delegate/attend) ·
+//   3 Deep Work (do) · 4 Important (schedule/delegate) ·
+//   5 Quick Leverage (do) · 6 Urgent-only (eliminate-first) ·
+//   7 Leverage Bet (do, optional) · 8 none (eliminate)
 export const CELL_META: Record<PriorityCell, CellMeta> = {
-  "founder-fire": { cell: "founder-fire", order: 1, emoji: "🔥", label: "Founder Fire", mode: "do" },
-  "deep-work": { cell: "deep-work", order: 2, emoji: "📈", label: "High-Leverage Deep Work", mode: "do" },
-  "quick-leverage": { cell: "quick-leverage", order: 3, emoji: "📤", label: "Quick Leverage Win", mode: "do" },
-  "delegate-important": { cell: "delegate-important", order: 4, emoji: "🚨", label: "Delegate / Schedule ASAP", mode: "delegate" },
-  "schedule-important": { cell: "schedule-important", order: 5, emoji: "🔁", label: "Delegate / Schedule", mode: "schedule" },
-  "delegate-urgent": { cell: "delegate-urgent", order: 6, emoji: "🚨", label: "Delegate ASAP", mode: "delegate" },
+  "founder-fire": { cell: "founder-fire", order: 1, emoji: "🔥", label: "Founder Fire / Schedule", mode: "do" },
+  "delegate-important": { cell: "delegate-important", order: 2, emoji: "🚨", label: "Delegate / Attend to ASAP", mode: "delegate" },
+  "deep-work": { cell: "deep-work", order: 3, emoji: "📈", label: "High-Leverage Deep Work", mode: "do" },
+  "schedule-important": { cell: "schedule-important", order: 4, emoji: "🔁", label: "Important / Delegate / Schedule", mode: "schedule" },
+  "quick-leverage": { cell: "quick-leverage", order: 5, emoji: "📤", label: "Quick Leverage Win / Schedule", mode: "do" },
+  "delegate-urgent": { cell: "delegate-urgent", order: 6, emoji: "🚨", label: "Eliminate / Ignore / Delegate ASAP", mode: "drop" },
   "leverage-bet": { cell: "leverage-bet", order: 7, emoji: "🧪", label: "Leverage Bet / Optional", mode: "do" },
   eliminate: { cell: "eliminate", order: 8, emoji: "🗑", label: "Eliminate / Ignore", mode: "drop" },
 };
@@ -167,19 +178,53 @@ export function isUntagged(
   return !item.important && !item.leveraged;
 }
 
-// ── Action-mode suggestion (the delegate/schedule hint on Next Actions) ──────
+// ── Action-mode suggestion (the competing badge on a task card) ──────────────
 
 export interface ModeSuggestion {
   mode: ActionMode;
   cell: PriorityCell;
 }
 
-/** Should this NEXT task carry a delegate/schedule/drop *suggestion*?
+/** Presentation for the competing suggestion BADGE. A task's status is
+ *  untouched; this badge just prompts the user to reconsider — delegate it,
+ *  schedule it, or eliminate/ignore it (drop). "Delegate" is never a status. */
+export interface SuggestionBadge {
+  emoji: string;
+  /** short chip label */
+  label: string;
+  /** the fuller prompt (tooltip / expanded) */
+  prompt: string;
+}
+
+export const SUGGESTION_BADGE: Record<
+  Exclude<ActionMode, "do">,
+  SuggestionBadge
+> = {
+  delegate: {
+    emoji: "🚨",
+    label: "Delegate?",
+    prompt: "Important + urgent — attend to it now or hand it off.",
+  },
+  schedule: {
+    emoji: "🔁",
+    label: "Schedule / delegate?",
+    prompt: "Important but not urgent — put it on the calendar or delegate it.",
+  },
+  // Cell 6 (urgent, not important) + cell 8 (neither): eliminate-first — is this
+  // even worth doing? If it must happen, hand it off.
+  drop: {
+    emoji: "🗑",
+    label: "Eliminate?",
+    prompt: "Not important to you — eliminate or ignore it, or delegate it ASAP.",
+  },
+};
+
+/** Should this NEXT task carry a delegate/schedule/eliminate *suggestion badge*?
  *
  * Only for tasks that are still mine to act on (NEXT + mine), not already
  * delegated (WAITING) or calendared, and not dismissed (keptMine). Returns null
- * for "do" work and anything that shouldn't be nudged. This is the source of
- * the "⚡ To Delegate" / "📅 To Schedule" buckets inside My Next Actions. */
+ * for "do" work (genuinely yours) and anything that shouldn't be nudged. This is
+ * a SUGGESTION — a competing badge on the card — never a status change. */
 export function modeSuggestion(
   item: Pick<
     GtdItem,

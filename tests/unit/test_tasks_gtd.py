@@ -595,16 +595,16 @@ def test_priority_formula_matches_the_notion_matrix_all_8_cells():
     I, U, L = True, True, True  # noqa: E741 (mirror the flag names)
     n = False
     cases = {
-        # leveraged branch
-        (I, U, L): "founder-fire",       # 1
-        (I, n, L): "deep-work",          # 2
-        (n, U, L): "quick-leverage",     # 3
-        (n, n, L): "leverage-bet",       # 7
-        # non-leveraged branch
-        (I, U, n): "delegate-important",  # 4
-        (I, n, n): "schedule-important",  # 5
-        (n, U, n): "delegate-urgent",     # 6
-        (n, n, n): "eliminate",           # 8
+        # leveraged branch (order 1/3/5/7 in the revised sequence)
+        (I, U, L): "founder-fire",
+        (I, n, L): "deep-work",
+        (n, U, L): "quick-leverage",
+        (n, n, L): "leverage-bet",
+        # non-leveraged branch (order 2/4/6/8)
+        (I, U, n): "delegate-important",
+        (I, n, n): "schedule-important",
+        (n, U, n): "delegate-urgent",
+        (n, n, n): "eliminate",
     }
     for (important, urgent, leveraged), expected in cases.items():
         got = cell_for_inputs(PriorityInputs(
@@ -613,19 +613,42 @@ def test_priority_formula_matches_the_notion_matrix_all_8_cells():
 
 
 def test_priority_cells_carry_the_right_action_mode():
-    """Cells collapse into do / delegate / schedule / drop — the action-mode
-    slicing that drives the Next Actions buckets."""
+    """Cells collapse into do / delegate / schedule / drop — the SUGGESTION each
+    cell nudges toward (surfaced as a competing card badge, never a status)."""
     from gateway.routes.tasks.priority import CELL_META
 
     mode = {c: CELL_META[c][3] for c in CELL_META}
+    # "do" = genuinely mine, no nudge.
     assert mode["founder-fire"] == "do"
     assert mode["deep-work"] == "do"
     assert mode["quick-leverage"] == "do"
     assert mode["leverage-bet"] == "do"
+    # Important+urgent (not leveraged) → delegate/attend nudge.
     assert mode["delegate-important"] == "delegate"
-    assert mode["delegate-urgent"] == "delegate"
+    # Important-only → schedule (or delegate) nudge.
     assert mode["schedule-important"] == "schedule"
+    # Urgent-but-not-important AND neither → eliminate-first (drop). This is the
+    # user's revision: urgent-only is no longer a "delegate" — it's challenged.
+    assert mode["delegate-urgent"] == "drop"
     assert mode["eliminate"] == "drop"
+
+
+def test_priority_cell_order_matches_the_revised_sequence():
+    """The user's revised 1→8 priority sequence interleaves leveraged and
+    non-leveraged cells (an important+urgent fire outranks leveraged deep work).
+    This ordering drives the ranked Priority view + priority sort."""
+    from gateway.routes.tasks.priority import CELLS_IN_ORDER
+
+    assert CELLS_IN_ORDER == [
+        "founder-fire",         # 1
+        "delegate-important",   # 2  (important + urgent)
+        "deep-work",            # 3
+        "schedule-important",   # 4  (important)
+        "quick-leverage",       # 5
+        "delegate-urgent",      # 6  (urgent only → eliminate-first)
+        "leverage-bet",         # 7
+        "eliminate",            # 8
+    ]
 
 
 def test_urgency_is_derived_overdue_or_within_window():

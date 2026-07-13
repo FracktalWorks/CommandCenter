@@ -14,6 +14,7 @@ import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
+import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -30,6 +31,7 @@ export function TaskCard({
   item,
   variant = "board",
   draggable = false,
+  showPriority = false,
   onDragStart,
   onDragEnd,
 }: {
@@ -37,11 +39,15 @@ export function TaskCard({
   /** "board" = full card (default); "row" = denser one-line-ish list row. */
   variant?: "board" | "row";
   draggable?: boolean;
+  /** Show the matrix-cell badge (the Priority view / ranked list). Off
+   *  elsewhere so a card carries at most the one relevant priority signal. */
+  showPriority?: boolean;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
 }) {
   const openFocus = useTaskStore((s) => s.openFocus);
   const projects = useTaskStore((s) => s.projects);
+  const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
     : undefined;
@@ -101,17 +107,39 @@ export function TaskCard({
           <Mail className="h-3 w-3" />
         </span>
       )}
+      {/* Priority signal — ONE per card. The Priority/ranked view shows the
+          matrix-cell badge; everywhere else the competing action NUDGE
+          (delegate / schedule / eliminate) — a suggestion, not a status,
+          dismissible via its × (keep mine). */}
+      {showPriority ? (
+        <PriorityBadge
+          item={item}
+          urgentWindowHours={urgentWindowHours}
+          showLabel={false}
+        />
+      ) : (
+        <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} compact />
+      )}
     </>
   );
 
   if (variant === "row") {
+    // A div (not a <button>) so the SuggestionBadge's own buttons are valid
+    // nested interactive elements; Enter/Space + role keep it keyboard-usable.
     return (
-      <button
-        type="button"
+      <div
+        role="button"
+        tabIndex={0}
         onClick={() => openFocus(item.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openFocus(item.id);
+          }
+        }}
         // Mobile: two-line row (full-width title, chips wrap underneath) so
         // titles aren't crushed to a few characters; sm:+ single line as before.
-        className="tech-transition group flex w-full flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
+        className="tech-transition group flex w-full cursor-pointer flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
       >
         <span className="min-w-0 flex-1 truncate text-sm text-foreground">
           {item.title}
@@ -127,7 +155,7 @@ export function TaskCard({
           {item.assignee && <Avatar name={item.assignee.name} />}
           <SourceBadge source={item.source} provider={item.provider} size="xs" />
         </div>
-      </button>
+      </div>
     );
   }
 

@@ -19,7 +19,6 @@ import {
   type ConnectedProvider,
 } from "./mockData";
 import { isCalendarItem, isTickled } from "./utils";
-import { modeSuggestion } from "./priority";
 import {
   DEFAULT_FILTERS,
   DEFAULT_SORT,
@@ -410,9 +409,6 @@ interface TaskState {
   selectedView: ViewKey;
   /** when drilled into a single @context under Next Actions */
   selectedContext: string | null;
-  /** when drilled into a suggested-action-mode bucket under Next Actions
-   *  ("delegate" / "schedule"). Mutually exclusive with selectedContext. */
-  selectedMode: "delegate" | "schedule" | null;
   selectedItemId: string | null;
   selectedProjectId: string | null;
   /** A task opened FULL-PAGE (focused overlay) — the ClickUp/Linear-style
@@ -457,9 +453,6 @@ interface TaskState {
   // actions
   selectView: (view: ViewKey) => void;
   selectContext: (context: string | null) => void;
-  /** Drill Next Actions into a suggested-action-mode bucket (delegate/schedule),
-   *  or null to clear back to all Next Actions. */
-  selectMode: (mode: "delegate" | "schedule" | null) => void;
   selectItem: (id: string | null) => void;
   selectProject: (id: string | null) => void;
   /** Capture a new inbox item (frictionless quick-add). */
@@ -672,7 +665,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   selectedView: "inbox",
   selectedContext: null,
-  selectedMode: null,
   focusedItemId: null,
   openFocus: (id) => set({ focusedItemId: id, selectedItemId: id }),
   closeFocus: () => set({ focusedItemId: null }),
@@ -700,7 +692,6 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     set({
       selectedView: view,
       selectedContext: null,
-      selectedMode: null,
       selectedItemId: null,
       selectedProjectId: null,
       // A search/filter is scoped to the view you set it in — reset on nav so a
@@ -710,11 +701,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   selectContext: (context) =>
     set({ selectedView: "next", selectedContext: context,
-          selectedMode: null, selectedItemId: null }),
-
-  selectMode: (mode) =>
-    set({ selectedView: "next", selectedMode: mode,
-          selectedContext: null, selectedItemId: null }),
+          selectedItemId: null }),
 
   selectItem: (id) => set({ selectedItemId: id }),
 
@@ -1926,25 +1913,6 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
     if (isCalendarItem(i)) c.calendar++;
   }
   return c;
-}
-
-/** Count of NEXT items the matrix SUGGESTS delegating / scheduling (the two
- *  hint buckets under My Next Actions). Uses modeSuggestion so it matches
- *  exactly what each bucket's filtered list shows (respects keptMine dismissal).
- *  windowHours comes from settings so urgency-driven modes stay in sync. */
-export function modeSuggestionCounts(
-  items: GtdItem[],
-  windowHours?: number,
-): { delegate: number; schedule: number } {
-  let delegate = 0;
-  let schedule = 0;
-  for (const i of items) {
-    if (i.archivedAt) continue;
-    const s = modeSuggestion(i, windowHours);
-    if (s?.mode === "delegate") delegate++;
-    else if (s?.mode === "schedule") schedule++;
-  }
-  return { delegate, schedule };
 }
 
 /** Flatten every connected account's statuses into one ordered, de-duplicated

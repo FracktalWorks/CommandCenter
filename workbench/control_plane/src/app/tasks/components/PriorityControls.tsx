@@ -1,11 +1,13 @@
 "use client";
 
-import { AlertTriangle, Calendar, Gem, Hand, Zap } from "lucide-react";
+import { AlertTriangle, Calendar, Gem, Hand, Trash2, X, Zap } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
   CELL_META,
+  SUGGESTION_BADGE,
   isUrgent,
+  modeSuggestion,
   priorityCell,
   type ActionMode,
   type PriorityCell,
@@ -159,55 +161,72 @@ export function PriorityBadge({
   );
 }
 
-/** A thin suggestion bar shown above a card in the To-Delegate / To-Schedule
- *  buckets. States the suggested move (with the AI's assignee for a delegate),
- *  and offers Dismiss ("keep mine" → keptMine) so the hint stops nagging. The
- *  actual delegate/schedule action happens by opening the task (its detail has
- *  the assignee / due-date controls). Nothing here mutates the disposition. */
-export function ModeHintBar({
+const SUGGESTION_TONE: Record<Exclude<ActionMode, "do">, string> = {
+  delegate: "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  schedule: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  drop: "border-border bg-secondary/60 text-muted-foreground",
+};
+
+const SUGGESTION_ICON: Record<Exclude<ActionMode, "do">, typeof Hand> = {
+  delegate: Hand,
+  schedule: Calendar,
+  drop: Trash2,
+};
+
+/** The competing SUGGESTION badge on a task card. The matrix reads a task as
+ *  better delegated / scheduled / eliminated than done by you — so it nudges,
+ *  as a small badge that sits alongside the card, NEVER changing the task's
+ *  status. Clicking opens the task (where the real delegate/schedule/trash
+ *  controls live); the × dismisses the nudge ("keep mine" → keptMine). Renders
+ *  nothing for "do" work or a dismissed task. Delegate is not a status. */
+export function SuggestionBadge({
   item,
-  mode,
+  urgentWindowHours,
+  compact = false,
 }: {
   item: GtdItem;
-  mode: ActionMode;
+  urgentWindowHours?: number;
+  compact?: boolean;
 }) {
   const updateItem = useTaskStore((s) => s.updateItem);
   const openFocus = useTaskStore((s) => s.openFocus);
-  if (mode !== "delegate" && mode !== "schedule") return null;
-  const isDelegate = mode === "delegate";
-  const who = item.assignee?.name;
+  const sug = modeSuggestion(item, urgentWindowHours);
+  if (!sug || sug.mode === "do") return null;
+  const mode = sug.mode as Exclude<ActionMode, "do">;
+  const badge = SUGGESTION_BADGE[mode];
+  const Icon = SUGGESTION_ICON[mode];
+  // For a delegate nudge, name the AI's suggested owner when we have one.
+  const who = mode === "delegate" ? item.assignee?.name?.split(/\s+/)[0] : undefined;
+  const label = who ? `Delegate to ${who}?` : badge.label;
   return (
-    <div
+    <span
       className={[
-        "flex items-center gap-2 px-3.5 py-1 text-[11px]",
-        isDelegate
-          ? "bg-orange-500/[0.06] text-orange-600 dark:text-orange-400"
-          : "bg-amber-500/[0.06] text-amber-600 dark:text-amber-400",
+        "inline-flex items-center gap-1 rounded-full border font-medium",
+        compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
+        SUGGESTION_TONE[mode],
       ].join(" ")}
     >
-      {isDelegate ? <Hand className="h-3 w-3 shrink-0" /> : <Calendar className="h-3 w-3 shrink-0" />}
-      <span className="min-w-0 flex-1 truncate">
-        {isDelegate
-          ? who
-            ? `Consider delegating to ${who}`
-            : "Consider delegating this"
-          : "Consider scheduling this"}
-      </span>
       <button
         type="button"
         onClick={() => openFocus(item.id)}
-        className="tech-transition shrink-0 rounded px-1.5 py-0.5 font-medium hover:bg-black/5 dark:hover:bg-white/10"
+        title={badge.prompt}
+        className="tech-transition inline-flex items-center gap-1 hover:opacity-80"
       >
-        {isDelegate ? "Delegate" : "Schedule"}
+        <Icon className="h-3 w-3 shrink-0" aria-hidden />
+        {label}
       </button>
       <button
         type="button"
-        onClick={() => updateItem(item.id, { keptMine: true })}
+        onClick={(e) => {
+          e.stopPropagation();
+          updateItem(item.id, { keptMine: true });
+        }}
         title="Keep this one mine — stop suggesting"
-        className="tech-transition shrink-0 rounded px-1.5 py-0.5 text-muted-foreground hover:bg-black/5 hover:text-foreground dark:hover:bg-white/10"
+        aria-label="Dismiss suggestion — keep mine"
+        className="tech-transition -mr-0.5 shrink-0 rounded-full p-0.5 hover:bg-black/10 dark:hover:bg-white/15"
       >
-        Keep mine
+        <X className="h-2.5 w-2.5" />
       </button>
-    </div>
+    </span>
   );
 }

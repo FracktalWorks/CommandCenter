@@ -29,6 +29,7 @@ import {
 import {
   accountToProviderEntry,
   apiBulkDispose,
+  apiBulkArchive,
   apiArchiveItem,
   apiAddSubtasks,
   apiListSubtasks,
@@ -36,6 +37,8 @@ import {
   apiCaptureBatch,
   apiDeleteAccount,
   apiDeleteItem,
+  apiRestoreItem,
+  apiPurgeItem,
   apiOrganize,
   apiMergeInto,
   apiFileUnder,
@@ -69,6 +72,19 @@ import {
  *  happened, so a transient failure only means the next hydrate reconciles. */
 function sync(promise: Promise<unknown>): void {
   void promise.catch(() => {});
+}
+
+/** Finalize any soft delete still pending in a snapshot — purge the rows (and
+ *  propagate the ClickUp deletion). Called when a snapshot is superseded by a
+ *  new one so a rapid second delete can't orphan the first's purge. Returns the
+ *  same snapshot for convenient chaining; no-op if there's nothing pending. */
+function flushPendingPurge(
+  snap: UndoSnapshot | null,
+  backend: "live" | "demo",
+): void {
+  if (snap?.softDeletedIds?.length && backend === "live") {
+    sync(Promise.all(snap.softDeletedIds.map((id) => apiPurgeItem(id).catch(() => {}))));
+  }
 }
 
 /** Sentinel @context for tasks that have none yet — the "@no context" bucket
@@ -314,6 +330,16 @@ interface UndoSnapshot {
    *  (a new row/id) via capture, since delete is permanent — unlike a
    *  disposition change, which undo reverts in place via changedIds. */
   deletedItems?: GtdItem[];
+  /** Ids SOFT-DELETED by this change (the current delete path). While the undo
+   *  toast is up the rows are only tombstoned server-side, so Undo restores
+   *  them LOSSLESSLY (apiRestoreItem) — provider linkage/history intact. When
+   *  the toast dismisses without an undo, they're purged (apiPurgeItem), which
+   *  also propagates the deletion to ClickUp for synced tasks. */
+  softDeletedIds?: string[];
+  /** Ids (bulk-)ARCHIVED or -restored by this change; undo flips them back
+   *  upstream. archivedTo is the direction that was applied (true = archived). */
+  archivedIds?: string[];
+  archivedTo?: boolean;
 }
 
 /** Friendly past-tense label for a one-tap disposition (undo toast). */
@@ -431,13 +457,31 @@ interface TaskState {
   /** Archive (hide from active views) or un-archive a task — independent of
    *  DONE. Optimistic; the row moves to / from the Archive view. */
   archiveItem: (id: string, archived: boolean) => void;
+  /** Archive (or un-archive) many tasks at once (multi-select). Optimistic +
+   *  undoable; local overlay only (never touches the connected tool). */
+  bulkArchive: (ids: string[], archived: boolean) => void;
   /** Lazily pull archived tasks into the store (they're excluded from the
    *  normal hydrate) — called when the Archive view is opened. */
   loadArchive: () => Promise<void>;
-  /** PERMANENTLY delete an item (hard-remove the row, not a GTD "Trash"
-   *  disposition). Optimistic + undoable (undo re-creates it). */
+  /** Lazily pull DONE tasks into the store (excluded from the normal hydrate)
+   *  — called when the Done view is opened. */
+  loadDone: () => Promise<void>;
+  /** Ids awaiting a delete confirmation (null = no dialog open). The delete
+   *  becomes real only on confirmPendingDelete. */
+  pendingDeleteIds: string[] | null;
+  /** Request deletion of one or more items. Fresh inbox captures delete right
+   *  away (undo covers them); ClickUp-synced OR already-clarified tasks open an
+   *  "Are you sure?" confirm first (real consequences — the ClickUp task will be
+   *  deleted too once the undo window passes). */
+  requestDelete: (ids: string[]) => void;
+  /** Confirm the pending delete (the dialog's primary action). */
+  confirmPendingDelete: () => void;
+  /** Dismiss the confirm dialog without deleting. */
+  cancelPendingDelete: () => void;
+  /** Delete an item. SOFT delete (tombstone) → lossless Undo within the window,
+   *  then purge (+ ClickUp propagation for synced tasks) on dismiss. */
   deleteItem: (id: string) => void;
-  /** Permanently delete many items at once (multi-select). */
+  /** Delete many items at once (multi-select). Same soft-delete + undo model. */
   deleteItems: (ids: string[]) => void;
   /** Defer (tickler): hide from the active inbox until a date, then resurface. */
   deferItem: (id: string, dateIso: string) => void;
@@ -618,6 +662,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   workspacesModalOpen: false,
   processedThisSession: 0,
   undoSnapshot: null,
+  pendingDeleteIds: null,
 
   selectView: (view) =>
     set({
@@ -832,6 +877,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   closeWorkspaces: () => set({ workspacesModalOpen: false }),
 
   clarify: (id, decision) => {
+    flushPendingPurge(get().undoSnapshot, get().backend);
     set((s) => {
       const snapshot: UndoSnapshot = {
         items: s.items,
@@ -995,6 +1041,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }),
 
   quickDispose: (id, disposition) => {
+    flushPendingPurge(get().undoSnapshot, get().backend);
     set((s) => ({
       items: s.items.map((i) => (i.id === id ? disposeOne(i, disposition) : i)),
       processedThisSession: s.processedThisSession + 1,
@@ -1011,6 +1058,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   },
 
   bulkDispose: (ids, disposition) => {
+    flushPendingPurge(get().undoSnapshot, get().backend);
     set((s) => {
       const set_ = new Set(ids);
       const affected = s.items.filter(
@@ -1064,6 +1112,57 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  loadDone: async () => {
+    // DONE tasks are excluded from the "all" hydrate (so a big completed
+    // backlog can't swamp the board), so the Done view lazy-loads them the
+    // same way Archive does.
+    if (get().backend !== "live") return;
+    try {
+      const done = await fetchItems("done");
+      set((s) => {
+        const byId = new Map(s.items.map((i) => [i.id, i]));
+        for (const d of done) byId.set(d.id, d);
+        return { items: Array.from(byId.values()) };
+      });
+    } catch {
+      /* keep current state */
+    }
+  },
+
+  bulkArchive: (ids, archived) => {
+    const nowIso = new Date().toISOString();
+    const set_ = new Set(ids);
+    const affected = get().items.filter(
+      (i) => set_.has(i.id) && Boolean(i.archivedAt) !== archived,
+    );
+    if (!affected.length) return;
+    flushPendingPurge(get().undoSnapshot, get().backend);
+    set((s) => ({
+      items: s.items.map((i) =>
+        set_.has(i.id)
+          ? { ...i, archivedAt: archived ? nowIso : undefined, updatedAt: nowIso }
+          : i,
+      ),
+      focusedItemId:
+        archived && s.focusedItemId && set_.has(s.focusedItemId)
+          ? null
+          : s.focusedItemId,
+      undoSnapshot: {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label: `${archived ? "Archived" : "Restored"} ${affected.length} item${affected.length === 1 ? "" : "s"}`,
+        // Archive is a local overlay (not a disposition change and not a
+        // delete), so undo restores the snapshot locally + flips the flag back
+        // upstream via bulk-archive.
+        archivedIds: affected.map((i) => i.id),
+        archivedTo: archived,
+      },
+    }));
+    if (get().backend === "live") sync(apiBulkArchive(ids, archived));
+  },
+
   loadLocalHierarchy: async () => {
     if (get().backend !== "live") return;
     try {
@@ -1095,21 +1194,59 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     ]);
   },
 
+  requestDelete: (ids) => {
+    const items = get().items;
+    const targets = ids
+      .map((id) => items.find((i) => i.id === id))
+      .filter((t): t is GtdItem => !!t);
+    if (!targets.length) return;
+    // Confirm before deleting anything with real consequences: a ClickUp-synced
+    // task (its upstream counterpart gets deleted too) or an already-clarified
+    // task (it's real work, not a stray capture). Fresh inbox captures skip the
+    // dialog — undo is enough for fast triage.
+    const needsConfirm = targets.some(
+      (t) => t.source !== "LOCAL" || t.disposition !== "INBOX",
+    );
+    if (needsConfirm) {
+      set({ pendingDeleteIds: targets.map((t) => t.id) });
+      return;
+    }
+    if (targets.length === 1) get().deleteItem(targets[0].id);
+    else get().deleteItems(targets.map((t) => t.id));
+  },
+
+  confirmPendingDelete: () => {
+    const ids = get().pendingDeleteIds;
+    set({ pendingDeleteIds: null });
+    if (!ids?.length) return;
+    if (ids.length === 1) get().deleteItem(ids[0]);
+    else get().deleteItems(ids);
+  },
+
+  cancelPendingDelete: () => set({ pendingDeleteIds: null }),
+
   deleteItem: (id) => {
     const target = get().items.find((i) => i.id === id);
     if (!target) return;
+    // A prior soft-delete's purge must not be orphaned by this new snapshot.
+    flushPendingPurge(get().undoSnapshot, get().backend);
     set((s) => ({
       items: s.items.filter((i) => i.id !== id),
       selectedItemId: s.selectedItemId === id ? null : s.selectedItemId,
+      // Close the focus modal if we just deleted the focused task.
+      focusedItemId: s.focusedItemId === id ? null : s.focusedItemId,
       undoSnapshot: {
         items: s.items,
         projects: s.projects,
         processed: s.processedThisSession,
         selectedItemId: s.selectedItemId,
         label: "Deleted",
-        deletedItems: [target],
+        // Soft delete → lossless undo (restore) or a purge on dismiss.
+        softDeletedIds: [id],
       },
     }));
+    // Soft-delete server-side now; the actual removal + ClickUp propagation
+    // happen on dismiss (see dismissUndo), so Undo can restore losslessly.
     if (get().backend === "live") sync(apiDeleteItem(id).catch(() => {}));
   },
 
@@ -1206,23 +1343,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const remove = new Set(ids);
     const targets = get().items.filter((i) => remove.has(i.id));
     if (!targets.length) return;
+    const targetIds = targets.map((t) => t.id);
+    flushPendingPurge(get().undoSnapshot, get().backend);
     set((s) => ({
       items: s.items.filter((i) => !remove.has(i.id)),
       selectedItemId:
         s.selectedItemId && remove.has(s.selectedItemId)
           ? null
           : s.selectedItemId,
+      focusedItemId:
+        s.focusedItemId && remove.has(s.focusedItemId)
+          ? null
+          : s.focusedItemId,
       undoSnapshot: {
         items: s.items,
         projects: s.projects,
         processed: s.processedThisSession,
         selectedItemId: s.selectedItemId,
         label: `Deleted ${targets.length} item${targets.length === 1 ? "" : "s"}`,
-        deletedItems: targets,
+        softDeletedIds: targetIds,
       },
     }));
     if (get().backend === "live") {
-      sync(Promise.all(ids.map((id) => apiDeleteItem(id).catch(() => {}))));
+      sync(Promise.all(targetIds.map((id) => apiDeleteItem(id).catch(() => {}))));
     }
   },
 
@@ -1396,7 +1539,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   undoLastChange: () => {
     const snap = get().undoSnapshot;
     if (!snap) return;
-    const { items, projects, processed, selectedItemId, changedIds, deletedItems } = snap;
+    const { items, projects, processed, selectedItemId, changedIds,
+      deletedItems, softDeletedIds, archivedIds, archivedTo } = snap;
     set({
       items,
       projects,
@@ -1405,7 +1549,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       undoSnapshot: null,
     });
     if (get().backend !== "live") return;
-    if (deletedItems?.length) {
+    if (softDeletedIds?.length) {
+      // Lossless undo of a soft delete: the rows are only tombstoned, so just
+      // clear the tombstone. Local state is already restored from the snapshot;
+      // nothing was touched upstream (the ClickUp delete only happens on purge).
+      sync(
+        Promise.all(softDeletedIds.map((id) => apiRestoreItem(id).catch(() => {}))),
+      );
+    } else if (deletedItems?.length) {
       // Undo a HARD delete: the row is gone server-side, so re-create it (a
       // new id) and swap the restored local placeholder to the server row so
       // future edits target a real row. Local state is already restored.
@@ -1425,6 +1576,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
           }),
         ),
       );
+    } else if (archivedIds?.length) {
+      // Flip the archive back the other way upstream (local state is already
+      // restored from the snapshot).
+      sync(apiBulkArchive(archivedIds, !archivedTo).catch(() => {}));
     } else if (changedIds?.length) {
       // Revert the server rows to their pre-change disposition (the local
       // state is already fully restored from the snapshot).
@@ -1442,7 +1597,18 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
-  dismissUndo: () => set({ undoSnapshot: null }),
+  dismissUndo: () => {
+    // The undo window closed without an undo. Finalize any soft delete: purge
+    // the rows and propagate the deletion to ClickUp for synced tasks. (Restore
+    // is no longer offered once dismissed.)
+    const snap = get().undoSnapshot;
+    set({ undoSnapshot: null });
+    if (snap?.softDeletedIds?.length && get().backend === "live") {
+      sync(
+        Promise.all(snap.softDeletedIds.map((id) => apiPurgeItem(id).catch(() => {}))),
+      );
+    }
+  },
 
   hydrate: async () => {
     try {
@@ -1634,6 +1800,12 @@ export function itemsForView(
       return items.filter((i) => i.disposition === "SOMEDAY");
     case "reference":
       return items.filter((i) => i.disposition === "REFERENCE");
+    case "done":
+      // Completed tasks live here until archived (they're filtered out of the
+      // active board/lists). Most-recently-completed first.
+      return items
+        .filter((i) => i.disposition === "DONE")
+        .sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
     case "calendar":
       return items
         .filter(isCalendarItem)
@@ -1647,7 +1819,7 @@ export function itemsForView(
 export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
   const c = {
     inbox: 0, next: 0, waiting: 0, calendar: 0, projects: 0,
-    someday: 0, reference: 0, archive: 0, engage: 0, horizons: 0,
+    someday: 0, reference: 0, done: 0, archive: 0, engage: 0, horizons: 0,
   } as Record<ViewKey, number>;
   for (const i of items) {
     if (i.archivedAt) continue; // archived rows never count toward active views
@@ -1656,6 +1828,7 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
     else if (i.disposition === "WAITING") c.waiting++;
     else if (i.disposition === "SOMEDAY") c.someday++;
     else if (i.disposition === "REFERENCE") c.reference++;
+    else if (i.disposition === "DONE") c.done++;
     if (isCalendarItem(i)) c.calendar++;
   }
   return c;

@@ -15,6 +15,10 @@ import {
   LayoutList,
   Columns3,
   Archive,
+  ArchiveRestore,
+  Trash2,
+  CheckSquare,
+  X,
   Sparkles,
 } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
@@ -62,6 +66,7 @@ const VIEW_META: Record<
   waiting: { title: "Waiting For", icon: Clock, hint: "Delegated or blocked on someone else." },
   calendar: { title: "Calendar", icon: Calendar, hint: "Date-specific actions — the hard landscape." },
   someday: { title: "Someday / Maybe", icon: Lightbulb, hint: "Incubating. Reviewed weekly." },
+  done: { title: "Done", icon: CheckCircle2, hint: "Completed tasks. They stay here until you archive them." },
   archive: { title: "Archive", icon: Archive, hint: "Archived tasks — hidden from active views. Restore anytime." },
 };
 
@@ -77,7 +82,26 @@ export function ItemList() {
   const filters = useTaskStore((s) => s.filters);
   const sort = useTaskStore((s) => s.sort);
   const hasSynced = useTaskStore((s) => s.accounts.length > 0);
+  const bulkArchive = useTaskStore((s) => s.bulkArchive);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
+
+  // Lightweight multi-select for bulk archive/restore/delete on the flat-list
+  // views (Done, Waiting, Someday, Reference, Archive). Local to the list — the
+  // inbox has its own selection UI; the board/grouped views don't select.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
+  const clearSelection = () => {
+    setSelectedIds(new Set());
+    setSelectMode(false);
+  };
+  const toggleSelected = (id: string) =>
+    setSelectedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
 
   // The view's items (source/archive-filtered), then the toolbar's search/
   // context/assignee filter, then the active sort. `inView` is the pre-toolbar
@@ -116,6 +140,12 @@ export function ItemList() {
   // Status-segmented list: only Next Actions groups (by the global workflow
   // stages). @context is NOT a grouping axis here — it drives the left sidebar.
   const grouped = view === "next";
+  // Bulk multi-select (archive / restore / delete) is offered on the flat-list
+  // views — where a "done pile" or backlog builds up. Not on the inbox (its own
+  // triage UI), Next Actions board/grouping, or calendar.
+  const showListInBoard = boardable && mode === "board";
+  const bulkSelectable = !grouped && !showListInBoard && view !== "calendar";
+  const isArchiveView = view === "archive";
 
   return (
     <div className="flex h-full flex-col">
@@ -187,13 +217,37 @@ export function ItemList() {
           {hasSynced && contextlessCount > 0 && (
             <ContextBackfillButton count={contextlessCount} />
           )}
+          {/* Multi-select toggle for bulk archive/restore/delete. */}
+          {bulkSelectable && visible.length > 0 && (
+            <button
+              type="button"
+              onClick={() => (selectMode ? clearSelection() : setSelectMode(true))}
+              aria-pressed={selectMode}
+              title={selectMode ? "Cancel selection" : "Select tasks"}
+              className={[
+                "tech-transition inline-flex items-center gap-1 rounded-md border px-1.5 py-0.5 text-[11px] font-medium",
+                boardable ||
+                (hasSynced && sourceFilter !== "all") ||
+                (hasSynced && contextlessCount > 0)
+                  ? "ml-2"
+                  : "ml-auto",
+                selectMode
+                  ? "border-primary/40 bg-primary/10 text-primary"
+                  : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
+              ].join(" ")}
+            >
+              <CheckSquare className="h-3 w-3" />
+              Select
+            </button>
+          )}
           <span
             className={
-              (boardable ||
+              (bulkSelectable && visible.length > 0) ||
+              boardable ||
               (hasSynced && sourceFilter !== "all") ||
               (hasSynced && contextlessCount > 0)
-                ? "ml-2"
-                : "ml-auto") + " text-xs text-muted-foreground"
+                ? "ml-2 text-xs text-muted-foreground"
+                : "ml-auto text-xs text-muted-foreground"
             }
           >
             {visible.length} item{visible.length === 1 ? "" : "s"}
@@ -231,12 +285,104 @@ export function ItemList() {
         <TaskListGrouped items={visible} view={view} />
       ) : (
         <div className="flex-1 overflow-y-auto">
-          {visible.map((item) => (
-            <TaskCard key={item.id} item={item} variant="row" />
-          ))}
+          {visible.map((item) =>
+            selectMode ? (
+              <label
+                key={item.id}
+                className="flex cursor-pointer items-center gap-2 border-b border-border/60 pl-3 hover:bg-secondary/40"
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedIds.has(item.id)}
+                  onChange={() => toggleSelected(item.id)}
+                  className="h-4 w-4 shrink-0 accent-primary"
+                />
+                <div className="pointer-events-none min-w-0 flex-1">
+                  <TaskCard item={item} variant="row" />
+                </div>
+              </label>
+            ) : (
+              <TaskCard key={item.id} item={item} variant="row" />
+            ),
+          )}
+        </div>
+      )}
+
+      {/* Bulk action bar — archive/restore/delete the current selection. */}
+      {selectMode && selectedIds.size > 0 && (
+        <div className="flex shrink-0 items-center gap-2 border-t border-border bg-card px-4 py-2">
+          <span className="text-xs text-muted-foreground">
+            {selectedIds.size} selected
+          </span>
+          <div className="ml-auto flex items-center gap-1.5">
+            {isArchiveView ? (
+              <BulkAction
+                icon={ArchiveRestore}
+                label="Restore"
+                onClick={() => {
+                  bulkArchive([...selectedIds], false);
+                  clearSelection();
+                }}
+              />
+            ) : (
+              <BulkAction
+                icon={Archive}
+                label="Archive"
+                onClick={() => {
+                  bulkArchive([...selectedIds], true);
+                  clearSelection();
+                }}
+              />
+            )}
+            <BulkAction
+              icon={Trash2}
+              label="Delete"
+              danger
+              onClick={() => {
+                requestDelete([...selectedIds]);
+                clearSelection();
+              }}
+            />
+            <button
+              type="button"
+              onClick={clearSelection}
+              aria-label="Cancel selection"
+              className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
         </div>
       )}
     </div>
+  );
+}
+
+function BulkAction({
+  icon: Icon,
+  label,
+  onClick,
+  danger = false,
+}: {
+  icon: typeof Archive;
+  label: string;
+  onClick: () => void;
+  danger?: boolean;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={[
+        "tech-transition inline-flex items-center gap-1.5 rounded-md border px-2.5 py-1 text-xs font-medium",
+        danger
+          ? "border-border text-muted-foreground hover:border-destructive/40 hover:bg-destructive/10 hover:text-destructive"
+          : "border-border text-muted-foreground hover:border-primary/40 hover:text-primary",
+      ].join(" ")}
+    >
+      <Icon className="h-3.5 w-3.5" />
+      {label}
+    </button>
   );
 }
 

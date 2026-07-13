@@ -25,6 +25,7 @@ import {
   Layers,
   Sparkles,
   Archive,
+  CheckCircle2,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -57,6 +58,7 @@ const PRIMARY: NavRow[] = [
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },
   { view: "someday", label: "Someday / Maybe", icon: Lightbulb, showCount: true },
+  { view: "done", label: "Done", icon: CheckCircle2, showCount: true },
   { view: "archive", label: "Archive", icon: Archive },
 ];
 
@@ -87,6 +89,7 @@ export function ListsSidebar({
   const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
   const openSettings = useTaskStore((s) => s.openSettings);
   const loadArchive = useTaskStore((s) => s.loadArchive);
+  const loadDone = useTaskStore((s) => s.loadDone);
   const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
@@ -94,6 +97,8 @@ export function ListsSidebar({
     selectViewRaw(v);
     // Archived tasks aren't in the normal hydrate — pull them on demand.
     if (v === "archive") void loadArchive();
+    // DONE tasks are excluded from the normal hydrate too — load on open.
+    if (v === "done") void loadDone();
     // The Projects tree (local spaces/folders) is loaded lazily on open.
     if (v === "projects") void loadLocalHierarchy();
     onNavigate?.();

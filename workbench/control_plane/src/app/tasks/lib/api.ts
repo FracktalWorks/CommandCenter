@@ -354,6 +354,19 @@ export async function apiBulkDispose(
   return rows.map(mapItem);
 }
 
+/** Archive (or un-archive) many tasks at once — the bulk "Archive selected"
+ *  action. Local overlay; never touches the connected tool. */
+export async function apiBulkArchive(
+  ids: string[],
+  archived: boolean
+): Promise<GtdItem[]> {
+  const rows = await gatewayFetch<Raw[]>(`/items/bulk-archive`, {
+    method: "POST",
+    body: JSON.stringify({ ids, archived }),
+  });
+  return rows.map(mapItem);
+}
+
 export interface OrganizeBody {
   kind: string;
   next_action?: string;
@@ -400,8 +413,24 @@ export async function apiPushItem(id: string): Promise<GtdItem> {
   return mapItem(await gatewayFetch<Raw>(`/items/${id}/push`, { method: "POST" }));
 }
 
+/** Soft-delete: the task vanishes from every view but stays intact server-side
+ *  for a lossless undo. Call apiPurgeItem after the undo window to finalize
+ *  (and propagate the deletion to ClickUp for synced tasks). */
 export async function apiDeleteItem(id: string): Promise<void> {
   await gatewayFetch<void>(`/items/${id}`, { method: "DELETE" });
+}
+
+/** Undo a soft delete — returns the restored task, exactly as it was. */
+export async function apiRestoreItem(id: string): Promise<GtdItem> {
+  return mapItem(
+    await gatewayFetch<Raw>(`/items/${id}/restore`, { method: "POST" })
+  );
+}
+
+/** Finalize a soft delete: remove the row and (for a synced task) propagate the
+ *  deletion to ClickUp. Idempotent — a row that's already gone is a no-op. */
+export async function apiPurgeItem(id: string): Promise<void> {
+  await gatewayFetch<void>(`/items/${id}/purge`, { method: "POST" });
 }
 
 export async function apiListWorkspaces(

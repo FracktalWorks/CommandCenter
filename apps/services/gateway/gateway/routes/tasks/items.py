@@ -66,6 +66,10 @@ VIEW_WHERE: dict[str, str] = {
 # Active views never show archived rows; the "archive" view shows only them.
 _ARCHIVE_EXCLUDE = "i.archived_at IS NULL"
 
+# Soft-deleted (tombstoned) rows are hidden from EVERY view, including Archive —
+# they're gone as far as the UI is concerned, pending restore or purge.
+_DELETED_EXCLUDE = "i.deleted_at IS NULL"
+
 
 class CaptureRequest(BaseModel):
     title: str
@@ -151,9 +155,14 @@ def _parse_ts(val: str | None) -> datetime | None:
                             detail=f"Bad timestamp: {val!r}") from exc
 
 
-async def _fetch_item(db: Any, item_id: str, user_id: str) -> Any:
+async def _fetch_item(
+    db: Any, item_id: str, user_id: str, *, include_deleted: bool = False,
+) -> Any:
+    """Fetch one item by id. Soft-deleted (tombstoned) rows are hidden by
+    default; restore/purge pass include_deleted=True to reach them."""
+    tomb = "" if include_deleted else f" AND {_DELETED_EXCLUDE}"
     row = (await db.execute(
-        text(ITEM_SELECT + " WHERE i.id = :id AND i.user_id = :uid"),
+        text(ITEM_SELECT + f" WHERE i.id = :id AND i.user_id = :uid{tomb}"),
         {"id": item_id, "uid": user_id},
     )).fetchone()
     if not row:
@@ -240,6 +249,8 @@ async def list_items(
         raise HTTPException(status_code=400, detail=f"Unknown view: {view}")
     params: dict[str, Any] = {"uid": _uid(user), "limit": max(1, min(limit, 1000))}
     clauses = ["i.user_id = :uid", where]
+    # Soft-deleted rows never surface in any view (including Archive).
+    clauses.append(_DELETED_EXCLUDE)
     # Subtasks are nested under their parent in the detail panel — they never
     # appear as standalone rows in the list/board views.
     clauses.append("i.parent_item_id IS NULL")
@@ -330,12 +341,17 @@ async def get_item(item_id: str, user: UserContext = Depends(get_current_user)):
 
 @router.delete("/items/{item_id}", status_code=204)
 async def delete_item(item_id: str, user: UserContext = Depends(get_current_user)):
-    """Hard-delete an item (undo-capture). Clarified items should be TRASHed
-    (kept for review) — deletion is for takebacks of fresh captures."""
+    """SOFT-delete an item: set deleted_at so it vanishes from every view but
+    stays fully intact (provider linkage, notes, disposition) for a lossless
+    Undo. The row is only physically removed — and a SYNCED task's upstream
+    ClickUp task deleted — by an explicit purge (POST /items/{id}/purge) once
+    the client's undo window has passed. Idempotent: re-deleting a tombstoned
+    row just refreshes the timestamp."""
     db = await _get_db()
     try:
         res = (await db.execute(
-            text("""DELETE FROM gtd_items
+            text("""UPDATE gtd_items
+                    SET deleted_at = now(), updated_at = now()
                     WHERE id = :id AND user_id = :uid RETURNING id"""),
             {"id": item_id, "uid": _uid(user)},
         )).fetchone()
@@ -344,6 +360,76 @@ async def delete_item(item_id: str, user: UserContext = Depends(get_current_user
         await db.commit()
     finally:
         await db.close()
+
+
+@router.post("/items/{item_id}/restore", response_model=GtdItemModel)
+async def restore_item(item_id: str, user: UserContext = Depends(get_current_user)):
+    """Undo a soft delete: clear deleted_at so the task returns to its view,
+    exactly as it was (nothing was touched upstream). 404 if there's no
+    soft-deleted row with this id (already purged, or never deleted)."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        res = (await db.execute(
+            text("""UPDATE gtd_items
+                    SET deleted_at = NULL, updated_at = now()
+                    WHERE id = :id AND user_id = :uid
+                      AND deleted_at IS NOT NULL RETURNING id"""),
+            {"id": item_id, "uid": uid},
+        )).fetchone()
+        if res is None:
+            raise HTTPException(status_code=404, detail="No deleted item to restore")
+        await db.commit()
+        return _row_to_item(await _fetch_item(db, item_id, uid))
+    finally:
+        await db.close()
+
+
+@router.post("/items/{item_id}/purge", status_code=204)
+async def purge_item(item_id: str, user: UserContext = Depends(get_current_user)):
+    """Finalize a delete: physically remove the (already soft-deleted) row and,
+    for a pushed SYNCED task, propagate the deletion to the connected tool. The
+    client calls this after the undo window closes. Idempotent — a row that's
+    already gone returns 204.
+
+    The upstream ClickUp DELETE is best-effort and runs BEFORE the local row is
+    removed so we still have its provider linkage; an upstream failure logs but
+    never blocks the local purge (the user asked to delete — we don't strand the
+    task locally because ClickUp hiccuped)."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        row = (await db.execute(
+            text(ITEM_SELECT + " WHERE i.id = :id AND i.user_id = :uid"),
+            {"id": item_id, "uid": uid},
+        )).fetchone()
+        if row is None:
+            return  # already purged → idempotent success
+        # Propagate the deletion upstream for a pushed SYNCED task.
+        if row.source != "LOCAL" and row.provider_task_id and row.account_id:
+            await _delete_upstream(db, row, uid)
+        await db.execute(
+            text("DELETE FROM gtd_items WHERE id = :id AND user_id = :uid"),
+            {"id": item_id, "uid": uid},
+        )
+        await db.commit()
+    finally:
+        await db.close()
+
+
+async def _delete_upstream(db: Any, row: Any, uid: str) -> None:
+    """Best-effort: delete a pushed SYNCED task's counterpart in the connected
+    tool. Never raises — a failed upstream delete must not block the local
+    purge (mirrors _push_patch_upstream's posture)."""
+    try:
+        account = await _assert_account_owner(db, str(row.account_id), uid)
+        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+        provider = build_provider(
+            account.provider, creds, account.workspace_id, str(account.id))
+        await provider.delete_task(str(row.provider_task_id))
+    except Exception as exc:  # best-effort — never fail the local purge
+        _log.warning("tasks.delete.upstream_failed",
+                     item_id=str(row.id)[:12], error=str(exc)[:160])
 
 
 # ── Small edits (rename / note / tickler / quick-dispose) ────────────────────
@@ -672,6 +758,39 @@ async def bulk_dispose(
                         updated_at = now()
                     WHERE id::text = ANY(:ids) AND user_id = :uid"""),
             {"disp": req.disposition, "ids": req.ids, "uid": _uid(user)},
+        )
+        await db.commit()
+        rows = (await db.execute(
+            text(ITEM_SELECT + " WHERE i.id::text = ANY(:ids) AND i.user_id = :uid"),
+            {"ids": req.ids, "uid": _uid(user)},
+        )).fetchall()
+        return [_row_to_item(r) for r in rows]
+    finally:
+        await db.close()
+
+
+class BulkArchiveRequest(BaseModel):
+    ids: list[str]
+    archived: bool = True   # false → un-archive the whole selection
+
+
+@router.post("/items/bulk-archive", response_model=list[GtdItemModel])
+async def bulk_archive(
+    req: BulkArchiveRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Archive (or un-archive) many tasks at once — the multi-select 'Archive
+    selected' action. A LOCAL-only overlay, identical to single archive: it
+    hides the tasks from active views but never touches the connected tool, so
+    it's safe for SYNCED (ClickUp) tasks too."""
+    db = await _get_db()
+    try:
+        await db.execute(
+            text("""UPDATE gtd_items
+                    SET archived_at = CASE WHEN :on THEN now() ELSE NULL END,
+                        updated_at = now()
+                    WHERE id::text = ANY(:ids) AND user_id = :uid"""),
+            {"ids": req.ids, "on": req.archived, "uid": _uid(user)},
         )
         await db.commit()
         rows = (await db.execute(

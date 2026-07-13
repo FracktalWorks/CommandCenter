@@ -152,7 +152,7 @@ export function TaskDetail({
   const accounts = useTaskStore((s) => s.accounts);
   const updateItem = useTaskStore((s) => s.updateItem);
   const quickDispose = useTaskStore((s) => s.quickDispose);
-  const deleteItem = useTaskStore((s) => s.deleteItem);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const archiveItem = useTaskStore((s) => s.archiveItem);
   const openFocus = useTaskStore((s) => s.openFocus);
   const isArchived = !!item.archivedAt;
@@ -233,7 +233,7 @@ export function TaskDetail({
             type="button"
             title="Delete task"
             aria-label="Delete task"
-            onClick={() => deleteItem(item.id)}
+            onClick={() => requestDelete([item.id])}
             className="tech-transition rounded-md p-1 text-muted-foreground/70 hover:bg-destructive/10 hover:text-destructive"
           >
             <Trash2 className="h-4 w-4" />

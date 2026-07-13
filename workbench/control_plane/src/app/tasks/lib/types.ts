@@ -162,6 +162,7 @@ export type ViewKey =
   | "projects"
   | "someday"
   | "reference"
+  | "done"
   | "archive"
   | "engage"
   | "horizons";

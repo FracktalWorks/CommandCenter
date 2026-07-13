@@ -252,8 +252,16 @@ interface EmailState {
     assigneeName?: string | null;
     dueAt?: string | null;
   } | null;
-  /** Capture an email into the task inbox (AI-drafted server-side). */
-  captureEmailToTasks: (emailId: string) => Promise<void>;
+  /** The email whose "Add to Tasks" clarify popup is open (null = closed).
+   *  The popup component owns the preview/enhance async state; the store only
+   *  tracks which message it's for. */
+  taskCapturePopupEmailId: string | null;
+  /** Open the clarify-before-capture popup for an email ("Add to Tasks" now
+   *  opens a review popup instead of capturing instantly). */
+  captureEmailToTasks: (emailId: string) => void;
+  closeTaskCapturePopup: () => void;
+  /** Show the "Captured to Tasks" toast (called by the popup on confirm). */
+  notifyTaskCaptured: (notice: NonNullable<EmailState["taskCaptureNotice"]>) => void;
   clearTaskCaptureNotice: () => void;
   updateEmail: (id: string, updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>) => Promise<void>;
   fetchLabels: (accountId?: string) => Promise<void>;
@@ -806,12 +814,13 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   taskCaptureNotice: null,
+  taskCapturePopupEmailId: null,
 
-  captureEmailToTasks: async (emailId) => {
+  captureEmailToTasks: (emailId) => {
     const email = get().emails.find((e) => e.id === emailId);
-    type Notice = NonNullable<EmailState["taskCaptureNotice"]>;
     if (!email) {
-      // e.g. a brand-new draft not yet saved to the message list.
+      // e.g. a brand-new draft not yet saved to the message list — nothing to
+      // capture from, so show a hint instead of opening an empty popup.
       set({
         taskCaptureNotice: {
           title: "Save this draft first, then add it to Tasks",
@@ -821,13 +830,12 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       setTimeout(() => get().clearTaskCaptureNotice(), 6000);
       return;
     }
-    let notice: Notice;
-    try {
-      const { captureEmailToTask } = await import("./api");
-      notice = await captureEmailToTask(email.accountId, emailId);
-    } catch {
-      notice = { title: "Could not reach the tasks backend", created: false };
-    }
+    set({ taskCapturePopupEmailId: emailId });
+  },
+
+  closeTaskCapturePopup: () => set({ taskCapturePopupEmailId: null }),
+
+  notifyTaskCaptured: (notice) => {
     set({ taskCaptureNotice: notice });
     // Auto-dismiss THIS notice only — an older capture's timer must not
     // clear a newer notice (identity check, not a blanket null).

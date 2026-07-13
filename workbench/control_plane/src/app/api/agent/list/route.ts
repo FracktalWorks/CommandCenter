@@ -31,7 +31,7 @@ const STATIC_FALLBACK: AgentEntry[] = [
 function readDynamicAgentsFallback(): AgentEntry[] {
   try {
     // workbench/control_plane is 2 levels below the repo root
-    const jsonPath = resolve(process.cwd(), "../../apps/gateway/agents.json");
+    const jsonPath = resolve(process.cwd(), "../../apps/services/gateway/agents.json");
     const raw = readFileSync(jsonPath, "utf-8");
     const parsed = JSON.parse(raw) as AgentEntry[];
     return Array.isArray(parsed) ? parsed : [];

@@ -14,7 +14,7 @@ import pytest
 
 _AGENT = (
     Path(__file__).resolve().parents[2]
-    / "apps" / "agent-email-assistant" / "agents.py"
+    / "apps" / "agents" / "agent-email-assistant" / "agents.py"
 )
 
 

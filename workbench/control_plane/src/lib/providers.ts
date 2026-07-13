@@ -5,8 +5,8 @@
  * Everything else — UI colours, icons, setup guides, env-var maps, and the
  * fallback key check in the model picker — is derived automatically.
  *
- * Mirror list: apps/gateway/gateway/routes/settings.py (_PROVIDER_ENV_MAP)
- * Backend allowlist: apps/gateway/gateway/routes/integrations.py (_ALLOWED_ENV_KEYS)
+ * Mirror list: apps/services/gateway/gateway/routes/settings.py (_PROVIDER_ENV_MAP)
+ * Backend allowlist: apps/services/gateway/gateway/routes/integrations.py (_ALLOWED_ENV_KEYS)
  * Both are kept in sync via a comment; see the "Adding a provider" instructions
  * in ai-company-brain/system_architecture.md.
  */

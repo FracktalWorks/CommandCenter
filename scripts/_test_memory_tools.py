@@ -293,7 +293,7 @@ def test_gateway_user_context() -> bool:
         # We can't easily run the route, but we can check the source
         agent_py = (
             Path(__file__).resolve().parent.parent
-            / "apps" / "gateway" / "gateway" / "routes" / "agent.py"
+            / "apps" / "services" / "gateway" / "gateway" / "routes" / "agent.py"
         )
         source = agent_py.read_text()
 

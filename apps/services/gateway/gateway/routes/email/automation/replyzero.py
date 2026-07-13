@@ -370,7 +370,11 @@ async def quick_action(
 
     spec = importlib.util.spec_from_file_location(
         "email_agent",
-        os.path.join(os.path.dirname(__file__), "..", "..", "..", "agent-email-assistant", "agents.py"),
+        os.path.join(
+            os.path.dirname(__file__),
+            "..", "..", "..", "..", "..", "..",  # automation → repo apps/
+            "agents", "agent-email-assistant", "agents.py",
+        ),
     )
     agent_mod = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(agent_mod)

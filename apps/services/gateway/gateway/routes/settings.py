@@ -30,7 +30,7 @@ router = APIRouter(prefix="/settings", tags=["settings"])
 def _repo_root() -> Path:
     """Walk up from this file to find the workspace root (pyproject.toml with [tool.uv.workspace]).
 
-    Must skip sub-package pyproject.toml files (e.g. apps/gateway/pyproject.toml)
+    Must skip sub-package pyproject.toml files (e.g. apps/services/gateway/pyproject.toml)
     and only stop at the monorepo root that contains infra/, .env, etc.
     """
     here = Path(__file__).resolve()

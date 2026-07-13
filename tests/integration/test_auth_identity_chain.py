@@ -279,7 +279,7 @@ async def main() -> int:
     reachable = await test_gateway_unreachable()
     if not reachable:
         print(f"ERROR: Gateway at {GATEWAY_URL} is not reachable.")
-        print("Start it with: cd apps/gateway && uv run uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload")
+        print("Start it with: cd apps/services/gateway && uv run uvicorn gateway.main:app --host 0.0.0.0 --port 8000 --reload")
         print()
         # Still run the tests that don't need gateway (none in this script)
         return 1

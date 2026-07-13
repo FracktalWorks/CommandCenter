@@ -52,7 +52,7 @@ SCOPED_AGENTS = {
 
 
 def _cfg(agent_dir: str) -> dict:
-    return json.loads((REPO / "apps" / agent_dir / "config.json").read_text(encoding="utf-8"))
+    return json.loads((REPO / "apps" / "agents" / agent_dir / "config.json").read_text(encoding="utf-8"))
 
 
 # ── 1. STATIC: the three agents declare lean, valid tool_scope ───────────────
@@ -77,7 +77,7 @@ def test_email_assistant_own_tool_scope_names_are_all_real_baked_tools():
     cfg = _cfg("agent-email-assistant")
     scope = cfg.get("own_tool_scope")
     assert scope, "email-assistant must declare own_tool_scope to trim its ~63 baked tools"
-    src = (REPO / "apps/agent-email-assistant/agents.py").read_text(encoding="utf-8")
+    src = (REPO / "apps/agents/agent-email-assistant/agents.py").read_text(encoding="utf-8")
     defined = set(re.findall(r"async def ([a-z_][a-z0-9_]+)\s*\(", src))
     missing = [t for t in scope if t not in defined]
     assert not missing, f"own_tool_scope names not defined in agents.py: {missing}"

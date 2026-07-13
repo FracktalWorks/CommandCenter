@@ -13,8 +13,8 @@ say()  { printf "\n==> %s\n" "$*"; }
 # did a `git reset --hard` before this script, the runtime registrations
 # would be lost.  Restore from a pre-reset backup when available.
 if [ -s /tmp/acb-agents.json.bak ]; then
-  cp /tmp/acb-agents.json.bak apps/gateway/agents.json
-  say "Restored runtime agents.json ($(wc -l < apps/gateway/agents.json) lines)"
+  cp /tmp/acb-agents.json.bak apps/services/gateway/agents.json
+  say "Restored runtime agents.json ($(wc -l < apps/services/gateway/agents.json) lines)"
 fi
 
 say "Pulling images"

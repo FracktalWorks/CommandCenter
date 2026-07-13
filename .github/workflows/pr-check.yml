@@ -112,12 +112,21 @@ jobs:
           fetch-depth: 0
 
       - name: Install gitleaks
-        run: go install github.com/gitleaks/gitleaks/v8@v8.18.4
+        # `go install github.com/gitleaks/gitleaks/v8` broke: that tag's go.mod
+        # still declares the module path as github.com/zricethezav/gitleaks/v8,
+        # so `go install` errors on the path mismatch and the scan never ran.
+        # Pull the prebuilt release binary instead — faster and path-stable.
+        run: |
+          VERSION=8.18.4
+          curl -sSfL "https://github.com/gitleaks/gitleaks/releases/download/v${VERSION}/gitleaks_${VERSION}_linux_x64.tar.gz" -o gitleaks.tar.gz
+          tar -xzf gitleaks.tar.gz gitleaks
+          sudo install -m 0755 gitleaks /usr/local/bin/gitleaks
+          gitleaks version
 
       - name: Scan PR commits for secrets
         run: |
           RANGE="${{ github.event.pull_request.base.sha }}..HEAD"
-          "$(go env GOPATH)/bin/gitleaks" detect \
+          gitleaks detect \
             --source . \
             --config .gitleaks.toml \
             --log-opts="--no-merges $RANGE" \

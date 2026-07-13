@@ -106,12 +106,12 @@ jobs:
             # Preserve runtime-managed state that lives in tracked files but is
             # mutated on the VPS (agents.json = Control-Plane agent registry).
             # git reset --hard would otherwise wipe agents registered via the UI.
-            cp apps/gateway/agents.json /tmp/acb-agents.json.bak 2>/dev/null || true
+            cp apps/services/gateway/agents.json /tmp/acb-agents.json.bak 2>/dev/null || true
             git fetch origin main
             git reset --hard origin/main
             if [ -s /tmp/acb-agents.json.bak ]; then
-              cp /tmp/acb-agents.json.bak apps/gateway/agents.json
-              echo "    restored runtime agents.json ($(wc -l < apps/gateway/agents.json) lines)"
+              cp /tmp/acb-agents.json.bak apps/services/gateway/agents.json
+              echo "    restored runtime agents.json ($(wc -l < apps/services/gateway/agents.json) lines)"
             fi
 
             echo "==> Skipping deprecated LiteLLM proxy cleanup (already removed)"

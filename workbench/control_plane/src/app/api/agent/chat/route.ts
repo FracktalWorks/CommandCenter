@@ -6,7 +6,7 @@
  *
  * IMPORTANT — Three distinct runtimes; do not conflate:
  *
- *   mode="copilot"   → GitHub Copilot SDK runtime (apps/gateway/routes/copilot_chat.py)
+ *   mode="copilot"   → GitHub Copilot SDK runtime (apps/services/gateway/gateway/routes/copilot_chat.py)
  *                       - CopilotClient wraps `gh copilot` CLI as a subprocess
  *                       - autopilot mode: native tool-calling (shell, file r/w, Python)
  *                       - reads AGENTS.md / .mcp.json from agent workspace

@@ -2,7 +2,7 @@
 
 Cron entry point (WBS 1.6). Delegates the actual stale-task / quiet-deal scan
 to ``scripts.reconciler`` so that the same code path is exercised whether the
-job is invoked from APScheduler (apps.ingestion.scheduler) or from a one-shot
+job is invoked from APScheduler (apps.services.ingestion.scheduler) or from a one-shot
 `docker compose run reconciler` command.
 """
 from __future__ import annotations

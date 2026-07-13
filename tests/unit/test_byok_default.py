@@ -1,7 +1,7 @@
 """Tests for the BYOK-by-default model routing policy (executor)."""
 from __future__ import annotations
 
-from apps.orchestrator.orchestrator.executor import (
+from apps.services.orchestrator.orchestrator.executor import (
     _apply_byok_provider_for_copilot_sdk,
     _apply_model_for_maf_agent,
     _byok_default_model,

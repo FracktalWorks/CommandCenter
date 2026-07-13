@@ -35,8 +35,8 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | Control Plane shell (Next.js, chat, SSO) | ✅ Done | `workbench/control_plane/` |
 | Control Plane rich chat UI (SSE streaming, markdown, syntax highlight, tool-call blocks) | ✅ Done | `workbench/control_plane/src/components/MarkdownMessage.tsx`, `useAgentChat.ts`, `AgentChat.tsx`, `api/agent/chat/route.ts` |
 | Control Plane model picker + agent switcher + stop-generation button | ✅ Done | `AgentChat.tsx` — VS Code Copilot-style UX |
-| LiteLLM gateway + tiered routing | ✅ Done | `infra/litellm/config.yaml` |
-| LiteLLM GitHub Copilot model routes (`copilot/gpt-4o`, `copilot/claude-sonnet`, `copilot/o3-mini`) | ✅ Done | `infra/litellm/config.yaml` |
+| LLM routing + tiered models | ✅ Done | **In-process litellm SDK** via the gateway `/v1` endpoint (`apps/gateway/gateway/routes/v1_compat.py`, `packages/acb_llm/`). No proxy process; `infra/litellm/config.yaml` is vestigial (tier rows only, → BO-16). |
+| GitHub Copilot model routes (`copilot/*`) | ✅ Done | Resolved in-process by `acb_llm` / the Copilot-SDK tier — not via a proxy config |
 | Skills monorepo + loader | ✅ Done | `skills/`, `packages/acb_skills/` |
 | Self-mutation GitHub PR automation | 🔲 Next | Phase 1 (WBS 1.3) |
 | Eval CI gate on agent/skill PRs | 🔲 Next | Phase 1 (WBS 1.4) |
@@ -49,10 +49,10 @@ Operators interact via a thin **Control Plane** (Next.js browser UI) with chat Q
 | **LLM settings UI (tier picker, Gemini/OpenAI key save)** | ✅ Done | `workbench/control_plane/src/app/settings/models/` — per-tier model assignment; provider key save; LiteLLM health |
 | **AG-UI → SSE translation (chat properly streams tool calls)** | ✅ Done | `workbench/control_plane/src/app/api/agent/chat/route.ts` — translates AG-UI events to delta/tool_start/tool_end for the UI hook |
 | **Memory: Mem0 episodic + Graphiti bi-temporal KG** | ✅ Done | M2.8 — pgvector backend, Neo4j `--profile memory`, `/memory/*` API, injected into orchestrator + Copilot agents. See [`reference.md`](reference.md) §3 |
-| **Fire-and-forget chat + live stream reconnection** | ✅ Done | Redis Streams + Postgres; agent continues after tab close, resumes live on reopen. See [`specs/stream_reconnection.md`](specs/stream_reconnection.md) |
+| **Fire-and-forget chat + live stream reconnection** | ✅ Done | Redis Streams + Postgres; agent continues after tab close, resumes live on reopen. See [`specs/archive/stream_reconnection.md`](specs/archive/stream_reconnection.md) |
 | **Chat session history (auto-title + last-turn preview)** | ✅ Done | M2.6 — `chat_sessions.title`/`last_preview`; session list UI |
 | **Integration OAuth framework (authorize→callback→refresh)** | ✅ Done | M2.6 — `routes/oauth.py`, HMAC-signed state, zoho-crm/clickup/google |
-| **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/vscode_tool_integration.md`](specs/vscode_tool_integration.md) |
+| **VS Code Copilot tools in chat (HITL Q, errors, repo memory, history, GitHub search, images)** | 🔄 Mostly done | See [`specs/archive/vscode_tool_integration.md`](specs/archive/vscode_tool_integration.md) |
 | **Email app — multi-account client (Gmail/Outlook/IMAP) + AI assistant** | 🔄 In progress | M2.9 — `workbench/control_plane/src/app/email/`, gateway `routes/email.py`, `apps/email_ingestion/`. Outlook display bugs fixed (PR #4). See [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md) |
 | **Task Manager app — GTD-philosophy client + `task-manager` agent (PM-agnostic: any tool via API or MCP)** | 🔄 capture/clarify live end-to-end | Frontend slices 1–2.5 + the capture/clarify **backend**: migration `48_task_manager_gtd.sql`, gateway `routes/tasks/` (20 endpoints), provider interface layer + **ClickUp connector** (multi-workspace `task_accounts`, encrypted tokens), `apps/skill-task-gtd/` + rewritten `apps/agent-task-manager/`, frontend wired live with mock fallback; **org-knowledge layer live** (`gtd_people` from agent-project-manager HR data → capability-aware delegation, §6.1). Resume: Slice 3 (Engage) · `/tasks/sync` pull. See [`specs/task_manager_app.md`](specs/task_manager_app.md) §9.1 |
 | `agent-sales` + `skill-zoho-ingest` | 🔲 Phase 2 | Phase 2 (WBS 2.2) |
@@ -147,11 +147,11 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 
 ### Resolved / Current State
 
-1. **AG-UI wiring (WBS 0.6)** — ✅ Done. `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` is wired in gateway startup (`apps/gateway/gateway/main.py`). Control Plane `CopilotKitProvider` points at the gateway AG-UI URL.
+1. **AG-UI wiring (WBS 0.6)** — ✅ Done. `add_agent_framework_fastapi_endpoint(app, agent, "/copilot/chat")` is wired in gateway startup (`apps/gateway/gateway/main.py`). (CopilotKit was removed in M2.5; the Control Plane chat now consumes AG-UI over SSE via `api/agent/chat/route.ts`.)
 
 2. **Webhook → MAF dispatch (WBS 0.7)** — ✅ Done. `agent.py` dispatches webhook events to the MAF executor (`orchestrator.executor.run_agent`). The old Copilot-runtime dispatch arm (`runtime: copilot`) has been removed.
 
-3. **Observability** — Langfuse has been **removed** from the stack (no container, no `langfuse` package, no OTel exporter). Re-introduce a self-hosted OTLP backend later if/when tracing is needed.
+3. **Observability** — the `langfuse` Python package is not installed and no OTLP exporter is wired; a Langfuse **container** exists in `infra/docker-compose.yml` but is **opt-in behind `--profile obs` and dormant**. Real telemetry today is the bespoke Redis activity/cost feed (`acb_common/activity.py`). Standing up distributed tracing is tracked as **BO-5** (audit H9).
 
 4. **Self_Mutation_Node** — implemented as a standalone async module (`apps/orchestrator/orchestrator/mutation.py`); no LangGraph. Formalising it as a MAF workflow step is pending (WBS 1.1).
 
@@ -170,8 +170,8 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 | **Self_Mutation_Node** | Implemented as a standalone async module (`apps/orchestrator/orchestrator/mutation.py`); no LangGraph. Formalisation as a MAF workflow step is pending (WBS 1.1). Spawns an isolated Copilot SDK mutation container (`acb-mutation-runner` Docker image), reads failure telemetry, applies a code fix to the live clone, and opens a GitHub PR. The container receives the mutation prompt and LiteLLM BYOK credentials via env vars; the agent repo is mounted at `/workspace/repo`. |
 | **Hot-patch model** | Fix is applied to the live persistent clone immediately (recovery in minutes). The PR is the audit record + rollback trigger (close = auto rollback). |
 | **Control Plane** | Next.js browser UI at `workbench/control_plane/`. Provides chat and HITL approval queue. Not an editor. |
-| **Action Broker** | The only write path to source systems (ClickUp/Zoho/Odoo). Enforces per-action authority tiers. Lives at `apps/action_broker/`. |
-| **Reconciler** | Nightly agent that diffs entity graph vs source systems and escalates drift. Lives at `apps/reconciler/` and `level4/apps/reconciler/`. |
+| **Action Broker** | The *intended* single write path to source systems (ClickUp/Zoho/Odoo), enforcing per-action authority tiers. Lives at `apps/action_broker/`. **Current reality:** the authority-tier decision core exists but ships with **zero handlers and is not yet wired into the write path** — real ClickUp/email writes bypass it today. Wiring it is **BO-1** (P0). |
+| **Reconciler** | Nightly agent that diffs entity graph vs source systems and escalates drift. Lives at `apps/reconciler/`. |
 | **HITL** | Human-in-the-loop. Approval requests delivered via Control Plane or email/WhatsApp when operator is not at the UI. |
 | **authority tier** | read / suggest / suggest+apply / autonomous — the allowed scope of an agent's action on a specific resource type. |
 | **Annealer** | Phase 5 sub-agent that mines successful run patterns, proposes new reusable skills as PRs, and manages shadow → canary → full rollout. **Reference implementation:** Hermes Agent's "Curator" (auto-authors + prunes skills on a cycle) — see CH-7 in [`specs/competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md). Our differentiator is that skill proposals go through the human PR/approval gate; self-improvement *plus* enterprise HITL is something neither Hermes nor OpenClaw offers. |
@@ -180,10 +180,12 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 
 ## Current Phase
 
-Phases 0, 1, 1.5, 1.6 are complete and **M2 is closed**. Active work is **M2.9 (email app)** plus **Phase 2 (Full Agent Ecosystem)** platform work toward **M3**. See [`project_plan.md`](project_plan.md) §6 for the full phased WBS and status.
+Phases 0, 1, 1.5, 1.6 are complete and **M2 is closed**. A **foundation architecture audit (2026-07)** is now the active workstream — it found the platform's documented guarantees are materially ahead of what the code enforces, and its P0 items gate the feature roadmap. **Two backlogs, read both:**
+- **Foundation hardening (do first):** [`/FOUNDATION_BUILDOUT_CHECKLIST.md`](../FOUNDATION_BUILDOUT_CHECKLIST.md) — `BO-1..21` (+ `CH-*` in `specs/competitive_hardening_2026-07.md`, `HH-*` in `specs/harness_hardening_2026-07.md`).
+- **Feature roadmap:** [`project_plan.md`](project_plan.md) §6 — M2.9 email → M3 agent ecosystem → M4 capture → M5 write authority → M6 intelligence.
 
-**Immediate priorities:**
-- M2.9 — email app: post-deploy mailbox reconnect, Drafts/Junk sync, entity-graph linkage.
-- Phase 2 — Zoho + Gmail ingestion pipelines (WBS 2.1/2.2), cross-source entity resolution (2.3), Action Broker hardening (2.4).
-- Phase 1 cleanup — GitHub PR automation (WBS 1.3), BYOK-forced metering (WBS 1.7).
-- Hardening — **SEC-1: lock down public Postgres/Redis (5432/6379) on the VPS** (see project_plan §6 / R-06).
+**Immediate priorities (P0 foundation first):**
+- **BO-8** rotate/purge committed secrets · **BO-2** enforce auth (never-reject → require) · **BO-1** wire the Action Broker into the write path (non-negotiable #4 is currently false) · **BO-3** mutation governance residuals.
+- **SEC-1 / R-06** — lock down public Postgres/Redis (5432/6379) on the VPS (bind `127.0.0.1`).
+- Then P1: **BO-7** sandbox, **BO-5** observability+cost, **BO-20** event-bus consumer + job queue, **BO-6** migrations.
+- Feature track (in parallel where unblocked): M2.9 email residuals; Phase 2 Zoho/Gmail ingestion (2.1/2.2) + entity resolution (2.3); Phase 1 cleanup (PR automation 1.3, BYOK metering 1.7).

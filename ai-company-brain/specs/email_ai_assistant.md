@@ -4,8 +4,8 @@
 > **Status:** 🟢 Live on the VPS. Full email client (Gmail / Microsoft 365 / IMAP) with multi-account sync, two-way write-back, conversation/threading UI, a complete inbox-zero-parity automation suite (rules, Reply Zero, drafting, sender categorization, cold-email blocker, inbox cleaner, analytics, digests) and an agent-backed assistant chat.
 >
 > **Companion docs:**
-> - [`email_inbox_zero_parity_plan.md`](./email_inbox_zero_parity_plan.md) — the forward-looking roadmap, remaining inbox-zero gaps, and deferred backend hardening.
-> - [`email_app_review.md`](./email_app_review.md) — the milestone build log (chronological history of what shipped).
+> - [`archive/email_inbox_zero_parity_plan.md`](./archive/email_inbox_zero_parity_plan.md) — the forward-looking roadmap, remaining inbox-zero gaps, and deferred backend hardening.
+> - [`archive/email_app_review.md`](./archive/email_app_review.md) — the milestone build log (chronological history of what shipped).
 >
 > This doc is the **single source of truth for what the email app *is* and *has*.** §6 is the classified feature inventory; §8 lists what is **not yet built or only partial**.
 
@@ -267,7 +267,7 @@ Legend: ✅ shipped · 🟡 shipped with a documented limitation. Provider gaps 
 
 ## 8. NOT YET BUILT / PARTIAL
 
-Grouped by area. Detailed acceptance criteria and the inbox-zero parity audit live in [`email_inbox_zero_parity_plan.md`](./email_inbox_zero_parity_plan.md).
+Grouped by area. Detailed acceptance criteria and the inbox-zero parity audit live in [`archive/email_inbox_zero_parity_plan.md`](./archive/email_inbox_zero_parity_plan.md).
 
 ### 8.1 Provider / sync gaps
 - 🟡 **Outlook delta sync** disabled — running on full-snapshot sweep; needs a verified delta/deletion approach for true incremental + instant non-inbox changes.

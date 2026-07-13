@@ -744,9 +744,18 @@ workflow = ConcurrentBuilder(agents=[research_agent, crm_agent]).build()
 
 ---
 
-#### CopilotKit (`@copilotkit/react-*` npm packages)
+#### CopilotKit (`@copilotkit/react-*` npm packages) — ⚠️ SUPERSEDED (removed in M2.5, 2026-06-20)
 
-**What it is:** A React/TypeScript UI library. It provides the chat window component and context injection hooks. It is **not an LLM**, **not an orchestrator**, and has **no connection to GitHub Copilot**.
+> **This subsection describes a design that no longer exists.** CopilotKit was
+> removed from the Control Plane in M2.5 — there is **no `@copilotkit/*` dependency**
+> in `workbench/control_plane/package.json`. The chat frontend now consumes the MAF
+> **AG-UI protocol over SSE** directly via `workbench/control_plane/src/app/api/agent/chat/route.ts`
+> (`useAgentChat.ts` / `AgentChat.tsx`); session isolation uses a `thread_id` passed to the
+> gateway AG-UI endpoint with `RedisHistoryProvider` persistence. The mechanics below
+> (routing table, model selection) remain accurate **except** that "CopilotKit → AG-UI"
+> is now "AG-UI/SSE client → AG-UI". Kept for history; see ADR-023 (also superseded).
+
+**What it is (historical):** A React/TypeScript UI library. It provided the chat window component and context injection hooks. It is **not an LLM**, **not an orchestrator**, and has **no connection to GitHub Copilot**.
 
 **What it does in this codebase:**
 - `CopilotChat` — renders the chat message thread UI
@@ -829,7 +838,12 @@ The model picker in the Control Plane chat UI determines which execution path ha
 
 Memory is **best-effort** — if `MEM0_API_URL` is not set, all endpoints return empty / no-op. The chat UI degrades gracefully. Orchestrator still runs without memory context.
 
-### ADR-023: CopilotKit as the React chat UI layer; Mem0 as the cross-surface memory store
+### ADR-023: CopilotKit as the React chat UI layer; Mem0 as the cross-surface memory store — **CopilotKit half SUPERSEDED (M2.5, 2026-06-20)**
+
+> **Update:** The **CopilotKit decision below is superseded** — CopilotKit was removed in M2.5;
+> the chat frontend now speaks AG-UI over SSE directly (`api/agent/chat/route.ts`), no
+> `@copilotkit/*` packages. The **Mem0 cross-surface memory** decision still stands (but note
+> memory is default-OFF/inert in practice — audit BO-21). Read the CopilotKit points below as history.
 
 - **Context:** Chat UI needs to maintain session state and improve over time. Memory accumulated in chat should benefit background agent runs, not just the chat session that created it. Critically: CopilotKit is a *React UI library*, not an orchestrator. It must not be conflated with the GitHub Copilot SDK (execution runtime) or LangGraph (workflow orchestrator).
 - **Decision:**

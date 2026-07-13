@@ -324,7 +324,7 @@ eslint clean.
 
 > **Continuing the pixel-art art pipeline** (generating real sprites via Pixel
 > Lab, wiring the swap seam, backend avatar config): see
-> [`pixel_art_office_pipeline.md`](pixel_art_office_pipeline.md) — the handoff
+> [`archive/pixel_art_office_pipeline.md`](archive/pixel_art_office_pipeline.md) — the handoff
 > guide (ASSET SPEC, anchors, seam, Pixel Lab plan, TODOs). Pixel Lab is blocked
 > by egress policy on the web environment; continue on a system with API access.
 
@@ -368,7 +368,7 @@ The office now composes each agent as a **layered scene inside a themed room**
 ### Phase 6.8 — real pixel-art sprites + Avatar Studio (2026-07-10)
 The office is now **real pixel art**, and each agent's look is **customizable**.
 Pixel Lab turned out to be reachable from the operator's own machine (the egress
-403 was only on the web env), so the whole pipeline in `pixel_art_office_pipeline.md`
+403 was only on the web env), so the whole pipeline in `archive/pixel_art_office_pipeline.md`
 was unblocked and shipped:
 - **Real role cast.** `scripts/gen_office_sprites.py` generates a transparent,
   waist-up pixel-art bust per role (coder / sales / planner / triage / reconciler

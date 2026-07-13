@@ -930,7 +930,7 @@ against a mocked provider — no live workspace in this environment.
 **Chat-stack state (same session, 2026-07-02)** — a full audit of the chat
 implementation (SSE · HITL · resume · multi-agent handoffs, both runtimes)
 lives in
-[`chat_implementation_review_2026-07.md`](chat_implementation_review_2026-07.md);
+[`archive/chat_implementation_review_2026-07.md`](archive/chat_implementation_review_2026-07.md);
 its status block records the three hardening batches already landed
 (`3b9d3c8` · `d2de4d2` · `20a7112` — P0-1/2/4/5/6/7/8, P1-1/3/4/8; regression
 suite `tests/unit/test_chat_hardening.py`, 19 tests) and what remains (P0-3

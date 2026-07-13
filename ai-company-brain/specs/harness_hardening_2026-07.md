@@ -2,7 +2,7 @@
 
 > **Status:** In progress · **Created:** 2026-07-02
 > Source: comprehensive comparison of the CommandCenter orchestrator against the practices catalogued in [awesome-harness-engineering](https://github.com/ai-boost/awesome-harness-engineering) (agent loops, planning artifacts, context engineering, tool design, permissions, memory, evals, observability, HITL, sandboxing).
-> Companions: [`chat_implementation_review_2026-07.md`](chat_implementation_review_2026-07.md) (streaming/HITL audit), [`llm_caching_memory.md`](llm_caching_memory.md) (caching plan), [`email_tool_consolidation.md`](email_tool_consolidation.md) (tool-surface plan).
+> Companions: [`archive/chat_implementation_review_2026-07.md`](archive/chat_implementation_review_2026-07.md) (streaming/HITL audit), [`llm_caching_memory.md`](llm_caching_memory.md) (caching plan), [`archive/email_tool_consolidation.md`](archive/email_tool_consolidation.md) (tool-surface plan).
 
 ## Verdict
 
@@ -38,7 +38,7 @@ Create `evals/` with a golden trajectory set exercising the harness itself (not 
 Verification found this shipped, contrary to the initial survey: `AgentChat.tsx` auto-compacts at 80% of the model's **real** context window (75/80 hysteresis, between turns only, re-arms per fill-up and on session/model switch), using the compact route as the engine and a Claude-Code-style checkpoint model (`activeContextSlice` in `lib/tokenCount.ts` — only [summary + recent turns] are sent/counted; full transcript stays for scrollback). Copilot-SDK-runtime agents are deliberately excluded (the SDK compacts server-side natively). No work needed here; token budgeting proper (central accounting in the executor) stays with the caching plan.
 
 ### HH-5 · Enforce tool_scope on email-assistant — mechanism shipped 2026-07-02
-The executor now supports `config.json: own_tool_scope` — the counterpart of `tool_scope` (platform-tool injection filter) for the tools an agent repo bakes itself. Applied via `_apply_own_tool_scope` before injection at all three build sites (main, streaming, sub-agent); no-match fails open with a warning, mirroring `tool_scope`. Email-assistant's actual narrowed subset is deliberately NOT set here — choosing which of the ~60 tools to drop/merge is [`email_tool_consolidation.md`](email_tool_consolidation.md)'s job; when that lands, declare the per-surface subsets via `own_tool_scope`.
+The executor now supports `config.json: own_tool_scope` — the counterpart of `tool_scope` (platform-tool injection filter) for the tools an agent repo bakes itself. Applied via `_apply_own_tool_scope` before injection at all three build sites (main, streaming, sub-agent); no-match fails open with a warning, mirroring `tool_scope`. Email-assistant's actual narrowed subset is deliberately NOT set here — choosing which of the ~60 tools to drop/merge is [`archive/email_tool_consolidation.md`](archive/email_tool_consolidation.md)'s job; when that lands, declare the per-surface subsets via `own_tool_scope`.
 
 ### HH-6 · Sandbox normal agent runs (deferred — Phase 5)
 Replace `PermissionHandler.approve_all` with an allowlist-based handler (near-term); longer-term run dynamic-agent code in the mutation-style container instead of in-process. Scheduled with the Phase 5 hardening pass alongside SEC-1.
@@ -47,7 +47,7 @@ Replace `PermissionHandler.approve_all` with an allowlist-based handler (near-te
 Namespace sub-agent injected-tool events in the parent stream; define a typed handoff payload (message + optional history slice + memory scope). Sequence after the chat review's strategic refactors to avoid churn.
 
 ### HH-8 · Stream-path unification (tracked elsewhere)
-Owned by [`chat_implementation_review_2026-07.md`](chat_implementation_review_2026-07.md) (one event translator, one persistence owner, message-id-native protocol). Listed here only for completeness — do not duplicate work.
+Owned by [`archive/chat_implementation_review_2026-07.md`](archive/chat_implementation_review_2026-07.md) (one event translator, one persistence owner, message-id-native protocol). Listed here only for completeness — do not duplicate work.
 
 ## Status log
 

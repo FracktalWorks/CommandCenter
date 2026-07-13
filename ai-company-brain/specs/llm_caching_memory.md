@@ -6,7 +6,7 @@
 > **ADR references:** ADR-008 (**implemented** 2026-07-03), ADR-012 (Phase 2 deferred)
 > **WBS reference:** WBS 2.6 (semantic cache + token compression)
 > **Related files:** `packages/acb_llm/acb_llm/prompt_cache.py` (NEW — the transform), `packages/acb_llm/acb_llm/client.py`, `apps/gateway/gateway/routes/v1_compat.py` (agent-traffic choke point), `apps/orchestrator/orchestrator/executor.py`, `apps/orchestrator/orchestrator/agents.py`, `packages/acb_memory/acb_memory/session_cache.py` (NEW), `apps/gateway/gateway/main.py` (prewarm), `apps/agent-email-assistant/agents.py`
-> **Companion plan:** [`specs/email_tool_consolidation.md`](email_tool_consolidation.md) — shrinking the tool surface (Phase 7 here depends on it)
+> **Companion plan:** [`specs/archive/email_tool_consolidation.md`](archive/email_tool_consolidation.md) — shrinking the tool surface (Phase 7 here depends on it)
 
 ---
 
@@ -35,7 +35,7 @@
 | 4.2 — Graphiti episode worthiness gate | ✅ done | `graphiti_client.py::_is_episode_worthy` (tier1, opt-in `GRAPHITI_EPISODE_FILTER=1`, conservative) |
 | 5 — LiteLLM Redis exact-match cache | ✅ done (SDK-side) | `client.py::_init_litellm_cache` installs `litellm.cache` gated on `LITELLM_REDIS_CACHE=1`; per-call opt-in via `enable_litellm_cache=True` |
 | 6 — cache warming at startup | ✅ done | `main.py::_prewarm_prompt_cache` (fire-and-forget, gated `PROMPT_CACHE_PREWARM=1`, warms only Anthropic-resolved tiers) |
-| 7 — email tool-surface reduction | ⏳ pending | app-scoped (email-assistant), independent of the caching core — see `email_tool_consolidation.md` |
+| 7 — email tool-surface reduction | ⏳ pending | app-scoped (email-assistant), independent of the caching core — see `archive/email_tool_consolidation.md` |
 
 **Env flags (all default OFF except session-memory, which is ON):**
 `SESSION_MEMORY_CACHE` (default 1), `SESSION_MEMORY_CACHE_TTL` (600),
@@ -390,7 +390,7 @@ For agents that run less frequently than every 5 minutes: use `ttl: "1h"` (2× w
 
 **Goal:** shrink and stabilise the tool payload itself, so there is less to cache AND tool-selection accuracy improves. Caching makes a big prefix *cheap*; this makes it *small*. Do both — they compound.
 
-The email-assistant is the acute case: **63 tools, all injected every request, bypassing `tool_scope`** — a ~30× outlier vs every other agent (task-manager 2, apis-config 1, coding orchestrator ~16 + Copilot built-ins). Companion plan: [`specs/email_tool_consolidation.md`](email_tool_consolidation.md).
+The email-assistant is the acute case: **63 tools, all injected every request, bypassing `tool_scope`** — a ~30× outlier vs every other agent (task-manager 2, apis-config 1, coding orchestrator ~16 + Copilot built-ins). Companion plan: [`specs/archive/email_tool_consolidation.md`](archive/email_tool_consolidation.md).
 
 **7.1 — Consolidate similar tools (email-assistant): 63 → ~40.** 13 merges behind `action=`/`preset=` params — no capability loss, endpoints unchanged (‑~23 tools ≈ ‑2–3k tokens off the tool array). Ship per that plan's 3-phase rollout; the AG-UI card router (`EmailToolCards.tsx`) must change in lockstep (it keys on tool names).
 
@@ -412,7 +412,7 @@ The email-assistant is the acute case: **63 tools, all injected every request, b
 | Anthropic cache miss due to < 1,024 token prefix | Low | Current prefix is ~3,500 tokens; add a token count assertion in tests |
 | Email agent tier resolves to DeepSeek (not Anthropic/OpenAI) → Phase 3.3 is a no-op | Medium | Confirm `EMAIL_AGENT_MODEL` / per-account `chat_model` tier→provider first; if DeepSeek, rely on the provider's auto-cache + LiteLLM Redis (Phase 5) + the provider-independent Phase 7 payload reduction |
 | `tool_scope` subset change busts the tool cache | Low | Keep each scoped subset deterministically ordered; cache is per-context, not per-turn — a context switch legitimately re-warms |
-| Tool consolidation renames break the AG-UI card router / quick-action callers | Medium | Phase 7.1 must land card-router + `_register_agent_tools` changes in the same PR (see `email_tool_consolidation.md` compat section) |
+| Tool consolidation renames break the AG-UI card router / quick-action callers | Medium | Phase 7.1 must land card-router + `_register_agent_tools` changes in the same PR (see `archive/email_tool_consolidation.md` compat section) |
 | Session memory stale mid-session | Low | Agents can call `recall_timeline()` explicitly; 10-min TTL is short enough for most sessions |
 | LiteLLM hook breaks non-Anthropic calls | Low | Hook is gated on `"anthropic" in model or "claude" in model` |
 | MAF internal format conflicts with structured system blocks | Medium | Option A (LiteLLM hook) avoids touching MAF at all; MAF sees a pre-transformed request |
@@ -453,7 +453,7 @@ Week 2, Day 1   Phase 3.1   Sentinel marker in executor.py memory injection    ~
 Week 2, Day 1   Phase 3.2   LiteLLM pre-call hook + config registration        ~3h
 Week 2, Day 2   Phase 3.3   Tool-array cache_control in the hook (native-MAF)  ~1h
 Week 2, Day 2   Phase 3.3   Verify token count >= 1,024 + tools cached in tests ~30m
-(parallel)      Phase 7.1   Email tool consolidation 63→~40 (own 3-phase plan) — see email_tool_consolidation.md
+(parallel)      Phase 7.1   Email tool consolidation 63→~40 (own 3-phase plan) — see archive/email_tool_consolidation.md
 (parallel)      Phase 7.2   Route email agent through tool_scope (core + specialist sets)  ~3h
 (parallel)      Phase 7.3   Trim update_assistant_settings / create_rule docstrings ~1h
 (parallel)      Phase 7.4   Drop UI-only actions from the email tool set        ~1h
@@ -483,7 +483,7 @@ Files to modify:
 | `packages/acb_llm/acb_llm/client.py` | Log cache tokens; add `cache_key` and `enable_litellm_cache` params |
 | `apps/orchestrator/orchestrator/executor.py` | Insert `<!-- CACHE BREAK -->` sentinel at memory injection boundary; (Phase 7.2) `tool_scope` for the email agent path |
 | `infra/litellm/acb_litellm_hooks.py` | (Phase 3.3) also add `cache_control` to the last entry of the `tools` array for Anthropic requests |
-| `apps/agent-email-assistant/agents.py` | (Phase 7) consolidate 63→~40 tools, trim mega-docstrings, drop UI-only tools, keep `_TOOLS` deterministically ordered — see `email_tool_consolidation.md` |
+| `apps/agent-email-assistant/agents.py` | (Phase 7) consolidate 63→~40 tools, trim mega-docstrings, drop UI-only tools, keep `_TOOLS` deterministically ordered — see `archive/email_tool_consolidation.md` |
 | `infra/litellm/config.yaml` | Enable Redis cache; register hook callback |
 | `apps/gateway/gateway/routes/agent.py` | Session-scoped memory cache in Redis |
 | `apps/gateway/gateway/main.py` | Session-scoped memory cache for `/copilot/chat` path; startup cache warming |

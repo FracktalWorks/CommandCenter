@@ -3136,9 +3136,15 @@ async def run_agent_stream(
                                 _cli_opts["log_level"] = _log_level
                             # Headless auth: explicit Copilot token (servers
                             # have no logged-in copilot CLI user).
+                            # Fall back to the canonical GITHUB_TOKEN — the
+                            # only secret the connect UI / settings store / DB
+                            # hydration actually populate. Without this, the
+                            # headless CLI has no auth and no logged-in copilot
+                            # user, yielding "Authorization error, run /login".
                             _cop_tok = (
                                 os.environ.get("COPILOT_GITHUB_TOKEN")
                                 or os.environ.get("GITHUB_COPILOT_TOKEN")
+                                or os.environ.get("GITHUB_TOKEN")
                                 or ""
                             ).strip()
                             if _cop_tok:

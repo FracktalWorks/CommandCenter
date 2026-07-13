@@ -104,6 +104,12 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Register · manage · commits · remove",
       },
       {
+        href: "/approvals",
+        label: "Approvals",
+        icon: "ShieldCheck",
+        note: "Action Broker · outward writes awaiting review",
+      },
+      {
         href: "/integrations",
         label: "Integrations",
         icon: "Plug",

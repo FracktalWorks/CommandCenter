@@ -22,6 +22,7 @@ import {
   Zap,
   FolderOpen,
   Activity,
+  ShieldCheck,
   type LucideIcon,
 } from "lucide-react";
 
@@ -40,6 +41,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   Zap,
   FolderOpen,
   Activity,
+  ShieldCheck,
 };
 
 /** Returns the Lucide component for a given icon name, or Zap as fallback. */

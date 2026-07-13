@@ -240,4 +240,5 @@ All planning artefacts live in [`ai-company-brain/`](ai-company-brain/). Start w
 | [`ai-company-brain/system_architecture.md`](ai-company-brain/system_architecture.md) | C4 diagrams, data model, ADRs |
 | [`ai-company-brain/reference.md`](ai-company-brain/reference.md) | MAF / Copilot SDK / memory library notes |
 | [`FOUNDATION_AUDIT_REPORT.md`](FOUNDATION_AUDIT_REPORT.md) | Foundational architecture audit (findings by severity) |
-| [`FOUNDATION_BUILDOUT_CHECKLIST.md`](FOUNDATION_BUILDOUT_CHECKLIST.md) | Missing/partial foundational capabilities + priorities |
+| [`FOUNDATION_BUILDOUT_CHECKLIST.md`](FOUNDATION_BUILDOUT_CHECKLIST.md) | Missing/partial foundational capabilities + priorities (incl. `CH-*` competitive refs, BO‑20/BO‑21) |
+| [`COMPETITIVE_COMPARISON.md`](COMPETITIVE_COMPARISON.md) | Three‑way comparison vs Hermes Agent & OpenClaw — where we stand + what to learn (annealed into `ai-company-brain/specs/competitive_hardening_2026-07.md`) |

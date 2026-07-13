@@ -110,6 +110,7 @@ Status: 🟢 live/shipped · 🔄 in progress · 🔲 planned/not started. *(Ind
 | [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / organization account research — identity, roles, permissions, memory, agent sharing, data-heavy app scoping (email, tasks), and SaaS multi-tenancy scaling | 🔲 research done |
 | [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST — design proposal | 🔲 brainstorm |
 | [`dev_velocity_tooling_2026-07.md`](specs/dev_velocity_tooling_2026-07.md) | **Dev-velocity tooling** — keeping a large codebase agent-developable: L1 complexity/correctness/mypy gates (grandfather-and-ratchet), L2 CodeGraph MCP (`.mcp.json`), L3 weekly code-health workflow + `codebase_health_audit` skill (flag-only) | 🟢 Phases 1-3 shipped (2026-07-04) |
+| [`competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md) | **Competitive hardening** — learnings from Hermes Agent & OpenClaw (`CH-*`) annealed into the backlog: proven reference implementations attached to BO-1/5/7/12/14, two new gaps (BO-20 event-bus/queue, BO-21 memory activation), Phase-5 Annealer = the self-improving-skills home. Companion to `harness_hardening`; source is `/COMPETITIVE_COMPARISON.md` | 🔲 planned (annealed, no code) |
 
 ---
 
@@ -171,7 +172,7 @@ CommandCenter uses **one execution runtime: MAF**. Interactive chat (via AG-UI e
 | **Reconciler** | Nightly agent that diffs entity graph vs source systems and escalates drift. Lives at `apps/reconciler/` and `level4/apps/reconciler/`. |
 | **HITL** | Human-in-the-loop. Approval requests delivered via Control Plane or email/WhatsApp when operator is not at the UI. |
 | **authority tier** | read / suggest / suggest+apply / autonomous — the allowed scope of an agent's action on a specific resource type. |
-| **Annealer** | Phase 5 sub-agent that mines successful run patterns, proposes new reusable skills as PRs, and manages shadow → canary → full rollout. |
+| **Annealer** | Phase 5 sub-agent that mines successful run patterns, proposes new reusable skills as PRs, and manages shadow → canary → full rollout. **Reference implementation:** Hermes Agent's "Curator" (auto-authors + prunes skills on a cycle) — see CH-7 in [`specs/competitive_hardening_2026-07.md`](specs/competitive_hardening_2026-07.md). Our differentiator is that skill proposals go through the human PR/approval gate; self-improvement *plus* enterprise HITL is something neither Hermes nor OpenClaw offers. |
 
 ---
 

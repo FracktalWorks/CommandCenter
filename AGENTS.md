@@ -113,6 +113,12 @@ best practice:
 - Our gap analysis + work queue: ai-company-brain/specs/harness_hardening_2026-07.md
   (HH-1..8). Check it before starting harness work — the gap may already be
   queued, in-progress, or explicitly deferred with rationale.
+- Competitor reference implementations: ai-company-brain/specs/competitive_hardening_2026-07.md
+  (CH-1..9, sourced from COMPETITIVE_COMPARISON.md) — proven patterns from Hermes
+  Agent (fail-closed approval, container sandbox flags, self-improving Curator,
+  typed sub-agent messaging) and OpenClaw (durable job queue, hub-and-spoke
+  channels; and its CVEs as the cautionary case). Consult it for "what good looks
+  like" when hardening security, plumbing, or multi-agent coordination.
 - Standing rules derived from it:
   1. New platform/agent tools declare risk annotations
      (acb_skills.tool_annotations: read_only/destructive/idempotent/open_world).

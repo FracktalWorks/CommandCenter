@@ -1309,6 +1309,55 @@ def test_pull_mapping_prefers_me_as_display_assignee():
     assert m["assignee"]["provider_user_id"] == "42"
 
 
+# ── "assigned to me" soundness ──────────────────────────────────────────────
+#
+# is_mine is THE signal Priority/Engage filter on ("only tasks assigned to me on
+# ClickUp"). Its correctness rests on matching MY ClickUp user id against the
+# task's assignee ids — so the comparison must be type-robust (ClickUp ids come
+# back as ints in some payloads, strings in others) and must never match on a
+# missing/blank id.
+
+def test_is_mine_matches_across_int_and_str_id_types():
+    """A numeric assignee id must still match my string id (and vice-versa) —
+    the mapping stringifies both sides, so 42 == '42'. A type mismatch here would
+    silently drop every one of my tasks out of Priority/Engage."""
+    # assignee id as an int, my id as a str
+    m = map_pulled_task(
+        _pulled(assignees=[{"name": "v", "provider_user_id": 42}]), "42")
+    assert m["is_mine"] is True
+    # assignee id as a str, my id passed as an int-ish str
+    m2 = map_pulled_task(
+        _pulled(assignees=[{"name": "v", "provider_user_id": "42"}]), 42)  # type: ignore[arg-type]
+    assert m2["is_mine"] is True
+
+
+def test_is_mine_never_matches_on_blank_or_missing_id():
+    """A blank/absent id must NOT spuriously match — otherwise unassigned or
+    malformed tasks would all look 'mine'."""
+    # My id is empty → nothing is mine, even an assignee with a blank id.
+    m = map_pulled_task(
+        _pulled(assignees=[{"name": "x", "provider_user_id": ""}]), "")
+    assert m["is_mine"] is False
+    # I have an id, but the assignee's id is missing entirely.
+    m2 = map_pulled_task(_pulled(assignees=[{"name": "x"}]), "42")
+    assert m2["is_mine"] is False
+
+
+def test_clickup_identity_derives_provider_user_id_from_clickup_id():
+    """The 'me' id used for is_mine comes from ClickUp's own user id via
+    verify()/get_schema — the authoritative owner of the connected token."""
+    import inspect
+
+    from gateway.routes.tasks import providers
+
+    verify = inspect.getsource(providers.ClickUpProvider.verify)
+    assert '"provider_user_id": str(u.get("id"' in verify
+    # The sync run compares against identity.user.provider_user_id.
+    from gateway.routes.tasks import sync as sync_mod
+    run = inspect.getsource(sync_mod._sync_account)
+    assert 'identity.get("user")' in run and "provider_user_id" in run
+
+
 @pytest.mark.asyncio
 async def test_clickup_list_tasks_paginates_and_normalizes():
     p = ClickUpProvider("pk_x", "9001")

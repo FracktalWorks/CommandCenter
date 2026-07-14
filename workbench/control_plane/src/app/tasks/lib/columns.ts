@@ -11,6 +11,7 @@
 /** A toggleable list column. `key` is the stable id used in storage + settings. */
 export type ColumnKey =
   | "priority"
+  | "mode"
   | "context"
   | "energy"
   | "estimate"
@@ -33,6 +34,7 @@ export interface ColumnDef {
  *  separately as the flexible 1fr track). Order here === on-screen order. */
 export const COLUMNS: ColumnDef[] = [
   { key: "priority", label: "Priority", width: "150px", align: "left" },
+  { key: "mode", label: "Action", width: "120px", align: "left" },
   { key: "context", label: "Context", width: "120px", align: "left" },
   { key: "energy", label: "Energy", width: "90px", align: "left" },
   { key: "estimate", label: "Estimate", width: "80px", align: "left" },
@@ -46,6 +48,7 @@ export const COLUMNS: ColumnDef[] = [
  *  default; the noisier count columns (files/subtasks) start hidden. */
 export const DEFAULT_VISIBLE: Record<ColumnKey, boolean> = {
   priority: true,
+  mode: true,
   context: true,
   energy: true,
   estimate: true,

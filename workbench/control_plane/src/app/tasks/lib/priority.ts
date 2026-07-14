@@ -166,6 +166,20 @@ export function actionMode(
   return CELL_META[priorityCell(item, windowHours, now)].mode;
 }
 
+/** The ONE presentation of an action mode — the suggestion of what to do with a
+ *  task: "Do It" (it's yours), or the nudges "Delegate?" / "Schedule?" /
+ *  "Eliminate?". Shared by the Action Mode column AND the group-by lens so the
+ *  two never drift. The "?" reads as a suggestion, never a forced status. */
+export const ACTION_MODE_META: Record<
+  ActionMode,
+  { label: string; emoji: string }
+> = {
+  do: { label: "Do It", emoji: "🎯" },
+  delegate: { label: "Delegate?", emoji: "🙋" },
+  schedule: { label: "Schedule?", emoji: "📅" },
+  drop: { label: "Eliminate?", emoji: "🗑" },
+};
+
 /** The matrix rank (1 = highest). Lower sorts first. */
 export function priorityRank(
   item: Pick<GtdItem, "dueAt" | "important" | "leveraged">,

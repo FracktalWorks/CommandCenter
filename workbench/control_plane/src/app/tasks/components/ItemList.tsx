@@ -71,7 +71,7 @@ const VIEW_META: Record<
   { title: string; icon: typeof Inbox; hint: string }
 > = {
   inbox: { title: "Inbox", icon: Inbox, hint: "Capture, then clarify each item to zero." },
-  next: { title: "My Next Actions", icon: ListChecks, hint: "Tasks assigned to you — the very next physical step for each." },
+  next: { title: "My Next Actions", icon: ListChecks, hint: "Tasks assigned to you, grouped by status and sorted by priority — the very next physical step for each." },
   priority: { title: "Priority", icon: Target, hint: "Your open work by the founder matrix — Founder Fire first, Eliminate last." },
   engage: { title: "Engage · Now", icon: Zap, hint: "What you can pick up right now, matched to your energy." },
   waiting: { title: "Waiting For", icon: Clock, hint: "Delegated or blocked on someone else." },

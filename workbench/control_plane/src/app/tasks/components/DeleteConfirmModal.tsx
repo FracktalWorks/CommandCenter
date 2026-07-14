@@ -10,8 +10,8 @@ import { useTaskStore } from "../lib/taskStore";
  * Store-driven: any delete site calls `requestDelete(ids)`, which opens this
  * dialog for ClickUp-synced or already-clarified tasks (fresh inbox captures
  * skip it). Confirming runs the soft-delete + undo flow; for a synced task the
- * copy warns that the ClickUp task will be deleted too (once the undo window
- * passes).
+ * copy warns that the ClickUp task will be ARCHIVED (not hard-deleted — ClickUp
+ * keeps it recoverable) once the undo window passes.
  */
 export function DeleteConfirmModal() {
   const pendingDeleteIds = useTaskStore((s) => s.pendingDeleteIds);
@@ -70,8 +70,8 @@ export function DeleteConfirmModal() {
                 <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
                 <span>
                   {syncedCount === count && count === 1
-                    ? "This is a ClickUp task — it will be deleted in ClickUp too."
-                    : `${syncedCount} of these ${syncedCount === 1 ? "is a ClickUp task" : "are ClickUp tasks"} — they'll be deleted in ClickUp too.`}
+                    ? "This is a ClickUp task — it will be archived in ClickUp (recoverable there), not permanently deleted."
+                    : `${syncedCount} of these ${syncedCount === 1 ? "is a ClickUp task" : "are ClickUp tasks"} — they'll be archived in ClickUp (recoverable there), not permanently deleted.`}
                 </span>
               </div>
             )}

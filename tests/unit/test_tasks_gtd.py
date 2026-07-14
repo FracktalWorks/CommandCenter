@@ -519,23 +519,26 @@ def test_restore_clears_the_tombstone_only_for_deleted_rows():
     assert "deleted_at IS NOT NULL" in src   # only a deleted row can be restored
 
 
-def test_purge_hard_deletes_and_propagates_clickup_deletion():
-    """Purge finalizes a soft delete: it removes the row AND, for a pushed
-    SYNCED task, deletes the upstream ClickUp task — best-effort, before the
-    local removal so the provider linkage is still available."""
+def test_purge_removes_row_and_archives_clickup_counterpart():
+    """Purge finalizes a soft delete: it removes the LOCAL row AND, for a pushed
+    SYNCED task, ARCHIVES the upstream ClickUp task (recoverable there — we never
+    hard-delete upstream) — best-effort, before the local removal so the provider
+    linkage is still available."""
     import inspect
 
     from gateway.routes.tasks import items as items_mod
 
     src = inspect.getsource(items_mod.purge_item)
-    assert "DELETE FROM gtd_items" in src
+    assert "DELETE FROM gtd_items" in src        # local row IS hard-removed
     assert "_delete_upstream" in src
-    # Upstream deletion is gated on a pushed synced task.
+    # Upstream propagation is gated on a pushed synced task.
     assert 'row.source != "LOCAL"' in src
     assert "provider_task_id" in src
 
     up = inspect.getsource(items_mod._delete_upstream)
-    assert "provider.delete_task" in up
+    # Upstream is ARCHIVED, not deleted — recoverable in the connected tool.
+    assert "provider.archive_task" in up
+    assert "provider.delete_task" not in up
     # Best-effort: an upstream failure must not block the local purge.
     assert "except Exception" in up
 
@@ -564,6 +567,36 @@ def test_base_provider_delete_task_defaults_to_unsupported():
     from gateway.routes.tasks import providers
 
     src = inspect.getsource(providers.BaseTaskProvider.delete_task)
+    assert "not supported" in src and "501" in src
+
+
+def test_archive_endpoints_mirror_upstream_for_synced_tasks():
+    """Single archive and bulk archive both back-propagate to the connected tool
+    via _archive_upstream (so the app and ClickUp stay consistent), while a
+    LOCAL-only task never triggers an outward write."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    single = inspect.getsource(items_mod.archive_item)
+    assert "_archive_upstream" in single
+    bulk = inspect.getsource(items_mod.bulk_archive)
+    assert "_archive_upstream" in bulk
+
+    helper = inspect.getsource(items_mod._archive_upstream)
+    # SYNCED-only: local rows (no provider linkage) are skipped.
+    assert 'row.source == "LOCAL"' in helper
+    assert "provider.archive_task" in helper
+    # Best-effort per row — one failure doesn't abort the batch.
+    assert "except Exception" in helper
+
+
+def test_base_provider_archive_task_defaults_to_unsupported():
+    import inspect
+
+    from gateway.routes.tasks import providers
+
+    src = inspect.getsource(providers.BaseTaskProvider.archive_task)
     assert "not supported" in src and "501" in src
 
 

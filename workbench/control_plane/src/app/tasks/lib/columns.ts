@@ -57,12 +57,18 @@ export const DEFAULT_VISIBLE: Record<ColumnKey, boolean> = {
 
 const STORAGE_KEY = "cc.tasks.listColumns";
 
-/** Read the persisted visibility map, merged over the defaults (so a newly
- *  added column shows/hides per its default until the user touches it). */
-export function readColumnVisibility(): Record<ColumnKey, boolean> {
+// useSyncExternalStore compares snapshots with Object.is, so getSnapshot MUST
+// return a STABLE reference until the value actually changes — otherwise it
+// re-renders on every commit forever (React error #185, "maximum update depth").
+// We cache the parsed map keyed on the raw localStorage string and only rebuild
+// it when that string changes (a write here, or a storage event from another
+// tab). `cachedRaw = undefined` means "not yet read".
+let cachedRaw: string | null | undefined;
+let cachedVis: Record<ColumnKey, boolean> = { ...DEFAULT_VISIBLE };
+
+function parseVisibility(raw: string | null): Record<ColumnKey, boolean> {
+  if (!raw) return { ...DEFAULT_VISIBLE };
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
-    if (!raw) return { ...DEFAULT_VISIBLE };
     const parsed = JSON.parse(raw) as Partial<Record<ColumnKey, boolean>>;
     const out = { ...DEFAULT_VISIBLE };
     for (const c of COLUMNS) {
@@ -74,14 +80,43 @@ export function readColumnVisibility(): Record<ColumnKey, boolean> {
   }
 }
 
+/** The persisted visibility map, merged over the defaults. Returns a CACHED,
+ *  stable object reference (rebuilt only when the stored string changes) so it's
+ *  safe as a useSyncExternalStore getSnapshot. */
+export function readColumnVisibility(): Record<ColumnKey, boolean> {
+  let raw: string | null;
+  try {
+    raw = window.localStorage.getItem(STORAGE_KEY);
+  } catch {
+    // localStorage unavailable (SSR / private mode) — stable default.
+    return cachedVis;
+  }
+  if (raw !== cachedRaw) {
+    cachedRaw = raw;
+    cachedVis = parseVisibility(raw);
+  }
+  return cachedVis;
+}
+
 const listeners = new Set<() => void>();
+
+function notify(): void {
+  listeners.forEach((cb) => cb());
+}
+
+/** Invalidate the cache and notify subscribers — call on a cross-tab storage
+ *  event so the next getSnapshot re-reads localStorage. */
+function invalidateAndNotify(): void {
+  cachedRaw = undefined; // force the next read to re-parse from storage
+  notify();
+}
 
 /** Subscribe to visibility changes (this tab's writes + other tabs' storage
  *  events). Shaped for useSyncExternalStore. */
 export function subscribeColumns(cb: () => void): () => void {
   listeners.add(cb);
   const onStorage = (e: StorageEvent) => {
-    if (e.key === STORAGE_KEY) cb();
+    if (e.key === STORAGE_KEY) invalidateAndNotify();
   };
   window.addEventListener("storage", onStorage);
   return () => {
@@ -93,12 +128,18 @@ export function subscribeColumns(cb: () => void): () => void {
 /** Persist a single column's visibility and notify subscribers. */
 export function setColumnVisible(key: ColumnKey, visible: boolean): void {
   const next = { ...readColumnVisibility(), [key]: visible };
+  const serialized = JSON.stringify(next);
   try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(next));
+    window.localStorage.setItem(STORAGE_KEY, serialized);
   } catch {
-    /* private mode — in-memory listeners still fire for this tab */
+    // Private mode — localStorage write failed; the in-memory cache below still
+    // makes this tab reflect the change.
   }
-  listeners.forEach((cb) => cb());
+  // Update the cache to the new value so getSnapshot returns this exact (stable)
+  // reference — keeping it consistent with what we just wrote, without a re-read.
+  cachedRaw = serialized;
+  cachedVis = next;
+  notify();
 }
 
 /** The visible columns, in order — the desktop grid's non-Name tracks. */

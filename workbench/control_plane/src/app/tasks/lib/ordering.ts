@@ -206,6 +206,12 @@ export function statusColumnForItem(
     s && stages.some((st) => normStatus(st) === normStatus(s))
       ? stages.find((st) => normStatus(st) === normStatus(s))!
       : "";
+  // A completed task always rests in the LAST stage (the "Done" column) — that's
+  // the terminal column it stays in until archived, regardless of whatever stage
+  // or ClickUp status it carried when it was completed.
+  if (item.disposition === "DONE" && stages.length) {
+    return stages[stages.length - 1];
+  }
   if (item.source === "LOCAL") {
     return known(item.workflowStage) || firstStage;
   }

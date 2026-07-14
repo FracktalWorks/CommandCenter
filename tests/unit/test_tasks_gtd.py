@@ -829,6 +829,49 @@ def test_workflow_stage_is_a_backsync_trigger():
     assert "_status_for_stage" in payload_src
 
 
+# ---------------------------------------------------------------------------
+# Done column: completed tasks stay on the board until archived
+# ---------------------------------------------------------------------------
+
+def test_done_disposition_stamps_completed_at():
+    from gateway.routes.tasks.items import _build_item_update
+
+    sets, params = _build_item_update("i1", "u", ItemPatch(disposition="DONE"))
+    assert "disposition = :disp" in sets
+    assert params["disp"] == "DONE"
+    assert "completed_at = now()" in sets
+    assert "completed_at = NULL" not in sets
+
+
+def test_reopen_clears_completed_at():
+    """Moving a task OFF done (e.g. dragging a card out of the Done column back
+    to NEXT) clears completed_at so it reads as active again — the invariant is
+    completed_at is non-null iff DONE."""
+    from gateway.routes.tasks.items import _build_item_update
+
+    sets, _ = _build_item_update("i1", "u", ItemPatch(disposition="NEXT"))
+    assert "completed_at = NULL" in sets
+    assert "completed_at = now()" not in sets
+
+
+def test_stage_boundary_flips_disposition_both_ways():
+    """patch_item translates a board drag across the DONE boundary into a
+    disposition flip: drop on the LAST stage → DONE; drag a DONE card to an
+    EARLIER stage → reopen to NEXT."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    src = inspect.getsource(tasks_items.patch_item)
+    # Last stage → DONE.
+    assert 'patch.workflow_stage == stages[-1]' in src
+    assert 'patch.disposition = "DONE"' in src
+    # Earlier stage while currently DONE → reopen to NEXT.
+    assert 'patch.workflow_stage != stages[-1]' in src
+    assert 'current.disposition == "DONE"' in src
+    assert 'patch.disposition = "NEXT"' in src
+
+
 def test_organize_request_accepts_subtasks():
     from gateway.routes.tasks.items import OrganizeRequest
 

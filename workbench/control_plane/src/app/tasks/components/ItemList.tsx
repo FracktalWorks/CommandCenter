@@ -23,12 +23,7 @@ import {
   X,
   Sparkles,
 } from "lucide-react";
-import {
-  useTaskStore,
-  itemsForView,
-  contextCounts,
-  NO_CONTEXT,
-} from "../lib/taskStore";
+import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
 import { isOverdue } from "../lib/utils";
@@ -37,7 +32,6 @@ import { ProjectsList } from "./ProjectsList";
 import { TaskCard } from "./TaskCard";
 import { TaskBoard } from "./TaskBoard";
 import { TaskListGrouped } from "./TaskListGrouped";
-import { LensGroupedList } from "./LensGroupedList";
 import { TaskToolbar } from "./TaskToolbar";
 
 // View mode (list vs kanban board) for the processed-task views, sticky per
@@ -96,8 +90,6 @@ export function ItemList() {
   const bulkArchive = useTaskStore((s) => s.bulkArchive);
   const requestDelete = useTaskStore((s) => s.requestDelete);
   const groupByChoice = useTaskStore((s) => s.groupBy);
-  const contexts = useTaskStore((s) => s.contexts);
-  const selectContext = useTaskStore((s) => s.selectContext);
   const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
 
   // Multi-select for bulk archive/restore/delete. Lifted into the store so it
@@ -118,10 +110,9 @@ export function ItemList() {
     () => itemsForView(items, view, context, sourceFilter),
     [items, view, context, sourceFilter],
   );
-  // The Priority view is GROUPED by priority level (Critical → Low Priority
-  // section headers, ranked 1→7 by LensGroupedList). It forces the priority
-  // sort so within each section tasks are rank-ordered; every other view honours
-  // the toolbar sort.
+  // The legacy Priority view (no longer a sidebar entry, but still reachable in
+  // code) forces the priority sort so its sections read rank-ordered; every
+  // other view honours the toolbar sort.
   const visible = useMemo(() => {
     const effectiveSort =
       view === "priority" ? ({ field: "priority", dir: "asc" } as const) : sort;
@@ -132,12 +123,6 @@ export function ItemList() {
   const contextlessCount = useMemo(
     () => (view === "next" ? inView.filter((i) => !i.context).length : 0),
     [view, inView],
-  );
-  // Per-@context counts for the in-header context pills (Next Actions only) —
-  // the same source the sidebar drill-down uses, so the pill counts match.
-  const ctxCounts = useMemo(
-    () => (view === "next" ? contextCounts(items) : {}),
-    [view, items],
   );
 
   if (view === "projects") {
@@ -160,19 +145,15 @@ export function ItemList() {
   // its own triage UI; projects is a different surface). Calendar/Archive get
   // it too — search/sort still help there — but they stay list-only.
   const showToolbar = view !== "inbox";
-  // Status-segmented list: only Next Actions groups (by the status axis — local
-  // stages ∪ ClickUp statuses). @context is NOT a grouping axis here — it drives
-  // the left sidebar.
+  // Next Actions is a single grouped list (TaskListGrouped) with columns; the
+  // grouping AXIS comes from the toolbar group-by ("" = Status). Every axis —
+  // status, priority, suggestion, energy, context — keeps the columns now (the
+  // list handles them all). Other views render a flat list.
   const grouped = view === "next";
-  // The toolbar "lens": an explicit group-by slices a view into labelled
-  // sections via LensGroupedList. "" = default (status axis on Next Actions,
-  // flat elsewhere). The Priority view always groups by priority LEVEL (the
-  // 7-level matrix), ignoring the toolbar group-by; elsewhere the toolbar wins.
-  const lens: GroupBy | "" = view === "priority" ? "priority" : groupByChoice;
-  const useLens = lens !== "" && lens !== "none" && !(boardable && mode === "board");
+  const groupAxis: GroupBy | "" = grouped ? groupByChoice : "";
   // Bulk multi-select (archive / restore / delete) is offered on every
   // processed-task surface — the flat lists (Done/Waiting/…), the Next-Actions
-  // status-grouped list, AND the Kanban board — so you can check off a batch and
+  // grouped list, AND the Kanban board — so you can check off a batch and
   // archive/delete it anywhere. Only the inbox (its own triage UI) and calendar
   // opt out.
   const isBoard = boardable && mode === "board";
@@ -300,18 +281,6 @@ export function ItemList() {
             flag them important or leveraged.
           </p>
         )}
-        {/* @context filter pills (Next Actions) — the Engage-style pill row in
-            place of a dropdown. "All" clears the context; each pill mirrors the
-            sidebar drill-down (sets selectedContext). Only shown when there's
-            more than one bucket to choose between. */}
-        {view === "next" && (
-          <ContextPills
-            contexts={contexts.map((c) => c.name)}
-            counts={ctxCounts}
-            selected={context}
-            onSelect={selectContext}
-          />
-        )}
       </header>
 
       {showToolbar && !loading && inView.length > 0 && (
@@ -329,18 +298,19 @@ export function ItemList() {
         ) : (
           <EmptyState view={view} />
         )
-      ) : useLens && !selectMode ? (
-        // An explicit toolbar lens (priority / mode / energy / context).
-        <LensGroupedList items={visible} by={lens as Exclude<typeof lens, "">} />
       ) : isBoard && !selectMode ? (
         // The Kanban board (drag-to-refile). In select mode we fall through to
-        // the status-grouped list instead — checkboxes + drag on the same cards
-        // would fight each other, and the grouped list shows the same stages.
+        // the grouped list instead — checkboxes + drag on the same cards would
+        // fight each other, and the grouped list shows the same stages.
         <div className="min-h-0 flex-1">
           <TaskBoard items={visible} view={view} />
         </div>
-      ) : grouped && !useLens ? (
-        <TaskListGrouped items={visible} view={view} />
+      ) : grouped ? (
+        // The one grouped list — columns + multi-select on EVERY grouping axis
+        // (status / priority / suggestion / energy / context). Drag-reorder is
+        // enabled only on the Status axis (you can't drag to change a computed
+        // attribute); the list handles that internally.
+        <TaskListGrouped items={visible} view={view} groupBy={groupAxis} />
       ) : (
         <div className="flex-1 overflow-y-auto">
           {visible.map((item) =>
@@ -417,71 +387,6 @@ export function ItemList() {
           </div>
         </div>
       )}
-    </div>
-  );
-}
-
-/** The Engage-style @context filter for Next Actions: an "All" pill plus one
- *  pill per @context that currently has tasks (and the "@no context" bucket when
- *  present). Selecting a pill sets the store's selectedContext — the same signal
- *  the sidebar drill-down uses — so the two stay in lock-step. Hidden when there
- *  is only the "All" option (nothing to narrow to). */
-function ContextPills({
-  contexts,
-  counts,
-  selected,
-  onSelect,
-}: {
-  contexts: string[];
-  counts: Record<string, number>;
-  selected: string | null;
-  onSelect: (c: string | null) => void;
-}) {
-  // Only offer @contexts that actually have tasks right now, in the sidebar's
-  // order: named contexts alphabetically-ish (as configured), then "@no context"
-  // last so the unclarified bucket doesn't lead.
-  const named = contexts.filter((c) => (counts[c] ?? 0) > 0);
-  const hasNoCtx = (counts[NO_CONTEXT] ?? 0) > 0;
-  const pills: { key: string; label: string; value: string | null; count: number }[] = [
-    { key: "__all__", label: "All", value: null, count: 0 },
-    ...named.map((c) => ({ key: c, label: c, value: c, count: counts[c] ?? 0 })),
-    ...(hasNoCtx
-      ? [{ key: NO_CONTEXT, label: NO_CONTEXT, value: NO_CONTEXT, count: counts[NO_CONTEXT] ?? 0 }]
-      : []),
-  ];
-  // Nothing to choose between (only "All") → don't render a lonely pill row.
-  if (pills.length <= 1) return null;
-  return (
-    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
-      {pills.map((p) => {
-        const on = selected === p.value;
-        return (
-          <button
-            key={p.key}
-            type="button"
-            onClick={() => onSelect(p.value)}
-            aria-pressed={on}
-            className={[
-              "tech-transition inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium",
-              on
-                ? "border-primary bg-primary/10 text-primary"
-                : "border-border text-muted-foreground hover:border-primary/40",
-            ].join(" ")}
-          >
-            {p.label}
-            {p.count > 0 && (
-              <span
-                className={[
-                  "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
-                  on ? "bg-primary/15 text-primary" : "bg-background/60 text-muted-foreground",
-                ].join(" ")}
-              >
-                {p.count}
-              </span>
-            )}
-          </button>
-        );
-      })}
     </div>
   );
 }

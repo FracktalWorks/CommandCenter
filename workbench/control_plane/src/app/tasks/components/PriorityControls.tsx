@@ -194,9 +194,11 @@ export function SuggestionBadge({
   const mode = sug.mode as Exclude<ActionMode, "do">;
   const badge = SUGGESTION_BADGE[mode];
   const Icon = SUGGESTION_ICON[mode];
-  // For a delegate nudge, name the AI's suggested owner when we have one.
-  const who = mode === "delegate" ? item.assignee?.name?.split(/\s+/)[0] : undefined;
-  const label = who ? `Delegate to ${who}?` : badge.label;
+  // Plain nudge ("Delegate?"), no name. A delegate nudge fires on tasks that are
+  // MINE (NEXT + isMine), so item.assignee is me — naming it would read
+  // "Delegate to <me>?", which is nonsense. Suggesting a real delegate from the
+  // org/HR structure is a separate follow-up; until then, no name.
+  const label = badge.label;
   return (
     <span
       className={[

@@ -14,13 +14,17 @@ import {
 } from "../lib/priority";
 
 // Shared prioritization UI: the 3-flag Weight toggle (Important / Urgent-auto /
-// Leveraged) and the single priority badge. Kept together so the visual
-// language (which colour, which emoji) is defined once.
+// Leveraged) and the priority badges. Kept together so the visual language
+// (which colour, which emoji) is defined once.
 //
-// One-badge-per-card rule: a card shows AT MOST ONE priority signal, chosen by
-// the active lens (the caller decides which to render). PriorityBadge is the
-// matrix-cell badge; the delegate/schedule hint and the energy chip live in
-// their own views. Never stack them.
+// Two DISTINCT signals, and they may sit side by side on a card:
+//   • PriorityBadge — the matrix-cell PILL (🔥 Critical, 📈 High-Leverage, …):
+//     WHAT the task is. Shown on every Next-Actions card so the priority reads
+//     at a glance (label hidden on the Priority view, which is grouped by level).
+//   • SuggestionBadge — the competing action NUDGE (delegate / schedule /
+//     eliminate): what to DO about it. A dismissible suggestion, never a status.
+// They answer different questions, so they're allowed to co-exist (the nudge is
+// hidden on the Priority view, where the pill already carries the level).
 
 /** The Weight toggles. Important + Leveraged are manual (click to flip); Urgent
  *  is DERIVED from the due date and shown read-only (a lit, non-clickable chip
@@ -133,8 +137,9 @@ const CELL_TONE: Record<PriorityCell, string> = {
   "low-priority": "border-border bg-secondary/40 text-muted-foreground",
 };
 
-/** The single matrix-cell badge (emoji + label). Render this ONLY in the
- *  Priority view / detail — never alongside the delegate/energy chips. */
+/** The matrix-cell badge (emoji + optional label) — the task's priority level.
+ *  Rides on every Next-Actions card (list + board) so the priority is visible at
+ *  a glance; `showLabel=false` on the Priority view (grouped by level already). */
 export function PriorityBadge({
   item,
   urgentWindowHours,

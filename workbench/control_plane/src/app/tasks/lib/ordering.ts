@@ -5,7 +5,7 @@
 
 import { GtdItem } from "./types";
 import { isOverdue } from "./utils";
-import { isUrgent, priorityRank } from "./priority";
+import { priorityRank } from "./priority";
 
 /** The step between freshly-assigned ranks (also the re-spread gap). */
 const RANK_STEP = 1000;
@@ -65,11 +65,13 @@ export function rankForDrop(ordered: GtdItem[], toIndex: number): number {
 /** How a view is ordered. "manual" is the drag-reorder order (default) and is
  *  the only mode where dragging to reposition is allowed; any explicit field
  *  sort overrides manual position, so dragging is disabled in those modes. */
+// "urgency" was dropped as a sort: it's a coarse urgent/not bucket that
+// "due" already orders more finely (soonest deadline first) and "priority"
+// already folds urgency into its rank — so it added nothing.
 export type SortField =
   | "manual"
   | "priority"
   | "due"
-  | "urgency"
   | "created"
   | "title"
   | "energy";
@@ -136,11 +138,8 @@ export function applySort(items: GtdItem[], s: TaskSort): GtdItem[] {
 function sortKeyFor(i: GtdItem, field: SortField): string | number | null {
   switch (field) {
     case "priority":
-      // Matrix rank 1..8 (1 = highest). Asc puts Founder Fire first.
+      // Matrix rank 1..7 (1 = highest). Asc puts Critical first.
       return priorityRank(i);
-    case "urgency":
-      // Urgent first: 0 = urgent, 1 = not. Overdue/soon float up on asc.
-      return isUrgent(i) ? 0 : 1;
     case "due":
       return i.dueAt ?? null;
     case "created":

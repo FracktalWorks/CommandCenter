@@ -159,6 +159,14 @@ class BaseTaskProvider(ABC):
         leaving the upstream task behind."""
         raise ProviderError(self.provider, "delete_task not supported", 501)
 
+    async def list_statuses_for_task(self, provider_task_id: str) -> list[str]:
+        """The ordered status names of THIS task's own list/project (status
+        vocabularies vary per project). Used to translate a local Next-Actions
+        stage back into a concrete upstream status for THIS task on a board drag.
+        Best-effort: empty list when it can't be resolved (→ caller skips the
+        upstream write and keeps the move local)."""
+        return []
+
     async def get_task_detail(self, provider_task_id: str) -> dict[str, Any]:
         """Fetch the rich, on-demand detail of one task for the detail view:
 
@@ -467,18 +475,32 @@ class ClickUpProvider(BaseTaskProvider):
             raise ProviderError(
                 "clickup", f"delete task → {r.status_code}: {r.text[:200]}")
 
-    async def _closed_status_for(self, provider_task_id: str) -> str | None:
-        """The closed/done-type status name of a task's list (varies per
-        workspace). Best-effort: returns None if it can't be resolved."""
+    async def _list_statuses_raw(
+        self, provider_task_id: str
+    ) -> list[dict[str, Any]]:
+        """The raw status objects ({status, type, orderindex}) of a task's list.
+        Best-effort: [] when it can't be resolved."""
         with contextlib.suppress(ProviderError, KeyError, TypeError):
             task = await self._get(f"/task/{provider_task_id}")
             list_id = str((task.get("list") or {}).get("id") or "")
             if not list_id:
-                return None
+                return []
             lst = await self._get(f"/list/{list_id}")
-            for st in lst.get("statuses") or []:
-                if (st.get("type") or "").lower() in ("closed", "done"):
-                    return st.get("status")
+            return [st for st in lst.get("statuses") or [] if st.get("status")]
+        return []
+
+    async def list_statuses_for_task(self, provider_task_id: str) -> list[str]:
+        """The ordered status NAMES of this task's own list (varies per project).
+        Empty when unresolvable → caller keeps the board move local."""
+        return [str(st.get("status")) for st in
+                await self._list_statuses_raw(provider_task_id)]
+
+    async def _closed_status_for(self, provider_task_id: str) -> str | None:
+        """The closed/done-type status name of a task's list (varies per
+        workspace). Best-effort: returns None if it can't be resolved."""
+        for st in await self._list_statuses_raw(provider_task_id):
+            if (st.get("type") or "").lower() in ("closed", "done"):
+                return str(st.get("status"))
         return None
 
     async def list_members(self, workspace_id: str) -> list[dict[str, Any]]:

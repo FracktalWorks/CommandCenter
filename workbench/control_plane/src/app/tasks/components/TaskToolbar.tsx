@@ -37,11 +37,11 @@ const SORT_FIELDS: SortField[] = [
 ];
 
 const GROUP_LABEL: Record<GroupBy | "", string> = {
-  "": "Default grouping",
+  "": "Status", // the default grouping for Next Actions IS by status
   none: "No grouping",
   context: "Context",
   priority: "Priority",
-  mode: "Action mode",
+  mode: "Suggestion",
   energy: "Energy",
 };
 
@@ -57,6 +57,11 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
   const setSort = useTaskStore((s) => s.setSort);
   const groupBy = useTaskStore((s) => s.groupBy);
   const setGroupBy = useTaskStore((s) => s.setGroupBy);
+  const view = useTaskStore((s) => s.selectedView);
+  // My Next Actions is only ever tasks assigned to me, so an assignee filter
+  // there is meaningless (it's always "me"). Keep it on the other views (e.g.
+  // Waiting For), where tasks are delegated to different people.
+  const showAssigneeFilter = view !== "next";
   // When already drilled into a single @context (a Next Actions subfolder),
   // every visible task IS that context — the Context dropdown is redundant, so
   // it only appears at the top-level Next Actions where all contexts are mixed.
@@ -115,8 +120,8 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
         />
       )}
 
-      {/* Assignee filter */}
-      {assignees.length > 0 && (
+      {/* Assignee filter — not on My Next Actions (always me); shown elsewhere. */}
+      {showAssigneeFilter && assignees.length > 0 && (
         <Select
           label="Assignee"
           value={filters.assignee}

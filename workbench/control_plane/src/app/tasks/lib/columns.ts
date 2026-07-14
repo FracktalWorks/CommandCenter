@@ -16,7 +16,6 @@ export type ColumnKey =
   | "energy"
   | "estimate"
   | "due"
-  | "assignee"
   | "attachments"
   | "subtasks";
 
@@ -34,12 +33,11 @@ export interface ColumnDef {
  *  separately as the flexible 1fr track). Order here === on-screen order. */
 export const COLUMNS: ColumnDef[] = [
   { key: "priority", label: "Priority", width: "150px", align: "left" },
-  { key: "mode", label: "Action", width: "120px", align: "left" },
+  { key: "mode", label: "Suggestion", width: "120px", align: "left" },
   { key: "context", label: "Context", width: "120px", align: "left" },
   { key: "energy", label: "Energy", width: "90px", align: "left" },
   { key: "estimate", label: "Estimate", width: "80px", align: "left" },
   { key: "due", label: "Due date", width: "110px", align: "left" },
-  { key: "assignee", label: "Assignee", width: "140px", align: "left" },
   { key: "attachments", label: "Files", width: "60px", align: "center" },
   { key: "subtasks", label: "Subtasks", width: "80px", align: "center" },
 ];
@@ -53,7 +51,6 @@ export const DEFAULT_VISIBLE: Record<ColumnKey, boolean> = {
   energy: true,
   estimate: true,
   due: true,
-  assignee: true,
   attachments: false,
   subtasks: false,
 };

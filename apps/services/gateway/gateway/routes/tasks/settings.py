@@ -25,12 +25,55 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends
-from gateway.routes.tasks.core import _get_db, _log, _uid, router
+from gateway.routes.tasks.core import _get_db, _log, _parse_jsonb, _uid, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
 # Default Kanban board stages for Next Actions (last stage = "done").
 DEFAULT_WORKFLOW_STAGES: list[str] = ["TODO", "IN PROCESS", "WAITING FOR", "DONE"]
+
+# Name heuristics for auto-seeding the ClickUp-status → Next-Actions-stage map.
+# Each stage lists substrings that, when found in a (lower-cased) ClickUp status
+# name, guess that stage. First match wins in STAGE order (so "in review" hits
+# IN PROCESS, not WAITING); anything unmatched falls back to the first stage.
+_STAGE_HEURISTICS: list[tuple[str, tuple[str, ...]]] = [
+    ("DONE", ("done", "complete", "closed", "resolved", "shipped", "cancel")),
+    ("WAITING FOR", ("waiting", "blocked", "on hold", "hold", "paused",
+                     "pending", "stuck")),
+    ("IN PROCESS", ("progress", "process", "doing", "review", "testing",
+                    "qa", "active", "wip", "started")),
+    ("TODO", ("todo", "to do", "to-do", "backlog", "open", "new", "icebox",
+              "later", "someday", "planned", "queue")),
+]
+
+
+def guess_stage_for_status(status: str, stages: list[str]) -> str:
+    """Auto-guess which of the user's `stages` a raw ClickUp status name belongs
+    to, by substring heuristics. Falls back to the FIRST stage when nothing
+    matches (so a task is always visible, never lost). Only guesses stages the
+    user actually has — a heuristic for a stage not in `stages` is skipped."""
+    low = (status or "").strip().lower()
+    have = {s.strip().upper(): s for s in stages}
+    for canonical, needles in _STAGE_HEURISTICS:
+        if canonical in have and any(n in low for n in needles):
+            return have[canonical]
+    return stages[0] if stages else "TODO"
+
+
+def seed_status_stage_map(
+    statuses: list[str], stages: list[str],
+    existing: dict[str, str] | None = None,
+) -> dict[str, str]:
+    """Build/extend the status→stage map: keep any EXISTING user choices, and
+    auto-guess a stage for every status not yet mapped. Keyed by the normalized
+    (trimmed, lower-cased) status name. Never overrides a user's explicit map."""
+    out = dict(existing or {})
+    for raw in statuses:
+        key = (raw or "").strip().lower()
+        if not key or key in out:
+            continue
+        out[key] = guess_stage_for_status(raw, stages)
+    return out
 
 # Per-function default tiers (aliases resolved by acb_llm: tier-fast→tier1 …).
 DEFAULT_GTD_MODELS = {
@@ -65,6 +108,12 @@ class GtdSettingsModel(BaseModel):
     # (also always urgent once overdue). Drives the matrix's ⏰ axis so urgency
     # never goes stale. Default 48h.
     urgent_window_hours: int = 48
+    # ClickUp status → Next-Actions stage. {normalized_status: stage} — one entry
+    # per unique upstream status name across every connected project. Governs how
+    # a synced task groups on the Next-Actions board and (in reverse) which of a
+    # task's own project statuses is written back on a drag. Empty = fall back to
+    # the name heuristic; seeded by the auto-guess on first status-catalog read.
+    status_stage_map: dict[str, str] = {}
 
 
 class GtdSettingsPatch(BaseModel):
@@ -79,6 +128,7 @@ class GtdSettingsPatch(BaseModel):
     mirror_done_tasks: bool | None = None
     workflow_stages: list[str] | None = None
     urgent_window_hours: int | None = None
+    status_stage_map: dict[str, str] | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -156,7 +206,39 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         mirror_done_tasks=bool(getattr(row, "mirror_done_tasks", False)),
         workflow_stages=_stages(getattr(row, "workflow_stages", None)),
         urgent_window_hours=int(getattr(row, "urgent_window_hours", 48) or 48),
+        status_stage_map=_status_map(getattr(row, "status_stage_map", None)),
     )
+
+
+def _status_map(val: Any) -> dict[str, str]:
+    """Normalize the stored status_stage_map (JSONB object, or JSON string) into
+    a clean {normalized_status: stage} dict; empty dict on anything unparseable
+    (pre-migration row, bad value) so callers fall back to the heuristic."""
+    import json
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except ValueError:
+            val = None
+    if isinstance(val, dict):
+        return {str(k).strip().lower(): str(v).strip()
+                for k, v in val.items()
+                if str(k).strip() and str(v).strip()}
+    return {}
+
+
+async def gtd_status_stage_map(db: Any, user_id: str) -> dict[str, str]:
+    """The user's ClickUp-status → stage map (normalized keys), defaults to {}.
+    Never raises — a missing row / pre-migration DB returns {}."""
+    try:
+        row = (await db.execute(text(
+            "SELECT status_stage_map FROM gtd_settings WHERE user_id = :uid"),
+            {"uid": user_id})).fetchone()
+        if row:
+            return _status_map(row.status_stage_map)
+    except Exception as exc:
+        _log.warning("tasks.settings.status_map_failed", error=str(exc)[:160])
+    return {}
 
 
 def _stages(val: Any) -> list[str]:
@@ -185,6 +267,60 @@ async def get_gtd_settings(user: UserContext = Depends(get_current_user)):
         await db.close()
 
 
+class StatusCatalogEntry(BaseModel):
+    status: str          # the ClickUp status name (a representative spelling)
+    stage: str           # the mapped Next-Actions stage (auto-guessed if unset)
+    mapped: bool         # False → this is an auto-guess, not a user choice yet
+
+
+class StatusCatalogResponse(BaseModel):
+    stages: list[str]                    # the user's 4 fixed stages (for the picker)
+    entries: list[StatusCatalogEntry]    # one per unique upstream status
+    unmapped: int                        # how many are still just auto-guesses
+
+
+@router.get("/status-catalog", response_model=StatusCatalogResponse)
+async def status_catalog(user: UserContext = Depends(get_current_user)):
+    """Every UNIQUE ClickUp status across the user's connected projects, paired
+    with the stage it maps to. A status the user hasn't explicitly mapped shows
+    its auto-guessed stage (``mapped=False``) so the settings table is never
+    blank — the user just confirms/adjusts. Powers the status-mapping UI."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        settings = await _load(db, uid)
+        rows = (await db.execute(text(
+            "SELECT schema_cache FROM task_accounts WHERE user_id = :uid"),
+            {"uid": uid})).fetchall()
+        # Unique upstream statuses (first spelling wins), normalized for dedup.
+        seen: dict[str, str] = {}
+        for r in rows:
+            cache = _parse_jsonb(r.schema_cache) or {}
+            for s in cache.get("statuses") or []:
+                if not isinstance(s, str) or not s.strip():
+                    continue
+                key = s.strip().lower()
+                seen.setdefault(key, s.strip())
+        stages = settings.workflow_stages
+        smap = settings.status_stage_map
+        entries: list[StatusCatalogEntry] = []
+        unmapped = 0
+        for key, display in sorted(seen.items()):
+            if key in smap:
+                entries.append(StatusCatalogEntry(
+                    status=display, stage=smap[key], mapped=True))
+            else:
+                entries.append(StatusCatalogEntry(
+                    status=display,
+                    stage=guess_stage_for_status(display, stages),
+                    mapped=False))
+                unmapped += 1
+        return StatusCatalogResponse(
+            stages=stages, entries=entries, unmapped=unmapped)
+    finally:
+        await db.close()
+
+
 @router.put("/settings", response_model=GtdSettingsModel)
 async def put_gtd_settings(
     patch: GtdSettingsPatch,
@@ -195,19 +331,27 @@ async def put_gtd_settings(
     fields = {k: v for k, v in patch.model_dump().items() if v is not None}
     db = await _get_db()
     try:
+        import json
         if "workflow_stages" in fields:
             # Sanitize (trim, drop empties, cap) and JSON-encode for the JSONB
             # column. Guarantee a non-empty list with a "done" stage.
-            import json
             stages = [str(s).strip() for s in fields["workflow_stages"]
                       if str(s).strip()][:24]
             if not stages:
                 stages = list(DEFAULT_WORKFLOW_STAGES)
             fields["workflow_stages"] = json.dumps(stages)
+        _jsonb_cols = {"workflow_stages", "status_stage_map"}
+        if "status_stage_map" in fields:
+            # Normalize keys (lower/trim) + drop empties; JSON-encode for JSONB.
+            raw = fields["status_stage_map"] or {}
+            clean = {str(k).strip().lower(): str(v).strip()
+                     for k, v in raw.items()
+                     if str(k).strip() and str(v).strip()}
+            fields["status_stage_map"] = json.dumps(clean)
         if fields:
             # JSONB columns need an explicit ::jsonb cast on the bind param.
             def _ph(k: str) -> str:
-                return f":{k}::jsonb" if k == "workflow_stages" else f":{k}"
+                return f":{k}::jsonb" if k in _jsonb_cols else f":{k}"
             cols = ", ".join(fields)
             vals = ", ".join(_ph(k) for k in fields)
             sets = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)

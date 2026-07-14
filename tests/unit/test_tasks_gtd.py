@@ -735,6 +735,100 @@ def test_urgent_window_setting_defaults_to_48h():
     assert GtdSettingsModel().urgent_window_hours == 48
 
 
+# ---------------------------------------------------------------------------
+# ClickUp status → Next-Actions stage mapping
+# ---------------------------------------------------------------------------
+
+def test_status_stage_heuristic_guesses_by_name():
+    """The auto-guess maps raw ClickUp status names to the 4 stages by keyword,
+    and only guesses stages the user actually has."""
+    from gateway.routes.tasks.settings import (
+        DEFAULT_WORKFLOW_STAGES,
+        guess_stage_for_status,
+    )
+
+    st = list(DEFAULT_WORKFLOW_STAGES)  # TODO / IN PROCESS / WAITING FOR / DONE
+    assert guess_stage_for_status("backlog", st) == "TODO"
+    assert guess_stage_for_status("to do", st) == "TODO"
+    assert guess_stage_for_status("in progress", st) == "IN PROCESS"
+    assert guess_stage_for_status("Review", st) == "IN PROCESS"
+    assert guess_stage_for_status("blocked", st) == "WAITING FOR"
+    assert guess_stage_for_status("Complete", st) == "DONE"
+    # Unknown → the first stage (never lost).
+    assert guess_stage_for_status("frobnicate", st) == "TODO"
+    # A heuristic for a stage the user removed is skipped → falls to first.
+    assert guess_stage_for_status("done", ["TODO", "IN PROCESS"]) == "TODO"
+
+
+def test_seed_status_stage_map_keeps_user_choices():
+    """Seeding auto-guesses unmapped statuses but never overrides an explicit
+    user mapping; keys are normalized (lower/trim)."""
+    from gateway.routes.tasks.settings import seed_status_stage_map
+
+    stages = ["TODO", "IN PROCESS", "WAITING FOR", "DONE"]
+    existing = {"in progress": "DONE"}  # a deliberate (odd) user choice
+    out = seed_status_stage_map(
+        ["In Progress", "backlog", "  "], stages, existing)
+    assert out["in progress"] == "DONE"      # user choice preserved
+    assert out["backlog"] == "TODO"          # auto-guessed
+    assert "" not in out                     # blank dropped
+
+
+def test_status_map_normalizes_and_ignores_blanks():
+    from gateway.routes.tasks.settings import _status_map
+
+    out = _status_map({"To Do ": "TODO", "": "X", "review": "  "})
+    assert out == {"to do": "TODO"}          # trimmed key, blanks dropped
+
+
+@pytest.mark.asyncio
+async def test_status_for_stage_reverses_the_map_per_project():
+    """On a board drag, _status_for_stage finds a status in THIS task's own
+    project that maps to the target stage; returns None (→ local-only move) when
+    the project has no status mapped to that stage."""
+    from gateway.routes.tasks.items import _status_for_stage
+
+    class _Provider:
+        def __init__(self, statuses):
+            self._statuses = statuses
+
+        async def list_statuses_for_task(self, _tid):
+            return self._statuses
+
+    smap = {"to do": "TODO", "in progress": "IN PROCESS", "done": "DONE"}
+    # Project HAS a status mapped to IN PROCESS → writes it.
+    p = _Provider(["To Do", "In Progress", "Done"])
+    assert await _status_for_stage(p, "t1", "IN PROCESS", smap) == "In Progress"
+    # Project has NO status mapped to WAITING FOR → None (move stays local).
+    assert await _status_for_stage(p, "t1", "WAITING FOR", smap) is None
+    # Provider hiccup → None, never raises.
+    class _Boom:
+        async def list_statuses_for_task(self, _tid):
+            raise RuntimeError("boom")
+    assert await _status_for_stage(_Boom(), "t1", "TODO", smap) is None
+
+
+def test_status_catalog_route_is_registered():
+    from gateway.routes.tasks import router
+
+    paths = {getattr(r, "path", "") for r in router.routes}
+    assert "/tasks/status-catalog" in paths
+
+
+def test_workflow_stage_is_a_backsync_trigger():
+    """A workflow_stage move on a synced task must reach the upstream back-sync
+    (it translates to a ClickUp status), so it counts as 'writable' and the
+    payload builder resolves the stage → status."""
+    import inspect
+
+    from gateway.routes.tasks import items as tasks_items
+
+    push_src = inspect.getsource(tasks_items._push_patch_upstream)
+    assert "patch.workflow_stage" in push_src  # part of the 'writable' gate
+    payload_src = inspect.getsource(tasks_items._build_upstream_payload)
+    assert "_status_for_stage" in payload_src
+
+
 def test_organize_request_accepts_subtasks():
     from gateway.routes.tasks.items import OrganizeRequest
 

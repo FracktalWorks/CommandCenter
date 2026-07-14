@@ -1776,6 +1776,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     mirrorDoneTasks: false,
     workflowStages: ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
     urgentWindowHours: 48,
+    statusStageMap: {},
   },
 
   updateSettings: async (patch) => {

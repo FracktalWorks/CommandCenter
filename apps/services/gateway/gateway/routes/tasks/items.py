@@ -550,6 +550,66 @@ async def patch_item(
         await db.close()
 
 
+async def _status_for_stage(
+    provider: Any, provider_task_id: str, stage: str,
+    status_stage_map: dict[str, str],
+) -> str | None:
+    """Reverse the status→stage map for ONE task: find a status in THIS task's
+    own ClickUp project whose mapping equals `stage`, so a board drag into a
+    local stage writes a concrete upstream status. Returns None when the task's
+    project has no status mapped to that stage (→ caller keeps the move local).
+    When several of the project's statuses map to the stage, the first in the
+    project's own order wins (stable + predictable)."""
+    try:
+        statuses = await provider.list_statuses_for_task(provider_task_id)
+    except Exception:
+        return None
+    for s in statuses:
+        if status_stage_map.get((s or "").strip().lower()) == stage:
+            return s
+    return None
+
+
+async def _build_upstream_payload(
+    db: Any, before: Any, patch: ItemPatch, uid: str,
+    provider: Any, marks_done: bool,
+) -> dict[str, Any]:
+    """Assemble the ClickUp update payload from a patch (extracted to keep
+    _push_patch_upstream flat). Translates a Next-Actions stage move into a
+    concrete upstream status for THIS task's project (or leaves it out — local
+    only — when nothing maps)."""
+    from gateway.routes.tasks.settings import gtd_status_stage_map
+    payload: dict[str, Any] = {}
+    if patch.title is not None:
+        payload["title"] = patch.title.strip()
+    if patch.notes is not None:
+        payload["description"] = patch.notes
+    if patch.provider_status is not None:
+        payload["status"] = patch.provider_status
+    # Board drag → local stage: resolve THIS task's project status for it. Not
+    # for the "done" stage (marks_done already closes it via mark_done).
+    if (patch.workflow_stage is not None and "status" not in payload
+            and not marks_done):
+        mapped = await _status_for_stage(
+            provider, str(before.provider_task_id), patch.workflow_stage,
+            await gtd_status_stage_map(db, uid))
+        if mapped:
+            payload["status"] = mapped
+    if patch.due_at is not None:
+        due = _parse_ts(patch.due_at)
+        payload["due_at_ms"] = int(due.timestamp() * 1000) if due else None
+    if marks_done:
+        payload["mark_done"] = True
+    prev = _parse_jsonb(before.assignee) or {}
+    if patch.clear_assignee:
+        payload["clear_assignee"] = True
+        payload["prev_assignee_id"] = prev.get("provider_user_id")
+    elif patch.assignee is not None:
+        payload["assignee_id"] = patch.assignee.provider_user_id
+        payload["prev_assignee_id"] = prev.get("provider_user_id")
+    return payload
+
+
 async def _push_patch_upstream(
     db: Any, before: Any, patch: ItemPatch, uid: str,
 ) -> None:
@@ -560,10 +620,13 @@ async def _push_patch_upstream(
             or not before.account_id:
         return
     # Only the ClickUp-writable fields warrant a call. A DONE disposition also
-    # closes the task upstream.
+    # closes the task upstream. A workflow_stage move on a synced task translates
+    # (via the status map) into a concrete upstream status for THIS task's
+    # project — unless nothing maps, in which case the move stays local.
     marks_done = patch.disposition == "DONE"
     writable = any(v is not None for v in (
         patch.title, patch.notes, patch.provider_status, patch.due_at,
+        patch.workflow_stage,
     )) or patch.assignee is not None or patch.clear_assignee or marks_done
     if not writable:
         return
@@ -572,25 +635,8 @@ async def _push_patch_upstream(
         creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
         provider = build_provider(
         account.provider, creds, account.workspace_id, str(account.id))
-        payload: dict[str, Any] = {}
-        if patch.title is not None:
-            payload["title"] = patch.title.strip()
-        if patch.notes is not None:
-            payload["description"] = patch.notes
-        if patch.provider_status is not None:
-            payload["status"] = patch.provider_status
-        if patch.due_at is not None:
-            due = _parse_ts(patch.due_at)
-            payload["due_at_ms"] = int(due.timestamp() * 1000) if due else None
-        if marks_done:
-            payload["mark_done"] = True
-        prev = _parse_jsonb(before.assignee) or {}
-        if patch.clear_assignee:
-            payload["clear_assignee"] = True
-            payload["prev_assignee_id"] = prev.get("provider_user_id")
-        elif patch.assignee is not None:
-            payload["assignee_id"] = patch.assignee.provider_user_id
-            payload["prev_assignee_id"] = prev.get("provider_user_id")
+        payload = await _build_upstream_payload(
+            db, before, patch, uid, provider, marks_done)
         result = await provider.update_task(str(before.provider_task_id), payload)
         # Persist the tool's normalized stage/url back onto the mirror.
         upd, uparams = [], {"id": str(before.id)}

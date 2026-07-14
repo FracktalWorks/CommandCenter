@@ -648,6 +648,10 @@ export interface TaskSettings {
   /** hours from now within which a due task is URGENT (drives the matrix's ⏰
    *  axis). Overdue is always urgent. */
   urgentWindowHours: number;
+  /** ClickUp status → Next-Actions stage. {normalizedStatus: stage}. Governs how
+   *  a synced task groups on the board and (reversed) which upstream status a
+   *  drag writes back. */
+  statusStageMap: Record<string, string>;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -665,6 +669,14 @@ function mapSettings(r: Raw): TaskSettings {
       ? (r.workflow_stages as unknown[]).map(String).filter(Boolean)
       : ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
     urgentWindowHours: Number(r.urgent_window_hours ?? 48) || 48,
+    statusStageMap:
+      r.status_stage_map && typeof r.status_stage_map === "object"
+        ? Object.fromEntries(
+            Object.entries(r.status_stage_map as Record<string, unknown>).map(
+              ([k, v]) => [k, String(v)],
+            ),
+          )
+        : {},
   };
 }
 
@@ -695,12 +707,47 @@ export async function updateTaskSettings(
     body.workflow_stages = patch.workflowStages;
   if (patch.urgentWindowHours !== undefined)
     body.urgent_window_hours = patch.urgentWindowHours;
+  if (patch.statusStageMap !== undefined)
+    body.status_stage_map = patch.statusStageMap;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",
       body: JSON.stringify(body),
     })
   );
+}
+
+/** One unique upstream status paired with the stage it maps to (auto-guessed
+ *  when the user hasn't set it yet). */
+export interface StatusCatalogEntry {
+  status: string;
+  stage: string;
+  mapped: boolean;
+}
+
+export interface StatusCatalog {
+  stages: string[];
+  entries: StatusCatalogEntry[];
+  unmapped: number;
+}
+
+/** The unique ClickUp statuses across the user's connected projects + their
+ *  (mapped or auto-guessed) Next-Actions stage — powers the mapping settings. */
+export async function fetchStatusCatalog(): Promise<StatusCatalog> {
+  const r = await gatewayFetch<Raw>(`/status-catalog`);
+  return {
+    stages: Array.isArray(r.stages)
+      ? (r.stages as unknown[]).map(String)
+      : [],
+    entries: Array.isArray(r.entries)
+      ? (r.entries as Raw[]).map((e) => ({
+          status: String(e.status ?? ""),
+          stage: String(e.stage ?? ""),
+          mapped: Boolean(e.mapped),
+        }))
+      : [],
+    unmapped: Number(r.unmapped ?? 0) || 0,
+  };
 }
 
 export interface SyncResult {

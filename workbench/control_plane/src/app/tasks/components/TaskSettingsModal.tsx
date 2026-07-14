@@ -1,12 +1,12 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import {
   X, Settings2, Sparkles, Inbox, RefreshCw,
-  Columns3, ChevronUp, ChevronDown, Plus,
+  Columns3, ChevronUp, ChevronDown, Plus, Loader2, AlertTriangle,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
-import type { TaskSettings } from "../lib/api";
+import { fetchStatusCatalog, type TaskSettings, type StatusCatalog } from "../lib/api";
 
 // Task Manager settings (mirror of the email app's AI Settings): pick the
 // model tier per AI function + behaviour toggles. Same gate pattern as
@@ -280,6 +280,26 @@ function SettingsPanel() {
               onChange={(next) => void updateSettings({ workflowStages: next })}
             />
           </section>
+
+          {/* ── ClickUp status → stage mapping ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Columns3 className="h-3.5 w-3.5" /> ClickUp status mapping
+            </h3>
+            <p className="mb-2 px-1 text-[11px] text-muted-foreground">
+              Next Actions shows your{" "}
+              <span className="font-medium">{settings.workflowStages.length}</span>{" "}
+              stages, not every raw ClickUp status. Map each ClickUp status to one
+              of your stages: a synced task shows in the stage its status maps to,
+              and dragging a card writes the mapped status back to ClickUp. Unmapped
+              statuses are auto-guessed — confirm or adjust them below.
+            </p>
+            <StatusMappingEditor
+              stages={settings.workflowStages}
+              map={settings.statusStageMap}
+              onChange={(next) => void updateSettings({ statusStageMap: next })}
+            />
+          </section>
         </div>
       </div>
     </div>
@@ -389,6 +409,120 @@ function StageEditor({
           </button>
         )}
       </div>
+    </div>
+  );
+}
+
+/** Maps each unique ClickUp status (fetched from the connected projects) to one
+ *  of the user's Next-Actions stages. Auto-guessed rows show their guess and are
+ *  saved on first confirm; changing a dropdown persists the whole map. */
+function StatusMappingEditor({
+  stages,
+  map,
+  onChange,
+}: {
+  stages: string[];
+  map: Record<string, string>;
+  onChange: (next: Record<string, string>) => void;
+}) {
+  const backend = useTaskStore((s) => s.backend);
+  const [catalog, setCatalog] = useState<StatusCatalog | null>(null);
+  // Only "live" fetches; start non-live already-resolved (no fetch, no spinner)
+  // so the effect never has to synchronously flip loading off.
+  const [loading, setLoading] = useState(backend === "live");
+  const [error, setError] = useState(false);
+
+  useEffect(() => {
+    if (backend !== "live") return;
+    let cancelled = false;
+    void fetchStatusCatalog()
+      .then((c) => !cancelled && setCatalog(c))
+      .catch(() => !cancelled && setError(true))
+      .finally(() => !cancelled && setLoading(false));
+    return () => {
+      cancelled = true;
+    };
+  }, [backend]);
+
+  // The effective stage for a status: an explicit user map wins; else the
+  // catalog's auto-guess. norm() matches the backend's normalized key.
+  const norm = (s: string) => s.trim().toLowerCase();
+  const stageFor = (entry: { status: string; stage: string }): string =>
+    map[norm(entry.status)] ?? entry.stage;
+
+  // Set one status → stage, persisting the FULL map (existing picks + this one,
+  // keyed normalized) so an auto-guess the user touches becomes a real choice.
+  const setStage = (status: string, stage: string) => {
+    onChange({ ...map, [norm(status)]: stage });
+  };
+
+  const unmappedCount = useMemo(
+    () => (catalog?.entries ?? []).filter((e) => !(norm(e.status) in map)).length,
+    [catalog, map],
+  );
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 px-1 py-2 text-[11px] text-muted-foreground">
+        <Loader2 className="h-3.5 w-3.5 animate-spin" /> Loading ClickUp statuses…
+      </div>
+    );
+  }
+  if (error || backend !== "live") {
+    return (
+      <p className="px-1 py-2 text-[11px] text-muted-foreground">
+        Connect a ClickUp workspace to map its statuses.
+      </p>
+    );
+  }
+  if (!catalog || catalog.entries.length === 0) {
+    return (
+      <p className="px-1 py-2 text-[11px] text-muted-foreground">
+        No ClickUp statuses found yet — sync a workspace and they&rsquo;ll appear
+        here to map.
+      </p>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-1.5">
+      {unmappedCount > 0 && (
+        <p className="mb-0.5 inline-flex items-center gap-1 px-1 text-[11px] text-warning">
+          <AlertTriangle className="h-3 w-3 shrink-0" />
+          {unmappedCount} status{unmappedCount === 1 ? "" : "es"} auto-guessed —
+          confirm or adjust.
+        </p>
+      )}
+      {catalog.entries.map((entry) => {
+        const isGuess = !(norm(entry.status) in map);
+        return (
+          <div
+            key={entry.status}
+            className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5"
+          >
+            <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
+              {entry.status}
+              {isGuess && (
+                <span className="ml-1.5 text-[10px] italic text-muted-foreground">
+                  (guessed)
+                </span>
+              )}
+            </span>
+            <span className="shrink-0 text-muted-foreground/50">→</span>
+            <select
+              value={stageFor(entry)}
+              onChange={(e) => setStage(entry.status, e.target.value)}
+              className="tech-transition h-7 shrink-0 rounded-md border border-border bg-background pl-2 pr-6 text-xs text-foreground focus:border-primary focus:outline-none"
+            >
+              {stages.map((s) => (
+                <option key={s} value={s}>
+                  {s}
+                </option>
+              ))}
+            </select>
+          </div>
+        );
+      })}
     </div>
   );
 }

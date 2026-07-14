@@ -4,22 +4,18 @@ import { useCallback, useMemo, useState } from "react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
-import {
-  applySort,
-  byManualOrder,
-  statusColumns,
-  statusColumnForItem,
-} from "../lib/ordering";
+import { applySort, byManualOrder, statusColumnForItem } from "../lib/ordering";
 import { stageAccent } from "../lib/stageColors";
 
 // A Kanban board over the Next Actions items (Jira/ClickUp-style). Columns are
-// the STATUS axis: the union of the user's local workflow stages
-// (settings.workflowStages) and every connected tool's statuses (ClickUp), so a
-// synced task lands in its real ClickUp stage instead of collapsing into the
-// first column. A LOCAL card keys off `workflowStage`, a SYNCED card off
-// `providerStatus`. (@context is a card chip, not a column; it drives the left
-// sidebar.) Dropping on the LAST stage marks the task DONE (backend). Fixed
-// columns — empty stages still show.
+// the user's 4 FIXED workflow stages (settings.workflowStages) — not the raw
+// ClickUp statuses. A LOCAL card keys off its `workflowStage`; a SYNCED card off
+// its ClickUp `providerStatus` translated through the status→stage MAP, so many
+// upstream statuses collapse into one clean stage. Dragging a card writes the
+// mapped status back to ClickUp (per task's project). (@context is a card chip,
+// not a column.) Dropping on the LAST stage marks the task DONE (backend). The
+// per-PROJECT view passes explicit `stages` (that project's real ClickUp
+// statuses) and bypasses the map. Fixed columns — empty stages still show.
 //
 // Cards render in manual (sortKey) order within a column and are drag-
 // reorderable: a drop computes a fractional rank between its new neighbours
@@ -43,18 +39,24 @@ export function TaskBoard({
   stages?: string[];
 }) {
   const workflowSettingStages = useTaskStore((s) => s.settings.workflowStages);
-  const providerStatuses = useTaskStore((s) => s.providerStatuses);
+  const statusStageMap = useTaskStore((s) => s.settings.statusStageMap);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
   const updateItem = useTaskStore((s) => s.updateItem);
 
-  // The status axis: an explicit stage set (project detail) or the union of the
-  // local Kanban stages and every connected tool's statuses. A LOCAL task keys
-  // off its `workflowStage`; a SYNCED task off its ClickUp `providerStatus`
-  // (see statusColumnForItem) — so both land in their real column.
+  // Columns: an explicit stage set (the per-project view's real ClickUp
+  // statuses) or the user's 4 fixed workflow stages. A LOCAL task keys off its
+  // `workflowStage`; a SYNCED task off its ClickUp status through the status→
+  // stage map (or the project view's own statuses, where the map is a no-op).
   const stageKeys = useMemo(
-    () => stages ?? statusColumns(workflowSettingStages, providerStatuses),
-    [stages, workflowSettingStages, providerStatuses],
+    () => stages ?? workflowSettingStages,
+    [stages, workflowSettingStages],
+  );
+  // In the project view (explicit `stages`) grouping is by raw status, so the
+  // map is bypassed; on the global board it translates the ClickUp status.
+  const effectiveMap = useMemo(
+    () => (stages ? {} : statusStageMap),
+    [stages, statusStageMap],
   );
   const manual = sort.field === "manual";
   const [dragId, setDragId] = useState<string | null>(null);
@@ -65,8 +67,9 @@ export function TaskBoard({
   // An unstaged task sits in the FIRST column of the axis.
   const firstStage = stageKeys[0];
   const stageOf = useCallback(
-    (i: GtdItem): string => statusColumnForItem(i, stageKeys, firstStage),
-    [stageKeys, firstStage],
+    (i: GtdItem): string =>
+      statusColumnForItem(i, stageKeys, firstStage, effectiveMap),
+    [stageKeys, firstStage, effectiveMap],
   );
 
   const columns = useMemo(
@@ -86,15 +89,24 @@ export function TaskBoard({
     return m;
   }, [items, columns, stageOf, sort]);
 
-  // Refile is SOURCE-AWARE: dropping a SYNCED (ClickUp) card into a column sets
-  // `providerStatus` (which back-syncs to the tool); a LOCAL card sets the local
-  // `workflowStage`. Keyed by the dragged item so one column accepts both.
+  // Refile depends on the axis:
+  //  • Global board (columns = local STAGES): set `workflowStage` for both
+  //    LOCAL and SYNCED. For a synced task the backend translates the stage into
+  //    that task's own ClickUp status via the status→stage map and writes it
+  //    back; if nothing maps, the move stays local (workflowStage override).
+  //  • Project view (columns = the project's raw ClickUp STATUSES): set
+  //    `providerStatus` directly (back-syncs), as before.
   const refileFor = (colKey: string, id: string | null) => {
     const it = id ? items.find((i) => i.id === id) : undefined;
     if (!it) return undefined;
-    return it.source === "LOCAL"
-      ? { workflowStage: colKey }
-      : { providerStatus: colKey };
+    if (stages) {
+      // Project view: raw ClickUp status axis.
+      return it.source === "LOCAL"
+        ? { workflowStage: colKey }
+        : { providerStatus: colKey };
+    }
+    // Global board: local stage axis (backend maps synced → ClickUp status).
+    return { workflowStage: colKey };
   };
 
   // Drop onto a specific gap (index) within a column — reorder + re-file.

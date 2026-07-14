@@ -121,41 +121,61 @@ async def replay_events(
     thread_id: str,
     since_id: str = "0-0",
     count: int = 500,
+    *,
+    drain: bool = False,
 ) -> list[dict[str, Any]]:
     """Read events from *since_id* (exclusive) to the current stream tail.
 
     Args:
         thread_id: Conversation thread ID.
         since_id:  Redis stream ID to start AFTER (use ``"0-0"`` for all).
-        count:     Max events to return in one batch.
+        count:     Max events per Redis batch. With ``drain=False`` this is also
+                   the hard cap on the total returned (single XREAD).
+        drain:     When ``True``, keep reading successive batches (advancing the
+                   cursor past the last-seen ID) until the stream is exhausted,
+                   so the FULL run is returned regardless of length. Use this for
+                   run-boundary persistence — a long reasoning stream emits one
+                   Redis event per delta and can exceed any single-batch cap, so
+                   without draining the tail (final answer / late tool events /
+                   trailing chain-of-thought) would be silently dropped from the
+                   persisted message. ``count`` still bounds each batch (memory),
+                   just not the total.
 
     Returns:
         List of parsed event dicts, oldest first.
     """
     r = await _get_client()
     try:
-        raw = await r.xread(
-            {_stream_key(thread_id): since_id},
-            count=count,
-            block=0,  # don't block — return immediately if no new events
-        )
-        if not raw:
-            return []
-
         events: list[dict[str, Any]] = []
-        for _stream_name, entries in raw:
-            for eid, fields in entries:
-                try:
-                    evt = json.loads(fields.get("event", "{}"))
-                    # Attach Redis stream ID for cursor tracking.
-                    evt["_stream_id"] = eid
-                    events.append(evt)
-                except (json.JSONDecodeError, TypeError):
-                    _log.warning(
-                        "stream_relay.bad_event",
-                        thread_id=thread_id[:12],
-                        eid=eid[:20],
-                    )
+        cursor = since_id
+        while True:
+            raw = await r.xread(
+                {_stream_key(thread_id): cursor},
+                count=count,
+                block=0,  # don't block — return immediately if no new events
+            )
+            if not raw:
+                break
+
+            batch = 0
+            for _stream_name, entries in raw:
+                for eid, fields in entries:
+                    batch += 1
+                    cursor = eid  # advance past this entry for the next batch
+                    try:
+                        evt = json.loads(fields.get("event", "{}"))
+                        # Attach Redis stream ID for cursor tracking.
+                        evt["_stream_id"] = eid
+                        events.append(evt)
+                    except (json.JSONDecodeError, TypeError):
+                        _log.warning(
+                            "stream_relay.bad_event",
+                            thread_id=thread_id[:12],
+                            eid=eid[:20],
+                        )
+            # Stop unless draining AND the batch was full (more may remain).
+            if not drain or batch < count:
+                break
         return events
     except aioredis.ResponseError:
         # Stream doesn't exist (expired or never created).

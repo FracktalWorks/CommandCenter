@@ -401,9 +401,27 @@ _GEN_UI_TYPES = {
 async def emit_generative_ui(ui: str) -> dict:
     """Render a rich, interactive, animated UI element inline in the chat, on the fly.
 
-    Use this whenever a visual answer beats prose — a weather card, a KPI
-    dashboard, a chart, a comparison, a status tracker, or a bespoke animated
-    widget. ``ui`` is a JSON object (string or dict). It supports THREE modes;
+    REACH FOR THIS EAGERLY — a well-made UI card beats a paragraph almost every
+    time the answer is data, a status, a comparison, a metric, a choice, or a
+    value the user should set. Default to rendering UI whenever:
+      • you're reporting numbers/metrics/KPIs → statDashboard or barChart
+      • you're describing current state/conditions → weatherCard or a card
+      • you're comparing options → comparison
+      • you're showing progress/steps/a checklist → progressTracker
+      • the user must PICK or SET something → buttons, or a custom-HTML card with
+        a slider / input / select that submits their choice back (see mode 3).
+    Whenever there's a genuine chance to let the user interact — adjust a value,
+    pick an option, confirm a choice — prefer an interactive UI over asking in
+    prose. Do NOT be trivial about it: a one-line factual reply ("yes", "it's
+    42") or a long narrative explanation should stay as text. Use UI when it
+    genuinely clarifies or when interaction is useful — not as decoration.
+
+    All three modes follow the Command Center design language automatically
+    (blue primary, warm-orange accent, rounded cards, subtle motion). Templates
+    and the component tree are on-brand by construction; custom HTML inherits the
+    real design tokens as CSS variables (see mode 3), so lean on those.
+
+    ``ui`` is a JSON object (string or dict). It supports THREE modes;
     prefer them in this order (template → tree → html):
 
     1. NAMED TEMPLATE — pre-designed, animated, on-brand components. You supply
@@ -438,15 +456,36 @@ async def emit_generative_ui(ui: str) -> dict:
        (buttons). A ``button``'s ``action`` string is sent back as the user's
        next message when clicked.
 
-    3. CUSTOM HTML — the escape hatch for bespoke animation/layout no template or
-       tree covers. Shape: ``{"type":"html","props":{"code":"<div>…</div>"}}``.
-       Your HTML/CSS/JS runs in an ISOLATED sandbox (its own opaque origin): it
-       cannot reach the app, cookies, or the network, so inline everything — NO
-       external CDNs, fonts, or images (use data: URIs). Optional
-       ``props.height`` (px); omit to auto-size. For interactivity, put
-       ``data-cc-action="<follow-up message>"`` on a clickable element (or call
-       ``ccAction("…")`` from your script); it's delivered as the user's next
-       message, exactly like a tree button's ``action``.
+    3. CUSTOM HTML — the escape hatch for bespoke animation/layout or genuinely
+       interactive controls no template or tree covers. Shape:
+       ``{"type":"html","props":{"code":"<div>…</div>"}}``. Your HTML/CSS/JS runs
+       in an ISOLATED sandbox (its own opaque origin): it cannot reach the app,
+       cookies, or the network, so inline everything — NO external CDNs, fonts, or
+       images (use data: URIs). Optional ``props.height`` (px); omit to auto-size.
+
+       DESIGN — follow the Command Center look. The frame pre-defines CSS
+       variables from the app's real design tokens; USE THEM instead of
+       hard-coding colors so your UI matches the product:
+         --cc-primary (blue) · --cc-accent (warm orange) · --cc-fg · --cc-muted
+         · --cc-card · --cc-secondary · --cc-border · --cc-success · --cc-warning
+         · --cc-danger · --cc-radius (0.75rem) · --cc-ease (motion curve).
+       Native ``<button>``, ``<input>``, ``<select>``, ``<textarea>`` and
+       ``input[type=range]`` are already styled on-brand (add class ``cc-primary``
+       to a button for the filled blue variant; ``cc-card`` for a panel). Prefer
+       rem spacing, rounded corners (var(--cc-radius)), and subtle transitions
+       (0.2s var(--cc-ease)). Keep it clean and professional — not flashy.
+
+       INTERACTIVITY — two channels back to the agent:
+         • ``data-cc-action="<message>"`` on a clickable element (or
+           ``ccAction("…")`` in script) fires a FIXED follow-up message — like a
+           button. Use for "Tell me more" / "Roll back" style actions.
+         • ``data-cc-submit="<label>"`` on a button harvests every named control
+           (``<input name=…>`` / select / textarea) in its enclosing ``<form>`` or
+           ``[data-cc-form]`` and submits their VALUES back as the user's next
+           message. Or call ``ccSubmit("Temperature", 22)`` /
+           ``ccSubmit({temp:22,unit:"C"})`` directly. Use this whenever the user
+           SETS a value — a slider, a number, a picked option — so the agent
+           actually receives what they chose. This is the key to real two-way UI.
 
     Returns ``{"ok": true}`` on emit. Additive — also say in prose what you're
     showing. Keep template/tree/html discriminated by the top-level ``type``.
@@ -466,10 +505,14 @@ async def emit_generative_ui(ui: str) -> dict:
           '{"type":"row","children":[{"type":"button","props":'
           '{"label":"Roll back","action":"roll back the deploy","tone":"danger"}}]}]}')
 
-        # Custom HTML (only when nothing above fits)
+        # Custom HTML with an interactive slider that submits the chosen value
         await emit_generative_ui('{"type":"html","props":{"code":'
-          '"<div style=\\'font:600 20px sans-serif;padding:16px\\'>Hi<button '
-          'data-cc-action=\\'tell me more\\'>More</button></div>"}}')
+          '"<div class=\\'cc-card\\' data-cc-form><label>Target temp: '
+          '<output id=o>22</output>degC</label>'
+          '<input type=range name=temp min=16 max=28 value=22 '
+          'oninput=\\'o.textContent=this.value\\'>'
+          '<button class=cc-primary data-cc-submit=\\'Set temperature\\'>Apply</button>'
+          '</div>"}}')
     """
     import json
 

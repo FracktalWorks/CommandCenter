@@ -398,7 +398,14 @@ async def persist_final_assistant_message(
     try:
         from orchestrator.stream_relay import replay_events  # noqa: PLC0415
 
-        events = await replay_events(thread_id, since_id="0-0", count=10_000)
+        # drain=True paginates until the stream is exhausted so a long run's
+        # tail (final answer, late tool events, trailing reasoning) is never
+        # dropped from the persisted message. count is the per-batch size, not a
+        # total cap. Reasoning emits one Redis event per delta, so long thinking
+        # streams can exceed a single batch — draining keeps them whole on reload.
+        events = await replay_events(
+            thread_id, since_id="0-0", count=10_000, drain=True,
+        )
         folded = fold_run_events(events)
 
         # Durable per-run observability trace (E2): record the run row from the

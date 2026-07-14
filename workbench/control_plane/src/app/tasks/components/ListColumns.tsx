@@ -2,7 +2,7 @@
 
 import { AlertTriangle, Clock, Paperclip, ListTree, Zap } from "lucide-react";
 import { GtdItem } from "../lib/types";
-import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
+import { durationLabel, isOverdue, relativeTime } from "../lib/utils";
 import { PriorityBadge } from "./PriorityControls";
 import { ACTION_MODE_META, actionMode, type ActionMode } from "../lib/priority";
 import type { ColumnDef } from "../lib/columns";
@@ -136,15 +136,6 @@ function CellBody({
             <Clock className="h-3 w-3" />
           )}
           {relativeTime(item.dueAt, MOCK_NOW)}
-        </span>
-      ) : null;
-    case "assignee":
-      return item.assignee ? (
-        <span className="inline-flex min-w-0 items-center gap-1 text-[10px] text-muted-foreground">
-          <span className="flex h-4 w-4 shrink-0 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
-            {initials(item.assignee.name)}
-          </span>
-          <span className="truncate">{item.assignee.name}</span>
         </span>
       ) : null;
     case "attachments":

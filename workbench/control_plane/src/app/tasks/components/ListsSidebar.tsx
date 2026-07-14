@@ -8,7 +8,6 @@ import {
   Calendar,
   FolderKanban,
   Lightbulb,
-  Zap,
   Mountain,
   Cloud,
   Plug,
@@ -17,7 +16,6 @@ import {
   Sparkles,
   Archive,
   CheckCircle2,
-  Target,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
@@ -34,23 +32,14 @@ type NavRow = {
   soon?: boolean;
 };
 
-// Rows above the "My Next Actions" section.
-const TOP: NavRow[] = [
+// The single flat nav. "My Next Actions" is one destination — its slices
+// (Priority / Suggestion / Context / Energy grouping, list vs board) are
+// configured IN the view (toolbar group-by + column settings), not as separate
+// sidebar entries. Priority and Engage were removed as standalone views for
+// that reason.
+const PRIMARY: NavRow[] = [
   { view: "inbox", label: "Inbox", icon: Inbox, showCount: true },
-];
-
-// The "My Next Actions" section: an unclickable header with the different SLICES
-// of my next actions beneath it. "Context" is the default list/board (sliced by
-// @context via the in-view pills); Priority and Engage are the other two lenses
-// over the same set of actions-assigned-to-me. All three read from is_mine.
-const NEXT_SLICES: NavRow[] = [
-  { view: "next", label: "Context", icon: ListChecks, showCount: true },
-  { view: "priority", label: "Priority", icon: Target, showCount: true },
-  { view: "engage", label: "Engage · Now", icon: Zap, showCount: true },
-];
-
-// Rows below the "My Next Actions" section.
-const REST: NavRow[] = [
+  { view: "next", label: "My Next Actions", icon: ListChecks, showCount: true },
   { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },
@@ -146,55 +135,24 @@ export function ListsSidebar({
         </div>
       )}
 
-      {TOP.map((row) => (
-        <NavButton
-          key={row.view}
-          row={row}
-          active={selectedView === row.view && !selectedContext}
-          count={counts[row.view]}
-          onClick={() => selectView(row.view)}
-        />
-      ))}
-
-      {/* "My Next Actions" is no longer a destination — it's an unclickable
-          section label. Its actions are sliced three ways beneath it: Context
-          (the default list/board, filtered by the in-view @context pills),
-          Priority (the matrix lens), and Engage (do-able-now). */}
-      <div className="mt-2">
-        <p className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-          My Next Actions
-        </p>
-        {NEXT_SLICES.map((row) => (
+      {PRIMARY.map((row) => {
+        const count =
+          row.view === "projects" ? projects.length : counts[row.view];
+        // My Next Actions stays highlighted even when an in-view @context pill is
+        // active (selectedContext set) — it's still the Next Actions view.
+        const active =
+          selectedView === row.view &&
+          (row.view === "next" ? true : !selectedContext);
+        return (
           <NavButton
             key={row.view}
             row={row}
-            // The Context slice stays highlighted even when an in-view @context
-            // pill is active (selectedContext set) — it's still the Context view.
-            active={
-              selectedView === row.view &&
-              (row.view === "next" ? true : !selectedContext)
-            }
-            count={counts[row.view]}
+            active={active}
+            count={count}
             onClick={() => selectView(row.view)}
           />
-        ))}
-      </div>
-
-      <div className="mt-2">
-        {REST.map((row) => {
-          const count =
-            row.view === "projects" ? projects.length : counts[row.view];
-          return (
-            <NavButton
-              key={row.view}
-              row={row}
-              active={selectedView === row.view && !selectedContext}
-              count={count}
-              onClick={() => selectView(row.view)}
-            />
-          );
-        })}
-      </div>
+        );
+      })}
 
       <div className="mt-3 border-t border-border pt-3">
         <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">

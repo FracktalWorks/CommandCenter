@@ -1,12 +1,19 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import {
   X, Settings2, Sparkles, Inbox, RefreshCw,
   Columns3, ChevronUp, ChevronDown, Plus, Loader2, AlertTriangle,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { fetchStatusCatalog, type TaskSettings, type StatusCatalog } from "../lib/api";
+import {
+  COLUMNS,
+  DEFAULT_VISIBLE,
+  readColumnVisibility,
+  setColumnVisible,
+  subscribeColumns,
+} from "../lib/columns";
 
 // Task Manager settings (mirror of the email app's AI Settings): pick the
 // model tier per AI function + behaviour toggles. Same gate pattern as
@@ -261,6 +268,19 @@ function SettingsPanel() {
               Per-workspace connections, schema refresh, and disconnect live in
               the Workspaces dialog.
             </p>
+          </section>
+
+          {/* ── Next Actions list columns ── */}
+          <section>
+            <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+              <Columns3 className="h-3.5 w-3.5" /> Next Actions columns
+            </h3>
+            <p className="mb-2 px-1 text-[11px] text-muted-foreground">
+              In the list view (desktop), Next Actions shows these as aligned
+              columns. Hide the ones you don&rsquo;t want to see. On mobile the
+              pills stay stacked under each task regardless.
+            </p>
+            <ColumnsEditor />
           </section>
 
           {/* ── Board (Kanban stages for Next Actions) ── */}
@@ -520,6 +540,52 @@ function StatusMappingEditor({
                 </option>
               ))}
             </select>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+/** The show/hide toggles for the Next-Actions list columns. Reads the same
+ *  localStorage-backed visibility the list uses (via useSyncExternalStore) so a
+ *  flip here updates the list live. A per-browser display pref — no server. */
+function ColumnsEditor() {
+  const vis = useSyncExternalStore(
+    subscribeColumns,
+    readColumnVisibility,
+    () => DEFAULT_VISIBLE,
+  );
+  return (
+    <div className="flex flex-col gap-1.5">
+      {COLUMNS.map((c) => {
+        const on = vis[c.key];
+        return (
+          <div
+            key={c.key}
+            className="flex items-center justify-between gap-3 rounded-lg border border-border px-3 py-2"
+          >
+            <span className="text-[13px] font-medium text-foreground">
+              {c.label}
+            </span>
+            <button
+              type="button"
+              role="switch"
+              aria-checked={on}
+              aria-label={`Show ${c.label} column`}
+              onClick={() => setColumnVisible(c.key, !on)}
+              className={[
+                "tech-transition relative inline-flex h-5 w-9 shrink-0 items-center rounded-full",
+                on ? "bg-primary" : "bg-secondary",
+              ].join(" ")}
+            >
+              <span
+                className={[
+                  "inline-block h-4 w-4 transform rounded-full bg-white shadow-sm transition-transform",
+                  on ? "translate-x-[18px]" : "translate-x-[2px]",
+                ].join(" ")}
+              />
+            </button>
           </div>
         );
       })}

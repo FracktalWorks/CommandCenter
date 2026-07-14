@@ -423,18 +423,49 @@ async def purge_item(item_id: str, user: UserContext = Depends(get_current_user)
 
 
 async def _delete_upstream(db: Any, row: Any, uid: str) -> None:
-    """Best-effort: delete a pushed SYNCED task's counterpart in the connected
-    tool. Never raises — a failed upstream delete must not block the local
-    purge (mirrors _push_patch_upstream's posture)."""
+    """Best-effort: propagate a purge to a pushed SYNCED task's counterpart in
+    the connected tool. We ARCHIVE it upstream rather than hard-delete — a
+    delete in the app removes the task locally but leaves it recoverable in the
+    connected tool (ClickUp's own trash/archive), which is the safer posture and
+    matches how ClickUp itself treats task removal. Never raises — a failed
+    upstream write must not block the local purge (mirrors _push_patch_upstream)."""
     try:
         account = await _assert_account_owner(db, str(row.account_id), uid)
         creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
         provider = build_provider(
             account.provider, creds, account.workspace_id, str(account.id))
-        await provider.delete_task(str(row.provider_task_id))
+        await provider.archive_task(str(row.provider_task_id), True)
     except Exception as exc:  # best-effort — never fail the local purge
         _log.warning("tasks.delete.upstream_failed",
                      item_id=str(row.id)[:12], error=str(exc)[:160])
+
+
+async def _archive_upstream(
+    db: Any, rows: list[Any], uid: str, archived: bool,
+) -> None:
+    """Best-effort: mirror an archive/un-archive to the connected tool for each
+    pushed SYNCED task in ``rows``. Runs AFTER the local commit — the local state
+    is already saved, so an upstream hiccup logs but never loses the archive
+    (mirrors _push_patch_upstream). Providers are cached per account so a bulk
+    archive of many tasks in one workspace builds one provider."""
+    providers: dict[str, Any] = {}
+    for row in rows:
+        if row.source == "LOCAL" or not row.provider_task_id or not row.account_id:
+            continue
+        try:
+            acct_id = str(row.account_id)
+            provider = providers.get(acct_id)
+            if provider is None:
+                account = await _assert_account_owner(db, acct_id, uid)
+                creds = json.loads(
+                    _key_store().decrypt(account.credentials_encrypted))
+                provider = build_provider(
+                    account.provider, creds, account.workspace_id, acct_id)
+                providers[acct_id] = provider
+            await provider.archive_task(str(row.provider_task_id), archived)
+        except Exception as exc:  # best-effort — never fail the local archive
+            _log.warning("tasks.archive.upstream_failed",
+                         item_id=str(row.id)[:12], error=str(exc)[:160])
 
 
 # ── Small edits (rename / note / tickler / quick-dispose) ────────────────────
@@ -789,7 +820,9 @@ async def archive_item(
     user: UserContext = Depends(get_current_user),
 ):
     """Archive (hide from every active view) or un-archive a task. Independent
-    of the DONE disposition — you can archive anything and restore it later."""
+    of the DONE disposition — you can archive anything and restore it later. For
+    a SYNCED task the archive mirrors to the connected tool (best-effort) so the
+    app and ClickUp stay consistent; restoring un-archives it upstream too."""
     uid = _uid(user)
     db = await _get_db()
     try:
@@ -803,7 +836,9 @@ async def archive_item(
         if not res:
             raise HTTPException(status_code=404, detail="Item not found")
         await db.commit()
-        return _row_to_item(await _fetch_item(db, item_id, uid))
+        row = await _fetch_item(db, item_id, uid)
+        await _archive_upstream(db, [row], uid, req.archived)
+        return _row_to_item(row)
     finally:
         await db.close()
 
@@ -849,9 +884,10 @@ async def bulk_archive(
     user: UserContext = Depends(get_current_user),
 ):
     """Archive (or un-archive) many tasks at once — the multi-select 'Archive
-    selected' action. A LOCAL-only overlay, identical to single archive: it
-    hides the tasks from active views but never touches the connected tool, so
-    it's safe for SYNCED (ClickUp) tasks too."""
+    selected' action. Like single archive, it hides the tasks from active views
+    and, for each SYNCED (ClickUp) task, mirrors the archive to the connected
+    tool (best-effort, after the local commit) so the app and ClickUp agree."""
+    uid = _uid(user)
     db = await _get_db()
     try:
         await db.execute(
@@ -859,13 +895,14 @@ async def bulk_archive(
                     SET archived_at = CASE WHEN :on THEN now() ELSE NULL END,
                         updated_at = now()
                     WHERE id::text = ANY(:ids) AND user_id = :uid"""),
-            {"ids": req.ids, "on": req.archived, "uid": _uid(user)},
+            {"ids": req.ids, "on": req.archived, "uid": uid},
         )
         await db.commit()
         rows = (await db.execute(
             text(ITEM_SELECT + " WHERE i.id::text = ANY(:ids) AND i.user_id = :uid"),
-            {"ids": req.ids, "uid": _uid(user)},
+            {"ids": req.ids, "uid": uid},
         )).fetchall()
+        await _archive_upstream(db, list(rows), uid, req.archived)
         return [_row_to_item(r) for r in rows]
     finally:
         await db.close()

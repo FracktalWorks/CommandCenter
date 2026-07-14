@@ -39,6 +39,11 @@ export function TaskListGrouped({
   const statusStageMap = useTaskStore((s) => s.settings.statusStageMap);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
+  // Multi-select: when active, rows show a checkbox and drag is suppressed
+  // (selecting and dragging the same card would conflict).
+  const selectMode = useTaskStore((s) => s.selectMode);
+  const selectedIds = useTaskStore((s) => s.selectedIds);
+  const toggleSelected = useTaskStore((s) => s.toggleSelected);
 
   // Next Actions groups by the 4 fixed workflow stages; other views render a
   // single flat group. A LOCAL row keys off `workflowStage`; a SYNCED row off
@@ -53,7 +58,8 @@ export function TaskListGrouped({
     () => (stages ? {} : statusStageMap),
     [stages, statusStageMap],
   );
-  const manual = sort.field === "manual";
+  // Drag-reorder is a manual-sort affordance; it's off while multi-selecting.
+  const manual = sort.field === "manual" && !selectMode;
   const firstStage = stageKeys[0];
 
   const [dragId, setDragId] = useState<string | null>(null);
@@ -183,6 +189,9 @@ export function TaskListGrouped({
                     key={item.id}
                     item={item}
                     manual={manual}
+                    selectMode={selectMode}
+                    selected={selectedIds.has(item.id)}
+                    onToggleSelected={() => toggleSelected(item.id)}
                     isDropTarget={dropAt === `${g.key}:${idx}`}
                     onDragStart={() => setDragId(item.id)}
                     onDragEnd={() => {
@@ -229,6 +238,9 @@ export function TaskListGrouped({
 function DraggableRow({
   item,
   manual,
+  selectMode,
+  selected,
+  onToggleSelected,
   isDropTarget,
   onDragStart,
   onDragEnd,
@@ -237,6 +249,9 @@ function DraggableRow({
 }: {
   item: GtdItem;
   manual: boolean;
+  selectMode: boolean;
+  selected: boolean;
+  onToggleSelected: () => void;
   isDropTarget: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -273,11 +288,23 @@ function DraggableRow({
       {isDropTarget && (
         <span className="pointer-events-none absolute -top-[3px] left-0 h-1 w-1.5 rounded-full bg-primary" />
       )}
-      <div className="flex items-stretch">
-        {manual && (
-          <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
-            <GripVertical className="h-3.5 w-3.5" />
-          </span>
+      <div className={["flex items-stretch", selected ? "bg-primary/5" : ""].join(" ")}>
+        {selectMode ? (
+          <label className="flex w-9 shrink-0 cursor-pointer items-center justify-center">
+            <input
+              type="checkbox"
+              checked={selected}
+              onChange={onToggleSelected}
+              className="h-4 w-4 accent-primary"
+              aria-label={selected ? "Deselect task" : "Select task"}
+            />
+          </label>
+        ) : (
+          manual && (
+            <span className="flex w-5 shrink-0 cursor-grab items-center justify-center text-muted-foreground/25 transition-colors group-hover/row:text-muted-foreground/60 active:cursor-grabbing">
+              <GripVertical className="h-3.5 w-3.5" />
+            </span>
+          )
         )}
         {/* expand toggle — only for parents; keeps a fixed-width gutter so all
             rows stay left-aligned whether or not they have subtasks. */}
@@ -299,9 +326,24 @@ function DraggableRow({
             </button>
           )}
         </span>
-        <div className="min-w-0 flex-1">
-          <TaskCard item={item} variant="row" />
-        </div>
+        {selectMode ? (
+          // In select mode the whole row toggles selection; the card is inert so
+          // a click selects rather than opening the task.
+          <button
+            type="button"
+            onClick={onToggleSelected}
+            className="min-w-0 flex-1 text-left"
+            aria-pressed={selected}
+          >
+            <div className="pointer-events-none">
+              <TaskCard item={item} variant="row" />
+            </div>
+          </button>
+        ) : (
+          <div className="min-w-0 flex-1">
+            <TaskCard item={item} variant="row" />
+          </div>
+        )}
       </div>
       {hasSubtasks && expanded && <SubtaskRows parent={item} />}
     </div>

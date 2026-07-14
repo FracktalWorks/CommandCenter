@@ -492,13 +492,24 @@ interface TaskState {
   pendingDeleteIds: string[] | null;
   /** Request deletion of one or more items. Fresh inbox captures delete right
    *  away (undo covers them); ClickUp-synced OR already-clarified tasks open an
-   *  "Are you sure?" confirm first (real consequences — the ClickUp task will be
-   *  deleted too once the undo window passes). */
+   *  "Are you sure?" confirm first (real consequences — the ClickUp task is
+   *  ARCHIVED upstream, not hard-deleted, once the undo window passes). */
   requestDelete: (ids: string[]) => void;
   /** Confirm the pending delete (the dialog's primary action). */
   confirmPendingDelete: () => void;
   /** Dismiss the confirm dialog without deleting. */
   cancelPendingDelete: () => void;
+  /** Multi-select for bulk archive/delete. Lifted into the store (not local to
+   *  ItemList) so the board and grouped list can offer checkboxes too — the
+   *  selection survives switching between list/board mode within a view. */
+  selectMode: boolean;
+  selectedIds: Set<string>;
+  /** Enter/leave select mode (leaving clears the selection). */
+  setSelectMode: (on: boolean) => void;
+  /** Toggle one id in the current selection. */
+  toggleSelected: (id: string) => void;
+  /** Clear the selection and leave select mode. */
+  clearSelection: () => void;
   /** Delete an item. SOFT delete (tombstone) → lossless Undo within the window,
    *  then purge (+ ClickUp propagation for synced tasks) on dismiss. */
   deleteItem: (id: string) => void;
@@ -687,6 +698,19 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   processedThisSession: 0,
   undoSnapshot: null,
   pendingDeleteIds: null,
+  selectMode: false,
+  selectedIds: new Set<string>(),
+
+  setSelectMode: (on) =>
+    set(on ? { selectMode: true } : { selectMode: false, selectedIds: new Set() }),
+  toggleSelected: (id) =>
+    set((s) => {
+      const next = new Set(s.selectedIds);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return { selectedIds: next };
+    }),
+  clearSelection: () => set({ selectedIds: new Set(), selectMode: false }),
 
   selectView: (view) =>
     set({
@@ -697,6 +721,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // A search/filter is scoped to the view you set it in — reset on nav so a
       // stale query doesn't silently hide items in the next view.
       filters: DEFAULT_FILTERS,
+      // A multi-selection is scoped to its view too — drop it on nav so you
+      // don't archive/delete rows you can no longer see.
+      selectMode: false,
+      selectedIds: new Set(),
     }),
 
   selectContext: (context) =>

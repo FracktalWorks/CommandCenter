@@ -399,39 +399,77 @@ _GEN_UI_TYPES = {
 
 
 async def emit_generative_ui(ui: str) -> dict:
-    """Render a rich, interactive UI element inline in the chat, on the fly.
+    """Render a rich, interactive, animated UI element inline in the chat, on the fly.
 
-    Pass a JSON component TREE (data, not code) and the chat renders it as real
-    UI — cards, tables, key/value blocks, badges, callouts, and clickable
-    buttons — instead of plain text. Use this when a structured visual answer
-    beats prose: a summary card, a comparison table, a status dashboard, a set
-    of action buttons.
+    Use this whenever a visual answer beats prose — a weather card, a KPI
+    dashboard, a chart, a comparison, a status tracker, or a bespoke animated
+    widget. ``ui`` is a JSON object (string or dict). It supports THREE modes;
+    prefer them in this order (template → tree → html):
 
-    ``ui`` is a JSON object (or ``{"root": <node>}``). Each node is
-    ``{"type": <kind>, "props": {...}, "children": [...]}``. Allowed ``type``
-    kinds (nothing else renders):
-      card{title?} · stack · row · heading{text} · text{text,muted?} ·
-      markdown{text} · badge{text,tone?} · divider · callout{title?,text?,tone?}
-      keyValue{pairs:[{key,value}]} · table{columns:[..],rows:[[..]]} ·
-      list{items:[..],ordered?} · code{text} · link{href,text?} ·
-      button{label,action,tone?}
-    ``tone`` ∈ success|error|warning|info|neutral (badges/callouts) or
-    primary|danger|default (buttons).
+    1. NAMED TEMPLATE — pre-designed, animated, on-brand components. You supply
+       ONLY data; the design is fixed and looks great every time. Use first when
+       one fits. Shape: ``{"type":"template","props":{"name":<t>,"data":{...}}}``.
+       Available templates and their ``data`` shapes:
+         • weatherCard — {location, tempC|tempF, condition('sunny'|'cloudy'|
+             'rain'|'snow'|'storm'), highC?, lowC?, humidity?, wind?,
+             forecast?:[{day,condition,high,low}]}
+         • statDashboard — {title?, stats:[{label, value, unit?, delta?:number}]}
+         • barChart — {title?, unit?, bars:[{label, value,
+             tone?('primary'|'success'|'warning'|'danger')}]}
+         • sparkTrend — {label, value, unit?, delta?:number, series:number[]}
+         • comparison — {title?, options:[{name, recommended?:bool,
+             rows:[{label, value}]}]}
+         • progressTracker — {title?, steps:[{label,
+             state('done'|'active'|'pending')}]}
 
-    A ``button``'s ``action`` string is sent back as the user's next message
-    when clicked — use it for follow-up choices ("Approve", "Show details").
+    2. COMPONENT TREE — a safe whitelist of typed primitives (data, not code).
+       Each node is ``{"type":<kind>,"props":{...},"children":[...]}``. Kinds:
+         card{title?} · stack · row · heading{text} · text{text,muted?} ·
+         markdown{text} · badge{text,tone?} · divider · callout{title?,text?,tone?}
+         keyValue{pairs:[{key,value}]} · table{columns:[..],rows:[[..]]} ·
+         list{items:[..],ordered?} · code{text} · link{href,text?} ·
+         button{label,action,tone?} ·
+         icon{name,size?,tone?,label?}
+       ``icon`` renders any Lucide icon by ``name`` (kebab or Pascal, e.g.
+       ``"cloud-sun"``, ``"CheckCircle"``, ``"trending-up"``) — on-brand, bundled,
+       no network; unknown names fall back to a neutral glyph. Put an ``icon`` in
+       a ``row`` beside ``text`` for labelled rows. ``tone`` ∈ success|error|
+       warning|info|neutral (badges/callouts/icons) or primary|danger|default
+       (buttons). A ``button``'s ``action`` string is sent back as the user's
+       next message when clicked.
 
-    There is NO raw-HTML/script node by design — you compose from the typed
-    primitives above; anything else is ignored. Returns ``{"ok": true}`` on
-    emit. This is additive: also say what you're showing in your text reply.
+    3. CUSTOM HTML — the escape hatch for bespoke animation/layout no template or
+       tree covers. Shape: ``{"type":"html","props":{"code":"<div>…</div>"}}``.
+       Your HTML/CSS/JS runs in an ISOLATED sandbox (its own opaque origin): it
+       cannot reach the app, cookies, or the network, so inline everything — NO
+       external CDNs, fonts, or images (use data: URIs). Optional
+       ``props.height`` (px); omit to auto-size. For interactivity, put
+       ``data-cc-action="<follow-up message>"`` on a clickable element (or call
+       ``ccAction("…")`` from your script); it's delivered as the user's next
+       message, exactly like a tree button's ``action``.
 
-    Example::
+    Returns ``{"ok": true}`` on emit. Additive — also say in prose what you're
+    showing. Keep template/tree/html discriminated by the top-level ``type``.
 
+    Examples::
+
+        # Template (preferred)
+        await emit_generative_ui('{"type":"template","props":{"name":"weatherCard",'
+          '"data":{"location":"Lisbon","tempC":24,"condition":"sunny","highC":26,'
+          '"lowC":18,"humidity":40,"forecast":[{"day":"Mon","condition":"sunny",'
+          '"high":25,"low":17},{"day":"Tue","condition":"rain","high":21,"low":15}]}}}')
+
+        # Component tree
         await emit_generative_ui('{"type":"card","props":{"title":"Deploy"},'
           '"children":[{"type":"keyValue","props":{"pairs":['
           '{"key":"Status","value":"green"},{"key":"Version","value":"1.4.2"}]}},'
           '{"type":"row","children":[{"type":"button","props":'
           '{"label":"Roll back","action":"roll back the deploy","tone":"danger"}}]}]}')
+
+        # Custom HTML (only when nothing above fits)
+        await emit_generative_ui('{"type":"html","props":{"code":'
+          '"<div style=\\'font:600 20px sans-serif;padding:16px\\'>Hi<button '
+          'data-cc-action=\\'tell me more\\'>More</button></div>"}}')
     """
     import json
 

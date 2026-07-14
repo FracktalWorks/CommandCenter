@@ -169,6 +169,11 @@ export interface TaskCaptureDraft {
   dueAt: string;
   deferUntil: string;
   context: string;
+  /** Full-clarify fields the AI fills for an actionable (NEXT/CALENDAR) capture
+   *  so a task filed outside the inbox lands complete. */
+  energy: string;
+  timeEstimateMins: number | null;
+  subtasks: string[];
 }
 
 export interface SimilarTask {
@@ -203,6 +208,12 @@ function mapDraft(raw: Record<string, unknown>): TaskCaptureDraft {
     dueAt: String(raw.due_at ?? ""),
     deferUntil: String(raw.defer_until ?? ""),
     context: String(raw.context ?? ""),
+    energy: String(raw.energy ?? ""),
+    timeEstimateMins:
+      raw.time_estimate_mins == null ? null : Number(raw.time_estimate_mins),
+    subtasks: Array.isArray(raw.subtasks)
+      ? raw.subtasks.map((s) => String(s))
+      : [],
   };
 }
 
@@ -216,6 +227,9 @@ function draftToWire(d: TaskCaptureDraft): Record<string, unknown> {
     due_at: d.dueAt,
     defer_until: d.deferUntil,
     context: d.context,
+    energy: d.energy,
+    time_estimate_mins: d.timeEstimateMins,
+    subtasks: d.subtasks,
   };
 }
 

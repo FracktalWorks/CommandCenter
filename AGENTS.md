@@ -21,6 +21,33 @@
 
 Do not rely on memory. Re-read the applicable DOX chain in the current session before editing.
 
+## Place Before Building
+
+Every new feature, module, tool, endpoint, or asset must land in its
+architecturally-correct home **before** any code is written. Convenience of the
+file you happen to have open is never a reason to place work elsewhere. Before
+building:
+
+1. Name the feature's kind — deployed service, dynamically-loaded agent,
+   importable skill, shared package, infra, deploy, planning doc, or UI. The
+   `apps/` split (services vs agents vs skills) and the packages list are
+   load-bearing, not cosmetic — respect them.
+2. Walk the Child DOX Index (below) and the nested indexes to find the scope
+   that owns that kind. The nearest owning AGENTS.md is the target directory.
+3. Verify the placement against Global Constraints and the local AGENTS.md
+   contract (e.g. new event-driven execution defaults to MAF paths, not the
+   Copilot-SDK runtime; secrets never live in agent/skill repos; UI work lives
+   under `workbench/` and follows the design system).
+4. Reuse the existing seam before adding a new one — extend the owning package,
+   service, or skill rather than duplicating its capability in a closer folder.
+   If no scope fits, the right move is a new scope with its own AGENTS.md, not an
+   orphan file wedged into an unrelated tree.
+5. If placement is genuinely ambiguous, state the candidate homes and the
+   trade-off before writing code — do not default to the current directory.
+
+A feature in the wrong layer is a defect even if it works. Correct the placement
+first, then build.
+
 ## Update After Editing
 
 Every meaningful change requires a DOX pass before the task is done.

@@ -43,6 +43,12 @@ export function TaskBoard({
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
   const updateItem = useTaskStore((s) => s.updateItem);
+  // Multi-select for bulk archive/delete — works right on the board now. While
+  // selecting, cards become selection toggles and drag is suppressed (a checkbox
+  // and a drag handle on the same card would fight each other).
+  const selectMode = useTaskStore((s) => s.selectMode);
+  const selectedIds = useTaskStore((s) => s.selectedIds);
+  const toggleSelected = useTaskStore((s) => s.toggleSelected);
 
   // Columns: an explicit stage set (the per-project view's real ClickUp
   // statuses) or the user's 4 fixed workflow stages. A LOCAL task keys off its
@@ -58,7 +64,8 @@ export function TaskBoard({
     () => (stages ? {} : statusStageMap),
     [stages, statusStageMap],
   );
-  const manual = sort.field === "manual";
+  // Manual drag-reorder is a sort affordance; suppressed while multi-selecting.
+  const manual = sort.field === "manual" && !selectMode;
   const [dragId, setDragId] = useState<string | null>(null);
   const [overCol, setOverCol] = useState<string | null>(null);
   // Exact gap "<colKey>:<index>" the card would drop into (manual mode only).
@@ -190,7 +197,10 @@ export function TaskBoard({
                   <div className="pb-2">
                     <TaskCard
                       item={i}
-                      draggable
+                      draggable={!selectMode}
+                      selectMode={selectMode}
+                      selected={selectedIds.has(i.id)}
+                      onToggleSelected={() => toggleSelected(i.id)}
                       onDragStart={() => setDragId(i.id)}
                       onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}
                     />

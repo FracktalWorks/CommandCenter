@@ -469,18 +469,31 @@ function RowContent({
   grid: string;
 }) {
   const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
+  const openFocus = useTaskStore((s) => s.openFocus);
   if (columns.length === 0) {
     return <TaskCard item={item} variant="row" />;
   }
   return (
     <>
-      {/* Mobile: the stacked card (title + wrapping pills). */}
+      {/* Mobile: the stacked card (title + wrapping pills) — clickable itself. */}
       <div className="sm:hidden">
         <TaskCard item={item} variant="row" />
       </div>
-      {/* Desktop: aligned columns matching the header grid. */}
+      {/* Desktop: aligned columns matching the header grid. The row opens the
+          focus modal on click (Enter/Space too) — same affordance as the card,
+          so the columnar list is clickable. Column cells that carry their own
+          interactive controls stop propagation. */}
       <div
-        className="hidden items-center gap-2 py-2.5 pr-3.5 sm:grid"
+        role="button"
+        tabIndex={0}
+        onClick={() => openFocus(item.id)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            openFocus(item.id);
+          }
+        }}
+        className="tech-transition hidden cursor-pointer items-center gap-2 py-2.5 pr-3.5 hover:bg-secondary/40 sm:grid"
         style={{ gridTemplateColumns: grid }}
       >
         <span className="min-w-0 truncate text-sm text-foreground">

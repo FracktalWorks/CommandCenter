@@ -32,6 +32,13 @@ const DISPOSITIONS: { value: string; label: string; hint: string }[] = [
 
 const CONTEXTS = ["", "@computer", "@calls", "@errands", "@office", "@home", "@agenda"];
 
+const ENERGIES: { value: string; label: string }[] = [
+  { value: "", label: "—" },
+  { value: "low", label: "Low" },
+  { value: "medium", label: "Medium" },
+  { value: "high", label: "High" },
+];
+
 function toDateInput(iso: string): string {
   // The draft carries ISO strings (possibly with time); the <input type=date>
   // wants YYYY-MM-DD. Keep just the date part; empty stays empty.
@@ -147,6 +154,10 @@ export function TaskCaptureModal({
   const disp = draft?.disposition || "INBOX";
   const showAssignee = disp === "WAITING";
   const showDue = disp === "NEXT" || disp === "CALENDAR" || disp === "WAITING";
+  // For an actionable capture (I'll do this), the AI also clarifies the energy,
+  // time estimate and any subtasks — mirror the inbox Clarify flow so the task
+  // lands complete. These fields are meaningless for WAITING/SOMEDAY/Inbox.
+  const showDetails = disp === "NEXT" || disp === "CALENDAR";
 
   return (
     <div
@@ -332,6 +343,93 @@ export function TaskCaptureModal({
                   </select>
                 </div>
               </div>
+
+              {/* Actionable-task details — energy, estimate, subtasks. The AI
+                  fills these when it routes the task to a next action so it
+                  lands complete (clarify parity); the user can tweak them. */}
+              {showDetails && (
+                <div className="space-y-3 rounded-lg border border-border/60 bg-secondary/20 px-3 py-2.5">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                        Energy
+                      </label>
+                      <select
+                        value={draft?.energy ?? ""}
+                        onChange={(e) => patch({ energy: e.target.value })}
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary/50 focus:outline-none"
+                      >
+                        {ENERGIES.map((en) => (
+                          <option key={en.value} value={en.value}>
+                            {en.label}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                        Estimate (min)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={draft?.timeEstimateMins ?? ""}
+                        onChange={(e) =>
+                          patch({
+                            timeEstimateMins:
+                              e.target.value === ""
+                                ? null
+                                : Math.max(0, Number(e.target.value)),
+                          })
+                        }
+                        placeholder="—"
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                  {(draft?.subtasks.length ?? 0) > 0 && (
+                    <div>
+                      <label className="block text-[11px] font-medium text-muted-foreground mb-1">
+                        Steps ({draft?.subtasks.length}) — created as subtasks
+                      </label>
+                      <ul className="space-y-1">
+                        {draft?.subtasks.map((s, i) => (
+                          <li key={i} className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-muted-foreground/60 w-4 flex-shrink-0 text-right">
+                              {i + 1}.
+                            </span>
+                            <input
+                              value={s}
+                              onChange={(e) =>
+                                patch({
+                                  subtasks: (draft?.subtasks ?? []).map((x, j) =>
+                                    j === i ? e.target.value : x
+                                  ),
+                                })
+                              }
+                              className="min-w-0 flex-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground focus:border-primary/50 focus:outline-none"
+                            />
+                            <button
+                              type="button"
+                              onClick={() =>
+                                patch({
+                                  subtasks: (draft?.subtasks ?? []).filter(
+                                    (_, j) => j !== i
+                                  ),
+                                })
+                              }
+                              className="flex-shrink-0 text-muted-foreground/50 hover:text-destructive"
+                              title="Remove step"
+                            >
+                              <X size={12} />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {err && <div className="text-xs text-destructive">{err}</div>}
             </>

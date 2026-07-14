@@ -32,6 +32,9 @@ export function TaskCard({
   variant = "board",
   draggable = false,
   showPriority = false,
+  selectMode = false,
+  selected = false,
+  onToggleSelected,
   onDragStart,
   onDragEnd,
 }: {
@@ -42,6 +45,11 @@ export function TaskCard({
   /** Show the matrix-cell badge (the Priority view / ranked list). Off
    *  elsewhere so a card carries at most the one relevant priority signal. */
   showPriority?: boolean;
+  /** Multi-select mode (board): show a checkbox and toggle selection on click
+   *  instead of opening the focus modal. Drag is suppressed by the parent. */
+  selectMode?: boolean;
+  selected?: boolean;
+  onToggleSelected?: () => void;
   onDragStart?: (e: React.DragEvent) => void;
   onDragEnd?: (e: React.DragEvent) => void;
 }) {
@@ -162,6 +170,13 @@ export function TaskCard({
     );
   }
 
+  // In select mode the card is a selection toggle, not a link: clicking checks
+  // the box (drag is disabled by the parent) so a batch can be archived/deleted
+  // right on the board. A selected card gets a primary ring.
+  const activate = () => {
+    if (selectMode) onToggleSelected?.();
+    else openFocus(item.id);
+  };
   return (
     <div
       role="button"
@@ -169,17 +184,33 @@ export function TaskCard({
       draggable={draggable}
       onDragStart={onDragStart}
       onDragEnd={onDragEnd}
-      onClick={() => openFocus(item.id)}
+      onClick={activate}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
-          openFocus(item.id);
+          activate();
         }
       }}
-      className="group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border border-border bg-card p-3 shadow-sm hover:border-primary/40 hover:shadow-md"
+      className={[
+        "group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-3 shadow-sm hover:shadow-md",
+        selected
+          ? "border-primary ring-1 ring-primary"
+          : "border-border hover:border-primary/40",
+      ].join(" ")}
     >
-      {draggable && (
-        <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
+      {selectMode ? (
+        <input
+          type="checkbox"
+          checked={selected}
+          onChange={() => onToggleSelected?.()}
+          onClick={(e) => e.stopPropagation()}
+          aria-label={selected ? "Deselect task" : "Select task"}
+          className="absolute right-1.5 top-1.5 h-4 w-4 accent-primary"
+        />
+      ) : (
+        draggable && (
+          <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
+        )
       )}
       <p className="pr-4 text-[13px] font-medium leading-snug text-foreground">
         {item.title}

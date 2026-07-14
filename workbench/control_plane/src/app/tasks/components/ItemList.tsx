@@ -298,10 +298,10 @@ export function ItemList() {
         ) : (
           <EmptyState view={view} />
         )
-      ) : isBoard && !selectMode ? (
-        // The Kanban board (drag-to-refile). In select mode we fall through to
-        // the grouped list instead — checkboxes + drag on the same cards would
-        // fight each other, and the grouped list shows the same stages.
+      ) : isBoard ? (
+        // The Kanban board (drag-to-refile). Multi-select works on the board
+        // itself now: in select mode the cards become checkboxes and drag is
+        // suppressed, so a batch can be archived/deleted without leaving the board.
         <div className="min-h-0 flex-1">
           <TaskBoard items={visible} view={view} />
         </div>

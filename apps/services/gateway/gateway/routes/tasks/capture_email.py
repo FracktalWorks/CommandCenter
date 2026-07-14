@@ -97,6 +97,11 @@ class CaptureDraftModel(BaseModel):
     due_at: str = ""
     defer_until: str = ""
     context: str = ""
+    # Full-clarify fields the AI fills for an actionable (NEXT/CALENDAR) capture,
+    # so a task filed outside the inbox lands complete — not a bare title.
+    energy: str = ""
+    time_estimate_mins: int | None = None
+    subtasks: list[str] = []
 
 
 class CapturePreviewResponse(BaseModel):
@@ -159,6 +164,7 @@ def draft_task_fallback(subject: str, from_name: str, snippet: str) -> dict[str,
         "notes": (snippet or "").strip()[:500],
         "disposition": "INBOX", "next_action": "", "assignee_name": "",
         "due_at": "", "defer_until": "", "context": "",
+        "energy": "", "time_estimate_mins": None, "subtasks": [],
     }
 
 
@@ -248,11 +254,23 @@ async def _llm_capture(
         "deadline), set defer_until (ISO-8601 tickler) instead.\n\n"
         "title: what the owner needs to do/decide, in their voice, ≤15 words "
         "(e.g. 'Approve Sanjay's revised vendor quote (Rs 4.2L)'). "
-        "notes: 1-2 sentences of context (who wants what, any deadline).\n"
+        "notes: 1-2 sentences of context (who wants what, any deadline).\n\n"
+        "When the disposition is NEXT or CALENDAR (the owner will act on this), "
+        "ALSO fully clarify it — don't leave it a bare title:\n"
+        "- energy: the focus it needs — 'high' (deep/creative), 'medium' "
+        "(normal), or 'low' (quick/administrative).\n"
+        "- time_estimate_mins: a realistic estimate of minutes to do it.\n"
+        "- subtasks: if finishing this genuinely needs MORE than one physical "
+        "step, list each concrete step in order (next_action is the first one); "
+        "otherwise return an empty list. Never pad a single-step task.\n"
+        "For WAITING/SOMEDAY these may be null/empty — the owner isn't doing the "
+        "work now.\n\n"
         'Return STRICT JSON only: {"title": str, "notes": str, "disposition": '
         '"NEXT"|"WAITING"|"CALENDAR"|"SOMEDAY", "next_action": str, '
         '"assignee_name": str|null, "due_at": str|null, "defer_until": '
-        'str|null, "context": "@computer"|"@calls"|"@agenda"|null}'
+        'str|null, "context": "@computer"|"@calls"|"@agenda"|null, '
+        '"energy": "high"|"medium"|"low"|null, "time_estimate_mins": int|null, '
+        '"subtasks": [str]}'
     )
     user = (
         f"TODAY: {today}\n"
@@ -286,6 +304,18 @@ async def _llm_capture(
     if disp not in _CAPTURE_DISPOSITIONS:
         disp = "INBOX"
     ctx = str(data.get("context") or "").strip()
+    # Energy / estimate / subtasks are only meaningful when the owner will act
+    # on the task (NEXT/CALENDAR) — clarify parity. For WAITING/SOMEDAY/INBOX
+    # they'd be noise, so drop them.
+    actionable = disp in ("NEXT", "CALENDAR")
+    energy = str(data.get("energy") or "").strip().lower()
+    if energy not in ("high", "medium", "low"):
+        energy = ""
+    subs = data.get("subtasks")
+    subtasks = (
+        [s2 for s in subs if (s2 := _clean_title(str(s), "")[:200])][:12]
+        if isinstance(subs, list) else []
+    )
     return {
         "title": title,
         "notes": str(data.get("notes") or "")[:500],
@@ -295,6 +325,11 @@ async def _llm_capture(
         "due_at": str(data.get("due_at") or "").strip(),
         "defer_until": str(data.get("defer_until") or "").strip(),
         "context": ctx if ctx.startswith("@") else "",
+        "energy": energy if actionable else "",
+        "time_estimate_mins": (
+            _coerce_mins(data.get("time_estimate_mins")) if actionable else None
+        ),
+        "subtasks": subtasks if actionable else [],
     }
 
 
@@ -344,6 +379,16 @@ async def _find_pm_account_for_person(
                     "provider_user_id": mid or pid or None,
                 }
     return None
+
+
+def _coerce_mins(val: Any) -> int | None:
+    """A positive minute estimate from the LLM (int, float, or numeric string),
+    clamped to a sane ceiling; None for anything unusable."""
+    try:
+        n = int(float(str(val).strip()))
+    except (TypeError, ValueError):
+        return None
+    return min(n, 100000) if n > 0 else None
 
 
 def _parse_dt(val: str) -> datetime | None:
@@ -517,6 +562,13 @@ async def _route_and_persist(
     clarified = disposition != "INBOX"
     ctx = str(draft.get("context") or "").strip()
     ctx = ctx if ctx.startswith("@") else ""
+    # Full-clarify fields (energy/estimate/subtasks) only for actionable work.
+    actionable = disposition in ("NEXT", "CALENDAR")
+    energy = str(draft.get("energy") or "").strip().lower()
+    energy = energy if (actionable and energy in ("high", "medium", "low")) else None
+    est = _coerce_mins(draft.get("time_estimate_mins")) if actionable else None
+    subtasks = draft.get("subtasks") if actionable else None
+    subtasks = [s for s in subtasks if str(s).strip()] if isinstance(subtasks, list) else []
 
     origin = {
         "kind": "email",
@@ -531,19 +583,19 @@ async def _route_and_persist(
     await db.execute(text(
         """INSERT INTO gtd_items
                (id, user_id, title, description, disposition, next_action,
-                context, assignee, is_mine, due_at, is_hard_date,
-                defer_until, source, account_id, sync_state,
+                context, energy, time_estimate_mins, assignee, is_mine, due_at,
+                is_hard_date, defer_until, source, account_id, sync_state,
                 clarified_at, origin)
            VALUES
                (:id, :uid, :title, :notes, :disp, :next_action,
-                :context, :assignee, :is_mine, :due_at, :is_hard,
-                :defer_until, :source, :account_id, :sync_state,
+                :context, :energy, :est, :assignee, :is_mine, :due_at,
+                :is_hard, :defer_until, :source, :account_id, :sync_state,
                 :clarified_at, :origin)"""),
         {"id": item_id, "uid": uid,
          "title": _clean_title(str(draft.get("title") or ""), "Handle email"),
          "notes": (draft.get("notes") or None), "disp": disposition,
          "next_action": draft.get("next_action") or None,
-         "context": ctx or None,
+         "context": ctx or None, "energy": energy, "est": est,
          "assignee": json.dumps(assignee) if assignee else None,
          "is_mine": is_mine, "due_at": due_at, "is_hard": is_hard,
          "defer_until": defer_until,
@@ -551,6 +603,11 @@ async def _route_and_persist(
          "clarified_at": datetime.now(tz=UTC) if clarified else None,
          "origin": json.dumps(origin)},
     )
+    # Break the task into its child next-actions when the LLM decomposed it.
+    if subtasks:
+        from gateway.routes.tasks.items import _create_subtasks
+        await _create_subtasks(
+            db, uid, item_id, subtasks, source, account_id, None, sync_state)
     if disposition == "WAITING":
         waiting_on = assignee or {
             "name": from_name or "the sender", "email": from_email_ or None,
@@ -664,6 +721,15 @@ async def capture_from_email(
         # follow-up's expected-by (tracked in gtd_waiting), not my hard date.
         is_hard = bool(due_at) and disposition in ("NEXT", "CALENDAR")
         clarified = disposition != "INBOX"
+        # When the router places this OUTSIDE the inbox (NEXT/CALENDAR), it also
+        # clarified energy/estimate/subtasks — persist them so the task lands
+        # complete, not a bare title (clarify parity for the direct-file path).
+        actionable = disposition in ("NEXT", "CALENDAR")
+        energy = str(draft.get("energy") or "").strip().lower()
+        energy = energy if (actionable and energy in ("high", "medium", "low")) else None
+        est = _coerce_mins(draft.get("time_estimate_mins")) if actionable else None
+        subtasks = draft.get("subtasks") if actionable else None
+        subtasks = [s for s in subtasks if str(s).strip()] if isinstance(subtasks, list) else []
 
         origin = {
             "kind": "email",
@@ -678,18 +744,19 @@ async def capture_from_email(
         await db.execute(text(
             """INSERT INTO gtd_items
                    (id, user_id, title, description, disposition, next_action,
-                    context, assignee, is_mine, due_at, is_hard_date,
-                    defer_until, source, account_id, sync_state,
-                    clarified_at, origin)
+                    context, energy, time_estimate_mins, assignee, is_mine,
+                    due_at, is_hard_date, defer_until, source, account_id,
+                    sync_state, clarified_at, origin)
                VALUES
                    (:id, :uid, :title, :notes, :disp, :next_action,
-                    :context, :assignee, :is_mine, :due_at, :is_hard,
-                    :defer_until, :source, :account_id, :sync_state,
-                    :clarified_at, :origin)"""),
+                    :context, :energy, :est, :assignee, :is_mine,
+                    :due_at, :is_hard, :defer_until, :source, :account_id,
+                    :sync_state, :clarified_at, :origin)"""),
             {"id": item_id, "uid": uid, "title": draft["title"],
              "notes": draft["notes"] or None, "disp": disposition,
              "next_action": draft.get("next_action") or None,
              "context": draft.get("context") or None,
+             "energy": energy, "est": est,
              "assignee": json.dumps(assignee) if assignee else None,
              "is_mine": is_mine, "due_at": due_at, "is_hard": is_hard,
              "defer_until": defer_until,
@@ -698,6 +765,11 @@ async def capture_from_email(
              "clarified_at": datetime.now(tz=UTC) if clarified else None,
              "origin": json.dumps(origin)},
         )
+        # Break the task into its child next-actions when the LLM decomposed it.
+        if subtasks:
+            from gateway.routes.tasks.items import _create_subtasks
+            await _create_subtasks(
+                db, uid, item_id, subtasks, source, account_id, None, sync_state)
         # A monitored follow-up/delegation gets an open waiting-for record so it
         # shows in Waiting and the nudge/stale logic tracks it.
         if disposition == "WAITING":
@@ -824,7 +896,10 @@ async def enhance_capture_from_email(
                            else drafted.get("assignee_name", "")),
             due_at=drafted.get("due_at", ""),
             defer_until=drafted.get("defer_until", ""),
-            context=drafted.get("context", ""))
+            context=drafted.get("context", ""),
+            energy=drafted.get("energy", ""),
+            time_estimate_mins=drafted.get("time_estimate_mins"),
+            subtasks=drafted.get("subtasks", []) or [])
         return CaptureEnhanceResponse(
             draft=draft, used_llm=used_llm,
             assignee_resolved=resolved["name"] if resolved else None)

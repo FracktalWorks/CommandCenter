@@ -10,18 +10,33 @@
  * Prefab/FastMCP-Apps embody, but over our own AG-UI transport — no MCP-Apps
  * host, no arbitrary HTML/JS.
  *
- * Safety: the component vocabulary is a fixed whitelist below. There is NO
- * "html"/"script" node — an agent can only compose from these typed primitives,
- * so a malicious or hallucinated tree can't inject markup or execute code. Any
- * unknown `type` renders as an inert labelled fallback, never raw.
+ * Three tiers of richness, all safe:
+ *   • Tier 1 — the whitelisted primitives below (card/table/badge/…): inert data,
+ *     no code path. The default and safest.
+ *   • Tier 2 — `template` node: renders a pre-designed, animated React component
+ *     from TEMPLATE_REGISTRY by NAME, supplying only data. Our design, every time.
+ *   • Tier 3 — `html` node: agent-GENERATED HTML/CSS/JS, executed inside a
+ *     locked-down opaque-origin iframe (SandboxedHtml). Unlimited/animated but
+ *     fully isolated — no ambient authority, actions bridged via postMessage.
+ * There is NO in-tree raw-markup injection: an unknown `type` renders as an inert
+ * labelled fallback, and the `html` tier's code never touches our DOM/origin.
  *
  * Interactivity: `button` nodes carry an `action` string; clicking one calls
  * onAction(action), which the chat wires to submit the action as a follow-up
- * (same contract as the ```choices``` MCQ block). No client-side eval.
+ * (same contract as the ```choices``` MCQ block). Template buttons and sandboxed
+ * [data-cc-action] elements use the SAME onAction contract. No client-side eval
+ * of agent code in our context.
  */
 
+import { createElement } from "react";
+import { useTheme } from "next-themes";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+
+import SandboxedHtml from "@/components/SandboxedHtml";
+import { renderTemplate } from "@/components/genUITemplates";
+import { resolveIcon } from "@/lib/icons";
+import { buildIconMap } from "@/lib/iconSvg";
 
 // ─── Schema ────────────────────────────────────────────────────────────────
 
@@ -36,7 +51,18 @@ export interface GenUINode {
 const KNOWN_TYPES = new Set([
   "card", "stack", "row", "heading", "text", "markdown", "badge",
   "divider", "keyValue", "table", "list", "code", "link", "button", "callout",
+  "template", "html", "icon",
 ]);
+
+/** tone → foreground color token for icons (matches badge/callout palette). */
+const ICON_TONE: Record<string, string> = {
+  success: "#10b981",
+  error: "#ef4444",
+  warning: "#f59e0b",
+  info: "#38bdf8",
+  muted: "var(--muted-foreground)",
+  neutral: "var(--foreground)",
+};
 
 const s = (v: unknown, fallback = ""): string =>
   typeof v === "string" ? v : v == null ? fallback : String(v);
@@ -44,10 +70,11 @@ const s = (v: unknown, fallback = ""): string =>
 // ─── Node renderer ───────────────────────────────────────────────────────
 
 function Node({
-  node, onAction, depth = 0,
+  node, onAction, theme, depth = 0,
 }: {
   node: GenUINode;
   onAction?: (action: string) => void;
+  theme: "light" | "dark";
   depth?: number;
 }): React.ReactElement | null {
   // Depth guard — a pathological/looping tree can't blow the stack.
@@ -58,7 +85,7 @@ function Node({
   const kids = Array.isArray(node.children) ? node.children : [];
 
   const renderKids = () =>
-    kids.map((k, i) => <Node key={i} node={k} onAction={onAction} depth={depth + 1} />);
+    kids.map((k, i) => <Node key={i} node={k} onAction={onAction} theme={theme} depth={depth + 1} />);
 
   switch (type) {
     case "card":
@@ -230,6 +257,56 @@ function Node({
       );
     }
 
+    case "icon": {
+      // A Lucide icon by name (kebab/camel/Pascal accepted). On-brand, bundled,
+      // no network. Unknown names fall back to a neutral glyph, never crash.
+      const size = typeof props.size === "number" ? props.size : 16;
+      const color = ICON_TONE[s(props.tone, "neutral")] ?? ICON_TONE.neutral;
+      const label = s(props.label);
+      // createElement (not <Icon/>) so the resolved Lucide component isn't seen
+      // as a component declared during render (react-hooks/static-components).
+      const glyph = createElement(resolveIcon(s(props.name)), {
+        size, color, strokeWidth: 1.75,
+        "aria-hidden": label ? undefined : true,
+        "aria-label": label || undefined,
+      });
+      if (!label) return <span className="inline-flex align-middle">{glyph}</span>;
+      return (
+        <span className="inline-flex items-center gap-1.5 align-middle text-[13px] text-foreground">
+          {glyph}
+          <span>{label}</span>
+        </span>
+      );
+    }
+
+    case "template": {
+      // Tier 2 — render a pre-designed animated component by name (data-only).
+      const name = s(props.name);
+      const data = props.data;
+      return renderTemplate(name, data);
+    }
+
+    case "html": {
+      // Tier 3 — agent-generated markup/JS, executed ONLY inside the isolated
+      // opaque-origin iframe. Actions bridge back through the same onAction path.
+      const code = s(props.code ?? props.html);
+      if (!code) return null;
+      const height =
+        typeof props.height === "number" ? props.height : undefined;
+      // Pre-resolve any Lucide icons the agent declared into inline SVG so the
+      // sandbox can use them with no network (ccIcon / [data-cc-icon]).
+      const icons = buildIconMap(props.icons);
+      return (
+        <SandboxedHtml
+          html={code}
+          height={height}
+          onAction={onAction}
+          theme={theme}
+          icons={icons}
+        />
+      );
+    }
+
     default:
       // Unknown type → inert, labelled fallback. NEVER render raw props/markup.
       if (!KNOWN_TYPES.has(type)) {
@@ -255,6 +332,8 @@ export default function GenerativeUINode({
   spec: unknown;
   onAction?: (action: string) => void;
 }): React.ReactElement | null {
+  const { resolvedTheme } = useTheme();
+  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
   const root =
     spec && typeof spec === "object"
       ? ((spec as Record<string, unknown>).root
@@ -262,5 +341,5 @@ export default function GenerativeUINode({
         ?? spec)
       : spec;
   if (!root || typeof root !== "object") return null;
-  return <Node node={root as GenUINode} onAction={onAction} />;
+  return <Node node={root as GenUINode} onAction={onAction} theme={theme} />;
 }

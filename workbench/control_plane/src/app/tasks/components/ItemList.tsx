@@ -23,7 +23,12 @@ import {
   X,
   Sparkles,
 } from "lucide-react";
-import { useTaskStore, itemsForView } from "../lib/taskStore";
+import {
+  useTaskStore,
+  itemsForView,
+  contextCounts,
+  NO_CONTEXT,
+} from "../lib/taskStore";
 import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
 import { isOverdue } from "../lib/utils";
@@ -91,6 +96,8 @@ export function ItemList() {
   const bulkArchive = useTaskStore((s) => s.bulkArchive);
   const requestDelete = useTaskStore((s) => s.requestDelete);
   const groupByChoice = useTaskStore((s) => s.groupBy);
+  const contexts = useTaskStore((s) => s.contexts);
+  const selectContext = useTaskStore((s) => s.selectContext);
   const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
 
   // Multi-select for bulk archive/restore/delete. Lifted into the store so it
@@ -125,6 +132,12 @@ export function ItemList() {
   const contextlessCount = useMemo(
     () => (view === "next" ? inView.filter((i) => !i.context).length : 0),
     [view, inView],
+  );
+  // Per-@context counts for the in-header context pills (Next Actions only) —
+  // the same source the sidebar drill-down uses, so the pill counts match.
+  const ctxCounts = useMemo(
+    () => (view === "next" ? contextCounts(items) : {}),
+    [view, items],
   );
 
   if (view === "projects") {
@@ -287,6 +300,18 @@ export function ItemList() {
             flag them important or leveraged.
           </p>
         )}
+        {/* @context filter pills (Next Actions) — the Engage-style pill row in
+            place of a dropdown. "All" clears the context; each pill mirrors the
+            sidebar drill-down (sets selectedContext). Only shown when there's
+            more than one bucket to choose between. */}
+        {view === "next" && (
+          <ContextPills
+            contexts={contexts.map((c) => c.name)}
+            counts={ctxCounts}
+            selected={context}
+            onSelect={selectContext}
+          />
+        )}
       </header>
 
       {showToolbar && !loading && inView.length > 0 && (
@@ -392,6 +417,71 @@ export function ItemList() {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+/** The Engage-style @context filter for Next Actions: an "All" pill plus one
+ *  pill per @context that currently has tasks (and the "@no context" bucket when
+ *  present). Selecting a pill sets the store's selectedContext — the same signal
+ *  the sidebar drill-down uses — so the two stay in lock-step. Hidden when there
+ *  is only the "All" option (nothing to narrow to). */
+function ContextPills({
+  contexts,
+  counts,
+  selected,
+  onSelect,
+}: {
+  contexts: string[];
+  counts: Record<string, number>;
+  selected: string | null;
+  onSelect: (c: string | null) => void;
+}) {
+  // Only offer @contexts that actually have tasks right now, in the sidebar's
+  // order: named contexts alphabetically-ish (as configured), then "@no context"
+  // last so the unclarified bucket doesn't lead.
+  const named = contexts.filter((c) => (counts[c] ?? 0) > 0);
+  const hasNoCtx = (counts[NO_CONTEXT] ?? 0) > 0;
+  const pills: { key: string; label: string; value: string | null; count: number }[] = [
+    { key: "__all__", label: "All", value: null, count: 0 },
+    ...named.map((c) => ({ key: c, label: c, value: c, count: counts[c] ?? 0 })),
+    ...(hasNoCtx
+      ? [{ key: NO_CONTEXT, label: NO_CONTEXT, value: NO_CONTEXT, count: counts[NO_CONTEXT] ?? 0 }]
+      : []),
+  ];
+  // Nothing to choose between (only "All") → don't render a lonely pill row.
+  if (pills.length <= 1) return null;
+  return (
+    <div className="mt-2.5 flex flex-wrap items-center gap-1.5">
+      {pills.map((p) => {
+        const on = selected === p.value;
+        return (
+          <button
+            key={p.key}
+            type="button"
+            onClick={() => onSelect(p.value)}
+            aria-pressed={on}
+            className={[
+              "tech-transition inline-flex items-center gap-1.5 rounded-full border px-3 py-1 text-xs font-medium",
+              on
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border text-muted-foreground hover:border-primary/40",
+            ].join(" ")}
+          >
+            {p.label}
+            {p.count > 0 && (
+              <span
+                className={[
+                  "rounded-full px-1.5 py-0.5 text-[10px] font-semibold",
+                  on ? "bg-primary/15 text-primary" : "bg-background/60 text-muted-foreground",
+                ].join(" ")}
+              >
+                {p.count}
+              </span>
+            )}
+          </button>
+        );
+      })}
     </div>
   );
 }

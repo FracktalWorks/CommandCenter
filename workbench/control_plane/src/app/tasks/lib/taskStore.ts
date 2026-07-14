@@ -1847,10 +1847,18 @@ export function itemsForView(
       // Co-assigned tasks (me + others) keep is_mine=true, so they stay.
       // The "@no context" bucket (NO_CONTEXT) holds tasks with no @context yet —
       // e.g. synced ClickUp tasks that never went through Clarify.
+      //
+      // DONE tasks stay here too (until archived) so a card dropped on the board's
+      // "Done" column doesn't vanish — it rests in that terminal column, from
+      // which the user archives it. They were mine (isMine) when completed, so
+      // they keep satisfying isMine; the board/grouped list files them into the
+      // last stage (Done). The flat, ungrouped list still excludes DONE (that
+      // filter lives in the caller via `includeDone`) so a plain list isn't
+      // swamped by a completed pile.
       return items.filter(
         (i) =>
-          i.disposition === "NEXT" &&
-          i.isMine &&
+          ((i.disposition === "NEXT" && i.isMine) ||
+            (i.disposition === "DONE" && i.isMine)) &&
           (!context
             ? true
             : context === NO_CONTEXT

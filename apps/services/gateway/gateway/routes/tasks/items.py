@@ -484,6 +484,11 @@ def _build_item_update(
         params["disp"] = patch.disposition
         if patch.disposition == "DONE":
             sets.append("completed_at = now()")
+        else:
+            # completed_at is non-null iff DONE: any move to a non-DONE
+            # disposition (reopening a card dragged out of the Done column, or
+            # sending it to Waiting/Someday) clears the completion stamp.
+            sets.append("completed_at = NULL")
         if patch.disposition != "INBOX":
             sets.append("clarified_at = coalesce(clarified_at, now())")
     if patch.defer_until is not None:
@@ -521,12 +526,20 @@ async def patch_item(
     from gateway.routes.tasks.settings import gtd_workflow_stages
     db = await _get_db()
     try:
-        # Moving a card to the LAST configured stage ("done" stage) also marks
-        # the task DONE (disposition + completed_at + ClickUp close).
+        # A board move (workflow_stage) that crosses the DONE boundary also flips
+        # the disposition, so the card lands where the drop implies:
+        #   • dropped on the LAST stage  → mark DONE  (completed_at + ClickUp close)
+        #   • dropped on an EARLIER stage while currently DONE → REOPEN to NEXT
+        # A DONE task rests in the last column (it isn't evicted from the board),
+        # so dragging it back out is the natural "un-complete" gesture.
         if patch.workflow_stage and patch.disposition is None:
             stages = await gtd_workflow_stages(db, _uid(user))
             if stages and patch.workflow_stage == stages[-1]:
                 patch.disposition = "DONE"
+            elif stages and patch.workflow_stage != stages[-1]:
+                current = await _fetch_item(db, item_id, _uid(user))
+                if current and current.disposition == "DONE":
+                    patch.disposition = "NEXT"
         sets, params = _build_item_update(item_id, _uid(user), patch)
         # Snapshot the row BEFORE the write — we need the prior assignee id to
         # build ClickUp's assignee add/rem delta, and provider linkage.

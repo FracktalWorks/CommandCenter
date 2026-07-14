@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo } from "react";
 import {
   Inbox,
   ListChecks,
@@ -10,15 +10,6 @@ import {
   Lightbulb,
   Zap,
   Mountain,
-  ChevronRight,
-  Monitor,
-  Phone,
-  Car,
-  Building2,
-  Home,
-  Users,
-  Circle,
-  CircleDashed,
   Cloud,
   Plug,
   HardDrive,
@@ -30,17 +21,8 @@ import {
   type LucideIcon,
   Settings2,
 } from "lucide-react";
-import {
-  useTaskStore,
-  viewCounts,
-  contextCounts,
-  NO_CONTEXT,
-} from "../lib/taskStore";
+import { useTaskStore, viewCounts } from "../lib/taskStore";
 import { ViewKey } from "../lib/types";
-
-const CONTEXT_ICONS: Record<string, LucideIcon> = {
-  Monitor, Phone, Car, Building2, Home, Users,
-};
 
 type NavRow = {
   view: ViewKey;
@@ -52,11 +34,23 @@ type NavRow = {
   soon?: boolean;
 };
 
-const PRIMARY: NavRow[] = [
+// Rows above the "My Next Actions" section.
+const TOP: NavRow[] = [
   { view: "inbox", label: "Inbox", icon: Inbox, showCount: true },
-  { view: "next", label: "My Next Actions", icon: ListChecks, showCount: true },
+];
+
+// The "My Next Actions" section: an unclickable header with the different SLICES
+// of my next actions beneath it. "Context" is the default list/board (sliced by
+// @context via the in-view pills); Priority and Engage are the other two lenses
+// over the same set of actions-assigned-to-me. All three read from is_mine.
+const NEXT_SLICES: NavRow[] = [
+  { view: "next", label: "Context", icon: ListChecks, showCount: true },
   { view: "priority", label: "Priority", icon: Target, showCount: true },
   { view: "engage", label: "Engage · Now", icon: Zap, showCount: true },
+];
+
+// Rows below the "My Next Actions" section.
+const REST: NavRow[] = [
   { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },
@@ -81,12 +75,10 @@ export function ListsSidebar({
   assistantActive?: boolean;
 } = {}) {
   const items = useTaskStore((s) => s.items);
-  const contexts = useTaskStore((s) => s.contexts);
   const projects = useTaskStore((s) => s.projects);
   const selectedView = useTaskStore((s) => s.selectedView);
   const selectedContext = useTaskStore((s) => s.selectedContext);
   const selectViewRaw = useTaskStore((s) => s.selectView);
-  const selectContextRaw = useTaskStore((s) => s.selectContext);
   const accounts = useTaskStore((s) => s.accounts);
   const openWorkspaces = useTaskStore((s) => s.openWorkspaces);
   const openSettings = useTaskStore((s) => s.openSettings);
@@ -105,13 +97,7 @@ export function ListsSidebar({
     if (v === "projects") void loadLocalHierarchy();
     onNavigate?.();
   };
-  const selectContext: typeof selectContextRaw = (c) => {
-    selectContextRaw(c);
-    onNavigate?.();
-  };
   const counts = useMemo(() => viewCounts(items), [items]);
-  const ctxCounts = useMemo(() => contextCounts(items), [items]);
-  const [nextExpanded, setNextExpanded] = useState(true);
 
   return (
     <nav className="flex h-full flex-col gap-1 overflow-y-auto p-3 text-sm">
@@ -160,49 +146,55 @@ export function ListsSidebar({
         </div>
       )}
 
-      {PRIMARY.map((row) => {
-        if (row.view === "next") {
-          return (
-            <div key="next">
-              <NextActionsRow
-                row={row}
-                active={selectedView === "next" && !selectedContext}
-                activeContext={selectedContext}
-                count={counts.next}
-                // Append the "@no context" bucket last when it holds tasks — the
-                // synced ClickUp tasks that arrive without a @context.
-                contexts={[
-                  ...contexts.map((c) => c.name),
-                  ...(ctxCounts[NO_CONTEXT] ? [NO_CONTEXT] : []),
-                ]}
-                contextIcons={Object.fromEntries([
-                  ...contexts.map((c) => [c.name, CONTEXT_ICONS[c.icon] ?? Circle]),
-                  [NO_CONTEXT, CircleDashed],
-                ])}
-                ctxCounts={ctxCounts}
-                expanded={nextExpanded}
-                onToggle={() => setNextExpanded((v) => !v)}
-                onSelectAll={() => selectView("next")}
-                onSelectContext={(c) => selectContext(c)}
-              />
-              {/* The matrix's delegate/schedule/eliminate hints are NOT sidebar
-                  buckets (that reads as a status the task lives in). They surface
-                  as a competing, dismissible BADGE on each task card instead —
-                  see SuggestionBadge. */}
-            </div>
-          );
-        }
-        const count = row.view === "projects" ? projects.length : counts[row.view];
-        return (
+      {TOP.map((row) => (
+        <NavButton
+          key={row.view}
+          row={row}
+          active={selectedView === row.view && !selectedContext}
+          count={counts[row.view]}
+          onClick={() => selectView(row.view)}
+        />
+      ))}
+
+      {/* "My Next Actions" is no longer a destination — it's an unclickable
+          section label. Its actions are sliced three ways beneath it: Context
+          (the default list/board, filtered by the in-view @context pills),
+          Priority (the matrix lens), and Engage (do-able-now). */}
+      <div className="mt-2">
+        <p className="px-2 pb-1 pt-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+          My Next Actions
+        </p>
+        {NEXT_SLICES.map((row) => (
           <NavButton
             key={row.view}
             row={row}
-            active={selectedView === row.view && !selectedContext}
-            count={count}
+            // The Context slice stays highlighted even when an in-view @context
+            // pill is active (selectedContext set) — it's still the Context view.
+            active={
+              selectedView === row.view &&
+              (row.view === "next" ? true : !selectedContext)
+            }
+            count={counts[row.view]}
             onClick={() => selectView(row.view)}
           />
-        );
-      })}
+        ))}
+      </div>
+
+      <div className="mt-2">
+        {REST.map((row) => {
+          const count =
+            row.view === "projects" ? projects.length : counts[row.view];
+          return (
+            <NavButton
+              key={row.view}
+              row={row}
+              active={selectedView === row.view && !selectedContext}
+              count={count}
+              onClick={() => selectView(row.view)}
+            />
+          );
+        })}
+      </div>
 
       <div className="mt-3 border-t border-border pt-3">
         <p className="px-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
@@ -324,103 +316,3 @@ function NavButton({
   );
 }
 
-/** An indented sub-row under My Next Actions for a suggested-action-mode bucket
- *  ("To delegate" / "To schedule"). Styled like a @context sub-row but with a
- *  distinct icon so the hint reads as a mode, not a context. */
-function NextActionsRow({
-  row,
-  active,
-  activeContext,
-  count,
-  contexts,
-  contextIcons,
-  ctxCounts,
-  expanded,
-  onToggle,
-  onSelectAll,
-  onSelectContext,
-}: {
-  row: NavRow;
-  active: boolean;
-  activeContext: string | null;
-  count: number;
-  contexts: string[];
-  contextIcons: Record<string, LucideIcon>;
-  ctxCounts: Record<string, number>;
-  expanded: boolean;
-  onToggle: () => void;
-  onSelectAll: () => void;
-  onSelectContext: (c: string) => void;
-}) {
-  const Icon = row.icon;
-  return (
-    <div>
-      <div
-        className={[
-          "tech-transition flex w-full items-center gap-1 rounded-lg pr-2",
-          active && !activeContext
-            ? "bg-primary/10 text-primary"
-            : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-        ].join(" ")}
-      >
-        <button
-          type="button"
-          onClick={onToggle}
-          aria-label={expanded ? "Collapse contexts" : "Expand contexts"}
-          className="rounded p-1 hover:bg-secondary"
-        >
-          <ChevronRight
-            className={`h-3.5 w-3.5 tech-transition ${expanded ? "rotate-90" : ""}`}
-          />
-        </button>
-        <button
-          type="button"
-          onClick={onSelectAll}
-          className="flex flex-1 items-center gap-2.5 py-2 text-left"
-        >
-          <Icon className="h-4 w-4 shrink-0" />
-          <span className="flex-1 truncate">{row.label}</span>
-          {count ? (
-            <span
-              className={[
-                "min-w-[18px] rounded-full px-1.5 py-0.5 text-center text-[10px] font-semibold",
-                active && !activeContext
-                  ? "bg-primary/20 text-primary"
-                  : "bg-muted text-muted-foreground",
-              ].join(" ")}
-            >
-              {count}
-            </span>
-          ) : null}
-        </button>
-      </div>
-
-      {expanded && (
-        <div className="ml-3 mt-0.5 flex flex-col gap-0.5 border-l border-border pl-2">
-          {contexts.map((ctx) => {
-            const CtxIcon = contextIcons[ctx] ?? Circle;
-            const c = ctxCounts[ctx] ?? 0;
-            const isActive = activeContext === ctx;
-            return (
-              <button
-                key={ctx}
-                type="button"
-                onClick={() => onSelectContext(ctx)}
-                className={[
-                  "tech-transition flex items-center gap-2 rounded-md px-2 py-1.5 text-left text-[13px]",
-                  isActive
-                    ? "bg-primary/10 text-primary"
-                    : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-                ].join(" ")}
-              >
-                <CtxIcon className="h-3.5 w-3.5 shrink-0" />
-                <span className="flex-1 truncate font-mono text-[12px]">{ctx}</span>
-                {c ? <span className="text-[10px] text-muted-foreground">{c}</span> : null}
-              </button>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}

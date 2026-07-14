@@ -146,6 +146,39 @@ jobs:
               fi
             done
 
+            # The workbench (Next.js, systemd unit acb-workbench) is a SEPARATE
+            # service that reads its OWN env file (control_plane/.env.local) via
+            # process.env — NOT the shared .env above. Its server routes forward
+            # GATEWAY_INTERNAL_TOKEN to the gateway's require_internal_auth. If the
+            # two files' tokens drift, every workbench->gateway internal call
+            # (/memory, /v1/chat/completions for orchestrator chat) 401s while the
+            # backend agents (which share .env) keep working — a confusing
+            # partial outage. So make .env the single source of truth: reconcile
+            # GATEWAY_INTERNAL_TOKEN in .env.local to EXACTLY match .env here,
+            # in-place, idempotently, preserving every other key in .env.local.
+            echo "==> Reconciling workbench internal token (.env.local <- .env)"
+            WB_ENV="/opt/acb/app/workbench/control_plane/.env.local"
+            SHARED_TOKEN="$(grep -E '^GATEWAY_INTERNAL_TOKEN=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+            if [ -z "$SHARED_TOKEN" ]; then
+              echo "    ! GATEWAY_INTERNAL_TOKEN not set in $ENV_FILE — skipping (backend also relies on it; fix the secret)"
+            elif [ ! -f "$WB_ENV" ]; then
+              echo "    ! $WB_ENV missing — creating with the token only (other workbench keys must be provisioned separately)"
+              printf 'GATEWAY_INTERNAL_TOKEN=%s\n' "$SHARED_TOKEN" > "$WB_ENV"
+            else
+              CURRENT="$(grep -E '^GATEWAY_INTERNAL_TOKEN=' "$WB_ENV" 2>/dev/null | head -1 | cut -d= -f2-)"
+              if [ "$CURRENT" = "$SHARED_TOKEN" ]; then
+                echo "    already in sync (sha8=$(printf %s "$SHARED_TOKEN" | sha256sum | cut -c1-8))"
+              else
+                cp -a "$WB_ENV" "$WB_ENV.bak.$(date +%s)"
+                # Rewrite the line without a sed s/// (token may contain / & etc.):
+                # drop any existing line, then append the authoritative value.
+                grep -vE '^GATEWAY_INTERNAL_TOKEN=' "$WB_ENV" > "$WB_ENV.tmp" || true
+                printf 'GATEWAY_INTERNAL_TOKEN=%s\n' "$SHARED_TOKEN" >> "$WB_ENV.tmp"
+                mv "$WB_ENV.tmp" "$WB_ENV"
+                echo "    updated .env.local token to match .env (sha8=$(printf %s "$SHARED_TOKEN" | sha256sum | cut -c1-8)); backup written"
+              fi
+            fi
+
             echo "==> Bootstrapping Docker Compose stack (core only)"
             docker compose -f infra/docker-compose.yml --profile core up -d --remove-orphans
 

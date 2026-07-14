@@ -27,14 +27,13 @@ const SORT_LABEL: Record<SortField, string> = {
   manual: "Manual",
   priority: "Priority",
   due: "Due date",
-  urgency: "Urgency",
   created: "Created",
   title: "Title",
   energy: "Energy",
 };
 
 const SORT_FIELDS: SortField[] = [
-  "manual", "priority", "due", "urgency", "created", "title", "energy",
+  "manual", "priority", "due", "created", "title", "energy",
 ];
 
 const GROUP_LABEL: Record<GroupBy | "", string> = {

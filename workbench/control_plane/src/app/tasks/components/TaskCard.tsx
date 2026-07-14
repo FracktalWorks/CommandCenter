@@ -107,17 +107,20 @@ export function TaskCard({
           <Mail className="h-3 w-3" />
         </span>
       )}
-      {/* Priority signal — ONE per card. The Priority/ranked view shows the
-          matrix-cell badge; everywhere else the competing action NUDGE
-          (delegate / schedule / eliminate) — a suggestion, not a status,
-          dismissible via its × (keep mine). */}
-      {showPriority ? (
-        <PriorityBadge
-          item={item}
-          urgentWindowHours={urgentWindowHours}
-          showLabel={false}
-        />
-      ) : (
+      {/* Priority signal. The matrix-cell PILL (🔥 Critical, 📈 High-Leverage,
+          …) now rides on EVERY card so the priority is visible at a glance in
+          the list and board — with its label except on the dense Priority view,
+          which is already grouped by level (`showPriority` → icon-only there to
+          avoid repeating the section header). The competing action NUDGE
+          (delegate / schedule / eliminate) sits ALONGSIDE it — different meaning
+          (what it IS vs what to DO about it) — dismissible via its × (keep mine),
+          and hidden on the Priority view where the pill already carries it. */}
+      <PriorityBadge
+        item={item}
+        urgentWindowHours={urgentWindowHours}
+        showLabel={!showPriority}
+      />
+      {!showPriority && (
         <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} compact />
       )}
     </>

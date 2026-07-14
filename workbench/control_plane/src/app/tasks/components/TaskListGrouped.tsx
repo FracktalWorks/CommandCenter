@@ -1,12 +1,27 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useMemo,
+  useState,
+  useSyncExternalStore,
+} from "react";
 import { ChevronRight, GripVertical, CornerDownRight, Loader2, Circle, CheckCircle2 } from "lucide-react";
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
 import { applySort, byManualOrder, statusColumnForItem } from "../lib/ordering";
 import { stageAccent } from "../lib/stageColors";
+import {
+  readColumnVisibility,
+  subscribeColumns,
+  visibleColumns,
+  gridTemplate,
+  DEFAULT_VISIBLE,
+  type ColumnDef,
+} from "../lib/columns";
+import { ColumnHeader, ColumnCell } from "./ListColumns";
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
@@ -50,6 +65,21 @@ export function TaskListGrouped({
   // its ClickUp status through the status→stage map (bypassed in the project
   // view, which passes explicit raw-status `stages`).
   const grouped = view === "next";
+  // Columnar list (desktop) for the Next-Actions Context view only — the same
+  // signals that are card pills, in aligned columns (Jira/ClickUp-style). The
+  // project view (explicit `stages`) keeps the simple stacked row. Mobile always
+  // falls back to the stacked card (handled per-row via the sm: breakpoint).
+  const columnVis = useSyncExternalStore(
+    subscribeColumns,
+    readColumnVisibility,
+    () => DEFAULT_VISIBLE,
+  );
+  const columnar = view === "next" && !stages;
+  const cols = useMemo(
+    () => (columnar ? visibleColumns(columnVis) : []),
+    [columnar, columnVis],
+  );
+  const grid = useMemo(() => gridTemplate(cols), [cols]);
   const stageKeys = useMemo(
     () => stages ?? workflowSettingStages,
     [stages, workflowSettingStages],
@@ -127,6 +157,24 @@ export function TaskListGrouped({
 
   return (
     <div className="flex-1 overflow-y-auto">
+      {/* Desktop column header row (Context list only). Hidden on mobile, where
+          rows stay stacked. The left spacer matches a row's grip+expand gutters
+          so "Name" and the cells sit above their columns. */}
+      {columnar && cols.length > 0 && (
+        <div className="sticky top-0 z-20 hidden border-b border-border bg-card/95 px-3.5 py-1.5 backdrop-blur sm:block">
+          <div
+            className="grid items-center gap-2"
+            style={{ gridTemplateColumns: grid }}
+          >
+            <span className="pl-10 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Name
+            </span>
+            {cols.map((c) => (
+              <ColumnHeader key={c.key} col={c} />
+            ))}
+          </div>
+        </div>
+      )}
       {groups.map((g, gi) => {
         const rows = byGroup.get(g.key) ?? [];
         const isCollapsed = collapsed.has(g.key);
@@ -192,6 +240,8 @@ export function TaskListGrouped({
                     selectMode={selectMode}
                     selected={selectedIds.has(item.id)}
                     onToggleSelected={() => toggleSelected(item.id)}
+                    columns={cols}
+                    grid={grid}
                     isDropTarget={dropAt === `${g.key}:${idx}`}
                     onDragStart={() => setDragId(item.id)}
                     onDragEnd={() => {
@@ -241,6 +291,8 @@ function DraggableRow({
   selectMode,
   selected,
   onToggleSelected,
+  columns,
+  grid,
   isDropTarget,
   onDragStart,
   onDragEnd,
@@ -252,6 +304,10 @@ function DraggableRow({
   selectMode: boolean;
   selected: boolean;
   onToggleSelected: () => void;
+  /** Visible desktop columns (empty → no columnar layout, stacked card only). */
+  columns: ColumnDef[];
+  /** grid-template-columns matching the header (only used when columns set). */
+  grid: string;
   isDropTarget: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -327,8 +383,8 @@ function DraggableRow({
           )}
         </span>
         {selectMode ? (
-          // In select mode the whole row toggles selection; the card is inert so
-          // a click selects rather than opening the task.
+          // In select mode the whole row toggles selection; the content is inert
+          // so a click selects rather than opening the task.
           <button
             type="button"
             onClick={onToggleSelected}
@@ -336,17 +392,61 @@ function DraggableRow({
             aria-pressed={selected}
           >
             <div className="pointer-events-none">
-              <TaskCard item={item} variant="row" />
+              <RowContent item={item} columns={columns} grid={grid} />
             </div>
           </button>
         ) : (
           <div className="min-w-0 flex-1">
-            <TaskCard item={item} variant="row" />
+            <RowContent item={item} columns={columns} grid={grid} />
           </div>
         )}
       </div>
       {hasSubtasks && expanded && <SubtaskRows parent={item} />}
     </div>
+  );
+}
+
+/** The row's body. With columns (desktop, Context view) it renders as an aligned
+ *  grid — Name in the flexible track, then one cell per visible column. Mobile
+ *  always falls back to the stacked TaskCard row (title + pills beneath), and so
+ *  does the project view (no columns). */
+function RowContent({
+  item,
+  columns,
+  grid,
+}: {
+  item: GtdItem;
+  columns: ColumnDef[];
+  grid: string;
+}) {
+  const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
+  if (columns.length === 0) {
+    return <TaskCard item={item} variant="row" />;
+  }
+  return (
+    <>
+      {/* Mobile: the stacked card (title + wrapping pills). */}
+      <div className="sm:hidden">
+        <TaskCard item={item} variant="row" />
+      </div>
+      {/* Desktop: aligned columns matching the header grid. */}
+      <div
+        className="hidden items-center gap-2 py-2.5 pr-3.5 sm:grid"
+        style={{ gridTemplateColumns: grid }}
+      >
+        <span className="min-w-0 truncate text-sm text-foreground">
+          {item.title}
+        </span>
+        {columns.map((c) => (
+          <ColumnCell
+            key={c.key}
+            col={c}
+            item={item}
+            urgentWindowHours={urgentWindowHours}
+          />
+        ))}
+      </div>
+    </>
   );
 }
 

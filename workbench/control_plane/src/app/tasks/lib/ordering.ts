@@ -93,7 +93,10 @@ export interface TaskSort {
 }
 
 export const DEFAULT_FILTERS: TaskFilters = { query: "", context: "", assignee: "" };
-export const DEFAULT_SORT: TaskSort = { field: "manual", dir: "asc" };
+// Default: within each status group, order by the priority matrix (1 = Critical
+// first). The user can switch to Manual (drag-reorder) or any field via the
+// toolbar. (Next Actions is grouped by status; this sorts inside each group.)
+export const DEFAULT_SORT: TaskSort = { field: "priority", dir: "asc" };
 
 export function filtersActive(f: TaskFilters): boolean {
   return Boolean(f.query.trim() || f.context || f.assignee);
@@ -226,11 +229,13 @@ export function statusColumnForItem(
 // ── Group-by (the toolbar "lens" that slices a list into labelled sections) ──
 
 import {
+  ACTION_MODE_META,
   CELL_META,
   CELLS_IN_ORDER,
   NO_CONTEXT_GROUP,
   actionMode,
   priorityCell,
+  type ActionMode,
 } from "./priority";
 
 export type GroupBy = "none" | "context" | "priority" | "mode" | "energy";
@@ -248,12 +253,9 @@ const ENERGY_LABEL: Record<string, string> = {
   medium: "Medium energy",
   high: "High energy",
 };
-const MODE_LABEL: Record<string, { label: string; emoji: string }> = {
-  do: { label: "Do — my work", emoji: "🎯" },
-  delegate: { label: "Delegate", emoji: "⚡" },
-  schedule: { label: "Schedule", emoji: "📅" },
-  drop: { label: "Consider dropping", emoji: "🗑" },
-};
+// The mode group-by labels come from the ONE shared ACTION_MODE_META (same as
+// the Action Mode column) so the grouping and the column never diverge.
+const MODE_LABEL = ACTION_MODE_META;
 
 /** Slice items into ordered, labelled groups for the chosen lens. Group ORDER
  *  is meaningful (priority → matrix order; mode → do/delegate/schedule/drop;
@@ -281,8 +283,8 @@ export function groupItems(
   }
 
   if (by === "mode") {
-    const order = ["do", "delegate", "schedule", "drop"];
-    const buckets = new Map<string, GtdItem[]>();
+    const order: ActionMode[] = ["do", "delegate", "schedule", "drop"];
+    const buckets = new Map<ActionMode, GtdItem[]>();
     for (const i of items) {
       const m = actionMode(i, urgentWindowHours);
       (buckets.get(m) ?? buckets.set(m, []).get(m)!).push(i);

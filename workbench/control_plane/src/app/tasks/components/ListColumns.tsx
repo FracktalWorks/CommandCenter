@@ -4,6 +4,7 @@ import { AlertTriangle, Clock, Paperclip, ListTree, Zap } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
 import { PriorityBadge } from "./PriorityControls";
+import { ACTION_MODE_META, actionMode, type ActionMode } from "../lib/priority";
 import type { ColumnDef } from "../lib/columns";
 
 // The desktop columnar cells for the Next-Actions list. Each renders the SAME
@@ -17,6 +18,15 @@ const ENERGY_DOT: Record<string, string> = {
   low: "bg-success",
   medium: "bg-warning",
   high: "bg-destructive",
+};
+
+// Action-mode pill tint. "Do It" reads calm/affirmative; the "?" nudges use the
+// same tones as the card SuggestionBadge so the language is consistent.
+const MODE_TONE: Record<ActionMode, string> = {
+  do: "border-primary/40 bg-primary/10 text-primary",
+  delegate: "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
+  schedule: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
+  drop: "border-border bg-secondary/60 text-muted-foreground",
 };
 
 const ALIGN: Record<ColumnDef["align"], string> = {
@@ -72,6 +82,24 @@ function CellBody({
       return (
         <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
       );
+    case "mode": {
+      // The suggestion of what to DO with this task — from the shared
+      // actionMode() logic (same as the "Action mode" group-by lens). Shown on
+      // every task: "Do It" (yours) or a "?" nudge (Delegate/Schedule/Eliminate).
+      const mode = actionMode(item, urgentWindowHours);
+      const meta = ACTION_MODE_META[mode];
+      return (
+        <span
+          className={[
+            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
+            MODE_TONE[mode],
+          ].join(" ")}
+        >
+          <span aria-hidden>{meta.emoji}</span>
+          {meta.label}
+        </span>
+      );
+    }
     case "context":
       return item.context ? (
         <span className="inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary/90">

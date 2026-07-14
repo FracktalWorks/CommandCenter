@@ -1906,13 +1906,15 @@ export function itemsForView(
         .filter((i) => i.disposition === "DONE")
         .sort((a, b) => (b.completedAt ?? "").localeCompare(a.completedAt ?? ""));
     case "priority":
-      // The matrix map: every open, actionable task that's mine — NEXT (mine)
-      // or WAITING I'm tracking — grouped into the 8 cells by the Priority
-      // lens. Excludes inbox (unclarified), done, reference, someday.
+      // The matrix map: every open, actionable task ASSIGNED TO ME on ClickUp
+      // (isMine — my provider user id is among the task's assignees), whether
+      // it's a NEXT action or a WAITING item I'm still on the hook for. Tasks
+      // delegated to someone else (WAITING, is_mine=false) are NOT mine and drop
+      // out. Excludes inbox (unclarified), done, reference, someday.
       return items.filter(
         (i) =>
-          (i.disposition === "NEXT" && i.isMine) ||
-          i.disposition === "WAITING",
+          i.isMine &&
+          (i.disposition === "NEXT" || i.disposition === "WAITING"),
       );
     case "engage":
       // "Right now": actionable work I can pick up (NEXT & mine). The Engage
@@ -1942,9 +1944,10 @@ export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
     else if (i.disposition === "SOMEDAY") c.someday++;
     else if (i.disposition === "REFERENCE") c.reference++;
     else if (i.disposition === "DONE") c.done++;
-    // Priority = every open actionable task that's mine (NEXT mine + WAITING);
-    // engage = the do-able-now subset (NEXT mine). Independent of the above.
-    if ((i.disposition === "NEXT" && i.isMine) || i.disposition === "WAITING")
+    // Priority = every open actionable task ASSIGNED TO ME (isMine) — NEXT or
+    // WAITING; engage = the do-able-now subset (NEXT mine). Independent of the
+    // above. Must mirror itemsForView's priority/engage filters exactly.
+    if (i.isMine && (i.disposition === "NEXT" || i.disposition === "WAITING"))
       c.priority++;
     if (i.disposition === "NEXT" && i.isMine) c.engage++;
     if (isCalendarItem(i)) c.calendar++;

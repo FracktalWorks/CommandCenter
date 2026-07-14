@@ -159,6 +159,14 @@ class BaseTaskProvider(ABC):
         leaving the upstream task behind."""
         raise ProviderError(self.provider, "delete_task not supported", 501)
 
+    async def archive_task(self, provider_task_id: str, archived: bool = True) -> None:
+        """Archive (or un-archive) a task in the tool — the reversible,
+        non-destructive counterpart to delete_task. Used both for an explicit
+        Archive and for a Delete (we archive rather than hard-delete upstream, so
+        the task is recoverable in the connected tool). A connector that hasn't
+        implemented it raises rather than silently diverging from the mirror."""
+        raise ProviderError(self.provider, "archive_task not supported", 501)
+
     async def list_statuses_for_task(self, provider_task_id: str) -> list[str]:
         """The ordered status names of THIS task's own list/project (status
         vocabularies vary per project). Used to translate a local Next-Actions
@@ -474,6 +482,36 @@ class ClickUpProvider(BaseTaskProvider):
         if r.status_code >= 400:
             raise ProviderError(
                 "clickup", f"delete task → {r.status_code}: {r.text[:200]}")
+
+    async def archive_task(self, provider_task_id: str, archived: bool = True) -> None:
+        """Archive (or un-archive) the task on ClickUp — the reversible upstream
+        counterpart to a delete. It's an outward mutation, so it goes through the
+        broker gate like every other write."""
+        await self._broker_gate(
+            "clickup.archive_task", f"task:{provider_task_id}",
+            {"account_id": self._account_id,
+             "args": {"provider_task_id": provider_task_id,
+                      "archived": archived}},
+            lambda: self._raw_archive_task(provider_task_id, archived),
+        )
+
+    async def _raw_archive_task(
+        self, provider_task_id: str, archived: bool
+    ) -> None:
+        """The actual ClickUp archive — a PUT with {archived: bool}. Bypasses the
+        broker gate (called by the gate on auto-apply AND by the persistent
+        handler on approval). A 404 is treated as success: the task is already
+        gone, which subsumes 'archived'."""
+        async with httpx.AsyncClient(timeout=20.0) as http:
+            r = await http.put(
+                f"{_CLICKUP}/task/{provider_task_id}",
+                headers=self._headers(), json={"archived": archived},
+            )
+        if r.status_code == 404:
+            return
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"archive task → {r.status_code}: {r.text[:200]}")
 
     async def _list_statuses_raw(
         self, provider_task_id: str

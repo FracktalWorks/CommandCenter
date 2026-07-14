@@ -93,22 +93,15 @@ export function ItemList() {
   const groupByChoice = useTaskStore((s) => s.groupBy);
   const mode = useSyncExternalStore(subscribeMode, readMode, () => "list");
 
-  // Lightweight multi-select for bulk archive/restore/delete on the flat-list
-  // views (Done, Waiting, Someday, Reference, Archive). Local to the list — the
-  // inbox has its own selection UI; the board/grouped views don't select.
-  const [selectMode, setSelectMode] = useState(false);
-  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const clearSelection = () => {
-    setSelectedIds(new Set());
-    setSelectMode(false);
-  };
-  const toggleSelected = (id: string) =>
-    setSelectedIds((prev) => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
+  // Multi-select for bulk archive/restore/delete. Lifted into the store so it
+  // works on every Next-Actions surface — the flat lists (Done/Waiting/…), the
+  // status-grouped list, AND the Kanban board — and survives the list/board
+  // toggle within a view. The inbox keeps its own selection UI.
+  const selectMode = useTaskStore((s) => s.selectMode);
+  const selectedIds = useTaskStore((s) => s.selectedIds);
+  const setSelectMode = useTaskStore((s) => s.setSelectMode);
+  const toggleSelected = useTaskStore((s) => s.toggleSelected);
+  const clearSelection = useTaskStore((s) => s.clearSelection);
 
   // The view's items (source/archive-filtered), then the toolbar's search/
   // context/assignee filter, then the active sort. `inView` is the pre-toolbar
@@ -164,11 +157,13 @@ export function ItemList() {
   // 7-level matrix), ignoring the toolbar group-by; elsewhere the toolbar wins.
   const lens: GroupBy | "" = view === "priority" ? "priority" : groupByChoice;
   const useLens = lens !== "" && lens !== "none" && !(boardable && mode === "board");
-  // Bulk multi-select (archive / restore / delete) is offered on the flat-list
-  // views — where a "done pile" or backlog builds up. Not on the inbox (its own
-  // triage UI), Next Actions board/grouping, or calendar.
-  const showListInBoard = boardable && mode === "board";
-  const bulkSelectable = !grouped && !showListInBoard && view !== "calendar";
+  // Bulk multi-select (archive / restore / delete) is offered on every
+  // processed-task surface — the flat lists (Done/Waiting/…), the Next-Actions
+  // status-grouped list, AND the Kanban board — so you can check off a batch and
+  // archive/delete it anywhere. Only the inbox (its own triage UI) and calendar
+  // opt out.
+  const isBoard = boardable && mode === "board";
+  const bulkSelectable = view !== "calendar";
   const isArchiveView = view === "archive";
 
   return (
@@ -312,7 +307,10 @@ export function ItemList() {
       ) : useLens && !selectMode ? (
         // An explicit toolbar lens (priority / mode / energy / context).
         <LensGroupedList items={visible} by={lens as Exclude<typeof lens, "">} />
-      ) : boardable && mode === "board" ? (
+      ) : isBoard && !selectMode ? (
+        // The Kanban board (drag-to-refile). In select mode we fall through to
+        // the status-grouped list instead — checkboxes + drag on the same cards
+        // would fight each other, and the grouped list shows the same stages.
         <div className="min-h-0 flex-1">
           <TaskBoard items={visible} view={view} />
         </div>

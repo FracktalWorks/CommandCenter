@@ -19,8 +19,11 @@
  *   • navigation/top-level redirects are not granted.
  * The ONLY channel back to the app is `postMessage`, which we validate and map
  * onto the existing onAction(...) follow-up-message contract — the same contract
- * declarative buttons use. So a Tier-3 card is exactly as interactive as a
- * Tier-1 one, with none of the ambient authority.
+ * declarative buttons use. Two shapes are bridged: `ccAction("msg")` fires a
+ * fixed follow-up (like a button), and `ccSubmit(label, value)` reports a VALUE
+ * the user set (slider/text/select) as a structured follow-up — so a Tier-3 card
+ * can be genuinely interactive (collect input), not just clickable, with none of
+ * the ambient authority.
  *
  * ── Icons without a network ────────────────────────────────────────────────
  * The CSP blocks remote images by design, so icons can't be pulled from a CDN.
@@ -70,8 +73,8 @@ const FRAME_CSP = [
   "base-uri 'none'",
 ].join("; ");
 
-/** The bridge injected into every frame: exposes ccAction/ccIcon + auto-height.
- *  `__ICONS__` is replaced with the pre-resolved { name: svgString } JSON. */
+/** The bridge injected into every frame: exposes ccAction/ccSubmit/ccIcon +
+ *  auto-height. `__ICONS__` is replaced with the pre-resolved { name: svgString } JSON. */
 const BRIDGE = `
 <script>
   (function () {
@@ -81,12 +84,38 @@ const BRIDGE = `
       try { parent.postMessage({ __cc: true, kind: "action", action: String(action) }, "*"); }
       catch (e) {}
     };
+    // Submit a VALUE the user set (slider/text/select) back to the agent. Sends a
+    // structured follow-up so the agent gets both a human label and the raw data.
+    // ccSubmit("Temperature", 22)  or  ccSubmit({ temp: 22, unit: "C" })
+    window.ccSubmit = function (label, value) {
+      var payload = (arguments.length <= 1) ? label
+        : { label: String(label), value: value };
+      try { parent.postMessage({ __cc: true, kind: "submit", payload: payload }, "*"); }
+      catch (e) {}
+    };
     // Return the inline SVG string for a pre-resolved Lucide icon name (or "").
     window.ccIcon = function (name) { return ICONS[name] || ""; };
     // Delegate clicks on [data-cc-action] so agents don't need to wire handlers.
     document.addEventListener("click", function (e) {
       var el = e.target && e.target.closest ? e.target.closest("[data-cc-action]") : null;
       if (el) window.ccAction(el.getAttribute("data-cc-action"));
+    });
+    // Delegate [data-cc-submit] — collect the value of the named form control(s)
+    // in the same form/container and submit them. Works for a bare click ("Apply"
+    // button) that harvests every [name] input within its closest form or [data-cc-form].
+    document.addEventListener("click", function (e) {
+      var trigger = e.target && e.target.closest ? e.target.closest("[data-cc-submit]") : null;
+      if (!trigger) return;
+      var label = trigger.getAttribute("data-cc-submit") || "";
+      var scope = trigger.closest("form, [data-cc-form]") || document;
+      var fields = scope.querySelectorAll("input[name], select[name], textarea[name]");
+      if (fields.length === 0) { window.ccSubmit(label); return; }
+      var out = {};
+      Array.prototype.forEach.call(fields, function (f) {
+        if ((f.type === "checkbox" || f.type === "radio") && !f.checked) return;
+        out[f.getAttribute("name")] = f.value;
+      });
+      window.ccSubmit(label, out);
     });
     // Auto-fill <span data-cc-icon="Name"></span> placeholders with the SVG.
     Array.prototype.forEach.call(document.querySelectorAll("[data-cc-icon]"), function (el) {
@@ -121,26 +150,116 @@ function safeScriptJson(value: unknown): string {
     .split(PS).join("\\u2029");
 }
 
+/** Turn a ccSubmit payload into a natural follow-up message the agent can read.
+ *  ccSubmit("Temperature", 22)      → 'Temperature: 22'
+ *  ccSubmit({temp:22,unit:"C"})     → 'temp: 22, unit: C'
+ *  ccSubmit("Apply", {size:"L"})    → 'Apply — size: L'
+ *  ccSubmit("Confirm")              → 'Confirm' */
+function describeSubmit(payload: unknown): string {
+  const kv = (o: Record<string, unknown>): string =>
+    Object.entries(o)
+      .map(([k, v]) => `${k}: ${String(v)}`)
+      .join(", ");
+  if (payload == null) return "";
+  if (typeof payload === "string") return payload;
+  if (typeof payload === "number" || typeof payload === "boolean") return String(payload);
+  if (typeof payload === "object") {
+    const p = payload as Record<string, unknown>;
+    // Shape from ccSubmit(label, value)
+    if ("label" in p && "value" in p) {
+      const label = String(p.label ?? "");
+      const val = p.value;
+      const valStr =
+        val && typeof val === "object" ? kv(val as Record<string, unknown>) : String(val);
+      return label ? `${label} — ${valStr}` : valStr;
+    }
+    return kv(p);
+  }
+  return String(payload);
+}
+
 function buildSrcDoc(
   html: string,
   theme: "light" | "dark",
   icons: Record<string, string>,
 ): string {
-  // Base styling gives generated code sane defaults + our theme tokens without
-  // it needing to know our design system. Generated <style> can override.
+  // Base styling gives generated code the REAL Command Center design system —
+  // the same tokens as globals.css — so generated HTML is on-brand by default
+  // without the agent needing to know hex values. Generated <style> can override.
+  // Tokens exposed as CSS vars: --cc-primary (blue), --cc-accent (orange),
+  // --cc-radius, --cc-ease, plus surface/border/text. Also styles native
+  // controls (input/range/select/button) so interactive UI matches the app.
+  const dark = theme === "dark";
   const base = `
 <style>
-  :root { color-scheme: ${theme}; }
+  :root {
+    color-scheme: ${theme};
+    --cc-bg: ${dark ? "hsl(220 13% 8%)" : "hsl(0 0% 100%)"};
+    --cc-card: ${dark ? "hsl(220 13% 10%)" : "hsl(0 0% 100%)"};
+    --cc-fg: ${dark ? "hsl(210 40% 98%)" : "hsl(222.2 84% 4.9%)"};
+    --cc-muted: ${dark ? "hsl(215 20% 65%)" : "hsl(215.4 16.3% 46.9%)"};
+    --cc-border: ${dark ? "hsl(220 13% 16%)" : "hsl(214.3 31.8% 91.4%)"};
+    --cc-secondary: ${dark ? "hsl(220 13% 14%)" : "hsl(210 40% 96%)"};
+    --cc-primary: ${dark ? "hsl(198 89% 50%)" : "hsl(198 89% 35%)"};
+    --cc-primary-fg: ${dark ? "hsl(220 13% 8%)" : "hsl(0 0% 100%)"};
+    --cc-accent: hsl(27 96% 61%);
+    --cc-success: hsl(142 76% 47%);
+    --cc-warning: hsl(47 96% 53%);
+    --cc-danger: ${dark ? "hsl(0 63% 60%)" : "hsl(0 84.2% 60.2%)"};
+    --cc-radius: 0.75rem;
+    --cc-ease: cubic-bezier(0.25, 0.46, 0.45, 0.94);
+  }
   html, body { margin: 0; padding: 0; }
   body {
     font-family: ui-sans-serif, system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
-    color: ${theme === "dark" ? "#e5e7eb" : "#111827"};
+    color: var(--cc-fg);
     background: transparent;
     padding: 2px;
+    font-size: 13px;
+    line-height: 1.5;
   }
   * { box-sizing: border-box; }
-  a { color: ${theme === "dark" ? "#7dd3fc" : "#0369a1"}; }
+  a { color: var(--cc-primary); }
+  h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
   [data-cc-icon] svg { display: inline-block; vertical-align: middle; }
+
+  /* On-brand native controls so generated interactive UI matches the app. */
+  button, .cc-btn {
+    font: inherit; cursor: pointer; border-radius: calc(var(--cc-radius) - 0.25rem);
+    border: 1px solid var(--cc-border); background: var(--cc-secondary);
+    color: var(--cc-fg); padding: 0.4rem 0.8rem;
+    transition: background 0.2s var(--cc-ease), border-color 0.2s var(--cc-ease);
+  }
+  button:hover, .cc-btn:hover { border-color: var(--cc-primary); }
+  button.cc-primary, .cc-btn.cc-primary {
+    background: var(--cc-primary); color: var(--cc-primary-fg); border-color: transparent;
+  }
+  input, select, textarea {
+    font: inherit; color: var(--cc-fg); background: var(--cc-card);
+    border: 1px solid var(--cc-border); border-radius: calc(var(--cc-radius) - 0.25rem);
+    padding: 0.35rem 0.55rem; outline: none;
+  }
+  input:focus, select:focus, textarea:focus {
+    border-color: var(--cc-primary);
+    box-shadow: 0 0 0 3px ${dark ? "hsl(198 89% 50% / 0.2)" : "hsl(198 89% 45% / 0.2)"};
+  }
+  input[type="range"] {
+    -webkit-appearance: none; appearance: none; height: 6px; padding: 0;
+    border: none; border-radius: 999px; background: var(--cc-secondary);
+  }
+  input[type="range"]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none; width: 16px; height: 16px;
+    border-radius: 999px; background: var(--cc-primary); cursor: pointer;
+    box-shadow: 0 0 0 3px ${dark ? "hsl(198 89% 50% / 0.18)" : "hsl(198 89% 45% / 0.18)"};
+  }
+  input[type="range"]::-moz-range-thumb {
+    width: 16px; height: 16px; border: none; border-radius: 999px;
+    background: var(--cc-primary); cursor: pointer;
+  }
+  .cc-card {
+    background: var(--cc-card); border: 1px solid var(--cc-border);
+    border-radius: var(--cc-radius); padding: 0.9rem;
+  }
 </style>`;
   const bridge = BRIDGE.replace("__ICONS__", safeScriptJson(icons));
   return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8">
@@ -176,6 +295,12 @@ export default function SandboxedHtml({
       if (kind === "action") {
         const action = String((data as { action?: unknown }).action ?? "").slice(0, 2000);
         if (action) onAction?.(action);
+      } else if (kind === "submit") {
+        // A value the user set (slider/text/select) → turn it into a follow-up
+        // message so the agent receives the chosen data on the same onAction path.
+        const payload = (data as { payload?: unknown }).payload;
+        const msg = describeSubmit(payload).slice(0, 2000);
+        if (msg) onAction?.(msg);
       } else if (kind === "height" && height == null) {
         const h = Number((data as { height?: unknown }).height);
         // Clamp so a runaway document can't grow unbounded.

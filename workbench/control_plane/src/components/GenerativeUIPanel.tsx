@@ -84,15 +84,21 @@ function JsonView({ value }: { value: Json }): React.ReactElement {
 }
 
 /**
- * HITL control events (ask_questions / ask_user / confirm) are rendered by the
- * inline ElicitationCard / ConfirmationCard, not as a generic data view.  Filter
- * them out here too so sessions persisted by older builds (which stored them in
- * customEvents) don't keep showing a stale "Interactive view" panel.
+ * Events this panel must NOT show:
+ *  • HITL control events (ask_questions / ask_user / confirm) — rendered by the
+ *    inline ElicitationCard / ConfirmationCard, not a generic data view. Filtered
+ *    so sessions persisted by older builds don't show a stale "Interactive view".
+ *  • generative_ui — the on-the-fly UI tree is ALREADY rendered inline, as a
+ *    first-class element with onAction, in MessageBubble. Showing it again inside
+ *    this collapsible blue "Interactive view" fold duplicates it (a read-only
+ *    copy) and crowds the chat with an AG-UI pill on every emit. The inline copy
+ *    is the canonical one; keep this panel for state snapshots + other events.
  */
-const HITL_CONTROL_EVENTS = new Set([
+const PANEL_HIDDEN_EVENTS = new Set([
   "elicitation_requested",
   "user_input_requested",
   "confirmation_requested",
+  "generative_ui",
 ]);
 
 /** A typed renderer for a specific custom-event `name`, returning the card body
@@ -107,8 +113,9 @@ export type CustomEventRenderer = (value: unknown) => React.ReactNode;
  * registry keyed by name" the module docstring referred to.
  */
 export const CUSTOM_EVENT_RENDERERS: Record<string, CustomEventRenderer> = {
-  // Generative-UI trees also render here (read-only) if they land in the
-  // panel; the interactive copy is inline in MessageBubble (with onAction).
+  // generative_ui is filtered out before this registry (PANEL_HIDDEN_EVENTS) —
+  // it renders inline in MessageBubble with onAction, so this entry is a
+  // read-only fallback that only fires if that filter is ever removed.
   generative_ui: (value) => <GenerativeUINode spec={value} />,
   // Typed approval card — a richer, self-describing confirmation surface than
   // the generic JSON view. Interactive approval still flows through the
@@ -139,7 +146,7 @@ export default function GenerativeUIPanel({
 }: GenerativeUIPanelProps): React.ReactElement | null {
   const [open, setOpen] = useState(false);
   const displayEvents = (customEvents ?? []).filter(
-    (ev) => !HITL_CONTROL_EVENTS.has(ev.name),
+    (ev) => !PANEL_HIDDEN_EVENTS.has(ev.name),
   );
   const hasState = agentState && Object.keys(agentState).length > 0;
   const hasCustom = displayEvents.length > 0;

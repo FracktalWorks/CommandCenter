@@ -78,12 +78,20 @@ export type SortField =
 
 export type SortDir = "asc" | "desc";
 
+// Facet filters: each is a SET of accepted values — a task matches a facet if it
+// falls in ANY of that facet's selected values (OR within a facet), and it must
+// pass EVERY active facet (AND across facets). Empty set = facet inactive. This
+// powers the unified Filter popover (Context / Priority / Energy) + the chips.
 export interface TaskFilters {
   /** free-text over title + next action */
   query: string;
-  /** @context exact match ("" = any) */
-  context: string;
-  /** assignee name exact match ("" = any) */
+  /** @context names to include ([] = any). NO_CONTEXT sentinel = "no @context". */
+  contexts: string[];
+  /** priority cells to include ([] = any). */
+  priorities: string[];
+  /** energy levels to include ([] = any). NO_ENERGY sentinel = "no energy set". */
+  energies: string[];
+  /** assignee name exact match ("" = any) — only used on non-next views. */
   assignee: string;
 }
 
@@ -92,27 +100,67 @@ export interface TaskSort {
   dir: SortDir;
 }
 
-export const DEFAULT_FILTERS: TaskFilters = { query: "", context: "", assignee: "" };
+/** Sentinel facet values for "unset" buckets, so they can be filtered like any
+ *  other value (a task with no @context / no energy). */
+export const NO_CONTEXT_FACET = "∅context";
+export const NO_ENERGY_FACET = "∅energy";
+
+export const DEFAULT_FILTERS: TaskFilters = {
+  query: "",
+  contexts: [],
+  priorities: [],
+  energies: [],
+  assignee: "",
+};
 // Default: within each status group, order by the priority matrix (1 = Critical
 // first). The user can switch to Manual (drag-reorder) or any field via the
 // toolbar. (Next Actions is grouped by status; this sorts inside each group.)
 export const DEFAULT_SORT: TaskSort = { field: "priority", dir: "asc" };
 
 export function filtersActive(f: TaskFilters): boolean {
-  return Boolean(f.query.trim() || f.context || f.assignee);
+  return Boolean(
+    f.query.trim() ||
+      f.contexts.length ||
+      f.priorities.length ||
+      f.energies.length ||
+      f.assignee,
+  );
+}
+
+/** How many facet VALUES are active (for the "Filter (N)" badge). Search and the
+ *  single-select assignee each count as one. */
+export function activeFilterCount(f: TaskFilters): number {
+  return (
+    f.contexts.length +
+    f.priorities.length +
+    f.energies.length +
+    (f.query.trim() ? 1 : 0) +
+    (f.assignee ? 1 : 0)
+  );
 }
 
 const ENERGY_RANK: Record<string, number> = { low: 0, medium: 1, high: 2 };
 
-/** Apply the free-text/context/assignee filters to a list. */
+/** Apply the search + facet filters. Each facet is OR-within, AND-across. */
 export function applyFilters(items: GtdItem[], f: TaskFilters): GtdItem[] {
   const q = f.query.trim().toLowerCase();
+  const ctxSet = new Set(f.contexts);
+  const priSet = new Set(f.priorities);
+  const enSet = new Set(f.energies);
   return items.filter((i) => {
     if (q) {
       const hay = `${i.title} ${i.nextAction ?? ""} ${i.notes ?? ""}`.toLowerCase();
       if (!hay.includes(q)) return false;
     }
-    if (f.context && i.context !== f.context) return false;
+    if (ctxSet.size) {
+      const key = i.context || NO_CONTEXT_FACET;
+      if (!ctxSet.has(key)) return false;
+    }
+    if (priSet.size && !priSet.has(priorityCell(i))) return false;
+    if (enSet.size) {
+      const key = i.energy || NO_ENERGY_FACET;
+      if (!enSet.has(key)) return false;
+    }
     if (f.assignee && (i.assignee?.name ?? "") !== f.assignee) return false;
     return true;
   });

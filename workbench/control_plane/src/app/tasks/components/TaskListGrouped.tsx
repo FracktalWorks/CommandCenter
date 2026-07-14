@@ -11,7 +11,14 @@ import { ChevronRight, GripVertical, CornerDownRight, Loader2, Circle, CheckCirc
 import { GtdItem, ViewKey } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { TaskCard } from "./TaskCard";
-import { applySort, byManualOrder, statusColumnForItem } from "../lib/ordering";
+import {
+  applySort,
+  byManualOrder,
+  statusColumnForItem,
+  groupItems,
+  type GroupBy,
+  type TaskGroup,
+} from "../lib/ordering";
 import { stageAccent } from "../lib/stageColors";
 import {
   readColumnVisibility,
@@ -43,15 +50,22 @@ export function TaskListGrouped({
   items,
   view,
   stages,
+  groupBy = "",
 }: {
   items: GtdItem[];
   view: ViewKey;
   /** Explicit ordered stage set (a project's ClickUp statuses). When omitted on
    *  Next Actions, the groups are the user's 4 fixed workflow stages. */
   stages?: string[];
+  /** The grouping axis. "" (default) groups by STATUS (drag-reorderable stages).
+   *  A lens ("priority" | "mode" | "energy" | "context") groups by that signal —
+   *  read-only (you can't drag to change a computed attribute), but columns and
+   *  multi-select still work. */
+  groupBy?: GroupBy | "";
 }) {
   const workflowSettingStages = useTaskStore((s) => s.settings.workflowStages);
   const statusStageMap = useTaskStore((s) => s.settings.statusStageMap);
+  const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
   const sort = useTaskStore((s) => s.sort);
   const reorderItem = useTaskStore((s) => s.reorderItem);
   // Multi-select: when active, rows show a checkbox and drag is suppressed
@@ -60,13 +74,15 @@ export function TaskListGrouped({
   const selectedIds = useTaskStore((s) => s.selectedIds);
   const toggleSelected = useTaskStore((s) => s.toggleSelected);
 
-  // Next Actions groups by the 4 fixed workflow stages; other views render a
-  // single flat group. A LOCAL row keys off `workflowStage`; a SYNCED row off
-  // its ClickUp status through the status→stage map (bypassed in the project
-  // view, which passes explicit raw-status `stages`).
-  const grouped = view === "next";
-  // Columnar list (desktop) for the Next-Actions Context view only — the same
-  // signals that are card pills, in aligned columns (Jira/ClickUp-style). The
+  // Status grouping (the default): the drag-reorderable workflow-stage swimlanes.
+  // A lens grouping (priority/mode/energy/context) is read-only swimlanes over
+  // the same set — you can't drag to change a computed attribute. Both keep the
+  // columns. Only Next Actions groups at all; other views are a single group.
+  const isLens = groupBy !== "" && groupBy !== "none";
+  const statusGrouped = view === "next" && !isLens;
+  const grouped = view === "next"; // any grouping (status or lens) shows headers
+  // Columnar list (desktop) applies to ALL Next-Actions groupings now — the same
+  // aligned columns whether you group by status, priority, energy, etc. The
   // project view (explicit `stages`) keeps the simple stacked row. Mobile always
   // falls back to the stacked card (handled per-row via the sm: breakpoint).
   const columnVis = useSyncExternalStore(
@@ -88,8 +104,9 @@ export function TaskListGrouped({
     () => (stages ? {} : statusStageMap),
     [stages, statusStageMap],
   );
-  // Drag-reorder is a manual-sort affordance; it's off while multi-selecting.
-  const manual = sort.field === "manual" && !selectMode;
+  // Drag-reorder is a manual-sort affordance on the STATUS axis only; off while
+  // multi-selecting and off for a lens grouping (can't drag to change priority).
+  const manual = sort.field === "manual" && !selectMode && statusGrouped;
   const firstStage = stageKeys[0];
 
   const [dragId, setDragId] = useState<string | null>(null);
@@ -97,22 +114,41 @@ export function TaskListGrouped({
   // gap the card would land in.
   const [dropAt, setDropAt] = useState<string | null>(null);
 
+  // A lens grouping delegates to groupItems() (the shared slicer) — precomputed
+  // once, since a lens can't reorder mid-render. Status grouping keys off the
+  // stage each item resolves to. Non-next views are a single flat group.
+  const lensGroups = useMemo<TaskGroup[]>(
+    () =>
+      isLens && view === "next"
+        ? groupItems(items, groupBy as GroupBy, urgentWindowHours)
+        : [],
+    [isLens, view, items, groupBy, urgentWindowHours],
+  );
+
   const groupOf = useCallback(
     (i: GtdItem): string =>
-      grouped
+      statusGrouped
         ? statusColumnForItem(i, stageKeys, firstStage, effectiveMap)
         : UNSET,
-    [grouped, stageKeys, firstStage, effectiveMap],
+    [statusGrouped, stageKeys, firstStage, effectiveMap],
   );
 
   const groups = useMemo(() => {
-    if (!grouped) return [{ key: UNSET, label: "" }];
+    if (isLens && view === "next") {
+      return lensGroups.map((g) => ({ key: g.key, label: g.label, emoji: g.emoji }));
+    }
+    if (!statusGrouped) return [{ key: UNSET, label: "" }];
     return stageKeys.map((s) => ({ key: s, label: s }));
-  }, [grouped, stageKeys]);
+  }, [isLens, view, lensGroups, statusGrouped, stageKeys]);
 
   const byGroup = useMemo(() => {
     const m = new Map<string, GtdItem[]>();
     for (const g of groups) m.set(g.key, []);
+    if (isLens && view === "next") {
+      // The lens slicer already bucketed the items; just sort within each group.
+      for (const g of lensGroups) m.set(g.key, applySort(g.items, sort));
+      return m;
+    }
     for (const i of items) {
       const k = groupOf(i);
       (m.get(k) ?? m.set(k, []).get(k)!).push(i);
@@ -120,7 +156,7 @@ export function TaskListGrouped({
     // Order each group by the active sort (manual → sortKey; else the field).
     for (const [k, arr] of m) m.set(k, applySort(arr, sort));
     return m;
-  }, [items, groups, groupOf, sort]);
+  }, [items, groups, groupOf, sort, isLens, view, lensGroups]);
 
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const toggle = (k: string) =>
@@ -179,8 +215,11 @@ export function TaskListGrouped({
         const rows = byGroup.get(g.key) ?? [];
         const isCollapsed = collapsed.has(g.key);
         const showHeader = grouped;
+        // Status swimlanes get the per-stage accent; a lens grouping uses a plain
+        // neutral header + its own emoji (the accent is a stage concept).
         const accent = stageAccent(g.label || g.key, gi, total);
-        const isDone = gi === total - 1;
+        const emoji = (g as { emoji?: string }).emoji;
+        const isDone = statusGrouped && gi === total - 1;
         // Highlight the whole group while a card hovers anywhere over it, so a
         // cross-stage move reads clearly even before hitting a precise gap.
         const groupHot = dropAt?.startsWith(`${g.key}:`) ?? false;
@@ -192,9 +231,8 @@ export function TaskListGrouped({
             {showHeader && (
               <div
                 className={[
-                  "sticky top-0 z-10 flex items-center gap-2 border-b border-border border-l-2 px-3 py-1.5 backdrop-blur",
-                  accent.soft,
-                  accent.bar,
+                  "sticky top-0 z-10 flex items-center gap-2 border-b border-border px-3 py-1.5 backdrop-blur",
+                  statusGrouped ? `border-l-2 ${accent.soft} ${accent.bar}` : "bg-card/95",
                 ].join(" ")}
               >
                 <button
@@ -208,9 +246,16 @@ export function TaskListGrouped({
                       isCollapsed ? "" : "rotate-90",
                     ].join(" ")}
                   />
-                  <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                  {statusGrouped ? (
+                    <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                  ) : emoji ? (
+                    <span aria-hidden className="shrink-0 text-xs">{emoji}</span>
+                  ) : null}
                   <span
-                    className={`truncate text-[11px] font-semibold uppercase tracking-wide ${accent.text}`}
+                    className={[
+                      "truncate text-[11px] font-semibold uppercase tracking-wide",
+                      statusGrouped ? accent.text : "text-foreground",
+                    ].join(" ")}
                   >
                     {g.label}
                   </span>
@@ -273,7 +318,11 @@ export function TaskListGrouped({
                 )}
                 {rows.length === 0 && showHeader && (
                   <p className="px-9 py-2.5 text-[11px] italic text-muted-foreground/50">
-                    {dragId ? "Drop here to move to this stage" : "No tasks in this stage"}
+                    {dragId
+                      ? "Drop here to move to this stage"
+                      : statusGrouped
+                        ? "No tasks in this stage"
+                        : "No tasks in this group"}
                   </p>
                 )}
               </div>

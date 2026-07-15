@@ -379,6 +379,279 @@ function buildSrcDoc(
   .cc-phase ul { margin: 0.3rem 0 0; padding-left: 18px; font-size: 13px; color: var(--cc-muted); }
   /* Status pills for tables/inline. */
   .cc-pill { font-family: var(--cc-mono); font-size: 10px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
+
+  /* ── Data-viz & decision blocks ───────────────────────────────────────
+     Pure CSS / inline-SVG so an agent emits terse markup (no JS, no hand-
+     rolled SVG paths) and gets an on-brand chart, KPI, decision box, or
+     architecture diagram. Tone via .cc-t-{success,warning,danger,accent}. */
+
+  /* KPI stat tiles — big number is the hero. Row of .cc-stat in .cc-stats. */
+  .cc-stats { display: grid; gap: 12px; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); }
+  .cc-report .cc-stats { margin-top: 0.9rem; }
+  .cc-stat {
+    background: var(--cc-card); border: 1px solid var(--cc-border);
+    border-radius: var(--cc-radius); padding: 0.9rem 1rem;
+  }
+  .cc-stat .cc-k {
+    font-family: var(--cc-mono); font-size: 10px; letter-spacing: 0.08em;
+    text-transform: uppercase; color: var(--cc-muted); margin: 0 0 6px;
+  }
+  .cc-stat .cc-v {
+    font-size: 30px; font-weight: 640; line-height: 1; color: var(--cc-fg);
+    font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
+  }
+  .cc-stat .cc-v small { font-size: 14px; font-weight: 500; color: var(--cc-muted); }
+  .cc-stat .cc-d { font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
+  .cc-stat .cc-d.cc-up { color: var(--cc-success); }
+  .cc-stat .cc-d.cc-down { color: var(--cc-danger); }
+  .cc-stat .cc-d.cc-up::before { content: "▲ "; }
+  .cc-stat .cc-d.cc-down::before { content: "▼ "; }
+  /* Accent one stat tile: <div class="cc-stat cc-feature">. */
+  .cc-stat.cc-feature {
+    border-color: color-mix(in srgb, var(--cc-accent) 40%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-accent) 7%, var(--cc-card));
+  }
+  .cc-stat.cc-feature .cc-v { color: var(--cc-accent); }
+
+  /* Horizontal bar chart. Each row: <div class="cc-bar" style="--v:72">…
+     <b>label</b><span>value</span>. --v is the percent (0–100). */
+  .cc-bars { display: grid; gap: 9px; }
+  .cc-report .cc-bars { margin-top: 0.6rem; }
+  .cc-bar { display: grid; grid-template-columns: minmax(70px, 22%) 1fr auto; align-items: center; gap: 12px; }
+  .cc-bar > b { font-weight: 500; font-size: 12px; color: var(--cc-muted); text-align: right;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-bar > .cc-track { height: 18px; border-radius: 6px; background: var(--cc-secondary); overflow: hidden; }
+  .cc-bar > .cc-track::after {
+    content: ""; display: block; height: 100%; width: calc(var(--v, 0) * 1%);
+    background: var(--cc-primary); border-radius: 6px;
+    transition: width 0.7s var(--cc-ease);
+  }
+  .cc-bar > span { font-family: var(--cc-mono); font-size: 12px; color: var(--cc-fg);
+    font-variant-numeric: tabular-nums; min-width: 3ch; text-align: right; }
+  .cc-bar.cc-t-success > .cc-track::after { background: var(--cc-success); }
+  .cc-bar.cc-t-warning > .cc-track::after { background: var(--cc-warning); }
+  .cc-bar.cc-t-danger  > .cc-track::after { background: var(--cc-danger); }
+  .cc-bar.cc-t-accent  > .cc-track::after { background: var(--cc-accent); }
+
+  /* Donut / ring gauge — one number, single conic-gradient. Set the percent:
+     <div class="cc-donut" style="--v:64"><span>64<small>%</small></span><b>label</b></div>. */
+  .cc-donuts { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); justify-items: center; }
+  .cc-donut { display: grid; justify-items: center; gap: 8px; text-align: center; }
+  .cc-donut > .cc-ring {
+    width: 104px; height: 104px; border-radius: 50%; display: grid; place-items: center;
+    background:
+      radial-gradient(var(--cc-card) 58%, transparent 59%),
+      conic-gradient(var(--cc-primary) calc(var(--v, 0) * 1%), var(--cc-secondary) 0);
+  }
+  .cc-donut.cc-t-success > .cc-ring { background: radial-gradient(var(--cc-card) 58%, transparent 59%), conic-gradient(var(--cc-success) calc(var(--v, 0) * 1%), var(--cc-secondary) 0); }
+  .cc-donut.cc-t-warning > .cc-ring { background: radial-gradient(var(--cc-card) 58%, transparent 59%), conic-gradient(var(--cc-warning) calc(var(--v, 0) * 1%), var(--cc-secondary) 0); }
+  .cc-donut.cc-t-danger  > .cc-ring { background: radial-gradient(var(--cc-card) 58%, transparent 59%), conic-gradient(var(--cc-danger)  calc(var(--v, 0) * 1%), var(--cc-secondary) 0); }
+  .cc-donut.cc-t-accent  > .cc-ring { background: radial-gradient(var(--cc-card) 58%, transparent 59%), conic-gradient(var(--cc-accent)  calc(var(--v, 0) * 1%), var(--cc-secondary) 0); }
+  .cc-donut .cc-ring span { font-size: 22px; font-weight: 640; color: var(--cc-fg); font-variant-numeric: tabular-nums; }
+  .cc-donut .cc-ring span small { font-size: 12px; color: var(--cc-muted); }
+  .cc-donut > b { font-weight: 500; font-size: 12px; color: var(--cc-muted); }
+
+  /* Sparkline holder — agent drops a tiny inline <svg><polyline>. Styles the
+     stroke/fill so they need no attributes: <div class="cc-spark"><svg …>. */
+  .cc-spark svg { display: block; width: 100%; height: auto; overflow: visible; }
+  .cc-spark polyline, .cc-spark path { fill: none; stroke: var(--cc-primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; }
+  .cc-spark .cc-fill { fill: color-mix(in srgb, var(--cc-primary) 14%, transparent); stroke: none; }
+  .cc-spark .cc-dot { fill: var(--cc-accent); stroke: none; }
+
+  /* Decision / recommendation box — verdict as the hero, rationale below.
+     Tone via .cc-t-*; default reads as a recommendation (success). */
+  .cc-decision {
+    display: grid; grid-template-columns: auto 1fr; gap: 14px; align-items: start;
+    border: 1px solid color-mix(in srgb, var(--cc-success) 34%, var(--cc-border));
+    background: color-mix(in srgb, var(--cc-success) 7%, var(--cc-card));
+    border-radius: var(--cc-radius); padding: 1rem 1.15rem;
+  }
+  .cc-decision > .cc-mark {
+    width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center;
+    font-weight: 700; font-size: 16px; color: var(--cc-primary-fg);
+    background: var(--cc-success);
+  }
+  .cc-decision .cc-verdict {
+    font-family: var(--cc-mono); font-size: 10px; letter-spacing: 0.1em; text-transform: uppercase;
+    color: var(--cc-success); margin: 2px 0 4px;
+  }
+  .cc-decision h4 { margin: 0 0 4px; font-size: 16px; color: var(--cc-fg); }
+  .cc-decision p { margin: 0; max-width: none; }
+  .cc-decision.cc-t-warning { border-color: color-mix(in srgb, var(--cc-warning) 40%, var(--cc-border)); background: color-mix(in srgb, var(--cc-warning) 8%, var(--cc-card)); }
+  .cc-decision.cc-t-warning > .cc-mark { background: var(--cc-warning); }
+  .cc-decision.cc-t-warning .cc-verdict { color: var(--cc-warning); }
+  .cc-decision.cc-t-danger { border-color: color-mix(in srgb, var(--cc-danger) 40%, var(--cc-border)); background: color-mix(in srgb, var(--cc-danger) 8%, var(--cc-card)); }
+  .cc-decision.cc-t-danger > .cc-mark { background: var(--cc-danger); }
+  .cc-decision.cc-t-danger .cc-verdict { color: var(--cc-danger); }
+
+  /* Visual architecture diagram — flex rows of nodes joined by arrows, an
+     upgrade from the ASCII .cc-diagram. Structure: .cc-arch > (.cc-node |
+     .cc-arrow | .cc-arch-row). Add .cc-primary / a tone class to a node. */
+  .cc-arch { display: flex; flex-wrap: wrap; align-items: stretch; gap: 10px; padding: 0.4rem 0; }
+  .cc-arch-row { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; width: 100%; justify-content: center; }
+  .cc-node {
+    flex: 0 1 auto; min-width: 96px; text-align: center;
+    background: var(--cc-card); border: 1px solid var(--cc-border);
+    border-radius: 10px; padding: 0.55rem 0.85rem;
+  }
+  .cc-node .cc-node-t { font-size: 13px; font-weight: 600; color: var(--cc-fg); }
+  .cc-node .cc-node-s { font-family: var(--cc-mono); font-size: 10px; color: var(--cc-muted); margin-top: 2px; }
+  .cc-node.cc-primary { border-color: color-mix(in srgb, var(--cc-primary) 55%, var(--cc-border)); background: color-mix(in srgb, var(--cc-primary) 9%, var(--cc-card)); }
+  .cc-node.cc-primary .cc-node-t { color: var(--cc-primary); }
+  .cc-node.cc-accent  { border-color: color-mix(in srgb, var(--cc-accent) 55%, var(--cc-border)); background: color-mix(in srgb, var(--cc-accent) 9%, var(--cc-card)); }
+  .cc-node.cc-accent .cc-node-t { color: var(--cc-accent); }
+  .cc-node.cc-muted { border-style: dashed; }
+  /* Arrows: default → ; add .cc-down for a ↓ between stacked rows. */
+  .cc-arrow { display: grid; place-items: center; color: var(--cc-muted); font-family: var(--cc-mono); font-size: 15px; padding: 0 2px; }
+  .cc-arrow::before { content: "\\2192"; }
+  .cc-arrow.cc-down { width: 100%; }
+  .cc-arrow.cc-down::before { content: "\\2193"; }
+  .cc-arrow.cc-bi::before { content: "\\21C4"; }
+
+  /* Legend row for charts / diagrams. */
+  .cc-legend { display: flex; flex-wrap: wrap; gap: 14px; font-size: 11px; color: var(--cc-muted); }
+  .cc-legend > span { display: inline-flex; align-items: center; gap: 6px; }
+  .cc-legend i { width: 10px; height: 10px; border-radius: 3px; background: var(--cc-primary); display: inline-block; }
+  .cc-legend i.cc-t-success { background: var(--cc-success); }
+  .cc-legend i.cc-t-warning { background: var(--cc-warning); }
+  .cc-legend i.cc-t-danger { background: var(--cc-danger); }
+  .cc-legend i.cc-t-accent { background: var(--cc-accent); }
+
+  /* ── Status callouts (4 tones) ────────────────────────────────────────
+     Small tinted notice, distinct from the verdict-style .cc-decision. Base
+     is neutral; add .cc-info / .cc-success / .cc-warning / .cc-danger. */
+  .cc-note {
+    display: grid; grid-template-columns: auto 1fr; gap: 11px; align-items: start;
+    border: 1px solid var(--cc-border); background: var(--cc-card);
+    border-radius: calc(var(--cc-radius) - 0.15rem); padding: 0.7rem 0.9rem;
+  }
+  .cc-note > .cc-ico {
+    width: 20px; height: 20px; border-radius: 50%; display: grid; place-items: center;
+    font-size: 12px; font-weight: 700; color: var(--cc-primary-fg); background: var(--cc-muted);
+  }
+  .cc-note p { margin: 0; max-width: none; color: var(--cc-fg); font-size: 13px; }
+  .cc-note p strong { color: var(--cc-fg); }
+  .cc-note.cc-info { border-color: color-mix(in srgb, var(--cc-primary) 32%, var(--cc-border)); background: color-mix(in srgb, var(--cc-primary) 6%, var(--cc-card)); }
+  .cc-note.cc-info > .cc-ico { background: var(--cc-primary); }
+  .cc-note.cc-success { border-color: color-mix(in srgb, var(--cc-success) 32%, var(--cc-border)); background: color-mix(in srgb, var(--cc-success) 6%, var(--cc-card)); }
+  .cc-note.cc-success > .cc-ico { background: var(--cc-success); }
+  .cc-note.cc-warning { border-color: color-mix(in srgb, var(--cc-warning) 34%, var(--cc-border)); background: color-mix(in srgb, var(--cc-warning) 8%, var(--cc-card)); }
+  .cc-note.cc-warning > .cc-ico { background: var(--cc-warning); color: hsl(20 14% 12%); }
+  .cc-note.cc-danger { border-color: color-mix(in srgb, var(--cc-danger) 34%, var(--cc-border)); background: color-mix(in srgb, var(--cc-danger) 7%, var(--cc-card)); }
+  .cc-note.cc-danger > .cc-ico { background: var(--cc-danger); }
+
+  /* ── Data table + status cells ────────────────────────────────────────
+     Richer than .cc-compare: zebra rows, a leading status-stripe column, and
+     inline mini-bar / pill cells for ops & audit reports.
+       <div class="cc-table"><table>… <td class="cc-cell-stat cc-t-warning">…
+     A row can carry a stripe with <tr class="cc-row cc-t-danger">. */
+  .cc-table { overflow-x: auto; border: 1px solid var(--cc-border); border-radius: var(--cc-radius); }
+  .cc-table table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 32rem; }
+  .cc-table thead th {
+    font-family: var(--cc-mono); font-size: 10px; text-transform: uppercase; letter-spacing: 0.06em;
+    color: var(--cc-muted); background: var(--cc-secondary); text-align: left;
+    padding: 9px 13px; border-bottom: 1px solid var(--cc-border); white-space: nowrap;
+  }
+  .cc-table tbody td { padding: 9px 13px; border-bottom: 1px solid var(--cc-border); vertical-align: middle; color: var(--cc-fg); }
+  .cc-table tbody tr:last-child td { border-bottom: none; }
+  .cc-table tbody tr:nth-child(even) td { background: color-mix(in srgb, var(--cc-secondary) 45%, transparent); }
+  .cc-table td.cc-num { font-family: var(--cc-mono); font-variant-numeric: tabular-nums; text-align: right; }
+  .cc-table td.cc-dim { color: var(--cc-muted); }
+  /* Leading status-stripe cell: <td class="cc-stripe cc-t-danger"></td>. */
+  .cc-table td.cc-stripe { width: 4px; padding: 0; background: var(--cc-border); }
+  .cc-table td.cc-stripe.cc-t-success { background: var(--cc-success); }
+  .cc-table td.cc-stripe.cc-t-warning { background: var(--cc-warning); }
+  .cc-table td.cc-stripe.cc-t-danger { background: var(--cc-danger); }
+  .cc-table td.cc-stripe.cc-t-accent { background: var(--cc-accent); }
+  /* Inline status text with a leading dot: <span class="cc-status cc-t-success">ok</span>. */
+  .cc-status { display: inline-flex; align-items: center; gap: 6px; font-size: 12px; }
+  .cc-status::before { content: ""; width: 7px; height: 7px; border-radius: 50%; background: var(--cc-muted); }
+  .cc-status.cc-t-success::before { background: var(--cc-success); }
+  .cc-status.cc-t-warning::before { background: var(--cc-warning); }
+  .cc-status.cc-t-danger::before { background: var(--cc-danger); }
+  .cc-status.cc-t-accent::before { background: var(--cc-accent); }
+  /* Inline mini-bar cell: <td><span class="cc-minibar" style="--v:74"></span></td>. */
+  .cc-minibar { display: inline-block; width: 100%; min-width: 56px; height: 8px; border-radius: 999px; background: var(--cc-secondary); overflow: hidden; vertical-align: middle; }
+  .cc-minibar::after { content: ""; display: block; height: 100%; width: calc(var(--v, 0) * 1%); background: var(--cc-primary); border-radius: 999px; }
+  .cc-minibar.cc-t-success::after { background: var(--cc-success); }
+  .cc-minibar.cc-t-warning::after { background: var(--cc-warning); }
+  .cc-minibar.cc-t-danger::after { background: var(--cc-danger); }
+  /* Solid status pill for a cell: <span class="cc-tag-pill cc-t-success">Live</span>. */
+  .cc-tag-pill {
+    font-family: var(--cc-mono); font-size: 10px; letter-spacing: 0.03em; padding: 2px 9px;
+    border-radius: 999px; background: var(--cc-secondary); color: var(--cc-muted); white-space: nowrap;
+  }
+  .cc-tag-pill.cc-t-success { background: color-mix(in srgb, var(--cc-success) 18%, transparent); color: var(--cc-success); }
+  .cc-tag-pill.cc-t-warning { background: color-mix(in srgb, var(--cc-warning) 20%, transparent); color: var(--cc-warning); }
+  .cc-tag-pill.cc-t-danger { background: color-mix(in srgb, var(--cc-danger) 18%, transparent); color: var(--cc-danger); }
+  .cc-tag-pill.cc-t-accent { background: color-mix(in srgb, var(--cc-accent) 18%, transparent); color: var(--cc-accent); }
+
+  /* ── Timeline / roadmap (Gantt-style) ─────────────────────────────────
+     Rows on a shared time axis. Set the number of columns on .cc-timeline
+     (--cols, default 12) and place each bar with --s (start col, 1-based)
+     and --e (span in cols):
+       <div class="cc-timeline" style="--cols:12">
+         <div class="cc-tl-row"><b>Design</b>
+           <div class="cc-tl-track"><span class="cc-tl-bar" style="--s:1;--e:3">Design</span></div></div>
+     Add a tone class to a bar to recolor it. */
+  .cc-timeline { --cols: 12; display: grid; gap: 8px; }
+  .cc-report .cc-timeline { margin-top: 0.6rem; }
+  .cc-tl-row { display: grid; grid-template-columns: minmax(72px, 18%) 1fr; align-items: center; gap: 12px; }
+  .cc-tl-row > b { font-weight: 500; font-size: 12px; color: var(--cc-muted); text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .cc-tl-track {
+    display: grid; grid-template-columns: repeat(var(--cols), 1fr); gap: 0;
+    height: 26px; border-radius: 7px; background: var(--cc-secondary);
+    background-image: repeating-linear-gradient(90deg, transparent 0, transparent calc(100% / var(--cols) - 1px), var(--cc-border) calc(100% / var(--cols) - 1px), var(--cc-border) calc(100% / var(--cols)));
+    overflow: hidden;
+  }
+  .cc-tl-bar {
+    grid-column: var(--s, 1) / span var(--e, 1); align-self: stretch;
+    display: flex; align-items: center; padding: 0 9px; margin: 3px 0;
+    border-radius: 6px; font-size: 11px; font-weight: 600; color: var(--cc-primary-fg);
+    background: var(--cc-primary); overflow: hidden; white-space: nowrap; text-overflow: ellipsis;
+  }
+  .cc-tl-bar.cc-t-accent { background: var(--cc-accent); }
+  .cc-tl-bar.cc-t-success { background: var(--cc-success); }
+  .cc-tl-bar.cc-t-warning { background: var(--cc-warning); color: hsl(20 14% 12%); }
+  .cc-tl-bar.cc-t-danger { background: var(--cc-danger); }
+  .cc-tl-bar.cc-ghost { background: var(--cc-secondary); color: var(--cc-muted); border: 1px dashed var(--cc-border); }
+  /* Axis labels row: same grid, .cc-tl-axis of <span>s under the tracks. */
+  .cc-tl-axis { display: grid; grid-template-columns: minmax(72px, 18%) 1fr; gap: 12px; margin-top: 2px; }
+  .cc-tl-axis > .cc-tl-ticks { display: grid; grid-template-columns: repeat(var(--cols), 1fr); font-family: var(--cc-mono); font-size: 9px; color: var(--cc-muted); }
+  .cc-tl-axis .cc-tl-ticks > span { text-align: center; }
+
+  /* ── Trend line / area chart ──────────────────────────────────────────
+     A charted trend, bigger than .cc-spark, with a faint grid, area fill,
+     axis labels, and an emphasized endpoint. Agent supplies the geometry as
+     an inline <svg>; these styles theme it so no per-element attributes are
+     needed. Structure:
+       <div class="cc-chart">
+         <svg class="cc-plot" viewBox="0 0 300 120" preserveAspectRatio="none">
+           <g class="cc-grid"><line x1=… /></g>
+           <polyline class="cc-area" points="…" />   (closed to baseline)
+           <polyline class="cc-line" points="…" />
+           <circle class="cc-end" cx=… cy=… r="3" /></svg>
+         <div class="cc-x"><span>Jan</span>…</div></div>  */
+  .cc-chart {
+    background: var(--cc-card); border: 1px solid var(--cc-border);
+    border-radius: var(--cc-radius); padding: 0.9rem 1rem 0.7rem;
+  }
+  .cc-chart .cc-plot { display: block; width: 100%; height: auto; overflow: visible; }
+  .cc-chart .cc-grid line { stroke: var(--cc-border); stroke-width: 1; vector-effect: non-scaling-stroke; }
+  .cc-chart .cc-area { fill: color-mix(in srgb, var(--cc-primary) 14%, transparent); stroke: none; }
+  .cc-chart .cc-line { fill: none; stroke: var(--cc-primary); stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; vector-effect: non-scaling-stroke; }
+  .cc-chart .cc-line.cc-t-accent { stroke: var(--cc-accent); }
+  .cc-chart .cc-line.cc-t-success { stroke: var(--cc-success); }
+  .cc-chart .cc-area.cc-t-accent { fill: color-mix(in srgb, var(--cc-accent) 14%, transparent); }
+  .cc-chart .cc-end { fill: var(--cc-accent); stroke: var(--cc-card); stroke-width: 1.5; }
+  .cc-chart .cc-x { display: flex; justify-content: space-between; font-family: var(--cc-mono); font-size: 10px; color: var(--cc-muted); margin-top: 6px; }
+  .cc-chart .cc-x > span { flex: 1; text-align: center; }
+  .cc-chart .cc-x > span:first-child { text-align: left; }
+  .cc-chart .cc-x > span:last-child { text-align: right; }
+
+  @media (prefers-reduced-motion: reduce) {
+    .cc-bar > .cc-track::after { transition: none; }
+  }
 </style>`;
   const bridge = BRIDGE.replace("__ICONS__", safeScriptJson(icons));
   return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8">

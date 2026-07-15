@@ -148,10 +148,28 @@ are already themed). Just write clean, well-structured Markdown — clear headin
 tables for tabular data, short paragraphs. The live preview shows exactly how the
 user sees it.
 
-**HTML documents / full-page reports** (`write_artifact("outputs/report.html", ...)`
-or an `emit_generative_ui` `html` node): these open in the side panel and render
-in a sandbox. The following CSS variables are **pre-injected** — use them, don't
-redefine colors:
+**HTML documents / reports.** The SAME building blocks and pre-injected CSS
+below back BOTH ways of showing HTML — pick the surface by how much you're
+presenting:
+
+- **Inline in the chat** — emit an `emit_generative_ui` **`html` node**. It
+  renders as a self-contained card *in the message stream* (auto-height, framed).
+  Use it for something compact and glanceable: a couple of KPI stats, one chart,
+  a decision box, a small comparison — a few blocks the user reads without leaving
+  the conversation.
+- **Full-page report in the side panel** — `write_artifact("outputs/<name>.html", ...)`.
+  It opens automatically in the document side panel (chrome-less, full height),
+  and it is **saved** — it persists, is downloadable, and can be re-opened later.
+  Use it for something substantial and multi-section: an analysis, a plan, a
+  briefing, an audit — anything the user will keep or scroll through.
+
+Rule of thumb: **a few blocks the user just needs to see → inline `html` node;
+a full document the user will keep or read at length → a saved `outputs/*.html`
+report.** The markup is identical either way — the same `cc-report` container and
+`cc-*` blocks work in both, so you never rewrite to move between them.
+
+Both render in a locked sandbox with these CSS variables **pre-injected** — use
+them, don't redefine colors:
 
 ```
 --cc-primary  --cc-accent  --cc-fg  --cc-muted  --cc-card  --cc-secondary
@@ -185,6 +203,69 @@ Wrap the whole document in `<div class="cc-report">…</div>`. Blocks:
   numbered sequence (ONLY when order truly matters).
 - `cc-phase` rows (each has `<span class="cc-badge">Phase 1</span>` + content) —
   a phased plan / roadmap.
+
+**Data-viz & decision blocks (USE THESE for charts, KPIs, decisions, and
+architecture — never hand-roll SVG paths or bar math).** These are pure
+CSS / inline-SVG: you pass a value, the block draws itself. Set a color tone on
+any of them by adding `cc-t-success` / `cc-t-warning` / `cc-t-danger` /
+`cc-t-accent`.
+
+- **KPI stats** — `cc-stats` grid of `cc-stat`, each `<p class="cc-k">LABEL</p>`
+  then `<div class="cc-v">42<small>%</small></div>` and an optional
+  `<div class="cc-d cc-up">+12% MoM</div>` (`cc-up`/`cc-down` add a ▲/▼ and
+  color). Add `cc-feature` to ONE tile to spotlight it in accent. Reach for this
+  whenever a number is the headline — big number, quiet label.
+- **Bar chart** — `cc-bars` containing rows: each
+  `<div class="cc-bar" style="--v:72"><b>Label</b><div class="cc-track"></div><span>72%</span></div>`.
+  `--v` is the percent (0–100) — you compute the percent, the CSS draws the fill.
+  No `<svg>`, no width math.
+- **Donut / ring gauge** — `cc-donuts` grid of
+  `<div class="cc-donut" style="--v:64"><div class="cc-ring"><span>64<small>%</small></span></div><b>Label</b></div>`.
+  One `--v` percent → a conic ring. Use for a single completion / share figure.
+- **Sparkline** — wrap a tiny inline SVG in `cc-spark`; the polyline is already
+  themed (stroke/fill), so you just plot points:
+  `<div class="cc-spark"><svg viewBox="0 0 100 30" preserveAspectRatio="none"><polyline points="0,20 25,12 50,16 75,6 100,9"/></svg></div>`.
+  Add a `<polyline class="cc-fill">` (closed to the baseline) for an area fill and
+  a `<circle class="cc-dot">` to emphasize the endpoint.
+- **Decision / recommendation box** — `<div class="cc-decision">` (add
+  `cc-t-warning`/`cc-t-danger` to change the verdict color) with a
+  `<div class="cc-mark">✓</div>`, then
+  `<div><p class="cc-verdict">Recommendation</p><h4>Go with option B</h4><p>…why…</p></div>`.
+  Use this for a clear call-to-action verdict, not a generic note (that's
+  `cc-callout`).
+- **Architecture diagram (visual)** — `cc-arch` of `cc-node` boxes joined by
+  `cc-arrow` (→ by default, `cc-arrow cc-down` for ↓, `cc-arrow cc-bi` for ⇄).
+  Each node: `<div class="cc-node cc-primary"><div class="cc-node-t">Gateway</div><div class="cc-node-s">FastAPI</div></div>`.
+  Wrap a stacked tier in `cc-arch-row`. Add `cc-primary`/`cc-accent`/`cc-muted`
+  (dashed) to a node. Prefer this over the ASCII `cc-diagram` for a real
+  box-and-connector architecture; keep `cc-diagram` for terminal-style flows.
+- **Legend** — `cc-legend` of `<span><i class="cc-t-success"></i> Passing</span>`
+  to key a chart's colors.
+- **Status callout** — `<div class="cc-note cc-warning"><span class="cc-ico">!</span><p><strong>Risk.</strong> …</p></div>`.
+  Tones: `cc-info` (blue), `cc-success` (green ✓), `cc-warning` (amber !),
+  `cc-danger` (red ✕). Use for a short status notice; use `cc-decision` when
+  there's a verdict/recommendation, `cc-callout` for a neutral highlight.
+- **Data table + status cells** — `<div class="cc-table"><table>…</table></div>`
+  for ops/audit/status tables. Cell helpers: `td.cc-num` (mono, right-aligned
+  numbers), `td.cc-dim` (muted), a leading `<td class="cc-stripe cc-t-danger">`
+  for a row severity stripe, `<span class="cc-status cc-t-success">ok</span>`
+  (dot + label), `<span class="cc-minibar" style="--v:74"></span>` (inline bar),
+  and `<span class="cc-tag-pill cc-t-warning">Degraded</span>` (solid pill).
+  Use this over `cc-compare` when rows are records with status, not options.
+- **Timeline / roadmap (Gantt)** — `<div class="cc-timeline" style="--cols:12">`
+  with rows: `<div class="cc-tl-row"><b>Design</b><div class="cc-tl-track"><span class="cc-tl-bar" style="--s:1;--e:3">Design</span></div></div>`.
+  `--cols` = total time columns; each bar's `--s` = start column (1-based),
+  `--e` = span in columns. Add a tone class to a bar, or `cc-ghost` for a
+  planned/unstarted bar. Optional axis: a `<div class="cc-tl-axis" style="--cols:12"><div></div><div class="cc-tl-ticks"><span>Jan</span>…</div></div>`
+  row of tick labels. Prefer this over `cc-phase` when timing/overlap matters.
+- **Trend line / area chart** — `<div class="cc-chart">` wrapping an inline
+  `<svg class="cc-plot" viewBox="0 0 300 120" preserveAspectRatio="none">`; the
+  classes theme it, so you only supply geometry: a `<g class="cc-grid">` of
+  `<line>`s, a `<polyline class="cc-area">` closed down to the baseline for the
+  fill, a `<polyline class="cc-line">` for the trend, and a `<circle class="cc-end">`
+  at the last point. Follow with `<div class="cc-x"><span>Jan</span>…</div>` for
+  x-axis labels. Use for a real multi-point trend; use `cc-spark` for a tiny
+  inline one and `cc-bars` for categorical values.
 
 Compose these instead of hand-rolling report CSS; they already match this
 document's palette, spacing, typography, and both light/dark themes. Reach for a

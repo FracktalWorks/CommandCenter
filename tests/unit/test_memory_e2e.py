@@ -871,6 +871,12 @@ def test_all_memory_public_symbols_resolve() -> None:
             assert isinstance(obj, type), (
                 f"{name} should be a class, got {type(obj)}"
             )
+        elif name.isupper():
+            # Module-level constants (e.g. scope keys AGENT_SCOPE_PREFIX,
+            # ORG_SCOPE_KEY) are exported values, not callables — just resolve.
+            assert isinstance(obj, (str, int, float, bytes, tuple)), (
+                f"{name} looks like a constant but is {type(obj)}"
+            )
         else:
             assert callable(obj), (
                 f"{name} should be callable, got {type(obj)}"

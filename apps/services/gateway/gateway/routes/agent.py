@@ -1212,11 +1212,17 @@ async def run_agent_stream_endpoint(
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
-    # ── Set user context for memory tools (remember / save_memory / etc.) ──
+    # ── Set user + agent context for memory tools ─────────────────────────
+    # user_id scopes THIS user's private memory (remember/save_memory); the
+    # agent name scopes the agent's cross-user memory (recall_agent/…). Org
+    # memory is a fixed global scope, so it needs no per-run context.
     try:
-        from acb_skills.memory_tools import \
-            _set_memory_user_id  # noqa: PLC0415
+        from acb_skills.memory_tools import (  # noqa: PLC0415
+            _set_memory_user_id,
+            _set_memory_agent_name,
+        )
         _set_memory_user_id(user_id)
+        _set_memory_agent_name(agent_name)
     except ImportError:
         pass
 
@@ -1229,7 +1235,9 @@ async def run_agent_stream_endpoint(
     try:
         from acb_memory import (  # noqa: PLC0415
             get_memory_context,
+            get_scoped_context,
             get_session_memory,
+            scope_key,
             search_entity_timeline,
         )
         user_msg = (
@@ -1237,20 +1245,38 @@ async def run_agent_stream_endpoint(
             or req.payload.get("user_query")
             or ""
         )
-        if user_msg and user_id != "anonymous":
+        # Agent + org memory are NOT user-scoped, so they load even for an
+        # anonymous user; the per-user Mem0/Graphiti blocks stay gated on a
+        # real user_id.
+        if user_msg:
+            _has_user = user_id != "anonymous"
 
             async def _build_memory_block() -> str:
                 parts: list[str] = []
-                # Mem0: episodic facts from past conversations
-                mem_ctx = await get_memory_context(user_id, user_msg)
-                if mem_ctx:
-                    parts.append("## Memory from past conversations\n" + mem_ctx)
+                # Mem0: this user's private episodic facts
+                if _has_user:
+                    mem_ctx = await get_memory_context(user_id, user_msg)
+                    if mem_ctx:
+                        parts.append("## Memory from past conversations\n" + mem_ctx)
+                # Agent memory: shared across every user of this agent
+                agent_ctx = await get_scoped_context(
+                    scope_key(agent=agent_name), user_msg, header="Agent memory"
+                )
+                if agent_ctx:
+                    parts.append("## This agent's shared memory\n" + agent_ctx)
+                # Org memory: organisation-wide, shared by every agent + user
+                org_ctx = await get_scoped_context(
+                    scope_key(org=True), user_msg, header="Organisation memory"
+                )
+                if org_ctx:
+                    parts.append("## Organisation-wide memory\n" + org_ctx)
                 # Graphiti: time-aware facts about entities in the query
-                graph_ctx = await search_entity_timeline(user_msg[:80], user_msg)
-                if graph_ctx:
-                    parts.append(
-                        "## Timeline facts from knowledge graph\n" + graph_ctx
-                    )
+                if _has_user:
+                    graph_ctx = await search_entity_timeline(user_msg[:80], user_msg)
+                    if graph_ctx:
+                        parts.append(
+                            "## Timeline facts from knowledge graph\n" + graph_ctx
+                        )
                 return "\n\n".join(parts)
 
             _redis = None
@@ -1779,7 +1805,8 @@ async def list_mutations(
             pc_result = sess.execute(
                 text(
                     "SELECT id, agent_name, run_id, commit_sha, commit_message, "
-                    "       test_summary, status, reviewed_by, reviewed_at, created_at "
+                    "       test_summary, status, reviewed_by, reviewed_at, created_at, "
+                    "       mutation_mode, pr_url, target_path "
                     "FROM pending_commit "
                     "ORDER BY created_at DESC LIMIT :limit"
                 ),
@@ -1799,6 +1826,10 @@ async def list_mutations(
                         "reviewed_by": r.reviewed_by,
                         "reviewed_at": str(r.reviewed_at) if r.reviewed_at else None,
                         "at": str(r.created_at),
+                        # Native-MAF → monorepo PR fields (null for push-mode).
+                        "mutation_mode": r.mutation_mode,
+                        "pr_url": r.pr_url,
+                        "target_path": r.target_path,
                         # approve / reject links for the Control Plane UI
                         "approve_url": f"/agent/mutations/pending/{r.id}/approve",
                         "reject_url": f"/agent/mutations/pending/{r.id}/reject",
@@ -1869,7 +1900,8 @@ async def list_pending_commits(
             result = sess.execute(
                 text(
                     "SELECT id, agent_name, run_id, commit_sha, commit_message, "
-                    "       test_summary, status, reviewed_by, reviewed_at, created_at "
+                    "       test_summary, status, reviewed_by, reviewed_at, created_at, "
+                    "       mutation_mode, pr_url, target_path "
                     "FROM pending_commit "
                     "ORDER BY created_at DESC LIMIT :limit"
                 ),
@@ -1889,6 +1921,9 @@ async def list_pending_commits(
                         "reviewed_by": r.reviewed_by,
                         "reviewed_at": str(r.reviewed_at) if r.reviewed_at else None,
                         "created_at": str(r.created_at),
+                        "mutation_mode": r.mutation_mode,
+                        "pr_url": r.pr_url,
+                        "target_path": r.target_path,
                     }
                 )
         return rows
@@ -2021,6 +2056,7 @@ async def approve_pending_commit(
         await remote_proc.communicate()
         has_remote = remote_proc.returncode == 0
 
+        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
         new_sha: str | None = None
         if has_remote:
             # Push.  If the fast-forward fails, rebase and retry.
@@ -2037,15 +2073,86 @@ async def approve_pending_commit(
             _log.info("mutation.commit_pushed",
                       agent=row.agent_name, commit_sha=effective_sha[:8])
         else:
+            # No git remote — a NATIVE MAF agent. Instead of the old no-op
+            # "kept local" (which the next deploy re-seed would clobber), open a
+            # PR against the CommandCenter monorepo so the fix lands in the
+            # agent's source (apps/agents/agent-<name>/) and becomes durable.
+            from gateway.routes.monorepo_pr import (  # noqa: PLC0415
+                MonorepoPRError,
+                monorepo_pr_configured,
+                open_monorepo_pr,
+            )
+
+            if monorepo_pr_configured():
+                try:
+                    pr = await open_monorepo_pr(
+                        agent_name=row.agent_name,
+                        clone_dir=clone_dir,
+                        commit_sha=commit_sha,
+                        commit_message=row.commit_message,
+                    )
+                except MonorepoPRError as pr_exc:
+                    raise HTTPException(
+                        status_code=502,
+                        detail=f"Could not open monorepo PR: {pr_exc}",
+                    ) from pr_exc
+
+                # PR is open — mark the row and return. This path does NOT use
+                # the git-push cascade below (there is no shared remote history
+                # to walk); each approved native-MAF mutation is its own PR.
+                with get_session() as sess:
+                    sess.execute(
+                        text(
+                            "UPDATE pending_commit SET status = 'pr_open', "
+                            "mutation_mode = 'monorepo_pr', pr_url = :pr_url, "
+                            "target_path = :tp, reviewed_by = :by, reviewed_at = now() "
+                            "WHERE id = :id"
+                        ),
+                        {
+                            "pr_url": pr.pr_url,
+                            "tp": pr.target_path,
+                            "by": reviewer,
+                            "id": commit_id,
+                        },
+                    )
+                    sess.commit()
+                record(
+                    AuditEvent(
+                        actor=f"human:{reviewer}",
+                        action="mutation_monorepo_pr_opened",
+                        target=f"agent:{row.agent_name}",
+                        payload={
+                            "pending_commit_id": commit_id,
+                            "commit_sha": commit_sha,
+                            "pr_url": pr.pr_url,
+                            "target_path": pr.target_path,
+                        },
+                    )
+                )
+                _log.info(
+                    "mutation.monorepo_pr_opened",
+                    agent=row.agent_name,
+                    commit_sha=commit_sha[:8],
+                    pr_url=pr.pr_url,
+                )
+                return {
+                    "status": "pr_open",
+                    "commit_sha": commit_sha,
+                    "pr_url": pr.pr_url,
+                    "target_path": pr.target_path,
+                }
+
+            # Monorepo-PR not configured — fall back to the legacy keep-local
+            # behaviour (durable only while the volume survives).
             effective_sha = commit_sha
             _log.info(
                 "mutation.commit_kept_local",
                 agent=row.agent_name,
                 commit_sha=effective_sha[:8],
-                hint="Local-only repo — no remote to push to. Commit kept.",
+                hint="Local-only repo, monorepo PR not configured. Commit kept.",
             )
 
-        reviewer = getattr(user, "sub", None) or getattr(user, "email", "unknown")
+        # (reviewer resolved above, before the push/PR fork.)
         with get_session() as sess:
             update_sql = (
                 "UPDATE pending_commit "

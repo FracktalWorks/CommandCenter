@@ -146,6 +146,27 @@ class Settings(BaseSettings):
     mutation_timeout_seconds: int = 600              # hard cap on a single mutation run
     mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix
 
+    # Native-MAF mutation → monorepo PR (Part 1).
+    # A native MAF agent (local_path, no git remote) can't push its self-mutation
+    # anywhere, so approving one opens a PR against the CommandCenter monorepo
+    # that edits apps/agents/agent-<name>/ in place. These configure that flow.
+    #
+    # ⚠️ DEV-ONLY — REPLACE BEFORE PRODUCTION/MULTI-TENANCY. Keep
+    # mutation_monorepo_repo pointed ONLY at our own first-party monorepo, and
+    # only in first-party/dev environments: third-party/customer agents must
+    # never push to the shared monorepo. See
+    # docs/DESIGN_LIMITATION_native_maf_mutation.md.
+    #
+    # The monorepo "owner/name" the PR is opened against. Leave blank to disable
+    # the monorepo-PR path (native-MAF approvals then fall back to keep-local).
+    mutation_monorepo_repo: str = ""                 # e.g. "FracktalWorks/CommandCenter"
+    mutation_monorepo_base: str = "main"             # PR base branch
+    # Dedicated token with push + pull-request scope on the monorepo. Kept
+    # separate from github_token (which only needs clone/read on agent repos) so
+    # the broader monorepo-write credential is explicit. Falls back to
+    # github_token when blank — see mutation_pr_token property below.
+    mutation_pr_token: str = ""
+
     # Copilot SDK chat (coworker sessions via /copilot/chat)
     # Auth order: LITELLM_MASTER_KEY → gateway /v1  |  GITHUB_TOKEN → api.githubcopilot.com
     # Model must be available in whichever provider is active.

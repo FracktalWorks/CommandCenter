@@ -93,6 +93,7 @@ Copilot SDK sandboxes.
 1. No in-app agent/skill editing -- Control Plane is for chat, HITL, observability only
 2. No credentials in agent or skill repos -- Integration Registry holds all secrets
 3. Self-mutation max_mutation_attempts = 1 per failure event
+   - ⚠️ **DEV-ONLY / must be replaced before production:** native MAF agents (local_path, no own remote) currently land approved self-mutations by opening a PR against THIS Command Center monorepo. This is fine only while all agents are first-party and Command Center is WIP. It MUST be swapped for a tenant-isolated mechanism before any multi-tenant/customer deployment — third parties must never push to the shared monorepo. See `docs/DESIGN_LIMITATION_native_maf_mutation.md`.
 4. No autonomous writes to source systems until Action Broker is live
 5. Git is the single source of truth for all agent artefacts
 6. MAF is the PRIMARY native agent runtime. The Copilot SDK is the supported second runtime for interactive coworker chat (Tier 1.5, /copilot/chat, BYOK-routed through the gateway) and the self-mutation sandbox -- not a general execution path for event-driven specialist agents

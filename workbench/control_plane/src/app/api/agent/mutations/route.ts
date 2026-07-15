@@ -26,8 +26,13 @@ export interface MutationEntry {
   commit_sha?: string;
   /** Commit message (only for pending_commit rows) */
   commit_message?: string;
-  /** PR URL (only for audit_event rows that opened a PR) */
+  /** PR URL — set for an audit_event that opened a PR, OR a native-MAF
+   *  pending_commit approved into a CommandCenter monorepo PR. */
   pr_url?: string;
+  /** "push" (own-remote agent) or "monorepo_pr" (native MAF → CommandCenter PR). */
+  mutation_mode?: "push" | "monorepo_pr";
+  /** Monorepo path the PR edits, e.g. "apps/agents/agent-task-manager". */
+  target_path?: string;
   /** Git branch name */
   branch?: string;
   error_type?: string;

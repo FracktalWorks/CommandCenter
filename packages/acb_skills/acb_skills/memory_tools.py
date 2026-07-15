@@ -49,6 +49,13 @@ _memory_user_id: contextvars.ContextVar[str] = contextvars.ContextVar(
 )
 
 
+# ContextVar for the CURRENT AGENT so agent-scoped memory tools know which
+# agent's (cross-user) memory to read/write. Set by the gateway per run.
+_memory_agent_name: contextvars.ContextVar[str] = contextvars.ContextVar(
+    "_memory_agent_name", default=""
+)
+
+
 def _set_memory_user_id(user_id: str) -> None:
     """Set the current user ID for memory tool operations.
 
@@ -62,6 +69,20 @@ def _set_memory_user_id(user_id: str) -> None:
 def _get_memory_user_id() -> str:
     """Return the current user ID, or empty string if not set."""
     return _memory_user_id.get()
+
+
+def _set_memory_agent_name(agent_name: str) -> None:
+    """Set the current agent name for agent-scoped memory operations.
+
+    Called by the gateway per run alongside _set_memory_user_id. Agent memory
+    (recall_agent / save_agent_memory) is shared across ALL users of this agent.
+    """
+    _memory_agent_name.set(agent_name or "")
+
+
+def _get_memory_agent_name() -> str:
+    """Return the current agent name, or empty string if not set."""
+    return _memory_agent_name.get()
 
 
 async def remember(query: str) -> str:
@@ -240,3 +261,152 @@ async def save_episode(
     except Exception as exc:  # noqa: BLE001
         _log.warning("memory_tools.save_episode_failed", error=str(exc)[:200])
         return f"(failed to record episode: {exc})"
+
+
+# ---------------------------------------------------------------------------
+# Agent memory (shared across ALL users of this agent) + Org memory (global)
+# ---------------------------------------------------------------------------
+
+
+async def recall_agent(query: str) -> str:
+    """Search this AGENT'S shared memory — facts learned across ALL users.
+
+    Unlike ``remember`` (this user's private memory), agent memory is shared by
+    every person who talks to this agent. Use it for durable knowledge the agent
+    itself should carry: how to do its job, standing facts about the domain it
+    owns, decisions and outcomes, useful conventions — things true regardless of
+    who is asking.
+
+    Args:
+        query: What to look up, in natural language.
+
+    Returns:
+        Formatted facts, or "(no agent memories found)".
+
+    Examples:
+        ctx = await recall_agent("our standard quote-approval workflow")
+        ctx = await recall_agent("which suppliers we've had quality issues with")
+    """
+    try:
+        from acb_memory import get_scoped_context, scope_key  # noqa: PLC0415
+
+        agent = _get_memory_agent_name()
+        if not agent:
+            return "(agent memory unavailable — no agent context)"
+        result = await get_scoped_context(
+            scope_key(agent=agent), query, header="Agent memory"
+        )
+        return result if result else "(no agent memories found)"
+    except ImportError:
+        return "(memory system not installed — ask operator to enable Mem0)"
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("memory_tools.recall_agent_failed", error=str(exc)[:200])
+        return f"(agent memory search failed: {exc})"
+
+
+async def save_agent_memory(fact: str) -> str:
+    """Save a fact into this AGENT'S shared memory (visible to all its users).
+
+    Use for knowledge the agent should retain regardless of who it's talking to —
+    domain facts, learned procedures, decisions, outcomes. Do NOT put a single
+    user's private preference here (use ``save_memory`` for that).
+
+    Args:
+        fact: A single, self-contained fact.
+
+    Returns:
+        "Agent memory saved." or an error description.
+
+    Examples:
+        await save_agent_memory("PO approvals over 5L require the founder's sign-off")
+        await save_agent_memory("Vendor Acme has a 3-week lead time on aluminium")
+    """
+    try:
+        from acb_memory import add_scoped_memories, scope_key  # noqa: PLC0415
+
+        agent = _get_memory_agent_name()
+        if not agent:
+            return "(cannot save — no agent context)"
+        messages = [
+            {"role": "user", "content": f"Remember this for your work: {fact}"},
+            {"role": "assistant", "content": f"Saved to agent memory: {fact}"},
+        ]
+        await add_scoped_memories(
+            scope_key(agent=agent), messages, agent_id=agent
+        )
+        _log.info("memory_tools.save_agent_memory_ok", agent=agent[:30], fact=fact[:80])
+        return "Agent memory saved."
+    except ImportError:
+        return "(memory system not installed — ask operator to enable Mem0)"
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("memory_tools.save_agent_memory_failed", error=str(exc)[:200])
+        return f"(failed to save agent memory: {exc})"
+
+
+async def recall_org(query: str) -> str:
+    """Search ORGANISATION-WIDE memory — facts shared across every agent + user.
+
+    Org memory is the company's shared brain: standing facts about the
+    organisation, people, policies, and priorities that every agent should know.
+    Read it when a question touches company-level context, not just this agent's
+    or this user's.
+
+    Args:
+        query: What to look up, in natural language.
+
+    Returns:
+        Formatted facts, or "(no organisation memories found)".
+
+    Examples:
+        ctx = await recall_org("our fiscal year and reporting cadence")
+        ctx = await recall_org("company-wide priorities this quarter")
+    """
+    try:
+        from acb_memory import get_scoped_context, scope_key  # noqa: PLC0415
+
+        result = await get_scoped_context(
+            scope_key(org=True), query, header="Organisation memory"
+        )
+        return result if result else "(no organisation memories found)"
+    except ImportError:
+        return "(memory system not installed — ask operator to enable Mem0)"
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("memory_tools.recall_org_failed", error=str(exc)[:200])
+        return f"(organisation memory search failed: {exc})"
+
+
+async def save_org_memory(fact: str) -> str:
+    """Save a fact into ORGANISATION-WIDE memory (shared by every agent + user).
+
+    Use ONLY for genuinely company-level knowledge every agent should have —
+    org structure, policies, standing priorities, key relationships. This is the
+    broadest scope; prefer ``save_agent_memory`` or ``save_memory`` when a fact
+    belongs to one agent or one user. Confirm with the user before writing
+    org-wide facts that others will rely on.
+
+    Args:
+        fact: A single, self-contained organisation-level fact.
+
+    Returns:
+        "Organisation memory saved." or an error description.
+
+    Examples:
+        await save_org_memory("Fracktal's fiscal year runs April-March")
+        await save_org_memory("All customer refunds above 1L need finance approval")
+    """
+    try:
+        from acb_memory import add_scoped_memories, scope_key  # noqa: PLC0415
+
+        agent = _get_memory_agent_name() or "org"
+        messages = [
+            {"role": "user", "content": f"Remember this company-wide fact: {fact}"},
+            {"role": "assistant", "content": f"Saved to organisation memory: {fact}"},
+        ]
+        await add_scoped_memories(scope_key(org=True), messages, agent_id=agent)
+        _log.info("memory_tools.save_org_memory_ok", fact=fact[:80])
+        return "Organisation memory saved."
+    except ImportError:
+        return "(memory system not installed — ask operator to enable Mem0)"
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("memory_tools.save_org_memory_failed", error=str(exc)[:200])
+        return f"(failed to save organisation memory: {exc})"

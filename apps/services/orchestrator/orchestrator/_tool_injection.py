@@ -28,6 +28,80 @@ from orchestrator._copilot_session import _apply_copilot_infinite_sessions
 _log = get_logger("orchestrator.tool_injection")
 
 
+@functools.lru_cache(maxsize=1)
+def _load_design_md() -> str:
+    """Return the Command Center DESIGN.md, cached for the process lifetime.
+
+    The design system is static (ships in acb_skills), so caching keeps the
+    system-prompt prefix byte-stable across turns for KV-cache hits. Injected
+    into every agent so any Markdown/HTML/generative-UI it produces follows the
+    Command Center design language. Returns "" if the file is missing (fail
+    open — never block agent load on a missing design doc).
+    """
+    try:
+        from pathlib import Path  # noqa: PLC0415
+
+        import acb_skills  # noqa: PLC0415
+
+        design_path = Path(acb_skills.__file__).parent / "design.md"
+        return design_path.read_text(encoding="utf-8", errors="replace").strip()
+    except Exception:  # noqa: BLE001
+        return ""
+
+
+def _design_md_section() -> str:
+    """The full DESIGN.md wrapped as a system-prompt section (or "" if absent).
+
+    Kept separate from :func:`_load_design_md` so the raw doc is reusable and the
+    section wrapper stays out of the cache key. Byte-stable across turns because
+    the underlying loader is cached.
+    """
+    design = _load_design_md()
+    if not design:
+        return ""
+    return (
+        "### Command Center design language (DESIGN.md)\n"
+        "Follow this for every document, report, and UI you generate:\n\n"
+        f"{design}"
+    )
+
+
+def _build_output_discipline_block(*, compact: bool = False) -> str:
+    """The 'all generated files live under outputs/' + design-language rule.
+
+    Injected into every agent (both runtimes). Two concerns, one block:
+      1. File discipline — EVERY file the agent generates goes under ``outputs/``
+         (logical subfolders encouraged), for both MAF and Copilot agents. This
+         keeps the workspace tidy and, crucially, persistent: ``outputs/`` is the
+         durable, redeploy-surviving home for deliverables.
+      2. Design language — a pointer to the injected DESIGN.md so any document,
+         report, or UI matches the Command Center look.
+    """
+    if compact:
+        return (
+            "FILES: put every file you generate under outputs/ (use logical "
+            "subfolders, e.g. outputs/reports/, outputs/data/). Never write "
+            "deliverables to the working-dir root. Markdown/HTML you produce "
+            "must follow the injected Command Center DESIGN.md."
+        )
+    return (
+        "### Output discipline (REQUIRED)\n"
+        "- Write EVERY file you generate under **outputs/** — reports, docs, "
+        "HTML, data, scripts, images, everything. Use logical subfolders to "
+        "stay organised (e.g. `outputs/reports/q3.md`, `outputs/data/rows.csv`, "
+        "`outputs/site/index.html`). `write_artifact` already defaults bare "
+        "paths to `outputs/`; when you use your own shell/editor tools, still "
+        "target `outputs/` explicitly, never the working-directory root.\n"
+        "- `outputs/` is the durable deliverables home — it persists across "
+        "redeploys and reboots. Treat it as the one place a user looks for what "
+        "you made.\n"
+        "- Prefer Markdown (`.md`) for written deliverables and HTML (`.html`) "
+        "for rich/interactive reports — both get a live preview in the side "
+        "panel. Any Markdown, HTML, or generative UI you produce MUST follow "
+        "the **Command Center DESIGN.md** included below."
+    )
+
+
 def _gate_injected_tool(fn: Any) -> Any:
     """Wrap an injected platform tool with the risk-aware permission gate (B6).
 
@@ -120,12 +194,13 @@ def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
         return f"""
 ---
 ## CommandCenter Platform Tools
+{_build_output_discipline_block(compact=True)}
 call_agent(name,msg), call_agents_parallel(tasks), call_agent_background(name,msg)
 web_search(query), fetch_page(url)
 write_artifact(path,content) — files go to outputs/
 share_artifact(path) — show a file you already wrote as a download/preview card
 emit_generative_ui(ui) — render rich UI inline; reach for it EAGERLY when the answer is data/status/comparison/a checklist/a value to pick or set (not for trivial one-liners). On-brand automatically. 3 modes: (1) component tree card/table/keyValue/badge/callout/button(label+action) + an icon node (type:icon, name=any Lucide icon e.g. 'cloud-sun'); (2) a template node (type:template, name= weatherCard/statDashboard/barChart/sparkTrend/comparison/progressTracker) pre-designed animated cards, supply data only (stats take optional icon); (3) an html node (type:html, props code + optional icons list of Lucide names) custom animated HTML/CSS/JS in a sandbox — style with the pre-set CSS vars --cc-primary/--cc-accent/--cc-fg/--cc-card/--cc-border/--cc-radius/--cc-ease (native inputs+sliders pre-styled), use icons via ccIcon('Name') or a span with data-cc-icon='Name', wire interactivity via data-cc-action='msg' (fixed follow-up) or data-cc-submit='label'/ccSubmit('label',value) to send user-set slider/input/select VALUES back. Prefer template over tree over html.
-remember(query), recall_timeline(entity,query), save_memory(fact), save_episode(name,content)
+remember(query)/save_memory(fact) = THIS USER's private memory; recall_agent(query)/save_agent_memory(fact) = shared across ALL users of this agent; recall_org(query)/save_org_memory(fact) = organisation-wide (every agent+user); recall_timeline(entity,query), save_episode(name,content)
 manage_todo_list(todoList) — structured task tracking panel (JSON array)
 ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
 run_diagnostics(filePaths?) — run code diagnostics: check Python files for syntax/lint errors (alias: get_errors)
@@ -157,10 +232,14 @@ github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
 ### Memory & knowledge graph
 - **remember(query)** — Search episodic memory for past facts about the user. Call before making claims about history or preferences.
 - **recall_timeline(entity, query)** — Bi-temporal knowledge graph: "when did X happen?" or entity history.
-- **save_memory(fact)** — Persist a high-signal user fact. Routine turns are handled automatically.
+- **save_memory(fact)** — Persist a high-signal fact about THIS USER. Routine turns are handled automatically.
+- **recall_agent(query)** / **save_agent_memory(fact)** — This AGENT's memory, shared across EVERY user who talks to it. Use for durable knowledge the agent should carry regardless of who's asking (procedures, domain facts, decisions) — not one user's private preference.
+- **recall_org(query)** / **save_org_memory(fact)** — ORGANISATION-WIDE memory shared by every agent and user. Read when a question touches company-level context; write only genuinely company-level facts (structure, policy, standing priorities), and confirm before writing.
 - **save_episode(name, content, source?)** — Record a time-stamped episode; Graphiti extracts entities & relationships.
 
 ### Workspace & file writing
+{_build_output_discipline_block()}
+
 Workspace folders visible in the Files Viewer: **outputs/** (default for generated files), **inputs/** (user uploads, read-only), **agent-data/** (reusable reference data).
 - **write_artifact(path, content, encoding?, overwrite?)** — Write a file to outputs/ (if path has no prefix). The chat shows a Download/preview card **automatically** — you do NOT need to build or paste any URL; just say what the file is. It never clobbers an existing file by default (it auto-versions to ``name (1).ext`` and returns the real ``path``); pass ``overwrite=true`` only when you deliberately want to replace a file in place.
 - **share_artifact(path)** — If you created a file with your OWN tools (shell, editor, a script you ran) instead of write_artifact, call this with that file's path (or a folder) to surface it as a Download/preview card. The card appears automatically; do NOT hand-construct links.
@@ -219,6 +298,8 @@ do the confirming (do not also double-confirm in prose).
 To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Never amend; one commit per task.
 - **By default, do NOT push** — direct pushes are blocked and the commit queues for human approval in the Control Plane inbox.
 - **If the user explicitly tells you to push (e.g. "commit and push") in this conversation**, then after committing run `git push --no-verify origin HEAD`. The `--no-verify` flag is required to bypass the approval hook. That commit is then recorded as already-approved — the user does not need to approve it again on the Agents page.
+
+{_design_md_section()}
 ---"""
 
 
@@ -356,9 +437,14 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
             recall_timeline,
             save_memory,
             save_episode,
+            recall_agent,
+            save_agent_memory,
+            recall_org,
+            save_org_memory,
         )
         _all_tools = _all_tools + [
             remember, recall_timeline, save_memory, save_episode,
+            recall_agent, save_agent_memory, recall_org, save_org_memory,
         ]
     except ImportError:
         pass  # acb_memory not installed — skip gracefully

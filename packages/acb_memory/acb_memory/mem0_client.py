@@ -1,4 +1,18 @@
-"""Mem0 episodic memory client — stores and retrieves per-user facts.
+"""Mem0 episodic memory client — stores and retrieves facts across THREE scopes.
+
+Scopes (all live in the one ``mem0_memories`` pgvector collection, separated by
+Mem0's ``user_id`` field which we repurpose as a scope key):
+
+- **user**  — ``user_id = "<email>"``          — facts about one human. Private to them.
+- **agent** — ``user_id = "agent:<name>"``      — facts an agent learns, shared across
+              EVERY user who talks to that agent (cross-user agent memory).
+- **org**   — ``user_id = "org:global"``        — organisation-wide shared memory every
+              agent can read and write.
+
+We key scopes through ``user_id`` (not Mem0's ``agent_id``) because Mem0's
+search/get_all reliably filter on ``user_id`` and do NOT filter on ``agent_id`` —
+so the scope key must ride the field that actually filters. ``scope_key()`` builds
+the key; ``AGENT_SCOPE_PREFIX`` / ``ORG_SCOPE_KEY`` are the reserved namespaces.
 
 Design:
 - Backend: Postgres + pgvector (reuses the existing CommandCenter Postgres;
@@ -10,9 +24,7 @@ Design:
 
 Typical usage:
     context = await get_memory_context("user@fracktal.in", "status of deals")
-    # → "Past memory: prefers CNTS-level breakdown, focuses on Delhi region"
-
-    # After a conversation (non-blocking):
+    ctx = await get_scoped_context(scope_key(agent="sales"), "delhi pipeline")
     asyncio.create_task(add_memories_background("user@fracktal.in", messages))
 """
 from __future__ import annotations
@@ -28,6 +40,26 @@ from acb_common import get_logger, get_settings
 from ._gateway_env import gateway_only_env
 
 _log = get_logger("acb_memory.mem0")
+
+# Reserved scope namespaces. A human user_id is a plain email; agent/org scopes
+# use these prefixes so the three never collide in the shared collection.
+AGENT_SCOPE_PREFIX = "agent:"
+ORG_SCOPE_KEY = "org:global"
+
+
+def scope_key(*, user: str | None = None, agent: str | None = None, org: bool = False) -> str:
+    """Build the Mem0 ``user_id`` scope key for a memory read/write.
+
+    Exactly one of *user* / *agent* / *org* selects the scope:
+      scope_key(user="a@b.com")  → "a@b.com"        (that human's private memory)
+      scope_key(agent="sales")   → "agent:sales"    (shared across users of the agent)
+      scope_key(org=True)        → "org:global"     (organisation-wide shared memory)
+    """
+    if org:
+        return ORG_SCOPE_KEY
+    if agent:
+        return f"{AGENT_SCOPE_PREFIX}{agent}"
+    return user or ""
 
 
 class MemoryClient:
@@ -267,3 +299,51 @@ async def add_memories_background(
         asyncio.create_task(add_memories_background(user_id, messages))
     """
     await get_memory_client().add(user_id, messages, agent_id=agent_id)
+
+
+# ---------------------------------------------------------------------------
+# Scoped helpers (agent + org memory)
+# ---------------------------------------------------------------------------
+#
+# These are thin, self-labelling wrappers over search/add so the gateway and the
+# memory tools read clearly. A scope is just a distinct Mem0 user_id value (see
+# scope_key), so all the graceful-degradation and filtering behaviour is shared.
+
+
+async def get_scoped_context(scope: str, query: str, *, header: str) -> str:
+    """Formatted memory block for one scope (agent or org), or "" if empty.
+
+    *scope* is a scope_key() result. *header* labels the block in the prompt
+    (e.g. "Agent memory" / "Organisation memory") so the model can tell the
+    three memory sources apart.
+    """
+    if not scope:
+        return ""
+    memories = await get_memory_client().search(scope, query)
+    lines = []
+    for m in memories:
+        fact = m.get("memory") or m.get("text") or str(m)
+        if fact:
+            lines.append(f"- {fact.strip()}")
+    if not lines:
+        return ""
+    return f"{header} (shared, use for continuity):\n" + "\n".join(lines)
+
+
+async def add_scoped_memories(
+    scope: str,
+    messages: list[dict[str, str]],
+    *,
+    agent_id: str = "orchestrator",
+) -> None:
+    """Fire-and-forget fact extraction into an agent/org scope (see scope_key)."""
+    if not scope:
+        return
+    await get_memory_client().add(scope, messages, agent_id=agent_id)
+
+
+async def get_scoped_all(scope: str) -> list[dict]:
+    """All stored memories for a scope (agent/org) — for the memory UI panel."""
+    if not scope:
+        return []
+    return await get_memory_client().get_all(scope)

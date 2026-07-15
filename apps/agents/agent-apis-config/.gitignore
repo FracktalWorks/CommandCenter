@@ -1,0 +1,13 @@
+# Agent-generated runtime workspace — never track these.
+# Keeping them untracked means the local-git mutation flow (git add -A /
+# git reset --hard) can never stage or wipe generated deliverables, so
+# outputs/ persists across redeploys, reboots, and self-mutation rollbacks.
+outputs/
+inputs/
+agent-data/
+
+# Runtime / cache noise
+__pycache__/
+*.pyc
+.env
+.venv/

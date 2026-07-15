@@ -690,6 +690,10 @@ def _ensure_local_git_repo(source_dir: Path, cache_dir: Path, settings: Any) -> 
     # ── Sync source → cache ─────────────────────────────────────────────
     _sync_source_to_cache(source_dir, cache_dir)
 
+    # Keep generated workspace dirs untracked so a mutation reset can't wipe
+    # them and outputs/ survives redeploys (runs before the baseline commit).
+    _ensure_workspace_gitignore(cache_dir)
+
     # ── Initialise local git repo (first call only) ──────────────────────
     git_dir = cache_dir / ".git"
     if not git_dir.is_dir():
@@ -715,6 +719,41 @@ def _ensure_local_git_repo(source_dir: Path, cache_dir: Path, settings: Any) -> 
                 stderr=commit_result.stderr.strip()[:100],
             )
         _log.info("loader.local_git_ready", agent=cache_dir.name)
+
+
+_WORKSPACE_GITIGNORE_MARKER = "# CommandCenter agent workspace (auto-managed)"
+_WORKSPACE_GITIGNORE_BLOCK = f"""
+{_WORKSPACE_GITIGNORE_MARKER}
+# Agent-generated deliverables are runtime state, never source. Keeping them
+# untracked means the local-git mutation flow (git add -A / git reset --hard
+# on rejection) can never stage or wipe them, so outputs/ persists across
+# redeploys, reboots, and self-mutation rollbacks.
+outputs/
+inputs/
+agent-data/
+"""
+
+
+def _ensure_workspace_gitignore(cache_dir: Path) -> None:
+    """Guarantee the cache clone ignores the agent-generated workspace dirs.
+
+    ``outputs/`` (plus ``inputs/`` and ``agent-data/``) hold runtime deliverables,
+    not source. If they were git-tracked, the mutation sandbox's ``git add -A``
+    would stage them and a rejection's ``git reset --hard HEAD~1`` — or any other
+    hard reset — could delete a user's generated files. This appends an ignore
+    block (idempotent, marker-guarded) to the clone's ``.gitignore`` so the three
+    dirs stay untracked and durable, even for GitHub-sourced agents whose repo
+    never shipped a ``.gitignore``.
+    """
+    try:
+        gi = cache_dir / ".gitignore"
+        existing = gi.read_text(encoding="utf-8", errors="replace") if gi.exists() else ""
+        if _WORKSPACE_GITIGNORE_MARKER in existing:
+            return  # already managed
+        sep = "" if (not existing or existing.endswith("\n")) else "\n"
+        gi.write_text(existing + sep + _WORKSPACE_GITIGNORE_BLOCK, encoding="utf-8")
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("loader.workspace_gitignore_failed", agent=cache_dir.name, error=str(exc))
 
 
 def _sync_source_to_cache(source_dir: Path, cache_dir: Path) -> None:
@@ -966,6 +1005,9 @@ def _ensure_repo(
             _clone_repo(url, clone_dir)
             _configure_bot_identity(clone_dir, settings)
             _install_push_guard(clone_dir)
+        # Keep generated workspace dirs untracked (idempotent) so a mutation
+        # reset can't wipe them and outputs/ persists across redeploys.
+        _ensure_workspace_gitignore(clone_dir)
         # After every pull/clone, auto-sync any new skill scripts into agents.py
         _sync_new_skills(clone_dir, settings)
         # Install the repo's declared deps into the SHARED gateway venv — agents

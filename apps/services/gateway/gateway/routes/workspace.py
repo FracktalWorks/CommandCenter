@@ -86,6 +86,92 @@ class WorkspacePatchRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
+def _agent_name_for_workspace(workspace: Path) -> str:
+    """The blob-store agent key for a resolved workspace root.
+
+    Workspaces live at ``{agents_clone_dir}/repos/<agent_name>``, so the
+    directory basename IS the agent name — the same key the agent-side
+    write-through uses (write_artifact._current_agent_name).
+    """
+    return workspace.name
+
+
+async def _mirror_gateway_write(
+    workspace: Path,
+    rel_path: str,
+    data: bytes,
+    *,
+    action: str,
+    session_id: str | None,
+) -> None:
+    """Write-through a gateway file write into the authoritative blob store.
+
+    Mirrors app-side writes (PUT save, upload) to Postgres so a file edited in
+    the file manager is as durable as one the agent wrote. No-op for paths
+    outside agent-data/inputs/outputs or when the store is unavailable.
+    """
+    try:
+        from acb_memory import is_stored_path, put_file  # noqa: PLC0415
+    except ImportError:
+        return
+    rel = rel_path.replace("\\", "/")
+    if not is_stored_path(rel):
+        return
+    import mimetypes as _mt  # noqa: PLC0415
+
+    mime = _mt.guess_type(rel)[0] or "application/octet-stream"
+    try:
+        await put_file(
+            _agent_name_for_workspace(workspace), rel, data,
+            mime_type=mime, action=action, session_id=session_id, actor="user",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("workspace.blob_mirror_failed", path=rel, error=str(exc)[:200])
+
+
+async def _faultin_from_store(workspace: Path, rel_path: str) -> bool:
+    """Restore a file missing from the disk cache from the authoritative store.
+
+    Returns True and writes the file to disk if the store had it, else False.
+    Only applies to the three backed folders; a no-op otherwise.
+    """
+    rel = rel_path.replace("\\", "/").lstrip("/")
+    try:
+        from acb_memory import get_file, is_stored_path  # noqa: PLC0415
+    except ImportError:
+        return False
+    if not is_stored_path(rel):
+        return False
+    data = await get_file(_agent_name_for_workspace(workspace), rel)
+    if data is None:
+        return False
+    dest = _safe_resolve(workspace, rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.write_bytes(data)
+    _log.info("workspace.faulted_in", agent=_agent_name_for_workspace(workspace), path=rel)
+    return True
+
+
+async def _mirror_gateway_delete(
+    workspace: Path, rel_path: str, *, session_id: str | None
+) -> None:
+    """Write-through a gateway file delete into the blob store."""
+    try:
+        from acb_memory import delete_file, is_stored_path  # noqa: PLC0415
+    except ImportError:
+        return
+    rel = rel_path.replace("\\", "/")
+    if not is_stored_path(rel):
+        return
+    try:
+        await delete_file(
+            _agent_name_for_workspace(workspace), rel,
+            session_id=session_id, actor="user",
+        )
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("workspace.blob_delete_mirror_failed", path=rel, error=str(exc)[:200])
+
+
 def _get_workspace_path(session_id: str) -> Path | None:
     """Look up workspace_path from Postgres for this session.
 
@@ -395,7 +481,12 @@ async def get_workspace_file(
         raise HTTPException(status_code=404, detail="File not found")
     file_path = _safe_resolve(workspace, path)
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+        # Fault-in: the store is authoritative, so a file missing from the disk
+        # cache may still live in the blob store (e.g. after a volume wipe before
+        # the agent has re-run). Restore it on demand, then serve.
+        restored = await _faultin_from_store(workspace, path)
+        if not restored:
+            raise HTTPException(status_code=404, detail="File not found")
 
     file_size = file_path.stat().st_size
     if file_size > _MAX_FILE_BYTES:
@@ -611,6 +702,12 @@ async def upload_files(
         stat = dest.stat()
         mime, _ = mimetypes.guess_type(safe_name)
         rel_path = str(dest.relative_to(workspace)).replace("\\", "/")
+
+        # Write-through: a user upload (inputs/) is durable state too.
+        await _mirror_gateway_write(
+            workspace, rel_path, content, action="create", session_id=session_id,
+        )
+
         uploaded.append(FileEntry(
             path=rel_path,
             name=dest.name,
@@ -680,6 +777,10 @@ async def upload_artifact(
         stat = dest.stat()
         mime, _ = mimetypes.guess_type(safe_name)
         rel_path = str(dest.relative_to(workspace)).replace("\\", "/")
+        # Write-through to the authoritative blob store.
+        await _mirror_gateway_write(
+            workspace, rel_path, content, action="create", session_id=None,
+        )
         uploaded.append(FileEntry(
             path=rel_path, name=dest.name, size=stat.st_size,
             modified_at=__import__("datetime").datetime.fromtimestamp(
@@ -733,12 +834,107 @@ async def delete_workspace_file(
         )
 
     file_path.unlink()
+    # Write-through the delete to the authoritative store (records a delete
+    # version in history).
+    rel_del = str(file_path.relative_to(workspace)).replace("\\", "/")
+    await _mirror_gateway_delete(workspace, rel_del, session_id=session_id)
     _log.info(
         "workspace.file_deleted",
         session_id=session_id,
         path=path,
     )
     return DeleteResponse(deleted=True, path=path)
+
+
+# ---------------------------------------------------------------------------
+# POST /workspace/{session_id}/promote — move an inputs/ file to agent-data/
+# ---------------------------------------------------------------------------
+# A user upload lands in inputs/. Promoting it to agent-data/ makes it durable,
+# behaviour-shaping knowledge (agent-data is an extension of the system prompt).
+
+
+class PromoteRequest(BaseModel):
+    path: str
+    """inputs/ path to promote, e.g. "inputs/spec.pdf"."""
+    dest: str | None = None
+    """Optional agent-data/ destination; defaults to agent-data/<basename>."""
+
+
+@router.post("/workspace/{session_id}/promote")
+async def promote_input_to_agent_data(
+    session_id: str, body: PromoteRequest
+) -> FileEntry:
+    """Move an inputs/ file into agent-data/ (permanent, prompt-shaping storage)."""
+    workspace = await asyncio.get_event_loop().run_in_executor(
+        None, _get_workspace_path, session_id
+    )
+    if workspace is None or not workspace.exists():
+        raise HTTPException(status_code=404, detail="workspace not found")
+
+    src_rel = body.path.replace("\\", "/").lstrip("/")
+    if not src_rel.startswith("inputs/"):
+        raise HTTPException(status_code=400, detail="only inputs/ files can be promoted")
+    src = _safe_resolve(workspace, src_rel)
+    if not src.exists() or not src.is_file():
+        raise HTTPException(status_code=404, detail="source file not found")
+
+    dest_rel = (body.dest or f"agent-data/{src.name}").replace("\\", "/").lstrip("/")
+    if not dest_rel.startswith("agent-data/"):
+        raise HTTPException(status_code=400, detail="destination must be under agent-data/")
+    dest = _safe_resolve(workspace, dest_rel)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+
+    data = src.read_bytes()
+    dest.write_bytes(data)
+    src.unlink()
+
+    mime, _ = mimetypes.guess_type(dest.name)
+    mime = mime or "application/octet-stream"
+    # Store: record the new agent-data version (promote) + the inputs delete.
+    await _mirror_gateway_write(
+        workspace, dest_rel, data, action="promote", session_id=session_id,
+    )
+    await _mirror_gateway_delete(workspace, src_rel, session_id=session_id)
+
+    stat = dest.stat()
+    _log.info("workspace.promoted", session_id=session_id, src=src_rel, dest=dest_rel)
+    return FileEntry(
+        path=dest_rel,
+        name=dest.name,
+        size=stat.st_size,
+        modified_at=__import__("datetime").datetime.fromtimestamp(
+            stat.st_mtime, tz=__import__("datetime").timezone.utc
+        ).isoformat(),
+        mime_type=mime,
+        is_dir=False,
+    )
+
+
+# ---------------------------------------------------------------------------
+# GET /workspace/{session_id}/history — version history of tracked files
+# ---------------------------------------------------------------------------
+
+
+@router.get("/workspace/{session_id}/history")
+async def get_workspace_history(
+    session_id: str, path: str | None = None, limit: int = 200
+) -> dict:
+    """Version history for this agent's files (all, or one *path*), newest first.
+
+    Every unique version an agent created/modified over time is a row, so a user
+    can track and directly access the full history of any file.
+    """
+    workspace = await asyncio.get_event_loop().run_in_executor(
+        None, _get_workspace_path, session_id
+    )
+    if workspace is None:
+        return {"history": []}
+    try:
+        from acb_memory import file_history  # noqa: PLC0415
+    except ImportError:
+        return {"history": []}
+    rows = await file_history(_agent_name_for_workspace(workspace), path, limit)
+    return {"history": rows}
 
 
 # ---------------------------------------------------------------------------
@@ -791,6 +987,7 @@ async def write_workspace_file(
         )
 
     # Create parent directories if needed
+    _existed = file_path.exists()
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write content
@@ -798,12 +995,19 @@ async def write_workspace_file(
         data = base64.b64decode(body.content)
         file_path.write_bytes(data)
     else:
+        data = body.content.encode("utf-8")
         file_path.write_text(body.content, encoding="utf-8")
 
     # Build response
     stat = file_path.stat()
     mime, _ = mimetypes.guess_type(file_path.name)
     rel_path = str(file_path.relative_to(workspace)).replace("\\", "/")
+
+    # Write-through to the authoritative blob store.
+    await _mirror_gateway_write(
+        workspace, rel_path, data,
+        action="modify" if _existed else "create", session_id=session_id,
+    )
 
     _log.info(
         "workspace.file_written",
@@ -1117,7 +1321,12 @@ async def get_artifact_file(
         raise HTTPException(status_code=404, detail="File not found")
     file_path = _safe_resolve(workspace, path)
     if not file_path.exists() or not file_path.is_file():
-        raise HTTPException(status_code=404, detail="File not found")
+        # Fault-in: the store is authoritative, so a file missing from the disk
+        # cache may still live in the blob store (e.g. after a volume wipe before
+        # the agent has re-run). Restore it on demand, then serve.
+        restored = await _faultin_from_store(workspace, path)
+        if not restored:
+            raise HTTPException(status_code=404, detail="File not found")
 
     file_size = file_path.stat().st_size
     if file_size > _MAX_FILE_BYTES:
@@ -1179,6 +1388,7 @@ async def write_artifact_file(
         )
 
     # Create parent directories if needed
+    _existed = file_path.exists()
     file_path.parent.mkdir(parents=True, exist_ok=True)
 
     # Write content
@@ -1186,12 +1396,19 @@ async def write_artifact_file(
         data = base64.b64decode(body.content)
         file_path.write_bytes(data)
     else:
+        data = body.content.encode("utf-8")
         file_path.write_text(body.content, encoding="utf-8")
 
     # Build response
     stat = file_path.stat()
     mime, _ = mimetypes.guess_type(file_path.name)
     rel_path = str(file_path.relative_to(workspace)).replace("\\", "/")
+
+    # Write-through to the authoritative blob store (agent = the explicit target).
+    await _mirror_gateway_write(
+        workspace, rel_path, data,
+        action="modify" if _existed else "create", session_id=None,
+    )
 
     # Determine category from path
     cat = "agent-data"

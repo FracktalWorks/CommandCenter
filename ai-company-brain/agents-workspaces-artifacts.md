@@ -4,6 +4,14 @@ Definitive reference for how agents are registered, loaded, where their files
 live on disk, and how the chat Files panel and the Artifacts viewer surface
 them. Written after a full end-to-end review (backend + frontend + live VPS).
 
+> **See also — the durable-state contract:**
+> [`specs/agent_file_and_memory_framework.md`](specs/agent_file_and_memory_framework.md)
+> is the canonical framework every MAF agent MUST follow for persisting code
+> (git, reviewed PR) vs. state (Postgres blob store, authoritative). Required
+> reading before building the in-platform agent workbench or any new MAF agent
+> (CommandCenter or Pomad Centre). This doc explains the *layout*; that one
+> explains the *durability contract* built on top of it.
+
 > TL;DR of the two things that confused us repeatedly:
 > 1. **An agent's on-disk workspace is ALWAYS `{agents_clone_dir}/repos/{agent_name}`** — keyed by the *logical agent name*, never the GitHub repo name and never the registry `local_path`. The clone only exists **after the agent has run at least once** (lazy clone). Registered ≠ cloned.
 > 2. **Copilot SDK agents do not write to `outputs/`** — they create/edit files in the working-directory **root** via native tools and never call `write_artifact`. So the file browsers must walk the **whole working tree**, not just `inputs/outputs/agent-data`.

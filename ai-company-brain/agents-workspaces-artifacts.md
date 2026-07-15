@@ -4,13 +4,22 @@ Definitive reference for how agents are registered, loaded, where their files
 live on disk, and how the chat Files panel and the Artifacts viewer surface
 them. Written after a full end-to-end review (backend + frontend + live VPS).
 
-> **See also — the durable-state contract:**
+> **See also — the durable-state contract & its implementation:**
 > [`specs/agent_file_and_memory_framework.md`](specs/agent_file_and_memory_framework.md)
 > is the canonical framework every MAF agent MUST follow for persisting code
-> (git, reviewed PR) vs. state (Postgres blob store, authoritative). Required
-> reading before building the in-platform agent workbench or any new MAF agent
-> (CommandCenter or Pomad Centre). This doc explains the *layout*; that one
-> explains the *durability contract* built on top of it.
+> (git, reviewed PR) vs. state (Postgres blob store, authoritative), and
+> [`specs/agent_persistence_implementation.md`](specs/agent_persistence_implementation.md)
+> is the engineering reference (every function, table, and seam — read before
+> changing how persistence works). Required reading before building the
+> in-platform agent workbench or any new MAF agent (CommandCenter or Pomad
+> Centre). This doc explains the *layout*; the framework explains the *contract*;
+> the implementation reference explains *how it's built*.
+>
+> **The disk workspace described below is now a rehydratable cache** — the three
+> folders (`agent-data/`, `inputs/`, `outputs/`) are backed by the Postgres blob
+> store (write-through on write, fault-in on read miss, rehydrate on load). The
+> layout and browser behaviour here are unchanged; the store sits *behind* these
+> read paths.
 
 > TL;DR of the two things that confused us repeatedly:
 > 1. **An agent's on-disk workspace is ALWAYS `{agents_clone_dir}/repos/{agent_name}`** — keyed by the *logical agent name*, never the GitHub repo name and never the registry `local_path`. The clone only exists **after the agent has run at least once** (lazy clone). Registered ≠ cloned.

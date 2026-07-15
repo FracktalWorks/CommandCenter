@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Download, FileText } from "lucide-react";
+import { ChevronDown, Download, ExternalLink, FileText } from "lucide-react";
 import { Attachment } from "../lib/types";
 import { getAttachmentDownloadUrl } from "../lib/api";
 import { formatBytes } from "../lib/utils";
@@ -58,18 +58,23 @@ export function AttachmentList({
                   target="_blank"
                   rel="noopener noreferrer"
                   title={`Open ${att.filename}`}
-                  className="flex-shrink-0"
+                  className="flex-shrink-0 group relative"
                 >
                   {/* eslint-disable-next-line @next/next/no-img-element */}
                   <img
                     src={url}
                     alt={att.filename}
-                    className="w-11 h-11 object-cover bg-background block"
+                    loading="lazy"
+                    className="w-14 h-14 object-cover bg-background block"
                   />
+                  {/* Hover affordance: the thumbnail opens full-size. */}
+                  <span className="absolute inset-0 hidden group-hover:flex items-center justify-center bg-black/40">
+                    <ExternalLink size={14} className="text-white" />
+                  </span>
                 </a>
               ) : (
-                <span className="w-11 h-11 bg-background flex items-center justify-center flex-shrink-0">
-                  <FileText size={16} className="text-muted-foreground" />
+                <span className="w-14 h-14 bg-background flex items-center justify-center flex-shrink-0">
+                  <FileText size={18} className="text-muted-foreground" />
                 </span>
               )}
               <div className="min-w-0 px-2.5 py-1">

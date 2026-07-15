@@ -12,6 +12,7 @@ import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
 import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
+import { AttachmentList } from "./AttachmentList";
 import { SignaturePreview } from "./SignaturePreview";
 
 const isDraft = (m: Email) =>
@@ -73,15 +74,19 @@ export function ConversationView({
       return n;
     });
 
-  // Hydrate full bodies for expanded messages that arrived body-less.
+  // Hydrate expanded messages that arrived incomplete: either body-less, or
+  // carrying attachments (has_attachments) whose file rows weren't included in
+  // the thread payload — so each card can show its own attachment thumbnails.
   /* eslint-disable react-hooks/set-state-in-effect */
   useEffect(() => {
     visible.forEach((m) => {
+      const needsBody = !m.bodyHtml && !m.bodyText;
+      const needsAttachments =
+        m.hasAttachments && (!m.attachments || m.attachments.length === 0);
       if (
         expanded.has(m.id) &&
         !hydrated[m.id] &&
-        !m.bodyHtml &&
-        !m.bodyText &&
+        (needsBody || needsAttachments) &&
         !isDraft(m)
       ) {
         getEmail(m.id)
@@ -184,6 +189,15 @@ export function ConversationView({
                   <div className="text-xs text-muted-foreground italic py-2">
                     No preview text.
                   </div>
+                )}
+                {/* Per-message attachments — same card UI (with image
+                    thumbnails) as the single-message reader, so a thread's
+                    earlier messages surface their files too. */}
+                {view.hasAttachments && (
+                  <AttachmentList
+                    attachments={view.attachments}
+                    className="mt-4 pt-3 border-t border-border"
+                  />
                 )}
               </div>
             )}

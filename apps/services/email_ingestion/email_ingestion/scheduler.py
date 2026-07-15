@@ -229,9 +229,22 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                                 cc_addresses = EXCLUDED.cc_addresses,
                                 bcc_addresses = EXCLUDED.bcc_addresses,
                                 subject = EXCLUDED.subject,
-                                body_text = EXCLUDED.body_text,
-                                body_html = EXCLUDED.body_html,
-                                snippet = EXCLUDED.snippet,
+                                -- Never overwrite a stored body with an empty
+                                -- one: Outlook re-syncs headers-only (empty
+                                -- body) on every tick, which would otherwise
+                                -- clobber a body filled by lazy-open hydration
+                                -- OR the search body-backfill sweep. Keep the
+                                -- existing body when the incoming one is empty.
+                                body_text = COALESCE(
+                                    NULLIF(EXCLUDED.body_text, ''),
+                                    email_messages.body_text),
+                                body_html = COALESCE(
+                                    NULLIF(EXCLUDED.body_html, ''),
+                                    email_messages.body_html),
+                                snippet = CASE
+                                    WHEN COALESCE(EXCLUDED.snippet, '') <> ''
+                                    THEN EXCLUDED.snippet
+                                    ELSE email_messages.snippet END,
                                 has_attachments = EXCLUDED.has_attachments,
                                 is_read = EXCLUDED.is_read,
                                 is_starred = EXCLUDED.is_starred,

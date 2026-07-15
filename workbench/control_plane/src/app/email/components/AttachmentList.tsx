@@ -1,10 +1,12 @@
 "use client";
 
 import { useState } from "react";
-import { ChevronDown, Download, ExternalLink, FileText } from "lucide-react";
+import { ChevronDown, Download, Eye, FileText } from "lucide-react";
 import { Attachment } from "../lib/types";
 import { getAttachmentDownloadUrl } from "../lib/api";
 import { formatBytes } from "../lib/utils";
+import ArtifactViewerModal from "@/components/ArtifactViewerModal";
+import type { FileEntry } from "@/components/ArtifactSidebar";
 
 // Show this many attachment cards before rolling the rest up behind a toggle —
 // a long signature email (or a message with many files) would otherwise flood
@@ -21,6 +23,20 @@ const COLLAPSED_COUNT = 4;
  * and a download link. The image bytes come through the same authenticated Next
  * proxy as the download, so no extra endpoint is needed for the preview.
  */
+/** A synthetic FileEntry so an email attachment can be rendered by the shared
+ *  ArtifactViewerModal. The modal keys its type detection off `name`/`mime_type`
+ *  and fetches bytes from the `downloadUrl` override, so no workspace path or
+ *  session is needed. */
+function toFileEntry(att: Attachment): FileEntry {
+  return {
+    path: att.filename,
+    name: att.filename,
+    size: att.sizeBytes,
+    modified_at: "",
+    mime_type: att.mimeType || "application/octet-stream",
+  };
+}
+
 export function AttachmentList({
   attachments,
   className = "",
@@ -29,6 +45,10 @@ export function AttachmentList({
   className?: string;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // The attachment currently open in the pop-up viewer (null = closed). Images,
+  // PDFs and documents all open in the same ArtifactViewerModal — never a new
+  // browser tab or the side panel.
+  const [viewing, setViewing] = useState<Attachment | null>(null);
   if (!attachments || attachments.length === 0) return null;
 
   const total = attachments.length;
@@ -52,32 +72,39 @@ export function AttachmentList({
               key={att.id}
               className="flex items-center border border-border rounded-md bg-secondary overflow-hidden w-fit max-w-[260px]"
             >
-              {isImage ? (
-                <a
-                  href={url}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  title={`Open ${att.filename}`}
-                  className="flex-shrink-0 group relative"
-                >
-                  {/* eslint-disable-next-line @next/next/no-img-element */}
-                  <img
-                    src={url}
-                    alt={att.filename}
-                    loading="lazy"
-                    className="w-14 h-14 object-cover bg-background block"
-                  />
-                  {/* Hover affordance: the thumbnail opens full-size. */}
-                  <span className="absolute inset-0 hidden group-hover:flex items-center justify-center bg-black/40">
-                    <ExternalLink size={14} className="text-white" />
+              {/* Thumbnail / icon — opens the pop-up viewer. */}
+              <button
+                type="button"
+                onClick={() => setViewing(att)}
+                title={`Preview ${att.filename}`}
+                className="flex-shrink-0 group relative"
+              >
+                {isImage ? (
+                  <>
+                    {/* eslint-disable-next-line @next/next/no-img-element */}
+                    <img
+                      src={url}
+                      alt={att.filename}
+                      loading="lazy"
+                      className="w-14 h-14 object-cover bg-background block"
+                    />
+                    <span className="absolute inset-0 hidden group-hover:flex items-center justify-center bg-black/40">
+                      <Eye size={14} className="text-white" />
+                    </span>
+                  </>
+                ) : (
+                  <span className="w-14 h-14 bg-background flex items-center justify-center group-hover:bg-secondary/60 transition-colors">
+                    <FileText size={18} className="text-muted-foreground group-hover:text-foreground" />
                   </span>
-                </a>
-              ) : (
-                <span className="w-14 h-14 bg-background flex items-center justify-center flex-shrink-0">
-                  <FileText size={18} className="text-muted-foreground" />
-                </span>
-              )}
-              <div className="min-w-0 px-2.5 py-1">
+                )}
+              </button>
+              {/* Filename / size — also opens the viewer. */}
+              <button
+                type="button"
+                onClick={() => setViewing(att)}
+                title={`Preview ${att.filename}`}
+                className="min-w-0 px-2.5 py-1 text-left"
+              >
                 <div
                   className="text-xs text-foreground truncate max-w-[150px]"
                   title={att.filename}
@@ -89,7 +116,7 @@ export function AttachmentList({
                     {formatBytes(att.sizeBytes)}
                   </div>
                 )}
-              </div>
+              </button>
               <a
                 href={url}
                 target="_blank"
@@ -115,6 +142,18 @@ export function AttachmentList({
           />
           {expanded ? "Show fewer" : `Show all ${total} attachments`}
         </button>
+      )}
+
+      {/* Pop-up viewer — images, PDFs and documents all render here. Read-only:
+          attachments aren't workspace files, so no edit/save/delete. */}
+      {viewing && (
+        <ArtifactViewerModal
+          sessionId=""
+          entry={toFileEntry(viewing)}
+          downloadUrl={getAttachmentDownloadUrl(viewing.id)}
+          readOnly
+          onClose={() => setViewing(null)}
+        />
       )}
     </div>
   );

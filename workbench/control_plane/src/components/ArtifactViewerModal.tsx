@@ -33,6 +33,10 @@ interface ArtifactViewerModalProps {
   saveUrl?: string;
   /** Optional override for the delete URL. */
   deleteUrl?: string;
+  /** Read-only viewer: suppress Edit/Save/Delete. Used for external files that
+   *  aren't workspace-editable (e.g. inbound email attachments), which only
+   *  have a download URL — there is nothing to PUT/DELETE. */
+  readOnly?: boolean;
 }
 
 type ViewerState =
@@ -272,7 +276,7 @@ function PdfViewer({ url }: { url: string }) {
 
 // ─── Main component ───────────────────────────────────────────────────────────
 
-export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete, downloadUrl: externalDownloadUrl, saveUrl: externalSaveUrl, deleteUrl: externalDeleteUrl }: ArtifactViewerModalProps) {
+export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelete, downloadUrl: externalDownloadUrl, saveUrl: externalSaveUrl, deleteUrl: externalDeleteUrl, readOnly = false }: ArtifactViewerModalProps) {
   const [state, setState] = useState<ViewerState>({ status: "loading" });
   const [editing, setEditing] = useState(false);
   const [editContent, setEditContent] = useState("");
@@ -282,7 +286,8 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
 
   // Determine if this file type supports inline editing.
   const kind = classify(entry);
-  const editable = kind === "markdown" || kind === "code" || kind === "text";
+  const editable =
+    !readOnly && (kind === "markdown" || kind === "code" || kind === "text");
   const isMarkdown = kind === "markdown";
 
   // Build the file URL and load content
@@ -379,7 +384,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   const downloadUrl = externalDownloadUrl
     ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
   const deletable =
-    !externalDownloadUrl && (
+    !readOnly && !externalDownloadUrl && (
       entry.path.startsWith("inputs/") ||
       entry.path.startsWith("outputs/") ||
       entry.path.startsWith("agent-data/")

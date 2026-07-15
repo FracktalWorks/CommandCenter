@@ -97,8 +97,14 @@ function PendingCommits({ agentName }: { agentName: string }) {
         setErrors((e) => ({ ...e, [id]: body.detail ?? body.error ?? `HTTP ${res.status}` }));
       } else {
         const body = await res.json().catch(() => ({}));
-        // Show cascade info when an approve auto-approved earlier commits in the chain
-        if (action === "approve" && typeof body.cascade_approved === "number" && body.cascade_approved > 0) {
+        // Native-MAF approval opened a CommandCenter PR — point the operator to it.
+        if (action === "approve" && body.status === "pr_open" && body.pr_url) {
+          setCascadeMsg(
+            `Opened a CommandCenter PR for ${body.target_path ?? "this agent"} — review and merge it on GitHub.`
+          );
+          setTimeout(() => setCascadeMsg(null), 8000);
+        } else if (action === "approve" && typeof body.cascade_approved === "number" && body.cascade_approved > 0) {
+          // Show cascade info when an approve auto-approved earlier commits in the chain
           setCascadeMsg(
             `Approved — ${body.cascade_approved} earlier commit${body.cascade_approved === 1 ? "" : "s"} in this chain were auto-approved.`
           );
@@ -372,6 +378,7 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 const isAudit = m.type === "audit_event";
                 const isApproved = m.status === "approved";
                 const isRejected = m.status === "rejected";
+                const isPrOpen = m.status === "pr_open";
                 return (
                   <div
                     key={key}
@@ -400,6 +407,8 @@ function PendingCommits({ agentName }: { agentName: string }) {
                         className={`shrink-0 rounded border px-1.5 py-0.5 text-[10px] ${
                           isApproved
                             ? "border-success/20 bg-success/10 text-success"
+                            : isPrOpen
+                            ? "border-primary/20 bg-primary/10 text-primary"
                             : isRejected
                             ? "border-border/50 bg-secondary text-muted-foreground"
                             : m.status === "failed"
@@ -409,6 +418,8 @@ function PendingCommits({ agentName }: { agentName: string }) {
                       >
                         {isApproved
                           ? "✓ Approved"
+                          : isPrOpen
+                          ? "⇡ PR open"
                           : isRejected
                           ? "✗ Rejected"
                           : m.status === "failed"
@@ -427,6 +438,17 @@ function PendingCommits({ agentName }: { agentName: string }) {
                         <span className="text-muted-foreground">
                           · {m.reviewed_by.startsWith("cascade:") ? "auto-approved" : m.reviewed_by}
                         </span>
+                      )}
+                      {m.pr_url && (
+                        <a
+                          href={m.pr_url}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-primary hover:underline underline-offset-2"
+                          title={m.target_path ? `PR edits ${m.target_path}` : "View pull request"}
+                        >
+                          View PR ↗
+                        </a>
                       )}
                     </div>
 

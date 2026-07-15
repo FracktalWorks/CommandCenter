@@ -34,6 +34,7 @@ write remains the explicit ``POST /items/{id}/push``).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import time
 from datetime import UTC, datetime
@@ -236,6 +237,21 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
         )).fetchall()
         known_ids = {r.provider_task_id for r in known_rows}
 
+    # Email-linked tasks that were ALREADY DONE before this sync — so when the
+    # provider reports one done we only propagate to the email thread on the real
+    # open→DONE transition, not on every re-sync (which would re-close a thread
+    # the user deliberately reopened while the upstream task stayed closed).
+    done_email_before = {
+        r.provider_task_id for r in (await db.execute(text(
+            """SELECT provider_task_id FROM gtd_items
+                WHERE account_id = :aid AND source <> 'LOCAL'
+                  AND provider_task_id IS NOT NULL
+                  AND disposition = 'DONE'
+                  AND origin->>'thread_id' IS NOT NULL"""),
+            {"aid": str(account.id)},
+        )).fetchall()
+    }
+
     for task in tasks:
         tid = task.get("provider_task_id")
         if not tid:
@@ -278,6 +294,18 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
                         WHERE item_id = :iid AND resolved = false"""),
                 {"iid": str(row.id)},
             )
+            # Closed upstream just now (open→DONE this sync) AND linked to an
+            # email thread → mark that thread Done. Only on the transition, so a
+            # thread the user reopened isn't re-closed on every subsequent sync.
+            if tid not in done_email_before:
+                orow = (await db.execute(text(
+                    "SELECT origin FROM gtd_items WHERE id = :id"),
+                    {"id": str(row.id)})).fetchone()
+                if orow is not None and orow.origin is not None:
+                    from gateway.routes.tasks.email_link import (
+                        propagate_task_done_to_thread)
+                    with contextlib.suppress(Exception):  # best-effort
+                        await propagate_task_done_to_thread(db, orow)
         elif row.disposition == "WAITING" and mapped["waiting_on"]:
             # Monitored task (assigned to someone else): keep exactly one
             # open waiting-for record pointing at the current assignee.

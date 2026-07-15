@@ -946,3 +946,398 @@ async def create_capture_from_email(
             due_at=item.due_at)
     finally:
         await db.close()
+
+
+# ── Commitment capture: a reply I SENT that promises a future action ──────────
+# When the user sends a reply that commits THEM (or their team) to a deliverable
+# — "I'll get back to you with the numbers", "we'll ship the fix by Friday" — the
+# thread carries a task the user owns. This flow detects that on send and offers
+# the SAME "Add to Tasks" popup as an inbound capture, pre-filled from the reply.
+#
+# The key difference from the inbound flow: the reply the user just sent usually
+# ISN'T mirrored into email_messages yet (it lands on the next provider sync), so
+# these endpoints are keyed on the reply's (thread_id, body, subject) rather than
+# a local email_id. The just-sent body is the DATA the gate reads; identity comes
+# from the account's own address (the LLM knows the commitment is MINE, not the
+# other party's).
+
+
+class DetectCommitmentRequest(BaseModel):
+    account_id: str
+    thread_id: str
+    body: str
+    subject: str = ""
+    # The provider id of the message being replied to — used to resolve the
+    # already-mirrored inbound message so we can tag the thread + link origin.
+    reply_to_message_id: str | None = None
+    # On send we run FAST: the gate reads only the reply body (no thread fetch),
+    # so the popup appears immediately. The popup's "Enhance with AI" button
+    # re-calls with include_thread=true to let the LLM review the whole
+    # conversation and produce a richer draft.
+    include_thread: bool = False
+
+
+class DetectCommitmentResponse(BaseModel):
+    is_commitment: bool
+    draft: CaptureDraftModel | None = None
+    similar: list[SimilarTaskModel] = []
+    already_captured: GtdItemModel | None = None
+    used_llm: bool = False
+
+
+class CreateCommitmentRequest(BaseModel):
+    account_id: str
+    thread_id: str
+    subject: str = ""
+    # The reply body — persisted onto the task's origin so the source is
+    # recoverable even before the sent message mirrors locally.
+    body: str = ""
+    reply_to_message_id: str | None = None
+    draft: CaptureDraftModel
+
+
+class _ReplyEmail:
+    """A duck-typed stand-in for an ``email_messages`` row so a just-sent reply
+    (not yet mirrored locally) flows through ``_route_and_persist`` unchanged.
+    ``from_address`` is the OWNER — the commitment is a task I gave myself, so
+    the origin's from_name/email should read as me, and a bare WAITING with no
+    delegate falls back to me rather than a stranger."""
+
+    def __init__(self, *, account_id: str, thread_id: str, email_id: str,
+                 subject: str, owner_name: str, owner_email: str) -> None:
+        self.account_id = account_id
+        self.thread_id = thread_id
+        self.id = email_id
+        self.subject = subject
+        self.from_address = json.dumps(
+            {"name": owner_name or owner_email, "email": owner_email})
+
+
+async def _resolve_sent_email_id(
+    db: Any, account_id: str, thread_id: str, reply_to_message_id: str | None,
+) -> str:
+    """The local id to hang the task's origin on. Prefer the newest SENT message
+    in the thread (the reply, once mirrored); fall back to the message being
+    replied to (always mirrored); last resort a synthetic thread-scoped id so the
+    origin still links back to the conversation. Idempotency uses the thread when
+    the exact reply id isn't known yet, so a placeholder never duplicates."""
+    sent = (await db.execute(text(
+        "SELECT id FROM email_messages "
+        "WHERE account_id = :aid AND thread_id = :tid "
+        "AND LOWER(COALESCE(folder, '')) = 'sent' "
+        "ORDER BY received_at DESC NULLS LAST LIMIT 1"
+    ), {"aid": account_id, "tid": thread_id})).fetchone()
+    if sent is not None:
+        return str(sent.id)
+    if reply_to_message_id:
+        row = (await db.execute(text(
+            "SELECT id FROM email_messages "
+            "WHERE account_id = :aid AND provider_message_id = :pmid LIMIT 1"
+        ), {"aid": account_id, "pmid": reply_to_message_id})).fetchone()
+        if row is not None:
+            return str(row.id)
+    return f"reply:{thread_id}"
+
+
+async def _find_existing_commitment(db: Any, uid: str, thread_id: str) -> Any:
+    """The OPEN commitment task already captured from THIS thread, or None.
+    Keyed on the thread (not a single message) because a commitment is about the
+    conversation, and re-sending in the same thread shouldn't spawn a second
+    task. Only commitment-origin items count — an inbound capture from the same
+    thread is a different task and mustn't suppress the commitment popup."""
+    if not thread_id:
+        return None
+    return (await db.execute(text(
+        ITEM_SELECT + """
+            WHERE i.user_id = :uid
+              AND i.origin->>'thread_id' = :tid
+              AND i.origin->>'commitment' = 'true'
+              AND i.disposition NOT IN ('DONE', 'TRASH')
+            LIMIT 1"""),
+        {"uid": uid, "tid": str(thread_id)},
+    )).fetchone()
+
+
+async def _account_owner(db: Any, uid: str, account_id: str) -> tuple[str, str]:
+    """(owner_display_name, owner_email) for an account the user owns, or raise
+    404. The email is the identity the commitment gate reasons about as 'me'.
+    email_accounts has no personal-name column (only a mailbox ``label`` like
+    'Work'), so the display name is the address's local-part — enough for the
+    gate to phrase the task in the first person."""
+    row = (await db.execute(text(
+        "SELECT email_address FROM email_accounts "
+        "WHERE id = :aid AND user_id = :uid"
+    ), {"aid": account_id, "uid": uid})).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="Account not found")
+    email = str(row.email_address or "").strip()
+    name = (email.split("@", 1)[0] or email) if email else "me"
+    return name, email
+
+
+async def _llm_detect_commitment(
+    *, subject: str, owner_name: str, owner_addrs: set[str], body: str,
+    thread: str, people: list[dict], model: str,
+) -> dict[str, Any] | None:
+    """Gate + draft: does the reply the OWNER just sent commit them (or their
+    team) to a future action/deliverable? Returns a routed capture draft with an
+    extra ``is_commitment`` flag, or None on any LLM failure (caller treats a
+    failure as 'no commitment' — never a false popup).
+
+    Distinct from ``_llm_capture``: the DATA here is a message the owner AUTHORED
+    (their own words, trusted as intent, not an inbound ask), and the gate must
+    say NO for pleasantries ('thanks, will do' with nothing concrete), pure
+    acknowledgements, or promises that are really the OTHER party's to fulfil."""
+    try:
+        from acb_llm.context import acompletion_with_fallback
+    except Exception:
+        return None
+
+    roster = "\n".join(
+        f"- {p.get('name')}"
+        + (f" · {p['role']}" if p.get("role") else "")
+        + (f" · skills: {', '.join((p.get('skills') or [])[:6])}"
+           if p.get("skills") else "")
+        for p in (people or [])[:40]
+    ) or "(no team on record)"
+    today = datetime.now(tz=UTC).date().isoformat()
+
+    system = (
+        "You read ONE reply that the OWNER (me) JUST SENT in an email thread and "
+        "decide whether it commits ME or MY TEAM to a concrete future action or "
+        "deliverable. If it does, turn that commitment into ONE GTD task for ME "
+        "and route it. This is MY OWN message — trust it as my intent.\n\n"
+        "Set is_commitment = true ONLY when I promised something specific and "
+        "actionable: 'I'll send you X', 'we'll get back to you with Y', 'I'll "
+        "review and revert by Friday', 'let me set up the call'. Set it FALSE "
+        "for: bare pleasantries or acknowledgements ('thanks', 'sounds good', "
+        "'noted'), vague niceties with no deliverable, questions I asked, or a "
+        "commitment that is really the OTHER party's to fulfil (I'm waiting on "
+        "THEM). When in doubt, prefer FALSE — a wrong popup is worse than a "
+        "missed one.\n\n"
+        "If is_commitment is true, draft the task:\n"
+        "- disposition: NEXT if I'll do it myself; CALENDAR if it's tied to a "
+        "specific date/time; WAITING with an assignee_name from the TEAM ROSTER "
+        "below if I'm handing it to a teammate (only a name that appears in the "
+        "roster — never invent one).\n"
+        f"Dates: TODAY is {today}. If I named a deadline ('by Friday', 'end of "
+        "week', 'before the 15th'), resolve it to an ABSOLUTE ISO-8601 date and "
+        "set due_at. Only a date the text supports — never invent one.\n"
+        "title: what I need to do, in my voice, ≤15 words "
+        "(e.g. 'Send Priya the revised vendor quote'). "
+        "notes: 1-2 sentences of context (what I promised whom, any deadline).\n"
+        "For NEXT/CALENDAR also clarify energy ('high'|'medium'|'low'), "
+        "time_estimate_mins (int), and subtasks (concrete steps in order, or [] "
+        "for a single-step task — next_action is the first step).\n\n"
+        'Return STRICT JSON only: {"is_commitment": bool, "title": str, '
+        '"notes": str, "disposition": "NEXT"|"WAITING"|"CALENDAR"|"SOMEDAY", '
+        '"next_action": str, "assignee_name": str|null, "due_at": str|null, '
+        '"defer_until": str|null, "context": "@computer"|"@calls"|"@agenda"|null,'
+        ' "energy": "high"|"medium"|"low"|null, "time_estimate_mins": int|null, '
+        '"subtasks": [str]}'
+    )
+    user = (
+        f"TODAY: {today}\n"
+        f"ME (the owner): {owner_name} <{', '.join(sorted(owner_addrs))}>\n"
+        f"SUBJECT: {subject}\n"
+        + (f"\nEARLIER IN THREAD:\n{thread}\n" if thread else "")
+        + f"\nTHE REPLY I JUST SENT:\n{(body or '')[:3500]}"
+        + f"\n\nTEAM ROSTER (for delegation only):\n{roster}"
+    )
+    try:
+        resp, _used = await acompletion_with_fallback(
+            model=model, fallback_model="tier-fast",
+            messages=[{"role": "system", "content": system},
+                      {"role": "user", "content": user}],
+            temperature=0.0, max_tokens=450,
+            response_format={"type": "json_object"},
+        )
+        raw = resp.choices[0].message.content or ""
+        start, end = raw.find("{"), raw.rfind("}")
+        data = json.loads(raw[start:end + 1])
+    except Exception:
+        return None
+
+    if not bool(data.get("is_commitment")):
+        return {"is_commitment": False}
+
+    title = _clean_title(str(data.get("title") or ""), "")
+    if not title:
+        return {"is_commitment": False}
+    disp = str(data.get("disposition") or "NEXT").strip().upper()
+    if disp not in _CAPTURE_DISPOSITIONS:
+        disp = "NEXT"
+    ctx = str(data.get("context") or "").strip()
+    actionable = disp in ("NEXT", "CALENDAR")
+    energy = str(data.get("energy") or "").strip().lower()
+    if energy not in ("high", "medium", "low"):
+        energy = ""
+    subs = data.get("subtasks")
+    subtasks = (
+        [s2 for s in subs if (s2 := _clean_title(str(s), "")[:200])][:12]
+        if isinstance(subs, list) else []
+    )
+    return {
+        "is_commitment": True,
+        "title": title,
+        "notes": str(data.get("notes") or "")[:500],
+        "disposition": disp,
+        "next_action": _clean_title(str(data.get("next_action") or ""), "")[:300],
+        "assignee_name": str(data.get("assignee_name") or "").strip(),
+        "due_at": str(data.get("due_at") or "").strip(),
+        "defer_until": str(data.get("defer_until") or "").strip(),
+        "context": ctx if ctx.startswith("@") else "",
+        "energy": energy if actionable else "",
+        "time_estimate_mins": (
+            _coerce_mins(data.get("time_estimate_mins")) if actionable else None
+        ),
+        "subtasks": subtasks if actionable else [],
+    }
+
+
+async def _tag_thread_task_category(
+    db: Any, account_id: str, thread_id: str,
+) -> None:
+    """Append the "Task" category label to the newest message in the thread so
+    the email app's Rapid Inbox surfaces the thread under its "Task" chip. Idem-
+    potent (array_append only if absent) and orthogonal to the mutually-exclusive
+    conversation-status label (Reply/Awaiting/Done) — the two axes coexist."""
+    if not thread_id:
+        return
+    target = (await db.execute(text(
+        "SELECT id FROM email_messages "
+        "WHERE account_id = :aid AND thread_id = :tid "
+        "AND LOWER(COALESCE(folder, '')) NOT IN ('drafts', 'draft') "
+        "ORDER BY received_at DESC NULLS LAST LIMIT 1"
+    ), {"aid": account_id, "tid": thread_id})).fetchone()
+    if target is None:
+        return
+    await db.execute(text(
+        "UPDATE email_messages SET categories = CASE "
+        "WHEN 'Task' = ANY(categories) THEN categories "
+        "ELSE array_append(categories, 'Task') END, "
+        "updated_at = now() WHERE id = :id"
+    ), {"id": str(target.id)})
+
+
+@router.post("/capture/from-reply/detect",
+             response_model=DetectCommitmentResponse)
+async def detect_commitment_from_reply(
+    req: DetectCommitmentRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Called right after the user sends a reply. Runs the commitment gate on the
+    just-sent body; if it detects a task the user committed to, returns a routed
+    draft for the "Add to Tasks" popup (same UI as an inbound capture). If not a
+    commitment — or if this thread already has an open commitment task — returns
+    is_commitment=false so no popup opens. No write happens here."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        owner_name, owner_email = await _account_owner(db, uid, req.account_id)
+
+        # Already have a commitment task on this thread → don't re-prompt.
+        existing = await _find_existing_commitment(db, uid, req.thread_id)
+        if existing is not None:
+            return DetectCommitmentResponse(
+                is_commitment=False,
+                already_captured=_row_to_item(existing))
+
+        owner_addrs = {owner_email.strip().lower()}
+        owner_addrs.discard("")
+        # Fast path (on send): read only the reply body — skip the thread fetch so
+        # the popup appears promptly. "Enhance with AI" sets include_thread to let
+        # the LLM review the whole conversation for a richer draft.
+        thread = (
+            await _fetch_thread(db, req.account_id, req.thread_id, "")
+            if req.include_thread else ""
+        )
+
+        from gateway.routes.tasks.people import fetch_people_for_clarify
+        from gateway.routes.tasks.settings import gtd_models
+        people = await fetch_people_for_clarify(db)
+        models = await gtd_models(db, uid)
+
+        detected = await _llm_detect_commitment(
+            subject=req.subject, owner_name=owner_name, owner_addrs=owner_addrs,
+            body=req.body, thread=thread, people=people,
+            model=models["email_capture"])
+        if not detected or not detected.get("is_commitment"):
+            return DetectCommitmentResponse(is_commitment=False, used_llm=bool(detected))
+
+        resolved = _resolve_assignee(detected.get("assignee_name", ""), people)
+        draft = CaptureDraftModel(
+            title=detected.get("title", ""), notes=detected.get("notes", ""),
+            disposition=str(detected.get("disposition") or "NEXT").upper(),
+            next_action=detected.get("next_action", ""),
+            assignee_name=(resolved["name"] if resolved
+                           else detected.get("assignee_name", "")),
+            due_at=detected.get("due_at", ""),
+            defer_until=detected.get("defer_until", ""),
+            context=detected.get("context", ""),
+            energy=detected.get("energy", ""),
+            time_estimate_mins=detected.get("time_estimate_mins"),
+            subtasks=detected.get("subtasks", []) or [])
+        similar = await _find_similar_tasks(
+            db, uid, req.thread_id, "", draft.title)
+        return DetectCommitmentResponse(
+            is_commitment=True, draft=draft, similar=similar, used_llm=True)
+    finally:
+        await db.close()
+
+
+@router.post("/capture/from-reply/create",
+             response_model=CaptureFromEmailResponse)
+async def create_commitment_from_reply(
+    req: CreateCommitmentRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Confirm the commitment popup: write the (possibly edited) task, link its
+    origin back to the thread, mark the origin as a commitment, and tag the
+    thread with the "Task" category so Rapid Inbox surfaces it. Idempotent per
+    thread — a second confirm on the same thread returns the existing task."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        owner_name, owner_email = await _account_owner(db, uid, req.account_id)
+
+        existing = await _find_existing_commitment(db, uid, req.thread_id)
+        if existing is not None:
+            item = _row_to_item(existing)
+            return CaptureFromEmailResponse(
+                item=item, created=False, disposition=item.disposition,
+                assignee_name=item.assignee.name if item.assignee else None,
+                due_at=item.due_at)
+
+        email_id = await _resolve_sent_email_id(
+            db, req.account_id, req.thread_id, req.reply_to_message_id)
+        reply = _ReplyEmail(
+            account_id=req.account_id, thread_id=req.thread_id,
+            email_id=email_id, subject=req.subject,
+            owner_name=owner_name, owner_email=owner_email)
+
+        from gateway.routes.tasks.people import fetch_people_for_clarify
+        people = await fetch_people_for_clarify(db)
+
+        item_id, _disp, _assignee = await _route_and_persist(
+            db, uid, reply, req.draft.model_dump(), people)
+        # Mark the origin as a commitment so the thread-scoped idempotency guard
+        # can tell it apart from an inbound capture on the same thread.
+        await db.execute(text(
+            "UPDATE gtd_items SET origin = jsonb_set("
+            "coalesce(origin, '{}'::jsonb), '{commitment}', 'true'::jsonb) "
+            "WHERE id = :id"
+        ), {"id": item_id})
+        await _tag_thread_task_category(db, req.account_id, req.thread_id)
+        await db.commit()
+
+        row = (await db.execute(
+            text(ITEM_SELECT + " WHERE i.id = :id"), {"id": item_id},
+        )).fetchone()
+        item = _row_to_item(row)
+        return CaptureFromEmailResponse(
+            item=item, created=True, disposition=item.disposition,
+            assignee_name=item.assignee.name if item.assignee else None,
+            due_at=item.due_at)
+    finally:
+        await db.close()

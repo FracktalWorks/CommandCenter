@@ -7,13 +7,16 @@ import {
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials, buildOptimisticSent } from "../lib/utils";
-import { getEmail, fetchFullBody, composeAssist } from "../lib/api";
+import {
+  getEmail, fetchFullBody, composeAssist, detectReplyCommitment,
+} from "../lib/api";
 import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
 import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { SignaturePreview } from "./SignaturePreview";
+import { TaskCaptureModal, type CommitmentContext } from "./TaskCaptureModal";
 
 const isDraft = (m: Email) =>
   (m.folder || "").toLowerCase() === "drafts" ||
@@ -62,9 +65,50 @@ export function ConversationView({
     () => new Set([openedId, lastId].filter(Boolean) as string[])
   );
   const [hydrated, setHydrated] = useState<Record<string, Email>>({});
+  // A detected commitment awaiting the user's confirm in the "Add to Tasks"
+  // popup, plus the account it belongs to (null = no popup open).
+  const [commitment, setCommitment] = useState<
+    { accountId: string; ctx: CommitmentContext } | null
+  >(null);
 
   // The newest non-draft message — the one a draft reply is threaded onto.
   const replyTarget = [...visible].reverse().find((m) => !isDraft(m));
+
+  // After a reply sends, ask the backend whether it committed the user to a
+  // task. Only when it did do we surface the popup — a silent no-op otherwise,
+  // so a plain "thanks, will do" never interrupts. Best-effort: a detector
+  // failure just means no popup, never a broken send.
+  const checkCommitment = async (c: {
+    accountId: string;
+    threadId: string;
+    subject: string;
+    body: string;
+    replyToMessageId: string | null;
+  }) => {
+    try {
+      const res = await detectReplyCommitment({
+        accountId: c.accountId,
+        threadId: c.threadId,
+        body: c.body,
+        subject: c.subject,
+        replyToMessageId: c.replyToMessageId,
+      });
+      if (!res.isCommitment || !res.draft) return;
+      setCommitment({
+        accountId: c.accountId,
+        ctx: {
+          threadId: c.threadId,
+          body: c.body,
+          subject: c.subject,
+          replyToMessageId: c.replyToMessageId,
+          draft: res.draft,
+          similar: res.similar,
+        },
+      });
+    } catch {
+      /* detection is best-effort — no popup on failure */
+    }
+  };
 
   const toggle = (id: string) =>
     setExpanded((prev) => {
@@ -109,6 +153,7 @@ export function ConversationView({
               draft={m}
               replyTo={replyTarget}
               onSent={onSent}
+              onCommitment={checkCommitment}
               onDismiss={() =>
                 setDismissed((s) => new Set(s).add(m.id))
               }
@@ -204,6 +249,17 @@ export function ConversationView({
           </div>
         );
       })}
+      {/* "You committed to a task" popup — same UI as an inbound capture, keyed
+          on the just-sent reply. Opens only when the detector found a real
+          commitment; dismissible (Cancel / Esc / backdrop). */}
+      {commitment && (
+        <TaskCaptureModal
+          accountId={commitment.accountId}
+          commitment={commitment.ctx}
+          onClose={() => setCommitment(null)}
+          onCaptured={() => setCommitment(null)}
+        />
+      )}
     </div>
   );
 }
@@ -242,11 +298,22 @@ export function DraftCard({
   replyTo,
   onDismiss,
   onSent,
+  onCommitment,
 }: {
   draft: Email;
   replyTo?: Email;
   onDismiss?: () => void;
   onSent?: (sent?: Email) => void;
+  /** After a reply is sent, hand its context up so the parent can check whether
+   *  it committed the user to a task (and offer the "Add to Tasks" popup). Only
+   *  fired for real replies (a reply target exists), not from-scratch composes. */
+  onCommitment?: (ctx: {
+    accountId: string;
+    threadId: string;
+    subject: string;
+    body: string;
+    replyToMessageId: string | null;
+  }) => void;
 }) {
   const {
     deleteEmail, selectedAccountId, saveDraft, sendDraft, sendEmail, accounts,
@@ -427,10 +494,11 @@ export function DraftCard({
         await sendDraft(accountId, draft.id);
       }
       // Surface the reply in the conversation at once + pull the real copy.
+      const sentThreadId = replyTo?.threadId || draft.threadId;
       onSent?.(
         buildOptimisticSent({
           accountId,
-          threadId: replyTo?.threadId || draft.threadId,
+          threadId: sentThreadId,
           fromEmail: ownEmail || "",
           to: recipients(),
           cc: ccList(),
@@ -438,6 +506,18 @@ export function DraftCard({
           bodyText: combinedBody(),
         })
       );
+      // If this was a real reply, check whether it committed me to a task. Pass
+      // only the NEW reply text (`body`), not the quoted chain, so the detector
+      // reasons about what I just wrote — not the whole thread as my words.
+      if (hasReplyTarget && sentThreadId && body.trim()) {
+        onCommitment?.({
+          accountId,
+          threadId: sentThreadId,
+          subject: draft.subject || "",
+          body,
+          replyToMessageId: replyTo?.providerMessageId || null,
+        });
+      }
     } catch {
       /* send failure — the draft stays in Drafts so the user can retry */
     } finally {

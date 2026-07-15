@@ -5,9 +5,28 @@ import {
   AlertTriangle, ArrowRight, CheckCircle2, Loader2, Sparkles, X,
 } from "lucide-react";
 import {
-  createEmailCapture, enhanceEmailCapture, previewEmailCapture,
+  createEmailCapture, createReplyCommitment, detectReplyCommitment,
+  enhanceEmailCapture, previewEmailCapture,
   type AlreadyCapturedTask, type SimilarTask, type TaskCaptureDraft,
 } from "../lib/api";
+
+/**
+ * The reply that just committed the user to a task. When the modal is opened
+ * with this instead of an emailId, it runs in "commitment" mode: it's keyed on
+ * the thread + reply body (the sent message isn't mirrored locally yet), the
+ * draft is pre-fetched by the detector on send (so no preview round-trip), and
+ * "Enhance with AI" re-runs the commitment detector rather than the inbound
+ * capture LLM.
+ */
+export interface CommitmentContext {
+  threadId: string;
+  body: string;
+  subject: string;
+  replyToMessageId?: string | null;
+  /** The routed draft the detector already produced on send. */
+  draft: TaskCaptureDraft;
+  similar: SimilarTask[];
+}
 
 /**
  * "Add to Tasks" clarify-before-capture popup.
@@ -50,11 +69,15 @@ function toDateInput(iso: string): string {
 export function TaskCaptureModal({
   accountId,
   emailId,
+  commitment,
   onClose,
   onCaptured,
 }: {
   accountId: string;
-  emailId: string;
+  /** Inbound capture: the message to capture. Omit in commitment mode. */
+  emailId?: string;
+  /** Commitment capture: the just-sent reply + its pre-fetched draft. */
+  commitment?: CommitmentContext;
   onClose: () => void;
   onCaptured: (notice: {
     title: string;
@@ -64,18 +87,24 @@ export function TaskCaptureModal({
     dueAt?: string | null;
   }) => void;
 }) {
-  const [loading, setLoading] = useState(true);
+  // Commitment mode arrives with its draft already detected on send, so nothing
+  // blocks on a preview round-trip.
+  const [loading, setLoading] = useState(!commitment);
   const [enhancing, setEnhancing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [enhanced, setEnhanced] = useState(false);
 
-  const [draft, setDraft] = useState<TaskCaptureDraft | null>(null);
-  const [similar, setSimilar] = useState<SimilarTask[]>([]);
+  const [draft, setDraft] = useState<TaskCaptureDraft | null>(
+    commitment?.draft ?? null);
+  const [similar, setSimilar] = useState<SimilarTask[]>(
+    commitment?.similar ?? []);
   const [already, setAlready] = useState<AlreadyCapturedTask | null>(null);
 
   // Load the preview (default title + similar tasks) when the popup opens.
+  // Commitment mode skips this — its draft was detected on send.
   useEffect(() => {
+    if (commitment || !emailId) return;
     let cancelled = false;
     setLoading(true);
     setErr(null);
@@ -95,7 +124,7 @@ export function TaskCaptureModal({
     return () => {
       cancelled = true;
     };
-  }, [accountId, emailId]);
+  }, [accountId, emailId, commitment]);
 
   // Close on Escape (unless mid-save).
   useEffect(() => {
@@ -115,7 +144,23 @@ export function TaskCaptureModal({
     setEnhancing(true);
     setErr(null);
     try {
-      const res = await enhanceEmailCapture(accountId, emailId);
+      // Commitment mode re-runs the detector over the sent reply; inbound mode
+      // runs the capture LLM over the source email. Both return a routed draft.
+      const res = commitment
+        ? await detectReplyCommitment({
+            accountId,
+            threadId: commitment.threadId,
+            body: commitment.body,
+            subject: commitment.subject,
+            replyToMessageId: commitment.replyToMessageId,
+            // Enhance reviews the WHOLE conversation (the send-time detect ran
+            // fast on the reply body alone).
+            includeThread: true,
+          }).then((d) => ({
+            draft: d.draft ?? draft!,
+            usedLlm: d.isCommitment,
+          }))
+        : await enhanceEmailCapture(accountId, emailId!);
       // Merge over the current draft: the AI supplies the richer fields, but
       // if the user had already typed a title we still overwrite it (that's
       // the point of Enhance) — they can undo by editing again.
@@ -136,7 +181,16 @@ export function TaskCaptureModal({
     setSaving(true);
     setErr(null);
     try {
-      const res = await createEmailCapture(accountId, emailId, draft);
+      const res = commitment
+        ? await createReplyCommitment({
+            accountId,
+            threadId: commitment.threadId,
+            subject: commitment.subject,
+            body: commitment.body,
+            replyToMessageId: commitment.replyToMessageId,
+            draft,
+          })
+        : await createEmailCapture(accountId, emailId!, draft);
       onCaptured({
         title: res.title,
         created: res.created,
@@ -170,7 +224,9 @@ export function TaskCaptureModal({
       >
         {/* Header */}
         <div className="flex items-center justify-between gap-3 px-4 py-3 border-b border-border flex-shrink-0">
-          <div className="text-sm font-medium text-foreground">Add to Tasks</div>
+          <div className="text-sm font-medium text-foreground">
+            {commitment ? "You committed to a task" : "Add to Tasks"}
+          </div>
           <button
             onClick={onClose}
             disabled={saving}
@@ -249,14 +305,19 @@ export function TaskCaptureModal({
                   <Sparkles size={13} />
                 )}
                 {enhancing
-                  ? "Reading the email…"
+                  ? commitment
+                    ? "Reading the conversation…"
+                    : "Reading the email…"
                   : enhanced
                   ? "Re-enhance with AI"
+                  : commitment
+                  ? "Review full conversation with AI"
                   : "Enhance with AI"}
               </button>
               {enhanced && (
                 <p className="text-[10px] text-muted-foreground/70 -mt-1">
-                  AI read the full email &amp; thread to name and route this task.
+                  AI read the full {commitment ? "conversation" : "email & thread"}{" "}
+                  to name and route this task.
                 </p>
               )}
 

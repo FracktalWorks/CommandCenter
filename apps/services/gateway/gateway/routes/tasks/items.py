@@ -14,6 +14,7 @@ The GTD flow, server-side:
 
 from __future__ import annotations
 
+import contextlib
 import json
 from datetime import datetime
 from typing import Any
@@ -584,6 +585,14 @@ async def patch_item(
         )).fetchone()
         if not res:
             raise HTTPException(status_code=404, detail="Item not found")
+        # A task captured from an email commitment closing → mark its thread Done
+        # (fires only on the OPEN→DONE transition, and the helper no-ops if the
+        # thread is already Done, so there's no ping-pong with the reverse path).
+        if patch.disposition == "DONE" and before.disposition != "DONE":
+            from gateway.routes.tasks.email_link import (
+                propagate_task_done_to_thread)
+            with contextlib.suppress(Exception):  # best-effort; close stands
+                await propagate_task_done_to_thread(db, before)
         await db.commit()
         # Back-sync the edit to the connected tool (SYNCED tasks only). Runs
         # AFTER the local commit and is best-effort: the user's edit is already

@@ -1340,6 +1340,16 @@ async def resolve_thread(
                 ), {"aid": req.account_id, "tid": req.thread_id,
                     "lmid": lm.id if lm else None,
                     "lmat": lm.received_at if lm else None})
+            # Marking the thread Done closes any OPEN task captured from it (the
+            # commitment task, or an inbound capture on the same thread). The
+            # helper only touches non-DONE tasks, so a task the forward path
+            # already closed is left alone — no ping-pong.
+            from gateway.routes.tasks.email_link import (
+                propagate_thread_done_to_tasks)
+            with contextlib.suppress(Exception):  # best-effort; thread is Done
+                await propagate_thread_done_to_tasks(
+                    db, user.email or "anonymous", req.account_id,
+                    req.thread_id)
         else:
             # Reopen: re-derive from the latest message's folder. Resolve the
             # latest message directly (don't rely on last_message_id, which may

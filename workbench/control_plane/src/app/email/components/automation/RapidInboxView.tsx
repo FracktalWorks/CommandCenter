@@ -5,7 +5,7 @@ import {
   Loader2, Reply, ReplyAll, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
   Info, Newspaper, Megaphone, Calendar, Receipt, Bell, Snowflake,
   Archive, Trash2, ChevronRight, Send, Search, X, Sparkles, Paperclip,
-  BellRing, Keyboard, CircleDashed,
+  BellRing, Keyboard, CircleDashed, ListTodo,
 } from "lucide-react";
 import {
   getReplyZero, draftReplySmart, resolveThread, listEmails, getEmail,
@@ -67,6 +67,12 @@ const CATEGORIES: Category[] = [
   { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
     group: "needs", bucket: "done",
     cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
+  // A thread I replied to promising a deliverable — auto-labelled "Task" on send
+  // and mirrored into the GTD task inbox. Closing the task (or this thread) moves
+  // the other side to Done.
+  { key: "task", label: "Task", icon: ListTodo, source: "label", match: "Task",
+    group: "needs",
+    cls: "bg-rose-500/15 text-rose-600 dark:text-rose-400" },
   { key: "fyi", label: "FYI", icon: Info, source: "label", match: "FYI",
     group: "needs",
     cls: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
@@ -106,7 +112,7 @@ const SORTS: { key: SortKey; label: string }[] = [
 const KNOWN_CATEGORY_LABELS = new Set(
   [
     "Newsletter", "Marketing", "Calendar", "Receipt", "Notification",
-    "Cold Email", "FYI", "Reply", "Awaiting Reply", "Done",
+    "Cold Email", "FYI", "Task", "Reply", "Awaiting Reply", "Done",
     // legacy names still on un-resynced local/provider mirrors (pre-rename)
     "To Reply", "Actioned",
   ].map((s) => s.toLowerCase()),

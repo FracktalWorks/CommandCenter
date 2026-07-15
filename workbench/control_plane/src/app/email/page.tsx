@@ -92,6 +92,7 @@ export default function EmailPage() {
     selectFolder,
     selectEmail,
     setSearchQuery,
+    searchIsSemantic,
     openCompose,
     closeCompose,
     updateEmail,
@@ -261,6 +262,7 @@ export default function EmailPage() {
       onAddAccount={handleAddAccount}
       onSetDefault={setDefaultAccount}
       onSearch={setSearchQuery}
+      searchIsSemantic={searchIsSemantic}
       showAutomation={false}
     />
   );
@@ -659,6 +661,7 @@ export default function EmailPage() {
               onAddAccount={handleAddAccount}
               onSetDefault={setDefaultAccount}
               onSearch={setSearchQuery}
+      searchIsSemantic={searchIsSemantic}
               onOpenAutomation={handleOpenAutomation}
               activeAutomation={automationFeature}
             />

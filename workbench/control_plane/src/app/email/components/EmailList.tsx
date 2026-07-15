@@ -45,6 +45,21 @@ const TOOLBAR_ACTIONS = [
   { icon: Tag, label: "Label", key: "label" },
 ];
 
+// Render a search highlight (ts_headline output) safely: the server wraps the
+// matched terms in <mark>…</mark> but does NOT escape the surrounding email text,
+// so we escape everything first, then re-allow ONLY the mark tags. Prevents any
+// HTML in the email body from injecting into the list.
+function renderHighlight(hl: string): { __html: string } {
+  const escaped = hl
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+  const withMarks = escaped
+    .replace(/&lt;mark&gt;/g, '<mark class="bg-primary/25 text-foreground rounded-sm px-0.5">')
+    .replace(/&lt;\/mark&gt;/g, "</mark>");
+  return { __html: withMarks };
+}
+
 interface CtxState {
   x: number;
   y: number;
@@ -440,10 +455,18 @@ export function EmailList({
                   {email.subject}
                 </div>
 
-                {/* Preview */}
-                <div className="text-[11px] text-muted-foreground truncate leading-relaxed">
-                  {email.snippet}
-                </div>
+                {/* Preview — a search hit shows the highlighted match snippet
+                    (why it matched); otherwise the plain snippet. */}
+                {email.highlight ? (
+                  <div
+                    className="text-[11px] text-muted-foreground truncate leading-relaxed"
+                    dangerouslySetInnerHTML={renderHighlight(email.highlight)}
+                  />
+                ) : (
+                  <div className="text-[11px] text-muted-foreground truncate leading-relaxed">
+                    {email.snippet}
+                  </div>
+                )}
 
                 {/* Categories / user labels — click to filter the list.
                     When an email has NO category (rules haven't run or the

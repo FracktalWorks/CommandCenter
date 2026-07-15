@@ -181,6 +181,9 @@ interface EmailState {
    *  without first switching to the folder it lives in. */
   selectedEmailOverride: Email | null;
   searchQuery: string;
+  /** True when the last search was re-ranked semantically (hybrid) by the server
+   *  — lets the UI show a "Smart results" indicator. False for lexical/no search. */
+  searchIsSemantic: boolean;
   /** Checkbox multi-selection in the list, shared with the unified toolbar so
    *  bulk actions can live in the page-level bar instead of inside EmailList. */
   selectedIds: Set<string>;
@@ -423,6 +426,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   selectedEmailId: null,
   selectedEmailOverride: null,
   searchQuery: "",
+  searchIsSemantic: false,
   selectedIds: new Set<string>(),
   viewerCommand: null,
 
@@ -520,14 +524,33 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     const { selectedAccountId, selectedFolder, selectedLabel, searchQuery } = get();
     set({ emailsLoading: true, error: null });
     try {
-      const result = await api.listEmails({
-        accountId: selectedAccountId || undefined,
-        folder: selectedFolder,
-        label: selectedLabel || undefined,
-        query: searchQuery || undefined,
-        page: 1,
-        pageSize: PAGE_SIZE,
-      });
+      const q = searchQuery.trim();
+      // A search spans ALL folders (relevance-ranked, highlighted) via the
+      // dedicated /email/search endpoint — "search all emails" shouldn't be
+      // confined to the open folder. No query → the normal folder list.
+      // hybrid:true asks for semantic re-ranking; the server applies it only
+      // when semantic search is enabled and returns whether it did.
+      let searchIsSemantic = false;
+      const result = q
+        ? await (async () => {
+            const r = await api.searchEmails({
+              q,
+              accountId: selectedAccountId || undefined,
+              label: selectedLabel || undefined,
+              hybrid: true,
+              page: 1,
+              pageSize: PAGE_SIZE,
+            });
+            searchIsSemantic = r.hybrid;
+            return r;
+          })()
+        : await api.listEmails({
+            accountId: selectedAccountId || undefined,
+            folder: selectedFolder,
+            label: selectedLabel || undefined,
+            page: 1,
+            pageSize: PAGE_SIZE,
+          });
       let emails = result.emails;
       let total = result.total;
       // Demo fallback: backend returned nothing → show mock messages.
@@ -552,6 +575,7 @@ export const useEmailStore = create<EmailState>((set, get) => ({
         emailsLoading: false,
         emailsTotal: total,
         emailsPage: 1,
+        searchIsSemantic,
       });
     } catch (err: any) {
       // Demo fallback: backend unreachable → show mock messages.

@@ -41,6 +41,10 @@ export interface Email {
   folder: string;
   receivedAt: string; // ISO 8601
   syncedAt: string;
+  /** Search-only: relevance score (ts_rank_cd) — present on /email/search hits. */
+  rank?: number;
+  /** Search-only: highlighted snippet (<mark>…</mark>) showing why it matched. */
+  highlight?: string;
 }
 
 export interface EmailAccount {

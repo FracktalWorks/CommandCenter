@@ -365,6 +365,28 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
             )
             await db.commit()
 
+            # Drain a bounded slice of the empty-body backlog so full-text search
+            # can match on the body of messages the user hasn't opened (Outlook
+            # syncs headers-only). Best-effort and bounded — never fails or stalls
+            # the sync; the backlog empties over successive ticks.
+            try:
+                from email_ingestion.body_backfill import backfill_missing_bodies
+                await backfill_missing_bodies(db, account_id, provider)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sync.body_backfill_failed account=%s err=%s",
+                               account_id, str(exc)[:160])
+
+            # Semantic search (Phase 2): embed a bounded batch of not-yet-embedded
+            # messages for hybrid vector ranking. No-op unless
+            # email_semantic_search_enabled. Best-effort; never fails the sync.
+            try:
+                from email_ingestion.email_embeddings import (
+                    embed_pending_messages)
+                await embed_pending_messages(db, account_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sync.email_embed_failed account=%s err=%s",
+                               account_id, str(exc)[:160])
+
             logger.info(
                 "sync.account_done account_id=%s provider=%s synced=%s",
                 account_id, provider_name, persisted_count,

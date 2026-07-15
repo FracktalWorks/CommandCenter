@@ -20,6 +20,9 @@ interface AccountSidebarProps {
   /** Make an account the user's default mailbox (the inbox the UI opens on). */
   onSetDefault?: (id: string) => void;
   onSearch?: (query: string) => void;
+  /** True when the current search was re-ranked semantically — shows a small
+   *  "Smart" badge in the search box so the user knows results are by meaning. */
+  searchIsSemantic?: boolean;
   /** Open one of the Email Automation feature views. */
   onOpenAutomation?: (feature: AutomationFeature) => void;
   /** Currently-open automation feature, for highlighting. */
@@ -55,6 +58,7 @@ export function AccountSidebar({
   onAddAccount,
   onSetDefault,
   onSearch,
+  searchIsSemantic = false,
   onOpenAutomation,
   activeAutomation,
   showMailbox = true,
@@ -89,7 +93,7 @@ export function AccountSidebar({
           <Search size={13} className="text-muted-foreground flex-shrink-0" />
           <input
             type="text"
-            placeholder="Search emails..."
+            placeholder="Search all emails..."
             value={searchQuery}
             onChange={(e) => {
               setSearchQuery(e.target.value);
@@ -97,6 +101,16 @@ export function AccountSidebar({
             }}
             className="bg-transparent outline-none text-xs w-full text-foreground placeholder:text-muted-foreground"
           />
+          {/* Shown only when the server actually applied semantic re-ranking —
+              so it never appears when the feature is off. */}
+          {searchQuery.trim() && searchIsSemantic && (
+            <span
+              title="Results ranked by meaning, not just keywords"
+              className="flex-shrink-0 inline-flex items-center gap-0.5 text-[9px] font-medium text-primary bg-primary/10 rounded px-1 py-0.5"
+            >
+              <Sparkles size={9} /> Smart
+            </span>
+          )}
         </div>
       </div>
 

@@ -258,6 +258,19 @@ class Settings(BaseSettings):
     neo4j_user: str = "neo4j"
     neo4j_password: str = ""   # required when graphiti_enabled=true
 
+    # Email semantic search (Phase 2) — embed emails into email_embeddings
+    # (pgvector) and blend cosine similarity with full-text rank on the
+    # hybrid=true path of /email/search. OFF by default: lexical FTS (Phase 1)
+    # is complete on its own, and embedding a mailbox costs tokens + a background
+    # sweep. Turn on once migration 73 has run.
+    email_semantic_search_enabled: bool = False
+    # One model for all email embeddings. The vector column in migration 73 is
+    # sized 1536 for this default; changing to a different-dimension model
+    # (e.g. gemini text-embedding-004 = 768) requires recreating the column and
+    # re-embedding — the model is stored per row so that migration is scriptable.
+    email_embedding_model: str = "text-embedding-3-small"
+    email_embedding_dim: int = 1536
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

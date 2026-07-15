@@ -121,6 +121,9 @@ function mapEmail(raw: Record<string, unknown>): Email {
     folder: String(raw.folder ?? "INBOX"),
     receivedAt: raw.received_at ? String(raw.received_at) : new Date().toISOString(),
     syncedAt: raw.synced_at ? String(raw.synced_at) : new Date().toISOString(),
+    // Present only on /email/search results.
+    rank: raw.rank != null ? Number(raw.rank) : undefined,
+    highlight: raw.highlight != null ? String(raw.highlight) : undefined,
   };
 }
 
@@ -321,6 +324,108 @@ export async function createEmailCapture(
   };
 }
 
+// ── Commitment capture (a reply I SENT that promises a future action) ─────────
+// Keyed on the reply's (thread_id, body, subject) rather than an email_id,
+// because the just-sent message usually isn't mirrored locally yet. `detect`
+// runs the commitment gate on send; `create` writes the confirmed task. Both
+// feed the SAME TaskCaptureModal UI as an inbound capture.
+
+export interface CommitmentDetection {
+  isCommitment: boolean;
+  draft: TaskCaptureDraft | null;
+  similar: SimilarTask[];
+  alreadyCaptured: AlreadyCapturedTask | null;
+}
+
+/** Detect on send: does the reply I just sent commit me to a task? Returns a
+ *  routed draft for the popup when it does; isCommitment=false → no popup. */
+export async function detectReplyCommitment(params: {
+  accountId: string;
+  threadId: string;
+  body: string;
+  subject?: string;
+  replyToMessageId?: string | null;
+  /** On send this stays false (fast: reply body only). "Enhance with AI" sets it
+   *  true so the LLM reviews the whole conversation for a richer draft. */
+  includeThread?: boolean;
+}): Promise<CommitmentDetection> {
+  const res = await gatewayFetch<Record<string, unknown>>(
+    "/tasks/capture/from-reply/detect",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        account_id: params.accountId,
+        thread_id: params.threadId,
+        body: params.body,
+        subject: params.subject ?? "",
+        reply_to_message_id: params.replyToMessageId ?? null,
+        include_thread: params.includeThread ?? false,
+      }),
+    }
+  );
+  const ac = res.already_captured as Record<string, unknown> | null;
+  return {
+    isCommitment: Boolean(res.is_commitment),
+    draft: res.draft
+      ? mapDraft(res.draft as Record<string, unknown>)
+      : null,
+    similar: ((res.similar ?? []) as Record<string, unknown>[]).map((s) => ({
+      id: String(s.id ?? ""),
+      title: String(s.title ?? ""),
+      disposition: String(s.disposition ?? "INBOX"),
+      reason: s.reason === "same-thread" ? "same-thread" : "similar-title",
+      score: Number(s.score ?? 0),
+    })),
+    alreadyCaptured: ac
+      ? {
+          id: String(ac.id ?? ""),
+          title: String(ac.title ?? ""),
+          disposition: String(ac.disposition ?? "INBOX"),
+        }
+      : null,
+  };
+}
+
+/** Confirm the commitment popup: write the (edited) task, link it to the thread,
+ *  and tag the thread "Task". Idempotent per thread. */
+export async function createReplyCommitment(params: {
+  accountId: string;
+  threadId: string;
+  subject?: string;
+  body?: string;
+  replyToMessageId?: string | null;
+  draft: TaskCaptureDraft;
+}): Promise<{
+  title: string;
+  created: boolean;
+  disposition: string;
+  assigneeName: string | null;
+  dueAt: string | null;
+}> {
+  const res = await gatewayFetch<Record<string, unknown>>(
+    "/tasks/capture/from-reply/create",
+    {
+      method: "POST",
+      body: JSON.stringify({
+        account_id: params.accountId,
+        thread_id: params.threadId,
+        subject: params.subject ?? "",
+        body: params.body ?? "",
+        reply_to_message_id: params.replyToMessageId ?? null,
+        draft: draftToWire(params.draft),
+      }),
+    }
+  );
+  const item = (res.item ?? {}) as Record<string, unknown>;
+  return {
+    title: String(item.title ?? ""),
+    created: Boolean(res.created),
+    disposition: String(res.disposition ?? "INBOX"),
+    assigneeName: res.assignee_name ? String(res.assignee_name) : null,
+    dueAt: res.due_at ? String(res.due_at) : null,
+  };
+}
+
 export async function listEmailAccounts(): Promise<EmailAccount[]> {
   const raw = await gatewayFetch<Record<string, unknown>[]>("/email/accounts");
   return (raw ?? []).map(mapAccount);
@@ -452,6 +557,72 @@ export async function listEmails(
     total: raw.total ?? 0,
     page: raw.page ?? 1,
     pageSize: raw.page_size ?? 50,
+  };
+}
+
+export interface SearchEmailsParams {
+  q: string;
+  /** Omit to search across ALL of the user's accounts (default). */
+  accountId?: string;
+  /** Omit to search across ALL folders (default). */
+  folder?: string;
+  label?: string;
+  senderCategory?: string;
+  isRead?: boolean;
+  isStarred?: boolean;
+  hasAttachments?: boolean;
+  receivedAfter?: string;
+  receivedBefore?: string;
+  /** Ask for semantic (vector) re-ranking. The server honours it only when
+   *  semantic search is enabled + embeddings exist; otherwise it returns pure
+   *  lexical results and `hybrid: false`. */
+  hybrid?: boolean;
+  page?: number;
+  pageSize?: number;
+}
+
+export interface SearchEmailsResult extends ListEmailsResponse {
+  /** True when the server actually applied semantic re-ranking. */
+  hybrid: boolean;
+}
+
+/** Ranked full-text search over ALL email (all folders/accounts unless narrowed).
+ *  Results are relevance-ordered and each carries a highlighted `highlight`
+ *  snippet. Distinct from listEmails (folder list) — this is the search surface.
+ *  Accepts websearch syntax: "quoted phrase", OR, -exclude. */
+export async function searchEmails(
+  params: SearchEmailsParams
+): Promise<SearchEmailsResult> {
+  const sp = new URLSearchParams();
+  sp.set("q", params.q);
+  if (params.accountId) sp.set("account_id", params.accountId);
+  if (params.folder) sp.set("folder", params.folder);
+  if (params.label) sp.set("label", params.label);
+  if (params.senderCategory) sp.set("sender_category", params.senderCategory);
+  if (params.isRead != null) sp.set("is_read", String(params.isRead));
+  if (params.isStarred != null) sp.set("is_starred", String(params.isStarred));
+  if (params.hasAttachments != null)
+    sp.set("has_attachments", String(params.hasAttachments));
+  if (params.receivedAfter) sp.set("received_after", params.receivedAfter);
+  if (params.receivedBefore) sp.set("received_before", params.receivedBefore);
+  if (params.hybrid) sp.set("hybrid", "true");
+  if (params.page) sp.set("page", String(params.page));
+  if (params.pageSize) sp.set("page_size", String(params.pageSize));
+
+  const raw = await gatewayFetch<{
+    emails: Record<string, unknown>[];
+    total: number;
+    page: number;
+    page_size: number;
+    hybrid?: boolean;
+  }>(`/email/search?${sp.toString()}`);
+
+  return {
+    emails: (raw.emails ?? []).map(mapEmail),
+    total: raw.total ?? 0,
+    page: raw.page ?? 1,
+    pageSize: raw.page_size ?? 50,
+    hybrid: Boolean(raw.hybrid),
   };
 }
 

@@ -6,9 +6,15 @@ agent code, files, and memory persist — and the required reading before we bui
 the in-platform **agent-building workbench** or any new MAF agent (here or on Pomad
 Centre).
 
-**Companions:** `agents-workspaces-artifacts.md` (workspace layout), `llm_caching_memory.md`
+**Companions:** `agent_persistence_implementation.md` (the engineering reference — every
+function, table, and seam; **read this before changing how persistence works**),
+`agents-workspaces-artifacts.md` (workspace layout), `llm_caching_memory.md`
 (Mem0 scopes), `system_architecture.md` (ADRs), and the dev-only limitation note at
 `docs/DESIGN_LIMITATION_native_maf_mutation.md`.
+
+> **This doc = the contract (what agents must do). The implementation reference =
+> how it's built (what to edit to change it).** Keep them in sync: a mechanism
+> change lands in the implementation reference; a contract change lands here.
 
 ---
 

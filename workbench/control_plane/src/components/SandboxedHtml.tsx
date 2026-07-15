@@ -56,6 +56,10 @@ interface SandboxedHtmlProps {
   /** name → inline SVG string. Pre-resolved on the parent (Lucide, no network)
    *  so generated code can drop icons via ccIcon("name") or [data-cc-icon]. */
   icons?: Record<string, string>;
+  /** Chrome-less, fill-height mode for full-page reports in the side panel
+   *  (no "Generated UI / sandboxed" header, no card frame, fills its container).
+   *  Inline chat cards keep the default framed chrome. */
+  chromeless?: boolean;
 }
 
 // A nonce-free but locked CSP: allow inline style/script (the generated code
@@ -260,6 +264,121 @@ function buildSrcDoc(
     background: var(--cc-card); border: 1px solid var(--cc-border);
     border-radius: var(--cc-radius); padding: 0.9rem;
   }
+
+  /* ── Report design kit ────────────────────────────────────────────────
+     Reusable, on-brand document blocks so an agent writes terse semantic
+     HTML and gets a polished Command Center report (matches the reference
+     proposal artifact). Every class is namespaced cc-*; agents compose them.
+     Mono/utility face for eyebrows, section numbers, diagrams, and data. */
+  .cc-report {
+    --cc-mono: ui-monospace, "SF Mono", "Cascadia Code", Menlo, Consolas, monospace;
+    max-width: 62rem; margin: 0 auto; padding: 0.5rem 0.25rem 2rem;
+    font-size: 14px; line-height: 1.62;
+  }
+  .cc-report > * + * { margin-top: 0.9rem; }
+  .cc-report p { max-width: 72ch; color: var(--cc-muted); }
+  .cc-report strong { color: var(--cc-fg); font-weight: 620; }
+  .cc-report code {
+    font-family: var(--cc-mono); font-size: 0.86em;
+    background: var(--cc-secondary); border: 1px solid var(--cc-border);
+    padding: 1px 5px; border-radius: 5px; color: var(--cc-fg);
+  }
+  /* Eyebrow — mono uppercase kicker with a leading rule. */
+  .cc-eyebrow {
+    font-family: var(--cc-mono); font-size: 11px; letter-spacing: 0.14em;
+    text-transform: uppercase; color: var(--cc-primary);
+    display: flex; align-items: center; gap: 10px; margin: 0;
+  }
+  .cc-eyebrow::before {
+    content: ""; width: 22px; height: 1px; background: var(--cc-primary);
+  }
+  /* Section number — mono accent tag that precedes an h2. */
+  .cc-sec-num {
+    font-family: var(--cc-mono); font-size: 11px; letter-spacing: 0.1em;
+    color: var(--cc-accent); text-transform: uppercase; display: block;
+  }
+  .cc-report h1 { font-size: clamp(24px, 4vw, 34px); line-height: 1.1; letter-spacing: -0.02em; text-wrap: balance; }
+  .cc-report h2 { font-size: 21px; letter-spacing: -0.015em; margin: 0.2rem 0 0.1rem; text-wrap: balance; }
+  .cc-report h3 { font-size: 15px; margin: 1.1rem 0 0.3rem; }
+  .cc-lede { font-size: 16px; color: var(--cc-muted); max-width: 64ch; }
+  /* Callout — tinted panel (accent by default, .cc-callout-key for primary).
+     Subtle tint + border, NOT a thick side stripe. */
+  .cc-callout {
+    display: grid; grid-template-columns: auto 1fr; gap: 14px;
+    background: color-mix(in srgb, var(--cc-accent) 8%, var(--cc-card));
+    border: 1px solid color-mix(in srgb, var(--cc-accent) 24%, var(--cc-border));
+    border-radius: var(--cc-radius); padding: 0.85rem 1rem;
+  }
+  .cc-callout .cc-tag {
+    font-family: var(--cc-mono); font-size: 10px; text-transform: uppercase;
+    letter-spacing: 0.1em; color: var(--cc-accent); padding-top: 2px; white-space: nowrap;
+  }
+  .cc-callout p { margin: 0; max-width: none; }
+  .cc-callout-key {
+    background: color-mix(in srgb, var(--cc-primary) 8%, var(--cc-card));
+    border-color: color-mix(in srgb, var(--cc-primary) 26%, var(--cc-border));
+  }
+  .cc-callout-key .cc-tag { color: var(--cc-primary); }
+  /* Chips row. */
+  .cc-chips { display: flex; flex-wrap: wrap; gap: 8px; }
+  .cc-chip {
+    font-family: var(--cc-mono); font-size: 11px; padding: 4px 10px;
+    border: 1px solid var(--cc-border); border-radius: 999px;
+    color: var(--cc-muted); background: var(--cc-card);
+  }
+  .cc-chip b { color: var(--cc-fg); font-weight: 600; }
+  /* Grid of cards. */
+  .cc-grid { display: grid; gap: 14px; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); }
+  .cc-report .cc-grid > .cc-card { margin: 0; }
+  .cc-grid .cc-card h4 { margin: 0 0 6px; font-size: 14px; font-weight: 620; display: flex; align-items: center; gap: 8px; }
+  .cc-grid .cc-card p { font-size: 13px; }
+  .cc-dot { width: 8px; height: 8px; border-radius: 999px; flex: none; background: var(--cc-primary); }
+  /* Comparison table. */
+  .cc-compare { overflow-x: auto; border: 1px solid var(--cc-border); border-radius: var(--cc-radius); }
+  .cc-compare table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 30rem; }
+  .cc-compare th, .cc-compare td { text-align: left; padding: 10px 14px; border-bottom: 1px solid var(--cc-border); vertical-align: top; }
+  .cc-compare thead th {
+    font-family: var(--cc-mono); font-size: 11px; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--cc-muted); background: var(--cc-secondary);
+  }
+  .cc-compare tbody tr:last-child td { border-bottom: none; }
+  .cc-compare td:first-child { color: var(--cc-muted); }
+  .cc-yes { color: var(--cc-success); font-weight: 600; }
+  .cc-no { color: var(--cc-danger); font-weight: 600; }
+  .cc-partial { color: var(--cc-warning); font-weight: 600; }
+  /* Mono diagram block — ASCII architecture / flow. */
+  .cc-diagram {
+    background: var(--cc-bg); border: 1px solid var(--cc-border);
+    border-radius: var(--cc-radius); padding: 1rem 1.1rem; overflow-x: auto;
+  }
+  .cc-diagram pre {
+    margin: 0; font-family: var(--cc-mono); font-size: 12px; line-height: 1.5;
+    color: var(--cc-muted); white-space: pre;
+  }
+  .cc-diagram pre b { color: var(--cc-primary); font-weight: 600; }
+  .cc-diagram pre .cc-hl { color: var(--cc-accent); }
+  /* Numbered steps. */
+  .cc-steps { display: grid; gap: 0; }
+  .cc-step { display: grid; grid-template-columns: 34px 1fr; gap: 14px; padding: 0.8rem 0; border-bottom: 1px solid var(--cc-border); align-items: start; }
+  .cc-step:last-child { border-bottom: none; }
+  .cc-step .cc-n {
+    font-family: var(--cc-mono); font-size: 12px; color: var(--cc-primary);
+    border: 1px solid var(--cc-border); border-radius: 8px; width: 30px; height: 30px;
+    display: grid; place-items: center; background: var(--cc-card);
+  }
+  .cc-step h4 { margin: 0.15rem 0 0.2rem; font-size: 14px; font-weight: 620; }
+  .cc-step p { margin: 0; font-size: 13px; }
+  /* Phase ribbon. */
+  .cc-phase { display: grid; grid-template-columns: auto 1fr; gap: 16px; padding: 0.85rem 0; border-bottom: 1px solid var(--cc-border); }
+  .cc-phase:last-child { border-bottom: none; }
+  .cc-phase .cc-badge {
+    font-family: var(--cc-mono); font-size: 11px; font-weight: 600; color: var(--cc-primary-fg);
+    background: var(--cc-primary); border-radius: 8px; padding: 4px 11px; height: fit-content; white-space: nowrap;
+  }
+  .cc-phase h4 { margin: 0.1rem 0 0.3rem; font-size: 15px; }
+  .cc-phase ul { margin: 0.3rem 0 0; padding-left: 18px; font-size: 13px; color: var(--cc-muted); }
+  /* Status pills for tables/inline. */
+  .cc-pill { font-family: var(--cc-mono); font-size: 10px; padding: 2px 8px; border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; }
 </style>`;
   const bridge = BRIDGE.replace("__ICONS__", safeScriptJson(icons));
   return `<!doctype html><html data-theme="${theme}"><head><meta charset="utf-8">
@@ -273,6 +392,7 @@ export default function SandboxedHtml({
   onAction,
   theme = "dark",
   icons,
+  chromeless = false,
 }: SandboxedHtmlProps): React.ReactElement {
   const frameRef = useRef<HTMLIFrameElement | null>(null);
   const [autoHeight, setAutoHeight] = useState<number>(height ?? 120);
@@ -310,6 +430,21 @@ export default function SandboxedHtml({
     window.addEventListener("message", onMessage);
     return () => window.removeEventListener("message", onMessage);
   }, [onAction, height]);
+
+  // Chrome-less: fill the container (side-panel report pane), no header/frame.
+  if (chromeless) {
+    return (
+      <iframe
+        ref={frameRef}
+        sandbox="allow-scripts"
+        allow=""
+        referrerPolicy="no-referrer"
+        title="Generated document"
+        srcDoc={srcDoc}
+        style={{ width: "100%", height: height ?? "100%", border: "0", display: "block" }}
+      />
+    );
+  }
 
   return (
     <div className="rounded-lg border border-border/60 bg-card/40 overflow-hidden">

@@ -33,8 +33,7 @@ from pathlib import Path
 def _get_agent_dir() -> str:
     """Resolve the agent's workspace root."""
     try:
-        from acb_skills.write_artifact import \
-            _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+        from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
         root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root", "")
         if root:
             return root
@@ -91,8 +90,22 @@ async def save_note(path: str, fact: str) -> str:
     ts = datetime.now(tz=timezone.utc).strftime("%Y-%m-%d %H:%M")
     line = f"- {ts}: {fact.strip()}\n"
 
-    existing = target.read_text(encoding="utf-8") if target.exists() else ""
-    target.write_text(existing + line, encoding="utf-8")
+    existed = target.exists()
+    existing = target.read_text(encoding="utf-8") if existed else ""
+    new_text = existing + line
+    target.write_text(new_text, encoding="utf-8")
+
+    # Write-through to the authoritative blob store — NOTES.md and other
+    # agent-data/ files are the agent's durable memory (an extension of its
+    # system prompt), so they must survive a wiped volume like Mem0 does.
+    # save_note emits no artifact event, so mirror here at the write itself.
+    import asyncio as _asyncio  # noqa: PLC0415
+
+    from acb_skills.write_artifact import mirror_to_blob_store  # noqa: PLC0415
+    _asyncio.ensure_future(mirror_to_blob_store(
+        clean, new_text.encode("utf-8"), mime_type="text/markdown",
+        action="modify" if existed else "create",
+    ))
 
     return f"Saved to {clean}"
 

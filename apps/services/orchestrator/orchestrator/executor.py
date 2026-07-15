@@ -1387,6 +1387,8 @@ async def run_agent(
                 from acb_skills.write_artifact import \
                     _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
+                _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
+                _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_agent_dir
                 _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
                     getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
@@ -1399,6 +1401,15 @@ async def run_agent(
                 _ws_root = Path(_effective_agent_dir)
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Rehydrate the agent's durable folders from the authoritative blob
+            # store BEFORE it runs, so a wiped/migrated volume comes back (store
+            # is source of truth, disk is a cache). Best-effort; never blocks.
+            try:
+                from acb_memory import rehydrate_workspace  # noqa: PLC0415
+                await rehydrate_workspace(agent_name, _effective_agent_dir)
             except Exception:  # noqa: BLE001
                 pass
 
@@ -1859,6 +1870,8 @@ async def run_agent_stream(
                 from acb_skills.write_artifact import \
                     _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
+                _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
+                _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
                 _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
                     getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
@@ -1875,6 +1888,14 @@ async def run_agent_stream(
                 _ws_root = loaded.agent_dir
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
+            except Exception:  # noqa: BLE001
+                pass
+
+            # Rehydrate durable folders from the authoritative blob store before
+            # the agent runs (store is source of truth). Best-effort.
+            try:
+                from acb_memory import rehydrate_workspace  # noqa: PLC0415
+                await rehydrate_workspace(agent_name, str(loaded.agent_dir))
             except Exception:  # noqa: BLE001
                 pass
 

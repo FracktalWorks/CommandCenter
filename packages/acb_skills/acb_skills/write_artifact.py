@@ -45,6 +45,55 @@ def _sha256(data: bytes) -> str:
     return hashlib.sha256(data).hexdigest()
 
 
+def _current_agent_name() -> str:
+    """Best-effort agent name for the current run (blob-store key).
+
+    Prefers the explicit context value the executor sets; falls back to the
+    workspace_root basename ({agents_clone_dir}/repos/<agent_name>).
+    """
+    name = _WRITE_ARTIFACT_CONTEXT.get("agent_name")
+    if name:
+        return str(name)
+    root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
+    return Path(root).name if root else ""
+
+
+async def mirror_to_blob_store(
+    rel_path: str,
+    data: bytes,
+    *,
+    mime_type: str = "application/octet-stream",
+    action: str = "modify",
+    actor: str = "agent",
+) -> None:
+    """Write-through a workspace file into the authoritative blob store.
+
+    Files under agent-data/, inputs/, outputs/ are mirrored to Postgres (source
+    of truth; the disk workspace is a cache) and a version-history row recorded.
+    No-op for other paths, when the store isn't available, or on any error — the
+    on-disk file is already written, so this never blocks the agent.
+    """
+    try:
+        from acb_memory import is_stored_path, put_file  # noqa: PLC0415
+    except ImportError:
+        return
+    if not is_stored_path(rel_path):
+        return
+    agent_name = _current_agent_name()
+    if not agent_name:
+        return
+    await put_file(
+        agent_name,
+        rel_path.replace("\\", "/"),
+        data,
+        mime_type=mime_type,
+        action=action,
+        run_id=_WRITE_ARTIFACT_CONTEXT.get("run_id"),
+        session_id=_WRITE_ARTIFACT_CONTEXT.get("session_id"),
+        actor=actor,
+    )
+
+
 def _normalise_path(path: str) -> str:
     """Strip leading slashes/dots and ensure the path lives in a visible dir.
 
@@ -178,12 +227,22 @@ async def write_artifact(
     else:
         data = bytes(content)
 
+    _existed = target.exists()
     target.write_bytes(data)
     digest = _sha256(data)
     size = len(data)
 
     mime, _ = mimetypes.guess_type(target.name)
     mime = mime or "application/octet-stream"
+
+    # Write-through to the authoritative blob store (agent-data/inputs/outputs).
+    # Fire-and-forget: the disk file is already written, so a store outage never
+    # blocks the agent.
+    import asyncio as _asyncio  # noqa: PLC0415
+    _asyncio.ensure_future(mirror_to_blob_store(
+        clean_path, data, mime_type=mime,
+        action="modify" if (_existed and overwrite) else "create",
+    ))
 
     # Build download URL (relative path — works from the frontend chat UI).
     download_url = (
@@ -475,6 +534,21 @@ async def emit_generative_ui(ui: str) -> dict:
        rem spacing, rounded corners (var(--cc-radius)), and subtle transitions
        (0.2s var(--cc-ease)). Keep it clean and professional — not flashy.
 
+       REPORT DESIGN KIT — for a substantial DOCUMENT (analysis, plan, comparison,
+       briefing) prefer writing it to an ``.html`` file with ``write_artifact`` so
+       it opens full-page in the side panel. Wrap it in ``<div class="cc-report">``
+       and compose these pre-styled blocks (no custom CSS needed): ``cc-eyebrow``
+       (kicker), ``cc-sec-num`` (section number before an h2), ``cc-lede`` (intro),
+       ``cc-callout`` / ``cc-callout-key`` (tinted highlight with a ``cc-tag`` +
+       ``<p>``), ``cc-chips``/``cc-chip``, ``cc-grid`` of ``cc-card``,
+       ``cc-compare`` around a ``<table>`` (cells ``cc-yes``/``cc-no``/
+       ``cc-partial``, ``cc-pill``), ``cc-diagram`` around a ``<pre>`` (``<b>`` for
+       nodes, ``.cc-hl`` for accents), ``cc-steps``/``cc-step`` (a ``cc-n`` number +
+       h4/p, only when order matters), ``cc-phase`` (a ``cc-badge`` + content). The
+       full block reference is in the injected Command Center DESIGN.md. These match
+       the app's palette, spacing, and both themes automatically — use them instead
+       of hand-rolling report styling.
+
        INTERACTIVITY — two channels back to the agent:
          • ``data-cc-action="<message>"`` on a clickable element (or
            ``ccAction("…")`` in script) fires a FIXED follow-up message — like a
@@ -513,6 +587,23 @@ async def emit_generative_ui(ui: str) -> dict:
           'oninput=\\'o.textContent=this.value\\'>'
           '<button class=cc-primary data-cc-submit=\\'Set temperature\\'>Apply</button>'
           '</div>"}}')
+
+        # Full-page report — write to an .html file (opens in the side panel).
+        # Compose the report kit; no custom CSS needed.
+        await write_artifact("outputs/reports/q3-review.html",
+          '<div class="cc-report">'
+          '<p class="cc-eyebrow">Quarterly Review</p>'
+          '<h1>Q3 in one page</h1>'
+          '<p class="cc-lede">Revenue up, churn flat, one risk to watch.</p>'
+          '<span class="cc-sec-num">01 - Metrics</span><h2>The numbers</h2>'
+          '<div class="cc-grid">'
+          '<div class="cc-card"><h4><span class="cc-dot"></span>Revenue</h4>'
+          '<p>Up 18% QoQ.</p></div>'
+          '<div class="cc-card"><h4><span class="cc-dot"></span>Churn</h4>'
+          '<p>Flat at 2.1%.</p></div></div>'
+          '<div class="cc-callout-key cc-callout"><span class="cc-tag">Watch</span>'
+          '<p>One enterprise account is 40% of new revenue.</p></div>'
+          '</div>')
     """
     import json
 

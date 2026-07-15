@@ -14,6 +14,7 @@ import GenerativeUINode from "@/components/GenerativeUINode";
 import ErrorCard from "@/components/ChatErrorCard";
 import { DismissableCard } from "@/components/ToolCardShell";
 import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
+import { openDoc } from "@/lib/sidePanelStore";
 
 function MessageBubble({
   message,
@@ -279,6 +280,9 @@ function MessageBubble({
                     artifact={a}
                     sessionId={sessionId}
                     onOpen={onFileOpen}
+                    onOpenInSidePanel={(entry) =>
+                      openDoc({ path: entry.path, name: entry.name, sessionId })
+                    }
                   />
                 </DismissableCard>
               );

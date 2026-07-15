@@ -8,7 +8,7 @@
  * or dismiss the banner and configure later in the Integrations page.
  */
 
-import { useState, useRef, useEffect, useCallback, useMemo } from "react";
+import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import React from "react";
 import Link from "next/link";
 import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle, LoaderCircle } from "lucide-react";
@@ -18,6 +18,7 @@ import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { UnifiedModel } from "@/app/api/models/all/route";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
+import { subscribe as subscribeSidePanel, getOpenDocsForSession } from "@/lib/sidePanelStore";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
 import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
@@ -303,7 +304,17 @@ export default function AgentChat({
   const isOrchestrator = currentAgentName === "orchestrator" || currentAgentName === "commandcenter";
   const effectiveRuntime = isOrchestrator ? currentRuntime : "copilot";
 
-  // System context = persona + persistent memories + frontend tools (sent as system message).
+  // Documents the user currently has open in the side-panel editor — folded
+  // into the agent's context so it knows what the user is looking at / editing
+  // and can reference or update those files. Stable snapshot per session.
+  const openDocs = useSyncExternalStore(
+    subscribeSidePanel,
+    () => getOpenDocsForSession(sessionId),
+    () => getOpenDocsForSession(sessionId),
+  );
+
+  // System context = persona + persistent memories + frontend tools + open docs
+  // (sent as system message).
   const systemContext = useMemo(() => {
     const parts: string[] = [];
     if (persona) parts.push(persona);
@@ -316,8 +327,16 @@ export default function AgentChat({
     // Inject registered frontend tools into the agent's system prompt
     const toolsAddendum = buildFrontendToolsAddendum();
     if (toolsAddendum) parts.push(toolsAddendum);
+    if (openDocs.length > 0) {
+      parts.push(
+        "The user currently has these workspace files open in the side-panel " +
+          "editor and may be viewing or editing them — read them with your file " +
+          "tools before referencing, and write changes back to the same path:\n" +
+          openDocs.map((d) => `• ${d.path}`).join("\n"),
+      );
+    }
     return parts.length > 0 ? parts.join("\n\n") : undefined;
-  }, [persona, memories]);
+  }, [persona, memories, openDocs]);
 
   // Local cache (localStorage) — instant restore when re-opening a session that
   // was active in this browser. Empty when the session lives only in Postgres

@@ -22,6 +22,7 @@ import {
   FileSpreadsheet,
   Download,
   Maximize2,
+  PanelLeft,
 } from "lucide-react";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -44,7 +45,12 @@ interface ArtifactCardProps {
   sessionId: string;
   /** Called when the user clicks "open" to view in the full modal. */
   onOpen?: (entry: import("./ArtifactSidebar").FileEntry) => void;
+  /** Called to open the file in the side-panel editor (documents: md/html). */
+  onOpenInSidePanel?: (entry: import("./ArtifactSidebar").FileEntry) => void;
 }
+
+/** Documents get a first-class "Open in side panel" action (editable + live). */
+const DOC_EXTS = new Set(["md", "mdx", "html", "htm"]);
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -97,9 +103,11 @@ export default function ArtifactCard({
   artifact,
   sessionId,
   onOpen,
+  onOpenInSidePanel,
 }: ArtifactCardProps) {
   const fileUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(artifact.path)}`;
   const image = isImage(artifact);
+  const isDoc = DOC_EXTS.has(getExt(artifact.name));
   const [imgError, setImgError] = useState(false);
 
   // Build a FileEntry-compatible object for the ArtifactViewerModal
@@ -113,6 +121,10 @@ export default function ArtifactCard({
 
   const handleOpen = () => {
     onOpen?.(buildFileEntry());
+  };
+
+  const handleOpenPanel = () => {
+    onOpenInSidePanel?.(buildFileEntry());
   };
 
   // ── Image artifact: render inline thumbnail ─────────────────────────────
@@ -191,10 +203,20 @@ export default function ArtifactCard({
 
       {/* Actions */}
       <div className="flex items-center gap-1 shrink-0">
+        {isDoc && onOpenInSidePanel && (
+          <button
+            onClick={handleOpenPanel}
+            className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
+            title="Open in side panel — edit + live preview"
+          >
+            <PanelLeft size={13} />
+            Open
+          </button>
+        )}
         <button
           onClick={handleOpen}
           className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          title="Open in viewer"
+          title={isDoc ? "Open in modal viewer" : "Open in viewer"}
         >
           <Maximize2 size={14} />
         </button>

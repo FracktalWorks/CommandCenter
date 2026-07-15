@@ -25,6 +25,9 @@ import {
   RefreshCw,
   Download,
   Trash2,
+  PanelLeft,
+  History,
+  ArrowUpToLine,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -50,6 +53,17 @@ export interface FileEntry {
   is_dir?: boolean;
 }
 
+/** One version row from the blob-store history endpoint. */
+export interface FileHistoryRow {
+  path: string;
+  folder: string;
+  sha256: string;
+  size: number;
+  action: string;     // create | modify | delete | promote
+  actor: string;      // agent | user | system
+  created_at: string;
+}
+
 interface TreeNode {
   name: string;
   path: string;       // full relative path (for files) or prefix (for dirs)
@@ -66,6 +80,8 @@ interface ArtifactSidebarProps {
   artifactUpdates?: FileEntry[];
   /** Render as a full-width drawer panel (mobile) rather than a collapsible rail. */
   fullWidth?: boolean;
+  /** Right-click → "Open in side panel". When omitted, the context menu is off. */
+  onOpenInSidePanel?: (entry: FileEntry) => void;
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -125,14 +141,21 @@ function TreeNodeRow({
   onFileOpen,
   sessionId,
   onDeleteFile,
+  onOpenInSidePanel,
 }: {
   node: TreeNode;
   depth: number;
   onFileOpen: (entry: FileEntry) => void;
   sessionId: string;
   onDeleteFile: (entry: FileEntry) => void;
+  onOpenInSidePanel?: (entry: FileEntry) => void;
 }) {
   const [expanded, setExpanded] = useState(false);
+  // Declared before the dir early-return so the hook order is stable across
+  // renders (rules-of-hooks): context-menu anchor + per-file history/promote state.
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const [history, setHistory] = useState<FileHistoryRow[] | null>(null);
+  const [promoting, setPromoting] = useState(false);
   const paddingLeft = 8 + depth * 12;
 
   if (node.isDir) {
@@ -154,7 +177,7 @@ function TreeNodeRow({
           <span className="truncate font-medium text-foreground">{node.name || "/"}</span>
         </button>
         {expanded && children.map((child) => (
-          <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={onDeleteFile} />
+          <TreeNodeRow key={child.path} node={child} depth={depth + 1} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={onDeleteFile} onOpenInSidePanel={onOpenInSidePanel} />
         ))}
       </div>
     );
@@ -163,6 +186,47 @@ function TreeNodeRow({
   const entry = node.entry!;
   const downloadUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
   const deletable = isDeletable(entry);
+  const isInput = entry.path.startsWith("inputs/");
+
+  const loadHistory = async () => {
+    try {
+      const res = await fetch(
+        `/api/agent/workspace/${sessionId}/history?path=${encodeURIComponent(entry.path)}`,
+      );
+      const data = await res.json();
+      setHistory(Array.isArray(data.history) ? data.history : []);
+    } catch {
+      setHistory([]);
+    }
+  };
+
+  const promote = async () => {
+    setPromoting(true);
+    try {
+      const res = await fetch(`/api/agent/workspace/${sessionId}/promote`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ path: entry.path }),
+      });
+      if (!res.ok) {
+        const b = await res.json().catch(() => ({}));
+        throw new Error(b.detail ?? `HTTP ${res.status}`);
+      }
+      onDeleteFile(entry); // it moved out of inputs/ — drop the old row
+    } catch (err) {
+      alert(`Promote failed: ${err instanceof Error ? err.message : String(err)}`);
+    } finally {
+      setPromoting(false);
+    }
+  };
+
+  const openContext = (e: React.MouseEvent) => {
+    e.preventDefault();
+    // Clamp so the small menu stays on-screen near the cursor.
+    const x = Math.min(e.clientX, window.innerWidth - 190);
+    const y = Math.min(e.clientY, window.innerHeight - 90);
+    setMenu({ x, y });
+  };
 
   const handleDelete = async (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -180,34 +244,159 @@ function TreeNodeRow({
   };
 
   return (
-    <div
-      className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-secondary cursor-pointer transition-colors"
-      style={{ paddingLeft: paddingLeft + 14 }}
-      onClick={() => onFileOpen(entry)}
-      title={`${entry.path} · ${formatBytes(entry.size)}${deletable ? "\nClick 🗑 to delete" : "\nProtected file"}\nClick to open`}
-    >
-      {fileIcon(entry)}
-      <span className="flex-1 truncate">{entry.name}</span>
-      <span className="shrink-0 text-muted-foreground text-[10px]">{formatBytes(entry.size)}</span>
-      <a
-        href={downloadUrl}
-        download={entry.name}
-        onClick={(e) => e.stopPropagation()}
-        className="shrink-0 text-muted-foreground hover:text-blue-400 transition-all p-0.5"
-        title={`Download ${entry.name}`}
+    <>
+      <div
+        className="group flex items-center gap-1.5 rounded px-1 py-0.5 text-xs text-muted-foreground hover:bg-secondary cursor-pointer transition-colors"
+        style={{ paddingLeft: paddingLeft + 14 }}
+        onClick={() => onFileOpen(entry)}
+        onContextMenu={openContext}
+        title={`${entry.path} · ${formatBytes(entry.size)}${deletable ? "\nClick 🗑 to delete" : "\nProtected file"}\nClick to open${onOpenInSidePanel ? " · Right-click for more" : ""}`}
       >
-        <Download size={12} />
-      </a>
-      {deletable && (
-        <button
-          onClick={handleDelete}
-          className="shrink-0 text-muted-foreground hover:text-red-400 transition-all p-0.5"
-          title={`Delete ${entry.name}`}
+        {fileIcon(entry)}
+        <span className="flex-1 truncate">{entry.name}</span>
+        <span className="shrink-0 text-muted-foreground text-[10px]">{formatBytes(entry.size)}</span>
+        <a
+          href={downloadUrl}
+          download={entry.name}
+          onClick={(e) => e.stopPropagation()}
+          className="shrink-0 text-muted-foreground hover:text-blue-400 transition-all p-0.5"
+          title={`Download ${entry.name}`}
         >
-          <Trash2 size={12} />
-        </button>
+          <Download size={12} />
+        </a>
+        {deletable && (
+          <button
+            onClick={handleDelete}
+            className="shrink-0 text-muted-foreground hover:text-red-400 transition-all p-0.5"
+            title={`Delete ${entry.name}`}
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
+
+      {menu && (
+        <>
+          {/* Full-screen catcher: any click / right-click closes the menu. */}
+          <div
+            className="fixed inset-0 z-[80]"
+            onClick={() => setMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setMenu(null);
+            }}
+          />
+          <div
+            className="fixed z-[81] min-w-[190px] overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-2xl"
+            style={{ left: menu.x, top: menu.y }}
+          >
+            {onOpenInSidePanel && (
+              <button
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-popover-foreground hover:bg-secondary transition-colors"
+                onClick={() => {
+                  onOpenInSidePanel(entry);
+                  setMenu(null);
+                }}
+              >
+                <PanelLeft size={13} className="shrink-0 text-muted-foreground" />
+                Open in side panel
+              </button>
+            )}
+            {isInput && (
+              <button
+                disabled={promoting}
+                className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-popover-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                onClick={() => {
+                  promote();
+                  setMenu(null);
+                }}
+                title="Move to Agent Data — permanent, prompt-shaping storage"
+              >
+                <ArrowUpToLine size={13} className="shrink-0 text-muted-foreground" />
+                {promoting ? "Promoting…" : "Promote to Agent Data"}
+              </button>
+            )}
+            <button
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-popover-foreground hover:bg-secondary transition-colors"
+              onClick={() => {
+                loadHistory();
+                setMenu(null);
+              }}
+            >
+              <History size={13} className="shrink-0 text-muted-foreground" />
+              Version history
+            </button>
+            <a
+              href={downloadUrl}
+              download={entry.name}
+              className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-xs text-popover-foreground hover:bg-secondary transition-colors"
+              onClick={() => setMenu(null)}
+            >
+              <Download size={13} className="shrink-0 text-muted-foreground" />
+              Download
+            </a>
+          </div>
+        </>
       )}
-    </div>
+
+      {history !== null && (
+        <div
+          className="fixed inset-0 z-[90] flex items-center justify-center bg-black/60 p-4"
+          onClick={() => setHistory(null)}
+        >
+          <div
+            className="max-h-[70vh] w-full max-w-md overflow-hidden rounded-xl border border-border bg-popover shadow-2xl flex flex-col"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+              <History size={14} className="text-muted-foreground" />
+              <span className="text-sm font-semibold text-foreground truncate">
+                {entry.name}
+              </span>
+              <span className="ml-auto text-[10px] text-muted-foreground">
+                {history.length} version{history.length === 1 ? "" : "s"}
+              </span>
+            </div>
+            <div className="flex-1 overflow-y-auto p-2">
+              {history.length === 0 ? (
+                <p className="px-2 py-6 text-center text-xs text-muted-foreground">
+                  No history recorded yet.
+                </p>
+              ) : (
+                history.map((h, i) => (
+                  <div
+                    key={`${h.sha256}-${i}`}
+                    className="flex items-center gap-2 rounded px-2 py-1.5 text-xs hover:bg-secondary"
+                  >
+                    <span
+                      className={`rounded px-1.5 py-0.5 text-[10px] ${
+                        h.action === "delete"
+                          ? "bg-red-900/30 text-red-300"
+                          : h.action === "promote"
+                          ? "bg-primary/15 text-primary"
+                          : h.action === "create"
+                          ? "bg-emerald-900/30 text-emerald-300"
+                          : "bg-secondary text-muted-foreground"
+                      }`}
+                    >
+                      {h.action}
+                    </span>
+                    <span className="font-mono text-[10px] text-muted-foreground">
+                      {h.sha256.slice(0, 8)}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">{formatBytes(h.size)}</span>
+                    <span className="text-[10px] text-muted-foreground/70">· {h.actor}</span>
+                    <span className="ml-auto text-[10px] text-muted-foreground/70">
+                      {new Date(h.created_at).toLocaleString("en-IN")}
+                    </span>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
 
@@ -220,6 +409,7 @@ export default function ArtifactSidebar({
   onFileOpen,
   artifactUpdates = [],
   fullWidth = false,
+  onOpenInSidePanel,
 }: ArtifactSidebarProps) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -371,7 +561,7 @@ export default function ArtifactSidebar({
           )}
 
           {!loading && rootChildren.map((node) => (
-            <TreeNodeRow key={node.path} node={node} depth={0} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={handleDeleteFile} />
+            <TreeNodeRow key={node.path} node={node} depth={0} onFileOpen={onFileOpen} sessionId={sessionId} onDeleteFile={handleDeleteFile} onOpenInSidePanel={onOpenInSidePanel} />
           ))}
         </div>
       )}

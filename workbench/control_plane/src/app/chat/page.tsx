@@ -22,6 +22,8 @@ import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
 import type { ArtifactEntry } from "@/hooks/useAgentChat";
 import ArtifactSidebar, { type FileEntry } from "@/components/ArtifactSidebar";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
+import SidePanelEditor from "@/components/SidePanelEditor";
+import { openDoc, pruneToSession, setDocLive } from "@/lib/sidePanelStore";
 import FileUploadButton from "@/components/FileUploadButton";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useMobileDrawer } from "@/components/AppShell";
@@ -742,6 +744,27 @@ function ChatPageInner() {
 
   const activeSession = sessions.find((s) => s.id === activeSessionId);
 
+  // Side panel shows the ACTIVE session's documents only — drop other sessions'
+  // tabs when switching so we never render a file from the wrong workspace.
+  useEffect(() => {
+    if (activeSessionId) pruneToSession(activeSessionId);
+  }, [activeSessionId]);
+
+  // Open a workspace file as a tab in the side-panel editor (right-click action
+  // and the auto-open-on-write path both funnel through here).
+  const handleOpenInSidePanel = useCallback(
+    (entry: FileEntry, opts?: { live?: boolean }) => {
+      if (!activeSessionId) return;
+      openDoc({
+        path: entry.path,
+        name: entry.name,
+        sessionId: activeSessionId,
+        live: opts?.live,
+      });
+    },
+    [activeSessionId],
+  );
+
   // ── Unresolved-agent guard ("infer, else prompt") ──────────────────────
   // A session persisted with agentName="unknown" (the /chat/active-sessions
   // placeholder that leaked into chat_session rows) must NOT be dispatched — it
@@ -933,6 +956,9 @@ function ChatPageInner() {
         </aside>
       )}
 
+      {/* ── Desktop: VS Code-style document side panel ─────────────────── */}
+      {!isMobile && <SidePanelEditor />}
+
       {/* ── Chat area ──────────────────────────────────────────────────── */}
       <div className="flex flex-1 overflow-hidden min-w-0">
         <div className="flex flex-1 flex-col overflow-hidden min-w-0">
@@ -976,6 +1002,7 @@ function ChatPageInner() {
                 expectedMessageCount={activeSession.messageCount}
                 onActivity={(info) => handleActivity(activeSession.id, info)}
                 onArtifact={(entry: ArtifactEntry) => {
+                  const name = entry.path.split("/").pop() ?? entry.path;
                   setArtifactUpdates((prev) => {
                     // Merge by path (artifact_created -> artifact_updated for the
                     // same file is one entry, not two) and keep a prior size /
@@ -984,13 +1011,31 @@ function ChatPageInner() {
                     const prior = prev.find((f) => f.path === entry.path);
                     const fe: FileEntry = {
                       path: entry.path,
-                      name: entry.path.split("/").pop() ?? entry.path,
+                      name,
                       size: entry.size ?? prior?.size ?? 0,
                       modified_at: new Date().toISOString(),
                       mime_type: entry.mimeType ?? prior?.mime_type ?? "",
                     };
                     return [...prev.filter((f) => f.path !== entry.path), fe];
                   });
+
+                  // Auto-open documents the agent writes so the user watches
+                  // them build in real time (Markdown/HTML → live preview in the
+                  // side panel). Other file types surface in the Files tree only.
+                  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+                  const isDoc = ["md", "mdx", "html", "htm"].includes(ext);
+                  if (isDoc && activeSession && !isMobile) {
+                    openDoc({
+                      path: entry.path,
+                      name,
+                      sessionId: activeSession.id,
+                      live: true,
+                    });
+                    // Clear the "writing" badge shortly after the last write —
+                    // a subsequent write to the same path re-sets it to live.
+                    const sid = activeSession.id;
+                    window.setTimeout(() => setDocLive(sid, entry.path, false), 2500);
+                  }
                 }}
               />
           ) : (
@@ -1016,6 +1061,7 @@ function ChatPageInner() {
               setViewerEntry(entry);
               setArtifactPanelOpen(true);
             }}
+            onOpenInSidePanel={(entry) => handleOpenInSidePanel(entry)}
             artifactUpdates={artifactUpdates}
           />
         )}

@@ -21,12 +21,30 @@ candidate query, so it's touched exactly once.
 
 from __future__ import annotations
 
+import html as _html
 import logging
+import re
 from typing import Any
 
 from sqlalchemy import text
 
 logger = logging.getLogger(__name__)
+
+_TAG_RE = re.compile(r"<[^>]+>")
+
+
+def _html_to_text(s: str) -> str:
+    """Crude HTML→plain-text (block/break tags → newlines, strip the rest,
+    unescape entities). Mirrors gateway.routes.email.signature.html_to_text;
+    inlined here so the ingestion package needs no gateway import. Used to
+    populate body_text from body_html when a provider returns HTML only — so
+    full-text search (which indexes body_text) can match it."""
+    s = re.sub(r"(?i)<\s*br\s*/?>", "\n", s or "")
+    s = re.sub(r"(?i)</\s*(p|div|tr|li|h[1-6]|table)\s*>", "\n", s)
+    s = _TAG_RE.sub("", s)
+    s = _html.unescape(s)
+    s = re.sub(r"[ \t]+\n", "\n", s)
+    return re.sub(r"\n{3,}", "\n\n", s).strip()
 
 # How many bodies to hydrate per sync tick. Small enough that the extra
 # provider round-trips never dominate a sync cycle; the backlog drains over
@@ -83,15 +101,24 @@ async def backfill_missing_bodies(
             logger.debug("body_backfill.fetch_failed account=%s msg=%s err=%s",
                          account_id, r.provider_message_id, str(exc)[:120])
             continue
-        body_text = _truncate(full.body_text or "", _MAX_BODY_TEXT_BYTES)
-        body_html = (
-            _truncate(full.body_html, _MAX_BODY_HTML_BYTES)
-            if getattr(full, "body_html", None) else None
-        )
+        raw_text = (full.body_text or "").strip()
+        raw_html = getattr(full, "body_html", None) or ""
+        # Outlook/Graph often returns HTML only (empty body_text). FTS indexes
+        # body_text, so derive plain text from the HTML — otherwise the row keeps
+        # matching the empty-body candidate query and is re-fetched every tick,
+        # and its body is never searchable.
+        if not raw_text and raw_html:
+            raw_text = _html_to_text(raw_html)
+        body_text = _truncate(raw_text, _MAX_BODY_TEXT_BYTES)
+        body_html = _truncate(raw_html, _MAX_BODY_HTML_BYTES) if raw_html else None
         # Nothing to store (a genuinely empty message) — stamp a single space so
         # the row stops matching the empty-body candidate query and we don't
         # re-fetch it forever.
         if not body_text and not body_html:
+            body_text = " "
+        elif not body_text:
+            # HTML existed but stripped to nothing — still mark non-empty so the
+            # candidate query stops re-selecting this row.
             body_text = " "
         snippet = (getattr(full, "snippet", "") or body_text or "")[:200]
         await db.execute(text(

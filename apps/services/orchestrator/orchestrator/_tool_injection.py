@@ -28,6 +28,40 @@ from orchestrator._copilot_session import _apply_copilot_infinite_sessions
 _log = get_logger("orchestrator.tool_injection")
 
 
+# ── Guaranteed standard toolset ────────────────────────────────────────────
+# Every loaded agent ALWAYS receives this small essential baseline, regardless
+# of a per-agent ``config.json: tool_scope``.  These are the tools any agent
+# needs whatever its specialty — write a file, track a todo, search the web,
+# ask the user a question, check its own code, keep working notes.  A
+# ``tool_scope`` may still ADD specialist tools on top, but it can no longer
+# silently strip the basics: a scope that omitted ``write_artifact`` is exactly
+# why agents fell back to fragile shell heredocs to author files (burning their
+# output budget on shell-escaping and truncating mid-write).  Kept deliberately
+# SMALL so the Berkeley "too many tools degrades accuracy" finding still holds.
+_CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
+    "web_search", "fetch_page",          # web access
+    "write_artifact", "share_artifact",  # file writing / delivery
+    "manage_todo_list",                  # task tracking panel
+    "ask_questions",                     # HITL clarification
+    "run_diagnostics", "get_errors",     # code / file error checking
+    "save_note", "recall_notes",         # cross-session working memory
+})
+
+
+def _resolve_injected_scope(tool_scope: list[str] | None) -> set[str] | None:
+    """Resolve which injected tool names an agent should receive.
+
+    Returns ``None`` when there is no ``tool_scope`` (inject everything), or the
+    set of allowed names = the agent's ``tool_scope`` UNIONed with the
+    guaranteed :data:`_CORE_STANDARD_TOOL_NAMES` floor.  Unioning the core in
+    means a scope can add specialist tools and narrow the rest, but can never
+    strip the baseline (file writing, todo, web search, clarify, …).
+    """
+    if not tool_scope:
+        return None
+    return set(tool_scope) | set(_CORE_STANDARD_TOOL_NAMES)
+
+
 @functools.lru_cache(maxsize=1)
 def _load_design_md() -> str:
     """Return the Command Center DESIGN.md, cached for the process lifetime.
@@ -79,13 +113,21 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
     """
     if compact:
         return (
-            "FILES: put every file you generate under outputs/ (use logical "
-            "subfolders, e.g. outputs/reports/, outputs/data/). Never write "
-            "deliverables to the working-dir root. Markdown/HTML you produce "
-            "must follow the injected Command Center DESIGN.md."
+            "FILES: write files with write_artifact(path, content) — pass the "
+            "content directly; do NOT build files with shell heredocs / echo / "
+            "printf / base64 (fragile quoting truncates large writes). Put "
+            "every file under outputs/ (logical subfolders, e.g. "
+            "outputs/reports/); never the working-dir root. Markdown/HTML you "
+            "produce must follow the injected Command Center DESIGN.md."
         )
     return (
         "### Output discipline (REQUIRED)\n"
+        "- **To write a file, call `write_artifact(path, content)`** — pass the "
+        "file's content directly as the `content` argument. Do NOT assemble "
+        "files with shell heredocs, `echo`, `printf`, `cat <<EOF`, or `base64`: "
+        "that fragile quoting breaks on quotes/backticks, wastes your output "
+        "budget, and can truncate a large write mid-file. Use the shell to RUN "
+        "things, not to author file content.\n"
         "- Write EVERY file you generate under **outputs/** — reports, docs, "
         "HTML, data, scripts, images, everything. Use logical subfolders to "
         "stay organised (e.g. `outputs/reports/q3.md`, `outputs/data/rows.csv`, "
@@ -506,15 +548,21 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     except ImportError:
         pass
 
-    # ── Dynamic tool scoping (technique #3: inject only what agent needs) ──
-    # If tool_scope is set (from config.json), filter to the named subset.
-    # This prevents the "too many tools" accuracy degradation documented by
-    # the Berkeley Function-Calling Leaderboard (every model degrades, no exceptions).
-    if tool_scope:
-        scope_set = set(tool_scope)
-        _extra_tools = [fn for fn in _all_tools if fn.__name__ in scope_set]
+    # ── Tool scoping: a guaranteed core floor + optional per-agent scope ───
+    # A config.json ``tool_scope`` narrows the injected set to only what the
+    # agent needs (technique #3 — the Berkeley Function-Calling Leaderboard
+    # shows every model degrades as the tool count grows).  BUT the scope is
+    # UNIONED with ``_CORE_STANDARD_TOOL_NAMES`` first, so the essential
+    # baseline (write a file, todo, web search, clarify, diagnostics, notes) is
+    # ALWAYS present no matter how the scope was written.  This is what stops an
+    # agent whose scope forgot ``write_artifact`` from having no clean file-write
+    # path and resorting to fragile shell heredocs.
+    _scope_names = _resolve_injected_scope(tool_scope)
+    if _scope_names is not None:
+        _extra_tools = [fn for fn in _all_tools if fn.__name__ in _scope_names]
         if not _extra_tools:
-            # Scope list doesn't match any known tool names — fall back to all
+            # Neither the scope nor the core matched any known tool (e.g. every
+            # optional import above failed) — fall back to the full set.
             _log.warning(
                 "executor.tool_scope_no_match",
                 requested=tool_scope,

@@ -2860,25 +2860,46 @@ async def run_agent_stream(
                 for _ev in _close_text_message(_t15_state):
                     yield _sse(_ev)
                 if not _t15_had_text:
-                    # Stream ended without any assistant text — surface as
-                    # a warning so the frontend doesn't show an empty bubble.
+                    # The stream ended without any *visible* assistant text.
+                    # Two very different situations hide behind that, and they
+                    # must NOT be treated the same:
+                    #
+                    #   • Tool work happened → the model almost certainly ran
+                    #     out of output budget (max_tokens) part-way through —
+                    #     classically mid tool-call or right after the last
+                    #     tool — so it never got to write its closing answer.
+                    #     Reasoning models (e.g. deepseek) burn the budget on
+                    #     reasoning + a large tool argument and get truncated
+                    #     (the last tool call's JSON arrives malformed:
+                    #     "Unterminated string in JSON ...").  But the run DID
+                    #     real work: the tool cards are already folded and
+                    #     persisted.  Dead-ending on a hard RUN_ERROR wipes all
+                    #     that from the UI and alarms the user — so instead we
+                    #     soft-finish: emit a short closing message and FINISH
+                    #     the run (records as 'completed', keeps the work).
+                    #
+                    #   • No tool work at all → the model genuinely returned
+                    #     nothing (content filter / provider error).  That is a
+                    #     real failure worth surfacing as an error.
+                    _tool_activity = bool(_t15_state.fc.seen)
                     _log.warning(
                         "executor.copilot_no_text",
                         agent=agent_name,
                         run_id=run_id,
+                        tool_activity=_tool_activity,
+                        tools=len(_t15_state.fc.seen),
                     )
-                    yield _sse({
-                        "type": "RUN_ERROR",
-                        "runId": run_id,
-                        "message": (
-                            "The agent produced no text output.  The "
-                            "underlying model may have hit a token limit, "
-                            "content filter, or provider error.  Check "
-                            "gateway logs for details."
-                        ),
-                        "code": "NO_OUTPUT",
-                    })
-                    return
+                    _nt_events, _nt_finish = _copilot_no_text_end(
+                        run_id=run_id, tool_activity=_tool_activity,
+                    )
+                    for _ev in _nt_events:
+                        yield _sse(_ev)
+                    if not _nt_finish:
+                        # No tool work — a genuine empty response; hard stop.
+                        return
+                    # Tool work happened: fall through to RUN_FINISHED +
+                    # commit detection so the run records as 'completed' and
+                    # the folded tool cards are preserved.
                 yield _sse({"type": "RUN_FINISHED", "runId": run_id, "threadId": thread_id})
 
                 await _detect_agent_commits(
@@ -3998,6 +4019,82 @@ def _build_event_message(
             )
 
     return "\n".join(parts) if parts else f"[Agent run: {agent_name} / {run_id}]"
+
+
+# ---------------------------------------------------------------------------
+# No-text stream-end handling (Copilot Tier 1.5)
+# ---------------------------------------------------------------------------
+
+# The fallback message shown when a tool-using run ends without a final
+# written answer (the model was truncated before its closing summary).
+_NO_TEXT_TRUNCATED_MSG = (
+    "I finished the steps above, but my final summary was cut off before it "
+    "could be written — the response hit its output length limit. The work "
+    "itself is captured in the steps above. Say “continue” and I'll "
+    "pick up where I left off and write the summary."
+)
+
+
+def _copilot_no_text_end(
+    *, run_id: str, tool_activity: bool,
+) -> tuple[list[dict[str, Any]], bool]:
+    """Decide how a Copilot run that produced no assistant text should end.
+
+    A run can finish the stream with ``text_started == False`` for two very
+    different reasons, and they must not be conflated:
+
+    * ``tool_activity`` — the agent DID real tool work but never wrote its
+      closing answer.  The overwhelmingly common cause is an output-token
+      (``max_tokens``) truncation part-way through the turn: a reasoning model
+      spends its budget on reasoning + a large tool argument and gets cut off
+      (the final tool call's JSON arrives malformed).  The tool cards are
+      already folded and persisted, so dead-ending on a hard error would wipe
+      real work from the UI.  Return a synthesised closing message and
+      ``finish=True`` so the caller falls through to ``RUN_FINISHED`` — the
+      run records as ``completed`` and the user can say "continue" to have the
+      agent resume the stored session and finish its summary.
+
+    * not ``tool_activity`` — the model genuinely returned nothing (content
+      filter / provider error).  Return a ``RUN_ERROR`` and ``finish=False``
+      so the caller stops.
+
+    Returns ``(events, finish)`` where ``events`` are the pre-terminal AG-UI
+    payloads to emit and ``finish`` indicates whether the caller should
+    continue to its shared ``RUN_FINISHED`` (True) or hard-stop now (False).
+    """
+    if tool_activity:
+        fb_id = uuid.uuid4().hex
+        return (
+            [
+                {
+                    "type": "TEXT_MESSAGE_START",
+                    "messageId": fb_id,
+                    "role": "assistant",
+                },
+                {
+                    "type": "TEXT_MESSAGE_CONTENT",
+                    "messageId": fb_id,
+                    "delta": _NO_TEXT_TRUNCATED_MSG,
+                },
+                {"type": "TEXT_MESSAGE_END", "messageId": fb_id},
+            ],
+            True,
+        )
+    return (
+        [
+            {
+                "type": "RUN_ERROR",
+                "runId": run_id,
+                "message": (
+                    "The agent produced no output.  The underlying model may "
+                    "have hit a content filter or a provider error.  Check "
+                    "gateway logs for details."
+                ),
+                "code": "NO_OUTPUT",
+            },
+        ],
+        False,
+    )
 
 
 # ---------------------------------------------------------------------------

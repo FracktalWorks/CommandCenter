@@ -9,7 +9,7 @@ import {
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials, buildOptimisticSent, bodyMatchKey } from "../lib/utils";
-import { useEmailStore } from "../lib/emailStore";
+import { useEmailStore, isRealFolder } from "../lib/emailStore";
 import {
   fetchFullBody, getEmail, listThread, createRule,
   fileToSendAttachment, composeAssist,
@@ -672,7 +672,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     Move to
                   </div>
                   {folders
-                    .filter((f) => f.key !== "starred" && f.key !== email?.folder)
+                    .filter((f) => isRealFolder(f.key) && f.key !== email?.folder)
                     .map((f) => (
                       <button
                         key={f.key}

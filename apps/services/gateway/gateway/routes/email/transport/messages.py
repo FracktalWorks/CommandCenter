@@ -22,6 +22,7 @@ from gateway.routes.email.core import (
     _provider_for_message,
     _row_to_message,
     _truncate_body,
+    folder_scope,
     router,
 )
 from pydantic import BaseModel, Field
@@ -109,14 +110,14 @@ async def list_messages(
             where_clauses.append("em.thread_id = :thread_id")
             params["thread_id"] = thread_id
         elif folder:
-            # "starred" is a flag, not a stored folder; everything else is matched
-            # case-insensitively against the canonical folder key persisted by the
-            # providers (inbox/sent/drafts/trash/archive/junk + user folders).
-            if folder.lower() == "starred":
-                where_clauses.append("em.is_starred = true")
-            else:
-                where_clauses.append("LOWER(em.folder) = LOWER(:folder)")
-                params["folder"] = folder
+            # Real folders match case-insensitively against the canonical key the
+            # providers persist (inbox/sent/drafts/trash/archive/junk + user
+            # folders); "starred" is a flag and "all" spans every folder but
+            # junk/trash. folder_scope() owns all three so the All *view* here and
+            # the All search *scope* can never disagree about what "all" means.
+            folder_sql = folder_scope(folder, params)
+            if folder_sql:
+                where_clauses.append(folder_sql)
         if label:
             # Match either a user label or an assigned category (both TEXT[]).
             where_clauses.append(

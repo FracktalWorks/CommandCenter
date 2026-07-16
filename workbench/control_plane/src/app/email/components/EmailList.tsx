@@ -10,7 +10,7 @@ import {
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
-import { useEmailStore } from "../lib/emailStore";
+import { useEmailStore, isRealFolder } from "../lib/emailStore";
 import { LabelChip, ColorSwatch, LabelColorGrid } from "./LabelChip";
 import { presetForLabel } from "../lib/labelColors";
 import { useViewMode } from "@/components/ViewModeProvider";
@@ -626,7 +626,7 @@ function ContextMenu({
   const update = bulk ? onBulkUpdate : onUpdate;
   const del = bulk ? onBulkDelete : onDelete;
   const moveTargets = folders.filter(
-    (f) => f.key !== "starred" && (bulk || f.key !== email.folder)
+    (f) => isRealFolder(f.key) && (bulk || f.key !== email.folder)
   );
   // Open submenu flyouts to the LEFT when the menu sits near the right edge.
   const flipLeft =

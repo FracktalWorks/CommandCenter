@@ -3,8 +3,8 @@
 import { useState } from "react";
 import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
-  Search, Plus, ChevronDown, ChevronRight, Check,
-  ShieldAlert, Folder, Sparkles, MailMinus,
+  Plus, ChevronDown, ChevronRight, Check,
+  ShieldAlert, Folder, Mails, MailMinus, Sparkles,
   BarChart3, Zap, Newspaper, MessageSquare,
 } from "lucide-react";
 import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
@@ -19,15 +19,11 @@ interface AccountSidebarProps {
   onAddAccount?: () => void;
   /** Make an account the user's default mailbox (the inbox the UI opens on). */
   onSetDefault?: (id: string) => void;
-  onSearch?: (query: string) => void;
-  /** True when the current search was re-ranked semantically — shows a small
-   *  "Smart" badge in the search box so the user knows results are by meaning. */
-  searchIsSemantic?: boolean;
   /** Open one of the Email Automation feature views. */
   onOpenAutomation?: (feature: AutomationFeature) => void;
   /** Currently-open automation feature, for highlighting. */
   activeAutomation?: AutomationFeature | null;
-  /** Show the mailbox nav (accounts + search + folders). Default true.
+  /** Show the mailbox nav (accounts + folders). Default true.
    *  Set false for the standalone "Automation" mobile drawer. */
   showMailbox?: boolean;
   /** Show the Email Automation app list. Default true.
@@ -57,17 +53,12 @@ export function AccountSidebar({
   onFolderSelect,
   onAddAccount,
   onSetDefault,
-  onSearch,
-  searchIsSemantic = false,
   onOpenAutomation,
   activeAutomation,
   showMailbox = true,
   showAutomation = true,
 }: AccountSidebarProps) {
   const [accountsExpanded, setAccountsExpanded] = useState(true);
-  const [searchQuery, setSearchQuery] = useState("");
-
-  const selectedAccount = accounts.find((a) => a.id === selectedAccountId) ?? accounts[0];
 
   return (
     <div className="flex flex-col h-full bg-sidebar text-sidebar-foreground overflow-hidden">
@@ -85,33 +76,6 @@ export function AccountSidebar({
         >
           <Plus size={14} />
         </button>
-      </div>
-
-      {/* Search */}
-      <div className="px-3 py-2 flex-shrink-0">
-        <div className="flex items-center gap-2 bg-secondary rounded-md px-3 py-1.5">
-          <Search size={13} className="text-muted-foreground flex-shrink-0" />
-          <input
-            type="text"
-            placeholder="Search all emails..."
-            value={searchQuery}
-            onChange={(e) => {
-              setSearchQuery(e.target.value);
-              onSearch?.(e.target.value);
-            }}
-            className="bg-transparent outline-none text-xs w-full text-foreground placeholder:text-muted-foreground"
-          />
-          {/* Shown only when the server actually applied semantic re-ranking —
-              so it never appears when the feature is off. */}
-          {searchQuery.trim() && searchIsSemantic && (
-            <span
-              title="Results ranked by meaning, not just keywords"
-              className="flex-shrink-0 inline-flex items-center gap-0.5 text-[9px] font-medium text-primary bg-primary/10 rounded px-1 py-0.5"
-            >
-              <Sparkles size={9} /> Smart
-            </span>
-          )}
-        </div>
       </div>
 
       {/* Accounts list */}
@@ -266,6 +230,7 @@ export function AccountSidebar({
 // Helper to map folder key to Lucide icon component.
 function getFolderIcon(key: string, type?: "system" | "user"): React.ElementType {
   const map: Record<string, React.ElementType> = {
+    all: Mails,
     inbox: Inbox,
     starred: Star,
     sent: Send,

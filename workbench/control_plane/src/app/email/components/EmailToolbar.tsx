@@ -6,7 +6,7 @@ import {
   Flag, Star, MailOpen, Mail, Tag, Printer, MoreHorizontal, X,
   ListChecks,
 } from "lucide-react";
-import { useEmailStore } from "../lib/emailStore";
+import { useEmailStore, isRealFolder } from "../lib/emailStore";
 import { LabelMenu } from "./LabelMenu";
 
 /**
@@ -93,7 +93,7 @@ export function EmailToolbar() {
                 <div className="absolute left-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-44 max-h-64 overflow-y-auto">
                   <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">Move to</div>
                   {folders
-                    .filter((f) => f.key !== "starred" && f.key !== selectedEmail.folder)
+                    .filter((f) => isRealFolder(f.key) && f.key !== selectedEmail.folder)
                     .map((f) => (
                       <button
                         key={f.key}

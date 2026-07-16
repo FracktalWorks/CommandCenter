@@ -2,6 +2,12 @@ import { create } from "zustand";
 import { Email, EmailAccount, EmailFolder, EMAIL_CATEGORIES, RunMessageResult } from "./types";
 import * as api from "./api";
 import type { EmailFolderRaw } from "./api";
+import {
+  SearchFilter,
+  filterKey,
+  isSearchActive,
+  toSearchParams,
+} from "./searchFilters";
 import { QUICK_ACTIONS, MOCK_ACCOUNTS, MOCK_EMAILS, MOCK_FOLDERS } from "./mockData";
 
 /**
@@ -21,11 +27,12 @@ const DEMO =
 
 /** Mock messages for an account, scoped to the active folder (demo mode only). */
 function demoEmailsFor(accountId: string | null, folder: string): Email[] {
-  return MOCK_EMAILS.filter(
-    (e) =>
-      (!accountId || e.accountId === accountId) &&
-      (folder === "starred" ? e.isStarred : e.folder === folder),
-  );
+  return MOCK_EMAILS.filter((e) => {
+    if (accountId && e.accountId !== accountId) return false;
+    if (folder === "starred") return e.isStarred;
+    if (folder === FOLDER_ALL) return !FOLDER_ALL_EXCLUDES.has(e.folder);
+    return e.folder === folder;
+  });
 }
 
 /**
@@ -49,8 +56,37 @@ function toCanonical(name: string): string {
   return CANONICAL_ALIASES[name.trim().toLowerCase()] ?? name.trim().toLowerCase();
 }
 
+/** The pseudo-folder spanning every folder except junk and trash. Not a real
+ *  provider folder — the backend turns it into a "folder NOT IN (junk, trash)"
+ *  scope (core.folder_scope), and it doubles as the search bar's "All" scope. */
+export const FOLDER_ALL = "all";
+
+/** Folders `all` deliberately leaves out — must mirror the backend's
+ *  FOLDER_ALL_EXCLUDES so the All view and the All search scope agree. */
+const FOLDER_ALL_EXCLUDES = new Set(["junk", "trash"]);
+
+/**
+ * The pseudo-folders: sidebar entries that are VIEWS, not real provider folders.
+ * `starred` is a flag and `all` is a scope over other folders — a message can be
+ * listed under either but can never be moved INTO one, and neither can be paged
+ * from the provider.
+ *
+ * Anything that treats a folder key as a real destination must filter through
+ * `isRealFolder`. Each move-to picker used to spell `key !== "starred"` inline,
+ * which is exactly why adding `all` silently offered mail a folder that doesn't
+ * exist.
+ */
+const PSEUDO_FOLDERS = new Set([FOLDER_ALL, "starred"]);
+
+/** True when `key` is a real provider folder — somewhere mail can actually be
+ *  moved to, and paged from. False for the All/Starred views. */
+export function isRealFolder(key: string): boolean {
+  return !PSEUDO_FOLDERS.has(key);
+}
+
 /** Default system folders that always appear even before sync, in display order. */
 const DEFAULT_SYSTEM_FOLDERS: EmailFolder[] = [
+  { icon: "Mails", label: "All", key: FOLDER_ALL, count: 0, type: "system" },
   { icon: "Inbox", label: "Inbox", key: "inbox", count: 0, type: "system" },
   { icon: "Star", label: "Starred", key: "starred", count: 0, type: "system" },
   { icon: "Send", label: "Sent", key: "sent", count: 0, type: "system" },
@@ -119,7 +155,26 @@ function mergeFolders(
   }
   userFolders.sort((a, b) => a.label.localeCompare(b.label));
 
-  return [...systemFolders, ...userFolders];
+  return withAllCount([...systemFolders, ...userFolders]);
+}
+
+/**
+ * Give the All pseudo-folder a count, since no provider reports one for it.
+ *
+ * Sums every real folder it spans — junk/trash are excluded by definition, and
+ * "starred" is a flag over mail that already lives in another folder, so
+ * counting it would double-count. Each message lives in exactly one folder, so
+ * the sum is the message total.
+ */
+function withAllCount(folders: EmailFolder[]): EmailFolder[] {
+  const total = folders.reduce(
+    (sum, f) =>
+      f.key === FOLDER_ALL || f.key === "starred" || FOLDER_ALL_EXCLUDES.has(f.key)
+        ? sum
+        : sum + (f.count || 0),
+    0,
+  );
+  return folders.map((f) => (f.key === FOLDER_ALL ? { ...f, count: total } : f));
 }
 
 /**
@@ -134,10 +189,12 @@ function buildFolders(emails: Email[]): EmailFolder[] {
     if (email.isStarred) counts["starred"] = (counts["starred"] || 0) + 1;
   }
 
-  return DEFAULT_SYSTEM_FOLDERS.map((df) => ({
-    ...df,
-    count: counts[df.key] || 0,
-  }));
+  return withAllCount(
+    DEFAULT_SYSTEM_FOLDERS.map((df) => ({
+      ...df,
+      count: counts[df.key] || 0,
+    })),
+  );
 }
 
 interface EmailState {
@@ -181,6 +238,13 @@ interface EmailState {
    *  without first switching to the folder it lives in. */
   selectedEmailOverride: Email | null;
   searchQuery: string;
+  /** Which folder the search bar looks in. null = "follow the open folder", so
+   *  the bar reads "Search Inbox" and re-targets as the user navigates. A folder
+   *  key (or "all") is an EXPLICIT override the user picked from the scope
+   *  dropdown, and it sticks until they clear the search or change it. */
+  searchScope: string | null;
+  /** Closable filter pills (tags, from/to, unread/…) narrowing the search. */
+  searchFilters: SearchFilter[];
   /** True when the last search was re-ranked semantically (hybrid) by the server
    *  — lets the UI show a "Smart results" indicator. False for lexical/no search. */
   searchIsSemantic: boolean;
@@ -244,6 +308,13 @@ interface EmailState {
   /** Send a transient command to the open email viewer (reply/forward/etc.). */
   setViewerCommand: (cmd: EmailState["viewerCommand"]) => void;
   setSearchQuery: (q: string) => void;
+  /** Point the search bar at a folder ("all" = everything but junk/trash), or
+   *  null to go back to following the open folder. */
+  setSearchScope: (scope: string | null) => void;
+  /** Replace the pill set (the bar owns add/remove via lib/searchFilters). */
+  setSearchFilters: (filters: SearchFilter[]) => void;
+  /** Drop the text AND the pills, returning to the plain folder list. */
+  clearSearch: () => void;
   openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string }) => void;
   closeCompose: () => void;
   hydrateEmail: (email: Email) => void;
@@ -297,6 +368,49 @@ interface EmailState {
   /** Make an account the user's default mailbox (the inbox the UI opens on). */
   setDefaultAccount: (id: string) => Promise<void>;
   clearError: () => void;
+}
+
+/** Is anything narrowing the list — search text or a pill? */
+function searchActive(s: EmailState): boolean {
+  return isSearchActive(s.searchQuery, s.searchFilters);
+}
+
+/**
+ * The scope the search bar is pointed at: the user's explicit pick, else the
+ * open folder ("Search Inbox"). `all` is the pseudo-folder the backend expands
+ * to "every folder but junk/trash".
+ */
+function effectiveScope(s: EmailState): string {
+  return s.searchScope ?? s.selectedFolder;
+}
+
+/**
+ * Fold the query + scope + pills into search params. ONE builder, used by the
+ * first page, "load more" and the background refresh alike — so a paged or
+ * refreshed search can't quietly apply a different filter set than page 1 did.
+ */
+function searchRequest(s: EmailState): api.SearchEmailsParams {
+  return {
+    q: s.searchQuery.trim() || undefined,
+    folder: effectiveScope(s),
+    ...toSearchParams(s.searchFilters),
+  };
+}
+
+/**
+ * Identity of the query currently on screen (text + scope + pills).
+ *
+ * An async fetch must not write its results into a view the user has since
+ * changed. Comparing the searchQuery string alone would miss a pill being added
+ * or the scope being switched mid-flight, landing stale results under a filter
+ * that no longer matches them.
+ */
+function searchViewKey(s: EmailState): string {
+  return JSON.stringify([
+    s.searchQuery.trim(),
+    effectiveScope(s),
+    s.searchFilters.map(filterKey),
+  ]);
 }
 
 let _debounceTimer: ReturnType<typeof setTimeout> | undefined;
@@ -426,6 +540,8 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   selectedEmailId: null,
   selectedEmailOverride: null,
   searchQuery: "",
+  searchScope: null,
+  searchFilters: [],
   searchIsSemantic: false,
   selectedIds: new Set<string>(),
   viewerCommand: null,
@@ -521,20 +637,19 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   fetchEmails: async () => {
-    const { selectedAccountId, selectedFolder, selectedLabel, searchQuery } = get();
+    const { selectedAccountId, selectedFolder, selectedLabel } = get();
     set({ emailsLoading: true, error: null });
     try {
-      const q = searchQuery.trim();
-      // A search spans ALL folders (relevance-ranked, highlighted) via the
-      // dedicated /email/search endpoint — "search all emails" shouldn't be
-      // confined to the open folder. No query → the normal folder list.
+      // A search (text and/or pills) goes to the dedicated /email/search
+      // endpoint — relevance-ranked and highlighted, scoped by the bar's scope
+      // dropdown rather than the open folder. Nothing to search → plain list.
       // hybrid:true asks for semantic re-ranking; the server applies it only
       // when semantic search is enabled and returns whether it did.
       let searchIsSemantic = false;
-      const result = q
+      const result = searchActive(get())
         ? await (async () => {
             const r = await api.searchEmails({
-              q,
+              ...searchRequest(get()),
               accountId: selectedAccountId || undefined,
               label: selectedLabel || undefined,
               hybrid: true,
@@ -596,29 +711,43 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   softRefresh: async () => {
+    const before = get();
     const {
-      selectedAccountId, selectedFolder, selectedLabel, searchQuery,
+      selectedAccountId, selectedFolder, selectedLabel,
       emailsLoading, emailsPage,
-    } = get();
+    } = before;
     // Don't disrupt an in-flight load or a user who has paginated/scrolled
     // deeper than the first page — they can pull-to-refresh manually.
     if (!selectedAccountId || emailsLoading || emailsPage > 1) return;
+    // A background refresh must re-run the SAME query the user is looking at —
+    // during a search that's /email/search with the scope + pills, not a plain
+    // folder list (which would silently swap ranked hits for the raw folder).
+    const wasSearch = searchActive(before);
+    const viewKey = searchViewKey(before);
     try {
-      const result = await api.listEmails({
-        accountId: selectedAccountId,
-        folder: selectedFolder,
-        label: selectedLabel || undefined,
-        query: searchQuery || undefined,
-        page: 1,
-        pageSize: PAGE_SIZE,
-      });
+      const result = wasSearch
+        ? await api.searchEmails({
+            ...searchRequest(before),
+            accountId: selectedAccountId,
+            label: selectedLabel || undefined,
+            hybrid: true,
+            page: 1,
+            pageSize: PAGE_SIZE,
+          })
+        : await api.listEmails({
+            accountId: selectedAccountId,
+            folder: selectedFolder,
+            label: selectedLabel || undefined,
+            page: 1,
+            pageSize: PAGE_SIZE,
+          });
       // Bail if the user navigated away mid-fetch (avoid clobbering the new view).
       const now = get();
       if (
         now.selectedAccountId !== selectedAccountId ||
         now.selectedFolder !== selectedFolder ||
         now.selectedLabel !== selectedLabel ||
-        now.searchQuery !== searchQuery ||
+        searchViewKey(now) !== viewKey ||
         now.emailsPage > 1
       ) {
         return;
@@ -638,22 +767,35 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   loadMoreEmails: async () => {
+    const state = get();
     const {
-      selectedAccountId, selectedFolder, searchQuery,
+      selectedAccountId, selectedFolder,
       emailsPage, emails, loadingMore, emailsTotal,
-    } = get();
+    } = state;
     if (loadingMore || emails.length >= emailsTotal) return;
     set({ loadingMore: true });
     try {
       const nextPage = emailsPage + 1;
-      const result = await api.listEmails({
-        accountId: selectedAccountId || undefined,
-        folder: selectedFolder,
-        label: get().selectedLabel || undefined,
-        query: searchQuery || undefined,
-        page: nextPage,
-        pageSize: PAGE_SIZE,
-      });
+      // Page 2+ of a search must BE the same search: same endpoint, same scope,
+      // same pills. Paging a search through the plain folder list would append
+      // rows ranked by recency under rows ranked by relevance — and silently
+      // drop the scope, so scrolling a scoped search leaked in other folders.
+      const result = searchActive(state)
+        ? await api.searchEmails({
+            ...searchRequest(state),
+            accountId: selectedAccountId || undefined,
+            label: state.selectedLabel || undefined,
+            hybrid: true,
+            page: nextPage,
+            pageSize: PAGE_SIZE,
+          })
+        : await api.listEmails({
+            accountId: selectedAccountId || undefined,
+            folder: selectedFolder,
+            label: state.selectedLabel || undefined,
+            page: nextPage,
+            pageSize: PAGE_SIZE,
+          });
       // Append, de-duping by id in case a sync shifted the window mid-scroll.
       const seen = new Set(emails.map((e) => e.id));
       const merged = [...emails, ...result.emails.filter((e) => !seen.has(e.id))];
@@ -737,12 +879,21 @@ export const useEmailStore = create<EmailState>((set, get) => ({
 
   selectFolder: (folder: string) => {
     // Switching folders clears any active label filter + checkbox selection.
+    // It also ENDS any search: picking a folder means "show me this folder", so
+    // leaving a query running would show search hits under a folder heading —
+    // and the scope reverts to following the folder, so the bar reads
+    // "Search Sent" the moment you land in Sent.
+    if (_debounceTimer) clearTimeout(_debounceTimer);
     set({
       selectedFolder: folder,
       selectedLabel: null,
       selectedEmailId: null,
       selectedEmailOverride: null,
       selectedIds: new Set(),
+      searchQuery: "",
+      searchFilters: [],
+      searchScope: null,
+      searchIsSemantic: false,
     });
     get().fetchEmails();
   },
@@ -819,6 +970,34 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     _debounceTimer = setTimeout(() => {
       get().fetchEmails();
     }, 300);
+  },
+
+  setSearchScope: (scope: string | null) => {
+    set({ searchScope: scope, selectedEmailId: null, selectedEmailOverride: null });
+    // Re-scoping only changes what's on screen while a search is running; with
+    // an empty bar the folder list already answers "what's in this folder".
+    if (searchActive(get())) get().fetchEmails();
+  },
+
+  setSearchFilters: (filters: SearchFilter[]) => {
+    set({ searchFilters: filters, selectedEmailId: null, selectedEmailOverride: null });
+    // Pills apply immediately — unlike typing, there's no keystroke to debounce.
+    // Removing the last pill with no text falls back to the plain folder list,
+    // which fetchEmails routes to on its own.
+    get().fetchEmails();
+  },
+
+  clearSearch: () => {
+    if (_debounceTimer) clearTimeout(_debounceTimer);
+    set({
+      searchQuery: "",
+      searchFilters: [],
+      searchScope: null,
+      searchIsSemantic: false,
+      selectedEmailId: null,
+      selectedEmailOverride: null,
+    });
+    get().fetchEmails();
   },
 
   openCompose: (defaults) => {

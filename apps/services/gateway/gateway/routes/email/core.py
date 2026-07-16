@@ -293,6 +293,38 @@ def _account_scope(account_id: str | None, params: dict[str, Any]) -> str:
     return frag
 
 
+# The scope sentinel meaning "every folder except junk and trash". ONE constant
+# behind both the sidebar's All folder and the search bar's "All folders" scope,
+# so "all" cannot come to mean two different sets of mail in two places.
+FOLDER_ALL = "all"
+
+# What "everything" deliberately leaves out. Junk and trash are mail the user has
+# already thrown away — sweeping them into an unscoped view would bury real mail
+# under spam. They stay reachable by selecting them explicitly.
+FOLDER_ALL_EXCLUDES = ("junk", "trash")
+
+
+def folder_scope(folder: str | None, params: dict[str, Any]) -> str | None:
+    """SQL scoping `em` to a folder, or None when the scope spans every folder.
+
+    Handles the two pseudo-folders the UI offers alongside real ones:
+      • ``all``     — every folder except junk/trash (the All view + search scope)
+      • ``starred`` — a flag, not a stored folder
+
+    Adds :folder / :folder_excludes to `params` as needed.
+    """
+    key = (folder or "").strip().lower()
+    if not key:
+        return None
+    if key == FOLDER_ALL:
+        params["folder_excludes"] = list(FOLDER_ALL_EXCLUDES)
+        return "LOWER(em.folder) <> ALL(:folder_excludes)"
+    if key == "starred":
+        return "em.is_starred = true"
+    params["folder"] = folder
+    return "LOWER(em.folder) = LOWER(:folder)"
+
+
 async def _assert_account_owner(db: Any, account_id: str, user_email: str) -> None:
     """Raise 404 if the account isn't owned by the user."""
     res = await db.execute(

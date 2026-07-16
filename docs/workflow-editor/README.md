@@ -30,7 +30,7 @@ Recommended stack for the new pieces:
 |---|---|---|
 | Canvas / node editor | **React Flow (`@xyflow/react`)** | Both reference apps use it; de-facto standard; fits Next.js 16 / React 19 |
 | Graph persistence | New Postgres tables via SQLAlchemy + a migration in `infra/postgres/` | No workflow tables exist today |
-| Execution engine | **New Python DAG executor** in a `workflow-engine` service, dispatching to existing `call_agent` / integrations | Keep the engine in the same runtime as the agents it drives |
+| Execution engine | **Microsoft Agent Framework (MAF) Workflows** — compile the visual graph to a `WorkflowBuilder` of executors + edges | Already in the dependency tree (`agent-framework-core` 1.8.x) and the runtime you operate; gives scheduler, conditional routing, fan-out/in, checkpointing, human-in-the-loop and streaming for free |
 | Triggers | Extend the **existing ingestion pipeline + `webhook_routes`** with a user-configurable binding table | Reuse HMAC receivers, Redis Streams, asyncio schedulers |
 | State bus | Single merged `variables` channel + `{{...}}` templating | Copied from open-agent-builder; powers autocomplete + validation |
 | Streaming run view | Reuse **AG-UI SSE + Redis stream-relay** | Already streams multi-agent runs live |
@@ -323,34 +323,69 @@ the node schema to be LLM-emittable from day one (flat, typed, documented).
 
 ---
 
-## 6. Execution engine
+## 6. Execution engine — compile to Microsoft Agent Framework Workflows
 
-A new engine (a service under `apps/services/`, e.g. `workflow-engine`, or a module in
-the orchestrator) that:
+**Do not hand-roll a DAG scheduler.** CommandCenter already runs on Microsoft Agent
+Framework (MAF), and `agent-framework-core` (pinned `>=1.8.0`) ships a full graph
+**Workflows** engine that is currently unused. It provides exactly the run-model this
+design needs — a directed graph of **executors** connected by **edges**, run with a
+Pregel-like superstep model — so the engine becomes a **compile target**, not new code
+to write. This is the open-agent-builder pattern ("compile the visual graph into a real
+orchestration engine") but on the runtime we already operate and stream from.
 
-1. **Loads** the target `workflow_version.serialized`.
-2. **Builds a DAG**, expanding loops/parallels into sentinel nodes (Sim rule #2).
-3. **Schedules** with a ready-queue: a node runs when all incoming edges are satisfied;
-   independent nodes run concurrently (Sim rule #3).
-4. **Executes** each node via a **handler registry** keyed by node `type`:
-   - `trigger` → seeds `variables` from the trigger payload.
-   - `agent` → `call_agent(name, rendered_message)` / `call_agents_parallel(...)`.
-   - `tool` → resolve the integration from `acb_skills/integrations.py` and invoke it.
-   - `condition`/`router` → evaluate expression, activate the matching out-edge.
-   - `loop` → iterate a sub-region.
-   - `approval`/`wait` → **snapshot to `workflow_run_pause`** and suspend; resume from
-     the approval inbox.
-   - `transform`/`set-state` → compute values into `variables` (sandbox untrusted code).
-   - `output` → collect the return payload.
-5. **Passes state** through one merged `variables` channel; each node's output is stored
-   under its id and referenced by other nodes via `{{...}}` templating.
-6. **Streams** per-node events over SSE (reuse AG-UI + Redis stream-relay) so the canvas
-   lights up live.
-7. **Runs async** for real triggers (a queue/worker like the existing Redis-Streams
-   consumers), sync for interactive "Test" runs. Redis pub/sub for cancellation.
+**What MAF Workflows gives us for free:**
 
-**Reuse, don't reinvent:** node handlers are thin adapters over `call_agent`, the
-integrations registry, and the approval broker that already exist.
+| Need | MAF primitive |
+|---|---|
+| Node execution | `Executor` (`@executor` fn or class); an **Agent wraps as an executor** |
+| State / data flow | typed messages `ctx.send_message()`, outputs `ctx.yield_output()`, plus workflow-level **shared state** |
+| Branching | **conditional / switch edges** |
+| Parallel + join | **fan-out / fan-in** edge groups |
+| Loops | cyclic edges (superstep model handles cycles) |
+| Human-in-the-loop | `ctx.request_info()` + `response_handler()` → `RequestInfoEvent` |
+| Pause / resume / long-running | **checkpointing** (`WorkflowBuilder().with_checkpointing(storage)`; in-memory / file / Cosmos backends) |
+| Modularity | **sub-workflows** (nest a workflow as a node) |
+| Live run view | the MAF **event stream** → surfaced as the existing AG-UI SSE + Redis relay |
+
+**The engine, then, is a thin compiler + a handler per node *type*:**
+
+1. **Load** the target `workflow_version.serialized`.
+2. **Compile** to a `WorkflowBuilder`: each node → `add_executor(...)`, each edge →
+   `add_edge(...)`; condition nodes → conditional/switch edges; parallel branches →
+   fan-out then fan-in. Configure `.with_checkpointing(storage)`.
+3. **One executor implementation per node type** (not per node):
+   - `trigger` → seeds the initial message + shared state from the trigger payload.
+   - `agent` → an Agent-as-executor, or an executor calling `call_agent(name, msg)` /
+     `call_agents_parallel(...)`.
+   - `tool` → an `@executor` that resolves the integration from
+     `acb_skills/integrations.py` and invokes it.
+   - `condition`/`router` → drives a conditional edge (no custom scheduler needed).
+   - `loop` → a cyclic edge region.
+   - `approval`/`wait` → `RequestInfoExecutor`; the checkpoint persists the paused run
+     (mirrored into `workflow_run_pause`) and it resumes from the **approval inbox**.
+   - `transform`/`set-state` → compute into shared state (sandbox untrusted code).
+   - `output` → `ctx.yield_output(...)`.
+4. **Reconcile the state model (the one real wrinkle).** MAF is message-passing;
+   the editor's `{{...}}` templating assumes any node can read any upstream output.
+   Bridge by accumulating each executor's result into MAF **workflow-level shared
+   state**, keyed by node id, and resolving `{{node.field}}` templates against it at
+   execution time. *Prototype this bridge first — it's the crux of the integration.*
+5. **Stream** MAF workflow events onto the canvas via the existing AG-UI SSE + Redis
+   stream-relay.
+6. **Runs async** for real triggers (enqueue like the existing Redis-Streams consumers),
+   sync for interactive "Test" runs.
+
+**Where it lives:** a module in the **orchestrator** (closest to `call_agent` and the
+existing MAF wiring in `orchestrator/executor.py`) is now preferable to a separate
+service, since we're extending the same runtime rather than standing up a new one.
+
+**Reuse, don't reinvent:** node executors are thin adapters over `call_agent`, the
+integrations registry, and the approval broker that already exist — the graph
+scheduling, routing, checkpointing, and HITL come from MAF.
+
+> **Caveat:** MAF is recent and some sibling packages are on prerelease (`1.0.0rc/b`)
+> tracks. Confirm the Workflows API surface is stable at the pinned `agent-framework-core`
+> version and pin exact versions before committing.
 
 ---
 
@@ -380,15 +415,19 @@ payload and enqueues a `workflow_run` (Copilot Studio's unified-trigger idea, Si
 
 ## 8. Key decisions & open questions
 
-1. **Engine: hand-rolled DAG (Sim) vs compile-to-LangGraph (open-agent-builder).**
-   Recommendation: **hand-rolled Python DAG executor.** LangGraph would add a heavy
-   dependency and a second orchestration paradigm alongside the Microsoft Agent
-   Framework already in use; a focused ready-queue scheduler is a few hundred lines and
-   keeps node handlers as thin adapters over `call_agent`. Revisit only if we need
-   LangGraph-specific features.
-2. **Where the engine lives.** New `apps/services/workflow-engine` (clean separation,
-   its own worker) vs a module inside the orchestrator (closer to `call_agent`).
-   Leaning **new service** for isolation and independent scaling.
+1. **Engine — DECIDED: compile to Microsoft Agent Framework Workflows.** Earlier drafts
+   weighed a hand-rolled DAG vs LangGraph; both are now rejected. MAF Workflows is
+   already in the dependency tree (`agent-framework-core >=1.8.0`) and is the runtime we
+   operate, and it provides the scheduler, conditional routing, fan-out/in, cyclic loops,
+   checkpointing, human-in-the-loop, and streaming natively (§6). We compile the visual
+   graph to a `WorkflowBuilder` and write one executor per node type. No new engine, no
+   new paradigm, no extra dependency. *Open sub-question:* validate the Workflows API is
+   stable at the pinned version and that the shared-state bridge for `{{...}}` templating
+   holds up (§6.4).
+2. **Where the engine lives.** A module inside the **orchestrator** (closest to
+   `call_agent` and the existing MAF wiring) is now preferred over a separate
+   `workflow-engine` service, since we extend the same runtime rather than stand up a
+   new one. Revisit only if run isolation/scaling demands it.
 3. **"No in-app editor" philosophy.** Confirm workflows are DB-config artifacts that
    *orchestrate* code-authored agents — not generated agent code. (§3.)
 4. **Cron/scheduling.** Adopt APScheduler vs extend the hand-rolled asyncio loops.
@@ -412,18 +451,20 @@ node/edge schema in TypeScript; persist `workflow.graph` jsonb via a new gateway
 No execution yet. *Goal: prove the editor UX on the real stack.* (This is what the
 mockup previews.)
 
-**Phase 1 — MVP linear execution (2–4 wks).** Data model + migration; Python DAG
-engine for **linear** graphs (trigger → agent → tool → output); `agent` and `tool`
-handlers over `call_agent` + integrations registry; **manual trigger** + **Test run**
-with SSE streaming onto the canvas; the `{{...}}` templating + variable picker.
+**Phase 1 — MVP linear execution (2–4 wks).** Data model + migration; the
+**graph → MAF `WorkflowBuilder` compiler** for **linear** graphs (trigger → agent →
+tool → output) plus the shared-state ↔ `{{...}}` templating bridge (§6.4 — build this
+first); `agent` and `tool` executors over `call_agent` + integrations registry;
+**manual trigger** + **Test run** with MAF events streamed onto the canvas via AG-UI SSE.
 
-**Phase 2 — Control flow + triggers (3–5 wks).** Condition/router/loop nodes with
-sentinel-node DAG expansion; **schedule + webhook + inbound-email triggers** via the
-`workflow_trigger` table and the ingestion pipeline; async run queue; run history UI.
+**Phase 2 — Control flow + triggers (3–5 wks).** Condition/router (conditional edges),
+loop (cyclic edges), and parallel (fan-out/fan-in) nodes; **schedule + webhook +
+inbound-email triggers** via the `workflow_trigger` table and the ingestion pipeline;
+async run queue; run history UI.
 
-**Phase 3 — Human-in-the-loop + polish (3–4 wks).** `user-approval` / `wait` nodes with
-snapshot pause/resume wired to the approval inbox; design-time validation badges;
-publish/version/rollback; per-node run inspector.
+**Phase 3 — Human-in-the-loop + polish (3–4 wks).** `user-approval` / `wait` nodes via
+MAF `RequestInfoExecutor` + checkpointing, wired to the approval inbox; design-time
+validation badges; publish/version/rollback; per-node run inspector.
 
 **Phase 4 — Generative authoring + reach (ongoing).** Describe→generate→refine;
 MCP-tool node; expose a workflow as an API/MCP server; template gallery; connected/

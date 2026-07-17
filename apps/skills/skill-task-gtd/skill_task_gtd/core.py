@@ -514,3 +514,71 @@ async def gtd_update(item_id: str, title: str = "", notes: str = "",
         return "Nothing to update."
     item = await _request("PATCH", f"/tasks/items/{item_id}", json=body)
     return f"Updated → {_fmt_item(item)}"
+
+
+# ── Calendar / timeboxing ─────────────────────────────────────────────────────
+
+@_annotate_risk(idempotent=True)
+async def gtd_schedule(item_id: str, start: str, end: str = "") -> str:
+    """Timebox a task onto the calendar — set WHEN the user will do it. A LOCAL
+    overlay (not pushed to a PM tool). Reversible with gtd_unschedule.
+
+    Args:
+        item_id: The item's full UUID.
+        start: ISO 8601 start datetime in the USER'S timezone (the persona gives
+            the current local time + offset), e.g. 2026-07-18T14:00:00+05:30.
+        end: ISO 8601 end datetime; empty = start + 30 minutes.
+    """
+    from datetime import datetime, timedelta
+    s = start.strip()
+    if not s:
+        return "A start time (ISO 8601) is required to schedule."
+    e = end.strip()
+    if not e:
+        try:
+            dt = datetime.fromisoformat(s.replace("Z", "+00:00"))
+            e = (dt + timedelta(minutes=30)).isoformat()
+        except ValueError:
+            return f"Couldn't parse start '{start}'. Use ISO 8601."
+    item = await _request(
+        "PATCH", f"/tasks/items/{item_id}",
+        json={"scheduled_start": s, "scheduled_end": e})
+    return f"Scheduled → {_fmt_item(item)}"
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_unschedule(item_id: str) -> str:
+    """Remove a task's calendar time-block (it stays a next action).
+
+    Args:
+        item_id: The item's full UUID.
+    """
+    item = await _request(
+        "PATCH", f"/tasks/items/{item_id}",
+        json={"scheduled_start": "", "scheduled_end": ""})
+    return f"Unscheduled → {_fmt_item(item)}"
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_list_schedule(from_iso: str, to_iso: str) -> str:
+    """List what's timeboxed on the calendar in a datetime window — so you can
+    plan around existing blocks and never double-book.
+
+    Args:
+        from_iso: ISO 8601 start of the window (inclusive).
+        to_iso: ISO 8601 end of the window (exclusive).
+    """
+    from urllib.parse import quote
+    items = await _request(
+        "GET", f"/tasks/calendar?from={quote(from_iso)}&to={quote(to_iso)}")
+    if not items:
+        return "Nothing is scheduled in that window."
+    lines = []
+    for i in items:
+        s = (i.get("scheduled_start") or i.get("due_at") or "")[:16].replace(
+            "T", " ")
+        en = (i.get("scheduled_end") or "")[11:16]
+        lines.append(
+            f"• {s}{('-' + en) if en else ''}  {i.get('title', '?')} "
+            f"(id: {i.get('id', '')})")
+    return "Scheduled:\n" + "\n".join(lines)

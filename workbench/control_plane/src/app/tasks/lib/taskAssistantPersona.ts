@@ -10,13 +10,14 @@
  */
 
 import type { GtdItem } from "./types";
-import type { TaskAccount } from "./api";
+import type { TaskAccount, TaskSettings } from "./api";
 
 export function buildTaskAssistantPersona(opts: {
   accounts?: TaskAccount[];
   items?: GtdItem[];
   selectedView?: string;
   openItem?: GtdItem | null;
+  settings?: TaskSettings;
 }): string {
   const accounts = opts.accounts ?? [];
   const items = opts.items ?? [];
@@ -67,6 +68,61 @@ export function buildTaskAssistantPersona(opts: {
         "gtd_clarify / gtd_organize / gtd_update on it directly.",
     );
   }
+
+  // Calendar / timeboxing context — so the agent can plan, reschedule and
+  // reorganize the day by chat, computing correct ISO times in the user's tz.
+  const now = new Date();
+  const offMin = -now.getTimezoneOffset(); // minutes east of UTC
+  const offSign = offMin >= 0 ? "+" : "-";
+  const offH = String(Math.floor(Math.abs(offMin) / 60)).padStart(2, "0");
+  const offM = String(Math.abs(offMin) % 60).padStart(2, "0");
+  const fmtT = (iso?: string) =>
+    iso
+      ? new Date(iso).toLocaleTimeString(undefined, {
+          hour: "numeric",
+          minute: "2-digit",
+        })
+      : "";
+  const todayStr = now.toDateString();
+  const todayBlocks = items
+    .filter(
+      (i) =>
+        i.scheduledStart &&
+        i.disposition !== "DONE" &&
+        new Date(i.scheduledStart).toDateString() === todayStr,
+    )
+    .sort((a, b) => (a.scheduledStart ?? "").localeCompare(b.scheduledStart ?? ""));
+  const unsched = next.filter((i) => i.isMine && !i.scheduledStart).length;
+  const calLines: string[] = [
+    `Calendar: current local time is ${now.toLocaleString()} ` +
+      `(UTC${offSign}${offH}:${offM}). Compute all schedule times as ISO 8601 ` +
+      "in this timezone.",
+  ];
+  if (opts.settings) {
+    calLines.push(
+      `Working window ${opts.settings.dayStartHour}:00–` +
+        `${opts.settings.dayEndHour}:00; daily focus capacity ~` +
+        `${Math.round((opts.settings.dailyCapacityMins / 60) * 10) / 10}h.`,
+    );
+  }
+  calLines.push(
+    todayBlocks.length
+      ? "Scheduled today:\n" +
+          todayBlocks
+            .map(
+              (i) => `• ${fmtT(i.scheduledStart)}–${fmtT(i.scheduledEnd)} ${i.title}`,
+            )
+            .join("\n")
+      : "Nothing is timeboxed today yet.",
+  );
+  calLines.push(
+    `${unsched} unscheduled next action${unsched === 1 ? "" : "s"} could be ` +
+      "timeboxed. To plan / reorganize / replan the day, use " +
+      "gtd_schedule(item_id, start, end) and gtd_unschedule(item_id); read " +
+      "the grid with gtd_list_schedule(from, to). Respect the working window " +
+      "and capacity, and never double-book an existing block.",
+  );
+  parts.push(calLines.join("\n"));
 
   parts.push(
     "GTD posture: AI proposes, the human decides. Never push a task to a " +

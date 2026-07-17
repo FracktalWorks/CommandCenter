@@ -128,6 +128,7 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
 
   // Live GTD context — refreshed whenever the store or selection changes, so
   // "clarify this" / "process my inbox" need no ids from the user.
+  const settings = useTaskStore((s) => s.settings);
   const taskContextStr = useMemo(
     () =>
       buildTaskAssistantPersona({
@@ -135,8 +136,9 @@ export function AssistantRail({ onClose }: { onClose?: () => void } = {}) {
         items,
         selectedView,
         openItem: items.find((i) => i.id === selectedItemId) ?? null,
+        settings,
       }),
-    [accounts, items, selectedView, selectedItemId],
+    [accounts, items, selectedView, selectedItemId, settings],
   );
 
   const activeSession = taskSessions.find((s) => s.id === activeId);

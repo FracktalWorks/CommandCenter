@@ -987,7 +987,7 @@ export function ClarifyPanel({
           <div className="flex flex-col gap-3.5 border-t border-border pt-3.5">
             <Field label="Shape it — these combine freely">
               <div className="flex flex-col gap-3">
-                <SubField label="Size">
+                <SubField label="Size" inline>
                   <div className="flex flex-wrap gap-1.5">
                     {(["single", "subtasks", "project"] as Size[]).map((s) => {
                       const M = SIZE_META[s];
@@ -1036,7 +1036,7 @@ export function ClarifyPanel({
                   </SubField>
                 )}
 
-                <SubField label="Owner">
+                <SubField label="Owner" inline>
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       type="button"
@@ -1066,7 +1066,7 @@ export function ClarifyPanel({
                   )}
                 </SubField>
 
-                <SubField label="When">
+                <SubField label="When" inline>
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       type="button"
@@ -1099,7 +1099,7 @@ export function ClarifyPanel({
                   )}
                 </SubField>
 
-                <SubField label="Energy">
+                <SubField label="Energy" inline>
                   <div className="flex gap-1.5">
                     {(["low", "medium", "high"] as Energy[]).map((e) => (
                       <Pill key={e} active={energy === e} onClick={() => setEnergy(e)}>
@@ -1109,7 +1109,7 @@ export function ClarifyPanel({
                   </div>
                 </SubField>
 
-                <SubField label="Context">
+                <SubField label="Context" inline>
                   <div className="flex flex-wrap gap-1.5">
                     {contexts.map((c) => (
                       <Pill key={c.name} mono active={context === c.name} onClick={() => setContext(c.name)}>
@@ -1121,7 +1121,7 @@ export function ClarifyPanel({
 
                 {/* Priority — the matrix inputs (AI-prefilled, you confirm).
                     Urgent is derived from the due date, so it isn't a toggle. */}
-                <SubField label="Priority">
+                <SubField label="Priority" inline>
                   <div className="flex flex-col gap-1">
                     <div className="flex flex-wrap gap-1.5">
                       <Pill active={important} onClick={() => setImportant((v) => !v)}>
@@ -2202,7 +2202,28 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function SubField({ label, children }: { label: string; children: React.ReactNode }) {
+function SubField({
+  label,
+  children,
+  inline = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Put the label to the LEFT of the control on wider screens (stacks on
+   *  narrow). Used for the compact pill rows so each doesn't cost a full
+   *  stacked block — keeps the Shape step from running tall. */
+  inline?: boolean;
+}) {
+  if (inline) {
+    return (
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3">
+        <p className="shrink-0 text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground sm:w-16 sm:pt-1.5">
+          {label}
+        </p>
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    );
+  }
   return (
     <div>
       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">

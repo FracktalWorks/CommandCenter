@@ -28,6 +28,7 @@ import {
   Maximize2,
   Archive,
   ArchiveRestore,
+  RotateCcw,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
@@ -193,6 +194,43 @@ export function TaskDetail({
             archive/delete actions clear of it */}
         <div className={`mb-2 flex flex-wrap items-center gap-2 ${focused ? "pr-9" : ""}`}>
           <StatusPicker item={item} onPick={(d) => quickDispose(item.id, d)} />
+          {/* One-click complete — the primary action. StatusPicker can still set
+              DONE among the other states, but a task shouldn't need a dropdown to
+              be finished. Toggles to Reopen once done. Hidden for REFERENCE. */}
+          {item.disposition !== "REFERENCE" && (
+            <button
+              type="button"
+              onClick={() =>
+                quickDispose(
+                  item.id,
+                  item.disposition === "DONE" ? "NEXT" : "DONE",
+                )
+              }
+              title={
+                item.disposition === "DONE"
+                  ? "Reopen this task"
+                  : "Mark this task done"
+              }
+              className={[
+                "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium",
+                item.disposition === "DONE"
+                  ? "bg-secondary text-muted-foreground hover:text-foreground"
+                  : "bg-success text-white hover:opacity-90",
+              ].join(" ")}
+            >
+              {item.disposition === "DONE" ? (
+                <>
+                  <RotateCcw className="h-3.5 w-3.5" />
+                  Reopen
+                </>
+              ) : (
+                <>
+                  <Check className="h-3.5 w-3.5" />
+                  Done
+                </>
+              )}
+            </button>
+          )}
           <SourceBadge source={item.source} provider={item.provider} />
           {isSynced && item.providerUrl && (
             <a

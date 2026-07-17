@@ -9,6 +9,7 @@ import {
   Paperclip,
   ListTree,
   GripVertical,
+  Check,
 } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
@@ -152,9 +153,12 @@ export function TaskCard({
         // titles aren't crushed to a few characters; sm:+ single line as before.
         className="tech-transition group flex w-full cursor-pointer flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
       >
-        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-          {item.title}
-        </span>
+        <div className="flex min-w-0 flex-1 items-center gap-2.5">
+          <DoneToggle item={item} />
+          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+            {item.title}
+          </span>
+        </div>
         <div className="flex shrink-0 flex-wrap items-center gap-2">
           {meta}
           {project && (
@@ -212,9 +216,12 @@ export function TaskCard({
           <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
         )
       )}
-      <p className="pr-4 text-[13px] font-medium leading-snug text-foreground">
-        {item.title}
-      </p>
+      <div className="flex items-start gap-2 pr-4">
+        {!selectMode && <DoneToggle item={item} className="mt-[2px]" />}
+        <p className="text-[13px] font-medium leading-snug text-foreground">
+          {item.title}
+        </p>
+      </div>
       {item.nextAction && item.nextAction !== item.title && (
         <p className="line-clamp-2 text-[11px] text-muted-foreground">
           {item.nextAction}
@@ -237,6 +244,35 @@ export function TaskCard({
         )}
       </div>
     </div>
+  );
+}
+
+// A leading circular check — the standard one-click "complete" affordance the
+// cards were missing. Empty circle when open (a faint check appears on hover);
+// filled green when done, and clicking again reopens it. stopPropagation so it
+// never triggers the card's open-focus / select behaviour.
+function DoneToggle({ item, className }: { item: GtdItem; className?: string }) {
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const done = item.disposition === "DONE";
+  return (
+    <button
+      type="button"
+      onClick={(e) => {
+        e.stopPropagation();
+        quickDispose(item.id, done ? "NEXT" : "DONE");
+      }}
+      aria-label={done ? "Mark as not done" : "Mark done"}
+      title={done ? "Mark as not done" : "Mark done"}
+      className={[
+        "tech-transition flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border",
+        done
+          ? "border-success bg-success text-white"
+          : "border-muted-foreground/40 text-transparent hover:border-success hover:text-success/70",
+        className ?? "",
+      ].join(" ")}
+    >
+      <Check className="h-3 w-3" strokeWidth={3} />
+    </button>
   );
 }
 

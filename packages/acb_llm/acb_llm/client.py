@@ -19,6 +19,7 @@ from typing import Any
 from acb_common import get_logger
 from litellm import acompletion  # type: ignore[import-untyped]
 
+from acb_llm.model_limits import STUB_MARKER
 from acb_llm.prompt_cache import apply_prompt_caching
 
 _log = get_logger("acb_llm")
@@ -320,6 +321,13 @@ def ensure_model_registered(model: str) -> str | None:
         if model.startswith(prefix):
             # Dynamic registration: add a minimal entry so litellm knows
             # to route through this provider's API.
+            #
+            # Every number here is a placeholder needed to make the entry
+            # well-formed — we do not know this model, that is why we are here.
+            # STUB_MARKER says so, so acb_llm.model_limits keeps the ROUTING and
+            # ignores the token counts. Without it, context_window_for read the
+            # 262144 straight back out of model_cost and reported our own guess
+            # as litellm's answer — and it outranked the real fallback table.
             model_cost[model] = {
                 "litellm_provider": provider,
                 "mode": "chat",
@@ -334,6 +342,7 @@ def ensure_model_registered(model: str) -> str | None:
                 "supports_system_messages": True,
                 "supports_tool_choice": True,
                 "supports_response_schema": True,
+                STUB_MARKER: True,
             }
             # Remember this is a placeholder price, not a real $0 (H8): so the
             # cost path reports "unknown" instead of a confident $0.00.

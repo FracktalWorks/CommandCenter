@@ -15,6 +15,20 @@ from __future__ import annotations
 import orchestrator.executor as ex
 
 
+def _set_window(monkeypatch, tokens: int) -> None:
+    """Pin the resolved context window so a budget test states one thing.
+
+    Patches the resolver itself rather than a model id, so these assertions
+    can't drift when a vendor changes a number.
+    """
+    import acb_llm.model_limits as ml
+
+    monkeypatch.setattr(
+        ml, "get_limits",
+        lambda _m: ml.ModelLimits(tokens, 8192, "test", "test"),
+    )
+
+
 def _hist(n: int, size: int = 400) -> list[dict[str, str]]:
     """n alternating turns of `size` chars each, oldest first."""
     return [
@@ -111,3 +125,63 @@ def test_empty_history_renders_nothing() -> None:
     assert ex._render_history_block(
         [{"role": "user", "content": "   "}], "hi", "tier-powerful",
     ) == ""
+
+
+# ---------------------------------------------------------------------------
+# The absolute ceiling: a fraction of a HUGE window is a cost bug
+# ---------------------------------------------------------------------------
+
+def test_million_token_window_is_capped(monkeypatch) -> None:
+    """50% of deepseek-v4-pro's 1M window is 500K tokens of prior conversation
+    resent and re-billed on EVERY turn. Past ~100K it's nearly all stale turns
+    the model doesn't need."""
+    _set_window(monkeypatch, 1_000_000)
+    budget = ex._history_char_budget("any-model")
+    assert budget == ex._HISTORY_MAX_TOKENS * 4
+    assert budget < (1_000_000 * 0.5) * 4, "the fraction alone must not stand"
+
+
+def test_ceiling_does_not_bind_on_current_tiers(monkeypatch) -> None:
+    """The ceiling must only catch the absurd cases — it must not quietly claw
+    back the context this budgeting was written to give agents."""
+    _set_window(monkeypatch, 131_072)
+    assert ex._history_char_budget("any-model") == int(131_072 * 0.5) * 4
+
+
+def test_ceiling_is_env_tunable(monkeypatch) -> None:
+    _set_window(monkeypatch, 1_000_000)
+    monkeypatch.setattr(ex, "_HISTORY_MAX_TOKENS", 10_000)
+    assert ex._history_char_budget("any-model") == 40_000
+
+
+# ---------------------------------------------------------------------------
+# Reserving room for the model's own reply
+# ---------------------------------------------------------------------------
+
+def test_reserves_what_the_gateway_will_actually_send() -> None:
+    """assemble_run_context defaulted to reserving 1024 tokens while the gateway
+    lets the model emit up to 32000 — so the prompt filled the window minus 1K,
+    the model tried to write 32K into what was left, and the provider rejected
+    the request outright."""
+    assert ex._reserved_output_tokens("deepseek/deepseek-v4-pro") == 32_000
+
+
+def test_reservation_shrinks_to_a_vouched_for_cap() -> None:
+    """gpt-4o can only emit 16384, so holding back 32000 wastes 16K of window."""
+    assert ex._reserved_output_tokens("openai/gpt-4o") == 16_384
+
+
+def test_reservation_ignores_a_stale_registry_cap() -> None:
+    """Same rule as the gateway clamp: litellm claims v4-pro caps at 8192 while
+    it provably emits 10940. Under-reserving is how output got truncated."""
+    assert ex._reserved_output_tokens("deepseek/deepseek-v4-pro") > 8_192
+
+
+def test_reservation_survives_a_resolver_failure(monkeypatch) -> None:
+    import acb_llm.model_limits as ml
+
+    def boom(_m):
+        raise RuntimeError("nope")
+
+    monkeypatch.setattr(ml, "get_limits", boom)
+    assert ex._reserved_output_tokens("anything") == ex._RESERVED_OUTPUT_TOKENS

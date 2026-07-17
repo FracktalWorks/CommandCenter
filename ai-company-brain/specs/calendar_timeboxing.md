@@ -1,8 +1,11 @@
 # Calendar & Timeboxing — feature spec + roadmap
 
-Status: **scaffolding + plan** (2026-07-17). Branch `feat/calendar-app`. This
-document is the plan; the branch ships the scaffold (data model + day/week/month
-grid + seams). Nothing here auto-deploys until reviewed.
+Status: **P0–P3 built** (2026-07-18). Branch `feat/calendar-app` / draft PR #71.
+The day/week/month grid, drag-drop + resize timeboxing, energy/capacity prefs,
+the AI "Plan my day" planner, chat-with-calendar tools, auto-reschedule
+roll-over, deadline radar, and overlap detection are all shipped to the branch.
+Only P4 (external Google/Outlook sync — needs OAuth creds) and P5 are deferred.
+Nothing auto-deploys until the PR is reviewed + merged.
 
 ## 1. Why
 
@@ -152,22 +155,47 @@ Microsoft Graph; encrypted tokens via `key_store`).
 - **Calendar-as-input**: a captured meeting → suggested prep task blocks.
 - **Shared/【delegated】visibility**: see when a delegate is free (later, org-aware).
 
+## 9b. How timeboxing fails — and how this design overcomes it
+
+| Failure mode | Overcome by |
+|---|---|
+| **Overcommitment** — planning more than fits | Capacity setting + "Xh/Yh over capacity" meter; the AI planner refuses to select more than fits and leaves the rest for another day |
+| **No buffers** — one overrun cascades | Buffer-minutes setting the packer leaves between blocks |
+| **Ignoring energy** — deep work in a trough | Energy windows (tinted on the grid); the planner places high-energy work in peak windows |
+| **Interruptions / falling behind** — the plan goes stale | One-click roll-over of overdue-incomplete blocks into today's open slots; the planner's free slots start at *now* |
+| **Deadline slip** — a due task never gets timeboxed | Deadline radar: due-soon badge + rail section + one-click "Today" |
+| **Bad estimates** — tasks run long | Drag-resize a block in seconds; the planner uses estimates and shows total load |
+| **Double-booking** — overlaps hide each other | Side-by-side lane layout + a red "double-booked" flag |
+| **Fragmentation** — scattered context switches | The planner is told to batch similar contexts |
+| **Tedium** — manual timeboxing is work | One-click "Plan my day"; or just tell the assistant "I'm low energy, move deep work to tomorrow" |
+| **Rigid plans** — replanning is manual | Re-plan with an energy note; roll-over; chat to reorganize |
+| **Timezone/boundary bugs** | The client sends resolved ISO geometry to the planner (no server tz guessing); the assistant gets the current local time + offset |
+
 ## 10. Phased roadmap
 
-- **P0 — scaffold (this branch):** scheduling columns + migration; `GtdItem`
-  fields + API mapping + `scheduleItem` store action; `CalendarView`
-  day/week/month grid rendering scheduled + deadline items; unscheduled rail +
-  click-to-schedule; `GET /tasks/calendar` range endpoint; sync + chat + planner
-  **seams** (stubs) wired but returning "coming soon".
-- **P1 — timeboxing usable:** drag-and-drop scheduling + resize; capacity meter;
-  energy windows setting; the deadlines all-day lane.
-- **P2 — smart planning:** `gtd_plan_day` tool + "Plan my day" + look-ahead;
-  chat-with-calendar persona context + schedule tools.
-- **P3 — auto-reschedule:** nightly roll-over job + deadline escalation + roll
-  history UI.
-- **P4 — external sync:** `calendar_accounts` + Google/Graph read; then two-way
-  write; conflict avoidance against external events.
-- **P5 — time-blocks table + auto-scheduling engine + Pomodoro + templates.**
+- **P0 — scaffold ✅ DONE:** scheduling columns (mig 76) + `GtdItem` fields + API
+  mapping; `CalendarView` day/week/month grid; unscheduled rail + click-to-
+  schedule; `GET /tasks/calendar` range endpoint; external-sync seams.
+- **P1 — timeboxing usable ✅ DONE:** drag-and-drop scheduling + block resize
+  (native DnD + pointer events, 15-min snap, drop highlight); capacity meter +
+  working-window/buffer/energy-window prefs (mig 77) that the grid + planner
+  honor; energy-window tint bands; overlap detection with side-by-side lanes +
+  "double-booked" flag; deadline all-day markers on the grid.
+- **P2 — smart planning ✅ DONE:** `POST /calendar/plan` LLM planner (judgment =
+  LLM, geometry = deterministic packer; priority/energy/capacity/deadline aware;
+  fallback ranking) + the "Plan my day" review modal with an energy-note re-plan;
+  chat-with-calendar = persona calendar context + `gtd_schedule`/`gtd_unschedule`
+  /`gtd_list_schedule` agent tools.
+- **P3 — auto-reschedule ✅ DONE (manual trigger):** `POST /calendar/rollover`
+  packs overdue-incomplete blocks into today (deadline-aware) + the roll-over
+  banner; deadline radar (due-soon badge + rail section + one-click timebox).
+  *Still to do: a nightly automatic roll-over job (scheduler) + roll history.*
+- **P4 — external sync (DEFERRED — needs OAuth creds):** `calendar_accounts` +
+  Google/Graph read (conflict-avoidance) then two-way write. Seamed at
+  `GET /calendar/accounts` + `POST /calendar/sync` (501).
+- **P5 — DEFERRED:** `gtd_time_blocks` table (multiple blocks/task, external
+  events on the grid) + continuous auto-scheduling engine + Pomodoro + ideal-week
+  templates + learned-estimate heuristics.
 
 ## 11. Files this touches (map)
 

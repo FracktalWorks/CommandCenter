@@ -410,10 +410,16 @@ def _resolve_project_match(token: str, projects: list[Any]) -> Any | None:
 async def _llm_propose(
     item: Any, people: list[dict], projects: list[Any],
     account_statuses: dict[str, list[str]], model: str,
+    user_context: str | None = None,
 ) -> dict[str, Any] | None:
     """LLM clarify core. Returns a ``core``-shaped dict (same keys propose()
     produces: disposition, next_action, optional outcome/context/energy/
-    suggested_assignee, confidence, rationale) or None on ANY failure."""
+    suggested_assignee, confidence, rationale) or None on ANY failure.
+
+    ``user_context`` is optional freeform guidance the user typed during clarify
+    ("this is actually the Q3 board deck — break it into sections") — TRUSTED
+    input (unlike the projects/people DATA), used to fix the title, pick the
+    project, and shape the steps."""
     try:
         from acb_llm.context import acompletion_with_fallback
     except Exception:
@@ -479,6 +485,10 @@ async def _llm_propose(
         "Rules: next_action is PHYSICAL and visible ('Call Sanjay re: quote', "
         "not 'handle quote'). Only delegate to a person in the list. Give a "
         "one-sentence `rationale`. Do not invent projects or people.\n"
+        "If a USER GUIDANCE section is present, it is the user telling you, right "
+        "now, what this item really is — treat it as the authoritative "
+        "description: use it to rewrite the title (suggested_title), choose the "
+        "project_match, set the complexity, and shape the subtasks accordingly.\n"
         'Return STRICT JSON only: {"disposition": str, "next_action": str, '
         '"outcome": str|null, "context": "@computer"|"@calls"|"@errands"|'
         '"@agenda"|null, "energy": "low"|"medium"|"high"|null, '
@@ -488,9 +498,12 @@ async def _llm_propose(
         '"due_date": str|null, "important": bool, "leveraged": bool, '
         '"confidence": "low"|"medium"|"high", "rationale": str}'
     )
+    guidance = (user_context or "").strip()
     user = (
         f"CAPTURED ITEM:\n\"{item.title}\""
         + (f"\nNOTES: {item.description}" if getattr(item, "description", None) else "")
+        + (f"\n\nUSER GUIDANCE (trusted — the user's own words about what this is "
+           f"and how to set it up):\n{guidance}" if guidance else "")
         + f"\n\nACTIVE PROJECTS:\n{_projects_brief(projects)}"
         + f"\n\nTEAM (for delegation):\n{_people_brief(people)}"
         + f"\n\nWORKSPACE STAGES: {', '.join(stages) or '(none)'}"
@@ -805,10 +818,21 @@ async def _find_parent_task(
             "title": candidates[idx]["title"]}
 
 
+from pydantic import BaseModel  # noqa: E402
+
+
+class ClarifyRequest(BaseModel):
+    """Optional freeform guidance the user types while clarifying to steer the
+    proposal — the task's real description in their own words. Trusted input,
+    distinct from the item's stored notes; drives title/project/steps."""
+    note: str | None = None
+
+
 @router.post("/items/{item_id}/clarify")
 async def clarify_item(
     item_id: str,
     reclarify: bool = False,
+    body: ClarifyRequest | None = None,
     user: UserContext = Depends(get_current_user),
 ):
     """The AI clarify proposal for one item (agent seam, §2.2).
@@ -816,7 +840,10 @@ async def clarify_item(
     `reclarify=true` re-runs clarify on an already-processed task (e.g. a synced
     ClickUp task that never went through Clarify, or one that turned out to need
     breaking down). The cognition is proposed the same way, but the destination
-    binding of a SYNCED task is preserved (see _apply_reclarify_binding)."""
+    binding of a SYNCED task is preserved (see _apply_reclarify_binding).
+
+    An optional `note` (request body) is freeform user guidance that steers the
+    title/project/steps for this pass."""
     uid = _uid(user)
     db = await _get_db()
     try:
@@ -849,11 +876,13 @@ async def clarify_item(
         # any LLM failure also falls back (propose_with_llm(..., None)).
         from gateway.routes.tasks.settings import gtd_models, gtd_toggles
         toggles = await gtd_toggles(db, uid)
+        note = (body.note if body else None)
         llm_core = None
         if toggles["clarify_use_llm"]:
             models = await gtd_models(db, uid)
             llm_core = await _llm_propose(
-                item, people, projects, account_statuses, models["clarify"])
+                item, people, projects, account_statuses, models["clarify"],
+                user_context=note)
         proposal = propose_with_llm(
             item, people, projects, account_statuses, llm_core)
         if reclarify:

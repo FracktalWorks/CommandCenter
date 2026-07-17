@@ -833,9 +833,15 @@ export async function apiClarifyPropose(
   /** true → re-clarify an already-processed task (preserves a SYNCED task's
    *  ClickUp destination binding server-side). */
   reclarify = false,
+  /** Optional freeform guidance the user typed while clarifying — steers the
+   *  proposed title / project / steps for this pass. */
+  note?: string,
 ): Promise<ClarifyProposal> {
   const q = reclarify ? "?reclarify=true" : "";
-  const r = await gatewayFetch<Raw>(`/items/${id}/clarify${q}`, { method: "POST" });
+  const r = await gatewayFetch<Raw>(`/items/${id}/clarify${q}`, {
+    method: "POST",
+    body: JSON.stringify({ note: note?.trim() || null }),
+  });
   const accountId = r.account_id ? String(r.account_id) : undefined;
   return {
     actionable: Boolean(r.actionable),

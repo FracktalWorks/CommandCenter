@@ -86,7 +86,12 @@ export function ListsSidebar({
     if (v === "projects") void loadLocalHierarchy();
     onNavigate?.();
   };
-  const counts = useMemo(() => viewCounts(items), [items]);
+  // Counts must honor the All / Mine / ClickUp source toggle, otherwise the
+  // badges stay frozen at the "All" totals while the list below re-filters.
+  const counts = useMemo(
+    () => viewCounts(items, sourceFilter),
+    [items, sourceFilter],
+  );
 
   return (
     <nav className="flex h-full flex-col gap-1 overflow-y-auto p-3 text-sm">

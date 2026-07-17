@@ -1930,8 +1930,15 @@ export function itemsForView(
   }
 }
 
-/** Per-view counts for the sidebar badges. */
-export function viewCounts(items: GtdItem[]): Record<ViewKey, number> {
+/** Per-view counts for the sidebar badges. ``source`` mirrors itemsForView's
+ *  source filter so the badges track the All / Mine / ClickUp toggle instead of
+ *  always reporting the "All" totals. */
+export function viewCounts(
+  items: GtdItem[],
+  source: "all" | "local" | "synced" = "all",
+): Record<ViewKey, number> {
+  if (source === "local") items = items.filter((i) => i.source === "LOCAL");
+  else if (source === "synced") items = items.filter((i) => i.source !== "LOCAL");
   const c = {
     inbox: 0, next: 0, priority: 0, waiting: 0, calendar: 0, projects: 0,
     someday: 0, reference: 0, done: 0, engage: 0, archive: 0, horizons: 0,

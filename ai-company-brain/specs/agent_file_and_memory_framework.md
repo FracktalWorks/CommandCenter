@@ -200,3 +200,55 @@ detail: `docs/DESIGN_LIMITATION_native_maf_mutation.md`.
 - [ ] `agent_name` is unique and stable (it's the storage + memory + mutation key).
 - [ ] For workbench / Pomad Centre work: the mutation target is tenant-isolated
       (NOT the shared monorepo) before any multi-tenant deployment.
+
+---
+
+## 8. Recipe: giving one agent a dedicated memory (worked example)
+
+The three scopes (§5, `llm_caching_memory.md`) are the *substrate*; a "dedicated
+agent memory" is just a deliberate **write/recall protocol** on the
+`agent:<name>` scope. Both external repos we drew from (agent-startup-guru,
+agent-project-manager) use lexical SQLite FTS for this — our Mem0 + pgvector
+`agent:<name>` partition already exceeds them on semantic recall, so the work is
+protocol, not plumbing. Reference implementation:
+`gateway/routes/tasks/task_memory.py` (the task-manager's clarification memory).
+
+**The five steps** (copy this shape for any agent that should learn on the job):
+
+1. **Pick the scope.** `scope_key(agent="<name>")` — the cross-user
+   `agent:<name>` Mem0 partition. Use the SAME `<name>` the app-side helper and
+   the agent's own `recall_agent`/`save_agent_memory` use, so both land in one
+   partition. (For a per-user habit, use `scope_key(user=email)` instead; for
+   org-wide facts, `scope_key(org=True)`.)
+
+2. **Define what it saves, and WHEN (write hygiene).** Save the *committed
+   outcome*, never the proposal — the real decision is the signal worth learning.
+   The task-manager saves on `organize` (the user's committed clarify decision:
+   "task X → disposition D, owner Y, project P, context C"), not on the proposal.
+   Write is **fire-and-forget + best-effort** (`add_scoped_memories`, swallow all
+   errors) so it never slows or breaks the request that produced it.
+
+3. **Define recall routing (when to spend a search vs. use loaded context).**
+   Recall ONE bounded `get_scoped_context` right before the expensive reasoning
+   step, and only when that step is already running (the task-manager recalls
+   only on the LLM clarify path, which is already a round-trip). Feed the result
+   into the prompt as a labelled block ("PAST CLARIFICATION PATTERNS"), with a
+   system-prompt line telling the model to treat it as *the user's own prior
+   decisions — prefer consistency, but the current item wins*.
+
+4. **(Optional) a purpose-built vector table** when recall precision needs
+   task-specific structure Mem0's free-text facts can't give (e.g. exact
+   disposition/owner columns to `ORDER BY cosine`). Start WITHOUT it — Mem0 facts
+   are enough until proven otherwise. (Phase 2's `gtd_people.capability_embedding`
+   is exactly this pattern for the *people*-matching side.)
+
+5. **Wire recall + save into the agent's loop.** Native/Copilot agents already
+   have `recall_agent`/`save_agent_memory` tools; an app-side engine (like the
+   gateway clarify route) calls `get_scoped_context`/`add_scoped_memories`
+   directly. Keep it graceful: Mem0 disabled → recall "" and save no-op, so the
+   feature is purely additive.
+
+**Guardrail:** a dedicated memory must never change an eval-locked deterministic
+path. The task-manager's recall feeds only the *LLM* clarify prompt; the
+heuristic `propose()` and the golden trajectories are untouched. Add memory as an
+overlay on the cognition, never as a new branch in the guaranteed baseline.

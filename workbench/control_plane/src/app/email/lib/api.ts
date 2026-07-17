@@ -1247,6 +1247,9 @@ export async function processPastEmails(params: {
  *  `idle` = nothing has run; `running` = job in flight; `done`/`error` = finished. */
 export type ProcessPastStatus = {
   status: "idle" | "running" | "done" | "error";
+  /** Which stage a running job is in: "downloading" the range from the provider,
+   *  then "processing" (applying rules per email). */
+  phase?: "downloading" | "processing";
   total?: number;
   processed?: number;
   applied?: number;

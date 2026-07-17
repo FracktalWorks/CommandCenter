@@ -413,6 +413,85 @@ async def gtd_organize(
     return f"Organized → {_fmt_item(item)}{staged}"
 
 
+def _fmt_plan(plan: dict[str, Any]) -> str:
+    """Render a proposed project plan compactly for the chat context."""
+    out = [f"PROJECT: {plan.get('name', '?')}"]
+    if plan.get("description"):
+        out.append(f"  {plan['description']}")
+    for ph in plan.get("phases") or []:
+        out.append(f"\n▸ {ph.get('name', 'Phase')}")
+        for t in ph.get("tasks") or []:
+            bits = []
+            who = (t.get("assignee") or {}).get("name") or t.get("assignee_name")
+            if who:
+                bits.append(f"→ {who}" + (" ⚠ overloaded"
+                                          if t.get("assignee_overloaded") else ""))
+            if t.get("priority"):
+                bits.append(str(t["priority"]))
+            if t.get("effort_hours"):
+                bits.append(f"{t['effort_hours']}h")
+            if t.get("due_offset_days") is not None:
+                bits.append(f"due +{t['due_offset_days']}d")
+            tail = (" · " + " · ".join(bits)) if bits else ""
+            out.append(f"  • {t.get('title', '?')}{tail}")
+            for s in t.get("subtasks") or []:
+                out.append(f"      - {s}")
+    if plan.get("notes"):
+        out.append(f"\nNotes: {plan['notes']}")
+    return "\n".join(out)
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_plan_project(
+    name: str,
+    description: str = "",
+    apply: bool = False,
+    target: str = "local",
+    account_id: str = "",
+    space_id: str = "",
+    folder_id: str = "",
+) -> str:
+    """Plan a whole project from a brief — the assistant drafts phases → tasks →
+    subtasks with a suggested owner (matched to each teammate's skills/capacity),
+    effort, priority and relative due dates.
+
+    Two-step by design (AI proposes, the human decides):
+      1. Call with apply=false (default) to PROPOSE a plan — show it to the user
+         and confirm before creating anything.
+      2. After the user approves, call again with apply=true to create it.
+
+    target="local" creates the project + tasks + subtasks in the local GTD store.
+    target="clickup" is a provider write — the agent NEVER pushes to ClickUp
+    itself; propose the plan and tell the user to apply it to ClickUp from the
+    Tasks UI (account_id/space_id are only used by that UI action).
+
+    Args:
+        name: The project name / goal.
+        description: Extra brief detail (scope, constraints, deadline).
+        apply: false = propose only; true = create it (local only).
+        target: "local" | "clickup".
+        account_id / space_id / folder_id: ClickUp destination (UI apply only).
+    """
+    plan = await _request("POST", "/tasks/plan", json={
+        "name": name, "description": description or None, "target": target})
+    summary = _fmt_plan(plan)
+    if not apply:
+        return ("Proposed plan (review with the user, then call gtd_plan_project "
+                "with apply=true to create it):\n\n" + summary)
+    if target == "clickup":
+        # C-04: the agent can't write to a provider. Hand the plan back for the
+        # human to apply from the UI (which stages/pushes with confirmation).
+        return ("Plan ready. Creating in ClickUp is a manual step — open Tasks → "
+                "Plan a project, review, and Apply → ClickUp. Proposed plan:\n\n"
+                + summary)
+    res = await _request("POST", "/tasks/plan/apply",
+                         json={"plan": plan, "target": "local"})
+    return (f"Created LOCAL project \"{plan.get('name')}\" "
+            f"({res.get('tasks_created', 0)} tasks, "
+            f"{res.get('subtasks_created', 0)} subtasks). "
+            f"project_id={res.get('project_id')}\n\n" + summary)
+
+
 @_annotate_risk(idempotent=True)
 async def gtd_update(item_id: str, title: str = "", notes: str = "",
                      defer_until: str = "") -> str:

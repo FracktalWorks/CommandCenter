@@ -7,6 +7,7 @@ import {
   Clock,
   Calendar,
   FolderKanban,
+  Users,
   Lightbulb,
   Mountain,
   Cloud,
@@ -43,6 +44,7 @@ const PRIMARY: NavRow[] = [
   { view: "waiting", label: "Waiting For", icon: Clock, showCount: true },
   { view: "calendar", label: "Calendar", icon: Calendar, showCount: true },
   { view: "projects", label: "Projects", icon: FolderKanban },
+  { view: "people", label: "People", icon: Users },
   { view: "someday", label: "Someday / Maybe", icon: Lightbulb, showCount: true },
   { view: "done", label: "Done", icon: CheckCircle2, showCount: true },
   { view: "archive", label: "Archive", icon: Archive },
@@ -74,6 +76,7 @@ export function ListsSidebar({
   const loadArchive = useTaskStore((s) => s.loadArchive);
   const loadDone = useTaskStore((s) => s.loadDone);
   const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
+  const loadPeople = useTaskStore((s) => s.loadPeople);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
   const selectView: typeof selectViewRaw = (v) => {
@@ -84,6 +87,8 @@ export function ListsSidebar({
     if (v === "done") void loadDone();
     // The Projects tree (local spaces/folders) is loaded lazily on open.
     if (v === "projects") void loadLocalHierarchy();
+    // The People roster (full HR records) is loaded lazily on open.
+    if (v === "people") void loadPeople();
     onNavigate?.();
   };
   const counts = useMemo(() => viewCounts(items), [items]);

@@ -971,7 +971,7 @@ async def organize_item(
     uid = _uid(user)
     db = await _get_db()
     try:
-        await _fetch_item(db, item_id, uid)  # 404 before any writes
+        src_item = await _fetch_item(db, item_id, uid)  # 404 before any writes
 
         source, sync_state = "LOCAL", "local"
         if req.account_id:
@@ -1067,6 +1067,19 @@ async def organize_item(
                 db, uid, item_id, req.subtasks, source, req.account_id,
                 project_id, sync_state)
         await db.commit()
+
+        # Teach the task-manager's clarification memory from the COMMITTED
+        # decision (§9, Phase 4) — the real outcome, not a proposal. Fire-and-
+        # forget + best-effort, so it never slows or breaks organize.
+        from gateway.routes.tasks.task_memory import remember_decision_background
+        remember_decision_background(
+            title=getattr(src_item, "title", "") or "",
+            disposition=disposition,
+            next_action=(req.next_action or "").strip() or None,
+            owner=(req.assignee.name if req.assignee else None),
+            project=(req.outcome.strip() if req.kind == "project"
+                     and req.outcome else None),
+            context=req.context)
 
         # Delegating to a connected tool auto-pushes so the teammate actually
         # sees it (parity with POST /items/{id}/delegate). Extracted so the tail

@@ -33,6 +33,9 @@ export interface ClarifyProposal {
   isTwoMinute?: boolean;
   /** who to hand off to, for a delegation */
   suggestedAssignee?: Person;
+  /** the proposed owner's live workload, when the server annotated it (§5,
+   *  Phase 2) — powers the "already at capacity" warning at assign time. */
+  assigneeLoad?: { overloaded: boolean; openTaskCount: number; note?: string };
   /** where it should be stored — Local vs a connected PM tool (§5.1) */
   target?: Target;
   /** an existing project to file it under, if any (auto-matched) */

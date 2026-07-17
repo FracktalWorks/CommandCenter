@@ -27,9 +27,11 @@ import {
   Check,
   AlertTriangle,
   Wand2,
+  RotateCcw,
 } from "lucide-react";
 import {
   apiPlanDay,
+  apiRollover,
   type TaskSettings,
   type EnergyWindow,
   type DayPlanResult,
@@ -154,6 +156,7 @@ export function CalendarView() {
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
+  const [rolling, setRolling] = useState(false);
 
   // Unscheduled, schedulable next actions (mine, NEXT, no block yet).
   const unscheduled = useMemo(
@@ -186,6 +189,57 @@ export function CalendarView() {
       scheduledStart: start.toISOString(),
       scheduledEnd: end.toISOString(),
     });
+
+  // Overdue = a past time-block whose task isn't done → offer a one-click
+  // roll-over into today's open slots (the "fell behind → stale plan" failure).
+  const overdueCount = useMemo(() => {
+    // Real wall-clock is intentional here (the calendar is a live surface,
+    // unlike the demo cards that use a frozen MOCK_NOW).
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
+    return items.filter(
+      (i) =>
+        i.scheduledStart &&
+        i.scheduledEnd &&
+        i.disposition !== "DONE" &&
+        new Date(i.scheduledEnd).getTime() < nowMs,
+    ).length;
+  }, [items]);
+
+  const rollOver = async () => {
+    setRolling(true);
+    const today = startOfDay(new Date());
+    const s = new Date(today);
+    s.setHours(dayStart, 0, 0, 0);
+    const e = new Date(today);
+    e.setHours(dayEnd, 0, 0, 0);
+    try {
+      const res = await apiRollover({
+        day_start: s.toISOString(),
+        day_end: e.toISOString(),
+        energy_windows: energyWindows.map((w) => {
+          const ws = new Date(today);
+          ws.setHours(w.start_hour, 0, 0, 0);
+          const we = new Date(today);
+          we.setHours(w.end_hour, 0, 0, 0);
+          return {
+            start: ws.toISOString(),
+            end: we.toISOString(),
+            energy: w.energy,
+          };
+        }),
+        capacity_mins: capacityTarget,
+        buffer_mins: settings.bufferMins ?? 0,
+      });
+      for (const b of res.blocks) {
+        updateItem(b.itemId, { scheduledStart: b.start, scheduledEnd: b.end });
+      }
+    } catch {
+      /* best-effort */
+    } finally {
+      setRolling(false);
+    }
+  };
 
   const step = (dir: 1 | -1) =>
     setAnchor((a) =>
@@ -291,6 +345,30 @@ export function CalendarView() {
           )}
         </div>
       </div>
+
+      {overdueCount > 0 && (
+        <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[12px]">
+          <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
+          <span className="min-w-0 flex-1 text-foreground">
+            {overdueCount} scheduled task{overdueCount === 1 ? "" : "s"} from
+            earlier {overdueCount === 1 ? "wasn't" : "weren't"} completed.
+          </span>
+          <button
+            type="button"
+            onClick={() => void rollOver()}
+            disabled={rolling}
+            title="Reschedule them into today's open slots (deadline-aware)"
+            className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1 font-medium text-warning hover:bg-warning/30 disabled:opacity-50"
+          >
+            {rolling ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <RotateCcw className="h-3.5 w-3.5" />
+            )}
+            Roll over to today
+          </button>
+        </div>
+      )}
 
       <div className="flex min-h-0 flex-1">
         <div className="min-w-0 flex-1 overflow-auto">

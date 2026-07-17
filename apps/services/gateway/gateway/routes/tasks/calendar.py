@@ -410,3 +410,99 @@ async def plan_day(
             used_mins=used, capacity_mins=req.capacity_mins)
     finally:
         await db.close()
+
+
+# ── Auto-reschedule / roll-over (P3) ─────────────────────────────────────────
+_OVERDUE_WHERE = (
+    " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
+    " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
+    " AND i.disposition NOT IN ('DONE','TRASH')"
+    " AND i.scheduled_start IS NOT NULL AND i.scheduled_end < :now"
+)
+_TODAY_BUSY_WHERE = (
+    " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
+    " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
+    " AND i.disposition NOT IN ('DONE','TRASH')"
+    " AND i.scheduled_start IS NOT NULL"
+    " AND i.scheduled_start < :win_end AND i.scheduled_end > :win_start"
+    " AND i.scheduled_end >= :now"
+)
+
+
+@router.post("/calendar/rollover", response_model=DayPlan)
+async def rollover_day(
+    req: PlanDayRequest, user: UserContext = Depends(get_current_user),
+):
+    """Roll INCOMPLETE past time-blocks forward into the target day's open slots
+    (deadline-aware, nearest-due first). Fixes the 'fell behind → the plan is
+    stale' failure. NO writes: returns a proposal the client applies. §6."""
+    win_start, win_end = _parse_iso(req.day_start), _parse_iso(req.day_end)
+    if not win_start or not win_end or win_end <= win_start:
+        raise HTTPException(
+            status_code=400, detail="Valid day_start/day_end (ISO) required.")
+    uid = _uid(user)
+    now = datetime.now(UTC)
+    db = await _get_db()
+    try:
+        over_rows = (await db.execute(
+            text(ITEM_SELECT + _OVERDUE_WHERE), {"uid": uid, "now": now},
+        )).fetchall()
+        overdue = [_row_to_item(r) for r in over_rows]
+        busy_rows = (await db.execute(
+            text(ITEM_SELECT + _TODAY_BUSY_WHERE),
+            {"uid": uid, "win_start": win_start, "win_end": win_end, "now": now},
+        )).fetchall()
+        busy: list[tuple[datetime, datetime]] = []
+        for r in busy_rows:
+            bs = _parse_iso(getattr(r, "scheduled_start", None))
+            be = _parse_iso(getattr(r, "scheduled_end", None))
+            if bs and be and be > bs:
+                busy.append((bs, be))
+
+        free = _free_intervals(win_start, win_end, busy, now)
+        windows: list[tuple[datetime, datetime, str]] = []
+        for w in req.energy_windows:
+            ws, we = _parse_iso(w.start), _parse_iso(w.end)
+            if ws and we and we > ws and w.energy in _ENERGY:
+                windows.append((ws, we, w.energy))
+
+        far = datetime.max.replace(tzinfo=UTC)
+
+        def _key(m: Any) -> tuple[datetime, datetime]:
+            return (_parse_iso(m.due_at) or far,
+                    _parse_iso(m.scheduled_start) or now)
+        overdue.sort(key=_key)
+
+        blocks: list[PlanBlock] = []
+        unplaced: list[PlanUnplaced] = []
+        used = 0
+        for m in overdue:
+            bs = _parse_iso(m.scheduled_start)
+            be = _parse_iso(m.scheduled_end)
+            dur = max(15, int((be - bs).total_seconds() / 60)) if bs and be else 30
+            pref = m.energy if m.energy in _ENERGY else None
+            placed = _place_one(free, dur, pref, windows, req.buffer_mins)
+            if placed is None:
+                unplaced.append(PlanUnplaced(
+                    item_id=m.id, title=m.title,
+                    reason="No open slot today — reschedule manually"))
+                continue
+            s, e = placed
+            due = _parse_iso(m.due_at)
+            note = "Rolled over from " + (bs.strftime("%b %d") if bs else "earlier")
+            if due and due < now:
+                note += " · due date passed"
+            blocks.append(PlanBlock(
+                item_id=m.id, title=m.title,
+                start=s.isoformat(), end=e.isoformat(),
+                energy=pref, rationale=note))
+            used += dur
+
+        notes = (f"{len(blocks)} task(s) rolled forward"
+                 + (f", {len(unplaced)} didn't fit" if unplaced else "")
+                 if blocks or unplaced else "Nothing overdue to roll over.")
+        return DayPlan(
+            blocks=blocks, unplaced=unplaced, notes=notes,
+            used_mins=used, capacity_mins=req.capacity_mins)
+    finally:
+        await db.close()

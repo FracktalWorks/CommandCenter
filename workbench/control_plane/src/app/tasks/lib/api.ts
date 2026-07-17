@@ -511,13 +511,7 @@ export interface PlanDayRequest {
   energy_note?: string;
 }
 
-/** Ask the AI planner for a timeboxed day (priority/energy/capacity/deadline
- *  aware). Returns a proposal — the caller applies accepted blocks via PATCH. */
-export async function apiPlanDay(req: PlanDayRequest): Promise<DayPlanResult> {
-  const r = await gatewayFetch<Raw>(`/calendar/plan`, {
-    method: "POST",
-    body: JSON.stringify(req),
-  });
+function mapDayPlan(r: Raw): DayPlanResult {
   const arr = (v: unknown): Raw[] => (Array.isArray(v) ? (v as Raw[]) : []);
   return {
     blocks: arr(r.blocks).map((b) => ({
@@ -537,6 +531,28 @@ export async function apiPlanDay(req: PlanDayRequest): Promise<DayPlanResult> {
     usedMins: Number(r.used_mins ?? 0),
     capacityMins: Number(r.capacity_mins ?? 0),
   };
+}
+
+/** Ask the AI planner for a timeboxed day (priority/energy/capacity/deadline
+ *  aware). Returns a proposal — the caller applies accepted blocks via PATCH. */
+export async function apiPlanDay(req: PlanDayRequest): Promise<DayPlanResult> {
+  return mapDayPlan(
+    await gatewayFetch<Raw>(`/calendar/plan`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+/** Roll incomplete PAST time-blocks forward into the target day's open slots
+ *  (deadline-aware). Returns a proposal — the caller applies it. */
+export async function apiRollover(req: PlanDayRequest): Promise<DayPlanResult> {
+  return mapDayPlan(
+    await gatewayFetch<Raw>(`/calendar/rollover`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  );
 }
 
 /** Archive (hide from active views) or un-archive a task. */

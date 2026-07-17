@@ -202,3 +202,119 @@ def test_off_flows_through_to_client(monkeypatch) -> None:
     assert ex._apply_copilot_infinite_sessions(agent) is True
     asyncio.run(agent._create_session(True, None))
     assert agent._client.received_config["infinite_sessions"] == {"enabled": False}
+
+
+# ---------------------------------------------------------------------------
+# Rebind regression (2026-07-17) — the wrap alone was NOT enough
+# ---------------------------------------------------------------------------
+# Every test above exercises the wrap in ISOLATION, which is why they all stayed
+# green while production silently bypassed the fix: `run_agent_stream` installs
+# the wrap via _inject_agent_tools, then REBINDS `agent._create_session` to
+# CommandCenterCopilotAgent's method (executor.py:2361) — discarding the wrap
+# before agent.run() ever calls it. So the Copilot backend kept running its
+# default 0.80/0.95 compaction against its wrong ~90K BYOK window guess.
+# The policy now lives in `effective_infinite_sessions` and is applied by the
+# CommandCenter session methods directly, so it survives any binding order.
+
+
+class _RebindFakeClient:
+    def __init__(self) -> None:
+        self.received_config: dict | None = None
+
+    async def create_session(self, config: dict):
+        self.received_config = config
+        return MagicMock(session_id="sess-2")
+
+    async def resume_session(self, session_id: str, config: dict):
+        self.received_config = config
+        return MagicMock(session_id=session_id)
+
+
+class _RebindAgent:
+    """Shaped enough to run the REAL CommandCenterCopilotAgent session methods."""
+
+    def __init__(self, *, byok: bool = False) -> None:
+        self._client = _RebindFakeClient()
+        self._default_options: dict = {
+            "provider": {"type": "openai", "base_url": "http://gw/v1", "api_key": "k"}
+        } if byok else {}
+        self._settings: dict = {}
+        self._tools: list = []
+        self._permission_handler = None
+        self._mcp_servers = None
+
+    async def _create_session(self, streaming, runtime_options=None):
+        # The base-wrapper behaviour (drops infinite_sessions) the wrap patches.
+        return await self._client.create_session({"streaming": streaming})
+
+
+def _rebind(agent):
+    """Reproduce executor.py:2361 — the clobber that discarded the wrap."""
+    from orchestrator.copilot_agent import CommandCenterCopilotAgent
+    agent._create_session = CommandCenterCopilotAgent._create_session.__get__(
+        agent, type(agent)
+    )
+    agent._resume_session = CommandCenterCopilotAgent._resume_session.__get__(
+        agent, type(agent)
+    )
+
+
+def test_byok_policy_survives_executor_create_session_rebind(monkeypatch) -> None:
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+    agent = _RebindAgent(byok=True)
+    ex._apply_copilot_infinite_sessions(agent)  # 1. tool injection wraps ...
+    _rebind(agent)                              # 2. ... executor clobbers it
+
+    asyncio.run(agent._create_session(True, None))
+    cfg = agent._client.received_config
+    assert cfg is not None
+    assert cfg.get("infinite_sessions") == {"enabled": False}, (
+        "BYOK compaction policy must survive the executor's _create_session "
+        "rebind — otherwise the backend compacts against a wrong ~90K window"
+    )
+
+
+def test_byok_policy_applied_on_resume(monkeypatch) -> None:
+    """A resumed session rebuilds config from scratch — it must re-apply too."""
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+    agent = _RebindAgent(byok=True)
+    _rebind(agent)
+
+    asyncio.run(agent._resume_session("sess-9", True))
+    cfg = agent._client.received_config
+    assert cfg.get("infinite_sessions") == {"enabled": False}
+
+
+def test_native_policy_survives_rebind(monkeypatch) -> None:
+    """Copilot-native keeps compaction ON (relaxed) after the rebind."""
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+    monkeypatch.delenv("COPILOT_COMPACTION_THRESHOLD", raising=False)
+    monkeypatch.delenv("COPILOT_BUFFER_THRESHOLD", raising=False)
+    agent = _RebindAgent(byok=False)
+    _rebind(agent)
+
+    asyncio.run(agent._create_session(True, None))
+    inf = agent._client.received_config.get("infinite_sessions")
+    assert inf is not None and inf["enabled"] is True
+    assert inf["buffer_exhaustion_threshold"] >= 0.98
+
+
+def test_opt_out_omits_block_after_rebind(monkeypatch) -> None:
+    """`default` must leave the SDK's own defaults intact (no block injected)."""
+    monkeypatch.setenv("COPILOT_INFINITE_SESSIONS", "default")
+    agent = _RebindAgent(byok=True)
+    _rebind(agent)
+
+    asyncio.run(agent._create_session(True, None))
+    assert "infinite_sessions" not in agent._client.received_config
+
+
+def test_effective_policy_is_single_source_of_truth(monkeypatch) -> None:
+    """The extracted policy both paths now share."""
+    monkeypatch.delenv("COPILOT_INFINITE_SESSIONS", raising=False)
+    from orchestrator._copilot_session import effective_infinite_sessions as eff
+
+    assert eff({"provider": {"type": "openai"}}) == {"enabled": False}
+    assert eff({})["enabled"] is True
+    monkeypatch.setenv("COPILOT_INFINITE_SESSIONS", "default")
+    assert eff({}) is None

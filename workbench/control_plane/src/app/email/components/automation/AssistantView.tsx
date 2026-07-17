@@ -320,6 +320,9 @@ function PastJobBanner({
   onDismiss: () => void;
 }) {
   const running = job.status === "running";
+  // Pre-apply phase: the range is still being fetched from the provider, so the
+  // total isn't known yet — show an indeterminate bar + "Downloading…".
+  const downloading = running && job.phase === "downloading";
   const total = job.total ?? 0;
   const processed = job.processed ?? 0;
   const matched = job.applied ?? 0;
@@ -340,7 +343,9 @@ function PastJobBanner({
           )}
           <span className="text-xs text-foreground min-w-0 truncate">
             {running
-              ? `Processing past emails — ${processed} of ${total}…`
+              ? downloading
+                ? "Downloading emails from your mailbox…"
+                : `Processing past emails — ${processed} of ${total}…`
               : job.status === "error"
                 ? `Processing failed: ${job.error || "unknown error"}`
                 : `Processed ${total} email${total === 1 ? "" : "s"} — ${matched} ${verb}.`}
@@ -364,8 +369,10 @@ function PastJobBanner({
         {running && (
           <div className="mt-1.5 h-1 w-full rounded-full bg-border overflow-hidden">
             <div
-              className="h-full bg-primary transition-all"
-              style={{ width: `${pct}%` }}
+              className={`h-full bg-primary ${
+                downloading ? "w-full animate-pulse" : "transition-all"
+              }`}
+              style={downloading ? undefined : { width: `${pct}%` }}
             />
           </div>
         )}
@@ -1633,20 +1640,19 @@ function ProcessPastEmailsDialog({
       // Processing past emails always APPLIES the matched rules (there's nothing
       // to "test" against history) — progress shows in the banner above the tabs
       // and results stream into the History tab as they're applied.
-      const r = await processPastEmails({
+      await processPastEmails({
         accountId,
         startDate: start || undefined,
         endDate: end || undefined,
         isTest: false,
         includeRead,
       });
-      if (r.count === 0) {
-        setResult("No emails found in that range.");
-      } else {
-        // Hand off to the live progress banner (it polls server-side state).
-        onStarted?.();
-        onClose();
-      }
+      // Always hand off to the live progress banner: the job downloads the range
+      // from the provider first, so there's no meaningful up-front count to gate
+      // on (the banner shows "Downloading…" then "Processing N of M…", and the
+      // final tally — including "nothing matched" — streams into History).
+      onStarted?.();
+      onClose();
     } catch (e) {
       setError((e as Error).message || "Failed to start processing");
     } finally {

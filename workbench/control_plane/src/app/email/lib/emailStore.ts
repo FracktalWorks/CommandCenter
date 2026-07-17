@@ -1363,6 +1363,25 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     try {
       const res = await api.runRuleOnMessage({ accountId, messageId, isTest });
       set({ testResults: { ...get().testResults, [messageId]: res } });
+      // Apply mode (isTest=false): reflect the freshly-applied category/folder
+      // in the loaded list so the "Uncategorized" pill in the inbox row resolves
+      // immediately. Before this, the apply wrote em.categories in the DB but the
+      // Zustand snapshot went untouched, so the pill stayed "Uncategorized" until
+      // a navigation-triggered refetch — the exact "clicking it did nothing" bug.
+      // The Test/dry-run path changes nothing, so it never patches.
+      if (!isTest && res.applied) {
+        set({
+          emails: get().emails.map((e) =>
+            e.id === messageId
+              ? {
+                  ...e,
+                  categories: res.categories ?? e.categories,
+                  folder: res.folder ?? e.folder,
+                }
+              : e,
+          ),
+        });
+      }
     } catch (err: any) {
       set({ error: err?.message || "Rule run failed" });
     } finally {

@@ -335,6 +335,13 @@ export interface RunMessageResult {
   reason: string;
   /** Full action specs when matched (test mode) or types taken (apply mode). */
   actions: (RuleAction | string)[];
+  /** Every rule name applied in multi-rule execution (apply mode). */
+  applied_rules?: string[];
+  /** Post-apply category array on the message (apply mode) — lets the caller
+   *  refresh the inbox row so a reran "Uncategorized" pill resolves in place. */
+  categories?: string[];
+  /** Post-apply folder (apply mode) — the actions may have archived/moved it. */
+  folder?: string | null;
 }
 
 export interface AssistantSettings {

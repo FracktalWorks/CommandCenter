@@ -10,6 +10,7 @@ import { CaptureBar } from "./components/CaptureBar";
 import { ItemList } from "./components/ItemList";
 import { ItemDetail } from "./components/ItemDetail";
 import { AssistantRail } from "./components/AssistantRail";
+import { PeopleView } from "./components/PeopleView";
 import { InboxView } from "./components/InboxView";
 import { EngageView } from "./components/EngageView";
 import { QuickCapture } from "./components/QuickCapture";
@@ -42,6 +43,7 @@ export default function TasksPage() {
   const isInbox = selectedView === "inbox";
   const isProjects = selectedView === "projects";
   const isEngage = selectedView === "engage";
+  const isPeople = selectedView === "people";
 
   // Load live data from the gateway once; stays on the bundled mock data when
   // the backend isn't reachable (UI-first demo mode).
@@ -213,6 +215,11 @@ export default function TasksPage() {
              view (like the inbox), no list/detail split. */
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <EngageView />
+          </div>
+        ) : isPeople ? (
+          /* People: the HR roster — full-width management surface (like Engage). */
+          <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
+            <PeopleView />
           </div>
         ) : isProjects ? (
           /* Projects keep the list + project-detail split (a project isn't a

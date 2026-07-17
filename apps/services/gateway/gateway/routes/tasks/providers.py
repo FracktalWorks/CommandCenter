@@ -16,6 +16,7 @@ takes over the gating in Phase 4).
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
 from abc import ABC, abstractmethod
 from typing import Any
@@ -27,6 +28,54 @@ from fastapi import HTTPException
 _log = get_logger("gateway.tasks.providers")
 
 _CLICKUP = "https://api.clickup.com/api/v2"
+# ClickUp rate-limits at 100 req/min/token → HTTP 429. Retry a bounded number of
+# times, honouring Retry-After, so a burst (a full schema pull, a planned-project
+# create) degrades to slower-but-correct instead of a hard failure (PM API rule).
+_RATE_LIMIT_RETRIES = 3
+_RATE_LIMIT_MAX_SLEEP = 30.0
+
+
+async def _clickup_send(
+    method: str, url: str, *, headers: dict[str, str],
+    retries: int = _RATE_LIMIT_RETRIES, **kwargs: Any,
+) -> httpx.Response:
+    """One ClickUp HTTP call with 429 back-off. Opens a client, sends, and on a
+    rate-limit sleeps (Retry-After when given, else exponential) up to ``retries``
+    times before returning the last response for the caller to handle."""
+    delay = 1.0
+    async with httpx.AsyncClient(timeout=20.0) as http:
+        response: httpx.Response | None = None
+        for attempt in range(retries + 1):
+            response = await http.request(method, url, headers=headers, **kwargs)
+            if response.status_code != 429 or attempt >= retries:
+                return response
+            ra = response.headers.get("Retry-After")
+            try:
+                wait = float(ra) if ra else delay
+            except ValueError:
+                wait = delay
+            _log.info("clickup.rate_limited", attempt=attempt + 1,
+                      sleep=min(wait, _RATE_LIMIT_MAX_SLEEP))
+            await asyncio.sleep(min(wait, _RATE_LIMIT_MAX_SLEEP))
+            delay *= 2
+        return response  # type: ignore[return-value]
+
+
+def _clickup_due(due_at_ms: Any) -> tuple[int | None, bool]:
+    """Normalise a due timestamp for ClickUp (PM API rule). Returns
+    (due_date_ms, due_date_time). A date-only value (midnight) is nudged to 18:00
+    so the task lands end-of-day, not start; ``due_date_time=True`` makes ClickUp
+    honour the exact time. None/blank → (None, False)."""
+    try:
+        ms = int(due_at_ms)
+    except (TypeError, ValueError):
+        return None, False
+    if ms <= 0:
+        return None, False
+    # Midnight UTC (date-only, e.g. from a relative offset) → 18:00 same day.
+    if ms % 86_400_000 == 0:
+        ms += 18 * 3_600_000
+    return ms, True
 
 
 class ProviderError(HTTPException):
@@ -252,9 +301,9 @@ class ClickUpProvider(BaseTaskProvider):
         return f"tasks:clickup:ws:{ws}"
 
     async def _get(self, path: str, params: dict[str, Any] | None = None) -> Any:
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.get(f"{_CLICKUP}{path}", headers=self._headers(),
-                               params=params or {})
+        r = await _clickup_send(
+            "GET", f"{_CLICKUP}{path}", headers=self._headers(),
+            params=params or {})
         if r.status_code == 401:
             raise ProviderError("clickup", "invalid API token", status_code=401)
         if r.status_code >= 400:
@@ -358,7 +407,10 @@ class ClickUpProvider(BaseTaskProvider):
         if payload.get("status"):
             body["status"] = payload["status"]
         if payload.get("due_at_ms"):
-            body["due_date"] = int(payload["due_at_ms"])
+            due_ms, due_time = _clickup_due(payload["due_at_ms"])
+            if due_ms is not None:
+                body["due_date"] = due_ms
+                body["due_date_time"] = due_time
         if payload.get("assignee_id"):
             with contextlib.suppress(TypeError, ValueError):
                 body["assignees"] = [int(payload["assignee_id"])]
@@ -379,11 +431,9 @@ class ClickUpProvider(BaseTaskProvider):
     ) -> dict[str, Any]:
         """The actual ClickUp create — bypasses the broker gate. Called by the
         gate on auto-apply AND by the persistent handler on approval."""
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.post(
-                f"{_CLICKUP}/list/{project_ref}/task",
-                headers=self._headers(), json=body,
-            )
+        r = await _clickup_send(
+            "POST", f"{_CLICKUP}/list/{project_ref}/task",
+            headers=self._headers(), json=body)
         if r.status_code >= 400:
             raise ProviderError("clickup", f"create task → {r.status_code}: {r.text[:200]}")
         t = r.json()
@@ -413,8 +463,12 @@ class ClickUpProvider(BaseTaskProvider):
             if closed:
                 body["status"] = closed
         if "due_at_ms" in payload:
-            body["due_date"] = (int(payload["due_at_ms"])
-                                if payload["due_at_ms"] else None)
+            if payload["due_at_ms"]:
+                due_ms, due_time = _clickup_due(payload["due_at_ms"])
+                body["due_date"] = due_ms
+                body["due_date_time"] = due_time
+            else:
+                body["due_date"] = None  # explicit clear
         # Assignees are a delta on ClickUp: {add: [...], rem: [...]}.
         if payload.get("clear_assignee") and payload.get("prev_assignee_id"):
             with contextlib.suppress(TypeError, ValueError):
@@ -444,11 +498,9 @@ class ClickUpProvider(BaseTaskProvider):
     ) -> dict[str, Any]:
         """The actual ClickUp PUT — bypasses the broker gate. Called by the gate
         on auto-apply AND by the persistent handler on approval."""
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.put(
-                f"{_CLICKUP}/task/{provider_task_id}",
-                headers=self._headers(), json=body,
-            )
+        r = await _clickup_send(
+            "PUT", f"{_CLICKUP}/task/{provider_task_id}",
+            headers=self._headers(), json=body)
         if r.status_code >= 400:
             raise ProviderError(
                 "clickup", f"update task → {r.status_code}: {r.text[:200]}")
@@ -473,10 +525,9 @@ class ClickUpProvider(BaseTaskProvider):
         """The actual ClickUp DELETE — bypasses the broker gate. Called by the
         gate on auto-apply AND by the persistent handler on approval. A 404 is
         treated as success: the task is already gone, which is the goal."""
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.delete(
-                f"{_CLICKUP}/task/{provider_task_id}", headers=self._headers(),
-            )
+        r = await _clickup_send(
+            "DELETE", f"{_CLICKUP}/task/{provider_task_id}",
+            headers=self._headers())
         if r.status_code == 404:
             return
         if r.status_code >= 400:
@@ -502,11 +553,9 @@ class ClickUpProvider(BaseTaskProvider):
         broker gate (called by the gate on auto-apply AND by the persistent
         handler on approval). A 404 is treated as success: the task is already
         gone, which subsumes 'archived'."""
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.put(
-                f"{_CLICKUP}/task/{provider_task_id}",
-                headers=self._headers(), json={"archived": archived},
-            )
+        r = await _clickup_send(
+            "PUT", f"{_CLICKUP}/task/{provider_task_id}",
+            headers=self._headers(), json={"archived": archived})
         if r.status_code == 404:
             return
         if r.status_code >= 400:
@@ -578,9 +627,9 @@ class ClickUpProvider(BaseTaskProvider):
         the gate on auto-apply AND by the persistent handler on approval."""
         path = (f"/folder/{folder_id}/list" if folder_id
                 else f"/space/{space_id}/list")
-        async with httpx.AsyncClient(timeout=20.0) as http:
-            r = await http.post(f"{_CLICKUP}{path}", headers=self._headers(),
-                                json={"name": name})
+        r = await _clickup_send(
+            "POST", f"{_CLICKUP}{path}", headers=self._headers(),
+            json={"name": name})
         if r.status_code >= 400:
             raise ProviderError(
                 "clickup", f"create list → {r.status_code}: {r.text[:200]}")

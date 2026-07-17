@@ -295,6 +295,8 @@ async def refresh_account_members(
             {"id": account_id, "cache": json.dumps(cache)},
         )
         await db.commit()
+        # Keep the org roster in step with live membership (§6).
+        await _reconcile_people(db, _uid(user))
         fresh = (await db.execute(
             text("SELECT * FROM task_accounts WHERE id = :id"),
             {"id": account_id},
@@ -416,3 +418,106 @@ async def _refresh_schema(db: Any, account_id: str, user_id: str) -> None:
              "ref": str(proj.get("id")), "outcome": name},
         )
     await db.commit()
+    # Reflect current ClickUp membership into the org roster (§6): add joiners,
+    # link matches, deactivate people we auto-added who have since left.
+    await _reconcile_people(db, user_id)
+
+
+async def _reconcile_people(db: Any, user_id: str) -> None:
+    """Reconcile the org roster (``gtd_people``) against CURRENT ClickUp
+    membership so assignment suggestions stay honest as people join/leave (§6).
+
+    Runs on every schema refresh. ``gtd_people`` is org-global while
+    ``task_accounts`` is per-user, so the live membership is the UNION of every
+    connected workspace's cached members (the account just refreshed is already
+    in the cache). Conservative by design:
+
+    - A member with no matching person → INSERT (source='clickup', active).
+    - A person with no ``clickup_user_id`` matched by email/name → LINK the id.
+    - A person we auto-added (``source='clickup'``) whose id vanished from every
+      workspace → mark ``status='inactive'`` (reappearing → 'active' again).
+
+    NEVER touches manually-added or seed-imported people's status (the user owns
+    those). Best-effort — a reconcile failure never breaks the sync/refresh.
+    """
+    try:
+        acct_rows = (await db.execute(
+            text("SELECT schema_cache FROM task_accounts"))).fetchall()
+        # Union of live members across every connected workspace.
+        live_pids: set[str] = set()
+        by_pid: dict[str, dict[str, Any]] = {}
+        by_email: dict[str, dict[str, Any]] = {}
+        by_name: dict[str, dict[str, Any]] = {}
+        for a in acct_rows:
+            for m in (_parse_jsonb(a.schema_cache) or {}).get("members") or []:
+                if not isinstance(m, dict):
+                    continue
+                pid = str(m.get("provider_user_id") or "").strip()
+                name = (m.get("name") or "").strip()
+                if not (pid or name):
+                    continue
+                if pid:
+                    live_pids.add(pid)
+                    by_pid[pid] = m
+                if m.get("email"):
+                    by_email.setdefault(str(m["email"]).strip().lower(), m)
+                if name:
+                    by_name.setdefault(name.lower(), m)
+
+        people = (await db.execute(text(
+            "SELECT id, name, email, clickup_user_id, source, status "
+            "FROM gtd_people"))).fetchall()
+        matched_pids: set[str] = set()
+        for p in people:
+            pid = str(p.clickup_user_id or "").strip()
+            email = (p.email or "").strip().lower()
+            name = (p.name or "").strip().lower()
+            # Which live member (if any) is this person?
+            member = (by_pid.get(pid) if pid else None) \
+                or (by_email.get(email) if email else None) \
+                or (by_name.get(name) if name else None)
+            if member is not None:
+                mpid = str(member.get("provider_user_id") or "").strip()
+                if mpid:
+                    matched_pids.add(mpid)
+                # Link the ClickUp id onto a person that didn't have one yet.
+                if mpid and not pid:
+                    await db.execute(text(
+                        "UPDATE gtd_people SET clickup_user_id = :pid, "
+                        "updated_at = now() WHERE id = :id"),
+                        {"pid": mpid, "id": str(p.id)})
+                # Reactivate an auto-added person who's back in the workspace.
+                if p.source == "clickup" and p.status != "active":
+                    await db.execute(text(
+                        "UPDATE gtd_people SET status = 'active', "
+                        "updated_at = now() WHERE id = :id"), {"id": str(p.id)})
+            elif (p.source == "clickup" and pid and pid not in live_pids
+                  and p.status == "active"):
+                # We auto-added this person from ClickUp and their id is gone
+                # from every workspace → they left. Deactivate (never delete).
+                await db.execute(text(
+                    "UPDATE gtd_people SET status = 'inactive', "
+                    "updated_at = now() WHERE id = :id"), {"id": str(p.id)})
+
+        # Insert workspace members who aren't in the roster at all.
+        for pid, m in by_pid.items():
+            if pid in matched_pids:
+                continue
+            name = (m.get("name") or "").strip()
+            if not name:
+                continue
+            await db.execute(text(
+                """INSERT INTO gtd_people
+                   (id, name, email, status, clickup_user_id, source,
+                    skills, updated_by, updated_at)
+                   VALUES (:id, :name, :email, 'active', :pid, 'clickup',
+                           ARRAY[]::text[], 'clickup-sync', now())
+                   ON CONFLICT (name) DO UPDATE
+                       SET clickup_user_id = COALESCE(
+                               gtd_people.clickup_user_id, EXCLUDED.clickup_user_id),
+                           updated_at = now()"""),
+                {"id": str(uuid4()), "name": name,
+                 "email": m.get("email"), "pid": pid})
+        await db.commit()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("tasks.reconcile_people_failed", error=str(exc)[:200])

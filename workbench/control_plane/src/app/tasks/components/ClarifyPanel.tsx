@@ -699,7 +699,7 @@ export function ClarifyPanel({
                   rows={2}
                   autoFocus
                   placeholder="Describe what this really is — e.g. “the Q3 board deck; break it into sections and file under Fundraising”. The assistant re-clarifies the title, project and steps from this."
-                  className="w-full resize-y rounded-md border border-border bg-background/60 px-3 py-2 text-[12.5px] text-foreground focus:border-primary/50 focus:outline-none"
+                  className="w-full resize-y rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
                 />
                 <div className="flex items-center gap-2">
                   <button

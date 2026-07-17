@@ -431,7 +431,7 @@ function QuickCapturePanel() {
             >
               <Plus className="h-3 w-3" /> Add another
             </button>
-            <div className="mt-3 flex items-center justify-between gap-2">
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
               <div className="flex items-center gap-2">
                 <button
                   type="button"

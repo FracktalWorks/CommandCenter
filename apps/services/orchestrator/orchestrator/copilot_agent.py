@@ -13,14 +13,24 @@ from agent_framework_github_copilot import GitHubCopilotAgent
 from copilot import CopilotClient, CopilotSession, SessionEvent
 from copilot.session import SessionEventType
 
+from orchestrator._copilot_session import (
+    effective_infinite_sessions as _effective_infinite_sessions,
+)
+
 logger = logging.getLogger(__name__)
 
-# ── Output token limit ───────────────────────────────────────────────────
-# Copilot SDK sessions don't set max_tokens by default, so BYOK models use
-# their provider's default (often as low as 4096).  When the agent emits
-# reasoning + text + tool calls, it can exhaust that budget mid-sentence and
-# the model stops silently → SESSION_IDLE → stream ends.  This env var lets
-# operators set a generous ceiling (default 16000) to prevent truncation.
+# ── Output token limit (CURRENTLY A NO-OP — see below) ───────────────────
+# WARNING: this value does NOT reach the model. The Copilot SDK's
+# create_session / resume_session wire protocol has no max_tokens field, so the
+# ``config["max_tokens"]`` we set below is silently dropped by the SDK. The
+# real output ceiling is applied by the gateway's /v1 endpoint
+# (GATEWAY_DEFAULT_MAX_OUTPUT_TOKENS in v1_compat.py), which is the choke point
+# every Copilot request actually flows through — the CLI POSTs there WITHOUT a
+# max_tokens, so the gateway's default is what binds.
+#
+# Kept (with the config lines below) so the cap starts working automatically if
+# a future SDK version adds the field — but do NOT tune this expecting an
+# effect: raise GATEWAY_DEFAULT_MAX_OUTPUT_TOKENS instead.
 _MAX_OUTPUT_TOKENS: int = int(
     os.environ.get("COPILOT_MAX_OUTPUT_TOKENS", "16000")
 )
@@ -171,6 +181,16 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         if max_tokens:
             config["max_tokens"] = int(max_tokens)
 
+        # === Context compaction: neutralise the backend's window guessing ===
+        # MUST be applied here, not only via the _apply_copilot_infinite_sessions
+        # wrap: the executor rebinds ``agent._create_session`` to THIS method
+        # after tool injection installs that wrap, so on the streaming chat path
+        # the wrap is discarded before it ever runs. Applying the shared policy
+        # directly makes the behaviour independent of binding order.
+        _inf = _effective_infinite_sessions(self._default_options)
+        if _inf is not None:
+            config["infinite_sessions"] = _inf
+
         # === Reasoning: forward effort so thinking deltas stream ===
         effort = (
             opts.get("reasoning_effort")
@@ -251,6 +271,14 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         max_tokens = self._default_options.get("max_tokens") or _MAX_OUTPUT_TOKENS
         if max_tokens:
             config["max_tokens"] = int(max_tokens)
+
+        # === Context compaction: re-apply on resume ===
+        # A resumed session rebuilds its config from scratch, so without this a
+        # long-running BYOK thread would silently regain the backend's default
+        # 0.80/0.95 compaction against its wrong ~90K window guess.
+        _inf = _effective_infinite_sessions(self._default_options)
+        if _inf is not None:
+            config["infinite_sessions"] = _inf
 
         # === Reasoning: forward effort so thinking deltas keep streaming ===
         effort = self._default_options.get("reasoning_effort")

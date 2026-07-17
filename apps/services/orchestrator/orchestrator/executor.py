@@ -2092,7 +2092,6 @@ async def run_agent_stream(
             if not _is_copilot_sdk and hasattr(agent, "run"):
                 _native_input = _compose_maf_run_input(
                     agent_name, run_id, event_payload, integrations,
-                    is_byok=_is_byok_early,
                 )
                 _nq: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 _nq_token = _active_run_queue.set(_nq)
@@ -2406,33 +2405,26 @@ async def run_agent_stream(
                 if not _copilot_session_id:
                     _prior = event_payload.get("messages") or []
                     if _prior:
-                        _history_lines: list[str] = []
-                        for m in _prior[-30:]:  # last 15 exchanges
-                            role = m.get("role", "user")
-                            content = (m.get("content") or "").strip()
-                            if not content:
-                                continue
-                            label = (
-                                "User" if role == "user" else "Assistant"
-                            )
-                            # Larger budget — coding messages carry diffs and
-                            # file contents that are meaningless when cut to
-                            # a few sentences.
-                            short = (
-                                content if len(content) <= 600
-                                else content[:600] + "..."
-                            )
-                            _history_lines.append(f"{label}: {short}")
-                        if _history_lines:
+                        # Budgeted to the model's REAL window. This used to be a
+                        # flat last-30 x 600 chars — which contradicted its own
+                        # comment about diffs/file contents being "meaningless
+                        # when cut to a few sentences" by cutting them to 600.
+                        # This path runs on every session rebuild (e.g. after a
+                        # gateway restart), so it decides how much of the thread
+                        # a resumed chat actually remembers.
+                        _rendered = _render_history_block(
+                            _prior, _msg_text, _active_run_model.get() or "",
+                        )
+                        if _rendered:
                             _msg_text = (
                                 "## Prior conversation (for context)\n"
-                                + "\n".join(_history_lines)
+                                + _rendered
                                 + f"\n\n## Current message\n{_msg_text}"
                             )
                             _log.debug(
                                 "executor.copilot_context_fallback",
                                 agent=agent_name,
-                                history_turns=len(_history_lines),
+                                history_chars=len(_rendered),
                             )
 
                 # ── Memory context injection (pre-enriched by the route handler) ──
@@ -2819,24 +2811,26 @@ async def run_agent_stream(
                         )
                         _prior_msgs = event_payload.get("messages") or []
                         if _prior_msgs:
-                            _hist: list[str] = []
-                            for _hm in _prior_msgs[-30:]:
-                                _hr = _hm.get("role", "user")
-                                _hc = (_hm.get("content") or "").strip()
-                                if _hc:
-                                    _hl = "User" if _hr == "user" else "Assistant"
-                                    _hs = _hc if len(_hc) <= 800 else _hc[:800] + "..."
-                                    _hist.append(f"{_hl}: {_hs}")
-                            if _hist:
+                            # Window-budgeted (was a flat last-30 x 800 chars).
+                            # This is the recovery path after the Copilot CLI
+                            # session died, so it is the ONLY thing standing
+                            # between the user and a total loss of thread
+                            # context — it should carry as much as the model can
+                            # actually hold.
+                            _rendered = _render_history_block(
+                                _prior_msgs, _msg_base,
+                                _active_run_model.get() or "",
+                            )
+                            if _rendered:
                                 _effective_msg = (
                                     "## Prior conversation (for context)\n"
-                                    + "\n".join(_hist)
+                                    + _rendered
                                     + f"\n\n## Current message\n{_msg_base}"
                                 )
                                 _log.debug(
                                     "executor.session_retry_history_injected",
                                     agent=agent_name,
-                                    history_turns=len(_hist),
+                                    history_chars=len(_rendered),
                                 )
                         # Reset streaming state for a clean second attempt.
                         _t15_state = _TranslationState(run_id)
@@ -3881,27 +3875,32 @@ def _compose_maf_run_input(
     run_id: str,
     event_payload: dict[str, Any],
     integrations: dict[str, Any],
-    *,
-    is_byok: bool,
 ) -> Any:
     """Build the input passed to a native MAF ``agent.run(...)`` call.
 
     Mirrors the Tier 2 batch path's message construction so the streaming and
     batch paths feed the agent identically:
 
-    * BYOK + history present → a structured ``list[Message]`` (the caller's
-      ``system_context`` as a leading system message, then the last ~10
-      exchanges, then the current user turn) so the model sees full turn
-      structure.
+    * History present → a structured ``list[Message]`` (the caller's
+      ``system_context`` as a leading system message, then the budgeted prior
+      turns, then the current user turn) so the model sees full turn structure.
     * Otherwise → the composed prompt string from :func:`_build_event_message`
       (which already folds in memory_context + system_context + history).
 
-    C2: the structured-message branch now routes through the ONE server-side
+    C2: the structured-message branch routes through the ONE server-side
     assembler ``acb_llm.assemble_run_context`` — token-budgeted (fit to the
     resolved model's window) + current-turn dedup + DB-rebuild-when-empty —
     instead of the old blind ``[-20:]`` count cap.  The batch path
     (:func:`run_agent`) calls the same assembler, so streaming and batch feed
     the model identically (the drift the two duplicated slicers risked).
+
+    This is deliberately NOT gated on BYOK any more. It used to be, which meant
+    a non-BYOK native-MAF agent's STREAMING turn silently fell back to the flat
+    string prompt while its own BATCH turn got the token-budgeted assembly — the
+    same agent remembered a different amount of the conversation depending on
+    whether it streamed. The assembler already degrades safely when the model is
+    unknown (no token fit, just a turn cap), so there is nothing BYOK-specific
+    about wanting real turn structure.
     """
     message = _build_event_message(agent_name, run_id, event_payload, integrations)
     history_msgs = event_payload.get("messages") or []
@@ -3913,7 +3912,7 @@ def _compose_maf_run_input(
     # a loader is threaded in via the payload by the route layer when it has a
     # thread_id; absent one, this is a no-op and behaviour is unchanged.
     _loader = event_payload.get("_history_loader")
-    if is_byok and (history_msgs or _loader):
+    if history_msgs or _loader:
         try:
             from acb_llm import assemble_run_context  # noqa: PLC0415
             from agent_framework import Message as _MAFMsg
@@ -3931,6 +3930,86 @@ def _compose_maf_run_input(
         except Exception:  # noqa: BLE001 — fall back to the string prompt
             return message
     return message
+
+
+# ── History budgeting for the string-prompt path ──────────────────────────
+# Fraction of the model's real context window this path may spend on prior
+# turns. The rest is left for the system prompt, tool schemas, the current turn
+# and the model's own output.
+_HISTORY_WINDOW_FRACTION: float = float(
+    os.environ.get("HISTORY_WINDOW_FRACTION", "0.5")
+)
+# Floor so a tiny/unknown window still carries usable history, and a hard stop
+# so a pathological thread can't walk unbounded.
+_HISTORY_MIN_CHARS: int = 8_000
+_HISTORY_MAX_MESSAGES: int = 400
+
+
+def _history_char_budget(model: str) -> int:
+    """Chars of prior conversation the string-prompt path may spend, from the
+    model's REAL window (tokens → chars at the repo's 4-chars/token heuristic).
+
+    Fails open to the floor if the window can't be resolved — never raises.
+    """
+    try:
+        from acb_llm.context import context_window_for
+        win = int(context_window_for(model))
+    except Exception:
+        win = 0
+    if win <= 0:
+        return _HISTORY_MIN_CHARS
+    return max(_HISTORY_MIN_CHARS, int(win * _HISTORY_WINDOW_FRACTION) * 4)
+
+
+def _render_history_block(
+    history: list[dict[str, Any]], current_msg: str, model: str,
+) -> str:
+    """Render prior turns as text, budgeted to the model's real context window.
+
+    Replaces the old model-BLIND caps (last 16 messages, each clipped to 600
+    chars). Those threw away almost everything: ~16x600 chars ~= 2,400 tokens is
+    under 2% of a 128k window, and the 600-char slice shredded even the
+    immediately-preceding turn — so a user who pasted a document, diff, or error
+    log had it cut to 600 chars on the very next message.
+
+    Budget scales with the resolved model's window, so a large-context model
+    keeps the whole thread while a small one still degrades safely. Oldest turns
+    drop first (mirroring assemble_run_context's whole-turn eviction); a single
+    oversized message is trimmed rather than allowed to eat the whole budget.
+    """
+    budget = _history_char_budget(model)
+    # Cap any ONE message so a single giant turn can't crowd out all the others.
+    per_msg_cap = max(_HISTORY_MIN_CHARS // 2, budget // 4)
+    total = len(history)
+    picked: list[str] = []
+    used = 0
+
+    # Walk newest → oldest so the most relevant turns win the budget; the
+    # surviving set is rendered back in chronological order below.
+    for idx in range(total - 1, max(-1, total - _HISTORY_MAX_MESSAGES - 1), -1):
+        m = history[idx]
+        role = m.get("role", "user")
+        content = (m.get("content") or "").strip()
+        if not content:
+            continue
+        # Skip the current turn if the caller also included it in history.
+        if role == "user" and content == current_msg.strip():
+            continue
+        # Technique #1 (tool-result clearing): older assistant turns don't need
+        # their raw tool-call JSON re-read — only their prose conclusions.
+        if idx < total - 3 and role == "assistant":
+            content = _TOOL_RESULT_RE.sub("", content).strip()
+            if not content:
+                continue
+        if len(content) > per_msg_cap:
+            content = content[:per_msg_cap] + "…"
+        if used + len(content) > budget:
+            break  # budget exhausted — everything older is dropped
+        used += len(content)
+        picked.append(f"{'User' if role == 'user' else 'Assistant'}: {content}")
+
+    picked.reverse()  # back to chronological order
+    return "\n".join(picked)
 
 
 def _build_event_message(
@@ -3980,30 +4059,11 @@ def _build_event_message(
     if system_ctx:
         parts.append("## Current context\n" + system_ctx)
     if history:
-        history_lines: list[str] = []
-        # Cap at last 16 messages (8 exchanges) to avoid context/payload limits.
-        # Technique #1 (tool result clearing): strip raw tool-call JSON from old
-        # assistant messages — the LLM doesn't need to re-read 5k-token API
-        # dumps that are deep in history; only final prose answers matter.
-        _sliced = history[-16:]
-        total = len(_sliced)
-        for idx, m in enumerate(_sliced):
-            role = m.get("role", "user")
-            content = (m.get("content") or "").strip()
-            if not content:
-                continue
-            # Skip the current message if it's already in history
-            if role == "user" and content == current_msg.strip():
-                continue
-            label = "User" if role == "user" else "Assistant"
-            # For older messages (not last 3), strip embedded tool result blocks
-            is_recent = idx >= total - 3
-            if not is_recent and role == "assistant":
-                content = _TOOL_RESULT_RE.sub("", content).strip()
-            short = content if len(content) <= 600 else content[:600] + "…"
-            history_lines.append(f"{label}: {short}")
-        if history_lines:
-            parts.append("Conversation history:\n" + "\n".join(history_lines))
+        _rendered = _render_history_block(
+            history, current_msg, _active_run_model.get() or "",
+        )
+        if _rendered:
+            parts.append("Conversation history:\n" + _rendered)
 
     # Main user message — prefer explicit "message" or "user_query" keys
     if current_msg:

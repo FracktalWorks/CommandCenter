@@ -215,7 +215,7 @@ async def gtd_calendar_prefs(db: Any, user_id: str) -> dict[str, Any]:
             "buffer_mins": s.buffer_mins,
             "energy_windows": s.energy_windows,
         })
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning(
             "tasks.settings.calendar_prefs_failed", error=str(exc)[:160])
     return out

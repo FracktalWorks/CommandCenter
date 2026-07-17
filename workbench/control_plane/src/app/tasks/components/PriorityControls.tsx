@@ -144,12 +144,18 @@ export function PriorityBadge({
   item,
   urgentWindowHours,
   showLabel = true,
+  hideLowPriority = false,
 }: {
   item: Pick<GtdItem, "important" | "leveraged" | "dueAt">;
   urgentWindowHours?: number;
   showLabel?: boolean;
+  /** On the card face, don't badge the default "low-priority" cell — a colored
+   *  pill on every ordinary task is noise. Elevated cells still show. The detail
+   *  Priority section and the level-grouped Priority view leave this off. */
+  hideLowPriority?: boolean;
 }) {
   const cell = priorityCell(item, urgentWindowHours);
+  if (hideLowPriority && cell === "low-priority") return null;
   const meta = CELL_META[cell];
   return (
     <span
@@ -204,12 +210,19 @@ export function SuggestionBadge({
   // "Delegate to <me>?", which is nonsense. Suggesting a real delegate from the
   // org/HR structure is a separate follow-up; until then, no name.
   const label = badge.label;
+  // On the card face (compact) the nudge is a QUIET neutral chip so it doesn't
+  // compete with the colored priority pill — a card should carry one colored
+  // priority signal, not two. In the detail Priority section it keeps its
+  // expressive per-mode colour.
+  const tone = compact
+    ? "border-border bg-secondary/50 text-muted-foreground"
+    : SUGGESTION_TONE[mode];
   return (
     <span
       className={[
         "inline-flex items-center gap-1 rounded-full border font-medium",
         compact ? "px-1.5 py-0.5 text-[10px]" : "px-2 py-0.5 text-[11px]",
-        SUGGESTION_TONE[mode],
+        tone,
       ].join(" ")}
     >
       <button

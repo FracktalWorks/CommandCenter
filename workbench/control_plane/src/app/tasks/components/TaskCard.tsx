@@ -128,6 +128,7 @@ export function TaskCard({
         item={item}
         urgentWindowHours={urgentWindowHours}
         showLabel={!showPriority}
+        hideLowPriority={!showPriority}
       />
       {!showPriority && (
         <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} compact />

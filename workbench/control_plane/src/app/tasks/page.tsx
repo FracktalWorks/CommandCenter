@@ -13,6 +13,7 @@ import { AssistantRail } from "./components/AssistantRail";
 import { PeopleView } from "./components/PeopleView";
 import { InboxView } from "./components/InboxView";
 import { EngageView } from "./components/EngageView";
+import { CalendarView } from "./components/CalendarView";
 import { QuickCapture } from "./components/QuickCapture";
 import { WorkspacesModal } from "./components/WorkspacesModal";
 import { TaskSettingsModal } from "./components/TaskSettingsModal";
@@ -44,6 +45,7 @@ export default function TasksPage() {
   const isProjects = selectedView === "projects";
   const isEngage = selectedView === "engage";
   const isPeople = selectedView === "people";
+  const isCalendar = selectedView === "calendar";
 
   // Load live data from the gateway once; stays on the bundled mock data when
   // the backend isn't reachable (UI-first demo mode).
@@ -120,6 +122,8 @@ export default function TasksPage() {
           <InboxView />
         ) : isEngage ? (
           <EngageView />
+        ) : isCalendar ? (
+          <CalendarView />
         ) : isProjects && selectedProjectId ? (
           // A selected project → full-screen roll-up with a Back affordance.
           <div className="flex h-full flex-col">
@@ -220,6 +224,12 @@ export default function TasksPage() {
           /* People: the HR roster — full-width management surface (like Engage). */
           <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
             <PeopleView />
+          </div>
+        ) : isCalendar ? (
+          /* Calendar: the timeboxing surface — full-width day/week/month grid
+             (spec: calendar_timeboxing.md), no list/detail split. */
+          <div className="min-w-0 flex-1 overflow-hidden border-r border-border">
+            <CalendarView />
           </div>
         ) : isProjects ? (
           /* Projects keep the list + project-detail split (a project isn't a

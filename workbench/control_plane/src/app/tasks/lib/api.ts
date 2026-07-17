@@ -93,6 +93,8 @@ function mapItem(raw: Raw): GtdItem {
     syncState: (raw.sync_state ?? "local") as GtdItem["syncState"],
     dueAt: raw.due_at ? String(raw.due_at) : undefined,
     isHardDate: Boolean(raw.is_hard_date),
+    scheduledStart: raw.scheduled_start ? String(raw.scheduled_start) : undefined,
+    scheduledEnd: raw.scheduled_end ? String(raw.scheduled_end) : undefined,
     createdAt: String(raw.created_at ?? ""),
     attachments: Array.isArray(raw.attachments)
       ? (raw.attachments as TaskAttachment[])
@@ -447,6 +449,8 @@ export async function apiPatchItem(
     energy?: string;
     time_estimate_mins?: number;
     due_at?: string;
+    scheduled_start?: string;
+    scheduled_end?: string;
     provider_status?: string;
     workflow_stage?: string;
     sort_key?: number;
@@ -464,6 +468,17 @@ export async function apiPatchItem(
       body: JSON.stringify(patch),
     })
   );
+}
+
+/** Items to render on the calendar grid for the window [fromIso, toIso):
+ *  scheduled time-blocks + deadline items. See calendar_timeboxing.md. */
+export async function apiCalendarRange(
+  fromIso: string,
+  toIso: string,
+): Promise<GtdItem[]> {
+  const qs = `?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
+  const rows = await gatewayFetch<Raw[]>(`/calendar${qs}`);
+  return rows.map(mapItem);
 }
 
 /** Archive (hide from active views) or un-archive a task. */

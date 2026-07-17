@@ -157,6 +157,9 @@ export interface ItemMetaPatch {
   energy?: Energy;
   timeEstimateMins?: number;
   dueAt?: string;              // ISO; "" clears
+  /** timeboxing (calendar_timeboxing.md §3) — ISO; "" clears (unschedule) */
+  scheduledStart?: string;
+  scheduledEnd?: string;
   providerStatus?: string;    // the tool's stage
   workflowStage?: string;     // the local Kanban stage (board move)
   sortKey?: number;           // manual (drag) rank within a group/column
@@ -1535,6 +1538,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               ? patch.timeEstimateMins || undefined
               : i.timeEstimateMins,
           dueAt: patch.dueAt !== undefined ? patch.dueAt || undefined : i.dueAt,
+          scheduledStart:
+            patch.scheduledStart !== undefined
+              ? patch.scheduledStart || undefined
+              : i.scheduledStart,
+          scheduledEnd:
+            patch.scheduledEnd !== undefined
+              ? patch.scheduledEnd || undefined
+              : i.scheduledEnd,
           providerStatus:
             patch.providerStatus !== undefined
               ? patch.providerStatus
@@ -1581,6 +1592,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.timeEstimateMins !== undefined)
         body.time_estimate_mins = patch.timeEstimateMins;
       if (patch.dueAt !== undefined) body.due_at = patch.dueAt;
+      if (patch.scheduledStart !== undefined)
+        body.scheduled_start = patch.scheduledStart;
+      if (patch.scheduledEnd !== undefined)
+        body.scheduled_end = patch.scheduledEnd;
       if (patch.providerStatus !== undefined)
         body.provider_status = patch.providerStatus;
       if (patch.workflowStage !== undefined)

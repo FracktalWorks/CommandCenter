@@ -171,6 +171,13 @@ export interface GtdItem {
   /** true → must happen on dueAt; surfaces in the Calendar view */
   isHardDate?: boolean;
 
+  // Timeboxing (calendar_timeboxing.md §3): the block when the task is actually
+  // scheduled to be done — distinct from the dueAt deadline. Unset = unscheduled.
+  /** ISO datetime — start of the scheduled time block */
+  scheduledStart?: string;
+  /** ISO datetime — end of the block (defaults to start + estimate) */
+  scheduledEnd?: string;
+
   createdAt: string;
   /** Context attachments captured with the item (photo/file/link). */
   attachments?: TaskAttachment[];

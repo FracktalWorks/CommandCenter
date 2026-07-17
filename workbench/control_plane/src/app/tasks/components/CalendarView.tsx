@@ -158,6 +158,29 @@ export function CalendarView() {
   const [planOpen, setPlanOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
 
+  // Deadline radar: unscheduled next actions with a due date approaching (≤14d)
+  // — the ones most likely to slip because they were never timeboxed.
+  const dueSoon = useMemo(() => {
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
+    const horizon = nowMs + 14 * 86400000;
+    return items
+      .filter(
+        (i) =>
+          i.isMine &&
+          i.disposition === "NEXT" &&
+          !i.scheduledStart &&
+          !i.archivedAt &&
+          i.dueAt &&
+          new Date(i.dueAt).getTime() <= horizon,
+      )
+      .map((i) => ({
+        item: i,
+        days: Math.ceil((new Date(i.dueAt as string).getTime() - nowMs) / 86400000),
+      }))
+      .sort((a, b) => a.days - b.days);
+  }, [items]);
+
   // Unscheduled, schedulable next actions (mine, NEXT, no block yet).
   const unscheduled = useMemo(
     () =>
@@ -296,6 +319,15 @@ export function CalendarView() {
           </button>
         </div>
         <div className="relative ml-auto flex items-center gap-2">
+          {dueSoon.length > 0 && (
+            <span
+              title={`${dueSoon.length} unscheduled task(s) due within 2 weeks`}
+              className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning"
+            >
+              <AlertTriangle className="h-3 w-3" />
+              {dueSoon.length} due soon
+            </span>
+          )}
           <button
             type="button"
             onClick={() => setPlanOpen(true)}
@@ -409,8 +441,10 @@ export function CalendarView() {
               0,
             )}
             capacityTarget={capacityTarget}
+            dueSoon={dueSoon}
             onPlan={() => setPlanOpen(true)}
             onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
+            onScheduleToday={(t) => schedule(t, startOfDay(new Date()))}
             onOpen={openFocus}
           />
         )}
@@ -1225,16 +1259,20 @@ function UnscheduledRail({
   focusedDayLabel,
   capacityMins,
   capacityTarget,
+  dueSoon,
   onPlan,
   onSchedule,
+  onScheduleToday,
   onOpen,
 }: {
   tasks: GtdItem[];
   focusedDayLabel: string;
   capacityMins: number;
   capacityTarget: number;
+  dueSoon: { item: GtdItem; days: number }[];
   onPlan: () => void;
   onSchedule: (t: GtdItem) => void;
+  onScheduleToday: (t: GtdItem) => void;
   onOpen: (id: string) => void;
 }) {
   const over = capacityMins > capacityTarget;
@@ -1260,6 +1298,51 @@ function UnscheduledRail({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-2">
+        {/* Deadline radar — due-soon tasks that aren't timeboxed yet. */}
+        {dueSoon.length > 0 && (
+          <div className="mb-2">
+            <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-warning">
+              <AlertTriangle className="h-3 w-3" /> Due soon
+            </p>
+            <div className="flex flex-col gap-1">
+              {dueSoon.map(({ item, days }) => (
+                <div
+                  key={item.id}
+                  className="rounded-md border border-warning/40 bg-warning/5 p-1.5"
+                >
+                  <button
+                    type="button"
+                    onClick={() => onOpen(item.id)}
+                    className="block w-full truncate text-left text-[12px] text-foreground"
+                  >
+                    {item.title}
+                  </button>
+                  <div className="mt-0.5 flex items-center justify-between">
+                    <span
+                      className={`text-[10px] font-medium ${
+                        days <= 1 ? "text-destructive" : "text-warning"
+                      }`}
+                    >
+                      {days <= 0
+                        ? "due today"
+                        : days === 1
+                          ? "due tomorrow"
+                          : `due in ${days}d`}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => onScheduleToday(item)}
+                      title="Timebox into today"
+                      className="tech-transition inline-flex items-center gap-0.5 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning hover:bg-warning/30"
+                    >
+                      <CalendarPlus className="h-3 w-3" /> Today
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
         {tasks.length === 0 ? (
           <p className="px-1 py-4 text-center text-[11px] text-muted-foreground">
             Nothing to schedule — inbox zero on next actions. 🎉

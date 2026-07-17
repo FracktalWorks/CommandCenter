@@ -43,18 +43,49 @@ _ALLOW_CALLER_ENDPOINT_OVERRIDE = os.environ.get(
 #   no max_tokens  → completion_tokens=4096,  finish_reason="length"  (cut off)
 #   max_tokens=32k → completion_tokens=10940, finish_reason="stop"    (finished)
 #
-# Deliberately NOT clamped to the model's registry max_output: litellm's
-# bundled registry claims this model caps at 8192, yet it demonstrably emits
-# 10940 — clamping to that stale value would reintroduce the truncation. Since
-# max_tokens is a CEILING (the model stops when it's done, as the "stop" above
-# shows), a generous default costs nothing and only removes an artificial cut.
-# Verified accepted by the whole active fleet (deepseek-v4-pro / tier-powerful /
-# tier-fast / auto all return 200 at 32000). Tune per deployment if a provider
-# rejects it; a per-model resolver is the follow-up once limit data is
-# trustworthy enough to clamp on.
+# Since max_tokens is a CEILING (the model stops when it's done, as the "stop"
+# above shows), a generous default costs nothing and only removes an artificial
+# cut. Verified accepted by the whole active fleet (deepseek-v4-pro /
+# tier-powerful / tier-fast / auto all return 200 at 32000).
 _DEFAULT_MAX_OUTPUT_TOKENS: int = int(
     os.environ.get("GATEWAY_DEFAULT_MAX_OUTPUT_TOKENS", "32000")
 )
+
+
+def _clamp_max_tokens(requested: int, model: str) -> int:
+    """Lower ``requested`` to ``model``'s real output cap, when one is known.
+
+    The generous default above is what stops long tool-call arguments being
+    truncated mid-JSON, but it cuts the other way too: a provider whose model
+    caps below 32000 answers an over-large max_tokens with a 400 — a total
+    failure, worse than the truncation this default exists to prevent. Nothing
+    in the fleet does that today (all deepseek), which is exactly why the ceiling
+    could be raised safely; this keeps that true when a smaller model is added.
+
+    Only a limit we VOUCH for is allowed to lower the ceiling — a curated entry
+    or an explicit env override. litellm's registry is excluded on purpose: it
+    claims deepseek-v4-pro caps at 8192 while the live model emits 10940, and
+    clamping to a stale-low number would re-create the exact truncation bug this
+    module's default was raised to fix. Believing a guess is what broke this
+    before; an unvetted model keeps the generous ceiling instead.
+    """
+    try:
+        from acb_llm.model_limits import get_limits
+        limits = get_limits(model)
+    except Exception:
+        return requested          # resolver unavailable — never block a call
+    if limits.max_output_source not in ("curated", "env"):
+        return requested
+    if limits.max_output <= 0 or requested <= limits.max_output:
+        return requested
+    _log.info(
+        "v1.max_tokens_clamped",
+        model=model,
+        requested=requested,
+        clamped_to=limits.max_output,
+        source=limits.max_output_source,
+    )
+    return limits.max_output
 
 # Mount at /v1 (OpenAI standard) and also at root for SDKs that omit the prefix.
 router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
@@ -198,7 +229,8 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     tools = body.get("tools")
     tool_choice = body.get("tool_choice", "auto")
     temperature = body.get("temperature", 0.2)
-    max_tokens = body.get("max_tokens") or _DEFAULT_MAX_OUTPUT_TOKENS
+    max_tokens = _clamp_max_tokens(
+        body.get("max_tokens") or _DEFAULT_MAX_OUTPUT_TOKENS, model)
     stream = body.get("stream", False)
     # Passthrough: custom api_base/api_key for Ollama / vLLM / self-hosted
     # endpoints — only when explicitly enabled (SSRF guard; see module top).

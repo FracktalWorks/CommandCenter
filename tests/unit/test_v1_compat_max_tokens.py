@@ -113,3 +113,54 @@ def test_default_is_env_tunable(monkeypatch) -> None:
     finally:
         monkeypatch.delenv("GATEWAY_DEFAULT_MAX_OUTPUT_TOKENS", raising=False)
         importlib.reload(v1_compat)
+
+
+# ---------------------------------------------------------------------------
+# The clamp: the generous default must not become a 400 on a small model
+# ---------------------------------------------------------------------------
+
+def test_clamped_down_to_a_curated_models_real_cap() -> None:
+    """gpt-4o maxes at 16384 output tokens. Sending it 32000 is a 400 — a total
+    failure, worse than the truncation the raised default exists to prevent."""
+    assert v1_compat._clamp_max_tokens(32_000, "openai/gpt-4o") == 16_384
+
+
+def test_a_stale_litellm_cap_never_clamps() -> None:
+    """The whole bug, in one assertion.
+
+    litellm claims deepseek-v4-pro caps at 8192 output tokens; the live model
+    emits 10940. Clamping to a registry number we don't vouch for would
+    re-create the exact mid-JSON truncation this default was raised to fix.
+    """
+    from litellm import model_cost
+
+    assert model_cost["deepseek/deepseek-v4-pro"]["max_output_tokens"] == 8192
+    got = v1_compat._clamp_max_tokens(32_000, "deepseek/deepseek-v4-pro")
+    assert got == 32_000, "must not clamp to litellm's stale 8192"
+
+
+def test_unvetted_model_keeps_the_generous_ceiling() -> None:
+    """No trustworthy limit -> no clamp. Believing a guess is what broke this
+    before; an unknown model resolves to a DEFAULT max_output, not a fact."""
+    assert v1_compat._clamp_max_tokens(32_000, "mystery/model-9000") == 32_000
+
+
+def test_a_request_under_the_cap_is_untouched() -> None:
+    assert v1_compat._clamp_max_tokens(256, "openai/gpt-4o") == 256
+
+
+def test_env_override_can_raise_a_curated_cap(monkeypatch) -> None:
+    """A provider raising its limit shouldn't need a deploy to be usable."""
+    monkeypatch.setenv("ACB_LIMITS__OPENAI_GPT_4O__MAX_OUTPUT", "40000")
+    assert v1_compat._clamp_max_tokens(32_000, "openai/gpt-4o") == 32_000
+
+
+def test_resolver_failure_never_blocks_a_call(monkeypatch) -> None:
+    """A limits lookup is an optimisation, not a gate on inference."""
+    import acb_llm.model_limits as ml
+
+    def boom(_model):
+        raise RuntimeError("registry exploded")
+
+    monkeypatch.setattr(ml, "get_limits", boom)
+    assert v1_compat._clamp_max_tokens(32_000, "openai/gpt-4o") == 32_000

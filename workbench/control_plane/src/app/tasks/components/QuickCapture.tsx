@@ -17,6 +17,21 @@ import { useVisualViewport } from "../lib/useVisualViewport";
 // clarify here (GTD keeps the two stages separate).
 // Gate: mounts the panel fresh each time the palette opens, so its local state
 // starts clean without a reset-in-effect.
+// Cheap "is this really several tasks?" pre-check for a single capture. Short
+// lines never trigger (almost always one action); only longer text with joining
+// words / list separators is worth an atomizer round-trip. The atomizer is the
+// real arbiter — this only decides whether to spend the call.
+function looksMultiTask(t: string): boolean {
+  if (t.includes("\n")) return true; // several lines pasted into the single box
+  const words = t.split(/\s+/).filter(Boolean).length;
+  if (words < 6) return false;
+  if (/[;•]/.test(t)) return true;
+  if (/\b(?:and then|then|also|as well as|followed by)\b/i.test(t)) return true;
+  if (/,\s*(?:and|then)\b/i.test(t)) return true;
+  if (t.length > 80 && /\band\b/i.test(t)) return true;
+  return false;
+}
+
 export function QuickCapture() {
   const open = useTaskStore((s) => s.quickCaptureOpen);
   if (!open) return null;
@@ -48,6 +63,11 @@ function QuickCapturePanel() {
     { title: string; include: boolean; verdict: "new" | "similar" | "duplicate"; matchTitle?: string; matchDisposition?: string; matchSource?: string }[]
   >([]);
   const [atomizing, setAtomizing] = useState(false);
+  // Single-capture smart-breakdown: `verifying` = the atomizer round-trip is in
+  // flight; `splitFromSingle` = the review being shown was reached by splitting
+  // a single capture (so we also offer "keep as one").
+  const [verifying, setVerifying] = useState(false);
+  const [splitFromSingle, setSplitFromSingle] = useState(false);
   const reviewEditedRef = useRef(false);
   const backend = useTaskStore((s) => s.backend);
   const areaRef = useRef<HTMLTextAreaElement>(null);
@@ -56,6 +76,7 @@ function QuickCapturePanel() {
   const switchMode = (m: "single" | "sweep") => {
     setMode(m);
     setPhase("write");
+    setSplitFromSingle(false);
   };
 
   // Escape closes.
@@ -72,9 +93,7 @@ function QuickCapturePanel() {
     .map((l) => l.trim())
     .filter(Boolean).length;
 
-  const submitSingle = () => {
-    const t = value.trim();
-    if (!t) return;
+  const doCaptureSingle = (t: string) => {
     // A captured date rides along: "remind" → tickler (defer_until); "due" →
     // deadline (due_at + hard date). No date → pure capture, unchanged.
     const dates = dateIso
@@ -90,6 +109,50 @@ function QuickCapturePanel() {
     inputRef.current?.focus();
   };
 
+  // Before filing a single item, sanity-check whether it's actually several
+  // distinct tasks — if so, drop into the mind-sweep review to split it rather
+  // than burying multiple actions in one inbox line. One task → files as-is.
+  const verifyAndMaybeSplit = async (t: string) => {
+    setVerifying(true);
+    try {
+      const { items } = await apiAtomize(t);
+      const distinct = items.filter((i) => i.title.trim());
+      if (distinct.length > 1) {
+        reviewEditedRef.current = false;
+        setSplitFromSingle(true);
+        setReviewItems(distinct.map((it) => ({
+          title: it.title,
+          include: it.verdict !== "duplicate",
+          verdict: it.verdict,
+          matchTitle: it.matchTitle,
+          matchDisposition: it.matchDisposition,
+          matchSource: it.matchSource,
+        })));
+        setMode("sweep");
+        setPhase("review");
+      } else {
+        doCaptureSingle(t); // one task after all
+      }
+    } catch {
+      doCaptureSingle(t); // atomizer unavailable — just file it
+    } finally {
+      setVerifying(false);
+    }
+  };
+
+  const submitSingle = () => {
+    const t = value.trim();
+    if (!t || verifying) return;
+    // Multi-task detection only when it's worth it: live backend, no per-item
+    // date/attachment already chosen (those signal a single item), and the text
+    // reads like several actions. Everything else files instantly.
+    if (backend === "live" && !pendingAtts.length && !dateIso && looksMultiTask(t)) {
+      void verifyAndMaybeSplit(t);
+      return;
+    }
+    doCaptureSingle(t);
+  };
+
   // Sweep → review gate (the §2.1 AI seam, now live). The instant line-split
   // renders immediately; the server atomizer (LLM splitting + duplicate
   // check against open items, deterministic fallback) upgrades the list in
@@ -101,6 +164,7 @@ function QuickCapturePanel() {
       .filter(Boolean);
     if (!lines.length) return;
     reviewEditedRef.current = false;
+    setSplitFromSingle(false); // a genuine sweep, not a single-capture split
     setReviewItems(lines.map((t) => ({ title: t, include: true, verdict: "new" as const })));
     setPhase("review");
     if (backend !== "live") return;
@@ -196,16 +260,24 @@ function QuickCapturePanel() {
               <button
                 type="button"
                 onClick={submitSingle}
-                disabled={!value.trim()}
+                disabled={!value.trim() || verifying}
                 aria-label="Add to inbox"
                 className={[
                   "tech-transition inline-flex shrink-0 items-center gap-1 rounded-md px-2.5 py-1.5 text-xs font-medium",
-                  value.trim()
+                  value.trim() && !verifying
                     ? "bg-primary text-primary-foreground hover:opacity-90"
                     : "cursor-not-allowed bg-secondary text-muted-foreground",
                 ].join(" ")}
               >
-                Add <CornerDownLeft className="h-3.5 w-3.5" />
+                {verifying ? (
+                  <>
+                    Checking… <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  </>
+                ) : (
+                  <>
+                    Add <CornerDownLeft className="h-3.5 w-3.5" />
+                  </>
+                )}
               </button>
             </div>
             <AttachmentComposer attachments={pendingAtts} onChange={setPendingAtts} compact />
@@ -288,7 +360,9 @@ function QuickCapturePanel() {
               <span>
                 {atomizing
                   ? "AI is splitting your dump into atomic items and checking for duplicates…"
-                  : "Review before adding — edit, remove, or re-include any item. Nothing is filed until you confirm."}
+                  : splitFromSingle
+                    ? "This looks like several tasks — review and split them, or keep it as one below. Nothing is filed until you confirm."
+                    : "Review before adding — edit, remove, or re-include any item. Nothing is filed until you confirm."}
               </span>
             </div>
             <div className="flex max-h-[42vh] flex-col gap-1.5 overflow-y-auto pr-1">
@@ -357,14 +431,26 @@ function QuickCapturePanel() {
             >
               <Plus className="h-3 w-3" /> Add another
             </button>
-            <div className="mt-3 flex items-center justify-between">
-              <button
-                type="button"
-                onClick={() => setPhase("write")}
-                className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
-              >
-                <ArrowLeft className="h-4 w-4" /> Back
-              </button>
+            <div className="mt-3 flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setPhase("write")}
+                  className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+                >
+                  <ArrowLeft className="h-4 w-4" /> Back
+                </button>
+                {splitFromSingle && (
+                  <button
+                    type="button"
+                    onClick={() => { doCaptureSingle(value.trim()); close(); }}
+                    title="File the original text as a single inbox item instead"
+                    className="tech-transition inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground"
+                  >
+                    Keep as one
+                  </button>
+                )}
+              </div>
               <button
                 type="button"
                 disabled={!reviewCount}

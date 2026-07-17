@@ -17,10 +17,14 @@ import {
   Sparkles,
   Archive,
   CheckCircle2,
+  RefreshCw,
+  Loader2,
+  AlertTriangle,
   type LucideIcon,
   Settings2,
 } from "lucide-react";
 import { useTaskStore, viewCounts } from "../lib/taskStore";
+import { relativeTime } from "../lib/utils";
 import { ViewKey } from "../lib/types";
 
 type NavRow = {
@@ -79,6 +83,8 @@ export function ListsSidebar({
   const loadPeople = useTaskStore((s) => s.loadPeople);
   const sourceFilter = useTaskStore((s) => s.sourceFilter);
   const setSourceFilter = useTaskStore((s) => s.setSourceFilter);
+  const syncNow = useTaskStore((s) => s.syncNow);
+  const syncing = useTaskStore((s) => s.syncing);
   const selectView: typeof selectViewRaw = (v) => {
     selectViewRaw(v);
     // Archived tasks aren't in the normal hydrate — pull them on demand.
@@ -91,7 +97,12 @@ export function ListsSidebar({
     if (v === "people") void loadPeople();
     onNavigate?.();
   };
-  const counts = useMemo(() => viewCounts(items), [items]);
+  // Counts must honor the All / Mine / ClickUp source toggle, otherwise the
+  // badges stay frozen at the "All" totals while the list below re-filters.
+  const counts = useMemo(
+    () => viewCounts(items, sourceFilter),
+    [items, sourceFilter],
+  );
 
   return (
     <nav className="flex h-full flex-col gap-1 overflow-y-auto p-3 text-sm">
@@ -202,8 +213,48 @@ export function ListsSidebar({
             className="flex items-center gap-2.5 rounded-lg px-2 py-1.5 text-[13px] text-muted-foreground"
           >
             <Cloud className="h-3.5 w-3.5 shrink-0 text-primary/70" />
-            <span className="flex-1 truncate">{a.label}</span>
-            <span className="text-[10px]">{a.projectCount}</span>
+            <div className="min-w-0 flex-1">
+              <span className="block truncate">{a.label}</span>
+              {/* Sync visibility: last pull time (or the error), so it's clear
+                  whether the ClickUp mirror is current without opening the
+                  Workspaces modal. */}
+              <span
+                className={[
+                  "flex items-center gap-1 truncate text-[10px]",
+                  a.syncError ? "text-destructive" : "text-muted-foreground/70",
+                ].join(" ")}
+                title={a.syncError || undefined}
+              >
+                {a.syncError ? (
+                  <>
+                    <AlertTriangle className="h-2.5 w-2.5 shrink-0" />
+                    Sync failed
+                  </>
+                ) : syncing ? (
+                  "Syncing…"
+                ) : a.lastSyncedAt ? (
+                  `Synced ${relativeTime(a.lastSyncedAt)}`
+                ) : (
+                  "Not synced yet"
+                )}
+              </span>
+            </div>
+            {/* Manual sync — pull this workspace's ClickUp tasks now, from
+                anywhere (previously only in the Workspaces modal). */}
+            <button
+              type="button"
+              title="Sync this workspace's ClickUp tasks now"
+              aria-label={`Sync ${a.label} now`}
+              disabled={syncing}
+              onClick={() => void syncNow(a.id)}
+              className="tech-transition shrink-0 rounded-md p-1 text-muted-foreground/70 hover:bg-secondary hover:text-foreground disabled:opacity-50"
+            >
+              {syncing ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <RefreshCw className="h-3.5 w-3.5" />
+              )}
+            </button>
           </div>
         ))}
         <button

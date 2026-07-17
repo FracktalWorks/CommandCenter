@@ -191,6 +191,12 @@ export function ClarifyPanel({
   const [suggestedTitle, setSuggestedTitle] = useState<string | undefined>(undefined);
   const [titleBusy, setTitleBusy] = useState(false);
   const titleCleared = useRef(false); // user explicitly dismissed/accepted → don't re-show
+  // ── Freeform guidance the user gives the assistant to steer this clarify ──
+  // (edit the title inline, and/or describe what the item really is → re-run
+  //  clarify with that context so the name/project/steps come out right).
+  const [note, setNote] = useState("");
+  const [noteOpen, setNoteOpen] = useState(false);
+  const [noteBusy, setNoteBusy] = useState(false);
   // Dismiss the "already on ClickUp?" banner to file this capture anyway.
   const [dupDismissed, setDupDismissed] = useState(false);
   // Dismiss the "file into this project" suggestion to choose a place manually.
@@ -237,47 +243,58 @@ export function ClarifyPanel({
   // The panel opened instantly on the local heuristic; swap in the server's
   // richer proposal when it lands — unless the user already touched the form
   // (dirtyRef, set by any interaction inside the panel root below).
+  // Seed the whole form from a proposal. Used by all three paths — the instant
+  // local heuristic, the server upgrade below, and a note-driven re-clarify —
+  // so they stay identical.
+  const seedFromProposal = useCallback(
+    (sp: ClarifyProposal) => {
+      setProposal(sp);
+      setSort(sortOf(sp.disposition));
+      setSize(sizeOf(sp.disposition, sp.complexity));
+      setOwner(sp.suggestedAssignee ? "delegate" : "me");
+      setNextAction(sp.nextAction);
+      setOutcome(sp.outcome ?? `${item.title} — done`);
+      setContext(sp.context ?? "@computer");
+      setEnergy(sp.energy ?? "medium");
+      setImportant(!!sp.important);
+      setLeveraged(!!sp.leveraged);
+      setAssignee(sp.suggestedAssignee ?? null);
+      if (sp.target) setDest(sp.target);
+      setProjectId(sp.projectId);
+      setSubtasks(
+        sp.complexity === "subtasks" || sp.complexity === "project"
+          ? sp.suggestedSubtasks ?? []
+          : [],
+      );
+      setStatus(
+        sp.status ??
+          defaultStatus(
+            sp.disposition,
+            providerStatuses(sp.target ?? { source: "LOCAL" }, providers),
+          ),
+      );
+      if (sp.dueDate) {
+        setWhen("date");
+        setDueAt(sp.dueDate);
+      }
+      if (sp.isVague && !titleCleared.current) {
+        setVagueOpen(true);
+        setSuggestedTitle(sp.suggestedTitle);
+      } else if (sp.suggestedTitle) {
+        setSuggestedTitle(sp.suggestedTitle);
+      }
+    },
+    // Setters are stable; only item.title / providers are read.
+    [item.title, providers],
+  );
+
   useEffect(() => {
     if (backend !== "live") return;
     let cancelled = false;
     apiClarifyPropose(item.id, reclarify)
       .then((sp) => {
         if (cancelled || dirtyRef.current) return;
-        setProposal(sp);
-        setSort(sortOf(sp.disposition));
-        setSize(sizeOf(sp.disposition, sp.complexity));
-        setOwner(sp.suggestedAssignee ? "delegate" : "me");
-        setNextAction(sp.nextAction);
-        setOutcome(sp.outcome ?? `${item.title} — done`);
-        setContext(sp.context ?? "@computer");
-        setEnergy(sp.energy ?? "medium");
-        setImportant(!!sp.important);
-        setLeveraged(!!sp.leveraged);
-        setAssignee(sp.suggestedAssignee ?? null);
-        if (sp.target) setDest(sp.target);
-        setProjectId(sp.projectId);
-        setSubtasks(
-          sp.complexity === "subtasks" || sp.complexity === "project"
-            ? sp.suggestedSubtasks ?? []
-            : [],
-        );
-        setStatus(
-          sp.status ??
-            defaultStatus(
-              sp.disposition,
-              providerStatuses(sp.target ?? { source: "LOCAL" }, providers),
-            ),
-        );
-        if (sp.dueDate) {
-          setWhen("date");
-          setDueAt(sp.dueDate);
-        }
-        if (sp.isVague && !titleCleared.current) {
-          setVagueOpen(true);
-          setSuggestedTitle(sp.suggestedTitle);
-        } else if (sp.suggestedTitle) {
-          setSuggestedTitle(sp.suggestedTitle);
-        }
+        seedFromProposal(sp);
       })
       .catch(() => {
         /* server proposal is an upgrade, not a dependency — keep the local one */
@@ -289,6 +306,32 @@ export function ClarifyPanel({
     // upgrade must run exactly once per mount — not re-fire on store churn.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [backend, item.id]);
+
+  // Re-run clarify with the user's freeform guidance, then re-seed the form —
+  // and adopt a clearer title if the assistant proposes one (giving it context
+  // is exactly what should let it fix the name).
+  const reclarifyWithNote = useCallback(async () => {
+    if (backend !== "live") return;
+    const n = note.trim();
+    if (!n) return;
+    setNoteBusy(true);
+    try {
+      const sp = await apiClarifyPropose(item.id, reclarify, n);
+      dirtyRef.current = true; // this is now the authoritative proposal
+      seedFromProposal(sp);
+      const better = sp.suggestedTitle?.trim();
+      if (better && better.toLowerCase() !== title.trim().toLowerCase()) {
+        setTitle(better);
+        renameItem(item.id, better);
+        titleCleared.current = true;
+        setVagueOpen(false);
+      }
+    } catch {
+      /* best-effort — keep the existing proposal */
+    } finally {
+      setNoteBusy(false);
+    }
+  }, [backend, item.id, reclarify, note, title, seedFromProposal, renameItem]);
 
   // Load the local hierarchy once (Where axis, local destination) if it hasn't
   // been fetched yet — the Projects view normally triggers this, but Clarify
@@ -580,7 +623,24 @@ export function ClarifyPanel({
           <SourceBadge source={item.source} provider={item.provider} />
         </div>
         <div className="flex items-start gap-2">
-          <h1 className="flex-1 text-lg font-bold leading-snug text-foreground">{title}</h1>
+          {/* The title is directly editable now — retype it, or use the
+              context field / Improve to have the assistant rewrite it. Saves on
+              blur / Enter; Escape reverts. */}
+          <input
+            value={title}
+            onChange={(e) => setTitle(e.target.value)}
+            onBlur={() => {
+              const t = title.trim();
+              if (t && t !== item.title) renameItem(item.id, t);
+              if (!t) setTitle(item.title); // never allow a blank title
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") { e.preventDefault(); e.currentTarget.blur(); }
+              if (e.key === "Escape") { setTitle(item.title); e.currentTarget.blur(); }
+            }}
+            aria-label="Task title — click to edit"
+            className="tech-transition -mx-1 flex-1 rounded-md border border-transparent bg-transparent px-1 text-lg font-bold leading-snug text-foreground hover:border-border focus:border-primary/50 focus:bg-background focus:outline-none"
+          />
           <button
             type="button"
             onClick={() => void runSuggestTitle()}
@@ -617,6 +677,56 @@ export function ClarifyPanel({
             ? "Refine this — or break it into next actions."
             : "What is it — and what needs to happen next?"}
         </p>
+        {/* Freeform guidance → re-clarify. Collapsed by default so it costs no
+            height; expand to describe what the item really is and let the
+            assistant re-derive the title / project / steps from it. */}
+        {backend === "live" && (
+          <div className="mt-2">
+            {!noteOpen ? (
+              <button
+                type="button"
+                onClick={() => setNoteOpen(true)}
+                className="tech-transition inline-flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
+              >
+                <Sparkles className="h-3 w-3" />
+                Add context for the assistant
+              </button>
+            ) : (
+              <div className="flex flex-col gap-1.5">
+                <textarea
+                  value={note}
+                  onChange={(e) => setNote(e.target.value)}
+                  rows={2}
+                  autoFocus
+                  placeholder="Describe what this really is — e.g. “the Q3 board deck; break it into sections and file under Fundraising”. The assistant re-clarifies the title, project and steps from this."
+                  className="w-full resize-y rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => void reclarifyWithNote()}
+                    disabled={noteBusy || !note.trim()}
+                    className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-40"
+                  >
+                    {noteBusy ? (
+                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                    ) : (
+                      <Wand2 className="h-3.5 w-3.5" />
+                    )}
+                    Re-clarify with this
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => { setNoteOpen(false); setNote(""); }}
+                    className="tech-transition rounded-md px-2 py-1.5 text-[12px] font-medium text-muted-foreground hover:text-foreground"
+                  >
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
       </header>
 
       <div className="flex flex-col gap-4 px-5 py-4">
@@ -877,7 +987,7 @@ export function ClarifyPanel({
           <div className="flex flex-col gap-3.5 border-t border-border pt-3.5">
             <Field label="Shape it — these combine freely">
               <div className="flex flex-col gap-3">
-                <SubField label="Size">
+                <SubField label="Size" inline>
                   <div className="flex flex-wrap gap-1.5">
                     {(["single", "subtasks", "project"] as Size[]).map((s) => {
                       const M = SIZE_META[s];
@@ -926,7 +1036,7 @@ export function ClarifyPanel({
                   </SubField>
                 )}
 
-                <SubField label="Owner">
+                <SubField label="Owner" inline>
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       type="button"
@@ -973,7 +1083,7 @@ export function ClarifyPanel({
                   )}
                 </SubField>
 
-                <SubField label="When">
+                <SubField label="When" inline>
                   <div className="flex flex-wrap gap-1.5">
                     <button
                       type="button"
@@ -1006,7 +1116,7 @@ export function ClarifyPanel({
                   )}
                 </SubField>
 
-                <SubField label="Energy">
+                <SubField label="Energy" inline>
                   <div className="flex gap-1.5">
                     {(["low", "medium", "high"] as Energy[]).map((e) => (
                       <Pill key={e} active={energy === e} onClick={() => setEnergy(e)}>
@@ -1016,7 +1126,7 @@ export function ClarifyPanel({
                   </div>
                 </SubField>
 
-                <SubField label="Context">
+                <SubField label="Context" inline>
                   <div className="flex flex-wrap gap-1.5">
                     {contexts.map((c) => (
                       <Pill key={c.name} mono active={context === c.name} onClick={() => setContext(c.name)}>
@@ -1028,7 +1138,7 @@ export function ClarifyPanel({
 
                 {/* Priority — the matrix inputs (AI-prefilled, you confirm).
                     Urgent is derived from the due date, so it isn't a toggle. */}
-                <SubField label="Priority">
+                <SubField label="Priority" inline>
                   <div className="flex flex-col gap-1">
                     <div className="flex flex-wrap gap-1.5">
                       <Pill active={important} onClick={() => setImportant((v) => !v)}>
@@ -2109,7 +2219,28 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   );
 }
 
-function SubField({ label, children }: { label: string; children: React.ReactNode }) {
+function SubField({
+  label,
+  children,
+  inline = false,
+}: {
+  label: string;
+  children: React.ReactNode;
+  /** Put the label to the LEFT of the control on wider screens (stacks on
+   *  narrow). Used for the compact pill rows so each doesn't cost a full
+   *  stacked block — keeps the Shape step from running tall. */
+  inline?: boolean;
+}) {
+  if (inline) {
+    return (
+      <div className="flex flex-col gap-1 sm:flex-row sm:items-start sm:gap-3">
+        <p className="shrink-0 text-[10px] font-semibold uppercase leading-tight tracking-wide text-muted-foreground sm:w-16 sm:pt-1.5">
+          {label}
+        </p>
+        <div className="min-w-0 flex-1">{children}</div>
+      </div>
+    );
+  }
   return (
     <div>
       <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">

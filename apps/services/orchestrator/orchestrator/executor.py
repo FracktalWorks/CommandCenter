@@ -539,10 +539,11 @@ async def _run_sub_agent_streaming(
             # Technique #3: read tool_scope from config.json to inject only the
             # tools this sub-agent actually needs (avoids the Berkeley leaderboard
             # accuracy degradation from too many tools).
-            _sub_tool_scope = (
+            _sub_tool_scope = _merged_tool_scope(
                 loaded.config.get("tool_scope") or None
                 if hasattr(loaded, "config")
-                else None
+                else None,
+                _agent_md_spec,
             )
             _apply_own_tool_scope(
                 agents,
@@ -829,24 +830,55 @@ def _apply_agent_md_overrides(
         CLI base prompt is retained.  Called *before* tool injection so the
         platform-tools addendum still appends on top.
       * **Tools** — the frontmatter ``tools`` list uses VS Code Copilot's
-        vocabulary and is treated as *advisory*: it is logged but never
-        restricts the agent.  Copilot SDK agents keep their native tools and
-        still receive every MAF platform-injected tool (additive).
+        vocabulary. It stays additive (it never restricts the agent), but it is
+        no longer inert: :func:`derive_tool_scope` maps those IDE names onto the
+        platform tools that actually do the job, and the caller unions them into
+        the injected scope via :func:`_merged_tool_scope`.
+      * **Runtime note** — a VS-Code-authored body points at affordances that do
+        not exist headless (Problems panel, ``#codebase``, the editor UI). We do
+        NOT rewrite the author's prose; we append a short note reconciling the
+        IDE tool names with the real ones.
+      * **MCP** — ``.vscode/mcp.json`` / ``.mcp.json`` are honoured. They were
+        never read before, so an agent that declares a server it depends on
+        (e.g. a diagramming agent declaring draw.io) silently lost it.
 
     Returns the parsed :class:`AgentMd` (so the caller can fold its ``model``
-    into the model-priority chain), or ``None`` when no usable file exists.
-    Fully defensive — never raises.
+    into the model-priority chain and derive the tool scope), or ``None`` when
+    no usable file exists. Fully defensive — never raises.
     """
     try:
-        from acb_skills.agent_md import load_agent_md  # noqa: PLC0415
+        from acb_skills.agent_md import (  # noqa: PLC0415
+            load_agent_md,
+            load_repo_mcp_servers,
+            runtime_note_for,
+        )
         spec = load_agent_md(agent_dir, agent_name)
     except Exception as exc:  # noqa: BLE001
         _log.debug("executor.agent_md_load_failed", agent=agent_name, error=str(exc))
         return None
+
+    # Repo-declared MCP servers stand on their own — an agent can depend on one
+    # without having an .agent.md at all.
+    try:
+        _repo_mcp = load_repo_mcp_servers(agent_dir)
+    except Exception:
+        _repo_mcp = {}
+    if _repo_mcp:
+        from orchestrator._tool_injection import merge_mcp_servers
+        for _ag in agents:
+            # override=False: the DB registry runs later and outranks the repo.
+            merge_mcp_servers(_ag, _repo_mcp, override=False)
+        _log.info(
+            "executor.agent_md_repo_mcp_applied",
+            agent=agent_name, servers=sorted(_repo_mcp),
+        )
+
     if spec is None:
         return None
 
+    _note = runtime_note_for(spec.tools)
     if spec.body:
+        _body = spec.body + _note
         for _ag in agents:
             try:
                 opts = getattr(_ag, "_default_options", None)
@@ -854,11 +886,11 @@ def _apply_agent_md_overrides(
                     # Preserve the SDK's system_message mode (default "append").
                     prev = opts.get("system_message")
                     mode = prev.get("mode", "append") if isinstance(prev, dict) else "append"
-                    opts["system_message"] = {"mode": mode, "content": spec.body}
+                    opts["system_message"] = {"mode": mode, "content": _body}
                 # Pure-MAF agents expose ``instructions`` directly.
                 if hasattr(_ag, "instructions"):
                     try:
-                        _ag.instructions = spec.body
+                        _ag.instructions = _body
                     except (AttributeError, TypeError):
                         pass
             except Exception:  # noqa: BLE001
@@ -871,8 +903,31 @@ def _apply_agent_md_overrides(
         model=spec.model,
         tools_advisory=spec.tools,
         body_chars=len(spec.body),
+        vscode_normalized=bool(_note),
     )
     return spec
+
+
+def _merged_tool_scope(
+    config_scope: list[str] | None, spec: Any | None,
+) -> list[str] | None:
+    """config.json ``tool_scope`` UNION the scope implied by ``.agent.md tools``.
+
+    Returns ``None`` (inject everything) whenever config.json set no scope: a
+    VS Code ``tools:`` list must be able to WIDEN an already-narrowed agent, but
+    must never NARROW an agent that was never scoped in the first place —
+    otherwise adding an .agent.md would silently strip tools the agent had.
+    """
+    if not config_scope:
+        return None
+    derived: list[str] = []
+    if spec is not None:
+        try:
+            from acb_skills.agent_md import derive_tool_scope
+            derived = derive_tool_scope(getattr(spec, "tools", []) or [])
+        except Exception:
+            derived = []
+    return list(dict.fromkeys(list(config_scope) + derived))
 
 
 # The ONLY tier aliases the gateway /v1 actually resolves (see
@@ -1858,7 +1913,11 @@ async def run_agent_stream(
             )
             _inject_agent_tools(
                 agents,
-                tool_scope=loaded.config.get("tool_scope") or None,
+                # .agent.md's VS Code tools widen (never narrow) the scope, so a
+                # declared capability like `codebase` resolves to a real tool.
+                tool_scope=_merged_tool_scope(
+                    loaded.config.get("tool_scope") or None, _agent_md_spec,
+                ),
             )  # inject call_agent / call_agent_background
             # Inject MCP servers from the registry into every agent at runtime
             for _a in agents:

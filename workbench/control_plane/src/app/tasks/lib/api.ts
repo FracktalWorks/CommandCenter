@@ -481,6 +481,64 @@ export async function apiCalendarRange(
   return rows.map(mapItem);
 }
 
+// ── AI day-planner (Plan my day) ─────────────────────────────────────────────
+export interface PlanDayBlock {
+  itemId: string;
+  title: string;
+  start: string;
+  end: string;
+  energy?: string;
+  rationale?: string;
+}
+export interface PlanDayUnplaced {
+  itemId: string;
+  title: string;
+  reason: string;
+}
+export interface DayPlanResult {
+  blocks: PlanDayBlock[];
+  unplaced: PlanDayUnplaced[];
+  notes?: string;
+  usedMins: number;
+  capacityMins: number;
+}
+export interface PlanDayRequest {
+  day_start: string;
+  day_end: string;
+  energy_windows: { start: string; end: string; energy: string }[];
+  capacity_mins: number;
+  buffer_mins: number;
+  energy_note?: string;
+}
+
+/** Ask the AI planner for a timeboxed day (priority/energy/capacity/deadline
+ *  aware). Returns a proposal — the caller applies accepted blocks via PATCH. */
+export async function apiPlanDay(req: PlanDayRequest): Promise<DayPlanResult> {
+  const r = await gatewayFetch<Raw>(`/calendar/plan`, {
+    method: "POST",
+    body: JSON.stringify(req),
+  });
+  const arr = (v: unknown): Raw[] => (Array.isArray(v) ? (v as Raw[]) : []);
+  return {
+    blocks: arr(r.blocks).map((b) => ({
+      itemId: String(b.item_id ?? ""),
+      title: String(b.title ?? ""),
+      start: String(b.start ?? ""),
+      end: String(b.end ?? ""),
+      energy: b.energy ? String(b.energy) : undefined,
+      rationale: b.rationale ? String(b.rationale) : undefined,
+    })),
+    unplaced: arr(r.unplaced).map((u) => ({
+      itemId: String(u.item_id ?? ""),
+      title: String(u.title ?? ""),
+      reason: String(u.reason ?? ""),
+    })),
+    notes: r.notes ? String(r.notes) : undefined,
+    usedMins: Number(r.used_mins ?? 0),
+    capacityMins: Number(r.capacity_mins ?? 0),
+  };
+}
+
 /** Archive (hide from active views) or un-archive a task. */
 export async function apiArchiveItem(
   id: string,

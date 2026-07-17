@@ -20,6 +20,14 @@ folder-oriented ``/email/messages`` list:
 The additive filters (folder, date range, read/starred/attachments, sender
 category) mirror ``/email/messages`` so search composes with filtering.
 
+``q`` is OPTIONAL: this is the whole query surface, not just the text one. The
+UI's search bar composes a text query with closable filter pills (tags, from/to,
+unread/starred/attachments), and a pills-only search — "show me everything
+tagged Newsletter" with no words typed — is a first-class case. With no ``q``
+the FTS predicate is simply skipped and results come back recency-ordered
+(there is no relevance to rank by); every other filter applies identically. A
+call with neither ``q`` nor any filter is just a folder listing.
+
 Phase 2 (semantic re-ranking over pgvector embeddings) layers ON TOP of this via
 ``hybrid=true`` — see ``semantic.py``. With semantics off, this endpoint is a
 complete, reliable lexical search on its own.
@@ -35,6 +43,7 @@ from gateway.routes.email.core import (
     _account_scope,
     _get_db,
     _row_to_message,
+    folder_scope,
     router,
 )
 from sqlalchemy import text
@@ -68,12 +77,85 @@ def _parse_dt(value: str | None) -> Any:
         return None
 
 
+def _tag_filters(
+    where: list[str], params: dict[str, Any],
+    label: str | None, labels: list[str] | None,
+) -> None:
+    """AND one predicate per tag pill.
+
+    ``label`` (single, legacy) and ``labels`` (the pills) are both matched against
+    user labels OR assigned categories, so a rule-engine tag ("Newsletter",
+    "Reply") and a user's own label are searchable the same way. Stacked pills
+    AND together — each narrows the result set, which is how a row of filter
+    chips reads."""
+    tags = [t for t in ([label] if label else []) + (labels or []) if t and t.strip()]
+    for i, tag in enumerate(tags):
+        key = f"tag_{i}"
+        where.append(f"(:{key} = ANY(COALESCE(em.labels, '{{}}'))"
+                     f" OR :{key} = ANY(COALESCE(em.categories, '{{}}')))")
+        params[key] = tag.strip()
+
+
+def _address_filters(
+    where: list[str], params: dict[str, Any],
+    from_addr: str | None, to_addr: str | None,
+) -> None:
+    """``from:``/``to:`` pills — substring match on an address or display name."""
+    if from_addr:
+        where.append("(LOWER(em.from_address->>'email') LIKE :from_addr"
+                     " OR LOWER(em.from_address->>'name') LIKE :from_addr)")
+        params["from_addr"] = f"%{from_addr.strip().lower()}%"
+    if to_addr:
+        # to_addresses/cc_addresses are JSONB arrays of {name, email}; match a
+        # substring against any recipient. Cc counts as "to" — a user looking for
+        # mail addressed to someone means it, whichever header carried them.
+        where.append("EXISTS (SELECT 1 FROM jsonb_array_elements("
+                     " COALESCE(em.to_addresses, '[]'::jsonb)"
+                     " || COALESCE(em.cc_addresses, '[]'::jsonb)) AS r"
+                     " WHERE LOWER(r->>'email') LIKE :to_addr"
+                     " OR LOWER(r->>'name') LIKE :to_addr)")
+        params["to_addr"] = f"%{to_addr.strip().lower()}%"
+
+
+def _state_filters(
+    where: list[str], params: dict[str, Any], flags: dict[str, Any],
+) -> None:
+    """Date-range, read/starred/attachment and sender-category filters — the
+    additive predicates shared with ``/email/messages``."""
+    dt_after = _parse_dt(flags.get("received_after"))
+    dt_before = _parse_dt(flags.get("received_before"))
+    if dt_after is not None:
+        where.append("em.received_at >= :received_after")
+        params["received_after"] = dt_after
+    if dt_before is not None:
+        where.append("em.received_at <= :received_before")
+        params["received_before"] = dt_before
+    for col in ("is_read", "is_starred", "has_attachments"):
+        if flags.get(col) is not None:
+            where.append(f"em.{col} = :{col}")
+            params[col] = flags[col]
+    if flags.get("sender_category"):
+        where.append("EXISTS (SELECT 1 FROM email_senders se "
+                     "WHERE se.account_id = em.account_id "
+                     "AND LOWER(se.email) = LOWER(em.from_address->>'email') "
+                     "AND LOWER(se.category) = LOWER(:sender_category))")
+        params["sender_category"] = flags["sender_category"]
+
+
 @router.get("/search")
 async def search_messages(
-    q: str = Query(..., min_length=1, description="Search query (websearch syntax)"),
+    q: str | None = Query(
+        None, description="Search text (websearch syntax); omit for filters-only"),
     account_id: str | None = Query(None, description="Limit to one account"),
-    folder: str | None = Query(None, description="Limit to one folder"),
+    folder: str | None = Query(
+        None, description="Scope: a folder key, 'all', or 'starred'"),
     label: str | None = Query(None),
+    labels: list[str] | None = Query(
+        None, description="Tag pills — repeatable; a message must carry ALL"),
+    from_addr: str | None = Query(
+        None, description="Substring match on the sender name or address"),
+    to_addr: str | None = Query(
+        None, description="Substring match on any To/Cc recipient"),
     received_after: str | None = Query(None),
     received_before: str | None = Query(None),
     is_read: bool | None = Query(None),
@@ -86,50 +168,41 @@ async def search_messages(
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
 ):
-    """Ranked full-text search over all of the user's email (all folders, all
-    accounts unless narrowed). Returns messages ordered by relevance, each with a
-    ``rank`` and a highlighted ``highlight`` snippet, plus ``total`` for paging.
+    """Ranked search over the user's email — the query surface behind the search
+    bar. Returns messages each with a ``rank`` and a highlighted ``highlight``
+    snippet, plus ``total`` for paging.
 
-    An empty/whitespace query yields no results (rather than every email) — the
-    caller decides whether to fall back to the plain folder list."""
+    ``q`` is optional: with search text, results are relevance-ranked; with only
+    filters (tag pills, from/to, unread/…), the text predicate is skipped and
+    results come back newest-first. ``folder`` scopes the search — a folder key,
+    ``all`` (everything but junk/trash), or ``starred``; omit it to span every
+    folder. Unless ``account_id`` narrows it, the search spans all the user's
+    accounts."""
     db = await _get_db()
     try:
         uid = user.email or "anonymous"
-        params: dict[str, Any] = {"uid": uid, "q": q}
+        text_q = (q or "").strip()
+        params: dict[str, Any] = {"uid": uid, "q": text_q}
 
-        where = [_account_scope(account_id, params),
-                 f"{_FTS_VECTOR} @@ websearch_to_tsquery('english', :q)"]
-
-        if folder:
-            where.append("em.folder = :folder")
-            params["folder"] = folder
-        if label:
-            where.append("(:label = ANY(COALESCE(em.labels, '{}'))"
-                         " OR :label = ANY(em.categories))")
-            params["label"] = label
-        dt_after, dt_before = _parse_dt(received_after), _parse_dt(received_before)
-        if dt_after is not None:
-            where.append("em.received_at >= :received_after")
-            params["received_after"] = dt_after
-        if dt_before is not None:
-            where.append("em.received_at <= :received_before")
-            params["received_before"] = dt_before
-        if is_read is not None:
-            where.append("em.is_read = :is_read")
-            params["is_read"] = is_read
-        if is_starred is not None:
-            where.append("em.is_starred = :is_starred")
-            params["is_starred"] = is_starred
-        if has_attachments is not None:
-            where.append("em.has_attachments = :has_attachments")
-            params["has_attachments"] = has_attachments
-        if sender_category:
+        where = [_account_scope(account_id, params)]
+        # Filters-only search: no text ⇒ no FTS predicate and nothing to rank.
+        if text_q:
             where.append(
-                "EXISTS (SELECT 1 FROM email_senders se "
-                "WHERE se.account_id = em.account_id "
-                "AND LOWER(se.email) = LOWER(em.from_address->>'email') "
-                "AND LOWER(se.category) = LOWER(:sender_category))")
-            params["sender_category"] = sender_category
+                f"{_FTS_VECTOR} @@ websearch_to_tsquery('english', :q)")
+
+        folder_sql = folder_scope(folder, params)
+        if folder_sql:
+            where.append(folder_sql)
+        _tag_filters(where, params, label, labels)
+        _address_filters(where, params, from_addr, to_addr)
+        _state_filters(where, params, {
+            "received_after": received_after,
+            "received_before": received_before,
+            "is_read": is_read,
+            "is_starred": is_starred,
+            "has_attachments": has_attachments,
+            "sender_category": sender_category,
+        })
 
         where_sql = " AND ".join(where)
 
@@ -147,13 +220,16 @@ async def search_messages(
         # a reliability-first search never drops a keyword hit. If the query can't
         # be embedded (flag off, embed error), we fall through to pure lexical.
         semantic_select = "0.0 AS sim"
-        order_sql = "rank DESC, em.received_at DESC"
+        # Filters-only: nothing to rank against, so newest-first is the only
+        # meaningful order (and hybrid re-ranking has no query to embed).
+        order_sql = ("rank DESC, em.received_at DESC" if text_q
+                     else "em.received_at DESC")
         join_sql = ""
-        if hybrid:
+        if hybrid and text_q:
             qvec = None
             try:
                 from email_ingestion.email_embeddings import embed_query
-                qvec = await embed_query(q)
+                qvec = await embed_query(text_q)
             except Exception:  # noqa: BLE001
                 qvec = None
             if qvec is not None:
@@ -174,6 +250,21 @@ async def search_messages(
 
         # ts_rank_cd rewards cover density (matches close together rank higher);
         # recency breaks ties so equally-relevant hits surface newest-first.
+        # With no search text there is nothing to rank or highlight: ts_headline
+        # against an empty tsquery would return the head of the body with no
+        # <mark> in it, which the list would render as a "match" snippet that
+        # matched nothing. Emit an empty highlight instead so the card falls back
+        # to its normal preview.
+        rank_select = (f"ts_rank_cd({_FTS_VECTOR},"
+                       " websearch_to_tsquery('english', :q)) AS rank"
+                       if text_q else "0.0 AS rank")
+        headline_select = (
+            f"""ts_headline('english', {_HEADLINE_SOURCE},
+                    websearch_to_tsquery('english', :q),
+                    'StartSel=<mark>, StopSel=</mark>, MaxFragments=2, '
+                    'MaxWords=18, MinWords=5, FragmentDelimiter=" … "'
+                ) AS highlight"""
+            if text_q else "'' AS highlight")
         rows = (await db.execute(text(
             f"""SELECT em.id, em.provider_message_id, em.thread_id,
                        em.account_id, em.folder, em.labels,
@@ -184,14 +275,9 @@ async def search_messages(
                        em.is_read, em.is_starred, em.is_flagged,
                        em.importance, em.categories,
                        em.received_at, em.synced_at,
-                       ts_rank_cd({_FTS_VECTOR},
-                           websearch_to_tsquery('english', :q)) AS rank,
+                       {rank_select},
                        {semantic_select},
-                       ts_headline('english', {_HEADLINE_SOURCE},
-                           websearch_to_tsquery('english', :q),
-                           'StartSel=<mark>, StopSel=</mark>, MaxFragments=2, '
-                           'MaxWords=18, MinWords=5, FragmentDelimiter=" … "'
-                       ) AS highlight
+                       {headline_select}
                   FROM email_messages em
                   {join_sql}
                  WHERE {where_sql}
@@ -214,7 +300,7 @@ async def search_messages(
             "total": total,
             "page": page,
             "page_size": page_size,
-            "query": q,
+            "query": text_q,
             "hybrid": bool(join_sql),
         }
     finally:

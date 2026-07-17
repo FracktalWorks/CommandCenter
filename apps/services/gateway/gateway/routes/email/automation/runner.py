@@ -450,26 +450,53 @@ def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
-def _past_job_start(account_id: str, owner: str, total: int, dry_run: bool) -> int:
+def _past_job_start(
+    account_id: str, owner: str, total: int, dry_run: bool,
+    *, downloading: bool = False,
+) -> int:
     """Seed the tracker for a new run; returns a token the background job passes
-    back so a superseded (older) run can't mutate the newer entry."""
+    back so a superseded (older) run can't mutate the newer entry.
+
+    ``downloading`` marks the run as in the pre-apply provider-backfill phase
+    (the range is being fetched from upstream). The job then calls
+    ``_past_job_begin_processing`` with the real in-range total once mail lands."""
     global _PAST_JOB_SEQ
     _PAST_JOB_SEQ += 1
     token = _PAST_JOB_SEQ
+    running = downloading or total > 0
     _PAST_JOBS[account_id] = {
         "token": token,
         "owner": owner,
-        "status": "running" if total > 0 else "done",
+        "status": "running" if running else "done",
+        "phase": "downloading" if downloading else "processing",
         "total": total,
         "processed": 0,
         "applied": 0,
         "skipped": 0,
         "dry_run": dry_run,
         "started_at": _now_iso(),
-        "finished_at": None if total > 0 else _now_iso(),
+        "finished_at": None if running else _now_iso(),
         "error": None,
     }
     return token
+
+
+def _past_job_begin_processing(
+    account_id: str, *, token: int | None = None, total: int,
+) -> None:
+    """Leave the 'downloading' phase and record the real in-range total once the
+    upstream backfill has landed, so the UI's 'N of M' reflects everything that
+    will actually be processed (not the pre-download local count)."""
+    job = _PAST_JOBS.get(account_id)
+    if not job:
+        return
+    if token is not None and job.get("token") != token:
+        return
+    job["total"] = total
+    job["phase"] = "processing"
+    if total <= 0:
+        job["status"] = "done"
+        job["finished_at"] = _now_iso()
 
 
 def _past_job_tick(
@@ -527,7 +554,9 @@ async def process_past_emails(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        # Count what will be processed so the dialog can report it.
+        # Best-effort pre-count of what's ALREADY synced locally — just a hint for
+        # the caller. The job downloads the range from upstream first, so the real
+        # total is recomputed there (the picker can reach past what's been synced).
         clause, params = _date_range_clause(
             req.account_id, start_dt, end_dt, only_unread)
         n = (await db.execute(text(
@@ -537,16 +566,18 @@ async def process_past_emails(
         count = int(n.c) if n else 0
     finally:
         await db.close()
-    # Initialise the live-progress tracker BEFORE scheduling so the UI can poll
-    # immediately (a zero-count run is marked done on the spot — no job needed).
+    # Always schedule: the job first downloads [start, end] from the provider so a
+    # range that predates the local sync still has mail to process, THEN counts +
+    # applies. The tracker starts in the 'downloading' phase and the UI polls it
+    # (there's no meaningful synchronous count to gate on before the backfill).
     token = _past_job_start(
-        req.account_id, user.email or "anonymous", count, req.is_test)
-    if count > 0:
-        background.add_task(
-            _process_past_emails_job, req.account_id, start_dt, end_dt,
-            min(req.limit, 2000), not req.is_test, user.email or "anonymous",
-            only_unread, token,
-        )
+        req.account_id, user.email or "anonymous", count, req.is_test,
+        downloading=True)
+    background.add_task(
+        _process_past_emails_job, req.account_id, start_dt, end_dt,
+        min(req.limit, 2000), not req.is_test, user.email or "anonymous",
+        only_unread, token,
+    )
     return {"scheduled": True, "count": count, "dry_run": req.is_test}
 
 
@@ -668,6 +699,13 @@ async def run_rules_on_message(
         ), {"id": str(row.id)})
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()
+        # Return the row's POST-apply category + folder so the caller can refresh
+        # its inbox row in place — the "Uncategorized" pill in the list reruns
+        # this endpoint and needs the applied label to resolve without a full
+        # refetch (the actions above may also have archived/moved the message).
+        fresh = (await db.execute(text(
+            "SELECT categories, folder FROM email_messages WHERE id = :id"
+        ), {"id": str(row.id)})).fetchone()
         primary = matches[0]
         return {
             "matched": True, "applied": True,
@@ -675,6 +713,8 @@ async def run_rules_on_message(
             "reason": primary["reason"],
             "actions": primary["rule"]["actions"],
             "applied_rules": [m["rule"]["name"] for m in matches],
+            "categories": list(fresh.categories or []) if fresh else [],
+            "folder": fresh.folder if fresh else None,
         }
     finally:
         await db.close()
@@ -784,6 +824,18 @@ async def _process_past_emails_job(
 
     Updates the in-memory progress tracker (_PAST_JOBS) per email so the UI's
     'Processing N of M…' indicator advances live and History can auto-refresh."""
+    # Download the requested range from the provider BEFORE applying. The date
+    # picker can reach back past what's been synced locally; without this the
+    # range query below is simply empty and the feature no-ops ("No emails found
+    # in that range."). A deep sync from the `start` floor backfills it; the apply
+    # itself stays bounded to [start, end] via _date_range_clause. Best-effort —
+    # a failed/partial backfill still applies over whatever IS present locally.
+    try:
+        from email_ingestion.scheduler import _sync_account  # noqa: PLC0415
+        await _sync_account(account_id, deep=True, since=start)
+    except Exception as e:  # noqa: BLE001 — never abort the apply on a backfill error
+        _log.warning("email.process_past_sync_failed",
+                     account_id=account_id, error=str(e)[:200])
     db = await _get_db()
     try:
         clause, params = _date_range_clause(account_id, start, end, only_unread)
@@ -796,6 +848,9 @@ async def _process_past_emails_job(
                 WHERE {clause}
                 ORDER BY em.received_at ASC LIMIT :limit"""
         ), params)).fetchall()
+        # The backfill may have pulled in mail the pre-schedule count didn't see —
+        # record the real total and switch the tracker to per-email progress.
+        _past_job_begin_processing(account_id, token=job_token, total=len(rows))
         if not rows:
             _past_job_finish(account_id, token=job_token)
             return

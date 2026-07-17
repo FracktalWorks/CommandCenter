@@ -6,6 +6,8 @@ import {
   GtdItem,
   GtdProject,
   Person,
+  OrgPerson,
+  OrgPersonWrite,
   ProviderKind,
   Target,
   ViewKey,
@@ -59,6 +61,10 @@ import {
   fetchAccounts,
   fetchItems,
   fetchPeople,
+  fetchOrgPeople,
+  createPerson,
+  updatePerson,
+  uploadResume,
   fetchProjects,
   fetchLocalHierarchy,
   apiCreateSpace,
@@ -391,6 +397,8 @@ interface TaskState {
   projects: GtdProject[];
   contexts: GtdContext[];
   people: Person[];
+  /** Full HR roster behind the People view (lazy-loaded on open). */
+  orgPeople: OrgPerson[];
   /** 'demo' = bundled mock data (no gateway); 'live' = the /tasks API. */
   backend: "demo" | "live";
   /** True until the first hydrate() resolves — the UI shows a spinner instead
@@ -567,6 +575,13 @@ interface TaskState {
    *  the Projects view opens; null until then. */
   localHierarchy: LocalHierarchy | null;
   loadLocalHierarchy: () => Promise<void>;
+  /** People view: lazy roster load + create/edit + résumé ingestion. */
+  loadPeople: (opts?: { q?: string; includeInactive?: boolean }) => Promise<void>;
+  savePerson: (id: string | null, body: OrgPersonWrite) => Promise<OrgPerson>;
+  uploadPersonResume: (
+    id: string,
+    file: File
+  ) => Promise<{ addedSkills: string[] }>;
   /** Create a local space / folder / project; refreshes the tree + projects. */
   createLocalSpace: (name: string) => Promise<void>;
   createLocalFolder: (spaceId: string, name: string) => Promise<void>;
@@ -667,6 +682,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   projects: [],
   contexts: MOCK_CONTEXTS,
   people: [],
+  orgPeople: [],
   backend: "demo",
   loading: true,
   providers: CONNECTED_PROVIDERS,
@@ -1248,6 +1264,37 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     } catch {
       /* keep current */
     }
+  },
+
+  loadPeople: async (opts) => {
+    if (get().backend !== "live") return;
+    try {
+      set({ orgPeople: await fetchOrgPeople(opts) });
+    } catch {
+      /* keep current */
+    }
+  },
+
+  savePerson: async (id, body) => {
+    const saved = id ? await updatePerson(id, body) : await createPerson(body);
+    set((s) => {
+      const exists = s.orgPeople.some((p) => p.id === saved.id);
+      return {
+        orgPeople: exists
+          ? s.orgPeople.map((p) => (p.id === saved.id ? saved : p))
+          : [...s.orgPeople, saved],
+      };
+    });
+    return saved;
+  },
+
+  uploadPersonResume: async (id, file) => {
+    const res = await uploadResume(id, file);
+    // Reflect the merged skills/profile in the roster immediately.
+    set((s) => ({
+      orgPeople: s.orgPeople.map((p) => (p.id === id ? res.person : p)),
+    }));
+    return { addedSkills: res.addedSkills };
   },
 
   createLocalSpace: async (name) => {

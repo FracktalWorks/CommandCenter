@@ -98,6 +98,36 @@ def _copilot_infinite_session_config() -> dict[str, Any] | None:
     }
 
 
+def effective_infinite_sessions(
+    default_options: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """The ``infinite_sessions`` block for a session config (or None to omit).
+
+    THE single place the policy is decided, so every path that builds a Copilot
+    SessionConfig applies the same rule:
+
+    - BYOK agent (``provider`` in ``default_options``) → ``{"enabled": False}``.
+      The Copilot backend cannot learn a BYOK model's real window (its
+      ``list_models()`` queries api.githubcopilot.com, which has no entry for our
+      gateway-routed model), so it falls back to ~90K and any threshold x 90K is
+      useless against a 1M-window model. Disabling is the only correct policy —
+      the wire protocol exposes no absolute-window field to correct it with.
+    - Copilot-native agent → relaxed thresholds (the backend knows the real
+      window, so its compaction is meaningful).
+    - ``COPILOT_INFINITE_SESSIONS=default`` → ``None`` (leave SDK defaults).
+
+    Must be evaluated at session-build time, not at import/wrap time: BYOK
+    detection sets ``_default_options["provider"]`` late in the run setup.
+    """
+    mode = os.environ.get("COPILOT_INFINITE_SESSIONS", "").strip().lower()
+    if mode == "default":
+        return None  # operator opted out — leave the SDK's own defaults intact
+    is_byok = bool((default_options or {}).get("provider"))
+    if mode == "off" or is_byok:
+        return {"enabled": False}
+    return _copilot_infinite_session_config() or {"enabled": False}
+
+
 def _apply_copilot_infinite_sessions(agent: Any) -> bool:
     """Inject ``infinite_sessions`` into a Copilot agent's SessionConfig.
 
@@ -141,21 +171,12 @@ def _apply_copilot_infinite_sessions(agent: Any) -> bool:
         # swap in a create_session that merges our block, run the original, restore.
         #
         # Compute effective config NOW — provider may have been set after the wrap.
-        _mode = os.environ.get("COPILOT_INFINITE_SESSIONS", "").strip().lower()
-        if _mode == "default":
+        effective_cfg = effective_infinite_sessions(
+            getattr(agent, "_default_options", {}) or {}
+        )
+        if effective_cfg is None:
             # Opt-out changed at runtime — skip injection this call.
             return await orig(streaming, runtime_options)
-        _opts = getattr(agent, "_default_options", {}) or {}
-        _is_byok = bool(_opts.get("provider"))
-        if _mode == "off" or _is_byok:
-            # BYOK: backend window estimate is wrong → disable compaction entirely.
-            # Our C2 assembly (acb_llm.assemble_run_context) already bounds the
-            # prompt; the real provider API honours its true window.
-            effective_cfg: dict[str, Any] = {"enabled": False}
-        else:
-            # Copilot-native: backend knows the real window → relaxed thresholds
-            # are meaningful. Fall back to disabled if config returns None.
-            effective_cfg = _copilot_infinite_session_config() or {"enabled": False}
 
         client = getattr(agent, "_client", None)
         orig_client_create = getattr(client, "create_session", None) if client else None

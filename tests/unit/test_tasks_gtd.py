@@ -86,7 +86,10 @@ async def test_clickup_create_task_payload_and_result():
         body = kwargs["json"]
         assert body["name"] == "Call the vendor"
         assert body["status"] == "To-do"
-        assert body["due_date"] == 1751328000000
+        # A date-only due (midnight ms) is nudged to 18:00 with due_date_time set
+        # so the task lands end-of-day, not start (adopted ClickUp API rule).
+        assert body["due_date"] == 1751328000000 + 18 * 3_600_000
+        assert body["due_date_time"] is True
         assert body["assignees"] == [42]
     assert out["provider_task_id"] == "86abc"
     assert out["provider_status"] == "to do"
@@ -555,7 +558,9 @@ def test_clickup_delete_task_goes_through_the_broker_gate():
     assert "_broker_gate" in dt
     assert "clickup.delete_task" in dt
     raw = inspect.getsource(providers.ClickUpProvider._raw_delete_task)
-    assert "http.delete" in raw
+    # The raw method performs the DELETE via the shared _clickup_send helper
+    # (which adds 429 back-off); verify it issues a DELETE, not the literal call.
+    assert "_clickup_send" in raw and '"DELETE"' in raw
     assert "404" in raw   # idempotent: already-gone is success
 
 

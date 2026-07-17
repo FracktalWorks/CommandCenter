@@ -561,12 +561,22 @@ export async function listEmails(
 }
 
 export interface SearchEmailsParams {
-  q: string;
+  /** Search text (websearch syntax). Optional: a filters-only search (tag pills,
+   *  from/to, unread/…) with no typed text is a first-class query. */
+  q?: string;
   /** Omit to search across ALL of the user's accounts (default). */
   accountId?: string;
-  /** Omit to search across ALL folders (default). */
+  /** Scope: a folder key, "all" (everything but junk/trash), or "starred".
+   *  Omit to search across every folder. */
   folder?: string;
   label?: string;
+  /** Tag pills. A message must carry ALL of them (each pill narrows). Matched
+   *  against user labels OR rule-engine categories ("Reply", "Newsletter"). */
+  labels?: string[];
+  /** `from:` pill — substring match on the sender's address or display name. */
+  fromAddr?: string;
+  /** `to:` pill — substring match on any To/Cc recipient. */
+  toAddr?: string;
   senderCategory?: string;
   isRead?: boolean;
   isStarred?: boolean;
@@ -586,18 +596,25 @@ export interface SearchEmailsResult extends ListEmailsResponse {
   hybrid: boolean;
 }
 
-/** Ranked full-text search over ALL email (all folders/accounts unless narrowed).
- *  Results are relevance-ordered and each carries a highlighted `highlight`
- *  snippet. Distinct from listEmails (folder list) — this is the search surface.
- *  Accepts websearch syntax: "quoted phrase", OR, -exclude. */
+/** Ranked search over the user's email — the query surface behind the search bar.
+ *  Distinct from listEmails (a plain folder list): results are relevance-ordered
+ *  and each carries a highlighted `highlight` snippet. Accepts websearch syntax
+ *  ("quoted phrase", OR, -exclude) plus the scope + pill filters the search bar
+ *  composes. With no `q` it's a filters-only search, ordered newest-first. */
 export async function searchEmails(
   params: SearchEmailsParams
 ): Promise<SearchEmailsResult> {
   const sp = new URLSearchParams();
-  sp.set("q", params.q);
+  if (params.q?.trim()) sp.set("q", params.q.trim());
   if (params.accountId) sp.set("account_id", params.accountId);
   if (params.folder) sp.set("folder", params.folder);
   if (params.label) sp.set("label", params.label);
+  // Repeated ?labels=…&labels=… — FastAPI reads it as a list.
+  for (const t of params.labels ?? []) {
+    if (t.trim()) sp.append("labels", t.trim());
+  }
+  if (params.fromAddr?.trim()) sp.set("from_addr", params.fromAddr.trim());
+  if (params.toAddr?.trim()) sp.set("to_addr", params.toAddr.trim());
   if (params.senderCategory) sp.set("sender_category", params.senderCategory);
   if (params.isRead != null) sp.set("is_read", String(params.isRead));
   if (params.isStarred != null) sp.set("is_starred", String(params.isStarred));
@@ -1230,6 +1247,9 @@ export async function processPastEmails(params: {
  *  `idle` = nothing has run; `running` = job in flight; `done`/`error` = finished. */
 export type ProcessPastStatus = {
   status: "idle" | "running" | "done" | "error";
+  /** Which stage a running job is in: "downloading" the range from the provider,
+   *  then "processing" (applying rules per email). */
+  phase?: "downloading" | "processing";
   total?: number;
   processed?: number;
   applied?: number;

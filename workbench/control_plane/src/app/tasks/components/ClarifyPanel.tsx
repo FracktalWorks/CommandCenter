@@ -1062,6 +1062,23 @@ export function ClarifyPanel({
                   {owner === "delegate" && (
                     <div className="mt-2">
                       <PeoplePicker people={peopleForDelegate} value={assignee} onChange={setAssignee} />
+                      {proposal.assigneeLoad?.overloaded &&
+                        assignee &&
+                        proposal.suggestedAssignee &&
+                        (assignee.providerUserId
+                          ? assignee.providerUserId ===
+                            proposal.suggestedAssignee.providerUserId
+                          : assignee.name.toLowerCase() ===
+                            proposal.suggestedAssignee.name.toLowerCase()) && (
+                          <p className="mt-1.5 flex items-start gap-1 text-[11px] text-amber-500">
+                            <AlertTriangle className="mt-0.5 h-3 w-3 shrink-0" />
+                            <span>
+                              {assignee.name.split(/\s+/)[0]} is{" "}
+                              {proposal.assigneeLoad.note ?? "already at capacity"} —
+                              consider spreading the load.
+                            </span>
+                          </p>
+                        )}
                     </div>
                   )}
                 </SubField>

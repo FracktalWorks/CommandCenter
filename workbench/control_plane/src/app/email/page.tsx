@@ -22,6 +22,7 @@ import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
 import { EmailList } from "./components/EmailList";
 import { EmailToolbar } from "./components/EmailToolbar";
+import { SearchBar } from "./components/SearchBar";
 import { MailboxActions } from "./components/MailboxActions";
 import { EmailDetail } from "./components/EmailDetail";
 import { EmailAssistantChat } from "./components/EmailAssistantChat";
@@ -29,9 +30,10 @@ import { ComposePanel } from "./components/ComposePanel";
 import { CommandPalette, Command } from "./components/CommandPalette";
 import { TaskCaptureModal } from "./components/TaskCaptureModal";
 import { AutomationView } from "./components/automation/AutomationView";
-import { useEmailStore } from "./lib/emailStore";
+import { useEmailStore, isRealFolder } from "./lib/emailStore";
 import { Email, AutomationFeature } from "./lib/types";
 import { folderLabel } from "./lib/utils";
+import { isSearchActive } from "./lib/searchFilters";
 
 export default function EmailPage() {
   const { isMobile } = useViewMode();
@@ -73,6 +75,8 @@ export default function EmailPage() {
     selectedFolder,
     selectedEmailId,
     selectedEmailOverride,
+    searchQuery,
+    searchFilters,
     composeOpen,
     composeDefaults,
     pendingSend,
@@ -91,8 +95,6 @@ export default function EmailPage() {
     setDefaultAccount,
     selectFolder,
     selectEmail,
-    setSearchQuery,
-    searchIsSemantic,
     openCompose,
     closeCompose,
     updateEmail,
@@ -158,9 +160,19 @@ export default function EmailPage() {
   const selectedEmail =
     emails.find((e) => e.id === selectedEmailId) ??
     (selectedEmailOverride?.id === selectedEmailId ? selectedEmailOverride : null);
+  // Unread badge: for a real folder, count the mail that belongs to it; for a
+  // pseudo-folder (All/Starred) or a search, the displayed list already spans
+  // folders, so match against selectedFolder would count nothing — count every
+  // unread row on screen instead.
+  const countAllShown =
+    !isRealFolder(selectedFolder) || isSearchActive(searchQuery, searchFilters);
   const unreadCount = emails.filter(
-    (e) => e.folder === selectedFolder && !e.isRead
+    (e) => (countAllShown || e.folder === selectedFolder) && !e.isRead
   ).length;
+  // The provider can't page a pseudo-folder (there's no "all"/"starred" folder
+  // to ask for older mail from), so never offer "load older" on those views.
+  const canBackfillFolder =
+    isRealFolder(selectedFolder) && !backfillExhausted[selectedFolder];
   const syncing = selectedAccountId
     ? syncStatus[selectedAccountId] === "syncing"
     : false;
@@ -261,8 +273,6 @@ export default function EmailPage() {
       onFolderSelect={handleFolderSelect}
       onAddAccount={handleAddAccount}
       onSetDefault={setDefaultAccount}
-      onSearch={setSearchQuery}
-      searchIsSemantic={searchIsSemantic}
       showAutomation={false}
     />
   );
@@ -660,8 +670,6 @@ export default function EmailPage() {
               onFolderSelect={handleFolderSelect}
               onAddAccount={handleAddAccount}
               onSetDefault={setDefaultAccount}
-              onSearch={setSearchQuery}
-      searchIsSemantic={searchIsSemantic}
               onOpenAutomation={handleOpenAutomation}
               activeAutomation={automationFeature}
             />
@@ -693,10 +701,20 @@ export default function EmailPage() {
       <>
       {/* ═══ Main area ═══ */}
       <div className="flex-1 flex flex-col min-w-0 overflow-hidden">
-        {/* ── DESKTOP top bar ── */}
+        {/* ── DESKTOP top bar ──
+            Three tracks: identity (panes + folder) left, SEARCH centred, actions
+            right. Both side tracks are basis-0 + grow, so free space splits
+            evenly and the search sits on the bar's true centre.
+            The side tracks' minimums matter: the actions are fixed-size icons
+            that cannot shrink, so that track is min-w-fit and always reserves
+            its width — otherwise the expanded search bar squeezes the track and
+            the icons overflow ON TOP of it, swallowing its clicks. The left
+            track keeps min-w-0 so a long folder name truncates instead. When
+            space runs out the search bar gives way (it is the only shrinkable
+            track), so centring degrades gracefully rather than overlapping. */}
         {!isMobile && (
-          <div className="flex items-center justify-between px-3 py-2 border-b border-border flex-shrink-0 bg-card">
-            <div className="flex items-center gap-1.5">
+          <div className="flex items-center gap-3 px-3 py-2 border-b border-border flex-shrink-0 bg-card">
+            <div className="flex items-center gap-1.5 flex-1 basis-0 min-w-0">
               <IconBtn
                 icon={leftOpen ? PanelLeftClose : PanelLeftOpen}
                 label={leftOpen ? "Hide accounts" : "Show accounts"}
@@ -710,18 +728,23 @@ export default function EmailPage() {
                 active={listOpen}
               />
               <div className="w-px h-4 bg-border" />
-              <div className="flex items-center gap-1.5 ml-1">
-                <h1 className="text-sm font-medium text-foreground">
+              <div className="flex items-center gap-1.5 ml-1 min-w-0">
+                <h1 className="text-sm font-medium text-foreground truncate">
                   {folderLabel(selectedFolder)}
                 </h1>
                 {unreadCount > 0 && (
-                  <span className="text-[10px] px-1.5 py-0.5 bg-primary/15 text-primary rounded-full">
+                  <span className="text-[10px] px-1.5 py-0.5 bg-primary/15 text-primary rounded-full flex-shrink-0">
                     {unreadCount} unread
                   </span>
                 )}
               </div>
             </div>
-            <div className="flex items-center gap-1">
+
+            <div className="flex justify-center flex-shrink min-w-0">
+              <SearchBar />
+            </div>
+
+            <div className="flex items-center gap-1 flex-1 basis-0 justify-end min-w-fit">
               <MailboxActions selectedEmail={selectedEmail} />
               <div className="w-px h-4 bg-border" />
               <button
@@ -805,6 +828,15 @@ export default function EmailPage() {
           </div>
         )}
 
+        {/* ── MOBILE: search ──
+            Its own row: the top bar has no room to centre a scope dropdown,
+            pills and an input beside the account chip. */}
+        {isMobile && mobileView === "inbox" && (
+          <div className="px-3 py-2 border-b border-border flex-shrink-0 bg-card">
+            <SearchBar />
+          </div>
+        )}
+
         {/* ── Reconnect banner: account auth/sync is failing ── */}
         {selectedAccount &&
           (selectedAccount.syncStatus === "error" || authErrors[selectedAccount.id]) && (
@@ -863,7 +895,7 @@ export default function EmailPage() {
                   loadingMore={loadingMore}
                   onBackfill={backfillOlder}
                   backfilling={backfilling}
-                  canBackfill={!backfillExhausted[selectedFolder]}
+                  canBackfill={canBackfillFolder}
                 />
               )}
             </div>
@@ -884,7 +916,7 @@ export default function EmailPage() {
                 loadingMore={loadingMore}
                 onBackfill={backfillOlder}
                 backfilling={backfilling}
-                canBackfill={!backfillExhausted[selectedFolder]}
+                canBackfill={canBackfillFolder}
               />
             </div>
           )}

@@ -78,10 +78,19 @@ def _connect_timeout() -> int:
 # -- Core sync logic (shared with manual /email/sync endpoint) ---------------
 
 
-async def _sync_account(account_id: str) -> dict[str, Any]:
+async def _sync_account(
+    account_id: str, *, deep: bool | None = None,
+    since: datetime | None = None,
+) -> dict[str, Any]:
     """Run a full sync cycle for a single account.  Returns sync summary.
 
     This is the same logic as POST /email/sync but usable from background tasks.
+
+    ``deep``/``since`` override the automatic (first-sync) heuristic so a caller
+    can force a deep backfill from an arbitrary date floor — e.g. historical
+    rule-apply downloading a past date range before running rules over it. Both
+    default to None, which preserves the normal first-sync-deep / then-incremental
+    behaviour exactly.
     """
     db_url = _get_db_url()
     engine = create_async_engine(
@@ -171,17 +180,24 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                 await db.commit()
 
             # First-ever sync for this account → deep 1-year backfill across all
-            # folders; afterwards stay shallow/incremental (cheap polls).
-            deep = not bool(getattr(row, "initial_sync_done", False))
-            since = (
-                datetime.now(timezone.utc) - timedelta(days=INITIAL_SYNC_DAYS)
-                if deep else None
+            # folders; afterwards stay shallow/incremental (cheap polls). A caller
+            # may override to force a deep sync from a specific `since` floor
+            # (historical rule-apply backfilling a past date range).
+            do_deep = (
+                not bool(getattr(row, "initial_sync_done", False))
+                if deep is None else bool(deep)
             )
+            floor = since
+            if floor is None:
+                floor = (
+                    datetime.now(timezone.utc) - timedelta(days=INITIAL_SYNC_DAYS)
+                    if do_deep else None
+                )
             sync_result = await provider.sync_messages(
                 history_id=row.last_history_id,
                 max_results=100,
-                deep=deep,
-                since=since,
+                deep=do_deep,
+                since=floor,
             )
 
             # Persist messages
@@ -351,13 +367,15 @@ async def _sync_account(account_id: str) -> dict[str, Any]:
                 text(
                     """UPDATE email_accounts
                        SET sync_status = 'idle', last_synced_at = now(),
-                           last_history_id = :history_id, sync_error = NULL,
+                           last_history_id = COALESCE(
+                               :history_id, last_history_id),
+                           sync_error = NULL,
                            initial_sync_done = initial_sync_done OR :deep,
                            updated_at = now()
                        WHERE id = :id"""
                 ),
                 {"id": account_id, "history_id": sync_result.new_history_id,
-                 "deep": deep},
+                 "deep": do_deep},
             )
 
             # Mark sync log success

@@ -3,7 +3,7 @@
 // The store hydrates from here when the gateway is reachable and silently
 // falls back to the bundled mock data when it isn't (UI-first demo mode).
 
-import { GtdItem, GtdProject, Person, Source, ProviderKind, Disposition, TaskAttachment, WorkspaceHierarchySpace } from "./types";
+import { GtdItem, GtdProject, Person, OrgPerson, OrgPersonWrite, ResumeIngestResult, Source, ProviderKind, Disposition, TaskAttachment, WorkspaceHierarchySpace } from "./types";
 import type { ClarifyProposal, ClarifyDisposition, Confidence } from "./clarify";
 import type { ConnectedProvider } from "./mockData";
 
@@ -39,6 +39,23 @@ function asPerson(v: unknown): Person | undefined {
     name: String(p.name ?? p.email ?? ""),
     email: p.email ? String(p.email) : undefined,
     providerUserId: p.provider_user_id ? String(p.provider_user_id) : undefined,
+  };
+}
+
+/** Pull the proposed owner's workload flags (server-annotated on the clarify
+ *  proposal, §5 Phase 2) off the raw suggested_assignee. Undefined when the
+ *  server didn't annotate load (semantic/workload path off or no owner). */
+function asAssigneeLoad(
+  v: unknown
+): { overloaded: boolean; openTaskCount: number; note?: string } | undefined {
+  if (!v || typeof v !== "object") return undefined;
+  const a = v as Raw;
+  if (a.overloaded === undefined && a.open_task_count === undefined)
+    return undefined;
+  return {
+    overloaded: Boolean(a.overloaded),
+    openTaskCount: Number(a.open_task_count ?? 0),
+    note: a.load_note ? String(a.load_note) : undefined,
   };
 }
 
@@ -255,6 +272,119 @@ export async function fetchPeople(): Promise<Person[]> {
       providerUserId: r.provider_user_id ? String(r.provider_user_id) : undefined,
     }))
     .filter((p) => p.name);
+}
+
+// ── Org / HR people (the People management view) ─────────────────────────────
+
+function mapOrgPerson(r: Raw): OrgPerson {
+  const num = (v: unknown) => (v == null ? undefined : Number(v));
+  return {
+    id: String(r.id ?? ""),
+    name: String(r.name ?? ""),
+    email: r.email ? String(r.email) : undefined,
+    role: r.role ? String(r.role) : undefined,
+    title: r.title ? String(r.title) : undefined,
+    department: r.department ? String(r.department) : undefined,
+    team: r.team ? String(r.team) : undefined,
+    reportsTo: r.reports_to ? String(r.reports_to) : undefined,
+    managerId: r.manager_id ? String(r.manager_id) : undefined,
+    status: String(r.status ?? "active"),
+    skills: Array.isArray(r.skills) ? (r.skills as unknown[]).map(String) : [],
+    skillsSource:
+      r.skills_source && typeof r.skills_source === "object"
+        ? (r.skills_source as Record<string, string>)
+        : {},
+    domain: r.domain ? String(r.domain) : undefined,
+    resumeSummary: r.resume_summary ? String(r.resume_summary) : undefined,
+    yearsExperience: num(r.years_experience),
+    capacityHoursPerWeek: num(r.capacity_hours_per_week),
+    currentLoadHoursPerWeek: num(r.current_load_hours_per_week),
+    availableHoursPerWeek: num(r.available_hours_per_week),
+    providerUserId: r.provider_user_id ? String(r.provider_user_id) : undefined,
+  };
+}
+
+function orgPersonToWire(b: OrgPersonWrite): Record<string, unknown> {
+  const w: Record<string, unknown> = {};
+  const set = (k: string, v: unknown) => {
+    if (v !== undefined) w[k] = v;
+  };
+  set("name", b.name);
+  set("email", b.email);
+  set("role", b.role);
+  set("title", b.title);
+  set("department", b.department);
+  set("team", b.team);
+  set("reports_to", b.reportsTo);
+  set("manager_id", b.managerId);
+  set("status", b.status);
+  set("skills", b.skills);
+  set("domain", b.domain);
+  set("resume_summary", b.resumeSummary);
+  set("years_experience", b.yearsExperience);
+  set("capacity_hours_per_week", b.capacityHoursPerWeek);
+  set("current_load_hours_per_week", b.currentLoadHoursPerWeek);
+  set("clickup_user_id", b.providerUserId);
+  return w;
+}
+
+export async function fetchOrgPeople(
+  opts: { q?: string; includeInactive?: boolean } = {}
+): Promise<OrgPerson[]> {
+  const sp = new URLSearchParams();
+  if (opts.q?.trim()) sp.set("q", opts.q.trim());
+  if (opts.includeInactive) sp.set("include_inactive", "true");
+  const qs = sp.toString();
+  const rows = await gatewayFetch<Raw[]>(`/people${qs ? `?${qs}` : ""}`);
+  return rows.map(mapOrgPerson).filter((p) => p.name);
+}
+
+export async function createPerson(body: OrgPersonWrite): Promise<OrgPerson> {
+  return mapOrgPerson(
+    await gatewayFetch<Raw>(`/people`, {
+      method: "POST",
+      body: JSON.stringify(orgPersonToWire(body)),
+    })
+  );
+}
+
+export async function updatePerson(
+  id: string,
+  body: OrgPersonWrite
+): Promise<OrgPerson> {
+  return mapOrgPerson(
+    await gatewayFetch<Raw>(`/people/${id}`, {
+      method: "PATCH",
+      body: JSON.stringify(orgPersonToWire(body)),
+    })
+  );
+}
+
+/** Upload a résumé (multipart) → parse → auto-merge skills; returns what changed.
+ *  Not via gatewayFetch (that forces JSON) — a raw multipart POST. */
+export async function uploadResume(
+  id: string,
+  file: File
+): Promise<ResumeIngestResult> {
+  const fd = new FormData();
+  fd.append("file", file);
+  const res = await fetch(`/api/tasks/people/${id}/resume`, {
+    method: "POST",
+    body: fd,
+  });
+  if (!res.ok) {
+    const b = (await res.json().catch(() => ({}))) as { detail?: string };
+    throw new Error(b.detail || `Résumé upload failed (${res.status})`);
+  }
+  const raw = (await res.json()) as Raw;
+  return {
+    resumeId: String(raw.resume_id ?? ""),
+    addedSkills: Array.isArray(raw.added_skills)
+      ? (raw.added_skills as unknown[]).map(String)
+      : [],
+    extracted: (raw.extracted ?? {}) as ResumeIngestResult["extracted"],
+    person: mapOrgPerson((raw.person ?? {}) as Raw),
+  };
 }
 
 /** Optional tickler / deadline captured alongside a quick capture. */
@@ -855,6 +985,7 @@ export async function apiClarifyPropose(
       : undefined,
     isTwoMinute: Boolean(r.is_two_minute),
     suggestedAssignee: asPerson(r.suggested_assignee),
+    assigneeLoad: asAssigneeLoad(r.suggested_assignee),
     target: accountId
       ? { source: "SYNCED", accountId }
       : { source: "LOCAL", provider: "local" },
@@ -926,6 +1057,140 @@ export async function apiFileUnder(id: string, parentId: string): Promise<GtdIte
       body: JSON.stringify({ parent_id: parentId }),
     }),
   );
+}
+
+// ── Project planning (§7, Phase 3): a brief → phases → tasks → subtasks ───────
+
+export interface PlanTask {
+  title: string;
+  description?: string;
+  assigneeName?: string;
+  assignee?: Person;
+  assigneeOverloaded?: boolean;
+  effortHours?: number;
+  priority?: string;
+  dueOffsetDays?: number;
+  context?: string;
+  energy?: string;
+  subtasks: string[];
+}
+export interface PlanPhase {
+  name: string;
+  tasks: PlanTask[];
+}
+export interface ProjectPlan {
+  name: string;
+  description?: string;
+  phases: PlanPhase[];
+  notes?: string;
+}
+export interface ApplyPlanResult {
+  projectId: string;
+  providerRef?: string;
+  tasksCreated: number;
+  subtasksCreated: number;
+  target: string;
+}
+
+function mapPlanTask(raw: Raw): PlanTask {
+  return {
+    title: String(raw.title ?? ""),
+    description: raw.description ? String(raw.description) : undefined,
+    assigneeName: raw.assignee_name ? String(raw.assignee_name) : undefined,
+    assignee: asPerson(raw.assignee),
+    assigneeOverloaded: Boolean(raw.assignee_overloaded),
+    effortHours:
+      raw.effort_hours != null ? Number(raw.effort_hours) : undefined,
+    priority: raw.priority ? String(raw.priority) : undefined,
+    dueOffsetDays:
+      raw.due_offset_days != null ? Number(raw.due_offset_days) : undefined,
+    context: raw.context ? String(raw.context) : undefined,
+    energy: raw.energy ? String(raw.energy) : undefined,
+    subtasks: Array.isArray(raw.subtasks)
+      ? (raw.subtasks as unknown[]).map(String).filter(Boolean)
+      : [],
+  };
+}
+
+function mapPlan(r: Raw): ProjectPlan {
+  return {
+    name: String(r.name ?? ""),
+    description: r.description ? String(r.description) : undefined,
+    phases: ((r.phases as Raw[]) ?? []).map((ph) => ({
+      name: String(ph.name ?? "Phase"),
+      tasks: ((ph.tasks as Raw[]) ?? []).map(mapPlanTask),
+    })),
+    notes: r.notes ? String(r.notes) : undefined,
+  };
+}
+
+/** Draft a full project plan from a brief (proposal only — no writes). */
+export async function apiPlanProject(
+  name: string,
+  description?: string,
+  target: "local" | "clickup" = "local",
+): Promise<ProjectPlan> {
+  return mapPlan(
+    await gatewayFetch<Raw>(`/plan`, {
+      method: "POST",
+      body: JSON.stringify({ name, description: description || null, target }),
+    }),
+  );
+}
+
+/** Materialise a (possibly edited) plan — LOCAL, or push to a ClickUp list. */
+export async function apiApplyPlan(
+  plan: ProjectPlan,
+  opts: {
+    target: "local" | "clickup";
+    accountId?: string;
+    spaceId?: string;
+    folderId?: string;
+  },
+): Promise<ApplyPlanResult> {
+  const wirePlan = {
+    name: plan.name,
+    description: plan.description ?? null,
+    notes: plan.notes ?? null,
+    phases: plan.phases.map((ph) => ({
+      name: ph.name,
+      tasks: ph.tasks.map((t) => ({
+        title: t.title,
+        description: t.description ?? null,
+        assignee_name: t.assigneeName ?? null,
+        assignee: t.assignee
+          ? {
+              name: t.assignee.name,
+              email: t.assignee.email ?? null,
+              provider_user_id: t.assignee.providerUserId ?? null,
+            }
+          : null,
+        effort_hours: t.effortHours ?? null,
+        priority: t.priority ?? null,
+        due_offset_days: t.dueOffsetDays ?? null,
+        context: t.context ?? null,
+        energy: t.energy ?? null,
+        subtasks: t.subtasks,
+      })),
+    })),
+  };
+  const r = await gatewayFetch<Raw>(`/plan/apply`, {
+    method: "POST",
+    body: JSON.stringify({
+      plan: wirePlan,
+      target: opts.target,
+      account_id: opts.accountId ?? null,
+      space_id: opts.spaceId ?? null,
+      folder_id: opts.folderId ?? null,
+    }),
+  });
+  return {
+    projectId: String(r.project_id ?? ""),
+    providerRef: r.provider_ref ? String(r.provider_ref) : undefined,
+    tasksCreated: Number(r.tasks_created ?? 0),
+    subtasksCreated: Number(r.subtasks_created ?? 0),
+    target: String(r.target ?? opts.target),
+  };
 }
 
 /** Rephrase a task's title more clearly (the always-available "Improve title"

@@ -44,6 +44,49 @@ export interface Person {
   providerUserId?: string;
 }
 
+/** The full HR record behind the People view — roles, manager, skills (org chart
+ *  + résumé-extracted), capacity, and the ClickUp assignment id. Editable in-app
+ *  (the app is the source of truth); mirrors the gateway's OrgPersonModel. */
+export interface OrgPerson {
+  id: string;
+  name: string;
+  email?: string;
+  role?: string;
+  title?: string;
+  department?: string;
+  team?: string;
+  reportsTo?: string;
+  managerId?: string;
+  status: string;
+  skills: string[];
+  /** per-skill provenance: {skill: "orgchart"|"resume"|"manual"} */
+  skillsSource: Record<string, string>;
+  domain?: string;
+  resumeSummary?: string;
+  yearsExperience?: number;
+  capacityHoursPerWeek?: number;
+  currentLoadHoursPerWeek?: number;
+  availableHoursPerWeek?: number;
+  /** ClickUp user id — the real assignment target. */
+  providerUserId?: string;
+}
+
+/** Create/update payload for an OrgPerson (camelCase; api.ts maps to snake). */
+export type OrgPersonWrite = Partial<Omit<OrgPerson, "id" | "skillsSource" | "availableHoursPerWeek">>;
+
+/** Result of ingesting a résumé: what skills it added + the parsed profile. */
+export interface ResumeIngestResult {
+  resumeId: string;
+  addedSkills: string[];
+  extracted: {
+    skills?: string[];
+    experience_summary?: string | null;
+    years_experience?: number | null;
+    domain?: string | null;
+  };
+  person: OrgPerson;
+}
+
 /** A GTD project — a first-class outcome needing >1 action (§5.1). */
 export interface GtdProject {
   id: string;
@@ -167,6 +210,7 @@ export type ViewKey =
   | "waiting"
   | "calendar"
   | "projects"
+  | "people"
   | "someday"
   | "reference"
   | "done"

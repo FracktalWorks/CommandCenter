@@ -5,7 +5,7 @@ import {
   Loader2, Reply, ReplyAll, Clock, PenLine, Mail, Check, CheckCircle2, RotateCcw,
   Info, Newspaper, Megaphone, Calendar, Receipt, Bell, Snowflake,
   Archive, Trash2, ChevronRight, Send, Search, X, Sparkles, Paperclip,
-  BellRing, Keyboard, CircleDashed, ListTodo,
+  BellRing, Keyboard, CircleDashed, ListTodo, Inbox,
 } from "lucide-react";
 import {
   getReplyZero, draftReplySmart, resolveThread, listEmails, getEmail,
@@ -58,21 +58,22 @@ interface Category {
 }
 
 const CATEGORIES: Category[] = [
+  // Order is intentional (user-requested): Reply · Task · Awaiting · Done · FYI.
   { key: "reply", label: "Reply", icon: Reply, source: "bucket",
     group: "needs", bucket: "needs_reply",
     cls: "bg-violet-500/15 text-violet-600 dark:text-violet-400" },
-  { key: "awaiting", label: "Awaiting", icon: Clock, source: "bucket",
-    group: "needs", bucket: "awaiting",
-    cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
-  { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
-    group: "needs", bucket: "done",
-    cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
   // A thread I replied to promising a deliverable — auto-labelled "Task" on send
   // and mirrored into the GTD task inbox. Closing the task (or this thread) moves
   // the other side to Done.
   { key: "task", label: "Task", icon: ListTodo, source: "label", match: "Task",
     group: "needs",
     cls: "bg-rose-500/15 text-rose-600 dark:text-rose-400" },
+  { key: "awaiting", label: "Awaiting", icon: Clock, source: "bucket",
+    group: "needs", bucket: "awaiting",
+    cls: "bg-amber-500/15 text-amber-600 dark:text-amber-400" },
+  { key: "done", label: "Done", icon: CheckCircle2, source: "bucket",
+    group: "needs", bucket: "done",
+    cls: "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400" },
   { key: "fyi", label: "FYI", icon: Info, source: "label", match: "FYI",
     group: "needs",
     cls: "bg-sky-500/15 text-sky-600 dark:text-sky-400" },
@@ -177,6 +178,19 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
     [catKey],
   );
 
+  // Jump from a rapid card to the full conversation in the main inbox. A card
+  // shows only the latest message; opening it in the inbox surfaces the entire
+  // thread. "cc-email-open" tells the page to close this automation overlay
+  // (page.tsx listens) so the selected thread is actually visible.
+  const openEmailById = useEmailStore((s) => s.openEmailById);
+  const openInInbox = useCallback(
+    (messageId: string) => {
+      void openEmailById(messageId);
+      window.dispatchEvent(new Event("cc-email-open"));
+    },
+    [openEmailById],
+  );
+
   const [items, setItems] = useState<RapidItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [counts, setCounts] = useState<Record<string, number>>({});
@@ -206,7 +220,12 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
       if (c.source === "label")
         // Reads em.categories/labels — the same per-message labels the rules
         // applied everywhere else in the app (never the sender categorizer).
-        return (await listEmails({ accountId, label: c.match, pageSize: 60 }))
+        // Scope "all" (every folder but junk/trash), NOT just the inbox: the
+        // cleanup rules that assign these categories also ARCHIVE (Gmail) or
+        // MOVE_FOLDER (Outlook) the mail, so a category's messages live OUTSIDE
+        // the inbox. An inbox-only query showed zero under Newsletter/
+        // Notification/… even though everything was correctly categorized.
+        return (await listEmails({ accountId, folder: "all", label: c.match, pageSize: 60 }))
           .emails.map(fromEmail);
       // unclassified: inbox mail the rules haven't labelled with any category yet.
       const r = await listEmails({ accountId, folder: "inbox", pageSize: 100 });
@@ -250,7 +269,9 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
       if (c.source === "bucket")
         p = getReplyZero(accountId, c.bucket!, 100).then((ts) => ts.length);
       else if (c.source === "label")
-        p = listEmails({ accountId, label: c.match, pageSize: 1 }).then((r) => r.total);
+        // Count across all folders (see fetchCategory) so chips reflect every
+        // categorized message, not only the few still sitting in the inbox.
+        p = listEmails({ accountId, folder: "all", label: c.match, pageSize: 1 }).then((r) => r.total);
       // unclassified is counted on load (no cheap total).
       p?.then((n) => setCounts((prev) => ({ ...prev, [c.key]: n }))).catch(() => undefined);
     }
@@ -704,6 +725,7 @@ export function RapidInboxView({ accountId, onArchived }: RapidInboxViewProps) {
                   onDelete={() => remove(it)}
                   onResolve={(done) => resolve(it, done)}
                   onSent={() => onSent(it)}
+                  onOpenInInbox={() => openInInbox(it.messageId)}
                   onNotice={(msg) => setToast({ msg })}
                 />
               </div>
@@ -767,7 +789,7 @@ function Chip({
 function RapidCard({
   accountId, item, cat, focused, expanded, replyOpen, full, fullLoading,
   selected, busy, onFocus, onToggleSelect, onToggleExpand, onOpenReply,
-  onCloseReply, onArchive, onDelete, onResolve, onSent, onNotice,
+  onCloseReply, onArchive, onDelete, onResolve, onSent, onOpenInInbox, onNotice,
 }: {
   accountId: string;
   item: RapidItem;
@@ -788,6 +810,7 @@ function RapidCard({
   onDelete: () => void;
   onResolve: (done: boolean) => void;
   onSent: () => void;
+  onOpenInInbox: () => void;
   onNotice: (msg: string) => void;
 }) {
   const isDone = cat.bucket === "done";
@@ -857,6 +880,10 @@ function RapidCard({
             <Loader2 className="animate-spin text-muted-foreground" size={14} />
           ) : (
             <>
+              <ActionBtn title="Open full thread in inbox" onClick={onOpenInInbox}
+                className="hover:bg-secondary">
+                <Inbox size={13} />
+              </ActionBtn>
               {isBucket && !isDone && (
                 <ActionBtn title="Mark done (d)" onClick={() => onResolve(true)}
                   className="hover:bg-emerald-500/10 hover:text-emerald-500">
@@ -883,10 +910,19 @@ function RapidCard({
       {expanded && (
         <div className="px-3 sm:px-5 pb-3 pl-[52px]">
           <div className="rounded-lg border border-border bg-card overflow-hidden">
-            <div className="px-3 py-2 border-b border-border bg-secondary/40 text-[11px] text-muted-foreground">
-              {full?.from?.name || item.from}
-              {full?.from?.email ? ` <${full.from.email}>` : ""}
-              {item.receivedAt ? ` · ${fullDateLabel(item.receivedAt)}` : ""}
+            <div className="flex items-center gap-2 px-3 py-2 border-b border-border bg-secondary/40 text-[11px] text-muted-foreground">
+              <span className="min-w-0 truncate">
+                {full?.from?.name || item.from}
+                {full?.from?.email ? ` <${full.from.email}>` : ""}
+                {item.receivedAt ? ` · ${fullDateLabel(item.receivedAt)}` : ""}
+              </span>
+              <button
+                onClick={onOpenInInbox}
+                title="See the whole conversation in your inbox"
+                className="ml-auto flex items-center gap-1 flex-shrink-0 text-primary hover:opacity-80 transition-opacity"
+              >
+                <Inbox size={11} /> Open in inbox
+              </button>
             </div>
             <div className="px-3 py-3 max-h-[45vh] overflow-y-auto">
               {fullLoading && !full ? (

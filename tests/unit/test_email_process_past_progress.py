@@ -2,7 +2,9 @@
 
 The job runs fire-and-forget, so the UI polls GET /rules/process-past/status to
 show an ongoing indicator. These tests cover the in-memory tracker lifecycle and
-that the handler seeds it (and only schedules work when there's mail to process).
+that the handler seeds it — historical apply DOWNLOADS the requested range from
+upstream first, so it always schedules (starting in the 'downloading' phase),
+even when nothing is synced locally yet.
 """
 from __future__ import annotations
 
@@ -122,7 +124,11 @@ async def test_handler_seeds_tracker_and_schedules_when_mail_exists() -> None:
     assert job["status"] == "running" and job["total"] == 4
 
 
-async def test_handler_no_schedule_when_range_empty() -> None:
+async def test_handler_schedules_download_even_when_nothing_local() -> None:
+    # Historical apply over a range must DOWNLOAD that range from upstream first,
+    # so it schedules even when nothing is synced locally yet (count == 0). The
+    # tracker starts in the 'downloading' phase; the real in-range total is
+    # computed after the backfill lands. (Regression guard for the range-first fix.)
     db = AsyncMock()
     result = MagicMock()
     result.fetchone.return_value = SimpleNamespace(c=0)
@@ -134,6 +140,8 @@ async def test_handler_no_schedule_when_range_empty() -> None:
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)
 
-    assert res["count"] == 0
-    assert bg.tasks == []                            # nothing to process
-    assert runner._PAST_JOBS["acc-1"]["status"] == "done"
+    assert res == {"scheduled": True, "count": 0, "dry_run": False}
+    assert len(bg.tasks) == 1                        # scheduled to download first
+    job = runner._PAST_JOBS["acc-1"]
+    assert job["status"] == "running"
+    assert job["phase"] == "downloading"

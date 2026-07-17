@@ -53,11 +53,13 @@ export function initials(name: string): string {
  */
 export function folderLabel(folder: string): string {
   const map: Record<string, string> = {
+    all: "All",
     inbox: "Inbox",
     starred: "Starred",
     sent: "Sent",
     drafts: "Drafts",
     archive: "Archive",
+    junk: "Junk",
     spam: "Spam",
     trash: "Trash",
   };

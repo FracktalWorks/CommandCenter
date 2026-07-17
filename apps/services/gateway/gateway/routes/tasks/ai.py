@@ -338,11 +338,17 @@ _LLM_DISPOSITIONS = {
 
 def _people_brief(people: list[dict]) -> str:
     """Compact capability lines for the prompt (name · role · domain · Ny ·
-    free hours · skills) — the org-knowledge the model picks an owner from."""
+    free hours · manager · load · skills) — the org-knowledge the model picks an
+    owner from. Reporting line (``reports_to``) and current load are rendered when
+    present so the model can prefer same-team owners, route approvals up, and
+    avoid piling work on an already-overloaded person (§5, Phase 2)."""
     lines = []
     for p in people[:40]:
         bits = [p.get("name") or "?"]
-        if p.get("role"):
+        # Title is more specific than role when both exist; keep role too.
+        if p.get("title"):
+            bits.append(str(p["title"]))
+        if p.get("role") and p.get("role") != p.get("title"):
             bits.append(str(p["role"]))
         dom = (p.get("domain") or "").strip()
         if dom and dom.lower() != "unknown":
@@ -352,12 +358,123 @@ def _people_brief(people: list[dict]) -> str:
         avail = p.get("available_hours_per_week")
         if avail is not None:
             bits.append(f"{avail}h free")
+        if p.get("reports_to"):
+            bits.append(f"reports to {p['reports_to']}")
+        if p.get("overloaded"):
+            bits.append(f"OVERLOADED ({p.get('open_task_count', 0)} open)")
+        elif p.get("open_task_count"):
+            bits.append(f"{p['open_task_count']} open")
         line = " · ".join(bits)
         skills = ", ".join((p.get("skills") or [])[:8])
         if skills:
             line += f" — skills: {skills}"
         lines.append(f"- {line}")
     return "\n".join(lines) or "(no people on record)"
+
+
+_BUSY_TASK_COUNT = 8  # open assigned tasks at/above which a person reads as busy
+
+
+async def annotate_people_context(
+    db: Any, uid: str, people: list[dict], task_text: str,
+) -> list[dict]:
+    """Enrich the roster IN PLACE with live workload + (flag-gated) semantic fit,
+    then return it ordered best-fit-first so the strongest owners survive the
+    prompt's 40-person truncation. Additive only — never used by the eval-locked
+    deterministic ``propose()`` (that path gets the raw list), so this can't move
+    a golden trajectory.
+
+    - ``open_task_count`` / ``overloaded``: this user's open tasks assigned to
+      each person (includes synced ClickUp tasks mirrored into gtd_items), so the
+      model + card can warn when assigning to someone already at capacity.
+    - ``capability_score``: cosine of the task text vs the person's capability
+      embedding when ``task_semantic_match_enabled`` is on (else absent → keyword
+      order preserved). Semantic scores only re-RANK; they never drop a person.
+    """
+    await _annotate_workload(db, uid, people)
+    scores: dict[str, float] = {}
+    try:
+        from gateway.routes.tasks.capability import semantic_scores
+        scores = await semantic_scores(db, task_text)
+    except Exception:
+        scores = {}
+    if scores:
+        for p in people:
+            key = (p.get("name") or "").strip().lower()
+            if key in scores:
+                p["capability_score"] = round(scores[key], 4)
+        # Stable sort: semantic best-fit first; unscored people keep their order
+        # after the scored ones (score defaults to -1 so they never lead).
+        people = sorted(
+            people, key=lambda p: p.get("capability_score", -1.0), reverse=True)
+    return people
+
+
+async def _annotate_workload(db: Any, uid: str, people: list[dict]) -> None:
+    """Attach ``open_task_count`` + ``overloaded`` to each person from the user's
+    open assigned tasks. Best-effort — a failure leaves the roster unannotated
+    (the model simply loses the load hint). Matches by provider_user_id first
+    (the assignment target), then by name."""
+    if not people:
+        return
+    try:
+        rows = (await db.execute(text(
+            """SELECT assignee->>'provider_user_id' AS pid,
+                      lower(assignee->>'name') AS nm, count(*) AS n
+                 FROM gtd_items
+                WHERE user_id = :uid
+                  AND disposition IN ('NEXT', 'WAITING', 'CALENDAR', 'DO_NOW')
+                  AND archived_at IS NULL
+                  AND assignee IS NOT NULL
+                GROUP BY 1, 2"""), {"uid": uid})).fetchall()
+    except Exception:
+        return
+    by_pid: dict[str, int] = {}
+    by_name: dict[str, int] = {}
+    for r in rows:
+        if r.pid:
+            by_pid[str(r.pid)] = by_pid.get(str(r.pid), 0) + int(r.n)
+        if r.nm:
+            by_name[r.nm] = by_name.get(r.nm, 0) + int(r.n)
+    for p in people:
+        pid = str(p.get("provider_user_id") or "")
+        nm = (p.get("name") or "").strip().lower()
+        count = by_pid.get(pid, 0) if pid else 0
+        if not count and nm:
+            count = by_name.get(nm, 0)
+        p["open_task_count"] = count
+        avail = p.get("available_hours_per_week")
+        # Overloaded when manual free-hours is exhausted OR the live open-task
+        # count crosses the busy threshold — whichever the data supports.
+        p["overloaded"] = bool(
+            (avail is not None and avail <= 0) or count >= _BUSY_TASK_COUNT)
+
+
+def _attach_assignee_load(proposal: dict[str, Any], people: list[dict]) -> None:
+    """Copy the proposed owner's workload flags onto the proposal's
+    ``suggested_assignee`` so the clarify/delegate card can render an overload
+    warning. Matches the annotated roster by provider_user_id then name. No-op
+    when there's no suggested owner or the roster wasn't annotated."""
+    who = proposal.get("suggested_assignee")
+    if not isinstance(who, dict):
+        return
+    pid = str(who.get("provider_user_id") or "")
+    nm = (who.get("name") or "").strip().lower()
+    match = next(
+        (p for p in people
+         if (pid and str(p.get("provider_user_id") or "") == pid)
+         or (nm and (p.get("name") or "").strip().lower() == nm)), None)
+    if match is None:
+        return
+    who["overloaded"] = bool(match.get("overloaded"))
+    who["open_task_count"] = match.get("open_task_count", 0)
+    if match.get("overloaded"):
+        n = match.get("open_task_count", 0)
+        avail = match.get("available_hours_per_week")
+        who["load_note"] = (
+            f"already at capacity ({avail}h free)"
+            if avail is not None and avail <= 0
+            else f"already has {n} open task{'s' if n != 1 else ''}")
 
 
 def _projects_brief(projects: list[Any]) -> str:
@@ -411,6 +528,7 @@ async def _llm_propose(
     item: Any, people: list[dict], projects: list[Any],
     account_statuses: dict[str, list[str]], model: str,
     user_context: str | None = None,
+    memory_context: str = "",
 ) -> dict[str, Any] | None:
     """LLM clarify core. Returns a ``core``-shaped dict (same keys propose()
     produces: disposition, next_action, optional outcome/context/energy/
@@ -419,7 +537,11 @@ async def _llm_propose(
     ``user_context`` is optional freeform guidance the user typed during clarify
     ("this is actually the Q3 board deck — break it into sections") — TRUSTED
     input (unlike the projects/people DATA), used to fix the title, pick the
-    project, and shape the steps."""
+    project, and shape the steps.
+
+    ``memory_context`` is an optional block of the task-manager's past
+    clarification patterns (§9, Phase 4) — the user's own prior decisions, fed as
+    continuity guidance so repeated kinds of task get filed consistently."""
     try:
         from acb_llm.context import acompletion_with_fallback
     except Exception:
@@ -440,7 +562,11 @@ async def _llm_propose(
         "physical `next_action`.\n"
         "- WAITING: delegate to a teammate — pick the BEST owner by capability "
         "(skills/domain match first, seniority and free hours to break ties), "
-        "set `assignee_name`.\n"
+        "set `assignee_name`. Prefer someone whose skills/domain fit AND who is "
+        "not marked OVERLOADED; if the strongest fit is overloaded, you may "
+        "still pick them but say so in the rationale. For approval/sign-off "
+        "work, routing to a person's manager (their `reports to`) is reasonable. "
+        "Only ever name a person in the TEAM list.\n"
         "- CALENDAR: time-specific/hard-date.\n"
         "- DO_NOW: a genuine <2-minute action.\n"
         "- SOMEDAY: incubate, not committed.\n"
@@ -489,6 +615,10 @@ async def _llm_propose(
         "now, what this item really is — treat it as the authoritative "
         "description: use it to rewrite the title (suggested_title), choose the "
         "project_match, set the complexity, and shape the subtasks accordingly.\n"
+        "If PAST CLARIFICATION PATTERNS are given, they are the user's OWN prior "
+        "decisions for similar tasks — prefer consistency with them (same "
+        "disposition/owner/project/context) when they fit, but the current "
+        "item's specifics always win.\n"
         'Return STRICT JSON only: {"disposition": str, "next_action": str, '
         '"outcome": str|null, "context": "@computer"|"@calls"|"@errands"|'
         '"@agenda"|null, "energy": "low"|"medium"|"high"|null, '
@@ -507,6 +637,8 @@ async def _llm_propose(
         + f"\n\nACTIVE PROJECTS:\n{_projects_brief(projects)}"
         + f"\n\nTEAM (for delegation):\n{_people_brief(people)}"
         + f"\n\nWORKSPACE STAGES: {', '.join(stages) or '(none)'}"
+        + (f"\n\nPAST CLARIFICATION PATTERNS:\n{memory_context}"
+           if memory_context else "")
     )
     try:
         resp, _used = await acompletion_with_fallback(
@@ -868,6 +1000,13 @@ async def clarify_item(
         # cognition; provider members are the fallback when none imported.
         from gateway.routes.tasks.people import fetch_people_for_clarify
         people = await fetch_people_for_clarify(db) or members
+        # Live workload + (flag-gated) semantic capability fit, best-fit first
+        # (§5, Phase 2). Additive: the deterministic propose() inside
+        # propose_with_llm gets this same list but ignores the extra keys, so the
+        # eval-locked heuristic is unchanged; only the LLM prompt + the card's
+        # overload hint use them.
+        task_text = f"{item.title} {getattr(item, 'description', '') or ''}"
+        people = await annotate_people_context(db, uid, people, task_text)
 
         # LLM clarify cognition (the user's clarify_model) reasons over the
         # same context; the deterministic propose() is overlaid underneath as
@@ -880,11 +1019,21 @@ async def clarify_item(
         llm_core = None
         if toggles["clarify_use_llm"]:
             models = await gtd_models(db, uid)
+            # The task-manager's own clarification memory (§9, Phase 4): recall
+            # how similar tasks were filed before + feed it as continuity to the
+            # proposal. Best-effort — "" when Mem0 is off / nothing matches.
+            from gateway.routes.tasks.task_memory import recall_clarify_context
+            memory_context = await recall_clarify_context(task_text)
             llm_core = await _llm_propose(
                 item, people, projects, account_statuses, models["clarify"],
-                user_context=note)
+                user_context=note, memory_context=memory_context)
         proposal = propose_with_llm(
             item, people, projects, account_statuses, llm_core)
+        # Attach the chosen owner's live load so the card can warn at assign
+        # time ("Rahul is already at capacity"). Post-hoc on the route only —
+        # never inside propose()/propose_with_llm, so the golden evals (which
+        # call those directly) are untouched.
+        _attach_assignee_load(proposal, people)
         if reclarify:
             proposal = _apply_reclarify_binding(proposal, item)
         else:

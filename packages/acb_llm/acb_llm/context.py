@@ -28,6 +28,7 @@ from typing import Any
 from acb_common import get_logger
 
 from acb_llm.message_compress import compress_message_content
+from acb_llm.model_limits import get_limits
 
 _log = get_logger("acb_llm.context")
 
@@ -60,19 +61,10 @@ def _infer_app_source(max_depth: int = 12) -> str | None:
         depth += 1
     return None
 
-# Fallback context-window table for models litellm's model_cost registry does
-# NOT know (self-hosted, private endpoints, legacy non-gateway tier aliases).
-#
-# Tier aliases (tier-fast / tier-balanced / tier-powerful) are intentionally
-# ABSENT: context_window_for() always resolves them through _TIER_MODEL —
-# the live mapping updated by acb_llm.client.set_tier_model() whenever the
-# Settings UI changes a tier.  Adding tier aliases here would make the window
-# stale the moment the tier model is changed in the UI.
-_TIER_CONTEXT_WINDOWS: dict[str, int] = {
-    "tier1-local-qwen3": 32_768,   # local Qwen3 via vLLM (not in litellm registry)
-    "tier2-sonnet": 200_000,       # legacy alias for Claude Sonnet tiers
-    "tier3-opus": 200_000,         # legacy alias for Claude Opus tiers
-}
+# Model limits (context window, max output) resolve through ONE place:
+# acb_llm.model_limits.get_limits — imported at the top of this module, and the
+# home of the fallback window table and the default window that used to sit
+# here. Import them from there, not from this module.
 
 # Substrings litellm / providers use when the prompt is too long for the model.
 _CONTEXT_OVERFLOW_MARKERS = (
@@ -82,8 +74,6 @@ _CONTEXT_OVERFLOW_MARKERS = (
     "please reduce", "exceeds the maximum",
 )
 
-# Fallback when no real number is available anywhere.
-_DEFAULT_CONTEXT_WINDOW = 32_768
 # Chars per token for the heuristic estimator (English prose ≈ 4).
 _CHARS_PER_TOKEN = 4
 # Trimmed-message marker so a truncated prompt reads as deliberately shortened.
@@ -123,47 +113,14 @@ def context_window_for(model: str) -> int:
     values for tier aliases — the budget always tracks the currently-configured
     model.
 
-    Resolution order:
-      1. ``resolve_underlying_model`` — tier alias → current backing model
-         (reads live ``_TIER_MODEL``; concrete ids pass through unchanged).
-      2. litellm ``model_cost`` registry — covers all known provider/model
-         combinations; tries the resolved name then its bare suffix.
-      3. ``_TIER_CONTEXT_WINDOWS`` fallback table — for self-hosted / private
-         endpoints litellm doesn't know.
-      4. Conservative 32 768-token default.
+    Thin wrapper over :func:`acb_llm.model_limits.get_limits`, which owns the
+    resolution order and the sources. Kept as the input-side entry point
+    because callers and tests import it from here; use ``get_limits`` directly
+    when you also need ``max_output`` or the provenance of a number.
 
     Always returns a positive integer.
     """
-    m = (model or "").strip()
-    if not m:
-        return _DEFAULT_CONTEXT_WINDOW
-
-    # Step 1: resolve tier alias → current backing model.  For concrete model
-    # ids, resolve_underlying_model returns the input unchanged.
-    resolved = resolve_underlying_model(m)
-
-    # Step 2: litellm model_cost registry (covers all known provider models).
-    try:
-        from litellm import model_cost
-        for candidate in dict.fromkeys(filter(None, [
-            resolved,
-            resolved.split("/")[-1] if "/" in resolved else None,
-        ])):
-            info = model_cost.get(candidate)
-            if info:
-                win = int(info.get("max_input_tokens")
-                          or info.get("max_tokens") or 0)
-                if win > 0:
-                    return win
-    except Exception:
-        pass
-
-    # Step 3: fallback table (self-hosted / private / legacy aliases).
-    for candidate in dict.fromkeys(filter(None, [resolved, m])):
-        if candidate in _TIER_CONTEXT_WINDOWS:
-            return _TIER_CONTEXT_WINDOWS[candidate]
-
-    return _DEFAULT_CONTEXT_WINDOW
+    return get_limits(model).context_window
 
 
 def count_message_tokens(messages: list[dict[str, Any]], model: str = "") -> int:

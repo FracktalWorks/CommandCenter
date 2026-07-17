@@ -110,6 +110,46 @@ function deadlinesForDay(items: GtdItem[], day: Date): GtdItem[] {
   );
 }
 
+/** Assign overlapping blocks to side-by-side lanes (Google-Calendar style) so a
+ *  double-booking is visible, not hidden. Returns each block with its lane index
+ *  and the number of lanes in its overlap group (>1 ⇒ a conflict). */
+function layoutBlocks(
+  blocks: Block[],
+): { block: Block; lane: number; lanes: number }[] {
+  const sorted = [...blocks].sort(
+    (a, b) =>
+      a.start.getTime() - b.start.getTime() || a.end.getTime() - b.end.getTime(),
+  );
+  const out: { block: Block; lane: number; lanes: number }[] = [];
+  let i = 0;
+  while (i < sorted.length) {
+    // Maximal group of transitively-overlapping blocks.
+    let groupEnd = sorted[i].end.getTime();
+    let j = i + 1;
+    while (j < sorted.length && sorted[j].start.getTime() < groupEnd) {
+      groupEnd = Math.max(groupEnd, sorted[j].end.getTime());
+      j++;
+    }
+    const group = sorted.slice(i, j);
+    const laneEnds: number[] = [];
+    const laneOf = new Map<Block, number>();
+    for (const b of group) {
+      let lane = laneEnds.findIndex((end) => end <= b.start.getTime());
+      if (lane === -1) {
+        lane = laneEnds.length;
+        laneEnds.push(b.end.getTime());
+      } else {
+        laneEnds[lane] = b.end.getTime();
+      }
+      laneOf.set(b, lane);
+    }
+    const lanes = laneEnds.length;
+    for (const b of group) out.push({ block: b, lane: laneOf.get(b) ?? 0, lanes });
+    i = j;
+  }
+  return out;
+}
+
 /** First 30-min-aligned free slot on `day` at/after the window start (or now, if
  *  today), that fits `mins` without overlapping an existing block. */
 function firstFreeSlot(
@@ -1101,21 +1141,37 @@ function TimeGrid({
                 </div>
               )}
 
-              {/* scheduled blocks */}
-              {blocks.map((b) => {
+              {/* scheduled blocks — overlaps split into side-by-side lanes */}
+              {layoutBlocks(blocks).map(({ block: b, lane, lanes }) => {
                 const end =
                   resizing?.id === b.item.id ? new Date(resizing.endMs) : b.end;
                 const top =
                   ((minutesInto(b.start) - dayStart * 60) / 60) * HOUR_PX;
                 const mins = (end.getTime() - b.start.getTime()) / 60000;
                 const height = Math.max(20, (mins / 60) * HOUR_PX - 2);
+                const conflict = lanes > 1;
+                const leftPct = (lane / lanes) * 100;
+                const widthPct = 100 / lanes;
                 return (
                   <div
                     key={b.item.id}
                     draggable
                     onDragStart={(e) => onBlockDragStart(e, b)}
-                    style={{ top: Math.max(0, top), height }}
-                    className="group absolute inset-x-1 cursor-grab overflow-hidden rounded-md border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-left active:cursor-grabbing"
+                    style={{
+                      top: Math.max(0, top),
+                      height,
+                      left: `calc(${leftPct}% + 2px)`,
+                      width: `calc(${widthPct}% - 4px)`,
+                    }}
+                    title={
+                      conflict ? "Overlaps another block — double-booked" : undefined
+                    }
+                    className={[
+                      "group absolute cursor-grab overflow-hidden rounded-md border px-1.5 py-0.5 text-left active:cursor-grabbing",
+                      conflict
+                        ? "border-destructive/60 bg-destructive/10"
+                        : "border-primary/40 bg-primary/10",
+                    ].join(" ")}
                   >
                     <button
                       type="button"

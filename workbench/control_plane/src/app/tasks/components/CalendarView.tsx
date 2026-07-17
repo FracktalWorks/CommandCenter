@@ -10,7 +10,7 @@
 // P0 renders from the already-hydrated store `items`; the dedicated
 // apiCalendarRange(from,to) endpoint is wired for P1 precise range loading.
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -59,6 +59,12 @@ const startOfWeek = (d: Date) => {
 const startOfMonthGrid = (d: Date) => startOfWeek(new Date(d.getFullYear(), d.getMonth(), 1));
 const minutesInto = (d: Date) => d.getHours() * 60 + d.getMinutes();
 const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
+
+// ── drag-and-drop / resize ───────────────────────────────────────────────────
+const SNAP_MINS = 15; // blocks snap to a quarter-hour
+const DRAG_TYPE = "application/x-cc-cal";
+type DragPayload = { id: string; durationMins: number; grabOffsetMins: number };
+const snap = (mins: number) => Math.round(mins / SNAP_MINS) * SNAP_MINS;
 
 type Block = { item: GtdItem; start: Date; end: Date };
 
@@ -144,6 +150,12 @@ export function CalendarView() {
   };
   const unschedule = (item: GtdItem) =>
     updateItem(item.id, { scheduledStart: "", scheduledEnd: "" });
+  // Move/resize a block to an exact start+end (drag-drop + resize commit here).
+  const reschedule = (id: string, start: Date, end: Date) =>
+    updateItem(id, {
+      scheduledStart: start.toISOString(),
+      scheduledEnd: end.toISOString(),
+    });
 
   const step = (dir: 1 | -1) =>
     setAnchor((a) =>
@@ -236,6 +248,7 @@ export function CalendarView() {
               items={items}
               onOpen={openFocus}
               onUnschedule={unschedule}
+              reschedule={reschedule}
             />
           )}
         </div>
@@ -267,11 +280,13 @@ function TimeGrid({
   items,
   onOpen,
   onUnschedule,
+  reschedule,
 }: {
   days: Date[];
   items: GtdItem[];
   onOpen: (id: string) => void;
   onUnschedule: (item: GtdItem) => void;
+  reschedule: (id: string, start: Date, end: Date) => void;
 }) {
   const hours = Array.from(
     { length: DAY_END_HOUR - DAY_START_HOUR },
@@ -279,6 +294,76 @@ function TimeGrid({
   );
   const now = new Date();
   const gridHeight = hours.length * HOUR_PX;
+  // Live resize (transient end while dragging the handle) + drop-target column.
+  const [resizing, setResizing] = useState<{ id: string; endMs: number } | null>(null);
+  const resizingRef = useRef(false); // suppress the native block-drag while resizing
+  const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+
+  // Drop a dragged task/block onto `day` at the cursor's Y → snapped start+end.
+  const handleDrop = (e: React.DragEvent, day: Date) => {
+    e.preventDefault();
+    setDragOverKey(null);
+    const raw = e.dataTransfer.getData(DRAG_TYPE);
+    if (!raw) return;
+    let p: DragPayload;
+    try {
+      p = JSON.parse(raw) as DragPayload;
+    } catch {
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const windowMins = (DAY_END_HOUR - DAY_START_HOUR) * 60;
+    let mins = snap(((e.clientY - rect.top) / HOUR_PX) * 60 - p.grabOffsetMins);
+    mins = Math.max(0, Math.min(mins, windowMins - p.durationMins));
+    const start = new Date(day);
+    start.setHours(DAY_START_HOUR, 0, 0, 0);
+    start.setMinutes(start.getMinutes() + mins);
+    reschedule(p.id, start, new Date(start.getTime() + p.durationMins * 60000));
+  };
+
+  const onBlockDragStart = (e: React.DragEvent, b: Block) => {
+    if (resizingRef.current) {
+      e.preventDefault(); // grabbing the resize handle, not moving the block
+      return;
+    }
+    const rect = e.currentTarget.getBoundingClientRect();
+    const grabOffsetMins = ((e.clientY - rect.top) / HOUR_PX) * 60;
+    const durationMins = (b.end.getTime() - b.start.getTime()) / 60000;
+    e.dataTransfer.setData(
+      DRAG_TYPE,
+      JSON.stringify({ id: b.item.id, durationMins, grabOffsetMins }),
+    );
+    e.dataTransfer.effectAllowed = "move";
+  };
+
+  // Resize via pointer events (native DnD is poor for edge-drag). Window
+  // listeners track the drag; commit on pointer-up.
+  const startResize = (e: React.PointerEvent, b: Block) => {
+    e.stopPropagation();
+    e.preventDefault();
+    resizingRef.current = true;
+    const startY = e.clientY;
+    const startMs = b.start.getTime();
+    const originEndMs = b.end.getTime();
+    const dayEnd = new Date(b.start);
+    dayEnd.setHours(DAY_END_HOUR, 0, 0, 0);
+    const clampEnd = (clientY: number) => {
+      const dyMins = ((clientY - startY) / HOUR_PX) * 60;
+      const endMs = originEndMs + snap(dyMins) * 60000;
+      return Math.max(startMs + SNAP_MINS * 60000, Math.min(endMs, dayEnd.getTime()));
+    };
+    const onMove = (ev: PointerEvent) =>
+      setResizing({ id: b.item.id, endMs: clampEnd(ev.clientY) });
+    const onUp = (ev: PointerEvent) => {
+      window.removeEventListener("pointermove", onMove);
+      window.removeEventListener("pointerup", onUp);
+      reschedule(b.item.id, new Date(startMs), new Date(clampEnd(ev.clientY)));
+      resizingRef.current = false;
+      setResizing(null);
+    };
+    window.addEventListener("pointermove", onMove);
+    window.addEventListener("pointerup", onUp);
+  };
 
   return (
     <div className="min-w-fit">
@@ -332,12 +417,25 @@ function TimeGrid({
           const blocks = blocksForDay(items, day);
           const deadlines = deadlinesForDay(items, day);
           const today = sameDay(day, now);
+          const dayKey = day.toISOString();
           const nowTop =
             ((minutesInto(now) - DAY_START_HOUR * 60) / 60) * HOUR_PX;
           return (
             <div
-              key={day.toISOString()}
-              className="relative flex-1 border-l border-border"
+              key={dayKey}
+              onDragOver={(e) => {
+                e.preventDefault();
+                e.dataTransfer.dropEffect = "move";
+                if (dragOverKey !== dayKey) setDragOverKey(dayKey);
+              }}
+              onDragLeave={(e) => {
+                if (e.currentTarget === e.target) setDragOverKey(null);
+              }}
+              onDrop={(e) => handleDrop(e, day)}
+              className={[
+                "relative flex-1 border-l border-border",
+                dragOverKey === dayKey ? "bg-primary/5" : "",
+              ].join(" ")}
               style={{ height: gridHeight }}
             >
               {/* hour lines */}
@@ -378,15 +476,19 @@ function TimeGrid({
 
               {/* scheduled blocks */}
               {blocks.map((b) => {
+                const end =
+                  resizing?.id === b.item.id ? new Date(resizing.endMs) : b.end;
                 const top =
                   ((minutesInto(b.start) - DAY_START_HOUR * 60) / 60) * HOUR_PX;
-                const mins = (b.end.getTime() - b.start.getTime()) / 60000;
+                const mins = (end.getTime() - b.start.getTime()) / 60000;
                 const height = Math.max(20, (mins / 60) * HOUR_PX - 2);
                 return (
                   <div
                     key={b.item.id}
+                    draggable
+                    onDragStart={(e) => onBlockDragStart(e, b)}
                     style={{ top: Math.max(0, top), height }}
-                    className="group absolute inset-x-1 overflow-hidden rounded-md border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-left"
+                    className="group absolute inset-x-1 cursor-grab overflow-hidden rounded-md border border-primary/40 bg-primary/10 px-1.5 py-0.5 text-left active:cursor-grabbing"
                   >
                     <button
                       type="button"
@@ -413,6 +515,14 @@ function TimeGrid({
                     >
                       <X className="h-3 w-3" />
                     </button>
+                    {/* drag the bottom edge to change duration */}
+                    <div
+                      onPointerDown={(e) => startResize(e, b)}
+                      title="Drag to change duration"
+                      className="absolute inset-x-0 bottom-0 flex h-2 cursor-ns-resize items-end justify-center pb-0.5 opacity-0 group-hover:opacity-100"
+                    >
+                      <div className="h-0.5 w-6 rounded-full bg-primary/60" />
+                    </div>
                   </div>
                 );
               })}
@@ -539,7 +649,7 @@ function UnscheduledRail({
           Unscheduled
         </div>
         <p className="mt-0.5 text-[10px] text-muted-foreground">
-          Click to timebox into {focusedDayLabel}.
+          Drag onto the grid, or click Timebox ({focusedDayLabel}).
         </p>
         <div
           className={[
@@ -561,7 +671,19 @@ function UnscheduledRail({
             {tasks.map((t) => (
               <div
                 key={t.id}
-                className="group rounded-md border border-border bg-background/60 p-2 hover:border-primary/40"
+                draggable
+                onDragStart={(e) => {
+                  e.dataTransfer.setData(
+                    DRAG_TYPE,
+                    JSON.stringify({
+                      id: t.id,
+                      durationMins: t.timeEstimateMins ?? DEFAULT_BLOCK_MINS,
+                      grabOffsetMins: 0,
+                    }),
+                  );
+                  e.dataTransfer.effectAllowed = "move";
+                }}
+                className="group cursor-grab rounded-md border border-border bg-background/60 p-2 hover:border-primary/40 active:cursor-grabbing"
               >
                 <button
                   type="button"

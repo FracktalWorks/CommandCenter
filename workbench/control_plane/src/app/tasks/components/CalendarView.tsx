@@ -20,8 +20,13 @@ import {
   X,
   Sparkles,
   CalendarPlus,
+  Settings2,
+  Plus,
+  Trash2,
 } from "lucide-react";
+import type { TaskSettings } from "../lib/api";
 import { useTaskStore } from "../lib/taskStore";
+import type { EnergyWindow } from "../lib/api";
 import { GtdItem } from "../lib/types";
 import { durationLabel } from "../lib/utils";
 
@@ -97,17 +102,23 @@ function deadlinesForDay(items: GtdItem[], day: Date): GtdItem[] {
 
 /** First 30-min-aligned free slot on `day` at/after the window start (or now, if
  *  today), that fits `mins` without overlapping an existing block. */
-function firstFreeSlot(dayBlocks: Block[], day: Date, mins: number): Date {
+function firstFreeSlot(
+  dayBlocks: Block[],
+  day: Date,
+  mins: number,
+  startHour: number,
+  endHour: number,
+): Date {
   const now = new Date();
   const earliest = new Date(day);
-  earliest.setHours(DAY_START_HOUR, 0, 0, 0);
+  earliest.setHours(startHour, 0, 0, 0);
   if (sameDay(day, now) && now > earliest) {
     // round up to the next 30
     const m = now.getMinutes();
     earliest.setHours(now.getHours(), m <= 30 ? 30 : 60, 0, 0);
   }
   const dayEnd = new Date(day);
-  dayEnd.setHours(DAY_END_HOUR, 0, 0, 0);
+  dayEnd.setHours(endHour, 0, 0, 0);
   let cursor = earliest;
   const sorted = [...dayBlocks].sort((a, b) => a.start.getTime() - b.start.getTime());
   for (const b of sorted) {
@@ -123,8 +134,17 @@ export function CalendarView() {
   const items = useTaskStore((s) => s.items);
   const updateItem = useTaskStore((s) => s.updateItem);
   const openFocus = useTaskStore((s) => s.openFocus);
+  const settings = useTaskStore((s) => s.settings);
+  // The plannable day window + capacity come from the user's calendar prefs so
+  // the grid and the AI planner agree; sane defaults when unset.
+  const dayStart = settings.dayStartHour ?? DAY_START_HOUR;
+  const dayEnd = Math.max(dayStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
+  const capacityTarget = settings.dailyCapacityMins ?? SOFT_CAPACITY_MINS;
+  const energyWindows = settings.energyWindows ?? [];
+  const updateSettings = useTaskStore((s) => s.updateSettings);
   const [mode, setMode] = useState<Mode>("day");
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
+  const [settingsOpen, setSettingsOpen] = useState(false);
 
   // Unscheduled, schedulable next actions (mine, NEXT, no block yet).
   const unscheduled = useMemo(
@@ -141,7 +161,8 @@ export function CalendarView() {
 
   const schedule = (item: GtdItem, day: Date, at?: Date) => {
     const mins = item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
-    const start = at ?? firstFreeSlot(blocksForDay(items, day), day, mins);
+    const start =
+      at ?? firstFreeSlot(blocksForDay(items, day), day, mins, dayStart, dayEnd);
     const end = new Date(start.getTime() + mins * 60000);
     updateItem(item.id, {
       scheduledStart: start.toISOString(),
@@ -211,22 +232,45 @@ export function CalendarView() {
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
-        <div className="ml-auto flex rounded-lg bg-secondary p-0.5 text-xs">
-          {(["day", "week", "month"] as Mode[]).map((m) => (
-            <button
-              key={m}
-              type="button"
-              onClick={() => setMode(m)}
-              className={[
-                "tech-transition rounded-md px-2.5 py-1 font-medium capitalize",
-                mode === m
-                  ? "bg-card text-foreground shadow-sm"
-                  : "text-muted-foreground hover:text-foreground",
-              ].join(" ")}
-            >
-              {m}
-            </button>
-          ))}
+        <div className="relative ml-auto flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setSettingsOpen((v) => !v)}
+            aria-label="Calendar settings"
+            title="Day window, capacity, energy windows"
+            className={[
+              "tech-transition rounded-md p-1.5",
+              settingsOpen
+                ? "bg-secondary text-foreground"
+                : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+            ].join(" ")}
+          >
+            <Settings2 className="h-4 w-4" />
+          </button>
+          <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
+            {(["day", "week", "month"] as Mode[]).map((m) => (
+              <button
+                key={m}
+                type="button"
+                onClick={() => setMode(m)}
+                className={[
+                  "tech-transition rounded-md px-2.5 py-1 font-medium capitalize",
+                  mode === m
+                    ? "bg-card text-foreground shadow-sm"
+                    : "text-muted-foreground hover:text-foreground",
+                ].join(" ")}
+              >
+                {m}
+              </button>
+            ))}
+          </div>
+          {settingsOpen && (
+            <CalendarSettings
+              settings={settings}
+              onChange={(patch) => void updateSettings(patch)}
+              onClose={() => setSettingsOpen(false)}
+            />
+          )}
         </div>
       </div>
 
@@ -246,6 +290,9 @@ export function CalendarView() {
             <TimeGrid
               days={days}
               items={items}
+              dayStart={dayStart}
+              dayEnd={dayEnd}
+              energyWindows={energyWindows}
               onOpen={openFocus}
               onUnschedule={unschedule}
               reschedule={reschedule}
@@ -265,6 +312,7 @@ export function CalendarView() {
               (n, b) => n + (b.end.getTime() - b.start.getTime()) / 60000,
               0,
             )}
+            capacityTarget={capacityTarget}
             onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
             onOpen={openFocus}
           />
@@ -274,24 +322,185 @@ export function CalendarView() {
   );
 }
 
+// ── Settings popover (day window, capacity, buffer, energy windows) ──────────
+function CalendarSettings({
+  settings,
+  onChange,
+  onClose,
+}: {
+  settings: TaskSettings;
+  onChange: (patch: Partial<TaskSettings>) => void;
+  onClose: () => void;
+}) {
+  const wins = settings.energyWindows ?? [];
+  const num = (v: string, fallback: number) => {
+    const n = parseInt(v, 10);
+    return Number.isFinite(n) ? n : fallback;
+  };
+  const setWin = (i: number, patch: Partial<EnergyWindow>) =>
+    onChange({
+      energyWindows: wins.map((w, idx) => (idx === i ? { ...w, ...patch } : w)),
+    });
+  const inputCls =
+    "rounded border border-border bg-background px-1 py-0.5 text-right text-foreground focus:border-primary/50 focus:outline-none";
+  return (
+    <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-border bg-card p-3 text-[12px] shadow-xl">
+      <div className="mb-2 flex items-center justify-between">
+        <span className="font-semibold text-foreground">Calendar settings</span>
+        <button
+          type="button"
+          onClick={onClose}
+          aria-label="Close"
+          className="rounded p-0.5 text-muted-foreground hover:text-foreground"
+        >
+          <X className="h-3.5 w-3.5" />
+        </button>
+      </div>
+
+      <label className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Day window</span>
+        <span className="flex items-center gap-1">
+          <input
+            type="number"
+            min={0}
+            max={23}
+            value={settings.dayStartHour}
+            onChange={(e) => onChange({ dayStartHour: num(e.target.value, 7) })}
+            className={`w-12 ${inputCls}`}
+          />
+          <span className="text-muted-foreground">–</span>
+          <input
+            type="number"
+            min={1}
+            max={24}
+            value={settings.dayEndHour}
+            onChange={(e) => onChange({ dayEndHour: num(e.target.value, 22) })}
+            className={`w-12 ${inputCls}`}
+          />
+        </span>
+      </label>
+
+      <label className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Daily focus capacity (h)</span>
+        <input
+          type="number"
+          min={0}
+          max={16}
+          step={0.5}
+          value={Math.round((settings.dailyCapacityMins / 60) * 10) / 10}
+          onChange={(e) =>
+            onChange({ dailyCapacityMins: Math.round(num(e.target.value, 6) * 60) })
+          }
+          className={`w-14 ${inputCls}`}
+        />
+      </label>
+
+      <label className="mb-3 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Buffer between blocks (min)</span>
+        <input
+          type="number"
+          min={0}
+          max={60}
+          step={5}
+          value={settings.bufferMins}
+          onChange={(e) => onChange({ bufferMins: num(e.target.value, 0) })}
+          className={`w-14 ${inputCls}`}
+        />
+      </label>
+
+      <div className="mb-1 flex items-center justify-between">
+        <span className="font-medium text-foreground">Energy windows</span>
+        <button
+          type="button"
+          onClick={() =>
+            onChange({
+              energyWindows: [
+                ...wins,
+                { start_hour: 9, end_hour: 12, energy: "high" },
+              ],
+            })
+          }
+          className="inline-flex items-center gap-0.5 text-primary hover:underline"
+        >
+          <Plus className="h-3 w-3" /> Add
+        </button>
+      </div>
+      <p className="mb-1.5 text-[10px] text-muted-foreground">
+        The planner puts high-energy work in peak windows, admin in low ones.
+      </p>
+      {wins.length === 0 ? (
+        <p className="text-[11px] text-muted-foreground/70">None set.</p>
+      ) : (
+        <div className="flex flex-col gap-1.5">
+          {wins.map((w, i) => (
+            <div key={i} className="flex items-center gap-1">
+              <input
+                type="number"
+                min={0}
+                max={23}
+                value={w.start_hour}
+                onChange={(e) => setWin(i, { start_hour: num(e.target.value, 9) })}
+                className={`w-11 ${inputCls}`}
+              />
+              <span className="text-muted-foreground">–</span>
+              <input
+                type="number"
+                min={1}
+                max={24}
+                value={w.end_hour}
+                onChange={(e) => setWin(i, { end_hour: num(e.target.value, 12) })}
+                className={`w-11 ${inputCls}`}
+              />
+              <select
+                value={w.energy}
+                onChange={(e) =>
+                  setWin(i, { energy: e.target.value as EnergyWindow["energy"] })
+                }
+                className="min-w-0 flex-1 rounded border border-border bg-background px-1 py-0.5 text-foreground"
+              >
+                <option value="high">high</option>
+                <option value="medium">medium</option>
+                <option value="low">low</option>
+              </select>
+              <button
+                type="button"
+                onClick={() =>
+                  onChange({ energyWindows: wins.filter((_, idx) => idx !== i) })
+                }
+                aria-label="Remove window"
+                className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Day / Week hour grid ─────────────────────────────────────────────────────
 function TimeGrid({
   days,
   items,
+  dayStart,
+  dayEnd,
+  energyWindows,
   onOpen,
   onUnschedule,
   reschedule,
 }: {
   days: Date[];
   items: GtdItem[];
+  dayStart: number;
+  dayEnd: number;
+  energyWindows: EnergyWindow[];
   onOpen: (id: string) => void;
   onUnschedule: (item: GtdItem) => void;
   reschedule: (id: string, start: Date, end: Date) => void;
 }) {
-  const hours = Array.from(
-    { length: DAY_END_HOUR - DAY_START_HOUR },
-    (_, i) => DAY_START_HOUR + i,
-  );
+  const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
   const now = new Date();
   const gridHeight = hours.length * HOUR_PX;
   // Live resize (transient end while dragging the handle) + drop-target column.
@@ -312,11 +521,11 @@ function TimeGrid({
       return;
     }
     const rect = e.currentTarget.getBoundingClientRect();
-    const windowMins = (DAY_END_HOUR - DAY_START_HOUR) * 60;
+    const windowMins = (dayEnd - dayStart) * 60;
     let mins = snap(((e.clientY - rect.top) / HOUR_PX) * 60 - p.grabOffsetMins);
     mins = Math.max(0, Math.min(mins, windowMins - p.durationMins));
     const start = new Date(day);
-    start.setHours(DAY_START_HOUR, 0, 0, 0);
+    start.setHours(dayStart, 0, 0, 0);
     start.setMinutes(start.getMinutes() + mins);
     reschedule(p.id, start, new Date(start.getTime() + p.durationMins * 60000));
   };
@@ -345,12 +554,15 @@ function TimeGrid({
     const startY = e.clientY;
     const startMs = b.start.getTime();
     const originEndMs = b.end.getTime();
-    const dayEnd = new Date(b.start);
-    dayEnd.setHours(DAY_END_HOUR, 0, 0, 0);
+    const dayEndAt = new Date(b.start);
+    dayEndAt.setHours(dayEnd, 0, 0, 0);
     const clampEnd = (clientY: number) => {
       const dyMins = ((clientY - startY) / HOUR_PX) * 60;
       const endMs = originEndMs + snap(dyMins) * 60000;
-      return Math.max(startMs + SNAP_MINS * 60000, Math.min(endMs, dayEnd.getTime()));
+      return Math.max(
+        startMs + SNAP_MINS * 60000,
+        Math.min(endMs, dayEndAt.getTime()),
+      );
     };
     const onMove = (ev: PointerEvent) =>
       setResizing({ id: b.item.id, endMs: clampEnd(ev.clientY) });
@@ -419,7 +631,7 @@ function TimeGrid({
           const today = sameDay(day, now);
           const dayKey = day.toISOString();
           const nowTop =
-            ((minutesInto(now) - DAY_START_HOUR * 60) / 60) * HOUR_PX;
+            ((minutesInto(now) - dayStart * 60) / 60) * HOUR_PX;
           return (
             <div
               key={dayKey}
@@ -446,6 +658,27 @@ function TimeGrid({
                   className="border-b border-border/60"
                 />
               ))}
+
+              {/* energy windows — peak/trough tint the planner places work into */}
+              {energyWindows.map((w, wi) => {
+                const bandTop = (w.start_hour - dayStart) * HOUR_PX;
+                const bandH = (w.end_hour - w.start_hour) * HOUR_PX;
+                if (bandH <= 0) return null;
+                const tone =
+                  w.energy === "high"
+                    ? "bg-success/10"
+                    : w.energy === "low"
+                      ? "bg-muted/40"
+                      : "bg-warning/10";
+                return (
+                  <div
+                    key={`ew-${wi}`}
+                    title={`${w.energy} energy ${w.start_hour}:00–${w.end_hour}:00`}
+                    className={`pointer-events-none absolute inset-x-0 ${tone}`}
+                    style={{ top: Math.max(0, bandTop), height: bandH }}
+                  />
+                );
+              })}
 
               {/* deadline markers (all-day, pinned top) */}
               {deadlines.length > 0 && (
@@ -479,7 +712,7 @@ function TimeGrid({
                 const end =
                   resizing?.id === b.item.id ? new Date(resizing.endMs) : b.end;
                 const top =
-                  ((minutesInto(b.start) - DAY_START_HOUR * 60) / 60) * HOUR_PX;
+                  ((minutesInto(b.start) - dayStart * 60) / 60) * HOUR_PX;
                 const mins = (end.getTime() - b.start.getTime()) / 60000;
                 const height = Math.max(20, (mins / 60) * HOUR_PX - 2);
                 return (
@@ -631,16 +864,18 @@ function UnscheduledRail({
   tasks,
   focusedDayLabel,
   capacityMins,
+  capacityTarget,
   onSchedule,
   onOpen,
 }: {
   tasks: GtdItem[];
   focusedDayLabel: string;
   capacityMins: number;
+  capacityTarget: number;
   onSchedule: (t: GtdItem) => void;
   onOpen: (id: string) => void;
 }) {
-  const over = capacityMins > SOFT_CAPACITY_MINS;
+  const over = capacityMins > capacityTarget;
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-card md:flex">
       <div className="border-b border-border px-3 py-2">
@@ -657,8 +892,9 @@ function UnscheduledRail({
             over ? "font-medium text-warning" : "text-muted-foreground",
           ].join(" ")}
         >
-          {Math.round((capacityMins / 60) * 10) / 10}h booked
-          {over ? " — heavy day" : ""}
+          {Math.round((capacityMins / 60) * 10) / 10}h /{" "}
+          {Math.round((capacityTarget / 60) * 10) / 10}h booked
+          {over ? " — over capacity" : ""}
         </div>
       </div>
       <div className="flex-1 overflow-y-auto p-2">

@@ -779,6 +779,14 @@ export async function apiUploadAttachment(file: File): Promise<TaskAttachment> {
   };
 }
 
+/** A peak/trough window in the day: the AI planner puts high-energy work in
+ *  'high' windows, admin in 'low' ones. */
+export interface EnergyWindow {
+  start_hour: number;
+  end_hour: number;
+  energy: "low" | "medium" | "high";
+}
+
 export interface TaskSettings {
   chatModel: string;
   clarifyModel: string;
@@ -797,6 +805,13 @@ export interface TaskSettings {
    *  a synced task groups on the board and (reversed) which upstream status a
    *  drag writes back. */
   statusStageMap: Record<string, string>;
+  // Calendar/timeboxing prefs (spec §5): the plannable day window, a soft daily
+  // focus budget, inter-block buffer, and the user's energy windows.
+  dayStartHour: number;
+  dayEndHour: number;
+  dailyCapacityMins: number;
+  bufferMins: number;
+  energyWindows: EnergyWindow[];
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -822,6 +837,13 @@ function mapSettings(r: Raw): TaskSettings {
             ),
           )
         : {},
+    dayStartHour: Number(r.day_start_hour ?? 7) || 7,
+    dayEndHour: Number(r.day_end_hour ?? 22) || 22,
+    dailyCapacityMins: Number(r.daily_capacity_mins ?? 360) || 360,
+    bufferMins: Number(r.buffer_mins ?? 0) || 0,
+    energyWindows: Array.isArray(r.energy_windows)
+      ? (r.energy_windows as EnergyWindow[])
+      : [],
   };
 }
 
@@ -854,6 +876,13 @@ export async function updateTaskSettings(
     body.urgent_window_hours = patch.urgentWindowHours;
   if (patch.statusStageMap !== undefined)
     body.status_stage_map = patch.statusStageMap;
+  if (patch.dayStartHour !== undefined) body.day_start_hour = patch.dayStartHour;
+  if (patch.dayEndHour !== undefined) body.day_end_hour = patch.dayEndHour;
+  if (patch.dailyCapacityMins !== undefined)
+    body.daily_capacity_mins = patch.dailyCapacityMins;
+  if (patch.bufferMins !== undefined) body.buffer_mins = patch.bufferMins;
+  if (patch.energyWindows !== undefined)
+    body.energy_windows = patch.energyWindows;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",

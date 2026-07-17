@@ -1867,6 +1867,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     workflowStages: ["TODO", "IN PROCESS", "WAITING FOR", "DONE"],
     urgentWindowHours: 48,
     statusStageMap: {},
+    dayStartHour: 7,
+    dayEndHour: 22,
+    dailyCapacityMins: 360,
+    bufferMins: 0,
+    energyWindows: [],
   },
 
   updateSettings: async (patch) => {

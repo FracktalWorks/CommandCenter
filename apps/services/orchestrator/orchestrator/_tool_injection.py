@@ -784,12 +784,43 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
             )
 
 
+def merge_mcp_servers(
+    agent: Any, servers: dict[str, dict[str, Any]], *, override: bool,
+) -> None:
+    """Merge MCP servers into the field the Copilot SDK actually reads.
+
+    MUST target ``agent._mcp_servers``, NOT ``agent._default_options``. The SDK
+    consults ``_default_options`` for exactly one key — ``system_message`` —
+    and resolves MCP as ``runtime_options.get("mcp_servers") or
+    self._mcp_servers`` (``_resume_session`` reads ``self._mcp_servers`` only).
+    We pass a fresh per-run options dict to ``agent.run()``, so anything written
+    to ``_default_options["mcp_servers"]`` is never read by anyone: MCP servers
+    silently never reached a session at all.
+
+    ``override=True`` lets the caller win over what's already there (the DB
+    registry outranks a repo's own files); ``False`` only fills gaps.
+    Best-effort — never raises.
+    """
+    if not servers:
+        return
+    try:
+        existing = getattr(agent, "_mcp_servers", None)
+        merged: dict[str, Any] = dict(existing) if isinstance(existing, dict) else {}
+        for name, cfg in servers.items():
+            if override or name not in merged:
+                merged[name] = cfg
+        agent._mcp_servers = merged  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+
 async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:
     """Query the MCP server registry and inject matching servers into the agent.
 
     Reads the ``mcp_servers`` Postgres table, resolves any credential
     references through the Integration Registry, and merges the MCP
-    server config into ``agent._default_options["mcp_servers"]``.
+    server config into ``agent._mcp_servers`` (see :func:`merge_mcp_servers`
+    for why that field and not ``_default_options``).
 
     Only servers whose ``agent_scope`` includes ``"*"`` or the current
     agent name are injected.
@@ -820,9 +851,19 @@ async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:
         if "*" not in scope_list and agent_name not in scope_list:
             continue
 
-        entry: dict[str, Any] = {"transport": transport}
+        # Shape per the SDK's MCPServerConfig: the key is ``type`` (NOT
+        # ``transport``), and a stdio server carries command + args.
+        # ``tools: ["*"]`` because the SDK treats an absent/empty list as
+        # "expose none" — an enabled server is meant to be usable.
+        entry: dict[str, Any] = {}
         if transport == "stdio" and command:
-            entry["command"] = command
+            _parts = str(command).split()
+            entry = {
+                "type": "stdio",
+                "command": _parts[0] if _parts else str(command),
+                "args": _parts[1:],
+                "tools": ["*"],
+            }
             # Resolve env var values from Integration Registry
             resolved_env: dict[str, str] = {}
             raw_env = env_vars or {}
@@ -830,8 +871,12 @@ async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:
                 resolved_env[k] = str(v)
             if resolved_env:
                 entry["env"] = resolved_env
-        elif transport == "http-sse" and url:
-            entry["url"] = url
+        elif transport in ("http-sse", "http", "sse") and url:
+            entry = {
+                "type": "sse" if transport == "sse" else "http",
+                "url": url,
+                "tools": ["*"],
+            }
             raw_headers = headers or {}
             resolved_headers: dict[str, str] = {}
             for k, v in (raw_headers if isinstance(raw_headers, dict) else {}).items():
@@ -846,15 +891,4 @@ async def _inject_mcp_servers(agent: Any, agent_name: str) -> None:
     if not mcp_config:
         return
 
-    # Merge into agent's default_options
-    try:
-        opts = getattr(agent, "_default_options", None)
-        if isinstance(opts, dict):
-            existing = opts.get("mcp_servers") or {}
-            if isinstance(existing, dict):
-                existing.update(mcp_config)
-            else:
-                existing = mcp_config
-            opts["mcp_servers"] = existing
-    except Exception:  # noqa: BLE001
-        pass
+    merge_mcp_servers(agent, mcp_config, override=True)

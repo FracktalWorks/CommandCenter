@@ -32,6 +32,7 @@ Parsing mirrors :mod:`acb_skills.registry`'s frontmatter conventions:
 """
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -108,6 +109,156 @@ def parse_agent_md(text: str, *, path: Path | None = None) -> AgentMd | None:
         body=body,
         path=path,
     )
+
+
+# ── VS Code vocabulary → this runtime ─────────────────────────────────────
+# A `.agent.md` is authored for VS Code Copilot, but here the agent runs
+# headless inside MAF on a BYOK model. Its `tools:` names are VS Code IDE tool
+# ids that exist in NO tool schema we build, so the model either calls a tool
+# that isn't there or improvises onto the Copilot CLI's native bash/create/edit.
+# Map each to the platform tool that actually does that job. Names mapping to
+# () are already covered by the CLI's own native tools (bash/create/edit), so
+# they need no platform tool — they only need the prompt note below.
+_VSCODE_TOOL_MAP: dict[str, tuple[str, ...]] = {
+    "codebase": ("github_search", "github_repo_search"),
+    "search": ("github_search", "github_repo_search"),
+    "usages": ("github_search",),
+    "githubRepo": ("github_repo_search",),
+    "fetch": ("fetch_page", "web_search"),
+    "openSimpleBrowser": ("fetch_page",),
+    "problems": ("run_diagnostics", "get_errors"),
+    "testFailure": ("run_diagnostics", "get_errors"),
+    "editFiles": ("write_artifact", "share_artifact"),
+    "new": ("write_artifact",),
+    "runCommands": (),   # → the CLI's native bash
+    "runTasks": (),      # → bash
+    "terminal": (),      # → bash
+    "changes": (),       # → bash (git)
+    "extensions": (),    # no equivalent — IDE-only
+    "vscodeAPI": (),     # no equivalent — IDE-only
+}
+
+# What to tell the model, in its own prompt, about the gap between the tool
+# names its .agent.md advertises and the ones it actually has.
+_RUNTIME_NOTE = """
+---
+## Runtime note (CommandCenter)
+
+You are NOT running inside VS Code — you run headless in the CommandCenter
+runtime. Your definition lists VS Code tool names; use these instead:
+
+- `editFiles` / `new` → **write_artifact(path, content)** — pass the file's
+  content directly. Do NOT build files with shell heredocs / echo / printf /
+  base64: that quoting is fragile and large writes get truncated mid-file.
+- `runCommands` / `terminal` / `runTasks` / `changes` → your native **bash**
+  tool (use it to RUN things, not to author file content).
+- `codebase` / `search` / `usages` → **github_search** / **github_repo_search**.
+- `problems` / `testFailure` → **run_diagnostics**.
+- `fetch` / `openSimpleBrowser` → **fetch_page** / **web_search**.
+
+There is no Problems panel, no `#codebase` index, no editor UI, and no VS Code
+extension host. Never ask the user to run a VS Code command or open a panel.
+"""
+
+
+def derive_tool_scope(tools: list[str]) -> list[str]:
+    """Platform tool names implied by a `.agent.md` VS Code ``tools:`` list.
+
+    Turns the advisory VS Code vocabulary into real, injectable tool names so a
+    declared capability (``codebase`` → code search) actually exists at run
+    time. Unknown/IDE-only names simply contribute nothing.
+    """
+    scope: list[str] = []
+    for t in tools:
+        for mapped in _VSCODE_TOOL_MAP.get(str(t).strip(), ()):
+            if mapped not in scope:
+                scope.append(mapped)
+    return scope
+
+
+def uses_vscode_tool_vocabulary(tools: list[str]) -> bool:
+    """True if any declared tool is a VS Code IDE tool id (not one of ours)."""
+    return any(str(t).strip() in _VSCODE_TOOL_MAP for t in tools)
+
+
+def runtime_note_for(tools: list[str]) -> str:
+    """The prompt note reconciling VS Code tool names with this runtime.
+
+    Returned only for agents that actually speak the VS Code vocabulary — an
+    agent authored for CommandCenter needs no such correction. Additive: it
+    never rewrites the author's prose, it just stops the prose from pointing at
+    affordances that don't exist here.
+    """
+    return _RUNTIME_NOTE if uses_vscode_tool_vocabulary(tools) else ""
+
+
+def _coerce_mcp_entry(raw: Any) -> dict[str, Any] | None:
+    """Normalise one MCP server entry to the Copilot SDK's MCPServerConfig.
+
+    Accepts the VS Code / Claude file shapes and emits what the SDK's
+    ``MCPLocalServerConfig`` / ``MCPRemoteServerConfig`` expect (note ``type``,
+    not ``transport``). ``tools: ["*"]`` because a file-declared server is
+    declared to be used — the SDK treats ``[]`` as "expose none".
+    """
+    if not isinstance(raw, dict):
+        return None
+    url = raw.get("url")
+    if url:
+        entry: dict[str, Any] = {
+            "type": raw.get("type") if raw.get("type") in ("http", "sse") else "http",
+            "url": str(url),
+            "tools": raw.get("tools") or ["*"],
+        }
+        if isinstance(raw.get("headers"), dict):
+            entry["headers"] = {str(k): str(v) for k, v in raw["headers"].items()}
+        return entry
+    command = raw.get("command")
+    if not command:
+        return None
+    entry = {
+        "type": "stdio",
+        "command": str(command),
+        "args": [str(a) for a in (raw.get("args") or [])],
+        "tools": raw.get("tools") or ["*"],
+    }
+    if isinstance(raw.get("env"), dict):
+        entry["env"] = {str(k): str(v) for k, v in raw["env"].items()}
+    if raw.get("cwd"):
+        entry["cwd"] = str(raw["cwd"])
+    return entry
+
+
+def load_repo_mcp_servers(agent_dir: Path | str) -> dict[str, dict[str, Any]]:
+    """MCP servers an agent repo declares in its own files.
+
+    A VS Code-authored agent declares its MCP servers in ``.vscode/mcp.json``
+    (``{"servers": {...}}``) or ``.mcp.json`` (``{"mcpServers": {...}}``).
+    Neither was ever read here — the runtime only looked at ``config.json``
+    and the ``mcp_servers`` DB table — so an agent that depends on an MCP
+    server (e.g. a diagramming agent declaring draw.io) silently lost it and
+    then failed at the task it was built for.
+
+    Both files are read (``.mcp.json`` wins on conflict, being the
+    runtime-agnostic one). Fully defensive: missing/malformed files yield {}.
+    """
+    base = Path(agent_dir)
+    out: dict[str, dict[str, Any]] = {}
+    for rel, key in ((".vscode/mcp.json", "servers"), (".mcp.json", "mcpServers")):
+        try:
+            raw = json.loads((base / rel).read_text(encoding="utf-8-sig"))
+        except (OSError, ValueError):
+            continue
+        if not isinstance(raw, dict):
+            continue
+        # Tolerate either top-level key in either file.
+        servers = raw.get(key) or raw.get("servers") or raw.get("mcpServers") or {}
+        if not isinstance(servers, dict):
+            continue
+        for name, cfg in servers.items():
+            entry = _coerce_mcp_entry(cfg)
+            if entry:
+                out[str(name)] = entry
+    return out
 
 
 def find_agent_md(agent_dir: Path | str, agent_name: str | None = None) -> Path | None:

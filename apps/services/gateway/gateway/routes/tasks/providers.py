@@ -44,9 +44,13 @@ async def _clickup_send(
     times before returning the last response for the caller to handle."""
     delay = 1.0
     async with httpx.AsyncClient(timeout=20.0) as http:
+        # Dispatch to the verb method (http.get/post/put/delete) rather than
+        # http.request(method, ...) — it's the idiomatic httpx call AND keeps the
+        # provider compatible with test doubles that stub the verb methods.
+        send = getattr(http, method.lower())
         response: httpx.Response | None = None
         for attempt in range(retries + 1):
-            response = await http.request(method, url, headers=headers, **kwargs)
+            response = await send(url, headers=headers, **kwargs)
             if response.status_code != 429 or attempt >= retries:
                 return response
             ra = response.headers.get("Retry-After")

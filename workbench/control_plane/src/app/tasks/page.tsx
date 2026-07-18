@@ -21,6 +21,8 @@ import { TaskFocusModal } from "./components/TaskFocusModal";
 import { ReclarifyModal } from "./components/ReclarifyModal";
 import { UndoToast } from "./components/UndoToast";
 import { DeleteConfirmModal } from "./components/DeleteConfirmModal";
+import { SchedulePopup } from "./components/SchedulePopup";
+import { EliminatePopup } from "./components/EliminatePopup";
 
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
@@ -149,6 +151,8 @@ export default function TasksPage() {
         <ReclarifyModal />
         <UndoToast />
         <DeleteConfirmModal />
+        <SchedulePopup />
+        <EliminatePopup />
       </div>
     );
   }
@@ -265,6 +269,8 @@ export default function TasksPage() {
       <ReclarifyModal />
       <UndoToast />
       <DeleteConfirmModal />
+      <SchedulePopup />
+      <EliminatePopup />
     </div>
   );
 }

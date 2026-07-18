@@ -477,11 +477,25 @@ export function TaskDetail({
             (they get prioritized in the clarify card). */}
         {item.disposition !== "INBOX" && (
           <section className="rounded-lg border border-border bg-card px-3 py-2.5">
-            <div className="flex items-center justify-between gap-2">
+            {/* Top-right of the sub-card: the priority cell pill and — right
+                beside it — the competing action nudge (delegate / schedule /
+                eliminate). Same suggestion the card carries, here in full: a
+                suggestion, not a status; dismiss with its × ("keep mine"), and
+                "Schedule?"/"Eliminate?" open their popups. */}
+            <div className="flex flex-wrap items-center justify-between gap-2">
               <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
                 Priority
               </span>
-              <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
+              <div className="flex flex-wrap items-center justify-end gap-1.5">
+                <PriorityBadge
+                  item={item}
+                  urgentWindowHours={urgentWindowHours}
+                />
+                <SuggestionBadge
+                  item={item}
+                  urgentWindowHours={urgentWindowHours}
+                />
+              </div>
             </div>
             <div className="mt-2">
               <WeightToggles
@@ -489,12 +503,6 @@ export function TaskDetail({
                 urgentWindowHours={urgentWindowHours}
                 onChange={(w) => updateItem(item.id, w)}
               />
-            </div>
-            {/* The competing action nudge (delegate / schedule / eliminate) —
-                the same suggestion shown on the card, here in full. A suggestion,
-                not a status; dismiss with its × ("keep mine"). */}
-            <div className="mt-2 empty:hidden">
-              <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} />
             </div>
             {isUntagged(item) && (
               <p className="mt-1.5 text-[11px] text-muted-foreground/70">

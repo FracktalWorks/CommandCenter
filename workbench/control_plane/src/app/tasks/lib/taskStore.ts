@@ -432,6 +432,16 @@ interface TaskState {
   focusedItemId: string | null;
   openFocus: (id: string) => void;
   closeFocus: () => void;
+  /** A task the "Schedule" affordance is scheduling (pill / card button / context
+   *  menu) — drives the global SchedulePopup. null = closed. */
+  scheduleItemId: string | null;
+  openSchedule: (id: string) => void;
+  closeSchedule: () => void;
+  /** A task the "Eliminate" affordance is disposing (delete or Someday) — drives
+   *  the global EliminatePopup. null = closed. */
+  eliminateItemId: string | null;
+  openEliminate: (id: string) => void;
+  closeEliminate: () => void;
   /** "Mine only / Synced / All" board filter — hides the connected-workspace
    *  mirror so your own captures aren't swamped. */
   sourceFilter: "all" | "local" | "synced";
@@ -703,6 +713,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   focusedItemId: null,
   openFocus: (id) => set({ focusedItemId: id, selectedItemId: id }),
   closeFocus: () => set({ focusedItemId: null }),
+  scheduleItemId: null,
+  openSchedule: (id) => set({ scheduleItemId: id }),
+  closeSchedule: () => set({ scheduleItemId: null }),
+  eliminateItemId: null,
+  openEliminate: (id) => set({ eliminateItemId: id }),
+  closeEliminate: () => set({ eliminateItemId: null }),
   sourceFilter: "all",
   setSourceFilter: (f) => set({ sourceFilter: f }),
   filters: DEFAULT_FILTERS,

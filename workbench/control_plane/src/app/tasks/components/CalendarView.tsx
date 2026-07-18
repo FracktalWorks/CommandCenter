@@ -47,32 +47,31 @@ import {
 import { useTaskStore } from "../lib/taskStore";
 import { GtdItem } from "../lib/types";
 import { durationLabel } from "../lib/utils";
+import {
+  DEFAULT_BLOCK_MINS,
+  startOfDay,
+  addDays,
+  sameDay,
+  type Block,
+  blocksForDay,
+  firstFreeSlot,
+} from "../lib/scheduling";
 
 type Mode = "day" | "week" | "month";
 
 const DAY_START_HOUR = 7; // grid window; energy-window config is P1
 const DAY_END_HOUR = 22;
 const HOUR_PX = 46;
-const DEFAULT_BLOCK_MINS = 30;
 const SOFT_CAPACITY_MINS = 6 * 60; // "you've booked >6h of focus" flag (P1 setting)
 
-// ── date helpers (plain Date math; no date lib in the bundle) ────────────────
-const startOfDay = (d: Date) =>
-  new Date(d.getFullYear(), d.getMonth(), d.getDate());
-const addDays = (d: Date, n: number) => {
-  const x = startOfDay(d);
-  x.setDate(x.getDate() + n);
-  return x;
-};
+// ── date helpers (plain Date math; no date lib in the bundle). The core slot
+// geometry (startOfDay/sameDay/addDays/blocksForDay/firstFreeSlot) lives in
+// lib/scheduling.ts so the Schedule popup reuses the exact same logic. ────────
 const addMonths = (d: Date, n: number) => {
   const x = startOfDay(d);
   x.setMonth(x.getMonth() + n, 1);
   return x;
 };
-const sameDay = (a: Date, b: Date) =>
-  a.getFullYear() === b.getFullYear() &&
-  a.getMonth() === b.getMonth() &&
-  a.getDate() === b.getDate();
 /** Monday-start week. */
 const startOfWeek = (d: Date) => {
   const x = startOfDay(d);
@@ -88,23 +87,6 @@ const SNAP_MINS = 15; // blocks snap to a quarter-hour
 const DRAG_TYPE = "application/x-cc-cal";
 type DragPayload = { id: string; durationMins: number; grabOffsetMins: number };
 const snap = (mins: number) => Math.round(mins / SNAP_MINS) * SNAP_MINS;
-
-type Block = { item: GtdItem; start: Date; end: Date };
-
-/** Timeboxed blocks that fall on `day`. */
-function blocksForDay(items: GtdItem[], day: Date): Block[] {
-  const out: Block[] = [];
-  for (const item of items) {
-    if (!item.scheduledStart) continue;
-    const start = new Date(item.scheduledStart);
-    if (!sameDay(start, day)) continue;
-    const end = item.scheduledEnd
-      ? new Date(item.scheduledEnd)
-      : new Date(start.getTime() + (item.timeEstimateMins ?? DEFAULT_BLOCK_MINS) * 60000);
-    out.push({ item, start, end });
-  }
-  return out.sort((a, b) => a.start.getTime() - b.start.getTime());
-}
 
 /** Deadline items (hard date, not timeboxed) due on `day` — the all-day lane. */
 function deadlinesForDay(items: GtdItem[], day: Date): GtdItem[] {
@@ -156,36 +138,6 @@ function layoutBlocks(
     i = j;
   }
   return out;
-}
-
-/** First 30-min-aligned free slot on `day` at/after the window start (or now, if
- *  today), that fits `mins` without overlapping an existing block. */
-function firstFreeSlot(
-  dayBlocks: Block[],
-  day: Date,
-  mins: number,
-  startHour: number,
-  endHour: number,
-): Date {
-  const now = new Date();
-  const earliest = new Date(day);
-  earliest.setHours(startHour, 0, 0, 0);
-  if (sameDay(day, now) && now > earliest) {
-    // round up to the next 30
-    const m = now.getMinutes();
-    earliest.setHours(now.getHours(), m <= 30 ? 30 : 60, 0, 0);
-  }
-  const dayEnd = new Date(day);
-  dayEnd.setHours(endHour, 0, 0, 0);
-  let cursor = earliest;
-  const sorted = [...dayBlocks].sort((a, b) => a.start.getTime() - b.start.getTime());
-  for (const b of sorted) {
-    if (b.end <= cursor) continue;
-    if (cursor.getTime() + mins * 60000 <= b.start.getTime()) break; // fits before b
-    if (b.end > cursor) cursor = new Date(b.end);
-  }
-  if (cursor.getTime() + mins * 60000 > dayEnd.getTime()) return earliest; // overflow → stack at top
-  return cursor;
 }
 
 /** A live clock that ticks so the calendar reflects the passage of time — the

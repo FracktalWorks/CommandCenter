@@ -171,10 +171,72 @@ def test_v1_compat_completion_error_does_not_emit(monkeypatch):
     # A 200 body with no ``choices`` makes the MAF/OpenAI client iterate a None
     # ``choices`` and fail with "'NoneType' object is not iterable", masking the
     # real cause. The endpoint returns a non-2xx so the client raises cleanly.
+    # RuntimeError has no status_code → defaults to 502; the reason survives.
     assert resp.status_code == 502
-    assert resp.json()["error"]["message"] == "upstream completion error"
+    err = resp.json()["error"]
+    assert err["code"] == 502
+    assert "provider down" in err["message"]
     # No usage → no model activation emitted.
     assert [e for e in captured if e.get("kind") == "model"] == []
+
+
+def test_v1_compat_upstream_error_surfaces_status_and_redacts_secrets(monkeypatch):
+    """An upstream failure propagates its status + a SANITIZED reason.
+
+    The provider's reason (rate limit / bad key / context length) is what makes
+    the error actionable, but its string may embed a key or endpoint URL. The
+    gateway must forward the status code and reason while redacting secrets, so
+    the frontend can classify it and the operator sees the real cause — not an
+    opaque "upstream completion error" dead-end.
+    """
+    captured: list[dict] = []
+
+    async def _no_keys() -> None:
+        return None
+
+    class _RateLimited(Exception):
+        status_code = 429
+
+        def __init__(self):
+            super().__init__(
+                "RateLimitError: quota exceeded for key sk-abcdef123456 at "
+                "https://api.deepseek.com/v1/chat/completions"
+            )
+
+    async def _boom(**kw):
+        raise _RateLimited()
+
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", _TOKEN)
+    monkeypatch.setattr(v1_compat, "_ensure_keys_loaded", _no_keys)
+    monkeypatch.setattr(litellm, "acompletion", _boom)
+    monkeypatch.setattr(llm_client, "ensure_model_registered", lambda m: "openai")
+    monkeypatch.setattr(
+        _pc, "apply_prompt_caching",
+        lambda **kw: (kw["messages"], kw.get("tools"), {}),
+    )
+    monkeypatch.setattr(acb_common, "publish_activity",
+                        lambda **kw: captured.append(kw))
+
+    app = FastAPI()
+    for r in v1_compat.routers:
+        app.include_router(r)
+    client = TestClient(app)
+
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "model": "tier-balanced",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+    })
+    # Status propagates so the client/frontend can classify it as a rate limit.
+    assert resp.status_code == 429
+    err = resp.json()["error"]
+    assert err["code"] == 429
+    msg = err["message"]
+    assert "(429)" in msg
+    assert "quota exceeded" in msg          # the actionable reason survives
+    assert "sk-abcdef123456" not in msg     # key fragment redacted
+    assert "api.deepseek.com" not in msg    # endpoint URL redacted
+    assert "[redacted]" in msg
 
 
 def test_v1_compat_nonstreaming_missing_choices_becomes_error(monkeypatch):

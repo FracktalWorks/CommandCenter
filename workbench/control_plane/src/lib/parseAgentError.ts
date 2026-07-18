@@ -25,13 +25,42 @@ export interface ParsedAgentError {
 
 /** Extract an HTTP status code from a structured JSON error or "HTTP NNN" prefix. */
 function extractHttpCode(r: string): number | null {
-  // Structured: "status_code": 429  or  "status": 402
-  const sm = r.match(/"(?:status_code|status)"\s*:\s*(\d{3})/i);
+  // Structured: "status_code": 429  or  "status": 402  or  "code": 401
+  const sm = r.match(/"(?:status_code|status|code)"\s*:\s*(\d{3})/i);
   if (sm) return parseInt(sm[1], 10);
   // HTTP prefix: "HTTP 429" or "Error 402: ..."
   const hm = r.match(/\bHTTP\s*(\d{3})\b/i) || r.match(/\bError\s*(\d{3})\b/i);
   if (hm) return parseInt(hm[1], 10);
+  // Gateway-surfaced upstream form: "upstream completion failed (429): ..."
+  const gm = r.match(/completion failed \((\d{3})\)/i);
+  if (gm) return parseInt(gm[1], 10);
   return null;
+}
+
+/**
+ * Whether a GitHub Copilot session error is genuinely an AUTHENTICATION
+ * problem (expired/missing token, sign-in required) rather than a downstream
+ * model/provider completion failure surfaced through the Copilot CLI.
+ *
+ * A `CAPIError: upstream completion …` is a model-provider error (rate limit,
+ * bad provider key, context length) — telling the user to `copilot auth login`
+ * for it sends them down the wrong path, so those must NOT be treated as auth.
+ */
+function isCopilotAuthError(r: string): boolean {
+  const lc = r.toLowerCase();
+  // A completion/provider failure is never a Copilot auth problem.
+  if (lc.includes("upstream completion") || lc.includes("capierror")) return false;
+  return (
+    lc.includes("/login") ||
+    lc.includes("auth login") ||
+    lc.includes("not authenticated") ||
+    lc.includes("unauthenticated") ||
+    lc.includes("sign in") ||
+    lc.includes("signed out") ||
+    lc.includes("unauthorized") ||
+    lc.includes("401") ||
+    (lc.includes("token") && (lc.includes("expired") || lc.includes("invalid") || lc.includes("scope")))
+  );
 }
 
 /** Check if the error is specifically about billing/payment/credits depletion. */
@@ -102,7 +131,15 @@ export function parseAgentError(raw: string): ParsedAgentError {
     };
   }
 
-  if (lc.includes("github copilot session error") || (lc.includes("/login") && lc.includes("copilot"))) {
+  // Only claim an AUTH problem when the Copilot session error genuinely is one.
+  // A session error that merely wraps a model/provider completion failure
+  // (`CAPIError: upstream completion …`) falls through to the HTTP/keyword
+  // matchers below so the real cause (rate limit, bad key, context length) is
+  // shown — otherwise every provider hiccup was mislabeled "run copilot auth login".
+  if (
+    (lc.includes("github copilot session error") || (lc.includes("/login") && lc.includes("copilot"))) &&
+    isCopilotAuthError(r)
+  ) {
     return {
       title: "GitHub Copilot session error",
       detail: "The GitHub Copilot CLI session failed to authenticate or was rejected.",

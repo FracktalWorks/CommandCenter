@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any
 
 from acb_auth import require_internal_auth
@@ -207,6 +208,47 @@ def _sanitize_messages_for_provider(
     return cleaned
 
 
+# ── Secret-stripping patterns for upstream error surfacing ─────────────────
+# The provider's error string carries the ACTIONABLE reason (rate limit, bad
+# key, context-length, invalid model) but may also embed the api_base URL, a
+# Bearer token, or an ``sk-…`` key fragment. We surface the reason to the
+# operator (it's THEIR CommandCenter) but redact anything secret first.
+_SECRET_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"sk-[A-Za-z0-9_\-]{6,}"),          # OpenAI-style keys
+    re.compile(r"Bearer\s+[A-Za-z0-9._\-]+", re.I),  # bearer tokens
+    re.compile(r"https?://\S+"),                     # endpoint URLs
+    re.compile(r"gh[pousr]_[A-Za-z0-9]{20,}"),      # GitHub tokens
+)
+
+
+def _sanitize_upstream_error(exc: Exception) -> tuple[int, str]:
+    """Return ``(http_status, safe_message)`` for an upstream completion error.
+
+    The status is taken from the litellm exception (``status_code``) when
+    present so the caller — and the frontend's ``parseAgentError`` — can
+    classify it (429 rate-limit, 401 auth, 400 bad-request, …) instead of
+    dead-ending on an opaque "upstream completion error". The message keeps the
+    provider's human-readable reason but with keys / tokens / URLs redacted.
+    """
+    status = getattr(exc, "status_code", None)
+    try:
+        status = int(status) if status is not None else 502
+    except (TypeError, ValueError):
+        status = 502
+    if not (400 <= status <= 599):
+        status = 502
+
+    reason = str(getattr(exc, "message", "") or str(exc) or "").strip()
+    for pat in _SECRET_PATTERNS:
+        reason = pat.sub("[redacted]", reason)
+    # Collapse whitespace and cap length so a giant provider payload can't bloat
+    # the response (or the CLI/UI that renders it).
+    reason = re.sub(r"\s+", " ", reason)[:300].strip()
+    if not reason:
+        reason = "upstream completion error"
+    return status, f"upstream completion failed ({status}): {reason}"
+
+
 async def _handle_chat_completions(request: Request) -> StreamingResponse | dict[str, Any]:
     """OpenAI-compatible chat completions. Supports streaming and tools."""
     await _ensure_keys_loaded()
@@ -313,15 +355,19 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                     yield f"data: {json.dumps(data)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as exc:
-                # Log the detail server-side; return a generic message so
-                # provider payloads / URLs / key fragments in the exception
-                # string are not disclosed to the caller.
+                # Log the full detail server-side; surface a SANITIZED reason +
+                # status to the caller (keys/URLs/tokens stripped) so the
+                # provider's real cause — rate limit, bad key, context length —
+                # reaches the operator instead of an opaque dead-end. The
+                # OpenAI/Copilot client raises this as its error message.
                 _log.exception("v1.stream_error")
+                _status, _safe = _sanitize_upstream_error(exc)
                 yield (
                     "data: "
                     + json.dumps({"error": {
-                        "message": "upstream completion error",
+                        "message": _safe,
                         "type": type(exc).__name__,
+                        "code": _status,
                     }})
                     + "\n\n"
                 )
@@ -386,19 +432,22 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
             )
         return payload  # type: ignore[return-value]
     except Exception as exc:
-        # Log detail server-side; return a generic message (no raw provider
-        # exception string) to avoid leaking URLs / payloads / key fragments.
-        # Use a 502 status (not a 200 error body): a 200 with no ``choices``
-        # makes the MAF/OpenAI client iterate a None ``choices`` and fail with
-        # "'NoneType' object is not iterable", hiding the real error. A non-2xx
-        # makes the client raise a clean APIStatusError carrying this message.
+        # Log full detail server-side; surface a SANITIZED reason + the upstream
+        # status (keys/URLs/tokens stripped) so the provider's real cause reaches
+        # the operator. Use a non-2xx status (never a 200 error body): a 200 with
+        # no ``choices`` makes the MAF/OpenAI client iterate a None ``choices``
+        # and fail with "'NoneType' object is not iterable", hiding the real
+        # error. A non-2xx makes the client raise a clean APIStatusError carrying
+        # this message, and the frontend can classify it by status/keyword.
         _log.exception("v1.completion_error")
+        _status, _safe = _sanitize_upstream_error(exc)
         return JSONResponse(
-            status_code=502,
+            status_code=_status,
             content={
                 "error": {
-                    "message": "upstream completion error",
+                    "message": _safe,
                     "type": type(exc).__name__,
+                    "code": _status,
                 }
             },
         )

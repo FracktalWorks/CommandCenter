@@ -16,7 +16,7 @@ from acb_auth import require_internal_auth
 from acb_common import get_logger
 from acb_llm.client import _ensure_keys_loaded
 from fastapi import APIRouter, Depends, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 
 _log = get_logger("v1")
 
@@ -303,6 +303,13 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                     _chunks.append(chunk)
                     # litellm returns Pydantic ModelResponseStream — convert to dict
                     data = chunk.model_dump() if hasattr(chunk, "model_dump") else dict(chunk)
+                    # Never emit a chunk whose ``choices`` is null: the MAF/OpenAI
+                    # client does ``len(chunk.choices)`` on every streamed chunk,
+                    # so a null here crashes the whole run with an opaque
+                    # "'NoneType' object has no len()". A missing/usage-only chunk
+                    # must carry an empty list, which the client already skips.
+                    if data.get("choices") is None:
+                        data["choices"] = []
                     yield f"data: {json.dumps(data)}\n\n"
                 yield "data: [DONE]\n\n"
             except Exception as exc:
@@ -353,17 +360,48 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
             _emit_usage(model, _tier, response, source=_obs_source, agent=_obs_agent)
         except Exception:  # noqa: BLE001
             pass
-        return dict(response) if hasattr(response, "items") else response  # type: ignore[return-value]
+        payload = dict(response) if hasattr(response, "items") else response
+        # An OpenAI-compatible completion MUST carry a non-empty ``choices``
+        # list. Some providers (and litellm on a soft error) return a 200 body
+        # that has no ``choices`` — the MAF/OpenAI client then parses it into a
+        # ChatCompletion whose ``choices`` is None and blows up iterating it with
+        # "'NoneType' object is not iterable", masking the real cause. Surface it
+        # as an upstream error (proper status) so the client raises cleanly.
+        # ``payload`` may be a dict or a litellm ModelResponse object, so read
+        # ``choices`` generically from either shape.
+        _choices = (
+            payload.get("choices") if isinstance(payload, dict)
+            else getattr(payload, "choices", None)
+        )
+        if not _choices:
+            _log.warning("v1.completion_missing_choices", model=model)
+            return JSONResponse(
+                status_code=502,
+                content={
+                    "error": {
+                        "message": "upstream completion returned no choices",
+                        "type": "UpstreamResponseError",
+                    }
+                },
+            )
+        return payload  # type: ignore[return-value]
     except Exception as exc:
         # Log detail server-side; return a generic message (no raw provider
         # exception string) to avoid leaking URLs / payloads / key fragments.
+        # Use a 502 status (not a 200 error body): a 200 with no ``choices``
+        # makes the MAF/OpenAI client iterate a None ``choices`` and fail with
+        # "'NoneType' object is not iterable", hiding the real error. A non-2xx
+        # makes the client raise a clean APIStatusError carrying this message.
         _log.exception("v1.completion_error")
-        return {
-            "error": {
-                "message": "upstream completion error",
-                "type": type(exc).__name__,
-            }
-        }
+        return JSONResponse(
+            status_code=502,
+            content={
+                "error": {
+                    "message": "upstream completion error",
+                    "type": type(exc).__name__,
+                }
+            },
+        )
 
 
 # Register on both /v1/chat/completions and /chat/completions

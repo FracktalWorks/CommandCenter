@@ -168,6 +168,107 @@ def test_v1_compat_completion_error_does_not_emit(monkeypatch):
         "messages": [{"role": "user", "content": "hi"}],
         "stream": False,
     })
-    # Endpoint returns a soft error body; no usage → no model activation emitted.
-    assert resp.status_code == 200
+    # A 200 body with no ``choices`` makes the MAF/OpenAI client iterate a None
+    # ``choices`` and fail with "'NoneType' object is not iterable", masking the
+    # real cause. The endpoint returns a non-2xx so the client raises cleanly.
+    assert resp.status_code == 502
+    assert resp.json()["error"]["message"] == "upstream completion error"
+    # No usage → no model activation emitted.
     assert [e for e in captured if e.get("kind") == "model"] == []
+
+
+def test_v1_compat_nonstreaming_missing_choices_becomes_error(monkeypatch):
+    """A 200 upstream body without ``choices`` must not reach the client as 200.
+
+    litellm (or a provider) can return a soft-error body that has no
+    ``choices``; forwarded as 200 it crashes the MAF/OpenAI client on
+    ``for choice in response.choices`` (choices=None → 'NoneType' object is not
+    iterable). We surface it as a 502 so the client raises a clear error.
+    """
+    captured: list[dict] = []
+
+    async def _no_keys() -> None:
+        return None
+
+    async def _no_choices(**kw):
+        # An error-shaped 200 with no choices (what triggered the original bug).
+        return {"error": {"message": "content policy", "type": "InvalidRequest"}}
+
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", _TOKEN)
+    monkeypatch.setattr(v1_compat, "_ensure_keys_loaded", _no_keys)
+    monkeypatch.setattr(litellm, "acompletion", _no_choices)
+    monkeypatch.setattr(llm_client, "ensure_model_registered", lambda m: "openai")
+    monkeypatch.setattr(
+        _pc, "apply_prompt_caching",
+        lambda **kw: (kw["messages"], kw.get("tools"), {}),
+    )
+    monkeypatch.setattr(acb_common, "publish_activity",
+                        lambda **kw: captured.append(kw))
+
+    app = FastAPI()
+    for r in v1_compat.routers:
+        app.include_router(r)
+    client = TestClient(app)
+
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": False,
+    })
+    assert resp.status_code == 502
+    assert resp.json()["error"]["type"] == "UpstreamResponseError"
+
+
+def test_v1_compat_streaming_null_choices_normalized_to_list(monkeypatch):
+    """A streamed chunk with ``choices=None`` is emitted as ``choices=[]``.
+
+    The MAF/OpenAI client calls ``len(chunk.choices)`` on every streamed chunk,
+    so a null there crashes the whole run. Normalising to an empty list keeps
+    the stream valid (the client already skips empty, usage-only chunks).
+    """
+    captured: list[dict] = []
+
+    async def _no_keys() -> None:
+        return None
+
+    class _Chunk:
+        def __init__(self, data):
+            self._data = data
+
+        def model_dump(self):
+            return dict(self._data)
+
+    async def _stream(**kw):
+        async def _gen():
+            # A usage-only final chunk some providers send with choices=null.
+            yield _Chunk({"id": "c1", "model": "gpt-4o-mini", "choices": None,
+                          "usage": {"prompt_tokens": 1, "completion_tokens": 1,
+                                    "total_tokens": 2}})
+        return _gen()
+
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", _TOKEN)
+    monkeypatch.setattr(v1_compat, "_ensure_keys_loaded", _no_keys)
+    monkeypatch.setattr(litellm, "acompletion", _stream)
+    monkeypatch.setattr(llm_client, "ensure_model_registered", lambda m: "openai")
+    monkeypatch.setattr(
+        _pc, "apply_prompt_caching",
+        lambda **kw: (kw["messages"], kw.get("tools"), {}),
+    )
+    monkeypatch.setattr(acb_common, "publish_activity",
+                        lambda **kw: captured.append(kw))
+
+    app = FastAPI()
+    for r in v1_compat.routers:
+        app.include_router(r)
+    client = TestClient(app)
+
+    resp = client.post("/v1/chat/completions", headers=_AUTH, json={
+        "model": "gpt-4o-mini",
+        "messages": [{"role": "user", "content": "hi"}],
+        "stream": True,
+    })
+    assert resp.status_code == 200
+    body = resp.text
+    # The emitted chunk carries an empty list, never a null.
+    assert '"choices": []' in body
+    assert '"choices": null' not in body

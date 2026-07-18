@@ -569,15 +569,31 @@ class ClickUpProvider(BaseTaskProvider):
     async def _list_statuses_raw(
         self, provider_task_id: str
     ) -> list[dict[str, Any]]:
-        """The raw status objects ({status, type, orderindex}) of a task's list.
-        Best-effort: [] when it can't be resolved."""
+        """The raw status objects ({status, type, orderindex}) of a task's list,
+        sorted by pipeline order. Best-effort: [] when it can't be resolved.
+
+        ClickUp usually returns `statuses` already ordered, but that's not
+        guaranteed — we sort by `orderindex` explicitly so `_status_for_stage`
+        deterministically picks the LOWEST status feeding a stage (a board move
+        into a stage lands on the earliest of its ClickUp statuses, not a random
+        one). Unknown/unparseable orderindex sorts last."""
+        def _orderindex(st: dict[str, Any]) -> float:
+            try:
+                return float(st.get("orderindex"))
+            except (TypeError, ValueError):
+                return float("inf")
+
         with contextlib.suppress(ProviderError, KeyError, TypeError):
             task = await self._get(f"/task/{provider_task_id}")
             list_id = str((task.get("list") or {}).get("id") or "")
             if not list_id:
                 return []
             lst = await self._get(f"/list/{list_id}")
-            return [st for st in lst.get("statuses") or [] if st.get("status")]
+            statuses = [
+                st for st in lst.get("statuses") or [] if st.get("status")
+            ]
+            statuses.sort(key=_orderindex)
+            return statuses
         return []
 
     async def list_statuses_for_task(self, provider_task_id: str) -> list[str]:

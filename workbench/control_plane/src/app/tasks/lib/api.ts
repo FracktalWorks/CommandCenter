@@ -574,6 +574,22 @@ export async function apiReplan(req: PlanDayRequest): Promise<DayPlanResult> {
   );
 }
 
+/** Learned-estimate accuracy over recent TIMED blocks (actual vs planned) — the
+ *  end-of-day review's "you run X% over" signal. `overPct` > 0 = under-estimates. */
+export interface EstimateStats {
+  samples: number;
+  ratio: number;
+  overPct: number;
+}
+export async function apiEstimateStats(): Promise<EstimateStats> {
+  const r = await gatewayFetch<Raw>(`/calendar/estimate-stats`);
+  return {
+    samples: Number(r.samples ?? 0),
+    ratio: Number(r.ratio ?? 1),
+    overPct: Number(r.over_pct ?? 0),
+  };
+}
+
 /** Archive (hide from active views) or un-archive a task. */
 export async function apiArchiveItem(
   id: string,

@@ -305,6 +305,76 @@ async def _llm_rank_day(
     return ordered, notes
 
 
+async def _estimate_ratio(db: Any, uid: str) -> tuple[float, int]:
+    """Median actual/planned duration ratio over the user's recent completed,
+    TIMED blocks — the "you take 1.3x your estimate" fudge factor that drives the
+    end-of-day review and the planner's estimate padding (calendar_ux_review §4).
+    planned = the scheduled block length, falling back to the raw estimate.
+    Returns (ratio, sample_count); (1.0, 0) when there isn't enough signal."""
+    row = (await db.execute(text("""
+        SELECT count(*) AS n,
+               percentile_cont(0.5) WITHIN GROUP (ORDER BY r) AS median_ratio
+          FROM (
+            SELECT EXTRACT(EPOCH FROM (actual_end - actual_start)) / 60.0
+                     / NULLIF(planned, 0) AS r
+              FROM (
+                SELECT actual_start, actual_end,
+                       COALESCE(
+                         EXTRACT(EPOCH FROM (scheduled_end - scheduled_start))
+                             / 60.0,
+                         time_estimate_mins) AS planned
+                  FROM gtd_items
+                 WHERE user_id = :uid
+                   AND actual_start IS NOT NULL AND actual_end IS NOT NULL
+                   AND actual_end > actual_start
+                   AND deleted_at IS NULL
+                   AND actual_end > now() - interval '90 days'
+              ) s
+             WHERE planned > 0
+          ) t
+    """), {"uid": uid})).first()
+    n = int(row.n or 0) if row else 0
+    ratio = float(row.median_ratio) if row and row.median_ratio else 1.0
+    return ratio, n
+
+
+async def _estimate_pad(db: Any, uid: str) -> tuple[float, str | None]:
+    """The learned-estimate multiplier for the planner + a human note. Clamped so
+    one odd week can't distort the plan; (1.0, None) without enough signal."""
+    ratio, n = await _estimate_ratio(db, uid)
+    if n < 5:
+        return 1.0, None
+    pad = max(0.8, min(1.75, ratio))
+    note = None
+    if abs(pad - 1) >= 0.1:
+        note = (f"Padded estimates x{pad:.2f} from your history "
+                f"(you average {round((ratio - 1) * 100):+d}% vs estimate).")
+    return pad, note
+
+
+def _join_notes(*parts: str | None) -> str | None:
+    """Space-join the non-empty note fragments (or None if all empty)."""
+    joined = " ".join(p for p in parts if p)
+    return joined or None
+
+
+@router.get("/calendar/estimate-stats")
+async def estimate_stats(user: UserContext = Depends(get_current_user)):
+    """Planned-vs-actual accuracy over recent timed blocks — the learned-estimate
+    signal shown in the end-of-day review (and used to pad the planner). §3 P3."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        ratio, n = await _estimate_ratio(db, uid)
+        return {
+            "samples": n,
+            "ratio": round(ratio, 2),
+            "over_pct": round((ratio - 1) * 100),
+        }
+    finally:
+        await db.close()
+
+
 _CANDIDATE_WHERE = (
     " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
     " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
@@ -339,6 +409,10 @@ async def plan_day(
         cand_rows = (await db.execute(
             text(ITEM_SELECT + _CANDIDATE_WHERE), {"uid": uid})).fetchall()
         cands = [_candidate_brief(_row_to_item(r), now) for r in cand_rows]
+        # Learned estimates: pad every duration by the user's historical
+        # actual/planned ratio so a chronic under-estimator gets a realistic day
+        # (§4). Only with enough signal; clamped so one odd week can't skew it.
+        pad, pad_note = await _estimate_pad(db, uid)
         busy_rows = (await db.execute(
             text(ITEM_SELECT + _BUSY_WHERE),
             {"uid": uid, "win_start": win_start, "win_end": win_end},
@@ -381,7 +455,7 @@ async def plan_day(
             c = by_id.get(o["id"])
             if not c:
                 continue
-            dur = c["estimate_mins"]
+            dur = max(5, round(c["estimate_mins"] * pad))
             if req.capacity_mins and used + dur > req.capacity_mins:
                 unplaced.append(PlanUnplaced(
                     item_id=c["id"], title=c["title"],
@@ -409,7 +483,7 @@ async def plan_day(
                     reason="Left for another day"))
 
         return DayPlan(
-            blocks=blocks, unplaced=unplaced, notes=notes,
+            blocks=blocks, unplaced=unplaced, notes=_join_notes(notes, pad_note),
             used_mins=used, capacity_mins=req.capacity_mins)
     finally:
         await db.close()

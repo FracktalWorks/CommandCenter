@@ -184,6 +184,8 @@ export function CalendarView() {
   const items = useTaskStore((s) => s.items);
   const updateItem = useTaskStore((s) => s.updateItem);
   const openFocus = useTaskStore((s) => s.openFocus);
+  const quickDispose = useTaskStore((s) => s.quickDispose);
+  const loadDone = useTaskStore((s) => s.loadDone);
   const settings = useTaskStore((s) => s.settings);
   // The plannable day window + capacity come from the user's calendar prefs so
   // the grid and the AI planner agree; sane defaults when unset.
@@ -204,6 +206,12 @@ export function CalendarView() {
     const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
     if (tz && tz !== settings.timezone) void updateSettings({ timezone: tz });
   }, [settings.timezone, updateSettings]);
+
+  // Pull DONE tasks into the store so COMPLETED time-blocks stay on the grid
+  // (they're excluded from the normal hydrate). Keeps the sense of progress.
+  useEffect(() => {
+    void loadDone();
+  }, [loadDone]);
 
   // Deadline radar: unscheduled next actions with a due date approaching (≤14d)
   // — the ones most likely to slip because they were never timeboxed.
@@ -240,6 +248,20 @@ export function CalendarView() {
       ),
     [items],
   );
+
+  // Completed blocks on the focused day — the "done today" tally (progress).
+  const doneStats = useMemo(() => {
+    const done = blocksForDay(items, anchor).filter(
+      (b) => b.item.disposition === "DONE",
+    );
+    return {
+      count: done.length,
+      mins: done.reduce(
+        (n, b) => n + (b.end.getTime() - b.start.getTime()) / 60000,
+        0,
+      ),
+    };
+  }, [items, anchor]);
 
   const schedule = (item: GtdItem, day: Date, at?: Date) => {
     const mins = item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
@@ -470,6 +492,12 @@ export function CalendarView() {
               energyWindows={energyWindows}
               onOpen={openFocus}
               onUnschedule={unschedule}
+              onComplete={(item) =>
+                quickDispose(
+                  item.id,
+                  item.disposition === "DONE" ? "NEXT" : "DONE",
+                )
+              }
               reschedule={reschedule}
             />
           )}
@@ -489,6 +517,7 @@ export function CalendarView() {
             )}
             capacityTarget={capacityTarget}
             dueSoon={dueSoon}
+            doneStats={doneStats}
             onPlan={() => setPlanOpen(true)}
             onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
             onScheduleToday={(t) => schedule(t, startOfDay(new Date()))}
@@ -942,6 +971,7 @@ function TimeGrid({
   energyWindows,
   onOpen,
   onUnschedule,
+  onComplete,
   reschedule,
 }: {
   days: Date[];
@@ -951,6 +981,7 @@ function TimeGrid({
   energyWindows: EnergyWindow[];
   onOpen: (id: string) => void;
   onUnschedule: (item: GtdItem) => void;
+  onComplete: (item: GtdItem) => void;
   reschedule: (id: string, start: Date, end: Date) => void;
 }) {
   const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
@@ -1169,6 +1200,7 @@ function TimeGrid({
                 const mins = (end.getTime() - b.start.getTime()) / 60000;
                 const height = Math.max(20, (mins / 60) * HOUR_PX - 2);
                 const conflict = lanes > 1;
+                const isDone = b.item.disposition === "DONE";
                 const leftPct = (lane / lanes) * 100;
                 const widthPct = 100 / lanes;
                 return (
@@ -1187,18 +1219,44 @@ function TimeGrid({
                     }
                     className={[
                       "group absolute cursor-grab overflow-hidden rounded-md border px-1.5 py-0.5 text-left active:cursor-grabbing",
-                      conflict
-                        ? "border-destructive/60 bg-destructive/10"
-                        : "border-primary/40 bg-primary/10",
+                      isDone
+                        ? "border-success/40 bg-success/10"
+                        : conflict
+                          ? "border-destructive/60 bg-destructive/10"
+                          : "border-primary/40 bg-primary/10",
                     ].join(" ")}
                   >
-                    <button
-                      type="button"
-                      onClick={() => onOpen(b.item.id)}
-                      className="block w-full truncate text-left text-[11px] font-medium text-foreground"
-                    >
-                      {b.item.title}
-                    </button>
+                    <div className="flex items-start gap-1">
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onComplete(b.item);
+                        }}
+                        aria-label={isDone ? "Mark not done" : "Mark done"}
+                        title={isDone ? "Mark as not done" : "Mark done"}
+                        className={[
+                          "mt-[1px] flex h-3.5 w-3.5 shrink-0 items-center justify-center rounded-full border",
+                          isDone
+                            ? "border-success bg-success text-white"
+                            : "border-muted-foreground/50 text-transparent hover:border-success hover:text-success/70",
+                        ].join(" ")}
+                      >
+                        <Check className="h-2.5 w-2.5" strokeWidth={3} />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => onOpen(b.item.id)}
+                        className={[
+                          "min-w-0 flex-1 truncate text-left text-[11px] font-medium",
+                          isDone
+                            ? "text-muted-foreground line-through"
+                            : "text-foreground",
+                        ].join(" ")}
+                      >
+                        {b.item.title}
+                      </button>
+                    </div>
                     <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
                       {b.start.toLocaleTimeString(undefined, {
                         hour: "numeric",
@@ -1335,6 +1393,7 @@ function UnscheduledRail({
   capacityMins,
   capacityTarget,
   dueSoon,
+  doneStats,
   onPlan,
   onSchedule,
   onScheduleToday,
@@ -1345,6 +1404,7 @@ function UnscheduledRail({
   capacityMins: number;
   capacityTarget: number;
   dueSoon: { item: GtdItem; days: number }[];
+  doneStats: { count: number; mins: number };
   onPlan: () => void;
   onSchedule: (t: GtdItem) => void;
   onScheduleToday: (t: GtdItem) => void;
@@ -1371,6 +1431,13 @@ function UnscheduledRail({
           {Math.round((capacityTarget / 60) * 10) / 10}h booked
           {over ? " — over capacity" : ""}
         </div>
+        {doneStats.count > 0 && (
+          <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-success">
+            <Check className="h-3 w-3" />
+            {doneStats.count} done ·{" "}
+            {Math.round((doneStats.mins / 60) * 10) / 10}h
+          </div>
+        )}
       </div>
       <div className="flex-1 overflow-y-auto p-2">
         {/* Deadline radar — due-soon tasks that aren't timeboxed yet. */}

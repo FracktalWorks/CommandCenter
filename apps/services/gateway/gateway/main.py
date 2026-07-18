@@ -208,6 +208,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.tasks_sync_skipped", error=str(exc))
 
+    # Nightly auto roll-over of incomplete calendar time-blocks: each user's
+    # overdue blocks are packed into their local today once the day rolls over
+    # (routes/tasks/calendar.py). Fixes the "fell behind → stale plan" failure.
+    try:
+        from gateway.routes.tasks.calendar import start_auto_rollover
+        await start_auto_rollover()
+        _log.info("gateway.tasks_rollover_started")
+    except Exception as exc:
+        _log.warning("gateway.tasks_rollover_skipped", error=str(exc))
+
     # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
     # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
     # max_tokens=0 so the first real user request is a cache HIT, not a cold
@@ -230,6 +240,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
             stop_background_sync as stop_tasks_sync,
         )
         await stop_tasks_sync()
+    except Exception:
+        pass
+
+    # Stop the calendar auto roll-over loop
+    try:
+        from gateway.routes.tasks.calendar import stop_auto_rollover
+        await stop_auto_rollover()
     except Exception:
         pass
 

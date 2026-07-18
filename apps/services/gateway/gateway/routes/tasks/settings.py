@@ -122,6 +122,10 @@ class GtdSettingsModel(BaseModel):
     daily_capacity_mins: int = 360
     buffer_mins: int = 0
     energy_windows: list[dict] = []
+    # Auto roll-over (migration 78): the user's IANA timezone (for the local-day
+    # boundary the nightly job triggers on) + an opt-out toggle.
+    timezone: str = "UTC"
+    auto_rollover: bool = True
 
 
 class GtdSettingsPatch(BaseModel):
@@ -142,6 +146,8 @@ class GtdSettingsPatch(BaseModel):
     daily_capacity_mins: int | None = None
     buffer_mins: int | None = None
     energy_windows: list[dict] | None = None
+    timezone: str | None = None
+    auto_rollover: bool | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -248,6 +254,8 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
             getattr(row, "daily_capacity_mins", 360) or 360),
         buffer_mins=int(getattr(row, "buffer_mins", 0) or 0),
         energy_windows=_energy_windows(getattr(row, "energy_windows", None)),
+        timezone=str(getattr(row, "timezone", None) or "UTC"),
+        auto_rollover=bool(getattr(row, "auto_rollover", True)),
     )
 
 

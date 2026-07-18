@@ -886,6 +886,10 @@ export interface TaskSettings {
   dailyCapacityMins: number;
   bufferMins: number;
   energyWindows: EnergyWindow[];
+  /** IANA timezone (for the nightly auto roll-over's local-day boundary). */
+  timezone: string;
+  /** auto-roll incomplete past blocks into today, once per local day. */
+  autoRollover: boolean;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -918,6 +922,8 @@ function mapSettings(r: Raw): TaskSettings {
     energyWindows: Array.isArray(r.energy_windows)
       ? (r.energy_windows as EnergyWindow[])
       : [],
+    timezone: String(r.timezone ?? "UTC"),
+    autoRollover: r.auto_rollover !== false,
   };
 }
 
@@ -957,6 +963,8 @@ export async function updateTaskSettings(
   if (patch.bufferMins !== undefined) body.buffer_mins = patch.bufferMins;
   if (patch.energyWindows !== undefined)
     body.energy_windows = patch.energyWindows;
+  if (patch.timezone !== undefined) body.timezone = patch.timezone;
+  if (patch.autoRollover !== undefined) body.auto_rollover = patch.autoRollover;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",

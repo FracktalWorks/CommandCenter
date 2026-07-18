@@ -198,6 +198,13 @@ export function CalendarView() {
   const [planOpen, setPlanOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
 
+  // Persist the user's real IANA timezone so the server-side nightly roll-over
+  // computes their local-day boundary correctly (defaults to UTC otherwise).
+  useEffect(() => {
+    const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+    if (tz && tz !== settings.timezone) void updateSettings({ timezone: tz });
+  }, [settings.timezone, updateSettings]);
+
   // Deadline radar: unscheduled next actions with a due date approaching (≤14d)
   // — the ones most likely to slip because they were never timeboxed.
   const dueSoon = useMemo(() => {
@@ -839,6 +846,18 @@ function CalendarSettings({
           value={settings.bufferMins}
           onChange={(e) => onChange({ bufferMins: num(e.target.value, 0) })}
           className={`w-14 ${inputCls}`}
+        />
+      </label>
+
+      <label className="mb-3 flex cursor-pointer items-center justify-between gap-2">
+        <span className="min-w-0 text-muted-foreground">
+          Auto roll-over overdue tasks daily
+        </span>
+        <input
+          type="checkbox"
+          checked={settings.autoRollover}
+          onChange={(e) => onChange({ autoRollover: e.target.checked })}
+          className="h-4 w-4 shrink-0 accent-primary"
         />
       </label>
 

@@ -18,9 +18,12 @@ windows as absolute ISO) so the server needs no timezone assumptions.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, time, timedelta
 from typing import Any
+from zoneinfo import ZoneInfo
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
@@ -429,6 +432,38 @@ _TODAY_BUSY_WHERE = (
 )
 
 
+def _pack_rollover(
+    overdue: list[Any], free: list[list[datetime]],
+    windows: list[tuple[datetime, datetime, str]], buffer_mins: int,
+    now: datetime,
+) -> tuple[list[tuple[Any, datetime, datetime, str]], list[Any]]:
+    """Pack overdue-incomplete items into `free` (nearest-due first, preserving
+    each block's duration). Returns (placements=[(item, start, end, note)],
+    unplaced_items). Shared by the endpoint (→ proposal) and the auto-rollover
+    background job (→ applies + logs)."""
+    far = datetime.max.replace(tzinfo=UTC)
+    overdue.sort(key=lambda m: (_parse_iso(m.due_at) or far,
+                                _parse_iso(m.scheduled_start) or now))
+    placements: list[tuple[Any, datetime, datetime, str]] = []
+    unplaced: list[Any] = []
+    for m in overdue:
+        bs = _parse_iso(m.scheduled_start)
+        be = _parse_iso(m.scheduled_end)
+        dur = max(15, int((be - bs).total_seconds() / 60)) if bs and be else 30
+        pref = m.energy if m.energy in _ENERGY else None
+        placed = _place_one(free, dur, pref, windows, buffer_mins)
+        if placed is None:
+            unplaced.append(m)
+            continue
+        s, e = placed
+        due = _parse_iso(m.due_at)
+        note = "Rolled over from " + (bs.strftime("%b %d") if bs else "earlier")
+        if due and due < now:
+            note += " · due date passed"
+        placements.append((m, s, e, note))
+    return placements, unplaced
+
+
 @router.post("/calendar/rollover", response_model=DayPlan)
 async def rollover_day(
     req: PlanDayRequest, user: UserContext = Depends(get_current_user),
@@ -466,38 +501,24 @@ async def rollover_day(
             if ws and we and we > ws and w.energy in _ENERGY:
                 windows.append((ws, we, w.energy))
 
-        far = datetime.max.replace(tzinfo=UTC)
-
-        def _key(m: Any) -> tuple[datetime, datetime]:
-            return (_parse_iso(m.due_at) or far,
-                    _parse_iso(m.scheduled_start) or now)
-        overdue.sort(key=_key)
-
-        blocks: list[PlanBlock] = []
-        unplaced: list[PlanUnplaced] = []
-        used = 0
-        for m in overdue:
-            bs = _parse_iso(m.scheduled_start)
-            be = _parse_iso(m.scheduled_end)
-            dur = max(15, int((be - bs).total_seconds() / 60)) if bs and be else 30
-            pref = m.energy if m.energy in _ENERGY else None
-            placed = _place_one(free, dur, pref, windows, req.buffer_mins)
-            if placed is None:
-                unplaced.append(PlanUnplaced(
-                    item_id=m.id, title=m.title,
-                    reason="No open slot today — reschedule manually"))
-                continue
-            s, e = placed
-            due = _parse_iso(m.due_at)
-            note = "Rolled over from " + (bs.strftime("%b %d") if bs else "earlier")
-            if due and due < now:
-                note += " · due date passed"
-            blocks.append(PlanBlock(
+        placements, unplaced_items = _pack_rollover(
+            overdue, free, windows, req.buffer_mins, now)
+        blocks = [
+            PlanBlock(
                 item_id=m.id, title=m.title,
                 start=s.isoformat(), end=e.isoformat(),
-                energy=pref, rationale=note))
-            used += dur
-
+                energy=m.energy if m.energy in _ENERGY else None,
+                rationale=note)
+            for (m, s, e, note) in placements
+        ]
+        unplaced = [
+            PlanUnplaced(
+                item_id=m.id, title=m.title,
+                reason="No open slot today — reschedule manually")
+            for m in unplaced_items
+        ]
+        used = sum(
+            int((e - s).total_seconds() / 60) for (_m, s, e, _n) in placements)
         notes = (f"{len(blocks)} task(s) rolled forward"
                  + (f", {len(unplaced)} didn't fit" if unplaced else "")
                  if blocks or unplaced else "Nothing overdue to roll over.")
@@ -506,3 +527,173 @@ async def rollover_day(
             used_mins=used, capacity_mins=req.capacity_mins)
     finally:
         await db.close()
+
+
+@router.get("/calendar/rollover/log")
+async def rollover_log(
+    limit: int = 30, user: UserContext = Depends(get_current_user),
+):
+    """Recent automatic roll-overs (audit/history): what moved, from → to."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text("""SELECT item_id, title, rolled_from, rolled_to, created_at
+                    FROM gtd_rollover_log WHERE user_id = :uid
+                    ORDER BY created_at DESC LIMIT :lim"""),
+            {"uid": uid, "lim": max(1, min(limit, 100))},
+        )).fetchall()
+        return [
+            {
+                "item_id": str(r.item_id),
+                "title": r.title,
+                "rolled_from": r.rolled_from.isoformat() if r.rolled_from else None,
+                "rolled_to": r.rolled_to.isoformat() if r.rolled_to else None,
+                "at": r.created_at.isoformat() if r.created_at else None,
+            }
+            for r in rows
+        ]
+    finally:
+        await db.close()
+
+
+# ── Automatic roll-over background job (nightly, per local day) ───────────────
+#
+# A single loop sweeps every user with auto_rollover on; the FIRST tick after a
+# user's LOCAL day rolls over (guarded by gtd_settings.last_rollover_date) packs
+# their overdue-incomplete blocks into the new day and APPLIES it (this is the
+# only place scheduling changes are written server-side, without the client).
+# Server-side geometry needs the user's timezone + prefs, all stored (mig 77/78).
+
+_rollover_task: asyncio.Task | None = None
+_ROLLOVER_TICK_SECS = 900  # 15 min — catches each local day boundary promptly.
+
+
+def _local_dt(d: date, hour: int, tz: ZoneInfo) -> datetime:
+    """A local wall-clock hour on date `d` in `tz` (hour 24 = next midnight)."""
+    if hour >= 24:
+        return datetime.combine(d + timedelta(days=1), time(0), tzinfo=tz)
+    return datetime.combine(d, time(max(0, min(hour, 23))), tzinfo=tz)
+
+
+async def _rollover_one_user(row: Any) -> None:
+    """Roll one user's overdue blocks into their local today, once per local day.
+    Applies + logs; marks last_rollover_date so it won't re-run until tomorrow."""
+    uid = row.user_id
+    try:
+        tz = ZoneInfo(row.timezone or "UTC")
+    except Exception:
+        tz = ZoneInfo("UTC")
+    now = datetime.now(UTC)
+    local_today = now.astimezone(tz).date()
+    if row.last_rollover_date == local_today:
+        return  # already handled this local day
+
+    day_start = int(row.day_start_hour if row.day_start_hour is not None else 7)
+    day_end = int(row.day_end_hour if row.day_end_hour is not None else 22)
+    win_start = _local_dt(local_today, day_start, tz)
+    win_end = _local_dt(local_today, max(day_start + 1, day_end), tz)
+    from gateway.routes.tasks.settings import _energy_windows
+    windows: list[tuple[datetime, datetime, str]] = []
+    for w in _energy_windows(row.energy_windows):
+        ws = _local_dt(local_today, w["start_hour"], tz)
+        we = _local_dt(local_today, w["end_hour"], tz)
+        if we > ws:
+            windows.append((ws, we, w["energy"]))
+
+    db = await _get_db()
+    try:
+        over_rows = (await db.execute(
+            text(ITEM_SELECT + _OVERDUE_WHERE), {"uid": uid, "now": now},
+        )).fetchall()
+        overdue = [_row_to_item(r) for r in over_rows]
+        busy_rows = (await db.execute(
+            text(ITEM_SELECT + _TODAY_BUSY_WHERE),
+            {"uid": uid, "win_start": win_start, "win_end": win_end, "now": now},
+        )).fetchall()
+        busy: list[tuple[datetime, datetime]] = []
+        for r in busy_rows:
+            bs = _parse_iso(getattr(r, "scheduled_start", None))
+            be = _parse_iso(getattr(r, "scheduled_end", None))
+            if bs and be and be > bs:
+                busy.append((bs, be))
+        free = _free_intervals(win_start, win_end, busy, now)
+        buffer_mins = int(row.buffer_mins or 0)
+        placements, _unplaced = _pack_rollover(
+            overdue, free, windows, buffer_mins, now)
+        for m, s, e, _note in placements:
+            await db.execute(
+                text("""UPDATE gtd_items
+                        SET scheduled_start = :s, scheduled_end = :e,
+                            updated_at = now()
+                        WHERE id = :id AND user_id = :uid"""),
+                {"s": s, "e": e, "id": m.id, "uid": uid})
+            await db.execute(
+                text("""INSERT INTO gtd_rollover_log
+                          (user_id, item_id, title, rolled_from, rolled_to)
+                        VALUES (:uid, :id, :title, :frm, :to)"""),
+                {"uid": uid, "id": m.id, "title": m.title,
+                 "frm": _parse_iso(m.scheduled_start), "to": s})
+        await db.execute(
+            text("UPDATE gtd_settings SET last_rollover_date = :d "
+                 "WHERE user_id = :uid"),
+            {"d": local_today, "uid": uid})
+        await db.commit()
+        if placements:
+            _log.info("tasks.calendar.rolled_over",
+                      user=str(uid)[:12], count=len(placements))
+    finally:
+        await db.close()
+
+
+async def _run_rollover_sweep() -> None:
+    """One pass over every auto-rollover user."""
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text("""SELECT user_id, timezone, auto_rollover, last_rollover_date,
+                           day_start_hour, day_end_hour, daily_capacity_mins,
+                           buffer_mins, energy_windows
+                    FROM gtd_settings
+                    WHERE coalesce(auto_rollover, true) = true"""),
+        )).fetchall()
+    finally:
+        await db.close()
+    for row in rows:
+        try:
+            await _rollover_one_user(row)
+        except Exception as exc:  # never let one user break the sweep
+            _log.warning("tasks.calendar.rollover_user_failed",
+                         error=str(exc)[:160])
+
+
+async def _auto_rollover_loop() -> None:
+    while True:
+        try:
+            await _run_rollover_sweep()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:  # never let one bad sweep kill the loop
+            _log.warning("tasks.calendar.rollover_sweep_failed",
+                         error=str(exc)[:160])
+        await asyncio.sleep(_ROLLOVER_TICK_SECS)
+
+
+async def start_auto_rollover() -> None:
+    """Launch the single auto-rollover loop (called from the gateway lifespan)."""
+    global _rollover_task
+    if _rollover_task and not _rollover_task.done():
+        return
+    _rollover_task = asyncio.create_task(_auto_rollover_loop())
+    _log.info("tasks.calendar.auto_rollover_started")
+
+
+async def stop_auto_rollover() -> None:
+    """Cancel the auto-rollover loop (gateway shutdown)."""
+    global _rollover_task
+    task = _rollover_task
+    _rollover_task = None
+    if task:
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task

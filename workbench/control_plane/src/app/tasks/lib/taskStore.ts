@@ -1872,6 +1872,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     dailyCapacityMins: 360,
     bufferMins: 0,
     energyWindows: [],
+    timezone: "UTC",
+    autoRollover: true,
   },
 
   updateSettings: async (patch) => {

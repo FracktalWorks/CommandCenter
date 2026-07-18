@@ -221,6 +221,10 @@ export function CalendarView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
+  // Mobile / tap-to-schedule sheet. `at` set ⇒ a tapped slot (schedule at that
+  // exact time); absent ⇒ opened from the FAB (auto-place into the first free
+  // slot of `day`). The rail is desktop-only, so this is the phone path.
+  const [sheet, setSheet] = useState<{ day: Date; at?: Date } | null>(null);
   // One live clock drives the now-line, the current-block ring and the Now/Next
   // countdowns so the whole surface ages in real time (30s tick).
   const now = useNow();
@@ -382,7 +386,7 @@ export function CalendarView() {
       : [anchor];
 
   return (
-    <div className="flex h-full min-h-0 flex-col bg-background">
+    <div className="relative flex h-full min-h-0 flex-col bg-background">
       {/* Header: title, nav, mode toggle */}
       <div className="flex flex-wrap items-center gap-2 border-b border-border px-4 py-3">
         <CalendarDays className="h-5 w-5 shrink-0 text-primary" />
@@ -541,6 +545,7 @@ export function CalendarView() {
                 )
               }
               reschedule={reschedule}
+              onPickSlot={(day, at) => setSheet({ day, at })}
             />
           )}
         </div>
@@ -567,6 +572,44 @@ export function CalendarView() {
           />
         )}
       </div>
+
+      {/* Mobile scheduling entry point — the rail is desktop-only and touch has
+          no drag-and-drop, so on a phone this is how you timebox: pick a task
+          (auto-placed) or Plan the whole day. Anchored to the calendar area so
+          it sits above the app's bottom bar. */}
+      {mode !== "month" && (
+        <button
+          type="button"
+          onClick={() =>
+            setSheet({ day: mode === "week" ? startOfWeek(anchor) : anchor })
+          }
+          aria-label="Schedule a task"
+          className="tech-transition absolute bottom-4 right-4 z-30 inline-flex items-center gap-1.5 rounded-full bg-primary px-4 py-3 font-semibold text-primary-foreground shadow-lg hover:opacity-90 md:hidden"
+        >
+          <CalendarPlus className="h-5 w-5" />
+          {unscheduled.length > 0 && (
+            <span className="text-[13px] tabular-nums">{unscheduled.length}</span>
+          )}
+        </button>
+      )}
+
+      {sheet && (
+        <ScheduleSheet
+          day={sheet.day}
+          at={sheet.at}
+          tasks={unscheduled}
+          dueSoon={dueSoon}
+          onSchedule={(t, at) => {
+            schedule(t, sheet.day, at);
+            setSheet(null);
+          }}
+          onPlan={() => {
+            setSheet(null);
+            setPlanOpen(true);
+          }}
+          onClose={() => setSheet(null)}
+        />
+      )}
 
       {planOpen && (
         <PlanDayPanel
@@ -725,6 +768,148 @@ function NowNextBar({
           </span>
         </button>
       )}
+    </div>
+  );
+}
+
+// ── Schedule sheet (mobile + tap-to-schedule) ───────────────────────────────
+// Touch devices have no HTML5 drag-and-drop and the unscheduled rail is
+// desktop-only, so on a phone you could view but barely schedule. This
+// bottom-anchored sheet is the mobile path — and also what a tap on an empty
+// grid slot opens on any device. Pick a task to timebox it: at the tapped time
+// when `at` is set, otherwise auto-placed into the day's first free slot. Plan
+// my day is the primary CTA up top.
+function ScheduleSheet({
+  day,
+  at,
+  tasks,
+  dueSoon,
+  onSchedule,
+  onPlan,
+  onClose,
+}: {
+  day: Date;
+  at?: Date;
+  tasks: GtdItem[];
+  dueSoon: { item: GtdItem; days: number }[];
+  onSchedule: (t: GtdItem, at?: Date) => void;
+  onPlan: () => void;
+  onClose: () => void;
+}) {
+  const fmtClock = (d: Date) =>
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const dueDays = new Map(dueSoon.map((d) => [d.item.id, d.days]));
+  const dayLabel = day.toLocaleDateString(undefined, {
+    weekday: "short",
+    month: "short",
+    day: "numeric",
+  });
+  return (
+    <div
+      className="fixed inset-0 z-[80] flex flex-col justify-end bg-black/40"
+      onClick={onClose}
+    >
+      <div
+        className="mx-auto flex max-h-[78vh] w-full max-w-md flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl"
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="flex justify-center pt-2">
+          <span className="h-1 w-10 rounded-full bg-border" />
+        </div>
+        <div className="flex items-center gap-2 px-4 py-2.5">
+          <CalendarPlus className="h-4 w-4 shrink-0 text-primary" />
+          <div className="min-w-0 flex-1">
+            <h2 className="truncate text-sm font-semibold text-foreground">
+              {at ? `Schedule at ${fmtClock(at)}` : "Schedule a task"}
+            </h2>
+            <p className="truncate text-[11px] text-muted-foreground">
+              {dayLabel}
+              {at ? "" : " · first free slot"}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={onClose}
+            aria-label="Close"
+            className="rounded-md p-1 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
+            <X className="h-4 w-4" />
+          </button>
+        </div>
+
+        <div className="px-3 pb-2">
+          <button
+            type="button"
+            onClick={onPlan}
+            className="tech-transition flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2.5 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
+          >
+            <Wand2 className="h-4 w-4" />
+            Plan my day with AI
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 overflow-y-auto px-3 pb-4">
+          {tasks.length === 0 ? (
+            <p className="px-1 py-8 text-center text-[12px] text-muted-foreground">
+              Nothing to schedule — inbox zero on next actions. 🎉
+            </p>
+          ) : (
+            <>
+              <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                Unscheduled ({tasks.length})
+              </p>
+              <div className="flex flex-col gap-1.5">
+                {tasks.map((t) => {
+                  const d = dueDays.get(t.id);
+                  return (
+                    <button
+                      key={t.id}
+                      type="button"
+                      onClick={() => onSchedule(t, at)}
+                      className="tech-transition flex items-center gap-2 rounded-lg border border-border bg-background/60 p-2.5 text-left hover:border-primary/50 active:bg-primary/5"
+                    >
+                      <span className="min-w-0 flex-1">
+                        <span className="block truncate text-[13px] font-medium text-foreground">
+                          {t.title}
+                        </span>
+                        <span className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
+                          <span className="inline-flex items-center gap-0.5">
+                            <Clock className="h-3 w-3" />
+                            {durationLabel(t.timeEstimateMins ?? DEFAULT_BLOCK_MINS)}
+                          </span>
+                          {t.energy && (
+                            <span className="inline-flex items-center gap-0.5 capitalize">
+                              <Zap className="h-3 w-3" />
+                              {t.energy}
+                            </span>
+                          )}
+                          {d !== undefined && (
+                            <span
+                              className={`font-medium ${
+                                d <= 1 ? "text-destructive" : "text-warning"
+                              }`}
+                            >
+                              {d <= 0
+                                ? "due today"
+                                : d === 1
+                                  ? "due tomorrow"
+                                  : `due in ${d}d`}
+                            </span>
+                          )}
+                        </span>
+                      </span>
+                      <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
+                        <CalendarPlus className="h-3.5 w-3.5" />
+                        {at ? fmtClock(at) : "Timebox"}
+                      </span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
@@ -1162,6 +1347,7 @@ function TimeGrid({
   onUnschedule,
   onComplete,
   reschedule,
+  onPickSlot,
 }: {
   days: Date[];
   items: GtdItem[];
@@ -1173,6 +1359,8 @@ function TimeGrid({
   onUnschedule: (item: GtdItem) => void;
   onComplete: (item: GtdItem) => void;
   reschedule: (id: string, start: Date, end: Date) => void;
+  /** Tap an empty grid slot → schedule a task at that snapped time. */
+  onPickSlot: (day: Date, at: Date) => void;
 }) {
   const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
   const gridHeight = hours.length * HOUR_PX;
@@ -1317,8 +1505,18 @@ function TimeGrid({
                 if (e.currentTarget === e.target) setDragOverKey(null);
               }}
               onDrop={(e) => handleDrop(e, day)}
+              onClick={(e) => {
+                // Empty-slot tap → schedule-here sheet. Blocks and deadline
+                // markers stopPropagation, so this only fires on bare grid.
+                const rect = e.currentTarget.getBoundingClientRect();
+                const rawMins = ((e.clientY - rect.top) / HOUR_PX) * 60;
+                const at = new Date(day);
+                at.setHours(dayStart, 0, 0, 0);
+                at.setMinutes(at.getMinutes() + Math.max(0, snap(rawMins)));
+                onPickSlot(day, at);
+              }}
               className={[
-                "relative flex-1 border-l border-border",
+                "relative flex-1 cursor-pointer border-l border-border",
                 dragOverKey === dayKey ? "bg-primary/5" : "",
               ].join(" ")}
               style={{ height: gridHeight }}
@@ -1360,7 +1558,10 @@ function TimeGrid({
                     <button
                       key={d.id}
                       type="button"
-                      onClick={() => onOpen(d.id)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onOpen(d.id);
+                      }}
                       title={`Due today: ${d.title}`}
                       className="tech-transition truncate rounded border border-destructive/40 bg-destructive/10 px-1.5 py-0.5 text-left text-[10px] font-medium text-destructive hover:bg-destructive/20"
                     >
@@ -1411,6 +1612,7 @@ function TimeGrid({
                     key={b.item.id}
                     draggable
                     onDragStart={(e) => onBlockDragStart(e, b)}
+                    onClick={(e) => e.stopPropagation()}
                     style={{
                       top: Math.max(0, top),
                       height,

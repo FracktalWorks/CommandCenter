@@ -1,5 +1,6 @@
 "use client";
 
+import { useState } from "react";
 import {
   Clock,
   AlertTriangle,
@@ -10,12 +11,17 @@ import {
   ListTree,
   GripVertical,
   Check,
+  ChevronDown,
+  CalendarClock,
+  Trash2,
 } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
+import { useCardActions } from "../lib/useCardActions";
 import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
+import { ContextMenu, type CtxItem } from "./ContextMenu";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -62,6 +68,56 @@ export function TaskCard({
     : undefined;
   const overdue = isOverdue(item, MOCK_NOW);
   const atts = item.attachments?.length ?? 0;
+
+  // Shared actions (schedule / stage / done / eliminate) power both the inline
+  // controls and the right-click menu, so they never drift.
+  const actions = useCardActions(item);
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
+  const menuItems: CtxItem[] = [
+    {
+      kind: "item",
+      label: "Schedule on calendar",
+      icon: CalendarClock,
+      onSelect: actions.schedule,
+    },
+    { kind: "sep" },
+    { kind: "label", label: "Change stage" },
+    ...actions.stages.map(
+      (st): CtxItem => ({
+        kind: "item",
+        label: st,
+        checked: st === actions.currentStage,
+        onSelect: () => actions.setStage(st),
+      }),
+    ),
+    { kind: "sep" },
+    {
+      kind: "item",
+      label: actions.isDone ? "Mark as not done" : "Mark as Done",
+      icon: Check,
+      onSelect: actions.toggleDone,
+    },
+    {
+      kind: "item",
+      label: "Eliminate…",
+      icon: Trash2,
+      danger: true,
+      onSelect: actions.eliminate,
+    },
+  ];
+  const openMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY });
+  };
+  const contextMenu = menu ? (
+    <ContextMenu
+      x={menu.x}
+      y={menu.y}
+      items={menuItems}
+      onClose={() => setMenu(null)}
+    />
+  ) : null;
 
   const meta = (
     <>
@@ -140,38 +196,43 @@ export function TaskCard({
     // A div (not a <button>) so the SuggestionBadge's own buttons are valid
     // nested interactive elements; Enter/Space + role keep it keyboard-usable.
     return (
-      <div
-        role="button"
-        tabIndex={0}
-        onClick={() => openFocus(item.id)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter" || e.key === " ") {
-            e.preventDefault();
-            openFocus(item.id);
-          }
-        }}
-        // Mobile: two-line row (full-width title, chips wrap underneath) so
-        // titles aren't crushed to a few characters; sm:+ single line as before.
-        className="tech-transition group flex w-full cursor-pointer flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
-      >
-        <div className="flex min-w-0 flex-1 items-center gap-2.5">
-          <DoneToggle item={item} />
-          <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-            {item.title}
-          </span>
-        </div>
-        <div className="flex shrink-0 flex-wrap items-center gap-2">
-          {meta}
-          {project && (
-            <span className="hidden items-center gap-1 text-[10px] text-muted-foreground sm:inline-flex">
-              <FolderKanban className="h-3 w-3" />
-              <span className="max-w-[120px] truncate">{project.outcome}</span>
+      <>
+        <div
+          role="button"
+          tabIndex={0}
+          onClick={() => openFocus(item.id)}
+          onContextMenu={openMenu}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" || e.key === " ") {
+              e.preventDefault();
+              openFocus(item.id);
+            }
+          }}
+          // Mobile: two-line row (full-width title, chips wrap underneath) so
+          // titles aren't crushed to a few characters; sm:+ single line as before.
+          className="tech-transition group flex w-full cursor-pointer flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
+        >
+          <div className="flex min-w-0 flex-1 items-center gap-2.5">
+            <StagePill actions={actions} />
+            <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+              {item.title}
             </span>
-          )}
-          {item.assignee && <Avatar name={item.assignee.name} />}
-          <SourceBadge source={item.source} provider={item.provider} size="xs" />
+          </div>
+          <div className="flex shrink-0 flex-wrap items-center gap-2">
+            {meta}
+            {project && (
+              <span className="hidden items-center gap-1 text-[10px] text-muted-foreground sm:inline-flex">
+                <FolderKanban className="h-3 w-3" />
+                <span className="max-w-[120px] truncate">{project.outcome}</span>
+              </span>
+            )}
+            <ScheduleButton onClick={actions.schedule} />
+            {item.assignee && <Avatar name={item.assignee.name} />}
+            <SourceBadge source={item.source} provider={item.provider} size="xs" />
+          </div>
         </div>
-      </div>
+        {contextMenu}
+      </>
     );
   }
 
@@ -183,96 +244,171 @@ export function TaskCard({
     else openFocus(item.id);
   };
   return (
-    <div
-      role="button"
-      tabIndex={0}
-      draggable={draggable}
-      onDragStart={onDragStart}
-      onDragEnd={onDragEnd}
-      onClick={activate}
-      onKeyDown={(e) => {
-        if (e.key === "Enter" || e.key === " ") {
-          e.preventDefault();
-          activate();
-        }
-      }}
-      className={[
-        "group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-3 shadow-sm hover:shadow-md",
-        selected
-          ? "border-primary ring-1 ring-primary"
-          : "border-border hover:border-primary/40",
-      ].join(" ")}
-    >
-      {selectMode ? (
-        <input
-          type="checkbox"
-          checked={selected}
-          onChange={() => onToggleSelected?.()}
-          onClick={(e) => e.stopPropagation()}
-          aria-label={selected ? "Deselect task" : "Select task"}
-          className="absolute right-1.5 top-1.5 h-4 w-4 accent-primary"
-        />
-      ) : (
-        draggable && (
-          <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
-        )
-      )}
-      <div className="flex items-start gap-2 pr-4">
-        {!selectMode && <DoneToggle item={item} className="mt-[2px]" />}
-        <p className="text-[13px] font-medium leading-snug text-foreground">
-          {item.title}
-        </p>
-      </div>
-      {item.nextAction && item.nextAction !== item.title && (
-        <p className="line-clamp-2 text-[11px] text-muted-foreground">
-          {item.nextAction}
-        </p>
-      )}
-      {project && (
-        <span className="inline-flex w-fit items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          <FolderKanban className="h-3 w-3" />
-          <span className="max-w-[160px] truncate">{project.outcome}</span>
-        </span>
-      )}
-      <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{meta}</div>
-      <div className="mt-0.5 flex items-center justify-between">
-        <SourceBadge source={item.source} provider={item.provider} size="xs" />
-        {item.assignee && (
-          <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-            <Avatar name={item.assignee.name} />
-            <span className="max-w-[90px] truncate">{item.assignee.name}</span>
+    <>
+      <div
+        role="button"
+        tabIndex={0}
+        draggable={draggable}
+        onDragStart={onDragStart}
+        onDragEnd={onDragEnd}
+        onClick={activate}
+        onContextMenu={openMenu}
+        onKeyDown={(e) => {
+          if (e.key === "Enter" || e.key === " ") {
+            e.preventDefault();
+            activate();
+          }
+        }}
+        className={[
+          "group tech-transition relative flex cursor-pointer flex-col gap-2 rounded-lg border bg-card p-3 shadow-sm hover:shadow-md",
+          selected
+            ? "border-primary ring-1 ring-primary"
+            : "border-border hover:border-primary/40",
+        ].join(" ")}
+      >
+        {selectMode ? (
+          <input
+            type="checkbox"
+            checked={selected}
+            onChange={() => onToggleSelected?.()}
+            onClick={(e) => e.stopPropagation()}
+            aria-label={selected ? "Deselect task" : "Select task"}
+            className="absolute right-1.5 top-1.5 h-4 w-4 accent-primary"
+          />
+        ) : (
+          draggable && (
+            <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
+          )
+        )}
+        <div className="flex items-start gap-2 pr-4">
+          {!selectMode && <StagePill actions={actions} />}
+          <p className="text-[13px] font-medium leading-snug text-foreground">
+            {item.title}
+          </p>
+        </div>
+        {item.nextAction && item.nextAction !== item.title && (
+          <p className="line-clamp-2 text-[11px] text-muted-foreground">
+            {item.nextAction}
+          </p>
+        )}
+        {project && (
+          <span className="inline-flex w-fit items-center gap-1 rounded bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+            <FolderKanban className="h-3 w-3" />
+            <span className="max-w-[160px] truncate">{project.outcome}</span>
           </span>
         )}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1">{meta}</div>
+        <div className="mt-0.5 flex items-center justify-between">
+          <SourceBadge source={item.source} provider={item.provider} size="xs" />
+          <div className="flex items-center gap-1.5">
+            <ScheduleButton onClick={actions.schedule} />
+            {item.assignee && (
+              <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
+                <Avatar name={item.assignee.name} />
+                <span className="max-w-[90px] truncate">
+                  {item.assignee.name}
+                </span>
+              </span>
+            )}
+          </div>
+        </div>
       </div>
+      {contextMenu}
+    </>
+  );
+}
+
+/** Stage dot colour: the last stage (Done) is green, the first is muted, the
+ *  middle stages read as active. */
+function stageDot(stage: string, stages: string[]): string {
+  if (stages.length && stage === stages[stages.length - 1]) return "bg-success";
+  return stages.indexOf(stage) <= 0 ? "bg-muted-foreground/40" : "bg-primary";
+}
+
+// The card's STAGE SELECTOR — replaces the old one-click Done button. Shows the
+// task's current Next-Actions stage and, on click, a small stage list; picking
+// the last stage marks it done (see useCardActions). Works for local tasks
+// (which had no card-level stage control) and reflects synced tasks' mapped
+// stage. stopPropagation so it never opens the card.
+function StagePill({
+  actions,
+}: {
+  actions: ReturnType<typeof useCardActions>;
+}) {
+  const { stages, currentStage, setStage, isDone } = actions;
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        title="Change stage"
+        aria-label={`Stage: ${currentStage}. Click to change.`}
+        className={[
+          "tech-transition inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
+          isDone
+            ? "border-success/50 bg-success/10 text-success"
+            : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
+        ].join(" ")}
+      >
+        {isDone ? (
+          <Check className="h-2.5 w-2.5" strokeWidth={3} />
+        ) : (
+          <span
+            className={`h-1.5 w-1.5 rounded-full ${stageDot(currentStage, stages)}`}
+          />
+        )}
+        <span className="max-w-[74px] truncate">{currentStage}</span>
+        <ChevronDown className="h-2.5 w-2.5 opacity-60" />
+      </button>
+      {open && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute left-0 top-full z-50 mt-1 min-w-[150px] overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-xl">
+            {stages.map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => {
+                  setStage(s);
+                  setOpen(false);
+                }}
+                className="tech-transition flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-foreground hover:bg-secondary"
+              >
+                <span
+                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${stageDot(s, stages)}`}
+                />
+                <span className="min-w-0 flex-1 truncate">{s}</span>
+                {s === currentStage && (
+                  <Check className="h-3 w-3 shrink-0 text-primary" />
+                )}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
     </div>
   );
 }
 
-// A leading circular check — the standard one-click "complete" affordance the
-// cards were missing. Empty circle when open (a faint check appears on hover);
-// filled green when done, and clicking again reopens it. stopPropagation so it
-// never triggers the card's open-focus / select behaviour.
-function DoneToggle({ item, className }: { item: GtdItem; className?: string }) {
-  const quickDispose = useTaskStore((s) => s.quickDispose);
-  const done = item.disposition === "DONE";
+// A quiet, always-visible "Schedule on calendar" button (touch-friendly — the
+// context menu is right-click only). Opens the shared SchedulePopup.
+function ScheduleButton({ onClick }: { onClick: () => void }) {
   return (
     <button
       type="button"
       onClick={(e) => {
         e.stopPropagation();
-        quickDispose(item.id, done ? "NEXT" : "DONE");
+        onClick();
       }}
-      aria-label={done ? "Mark as not done" : "Mark done"}
-      title={done ? "Mark as not done" : "Mark done"}
-      className={[
-        "tech-transition flex h-[18px] w-[18px] shrink-0 items-center justify-center rounded-full border",
-        done
-          ? "border-success bg-success text-white"
-          : "border-muted-foreground/40 text-transparent hover:border-success hover:text-success/70",
-        className ?? "",
-      ].join(" ")}
+      title="Schedule on calendar"
+      aria-label="Schedule on calendar"
+      className="tech-transition rounded p-1 text-muted-foreground/70 hover:bg-secondary hover:text-primary"
     >
-      <Check className="h-3 w-3" strokeWidth={3} />
+      <CalendarClock className="h-3.5 w-3.5" />
     </button>
   );
 }

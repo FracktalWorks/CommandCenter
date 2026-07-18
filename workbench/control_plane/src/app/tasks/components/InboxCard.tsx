@@ -28,6 +28,7 @@ import type { ConnectedProvider } from "../lib/mockData";
 import { detectDateHint, originEmailHref, relativeTime, snoozeOptions } from "../lib/utils";
 import { AttachmentChips } from "./AttachmentComposer";
 import { SourceBadge } from "./SourceBadge";
+import { ContextMenu, type CtxItem } from "./ContextMenu";
 
 // The assistant's at-a-glance read of a capture — shown on the card so you see
 // the *shape* of your inbox (what's yours, what to delegate, what's a project,
@@ -68,6 +69,7 @@ export function InboxCard({
   const openClarify = useTaskStore((s) => s.openClarify);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const requestDelete = useTaskStore((s) => s.requestDelete);
+  const openSchedule = useTaskStore((s) => s.openSchedule);
   const deferItem = useTaskStore((s) => s.deferItem);
   const updateItem = useTaskStore((s) => s.updateItem);
   const people = useTaskStore((s) => s.people);
@@ -82,6 +84,7 @@ export function InboxCard({
   const [snoozeOpen, setSnoozeOpen] = useState(false);
   const [draftTitle, setDraftTitle] = useState(item.title);
   const [draftNote, setDraftNote] = useState(item.notes ?? "");
+  const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const rootRef = useRef<HTMLDivElement>(null);
 
   // Keep the keyboard cursor row visible as you navigate with j/k.
@@ -136,6 +139,47 @@ export function InboxCard({
     );
   }
 
+  const menuItems: CtxItem[] = [
+    {
+      kind: "item",
+      label: "Clarify…",
+      icon: Sparkles,
+      onSelect: () => openClarify(item.id),
+    },
+    {
+      kind: "item",
+      label: "Schedule on calendar",
+      icon: CalendarClock,
+      onSelect: () => openSchedule(item.id),
+    },
+    { kind: "sep" },
+    {
+      kind: "item",
+      label: "Move to Someday / Maybe",
+      icon: Lightbulb,
+      onSelect: () => quickDispose(item.id, "SOMEDAY"),
+    },
+    {
+      kind: "item",
+      label: "Move to Reference",
+      icon: FileText,
+      onSelect: () => quickDispose(item.id, "REFERENCE"),
+    },
+    { kind: "sep" },
+    {
+      kind: "item",
+      label: "Delete",
+      icon: Trash2,
+      danger: true,
+      onSelect: () => requestDelete([item.id]),
+    },
+  ];
+  const openMenu = (e: React.MouseEvent) => {
+    e.preventDefault();
+    e.stopPropagation();
+    setMenu({ x: e.clientX, y: e.clientY });
+  };
+
   return (
     <div
       ref={rootRef}
@@ -143,6 +187,7 @@ export function InboxCard({
       tabIndex={0}
       data-cursor={cursor || undefined}
       onClick={() => openClarify(item.id)}
+      onContextMenu={openMenu}
       onKeyDown={(e) => {
         if (e.key === "Enter" || e.key === " ") {
           e.preventDefault();
@@ -289,6 +334,15 @@ export function InboxCard({
       >
         <Trash2 className="h-4 w-4" />
       </button>
+
+      {menu && (
+        <ContextMenu
+          x={menu.x}
+          y={menu.y}
+          items={menuItems}
+          onClose={() => setMenu(null)}
+        />
+      )}
     </div>
   );
 }

@@ -60,16 +60,20 @@ try:
         gtd_inbox_insights,
         gtd_list,
         gtd_list_projects,
+        gtd_list_schedule,
         gtd_organize,
         gtd_people,
         gtd_plan_project,
+        gtd_schedule,
         gtd_sync,
+        gtd_unschedule,
         gtd_update,
     )
     _TOOLS += [
         gtd_capture, gtd_capture_many, gtd_list, gtd_list_projects,
         gtd_accounts, gtd_people, gtd_inbox_insights, gtd_clarify,
         gtd_organize, gtd_update, gtd_sync, gtd_plan_project,
+        gtd_schedule, gtd_unschedule, gtd_list_schedule,
     ]
 except ImportError:
     # skill-task-gtd not installed yet — agent still boots.

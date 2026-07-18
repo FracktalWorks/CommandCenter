@@ -171,6 +171,20 @@ export interface GtdItem {
   /** true → must happen on dueAt; surfaces in the Calendar view */
   isHardDate?: boolean;
 
+  // Timeboxing (calendar_timeboxing.md §3): the block when the task is actually
+  // scheduled to be done — distinct from the dueAt deadline. Unset = unscheduled.
+  /** ISO datetime — start of the scheduled time block */
+  scheduledStart?: string;
+  /** ISO datetime — end of the block (defaults to start + estimate) */
+  scheduledEnd?: string;
+  /** false = a FIXED block (meeting) the auto-mover (roll-over / replan) leaves
+   *  put; true/undefined = flexible, may be moved. See calendar_ux_review §5.5 */
+  flexible?: boolean;
+  /** when the block was ACTUALLY worked (focus timer + completion) — vs the
+   *  scheduled_* plan. Powers planned-vs-actual + learned estimates (§4). */
+  actualStart?: string;
+  actualEnd?: string;
+
   createdAt: string;
   /** Context attachments captured with the item (photo/file/link). */
   attachments?: TaskAttachment[];

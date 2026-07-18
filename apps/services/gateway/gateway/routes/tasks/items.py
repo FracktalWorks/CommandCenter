@@ -21,7 +21,7 @@ from typing import Any
 from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Query
 from gateway.routes.tasks.core import (
     DEFAULT_CONTEXTS,
     ITEM_SELECT,
@@ -105,6 +105,15 @@ class ItemPatch(BaseModel):
     energy: str | None = None
     time_estimate_mins: int | None = None
     due_at: str | None = None
+    # Timeboxing (calendar_timeboxing.md §3) — LOCAL overlay, not back-synced.
+    # "" clears (unschedule). scheduled_end defaults to start + estimate client-side.
+    scheduled_start: str | None = None
+    scheduled_end: str | None = None
+    # true = auto-mover may move this block; false = FIXED (a meeting). §5.5.
+    flexible: bool | None = None
+    # Actuals (focus timer + completion) — ISO; "" clears. LOCAL overlay. §4.
+    actual_start: str | None = None
+    actual_end: str | None = None
     provider_status: str | None = None   # the tool's stage, e.g. 'To-do'
     workflow_stage: str | None = None    # the local Kanban stage (board move)
     sort_key: float | None = None        # manual (drag) rank within a group/column
@@ -293,6 +302,45 @@ async def list_items(
                  + " i.sort_key ASC NULLS LAST, i.created_at DESC"
                  + " LIMIT :limit"),
             params,
+        )).fetchall()
+        return [_row_to_item(r) for r in rows]
+    finally:
+        await db.close()
+
+
+@router.get("/calendar", response_model=list[GtdItemModel])
+async def calendar_range(
+    from_: str = Query(..., alias="from"),
+    to: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Items to render on the calendar grid for the window [from, to):
+    everything with a time BLOCK (scheduled_start) landing in the window, PLUS
+    deadline items (is_hard_date + due_at) so a due date is never invisible just
+    because it isn't timeboxed yet. Timeboxing model: calendar_timeboxing.md.
+    (Phase 4 will union external Google/Outlook events here too.)"""
+    frm, until = _parse_ts(from_), _parse_ts(to)
+    if frm is None or until is None:
+        raise HTTPException(
+            status_code=400, detail="from and to must be ISO datetimes")
+    db = await _get_db()
+    try:
+        rows = (await db.execute(
+            text(ITEM_SELECT + f"""
+                WHERE i.user_id = :uid
+                  AND i.parent_item_id IS NULL
+                  AND i.archived_at IS NULL
+                  AND {_DELETED_EXCLUDE}
+                  AND i.disposition NOT IN ('DONE', 'TRASH')
+                  AND (
+                    (i.scheduled_start IS NOT NULL
+                       AND i.scheduled_start >= :frm AND i.scheduled_start < :until)
+                    OR (i.is_hard_date AND i.due_at IS NOT NULL
+                       AND i.due_at >= :frm AND i.due_at < :until)
+                  )
+                ORDER BY coalesce(i.scheduled_start, i.due_at) ASC
+            """),
+            {"uid": _uid(user), "frm": frm, "until": until},
         )).fetchall()
         return [_row_to_item(r) for r in rows]
     finally:
@@ -496,9 +544,11 @@ def _build_item_update(
         (patch.important, "important = :important", patch.important),
         (patch.leveraged, "leveraged = :leveraged", patch.leveraged),
         (patch.kept_mine, "kept_mine = :kept_mine", patch.kept_mine),
+        # Fixed/flexible block (calendar_ux_review.md §5.5) — local overlay.
+        (patch.flexible, "flexible = :flexible", patch.flexible),
     ]
     keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage",
-            "sortkey", "important", "leveraged", "kept_mine"]
+            "sortkey", "important", "leveraged", "kept_mine", "flexible"]
     for (present, clause, value), key in zip(simple, keys, strict=True):
         if present is not None:
             sets.append(clause)
@@ -523,12 +573,23 @@ def _build_item_update(
             sets.append("completed_at = NULL")
         if patch.disposition != "INBOX":
             sets.append("clarified_at = coalesce(clarified_at, now())")
-    if patch.defer_until is not None:
-        sets.append("defer_until = :defer")
-        params["defer"] = _parse_ts(patch.defer_until)  # "" → None → clears
-    if patch.due_at is not None:
-        sets.append("due_at = :due")
-        params["due"] = _parse_ts(patch.due_at)
+    # Timestamp columns — all parse via _parse_ts ("" → None → clears). Kept as a
+    # data-driven loop (not one branch each) so adding a dated field doesn't grow
+    # this translator's cyclomatic complexity. defer/due = the deadline lane;
+    # scheduled_* = the plan block (place/clear a timebox); actual_* = the
+    # focus-timer actuals (calendar_ux_review.md §4).
+    ts_cols: list[tuple[str | None, str, str]] = [
+        (patch.defer_until, "defer_until", "defer"),
+        (patch.due_at, "due_at", "due"),
+        (patch.scheduled_start, "scheduled_start", "sched_start"),
+        (patch.scheduled_end, "scheduled_end", "sched_end"),
+        (patch.actual_start, "actual_start", "act_start"),
+        (patch.actual_end, "actual_end", "act_end"),
+    ]
+    for val, col, key in ts_cols:
+        if val is not None:
+            sets.append(f"{col} = :{key}")
+            params[key] = _parse_ts(val)
     if patch.clear_assignee:
         sets.append("assignee = NULL")
     elif patch.assignee is not None:

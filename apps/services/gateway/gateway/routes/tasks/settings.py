@@ -114,6 +114,18 @@ class GtdSettingsModel(BaseModel):
     # task's own project statuses is written back on a drag. Empty = fall back to
     # the name heuristic; seeded by the auto-guess on first status-catalog read.
     status_stage_map: dict[str, str] = {}
+    # Calendar/timeboxing prefs (migration 77). The plannable day window, a soft
+    # daily focus budget (overcommit flag), inter-block buffer, and the user's
+    # energy windows ([{start_hour,end_hour,energy}]). Grid + AI planner use them.
+    day_start_hour: int = 7
+    day_end_hour: int = 22
+    daily_capacity_mins: int = 360
+    buffer_mins: int = 0
+    energy_windows: list[dict] = []
+    # Auto roll-over (migration 78): the user's IANA timezone (for the local-day
+    # boundary the nightly job triggers on) + an opt-out toggle.
+    timezone: str = "UTC"
+    auto_rollover: bool = True
 
 
 class GtdSettingsPatch(BaseModel):
@@ -129,6 +141,13 @@ class GtdSettingsPatch(BaseModel):
     workflow_stages: list[str] | None = None
     urgent_window_hours: int | None = None
     status_stage_map: dict[str, str] | None = None
+    day_start_hour: int | None = None
+    day_end_hour: int | None = None
+    daily_capacity_mins: int | None = None
+    buffer_mins: int | None = None
+    energy_windows: list[dict] | None = None
+    timezone: str | None = None
+    auto_rollover: bool | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -186,6 +205,28 @@ async def gtd_workflow_stages(db: Any, user_id: str) -> list[str]:
     return list(DEFAULT_WORKFLOW_STAGES)
 
 
+async def gtd_calendar_prefs(db: Any, user_id: str) -> dict[str, Any]:
+    """Calendar/timeboxing prefs with safe defaults (never raises), for the grid
+    + the AI day-planner. energy_windows = [{start_hour,end_hour,energy}]."""
+    out: dict[str, Any] = {
+        "day_start_hour": 7, "day_end_hour": 22,
+        "daily_capacity_mins": 360, "buffer_mins": 0, "energy_windows": [],
+    }
+    try:
+        s = await _load(db, user_id)
+        out.update({
+            "day_start_hour": s.day_start_hour,
+            "day_end_hour": s.day_end_hour,
+            "daily_capacity_mins": s.daily_capacity_mins,
+            "buffer_mins": s.buffer_mins,
+            "energy_windows": s.energy_windows,
+        })
+    except Exception as exc:
+        _log.warning(
+            "tasks.settings.calendar_prefs_failed", error=str(exc)[:160])
+    return out
+
+
 async def _load(db: Any, user_id: str) -> GtdSettingsModel:
     row = (await db.execute(text(
         "SELECT * FROM gtd_settings WHERE user_id = :uid"),
@@ -207,7 +248,40 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         workflow_stages=_stages(getattr(row, "workflow_stages", None)),
         urgent_window_hours=int(getattr(row, "urgent_window_hours", 48) or 48),
         status_stage_map=_status_map(getattr(row, "status_stage_map", None)),
+        day_start_hour=int(getattr(row, "day_start_hour", 7) or 7),
+        day_end_hour=int(getattr(row, "day_end_hour", 22) or 22),
+        daily_capacity_mins=int(
+            getattr(row, "daily_capacity_mins", 360) or 360),
+        buffer_mins=int(getattr(row, "buffer_mins", 0) or 0),
+        energy_windows=_energy_windows(getattr(row, "energy_windows", None)),
+        timezone=str(getattr(row, "timezone", None) or "UTC"),
+        auto_rollover=bool(getattr(row, "auto_rollover", True)),
     )
+
+
+def _energy_windows(val: Any) -> list[dict]:
+    """Normalize stored energy_windows (JSONB list, or JSON string) → a clean
+    list of {start_hour,end_hour,energy}. Drops anything malformed."""
+    import json
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except ValueError:
+            return []
+    if not isinstance(val, list):
+        return []
+    out: list[dict] = []
+    for w in val:
+        if not isinstance(w, dict):
+            continue
+        try:
+            s, e = int(w.get("start_hour")), int(w.get("end_hour"))
+        except (TypeError, ValueError):
+            continue
+        en = str(w.get("energy") or "").lower()
+        if en in ("low", "medium", "high") and 0 <= s < e <= 24:
+            out.append({"start_hour": s, "end_hour": e, "energy": en})
+    return out
 
 
 def _status_map(val: Any) -> dict[str, str]:
@@ -340,7 +414,7 @@ async def put_gtd_settings(
             if not stages:
                 stages = list(DEFAULT_WORKFLOW_STAGES)
             fields["workflow_stages"] = json.dumps(stages)
-        _jsonb_cols = {"workflow_stages", "status_stage_map"}
+        _jsonb_cols = {"workflow_stages", "status_stage_map", "energy_windows"}
         if "status_stage_map" in fields:
             # Normalize keys (lower/trim) + drop empties; JSON-encode for JSONB.
             raw = fields["status_stage_map"] or {}
@@ -348,6 +422,10 @@ async def put_gtd_settings(
                      for k, v in raw.items()
                      if str(k).strip() and str(v).strip()}
             fields["status_stage_map"] = json.dumps(clean)
+        if "energy_windows" in fields:
+            # Validate + JSON-encode for the JSONB column.
+            fields["energy_windows"] = json.dumps(
+                _energy_windows(fields["energy_windows"]))
         if fields:
             # JSONB columns need an explicit ::jsonb cast on the bind param.
             def _ph(k: str) -> str:

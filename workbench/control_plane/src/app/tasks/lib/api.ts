@@ -93,6 +93,12 @@ function mapItem(raw: Raw): GtdItem {
     syncState: (raw.sync_state ?? "local") as GtdItem["syncState"],
     dueAt: raw.due_at ? String(raw.due_at) : undefined,
     isHardDate: Boolean(raw.is_hard_date),
+    scheduledStart: raw.scheduled_start ? String(raw.scheduled_start) : undefined,
+    scheduledEnd: raw.scheduled_end ? String(raw.scheduled_end) : undefined,
+    // Defaults to flexible (movable) — matches the column default (mig 79).
+    flexible: raw.flexible == null ? true : Boolean(raw.flexible),
+    actualStart: raw.actual_start ? String(raw.actual_start) : undefined,
+    actualEnd: raw.actual_end ? String(raw.actual_end) : undefined,
     createdAt: String(raw.created_at ?? ""),
     attachments: Array.isArray(raw.attachments)
       ? (raw.attachments as TaskAttachment[])
@@ -447,6 +453,11 @@ export async function apiPatchItem(
     energy?: string;
     time_estimate_mins?: number;
     due_at?: string;
+    scheduled_start?: string;
+    scheduled_end?: string;
+    flexible?: boolean;
+    actual_start?: string;
+    actual_end?: string;
     provider_status?: string;
     workflow_stage?: string;
     sort_key?: number;
@@ -464,6 +475,119 @@ export async function apiPatchItem(
       body: JSON.stringify(patch),
     })
   );
+}
+
+/** Items to render on the calendar grid for the window [fromIso, toIso):
+ *  scheduled time-blocks + deadline items. See calendar_timeboxing.md. */
+export async function apiCalendarRange(
+  fromIso: string,
+  toIso: string,
+): Promise<GtdItem[]> {
+  const qs = `?from=${encodeURIComponent(fromIso)}&to=${encodeURIComponent(toIso)}`;
+  const rows = await gatewayFetch<Raw[]>(`/calendar${qs}`);
+  return rows.map(mapItem);
+}
+
+// ── AI day-planner (Plan my day) ─────────────────────────────────────────────
+export interface PlanDayBlock {
+  itemId: string;
+  title: string;
+  start: string;
+  end: string;
+  energy?: string;
+  rationale?: string;
+}
+export interface PlanDayUnplaced {
+  itemId: string;
+  title: string;
+  reason: string;
+}
+export interface DayPlanResult {
+  blocks: PlanDayBlock[];
+  unplaced: PlanDayUnplaced[];
+  notes?: string;
+  usedMins: number;
+  capacityMins: number;
+}
+export interface PlanDayRequest {
+  day_start: string;
+  day_end: string;
+  energy_windows: { start: string; end: string; energy: string }[];
+  capacity_mins: number;
+  buffer_mins: number;
+  energy_note?: string;
+}
+
+function mapDayPlan(r: Raw): DayPlanResult {
+  const arr = (v: unknown): Raw[] => (Array.isArray(v) ? (v as Raw[]) : []);
+  return {
+    blocks: arr(r.blocks).map((b) => ({
+      itemId: String(b.item_id ?? ""),
+      title: String(b.title ?? ""),
+      start: String(b.start ?? ""),
+      end: String(b.end ?? ""),
+      energy: b.energy ? String(b.energy) : undefined,
+      rationale: b.rationale ? String(b.rationale) : undefined,
+    })),
+    unplaced: arr(r.unplaced).map((u) => ({
+      itemId: String(u.item_id ?? ""),
+      title: String(u.title ?? ""),
+      reason: String(u.reason ?? ""),
+    })),
+    notes: r.notes ? String(r.notes) : undefined,
+    usedMins: Number(r.used_mins ?? 0),
+    capacityMins: Number(r.capacity_mins ?? 0),
+  };
+}
+
+/** Ask the AI planner for a timeboxed day (priority/energy/capacity/deadline
+ *  aware). Returns a proposal — the caller applies accepted blocks via PATCH. */
+export async function apiPlanDay(req: PlanDayRequest): Promise<DayPlanResult> {
+  return mapDayPlan(
+    await gatewayFetch<Raw>(`/calendar/plan`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+/** Roll incomplete PAST time-blocks forward into the target day's open slots
+ *  (deadline-aware). Returns a proposal — the caller applies it. */
+export async function apiRollover(req: PlanDayRequest): Promise<DayPlanResult> {
+  return mapDayPlan(
+    await gatewayFetch<Raw>(`/calendar/rollover`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+/** Re-timebox the REST of today: repack today's not-yet-done FLEXIBLE blocks
+ *  from now, around fixed/done blocks. The "I fell behind — fix my day" op.
+ *  Returns a proposal — the caller applies it. */
+export async function apiReplan(req: PlanDayRequest): Promise<DayPlanResult> {
+  return mapDayPlan(
+    await gatewayFetch<Raw>(`/calendar/replan`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+/** Learned-estimate accuracy over recent TIMED blocks (actual vs planned) — the
+ *  end-of-day review's "you run X% over" signal. `overPct` > 0 = under-estimates. */
+export interface EstimateStats {
+  samples: number;
+  ratio: number;
+  overPct: number;
+}
+export async function apiEstimateStats(): Promise<EstimateStats> {
+  const r = await gatewayFetch<Raw>(`/calendar/estimate-stats`);
+  return {
+    samples: Number(r.samples ?? 0),
+    ratio: Number(r.ratio ?? 1),
+    overPct: Number(r.over_pct ?? 0),
+  };
 }
 
 /** Archive (hide from active views) or un-archive a task. */
@@ -764,6 +888,14 @@ export async function apiUploadAttachment(file: File): Promise<TaskAttachment> {
   };
 }
 
+/** A peak/trough window in the day: the AI planner puts high-energy work in
+ *  'high' windows, admin in 'low' ones. */
+export interface EnergyWindow {
+  start_hour: number;
+  end_hour: number;
+  energy: "low" | "medium" | "high";
+}
+
 export interface TaskSettings {
   chatModel: string;
   clarifyModel: string;
@@ -782,6 +914,17 @@ export interface TaskSettings {
    *  a synced task groups on the board and (reversed) which upstream status a
    *  drag writes back. */
   statusStageMap: Record<string, string>;
+  // Calendar/timeboxing prefs (spec §5): the plannable day window, a soft daily
+  // focus budget, inter-block buffer, and the user's energy windows.
+  dayStartHour: number;
+  dayEndHour: number;
+  dailyCapacityMins: number;
+  bufferMins: number;
+  energyWindows: EnergyWindow[];
+  /** IANA timezone (for the nightly auto roll-over's local-day boundary). */
+  timezone: string;
+  /** auto-roll incomplete past blocks into today, once per local day. */
+  autoRollover: boolean;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -807,6 +950,15 @@ function mapSettings(r: Raw): TaskSettings {
             ),
           )
         : {},
+    dayStartHour: Number(r.day_start_hour ?? 7) || 7,
+    dayEndHour: Number(r.day_end_hour ?? 22) || 22,
+    dailyCapacityMins: Number(r.daily_capacity_mins ?? 360) || 360,
+    bufferMins: Number(r.buffer_mins ?? 0) || 0,
+    energyWindows: Array.isArray(r.energy_windows)
+      ? (r.energy_windows as EnergyWindow[])
+      : [],
+    timezone: String(r.timezone ?? "UTC"),
+    autoRollover: r.auto_rollover !== false,
   };
 }
 
@@ -839,6 +991,15 @@ export async function updateTaskSettings(
     body.urgent_window_hours = patch.urgentWindowHours;
   if (patch.statusStageMap !== undefined)
     body.status_stage_map = patch.statusStageMap;
+  if (patch.dayStartHour !== undefined) body.day_start_hour = patch.dayStartHour;
+  if (patch.dayEndHour !== undefined) body.day_end_hour = patch.dayEndHour;
+  if (patch.dailyCapacityMins !== undefined)
+    body.daily_capacity_mins = patch.dailyCapacityMins;
+  if (patch.bufferMins !== undefined) body.buffer_mins = patch.bufferMins;
+  if (patch.energyWindows !== undefined)
+    body.energy_windows = patch.energyWindows;
+  if (patch.timezone !== undefined) body.timezone = patch.timezone;
+  if (patch.autoRollover !== undefined) body.auto_rollover = patch.autoRollover;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",

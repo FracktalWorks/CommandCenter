@@ -180,6 +180,28 @@ function firstFreeSlot(
   return cursor;
 }
 
+/** A live clock that ticks so the calendar reflects the passage of time — the
+ *  now-line, the current-block highlight, and the Now/Next countdowns all read
+ *  from this instead of calling Date.now() in render (which the purity lint
+ *  forbids, and which wouldn't re-render on its own anyway). */
+function useNow(intervalMs = 30000): Date {
+  const [now, setNow] = useState<Date>(() => new Date());
+  useEffect(() => {
+    const id = setInterval(() => setNow(new Date()), intervalMs);
+    return () => clearInterval(id);
+  }, [intervalMs]);
+  return now;
+}
+
+/** "23m" / "1h 5m" — compact human duration for countdowns. */
+function fmtLeft(mins: number): string {
+  if (mins < 1) return "<1m";
+  if (mins < 60) return `${mins}m`;
+  const h = Math.floor(mins / 60);
+  const m = mins % 60;
+  return m ? `${h}h ${m}m` : `${h}h`;
+}
+
 export function CalendarView() {
   const items = useTaskStore((s) => s.items);
   const updateItem = useTaskStore((s) => s.updateItem);
@@ -199,6 +221,9 @@ export function CalendarView() {
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [planOpen, setPlanOpen] = useState(false);
   const [rolling, setRolling] = useState(false);
+  // One live clock drives the now-line, the current-block ring and the Now/Next
+  // countdowns so the whole surface ages in real time (30s tick).
+  const now = useNow();
 
   // Persist the user's real IANA timezone so the server-side nightly roll-over
   // computes their local-day boundary correctly (defaults to UTC otherwise).
@@ -447,6 +472,22 @@ export function CalendarView() {
         </div>
       </div>
 
+      {/* Now / Next — always reflects the *real* current time (today), even when
+          you're browsing another day/week. The antidote to time-blindness, and
+          the one scheduling-aware surface that's also visible on mobile. */}
+      <NowNextBar
+        now={now}
+        items={items}
+        onOpen={openFocus}
+        onComplete={(item) =>
+          quickDispose(item.id, item.disposition === "DONE" ? "NEXT" : "DONE")
+        }
+        onGoToToday={() => {
+          setAnchor(startOfDay(new Date()));
+          if (mode === "month") setMode("day");
+        }}
+      />
+
       {overdueCount > 0 && (
         <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[12px]">
           <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
@@ -487,6 +528,7 @@ export function CalendarView() {
             <TimeGrid
               days={days}
               items={items}
+              now={now}
               dayStart={dayStart}
               dayEnd={dayEnd}
               energyWindows={energyWindows}
@@ -536,6 +578,152 @@ export function CalendarView() {
           energyWindows={energyWindows}
           onClose={() => setPlanOpen(false)}
         />
+      )}
+    </div>
+  );
+}
+
+// ── Now / Next focus bar ─────────────────────────────────────────────────────
+// "What should I be doing right now, and what's next?" — a persistent, live
+// strip that always reflects the real current time (today), independent of the
+// day you're browsing. Directly targets time-blindness: the current block gets
+// a countdown + a one-tap done, the next block a "starts in" timer.
+function NowNextBar({
+  now,
+  items,
+  onOpen,
+  onComplete,
+  onGoToToday,
+}: {
+  now: Date;
+  items: GtdItem[];
+  onOpen: (id: string) => void;
+  onComplete: (item: GtdItem) => void;
+  onGoToToday: () => void;
+}) {
+  const nowMs = now.getTime();
+  const todayBlocks = blocksForDay(items, startOfDay(now));
+  const current = todayBlocks.find(
+    (b) =>
+      b.item.disposition !== "DONE" &&
+      b.start.getTime() <= nowMs &&
+      b.end.getTime() > nowMs,
+  );
+  const next = todayBlocks.find(
+    (b) => b.item.disposition !== "DONE" && b.start.getTime() > nowMs,
+  );
+
+  // Nothing live to say → stay out of the way (empty day, or the day is over).
+  if (!current && !next) return null;
+
+  const fmtClock = (d: Date) =>
+    d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
+  const minsLeft = current
+    ? Math.max(0, Math.ceil((current.end.getTime() - nowMs) / 60000))
+    : 0;
+  const minsToNext = next
+    ? Math.max(0, Math.ceil((next.start.getTime() - nowMs) / 60000))
+    : 0;
+  const nextIsNow = next && minsToNext <= 0;
+  // How far through the current block we are (fills as the block elapses).
+  const progress = current
+    ? Math.min(
+        100,
+        Math.max(
+          0,
+          ((nowMs - current.start.getTime()) /
+            (current.end.getTime() - current.start.getTime())) *
+            100,
+        ),
+      )
+    : 0;
+
+  return (
+    <div className="flex items-stretch gap-3 border-b border-border bg-primary/[0.04] px-4 py-2">
+      {/* NOW */}
+      <div className="flex min-w-0 flex-1 items-center gap-2.5">
+        <span className="flex shrink-0 items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-primary">
+          <span className="relative flex h-2 w-2">
+            {current && (
+              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary/60" />
+            )}
+            <span
+              className={[
+                "relative inline-flex h-2 w-2 rounded-full",
+                current ? "bg-primary" : "bg-muted-foreground/40",
+              ].join(" ")}
+            />
+          </span>
+          Now
+        </span>
+        {current ? (
+          <>
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onComplete(current.item);
+              }}
+              aria-label="Mark done"
+              title="Mark done"
+              className="tech-transition flex h-5 w-5 shrink-0 items-center justify-center rounded-full border border-muted-foreground/50 text-transparent hover:border-success hover:bg-success/10 hover:text-success"
+            >
+              <Check className="h-3 w-3" strokeWidth={3} />
+            </button>
+            <button
+              type="button"
+              onClick={() => onOpen(current.item.id)}
+              className="flex min-w-0 flex-1 flex-col items-start text-left"
+            >
+              <span className="w-full truncate text-[13px] font-medium text-foreground">
+                {current.item.title}
+              </span>
+              <span className="mt-1 flex w-full items-center gap-1.5">
+                <span className="h-1 flex-1 overflow-hidden rounded-full bg-primary/15">
+                  <span
+                    className="block h-full rounded-full bg-primary/70"
+                    style={{ width: `${progress}%` }}
+                  />
+                </span>
+                <span className="shrink-0 text-[10px] font-medium tabular-nums text-primary">
+                  {fmtLeft(minsLeft)} left
+                </span>
+              </span>
+            </button>
+          </>
+        ) : (
+          <button
+            type="button"
+            onClick={onGoToToday}
+            title="Nothing scheduled at the moment"
+            className="min-w-0 flex-1 truncate text-left text-[12px] text-muted-foreground hover:text-foreground"
+          >
+            Open right now — nothing scheduled.
+          </button>
+        )}
+      </div>
+
+      {/* NEXT */}
+      {next && (
+        <button
+          type="button"
+          onClick={() => onOpen(next.item.id)}
+          className="flex min-w-0 max-w-[42%] shrink items-center gap-2 border-l border-border pl-3 text-left"
+        >
+          <span className="shrink-0 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            Next
+          </span>
+          <span className="min-w-0">
+            <span className="block truncate text-[12.5px] text-foreground">
+              {next.item.title}
+            </span>
+            <span className="block text-[10px] tabular-nums text-muted-foreground">
+              {fmtClock(next.start)}
+              {" · "}
+              {nextIsNow ? "starting now" : `in ${fmtLeft(minsToNext)}`}
+            </span>
+          </span>
+        </button>
       )}
     </div>
   );
@@ -966,6 +1154,7 @@ function CalendarSettings({
 function TimeGrid({
   days,
   items,
+  now,
   dayStart,
   dayEnd,
   energyWindows,
@@ -976,6 +1165,7 @@ function TimeGrid({
 }: {
   days: Date[];
   items: GtdItem[];
+  now: Date;
   dayStart: number;
   dayEnd: number;
   energyWindows: EnergyWindow[];
@@ -985,7 +1175,6 @@ function TimeGrid({
   reschedule: (id: string, start: Date, end: Date) => void;
 }) {
   const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
-  const now = new Date();
   const gridHeight = hours.length * HOUR_PX;
   // Live resize (transient end while dragging the handle) + drop-target column.
   const [resizing, setResizing] = useState<{ id: string; endMs: number } | null>(null);
@@ -1181,13 +1370,22 @@ function TimeGrid({
                 </div>
               )}
 
-              {/* now line */}
+              {/* now line — pulses so "where am I in the day" is glanceable; a
+                  live time pill (day view) makes the exact time readable. */}
               {today && nowTop >= 0 && nowTop <= gridHeight && (
                 <div
-                  className="pointer-events-none absolute inset-x-0 z-10 border-t-2 border-primary"
+                  className="pointer-events-none absolute inset-x-0 z-20 border-t-2 border-primary"
                   style={{ top: nowTop }}
                 >
-                  <span className="absolute -left-1 -top-1 h-2 w-2 rounded-full bg-primary" />
+                  <span className="absolute -left-1 -top-1 h-2 w-2 animate-pulse rounded-full bg-primary" />
+                  {days.length === 1 && (
+                    <span className="absolute left-1 -top-2 rounded bg-primary px-1 text-[9px] font-semibold leading-tight text-primary-foreground shadow-sm">
+                      {now.toLocaleTimeString(undefined, {
+                        hour: "numeric",
+                        minute: "2-digit",
+                      })}
+                    </span>
+                  )}
                 </div>
               )}
 
@@ -1201,6 +1399,11 @@ function TimeGrid({
                 const height = Math.max(20, (mins / 60) * HOUR_PX - 2);
                 const conflict = lanes > 1;
                 const isDone = b.item.disposition === "DONE";
+                // The block that contains "now" — the one you should be in.
+                const isNow =
+                  !isDone &&
+                  b.start.getTime() <= now.getTime() &&
+                  b.end.getTime() > now.getTime();
                 const leftPct = (lane / lanes) * 100;
                 const widthPct = 100 / lanes;
                 return (
@@ -1223,7 +1426,12 @@ function TimeGrid({
                         ? "border-success/40 bg-success/10"
                         : conflict
                           ? "border-destructive/60 bg-destructive/10"
-                          : "border-primary/40 bg-primary/10",
+                          : isNow
+                            ? "border-primary bg-primary/20"
+                            : "border-primary/40 bg-primary/10",
+                      isNow
+                        ? "z-10 ring-2 ring-primary ring-offset-1 ring-offset-background shadow-md"
+                        : "",
                     ].join(" ")}
                   >
                     <div className="flex items-start gap-1">
@@ -1264,6 +1472,12 @@ function TimeGrid({
                       })}
                       {b.item.energy && (
                         <span className="capitalize">· {b.item.energy}</span>
+                      )}
+                      {isNow && (
+                        <span className="ml-auto inline-flex items-center gap-0.5 pr-3 font-semibold text-primary">
+                          <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
+                          now
+                        </span>
                       )}
                     </div>
                     <button

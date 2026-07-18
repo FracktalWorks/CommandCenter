@@ -97,6 +97,8 @@ function mapItem(raw: Raw): GtdItem {
     scheduledEnd: raw.scheduled_end ? String(raw.scheduled_end) : undefined,
     // Defaults to flexible (movable) — matches the column default (mig 79).
     flexible: raw.flexible == null ? true : Boolean(raw.flexible),
+    actualStart: raw.actual_start ? String(raw.actual_start) : undefined,
+    actualEnd: raw.actual_end ? String(raw.actual_end) : undefined,
     createdAt: String(raw.created_at ?? ""),
     attachments: Array.isArray(raw.attachments)
       ? (raw.attachments as TaskAttachment[])
@@ -454,6 +456,8 @@ export async function apiPatchItem(
     scheduled_start?: string;
     scheduled_end?: string;
     flexible?: boolean;
+    actual_start?: string;
+    actual_end?: string;
     provider_status?: string;
     workflow_stage?: string;
     sort_key?: number;

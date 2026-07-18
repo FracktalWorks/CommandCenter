@@ -180,6 +180,10 @@ export interface GtdItem {
   /** false = a FIXED block (meeting) the auto-mover (roll-over / replan) leaves
    *  put; true/undefined = flexible, may be moved. See calendar_ux_review §5.5 */
   flexible?: boolean;
+  /** when the block was ACTUALLY worked (focus timer + completion) — vs the
+   *  scheduled_* plan. Powers planned-vs-actual + learned estimates (§4). */
+  actualStart?: string;
+  actualEnd?: string;
 
   createdAt: string;
   /** Context attachments captured with the item (photo/file/link). */

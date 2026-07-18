@@ -111,6 +111,9 @@ class ItemPatch(BaseModel):
     scheduled_end: str | None = None
     # true = auto-mover may move this block; false = FIXED (a meeting). §5.5.
     flexible: bool | None = None
+    # Actuals (focus timer + completion) — ISO; "" clears. LOCAL overlay. §4.
+    actual_start: str | None = None
+    actual_end: str | None = None
     provider_status: str | None = None   # the tool's stage, e.g. 'To-do'
     workflow_stage: str | None = None    # the local Kanban stage (board move)
     sort_key: float | None = None        # manual (drag) rank within a group/column
@@ -570,19 +573,23 @@ def _build_item_update(
             sets.append("completed_at = NULL")
         if patch.disposition != "INBOX":
             sets.append("clarified_at = coalesce(clarified_at, now())")
-    if patch.defer_until is not None:
-        sets.append("defer_until = :defer")
-        params["defer"] = _parse_ts(patch.defer_until)  # "" → None → clears
-    if patch.due_at is not None:
-        sets.append("due_at = :due")
-        params["due"] = _parse_ts(patch.due_at)
-    # Timeboxing: place/clear the task's block. "" → None → unscheduled.
-    if patch.scheduled_start is not None:
-        sets.append("scheduled_start = :sched_start")
-        params["sched_start"] = _parse_ts(patch.scheduled_start)
-    if patch.scheduled_end is not None:
-        sets.append("scheduled_end = :sched_end")
-        params["sched_end"] = _parse_ts(patch.scheduled_end)
+    # Timestamp columns — all parse via _parse_ts ("" → None → clears). Kept as a
+    # data-driven loop (not one branch each) so adding a dated field doesn't grow
+    # this translator's cyclomatic complexity. defer/due = the deadline lane;
+    # scheduled_* = the plan block (place/clear a timebox); actual_* = the
+    # focus-timer actuals (calendar_ux_review.md §4).
+    ts_cols: list[tuple[str | None, str, str]] = [
+        (patch.defer_until, "defer_until", "defer"),
+        (patch.due_at, "due_at", "due"),
+        (patch.scheduled_start, "scheduled_start", "sched_start"),
+        (patch.scheduled_end, "scheduled_end", "sched_end"),
+        (patch.actual_start, "actual_start", "act_start"),
+        (patch.actual_end, "actual_end", "act_end"),
+    ]
+    for val, col, key in ts_cols:
+        if val is not None:
+            sets.append(f"{col} = :{key}")
+            params[key] = _parse_ts(val)
     if patch.clear_assignee:
         sets.append("assignee = NULL")
     elif patch.assignee is not None:

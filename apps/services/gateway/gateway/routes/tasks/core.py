@@ -96,6 +96,10 @@ class GtdItemModel(BaseModel):
     # true (default) = the auto-mover (roll-over / replan) may move this block;
     # false = FIXED (a meeting) that stays put. See calendar_ux_review.md §5.5.
     flexible: bool = True
+    # When the block was ACTUALLY worked (focus timer + completion), vs the
+    # scheduled_* plan. Powers planned-vs-actual + learned estimates (§4).
+    actual_start: str | None = None
+    actual_end: str | None = None
     completed_at: str | None = None
     clarified_at: str | None = None
     origin: dict | None = None           # source linkage (e.g. captured from an email)
@@ -246,6 +250,8 @@ def _row_to_item(row: Any) -> GtdItemModel:
         scheduled_start=_iso(getattr(row, "scheduled_start", None)),
         scheduled_end=_iso(getattr(row, "scheduled_end", None)),
         flexible=bool(getattr(row, "flexible", True)),
+        actual_start=_iso(getattr(row, "actual_start", None)),
+        actual_end=_iso(getattr(row, "actual_end", None)),
         completed_at=_iso(row.completed_at),
         clarified_at=_iso(row.clarified_at),
         origin=_parse_jsonb(getattr(row, "origin", None)),

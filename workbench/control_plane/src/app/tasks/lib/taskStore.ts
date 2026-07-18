@@ -162,6 +162,9 @@ export interface ItemMetaPatch {
   scheduledEnd?: string;
   /** false = FIXED block (meeting) the auto-mover leaves put; true = flexible */
   flexible?: boolean;
+  /** actuals (focus timer + completion) — ISO; "" clears */
+  actualStart?: string;
+  actualEnd?: string;
   providerStatus?: string;    // the tool's stage
   workflowStage?: string;     // the local Kanban stage (board move)
   sortKey?: number;           // manual (drag) rank within a group/column
@@ -1549,6 +1552,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               ? patch.scheduledEnd || undefined
               : i.scheduledEnd,
           flexible: patch.flexible !== undefined ? patch.flexible : i.flexible,
+          actualStart:
+            patch.actualStart !== undefined
+              ? patch.actualStart || undefined
+              : i.actualStart,
+          actualEnd:
+            patch.actualEnd !== undefined
+              ? patch.actualEnd || undefined
+              : i.actualEnd,
           providerStatus:
             patch.providerStatus !== undefined
               ? patch.providerStatus
@@ -1600,6 +1611,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.scheduledEnd !== undefined)
         body.scheduled_end = patch.scheduledEnd;
       if (patch.flexible !== undefined) body.flexible = patch.flexible;
+      if (patch.actualStart !== undefined)
+        body.actual_start = patch.actualStart;
+      if (patch.actualEnd !== undefined) body.actual_end = patch.actualEnd;
       if (patch.providerStatus !== undefined)
         body.provider_status = patch.providerStatus;
       if (patch.workflowStage !== undefined)

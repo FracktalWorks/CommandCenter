@@ -31,6 +31,7 @@ import {
   CalendarClock,
   Lock,
   Unlock,
+  Play,
 } from "lucide-react";
 import {
   apiPlanDay,
@@ -317,6 +318,24 @@ export function CalendarView() {
       scheduledEnd: end.toISOString(),
     });
 
+  // Focus timer: stamp when you actually START a block (clears any prior end so
+  // it re-times cleanly). Actual work-time = actualEnd − actualStart.
+  const startFocus = (item: GtdItem) =>
+    updateItem(item.id, { actualStart: new Date().toISOString(), actualEnd: "" });
+
+  // Complete/uncomplete a block. Finishing a STARTED (timed) session stamps
+  // actualEnd = now so planned-vs-actual is captured; reopening clears it.
+  const completeBlock = (item: GtdItem) => {
+    const toDone = item.disposition !== "DONE";
+    if (toDone) {
+      if (item.actualStart && !item.actualEnd)
+        updateItem(item.id, { actualEnd: new Date().toISOString() });
+    } else if (item.actualEnd) {
+      updateItem(item.id, { actualEnd: "" });
+    }
+    quickDispose(item.id, toDone ? "DONE" : "NEXT");
+  };
+
   // Overdue = a past time-block whose task isn't done → offer a one-click
   // roll-over into today's open slots (the "fell behind → stale plan" failure).
   const overdueCount = useMemo(() => {
@@ -516,9 +535,8 @@ export function CalendarView() {
         now={now}
         items={items}
         onOpen={openFocus}
-        onComplete={(item) =>
-          quickDispose(item.id, item.disposition === "DONE" ? "NEXT" : "DONE")
-        }
+        onComplete={completeBlock}
+        onStart={startFocus}
         onGoToToday={() => {
           setAnchor(startOfDay(new Date()));
           if (mode === "month") setMode("day");
@@ -571,12 +589,7 @@ export function CalendarView() {
               energyWindows={energyWindows}
               onOpen={openFocus}
               onUnschedule={unschedule}
-              onComplete={(item) =>
-                quickDispose(
-                  item.id,
-                  item.disposition === "DONE" ? "NEXT" : "DONE",
-                )
-              }
+              onComplete={completeBlock}
               reschedule={reschedule}
               onPickSlot={(day, at) => setSheet({ day, at })}
               onSetFlexible={(item, flexible) =>
@@ -675,12 +688,14 @@ function NowNextBar({
   items,
   onOpen,
   onComplete,
+  onStart,
   onGoToToday,
 }: {
   now: Date;
   items: GtdItem[];
   onOpen: (id: string) => void;
   onComplete: (item: GtdItem) => void;
+  onStart: (item: GtdItem) => void;
   onGoToToday: () => void;
 }) {
   const nowMs = now.getTime();
@@ -719,6 +734,17 @@ function NowNextBar({
         ),
       )
     : 0;
+  // Focus timer state: is the current block being actively timed, and for how
+  // long? (actual work-time, distinct from the block's scheduled elapse.)
+  const startedAt =
+    current && current.item.actualStart
+      ? new Date(current.item.actualStart)
+      : null;
+  const running = !!startedAt && !!current && !current.item.actualEnd;
+  const focusMins =
+    running && startedAt
+      ? Math.max(0, Math.floor((nowMs - startedAt.getTime()) / 60000))
+      : 0;
 
   return (
     <div className="flex items-stretch gap-3 border-b border-border bg-primary/[0.04] px-4 py-2">
@@ -752,6 +778,21 @@ function NowNextBar({
             >
               <Check className="h-3 w-3" strokeWidth={3} />
             </button>
+            {!running && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onStart(current.item);
+                }}
+                aria-label="Start focus timer"
+                title="Start — track how long this actually takes"
+                className="tech-transition flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/50 px-2 text-[10px] font-semibold text-primary hover:bg-primary/10"
+              >
+                <Play className="h-2.5 w-2.5" fill="currentColor" />
+                Start
+              </button>
+            )}
             <button
               type="button"
               onClick={() => onOpen(current.item.id)}
@@ -763,12 +804,15 @@ function NowNextBar({
               <span className="mt-1 flex w-full items-center gap-1.5">
                 <span className="h-1 flex-1 overflow-hidden rounded-full bg-primary/15">
                   <span
-                    className="block h-full rounded-full bg-primary/70"
+                    className={[
+                      "block h-full rounded-full",
+                      running ? "bg-primary animate-pulse" : "bg-primary/70",
+                    ].join(" ")}
                     style={{ width: `${progress}%` }}
                   />
                 </span>
                 <span className="shrink-0 text-[10px] font-medium tabular-nums text-primary">
-                  {fmtLeft(minsLeft)} left
+                  {running ? `▶ ${fmtLeft(focusMins)}` : `${fmtLeft(minsLeft)} left`}
                 </span>
               </span>
             </button>
@@ -1656,6 +1700,22 @@ function TimeGrid({
                   b.end.getTime() > now.getTime();
                 // Fixed (meeting) block — roll-over/replan leave it put.
                 const isFixed = b.item.flexible === false;
+                // Planned-vs-actual: for a completed, timed block, how far off
+                // the plan the real work-time was (the estimate-accuracy signal).
+                const plannedMins = Math.round(
+                  (b.end.getTime() - b.start.getTime()) / 60000,
+                );
+                const actualMins =
+                  isDone && b.item.actualStart && b.item.actualEnd
+                    ? Math.max(
+                        1,
+                        Math.round(
+                          (new Date(b.item.actualEnd).getTime() -
+                            new Date(b.item.actualStart).getTime()) /
+                            60000,
+                        ),
+                      )
+                    : null;
                 const leftPct = (lane / lanes) * 100;
                 const widthPct = 100 / lanes;
                 return (
@@ -1733,6 +1793,24 @@ function TimeGrid({
                         <span className="ml-auto inline-flex items-center gap-0.5 pr-3 font-semibold text-primary">
                           <span className="h-1.5 w-1.5 animate-pulse rounded-full bg-primary" />
                           now
+                        </span>
+                      )}
+                      {actualMins != null && (
+                        <span
+                          title={`Planned ${plannedMins}m · actually took ${actualMins}m`}
+                          className={[
+                            "ml-auto inline-flex shrink-0 items-center pr-3 font-medium tabular-nums",
+                            actualMins > plannedMins
+                              ? "text-warning"
+                              : actualMins < plannedMins
+                                ? "text-success"
+                                : "text-muted-foreground",
+                          ].join(" ")}
+                        >
+                          {actualMins === plannedMins
+                            ? "on time"
+                            : (actualMins > plannedMins ? "+" : "−") +
+                              fmtLeft(Math.abs(actualMins - plannedMins))}
                         </span>
                       )}
                     </div>

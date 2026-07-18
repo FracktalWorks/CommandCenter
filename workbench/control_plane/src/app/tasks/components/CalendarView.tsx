@@ -28,10 +28,14 @@ import {
   AlertTriangle,
   Wand2,
   RotateCcw,
+  CalendarClock,
+  Lock,
+  Unlock,
 } from "lucide-react";
 import {
   apiPlanDay,
   apiRollover,
+  apiReplan,
   type TaskSettings,
   type EnergyWindow,
   type DayPlanResult,
@@ -219,7 +223,9 @@ export function CalendarView() {
   const [mode, setMode] = useState<Mode>("day");
   const [anchor, setAnchor] = useState<Date>(() => startOfDay(new Date()));
   const [settingsOpen, setSettingsOpen] = useState(false);
-  const [planOpen, setPlanOpen] = useState(false);
+  // The AI planner panel: "plan" fills free slots from unscheduled next actions;
+  // "replan" reorganizes the rest of today's flexible blocks from now. null = shut.
+  const [planMode, setPlanMode] = useState<null | "plan" | "replan">(null);
   const [rolling, setRolling] = useState(false);
   // Mobile / tap-to-schedule sheet. `at` set ⇒ a tapped slot (schedule at that
   // exact time); absent ⇒ opened from the FAB (auto-place into the first free
@@ -327,6 +333,22 @@ export function CalendarView() {
     ).length;
   }, [items]);
 
+  // Is there anything left to reorganize today? "Replan the rest of my day" only
+  // makes sense with ≥1 flexible, not-done block still ahead (end ≥ now) — a
+  // fixed meeting or a finished block isn't movable, so it wouldn't offer this.
+  const canReplan = useMemo(() => {
+    const nowMs = now.getTime();
+    return items.some(
+      (i) =>
+        i.scheduledStart &&
+        i.scheduledEnd &&
+        i.disposition !== "DONE" &&
+        (i.flexible ?? true) &&
+        sameDay(new Date(i.scheduledStart), now) &&
+        new Date(i.scheduledEnd).getTime() >= nowMs,
+    );
+  }, [items, now]);
+
   const rollOver = async () => {
     setRolling(true);
     const today = startOfDay(new Date());
@@ -426,9 +448,20 @@ export function CalendarView() {
               {dueSoon.length} due soon
             </span>
           )}
+          {canReplan && (
+            <button
+              type="button"
+              onClick={() => setPlanMode("replan")}
+              title="Fell behind? Reorganize the rest of today's flexible blocks from now."
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            >
+              <CalendarClock className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Replan</span>
+            </button>
+          )}
           <button
             type="button"
-            onClick={() => setPlanOpen(true)}
+            onClick={() => setPlanMode("plan")}
             title="AI-plan your day from your Next Actions"
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20"
           >
@@ -546,6 +579,9 @@ export function CalendarView() {
               }
               reschedule={reschedule}
               onPickSlot={(day, at) => setSheet({ day, at })}
+              onSetFlexible={(item, flexible) =>
+                updateItem(item.id, { flexible })
+              }
             />
           )}
         </div>
@@ -565,7 +601,7 @@ export function CalendarView() {
             capacityTarget={capacityTarget}
             dueSoon={dueSoon}
             doneStats={doneStats}
-            onPlan={() => setPlanOpen(true)}
+            onPlan={() => setPlanMode("plan")}
             onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
             onScheduleToday={(t) => schedule(t, startOfDay(new Date()))}
             onOpen={openFocus}
@@ -605,21 +641,24 @@ export function CalendarView() {
           }}
           onPlan={() => {
             setSheet(null);
-            setPlanOpen(true);
+            setPlanMode("plan");
           }}
           onClose={() => setSheet(null)}
         />
       )}
 
-      {planOpen && (
+      {planMode && (
         <PlanDayPanel
-          target={mode === "day" ? anchor : startOfDay(new Date())}
+          mode={planMode}
+          target={
+            planMode === "replan" || mode !== "day" ? startOfDay(now) : anchor
+          }
           dayStart={dayStart}
           dayEnd={dayEnd}
           capacityMins={capacityTarget}
           bufferMins={settings.bufferMins ?? 0}
           energyWindows={energyWindows}
-          onClose={() => setPlanOpen(false)}
+          onClose={() => setPlanMode(null)}
         />
       )}
     </div>
@@ -916,6 +955,7 @@ function ScheduleSheet({
 
 // ── AI "Plan my day" review panel ────────────────────────────────────────────
 function PlanDayPanel({
+  mode = "plan",
   target,
   dayStart,
   dayEnd,
@@ -924,6 +964,7 @@ function PlanDayPanel({
   energyWindows,
   onClose,
 }: {
+  mode?: "plan" | "replan";
   target: Date;
   dayStart: number;
   dayEnd: number;
@@ -932,6 +973,7 @@ function PlanDayPanel({
   energyWindows: EnergyWindow[];
   onClose: () => void;
 }) {
+  const isReplan = mode === "replan";
   const updateItem = useTaskStore((s) => s.updateItem);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
@@ -947,7 +989,7 @@ function PlanDayPanel({
     dayEndAt.setHours(dayEnd, 0, 0, 0);
     try {
       setPlan(
-        await apiPlanDay({
+        await (isReplan ? apiReplan : apiPlanDay)({
           day_start: dayStartAt.toISOString(),
           day_end: dayEndAt.toISOString(),
           energy_windows: energyWindows.map((w) => {
@@ -1008,13 +1050,17 @@ function PlanDayPanel({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="flex items-center gap-2 border-b border-border px-4 py-3">
-          <Wand2 className="h-4 w-4 shrink-0 text-primary" />
+          {isReplan ? (
+            <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
+          ) : (
+            <Wand2 className="h-4 w-4 shrink-0 text-primary" />
+          )}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
-              Plan my day
+              {isReplan ? "Replan the rest of my day" : "Plan my day"}
             </h2>
             <p className="truncate text-[11px] text-muted-foreground">
-              {dateLabel}
+              {isReplan ? `From now · ${dateLabel}` : dateLabel}
             </p>
           </div>
           <button
@@ -1348,6 +1394,7 @@ function TimeGrid({
   onComplete,
   reschedule,
   onPickSlot,
+  onSetFlexible,
 }: {
   days: Date[];
   items: GtdItem[];
@@ -1361,6 +1408,8 @@ function TimeGrid({
   reschedule: (id: string, start: Date, end: Date) => void;
   /** Tap an empty grid slot → schedule a task at that snapped time. */
   onPickSlot: (day: Date, at: Date) => void;
+  /** Pin (false) / unpin (true) a block so the auto-mover skips / includes it. */
+  onSetFlexible: (item: GtdItem, flexible: boolean) => void;
 }) {
   const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
   const gridHeight = hours.length * HOUR_PX;
@@ -1605,6 +1654,8 @@ function TimeGrid({
                   !isDone &&
                   b.start.getTime() <= now.getTime() &&
                   b.end.getTime() > now.getTime();
+                // Fixed (meeting) block — roll-over/replan leave it put.
+                const isFixed = b.item.flexible === false;
                 const leftPct = (lane / lanes) * 100;
                 const widthPct = 100 / lanes;
                 return (
@@ -1634,6 +1685,9 @@ function TimeGrid({
                       isNow
                         ? "z-10 ring-2 ring-primary ring-offset-1 ring-offset-background shadow-md"
                         : "",
+                      // A pinned block gets a solid left accent so "this won't
+                      // move" is glanceable, not only on the lock icon.
+                      isFixed && !isDone ? "border-l-2 border-l-primary" : "",
                     ].join(" ")}
                   >
                     <div className="flex items-start gap-1">
@@ -1682,6 +1736,34 @@ function TimeGrid({
                         </span>
                       )}
                     </div>
+                    {/* Fixed ↔ flexible. A fixed (meeting) block is skipped by
+                        roll-over/replan; the lock is persistent when fixed and
+                        hover-to-pin when flexible. */}
+                    <button
+                      type="button"
+                      aria-label={isFixed ? "Make flexible" : "Pin as fixed"}
+                      title={
+                        isFixed
+                          ? "Fixed — the planner won't move this. Click to make flexible."
+                          : "Flexible — auto-moves when you replan. Click to pin as fixed."
+                      }
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onSetFlexible(b.item, isFixed);
+                      }}
+                      className={[
+                        "tech-transition absolute right-[18px] top-0.5 rounded p-0.5",
+                        isFixed
+                          ? "text-primary hover:bg-black/10"
+                          : "text-muted-foreground opacity-0 hover:bg-black/10 hover:text-foreground group-hover:opacity-100",
+                      ].join(" ")}
+                    >
+                      {isFixed ? (
+                        <Lock className="h-3 w-3" />
+                      ) : (
+                        <Unlock className="h-3 w-3" />
+                      )}
+                    </button>
                     <button
                       type="button"
                       aria-label="Unschedule"

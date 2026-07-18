@@ -109,6 +109,8 @@ class ItemPatch(BaseModel):
     # "" clears (unschedule). scheduled_end defaults to start + estimate client-side.
     scheduled_start: str | None = None
     scheduled_end: str | None = None
+    # true = auto-mover may move this block; false = FIXED (a meeting). §5.5.
+    flexible: bool | None = None
     provider_status: str | None = None   # the tool's stage, e.g. 'To-do'
     workflow_stage: str | None = None    # the local Kanban stage (board move)
     sort_key: float | None = None        # manual (drag) rank within a group/column
@@ -539,9 +541,11 @@ def _build_item_update(
         (patch.important, "important = :important", patch.important),
         (patch.leveraged, "leveraged = :leveraged", patch.leveraged),
         (patch.kept_mine, "kept_mine = :kept_mine", patch.kept_mine),
+        # Fixed/flexible block (calendar_ux_review.md §5.5) — local overlay.
+        (patch.flexible, "flexible = :flexible", patch.flexible),
     ]
     keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage",
-            "sortkey", "important", "leveraged", "kept_mine"]
+            "sortkey", "important", "leveraged", "kept_mine", "flexible"]
     for (present, clause, value), key in zip(simple, keys, strict=True):
         if present is not None:
             sets.append(clause)

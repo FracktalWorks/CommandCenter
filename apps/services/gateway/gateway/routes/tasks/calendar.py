@@ -420,6 +420,8 @@ _OVERDUE_WHERE = (
     " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
     " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
     " AND i.disposition NOT IN ('DONE','TRASH')"
+    # never roll a FIXED (meeting) block forward — only task-blocks move
+    " AND coalesce(i.flexible, true) = true"
     " AND i.scheduled_start IS NOT NULL AND i.scheduled_end < :now"
 )
 _TODAY_BUSY_WHERE = (
@@ -429,6 +431,29 @@ _TODAY_BUSY_WHERE = (
     " AND i.scheduled_start IS NOT NULL"
     " AND i.scheduled_start < :win_end AND i.scheduled_end > :win_start"
     " AND i.scheduled_end >= :now"
+)
+# "Replan the rest of my day": the MOVABLE set — today's flexible, incomplete
+# blocks not already in the past; these get repacked from now onward.
+_REPLAN_MOVABLE_WHERE = (
+    " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
+    " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
+    " AND i.disposition NOT IN ('DONE','TRASH')"
+    " AND coalesce(i.flexible, true) = true"
+    " AND i.scheduled_start IS NOT NULL"
+    " AND i.scheduled_start < :win_end AND i.scheduled_end > :win_start"
+    " AND i.scheduled_end >= :now"
+)
+# Everything else already on today's grid is an OBSTACLE the repack must respect
+# (fixed meeting blocks, done blocks, anything not in the movable set) — the
+# strict complement of _REPLAN_MOVABLE_WHERE within scheduled-in-window.
+_REPLAN_FIXED_WHERE = (
+    " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
+    " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
+    " AND i.scheduled_start IS NOT NULL"
+    " AND i.scheduled_start < :win_end AND i.scheduled_end > :win_start"
+    " AND NOT (coalesce(i.flexible, true) = true"
+    "          AND i.disposition NOT IN ('DONE','TRASH')"
+    "          AND i.scheduled_end >= :now)"
 )
 
 
@@ -522,6 +547,84 @@ async def rollover_day(
         notes = (f"{len(blocks)} task(s) rolled forward"
                  + (f", {len(unplaced)} didn't fit" if unplaced else "")
                  if blocks or unplaced else "Nothing overdue to roll over.")
+        return DayPlan(
+            blocks=blocks, unplaced=unplaced, notes=notes,
+            used_mins=used, capacity_mins=req.capacity_mins)
+    finally:
+        await db.close()
+
+
+@router.post("/calendar/replan", response_model=DayPlan)
+async def replan_day(
+    req: PlanDayRequest, user: UserContext = Depends(get_current_user),
+):
+    """Re-timebox the REST of today: take today's not-yet-done FLEXIBLE blocks
+    from now onward and repack them into the remaining open time, packing AROUND
+    fixed (meeting) blocks and what's already done. The honest 'I fell behind —
+    reorganize my day' button, distinct from rollover (which pulls PAST-overdue
+    forward) and plan (which fills free space with UNSCHEDULED next actions). See
+    calendar_ux_review.md §3 P2. NO writes: returns a proposal the client
+    applies (PATCH scheduled_start/end per accepted block)."""
+    win_start, win_end = _parse_iso(req.day_start), _parse_iso(req.day_end)
+    if not win_start or not win_end or win_end <= win_start:
+        raise HTTPException(
+            status_code=400, detail="Valid day_start/day_end (ISO) required.")
+    uid = _uid(user)
+    now = datetime.now(UTC)
+    db = await _get_db()
+    try:
+        params = {"uid": uid, "win_start": win_start,
+                  "win_end": win_end, "now": now}
+        move_rows = (await db.execute(
+            text(ITEM_SELECT + _REPLAN_MOVABLE_WHERE), params)).fetchall()
+        movable = [_row_to_item(r) for r in move_rows]
+        fixed_rows = (await db.execute(
+            text(ITEM_SELECT + _REPLAN_FIXED_WHERE), params)).fetchall()
+        busy: list[tuple[datetime, datetime]] = []
+        for r in fixed_rows:
+            bs = _parse_iso(getattr(r, "scheduled_start", None))
+            be = _parse_iso(getattr(r, "scheduled_end", None))
+            if bs and be and be > bs:
+                busy.append((bs, be))
+
+        free = _free_intervals(win_start, win_end, busy, now)
+        windows: list[tuple[datetime, datetime, str]] = []
+        for w in req.energy_windows:
+            ws, we = _parse_iso(w.start), _parse_iso(w.end)
+            if ws and we and we > ws and w.energy in _ENERGY:
+                windows.append((ws, we, w.energy))
+
+        # Nearest-due first, then earliest-originally-scheduled; a replan
+        # reshuffles WHEN each block sits, preserving its own duration.
+        far = datetime.max.replace(tzinfo=UTC)
+        movable.sort(key=lambda m: (_parse_iso(m.due_at) or far,
+                                    _parse_iso(m.scheduled_start) or now))
+        blocks: list[PlanBlock] = []
+        unplaced: list[PlanUnplaced] = []
+        used = 0
+        for m in movable:
+            bs = _parse_iso(m.scheduled_start)
+            be = _parse_iso(m.scheduled_end)
+            dur = (max(15, int((be - bs).total_seconds() / 60))
+                   if bs and be else 30)
+            pref = m.energy if m.energy in _ENERGY else None
+            placed = _place_one(free, dur, pref, windows, req.buffer_mins)
+            if placed is None:
+                unplaced.append(PlanUnplaced(
+                    item_id=m.id, title=m.title,
+                    reason="No open time left today"))
+                continue
+            s, e = placed
+            blocks.append(PlanBlock(
+                item_id=m.id, title=m.title,
+                start=s.isoformat(), end=e.isoformat(),
+                energy=pref, rationale="Replanned to fit the rest of your day"))
+            used += dur
+
+        notes = (f"Replanned {len(blocks)} block(s) from now"
+                 + (f", {len(unplaced)} didn't fit" if unplaced else "")
+                 if blocks or unplaced
+                 else "Nothing to replan — the rest of your day is clear.")
         return DayPlan(
             blocks=blocks, unplaced=unplaced, notes=notes,
             used_mins=used, capacity_mins=req.capacity_mins)

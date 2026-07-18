@@ -177,6 +177,9 @@ export interface GtdItem {
   scheduledStart?: string;
   /** ISO datetime — end of the block (defaults to start + estimate) */
   scheduledEnd?: string;
+  /** false = a FIXED block (meeting) the auto-mover (roll-over / replan) leaves
+   *  put; true/undefined = flexible, may be moved. See calendar_ux_review §5.5 */
+  flexible?: boolean;
 
   createdAt: string;
   /** Context attachments captured with the item (photo/file/link). */

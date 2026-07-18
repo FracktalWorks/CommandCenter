@@ -95,6 +95,8 @@ function mapItem(raw: Raw): GtdItem {
     isHardDate: Boolean(raw.is_hard_date),
     scheduledStart: raw.scheduled_start ? String(raw.scheduled_start) : undefined,
     scheduledEnd: raw.scheduled_end ? String(raw.scheduled_end) : undefined,
+    // Defaults to flexible (movable) — matches the column default (mig 79).
+    flexible: raw.flexible == null ? true : Boolean(raw.flexible),
     createdAt: String(raw.created_at ?? ""),
     attachments: Array.isArray(raw.attachments)
       ? (raw.attachments as TaskAttachment[])
@@ -451,6 +453,7 @@ export async function apiPatchItem(
     due_at?: string;
     scheduled_start?: string;
     scheduled_end?: string;
+    flexible?: boolean;
     provider_status?: string;
     workflow_stage?: string;
     sort_key?: number;
@@ -549,6 +552,18 @@ export async function apiPlanDay(req: PlanDayRequest): Promise<DayPlanResult> {
 export async function apiRollover(req: PlanDayRequest): Promise<DayPlanResult> {
   return mapDayPlan(
     await gatewayFetch<Raw>(`/calendar/rollover`, {
+      method: "POST",
+      body: JSON.stringify(req),
+    }),
+  );
+}
+
+/** Re-timebox the REST of today: repack today's not-yet-done FLEXIBLE blocks
+ *  from now, around fixed/done blocks. The "I fell behind — fix my day" op.
+ *  Returns a proposal — the caller applies it. */
+export async function apiReplan(req: PlanDayRequest): Promise<DayPlanResult> {
+  return mapDayPlan(
+    await gatewayFetch<Raw>(`/calendar/replan`, {
       method: "POST",
       body: JSON.stringify(req),
     }),

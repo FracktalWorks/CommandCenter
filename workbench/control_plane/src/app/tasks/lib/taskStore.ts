@@ -160,6 +160,8 @@ export interface ItemMetaPatch {
   /** timeboxing (calendar_timeboxing.md §3) — ISO; "" clears (unschedule) */
   scheduledStart?: string;
   scheduledEnd?: string;
+  /** false = FIXED block (meeting) the auto-mover leaves put; true = flexible */
+  flexible?: boolean;
   providerStatus?: string;    // the tool's stage
   workflowStage?: string;     // the local Kanban stage (board move)
   sortKey?: number;           // manual (drag) rank within a group/column
@@ -1546,6 +1548,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             patch.scheduledEnd !== undefined
               ? patch.scheduledEnd || undefined
               : i.scheduledEnd,
+          flexible: patch.flexible !== undefined ? patch.flexible : i.flexible,
           providerStatus:
             patch.providerStatus !== undefined
               ? patch.providerStatus
@@ -1596,6 +1599,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         body.scheduled_start = patch.scheduledStart;
       if (patch.scheduledEnd !== undefined)
         body.scheduled_end = patch.scheduledEnd;
+      if (patch.flexible !== undefined) body.flexible = patch.flexible;
       if (patch.providerStatus !== undefined)
         body.provider_status = patch.providerStatus;
       if (patch.workflowStage !== undefined)

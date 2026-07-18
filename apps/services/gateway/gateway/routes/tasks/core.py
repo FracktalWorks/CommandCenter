@@ -93,6 +93,9 @@ class GtdItemModel(BaseModel):
     # scheduled to be done. Distinct from due_at (deadline). null = unscheduled.
     scheduled_start: str | None = None
     scheduled_end: str | None = None
+    # true (default) = the auto-mover (roll-over / replan) may move this block;
+    # false = FIXED (a meeting) that stays put. See calendar_ux_review.md §5.5.
+    flexible: bool = True
     completed_at: str | None = None
     clarified_at: str | None = None
     origin: dict | None = None           # source linkage (e.g. captured from an email)
@@ -242,6 +245,7 @@ def _row_to_item(row: Any) -> GtdItemModel:
         is_hard_date=bool(row.is_hard_date),
         scheduled_start=_iso(getattr(row, "scheduled_start", None)),
         scheduled_end=_iso(getattr(row, "scheduled_end", None)),
+        flexible=bool(getattr(row, "flexible", True)),
         completed_at=_iso(row.completed_at),
         clarified_at=_iso(row.clarified_at),
         origin=_parse_jsonb(getattr(row, "origin", None)),

@@ -233,3 +233,33 @@ async def test_messages_list_all_folder_matches_search_all_scope():
         params.update(p)
     assert "LOWER(em.folder) <> ALL(:folder_excludes)" in sql
     assert params["folder_excludes"] == ["junk", "trash"]
+
+
+# ── Frontend ⟷ backend constant parity ────────────────────────────────────────
+
+
+def test_folder_all_excludes_matches_the_frontend_constant():
+    """The set of folders the "All" scope hides is declared TWICE — the server's
+    ``core.FOLDER_ALL_EXCLUDES`` and the client's ``FOLDER_ALL_EXCLUDES`` in
+    ``emailStore.ts`` (the sidebar All *view* filters locally off it). They must
+    stay identical, else the All view and the All search scope silently disagree
+    on whether a message is shown. This guards the client copy, since the CI
+    lint/test gate never builds the frontend."""
+    import re
+    from pathlib import Path
+
+    from gateway.routes.email.core import FOLDER_ALL_EXCLUDES
+
+    repo = Path(__file__).resolve().parents[2]
+    store = (
+        repo / "workbench/control_plane/src/app/email/lib/emailStore.ts"
+    ).read_text(encoding="utf-8")
+    m_ = re.search(r"FOLDER_ALL_EXCLUDES\s*=\s*new Set\(\[([^\]]*)\]\)", store)
+    assert m_, "FOLDER_ALL_EXCLUDES not found in emailStore.ts"
+    frontend = {
+        tok.strip().strip("\"'") for tok in m_.group(1).split(",") if tok.strip()
+    }
+    assert frontend == set(FOLDER_ALL_EXCLUDES), (
+        f"folder-exclude drift: backend={set(FOLDER_ALL_EXCLUDES)} "
+        f"frontend={frontend} — update both core.py and emailStore.ts together"
+    )

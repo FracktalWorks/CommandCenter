@@ -1,0 +1,1021 @@
+<title>CommandCenter · Workflow Builder</title>
+<style>
+  /* ---- Design tokens ------------------------------------------------ */
+  :root {
+    color-scheme: light dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+
+    /* neutrals — slate with a faint blue bias (chosen, not defaulted) */
+    --ground: #f4f6f9;
+    --panel: #ffffff;
+    --panel-2: #eef1f6;
+    --line: #dde2ea;
+    --line-strong: #c3ccda;
+    --ink: #10151f;
+    --ink-2: #47526420;
+    --muted: #5a6577;
+    --faint: #8a94a6;
+
+    /* brand action — signal azure */
+    --accent: #2f6bff;
+    --accent-ink: #1b47b8;
+    --accent-wash: #2f6bff14;
+
+    /* functional category hues (encode node kind, not decoration) */
+    --c-trigger: #e0850a;
+    --c-agent:   #7c5cf0;
+    --c-tool:    #0e9d8e;
+    --c-logic:   #5b6b8c;
+    --c-output:  #1f9d55;
+
+    /* semantic run status */
+    --ok: #1f9d55;
+    --run: #2f6bff;
+    --err: #d64545;
+
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow: 0 1px 2px #0b122008, 0 6px 20px #0b122010;
+    --shadow-lg: 0 12px 40px #0b122024;
+    --canvas-dot: #cfd6e0;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0b0e14;
+      --panel: #121722;
+      --panel-2: #0e131c;
+      --line: #232c3a;
+      --line-strong: #33405a;
+      --ink: #e7ecf4;
+      --ink-2: #ffffff10;
+      --muted: #9aa6ba;
+      --faint: #6b7688;
+      --accent: #5c8bff;
+      --accent-ink: #9db9ff;
+      --accent-wash: #5c8bff1f;
+      --c-trigger: #f0a93a;
+      --c-agent:   #a48cff;
+      --c-tool:    #2dc6b4;
+      --c-logic:   #8ea0c6;
+      --c-output:  #46c680;
+      --ok: #46c680;
+      --run: #5c8bff;
+      --err: #f06565;
+      --shadow: 0 1px 2px #00000040, 0 8px 26px #00000050;
+      --shadow-lg: 0 16px 50px #00000070;
+      --canvas-dot: #1f2836;
+    }
+  }
+  /* explicit theme toggle wins in both directions */
+  :root[data-theme="light"] {
+    --ground:#f4f6f9;--panel:#fff;--panel-2:#eef1f6;--line:#dde2ea;--line-strong:#c3ccda;
+    --ink:#10151f;--muted:#5a6577;--faint:#8a94a6;--accent:#2f6bff;--accent-ink:#1b47b8;
+    --accent-wash:#2f6bff14;--c-trigger:#e0850a;--c-agent:#7c5cf0;--c-tool:#0e9d8e;
+    --c-logic:#5b6b8c;--c-output:#1f9d55;--ok:#1f9d55;--run:#2f6bff;--err:#d64545;--canvas-dot:#cfd6e0;
+  }
+  :root[data-theme="dark"] {
+    --ground:#0b0e14;--panel:#121722;--panel-2:#0e131c;--line:#232c3a;--line-strong:#33405a;
+    --ink:#e7ecf4;--muted:#9aa6ba;--faint:#6b7688;--accent:#5c8bff;--accent-ink:#9db9ff;
+    --accent-wash:#5c8bff1f;--c-trigger:#f0a93a;--c-agent:#a48cff;--c-tool:#2dc6b4;
+    --c-logic:#8ea0c6;--c-output:#46c680;--ok:#46c680;--run:#5c8bff;--err:#f06565;--canvas-dot:#1f2836;
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--ground);
+    color: var(--ink);
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 10.5px;
+    letter-spacing: .14em;
+    text-transform: uppercase;
+    color: var(--faint);
+  }
+  button { font-family: inherit; cursor: pointer; }
+  :focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; border-radius: 6px; }
+
+  /* ---- App shell ---------------------------------------------------- */
+  .app {
+    display: grid;
+    grid-template-rows: 52px 1fr;
+    grid-template-columns: 232px 1fr 312px;
+    grid-template-areas:
+      "top top top"
+      "palette canvas inspector";
+    height: 100vh;
+  }
+  /* topbar */
+  .topbar {
+    grid-area: top;
+    display: flex; align-items: center; gap: 14px;
+    padding: 0 16px;
+    background: var(--panel);
+    border-bottom: 1px solid var(--line);
+    z-index: 30;
+  }
+  .brand { display:flex; align-items:center; gap:9px; font-weight:640; letter-spacing:-.01em; }
+  .brand .logo {
+    width: 22px; height: 22px; border-radius: 6px;
+    background: linear-gradient(135deg, var(--accent), var(--c-agent));
+    display:grid; place-items:center; color:#fff; font-size:12px;
+    box-shadow: inset 0 0 0 1px #ffffff30;
+  }
+  .brand .sub { color: var(--faint); font-weight: 500; }
+  .wf-name {
+    display:flex; align-items:center; gap:8px;
+    padding: 5px 10px; border-radius: 8px; font-weight: 560; font-size: 13.5px;
+    border: 1px solid transparent;
+  }
+  .wf-name:hover { border-color: var(--line); background: var(--panel-2); }
+  .wf-name .dot { width:7px;height:7px;border-radius:50%;background:var(--ok); box-shadow:0 0 0 3px color-mix(in srgb, var(--ok) 22%, transparent); }
+  .trigger-chip {
+    display:flex; align-items:center; gap:7px;
+    padding: 5px 10px 5px 8px; border-radius: 999px;
+    background: color-mix(in srgb, var(--c-trigger) 12%, transparent);
+    border: 1px solid color-mix(in srgb, var(--c-trigger) 34%, transparent);
+    color: color-mix(in srgb, var(--c-trigger) 72%, var(--ink));
+    font-size: 12px; font-weight: 560;
+  }
+  .trigger-chip svg { width:13px;height:13px; }
+  .spacer { flex: 1; }
+  .btn {
+    display:inline-flex; align-items:center; gap:7px;
+    padding: 7px 13px; border-radius: 9px; font-size: 13px; font-weight: 560;
+    border: 1px solid var(--line-strong); background: var(--panel); color: var(--ink);
+    transition: transform .04s ease, background .15s;
+  }
+  .btn:hover { background: var(--panel-2); }
+  .btn:active { transform: translateY(1px); }
+  .btn svg { width: 14px; height: 14px; }
+  .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+  .btn.primary:hover { background: var(--accent-ink); }
+  .btn.ghost { border-color: transparent; background: transparent; color: var(--muted); padding: 7px 9px; }
+  .btn.ghost:hover { background: var(--panel-2); color: var(--ink); }
+
+  /* ---- Palette ------------------------------------------------------ */
+  .palette {
+    grid-area: palette;
+    background: var(--panel);
+    border-right: 1px solid var(--line);
+    overflow-y: auto;
+    padding: 14px 12px 24px;
+  }
+  .palette h2 { margin: 4px 4px 10px; }
+  .pal-group { margin-bottom: 16px; }
+  .pal-group > .eyebrow { display:flex; align-items:center; gap:7px; margin: 0 4px 7px; }
+  .pal-group > .eyebrow::before { content:""; width:8px;height:8px;border-radius:3px; background: var(--cat); }
+  .pal-item {
+    display:flex; align-items:center; gap:9px;
+    padding: 8px 9px; border-radius: 9px; margin-bottom: 3px;
+    border: 1px solid transparent; font-size: 12.8px; color: var(--ink);
+    user-select: none; cursor: grab;
+    transition: background .12s, border-color .12s;
+  }
+  .pal-item:hover { background: var(--panel-2); border-color: var(--line); }
+  .pal-item:active { cursor: grabbing; }
+  .pal-ico {
+    width: 26px; height: 26px; border-radius: 7px; flex: none;
+    display:grid; place-items:center;
+    background: color-mix(in srgb, var(--cat) 15%, transparent);
+    color: var(--cat);
+    border: 1px solid color-mix(in srgb, var(--cat) 30%, transparent);
+  }
+  .pal-ico svg { width: 14px; height: 14px; }
+  .pal-item .plus { margin-left:auto; color: var(--faint); font-size: 15px; opacity: 0; }
+  .pal-item:hover .plus { opacity: 1; }
+  .pal-hint { margin: 2px 4px 0; font-size: 11px; color: var(--faint); line-height: 1.5; }
+
+  /* ---- Canvas ------------------------------------------------------- */
+  .canvas-wrap { grid-area: canvas; position: relative; overflow: hidden; background: var(--ground); }
+  .canvas-bg {
+    position:absolute; inset:0;
+    background-image: radial-gradient(var(--canvas-dot) 1.3px, transparent 1.3px);
+    background-size: 22px 22px;
+    cursor: grab;
+  }
+  .canvas-bg.panning { cursor: grabbing; }
+  #viewport { position: absolute; inset: 0; transform-origin: 0 0; }
+  #edges { position: absolute; top:0; left:0; overflow: visible; pointer-events: none; }
+  .edge-path { fill: none; stroke: var(--line-strong); stroke-width: 2; }
+  .edge-path.branch-yes { stroke: color-mix(in srgb, var(--c-logic) 60%, var(--ok)); }
+  .edge-path.branch-no  { stroke: var(--line-strong); stroke-dasharray: 5 5; }
+  .edge-path.hot { stroke: var(--run); stroke-width: 2.6; filter: drop-shadow(0 0 4px color-mix(in srgb, var(--run) 60%, transparent)); }
+  .edge-label {
+    font-family: var(--font-mono); font-size: 10px; letter-spacing:.04em;
+    fill: var(--muted); text-transform: uppercase;
+  }
+  .edge-label-bg { fill: var(--ground); }
+
+  .node {
+    position: absolute; width: 208px;
+    background: var(--panel); border: 1px solid var(--line);
+    border-radius: 12px; box-shadow: var(--shadow);
+    cursor: grab; user-select: none;
+    border-top: 3px solid var(--cat);
+    transition: box-shadow .15s, border-color .15s;
+  }
+  .node:hover { box-shadow: var(--shadow-lg); }
+  .node.selected { border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash), var(--shadow-lg); }
+  .node.dragging { cursor: grabbing; z-index: 5; }
+  .node.skipped { opacity: .42; filter: grayscale(.4); }
+  .node-head { display:flex; align-items:center; gap:8px; padding: 9px 11px 7px; }
+  .node-ico {
+    width: 26px; height:26px; border-radius:7px; flex:none; display:grid; place-items:center;
+    background: color-mix(in srgb, var(--cat) 15%, transparent);
+    color: var(--cat); border: 1px solid color-mix(in srgb, var(--cat) 30%, transparent);
+  }
+  .node-ico svg { width:14px; height:14px; }
+  .node-titles { min-width:0; }
+  .node-kind { font-family: var(--font-mono); font-size:9.5px; letter-spacing:.11em; text-transform:uppercase; color: var(--cat); }
+  .node-title { font-size: 13px; font-weight: 600; letter-spacing:-.01em; line-height:1.25; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .node-body { padding: 0 11px 11px; }
+  .node-desc { font-size: 11.5px; color: var(--muted); line-height: 1.45; }
+  .node-desc code { font-family: var(--font-mono); font-size: 10.5px; color: var(--accent-ink); background: var(--accent-wash); padding: 1px 4px; border-radius: 4px; }
+  .node-foot { display:flex; align-items:center; gap:6px; padding: 7px 11px; border-top: 1px solid var(--line); }
+  .node-status {
+    font-family: var(--font-mono); font-size:10px; letter-spacing:.08em; text-transform:uppercase;
+    display:flex; align-items:center; gap:6px; color: var(--faint);
+  }
+  .node-status .s-dot { width:7px; height:7px; border-radius:50%; background: var(--line-strong); }
+  .node[data-status="running"] { border-color: var(--run); }
+  .node[data-status="running"] .s-dot { background: var(--run); animation: pulse 1s infinite; }
+  .node[data-status="running"] .node-status { color: var(--run); }
+  .node[data-status="ok"] .s-dot { background: var(--ok); }
+  .node[data-status="ok"] .node-status { color: var(--ok); }
+  .node[data-status="wait"] .s-dot { background: var(--c-trigger); animation: pulse 1.4s infinite; }
+  .node[data-status="wait"] .node-status { color: var(--c-trigger); }
+  @keyframes pulse { 0%,100%{ box-shadow:0 0 0 0 color-mix(in srgb, currentColor 55%, transparent);} 50%{ box-shadow:0 0 0 5px transparent;} }
+
+  /* node ports */
+  .port { position:absolute; width:11px; height:11px; border-radius:50%; background: var(--panel); border:2px solid var(--line-strong); left:50%; transform:translateX(-50%); }
+  .port.in { top:-6px; } .port.out { bottom:-6px; }
+  .port.yes { left:auto; right:28px; transform:none; border-color: var(--ok); }
+  .port.no  { left:28px; transform:none; }
+
+  .add-btn {
+    position:absolute; width:22px;height:22px; border-radius:50%;
+    background: var(--panel); border:1px solid var(--line-strong); color: var(--muted);
+    display:grid; place-items:center; font-size:15px; line-height:0; z-index:6;
+    box-shadow: var(--shadow); opacity:0; transition: opacity .12s, transform .12s;
+  }
+  .canvas-wrap:hover .add-btn { opacity:.85; }
+  .add-btn:hover { opacity:1; color: var(--accent); border-color: var(--accent); transform: scale(1.12); }
+
+  /* zoom controls */
+  .zoom {
+    position:absolute; left:14px; bottom:14px; z-index:20;
+    display:flex; flex-direction:column; background: var(--panel);
+    border:1px solid var(--line); border-radius:10px; overflow:hidden; box-shadow: var(--shadow);
+  }
+  .zoom button { border:none; background:transparent; color: var(--muted); width:30px; height:30px; font-size:15px; display:grid; place-items:center; }
+  .zoom button:hover { background: var(--panel-2); color: var(--ink); }
+  .zoom button + button { border-top: 1px solid var(--line); }
+  .canvas-hint {
+    position:absolute; right:14px; top:12px; z-index:20;
+    font-size:11px; color: var(--faint);
+    background: color-mix(in srgb, var(--panel) 80%, transparent);
+    backdrop-filter: blur(4px);
+    border:1px solid var(--line); border-radius:8px; padding:5px 9px;
+  }
+
+  /* NL prompt bar */
+  .nl-bar {
+    position:absolute; left:50%; bottom:16px; transform:translateX(-50%);
+    z-index:20; width:min(560px, 72%);
+    display:flex; align-items:center; gap:10px;
+    background: var(--panel); border:1px solid var(--line-strong);
+    border-radius:12px; padding:9px 10px 9px 14px; box-shadow: var(--shadow-lg);
+  }
+  .nl-bar svg.spark { width:16px;height:16px; color: var(--c-agent); flex:none; }
+  .nl-bar input {
+    flex:1; border:none; background:transparent; color:var(--ink);
+    font-family:inherit; font-size:13px; outline:none;
+  }
+  .nl-bar input::placeholder { color: var(--faint); }
+  .nl-bar .btn { padding:6px 11px; }
+
+  /* ---- Inspector ---------------------------------------------------- */
+  .inspector {
+    grid-area: inspector; background: var(--panel);
+    border-left: 1px solid var(--line); overflow-y:auto; padding: 0;
+  }
+  .insp-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--line); position:sticky; top:0; background:var(--panel); z-index:2; }
+  .insp-head .row { display:flex; align-items:center; gap:10px; }
+  .insp-ico { width:30px;height:30px;border-radius:8px; display:grid;place-items:center; background: color-mix(in srgb, var(--cat) 15%, transparent); color:var(--cat); border:1px solid color-mix(in srgb,var(--cat) 30%, transparent); }
+  .insp-ico svg{width:16px;height:16px;}
+  .insp-title { font-size:15px; font-weight:640; letter-spacing:-.01em; }
+  .insp-body { padding: 14px 16px 30px; }
+  .field { margin-bottom: 15px; }
+  .field label { display:block; font-size:11.5px; font-weight:560; color:var(--muted); margin-bottom:6px; }
+  .field .ctrl {
+    width:100%; padding:8px 10px; border-radius:8px; border:1px solid var(--line-strong);
+    background: var(--ground); color: var(--ink); font-family:inherit; font-size:13px;
+  }
+  .field .ctrl.mono { font-family: var(--font-mono); font-size:12px; }
+  .field select.ctrl { appearance:none; background-image: linear-gradient(45deg,transparent 50%,var(--faint) 50%),linear-gradient(135deg,var(--faint) 50%,transparent 50%); background-position: calc(100% - 16px) 15px, calc(100% - 11px) 15px; background-size:5px 5px,5px 5px; background-repeat:no-repeat; }
+  .field .ctrl:focus { outline:none; border-color: var(--accent); box-shadow: 0 0 0 3px var(--accent-wash); }
+  .tmpl { font-family: var(--font-mono); font-size:11px; color: var(--accent-ink); }
+  .var-pill {
+    display:inline-flex; align-items:center; gap:4px;
+    font-family: var(--font-mono); font-size:11px;
+    background: var(--accent-wash); color: var(--accent-ink);
+    border:1px solid color-mix(in srgb, var(--accent) 30%, transparent);
+    padding:2px 7px; border-radius:6px; margin:2px 4px 2px 0;
+  }
+  .insp-section-label { display:flex; align-items:center; gap:7px; margin: 20px 0 9px; }
+  .insp-section-label::after { content:""; flex:1; height:1px; background: var(--line); }
+  .outputs-box { background: var(--ground); border:1px solid var(--line); border-radius:9px; padding:10px 11px; }
+  .out-row { display:flex; align-items:center; justify-content:space-between; font-size:12px; padding:3px 0; }
+  .out-row .k { font-family: var(--font-mono); font-size:11.5px; }
+  .out-row .t { font-size:10.5px; color:var(--faint); font-family:var(--font-mono); }
+  .insp-empty { padding: 40px 20px; text-align:center; color: var(--faint); }
+  .insp-empty svg { width:34px;height:34px; opacity:.4; margin-bottom:10px; }
+
+  /* ---- Run console -------------------------------------------------- */
+  .console {
+    position:absolute; left:0; right:0; bottom:0; z-index:25;
+    background: var(--panel); border-top:1px solid var(--line);
+    transform: translateY(calc(100% - 34px)); transition: transform .28s cubic-bezier(.2,.8,.2,1);
+    box-shadow: 0 -8px 30px #0b122018;
+  }
+  .console.open { transform: translateY(0); }
+  .console-head {
+    height:34px; display:flex; align-items:center; gap:10px; padding:0 14px; cursor:pointer;
+    border-bottom:1px solid transparent;
+  }
+  .console.open .console-head { border-color: var(--line); }
+  .console-head .eyebrow { display:flex; align-items:center; gap:7px; }
+  .console-head .live { width:7px;height:7px;border-radius:50%; background:var(--faint); }
+  .console.running .live { background: var(--run); animation: pulse 1s infinite; }
+  .console-head .chev { margin-left:auto; color:var(--faint); transition: transform .2s; }
+  .console.open .chev { transform: rotate(180deg); }
+  .console-log {
+    height: 168px; overflow-y:auto; padding: 10px 14px 16px;
+    font-family: var(--font-mono); font-size: 11.5px; line-height: 1.7;
+  }
+  .log-line { display:flex; gap:10px; white-space:pre-wrap; }
+  .log-line .ts { color: var(--faint); flex:none; }
+  .log-line .tag { flex:none; width:56px; }
+  .log-line.ok .tag { color: var(--ok); }
+  .log-line.run .tag { color: var(--run); }
+  .log-line.wait .tag { color: var(--c-trigger); }
+  .log-line.err .tag { color: var(--err); }
+  .log-line .msg { color: var(--ink); }
+  .log-line .msg b { color: var(--accent-ink); font-weight:600; }
+
+  .toast {
+    position:fixed; top:64px; left:50%; transform:translateX(-50%) translateY(-12px);
+    background: var(--ink); color: var(--ground); padding:9px 16px; border-radius:10px;
+    font-size:13px; font-weight:540; box-shadow: var(--shadow-lg); z-index:100;
+    opacity:0; pointer-events:none; transition: opacity .2s, transform .2s;
+  }
+  .toast.show { opacity:1; transform:translateX(-50%) translateY(0); }
+
+  @media (max-width: 1080px) {
+    .app { grid-template-columns: 200px 1fr 0; }
+    .inspector { display:none; }
+  }
+  @media (max-width: 760px) {
+    .mobile-note { display:flex !important; }
+    .app { display:none; }
+  }
+  .mobile-note {
+    display:none; height:100vh; align-items:center; justify-content:center;
+    padding:32px; text-align:center; color: var(--muted); font-size:14px; line-height:1.6;
+  }
+</style>
+
+<div class="mobile-note">
+  <div>
+    <div class="eyebrow" style="margin-bottom:10px;">CommandCenter · Workflow Builder</div>
+    This interactive mockup is designed for a wider screen.<br>Open it on a laptop or desktop to explore the canvas.
+  </div>
+</div>
+
+<div class="app" id="app">
+  <!-- Topbar -->
+  <header class="topbar">
+    <div class="brand"><span class="logo">◆</span> CommandCenter <span class="sub">/ Workflows</span></div>
+    <div class="wf-name" title="Rename workflow"><span class="dot"></span> Inbound Sales Email → Triage <span style="color:var(--faint)">▾</span></div>
+    <div class="trigger-chip" id="triggerChip">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/></svg>
+      Trigger: New email received
+    </div>
+    <div class="spacer"></div>
+    <button class="btn ghost" id="themeBtn" title="Toggle theme">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/></svg>
+    </button>
+    <button class="btn" id="testBtn">
+      <svg viewBox="0 0 24 24" fill="currentColor"><path d="M8 5v14l11-7z"/></svg>
+      Test run
+    </button>
+    <button class="btn primary" id="publishBtn">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5M5 12l7-7 7 7"/></svg>
+      Publish
+    </button>
+  </header>
+
+  <!-- Palette -->
+  <aside class="palette" id="palette">
+    <h2 class="eyebrow" style="letter-spacing:.16em;">Building blocks</h2>
+    <p class="pal-hint" style="margin-bottom:16px;">Drag onto the canvas, or click to add. Blocks run your existing agents & integrations.</p>
+    <div id="palGroups"></div>
+  </aside>
+
+  <!-- Canvas -->
+  <main class="canvas-wrap" id="canvasWrap">
+    <div class="canvas-bg" id="canvasBg"></div>
+    <div class="canvas-hint">Drag nodes · scroll to zoom · drag canvas to pan</div>
+    <div id="viewport">
+      <svg id="edges"></svg>
+      <!-- nodes injected here -->
+    </div>
+
+    <div class="zoom">
+      <button id="zoomIn" title="Zoom in">+</button>
+      <button id="zoomFit" title="Fit" style="font-size:11px;">▢</button>
+      <button id="zoomOut" title="Zoom out">−</button>
+    </div>
+
+    <div class="nl-bar" title="Describe → generate → refine">
+      <svg class="spark" viewBox="0 0 24 24" fill="currentColor"><path d="M12 2l1.6 5.4L19 9l-5.4 1.6L12 16l-1.6-5.4L5 9l5.4-1.6z"/><path d="M18 14l.8 2.7L21.5 17l-2.7.8L18 20.5l-.8-2.7L14.5 17l2.7-.8z" opacity=".6"/></svg>
+      <input id="nlInput" placeholder="Describe an automation to generate…  e.g. “When a lead emails, log to Zoho and draft a reply”">
+      <button class="btn primary" id="nlBtn">Generate</button>
+    </div>
+  </main>
+
+  <!-- Inspector -->
+  <aside class="inspector" id="inspector">
+    <div class="insp-empty" id="inspEmpty">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+      <div>Select a block to configure it.</div>
+    </div>
+    <div id="inspContent" style="display:none;"></div>
+  </aside>
+</div>
+
+<!-- Run console -->
+<div class="console" id="console">
+  <div class="console-head" id="consoleHead">
+    <span class="eyebrow"><span class="live"></span> Run console</span>
+    <span id="consoleStatus" class="eyebrow" style="color:var(--faint)">idle</span>
+    <span class="chev">▾</span>
+  </div>
+  <div class="console-log" id="consoleLog">
+    <div class="log-line"><span class="ts">--:--:--</span><span class="tag" style="color:var(--faint)">READY</span><span class="msg">Press <b>Test run</b> to simulate execution with sample trigger data.</span></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script>
+(function () {
+  "use strict";
+
+  // ---- Icons (inline SVG, functional per category) ------------------
+  const I = {
+    bolt:'<path d="M13 2 3 14h7l-1 8 10-12h-7z"/>',
+    mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+    clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+    hook:'<path d="M18 4a3 3 0 0 0-3 3v7a3 3 0 1 1-6 0"/><circle cx="9" cy="18" r="2.5"/><path d="M18 4h2M18 4v2"/>',
+    api:'<path d="M8 3H5a2 2 0 0 0-2 2v3M16 3h3a2 2 0 0 1 2 2v3M8 21H5a2 2 0 0 1-2-2v-3M16 21h3a2 2 0 0 0 2-2v-3"/><circle cx="12" cy="12" r="2.5"/>',
+    bot:'<rect x="4" y="8" width="16" height="11" rx="3"/><path d="M12 8V4M8 13h.01M16 13h.01M9 17h6"/><circle cx="12" cy="3" r="1.4"/>',
+    ask:'<circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.8.4-1 .9-1 1.7M12 17h.01"/>',
+    crm:'<path d="M3 21V8l9-5 9 5v13"/><path d="M9 21v-6h6v6M9 11h.01M15 11h.01"/>',
+    send:'<path d="m22 2-7 20-4-9-9-4z"/><path d="M22 2 11 13"/>',
+    task:'<rect x="4" y="4" width="16" height="16" rx="2"/><path d="m8 12 3 3 5-6"/>',
+    sheet:'<rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M9 3v18M15 3v18"/>',
+    http:'<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a15 15 0 0 1 0 18M12 3a15 15 0 0 0 0 18"/>',
+    mcp:'<path d="M12 3v6M12 15v6M3 12h6M15 12h6"/><circle cx="12" cy="12" r="3"/>',
+    branch:'<path d="M6 3v12M6 21a3 3 0 1 0 0-6 3 3 0 0 0 0 6zM6 6a3 3 0 1 0 0-6M18 12a3 3 0 1 0 0-6M18 9c0 3-4 3-4 6"/>',
+    loop:'<path d="M17 2l4 4-4 4"/><path d="M3 11v-1a4 4 0 0 1 4-4h14M7 22l-4-4 4-4"/><path d="M21 13v1a4 4 0 0 1-4 4H3"/>',
+    wait:'<circle cx="12" cy="12" r="9"/><path d="M12 8v4M12 16h.01"/>',
+    code:'<path d="m8 8-4 4 4 4M16 8l4 4-4 4M13 6l-2 12"/>',
+    approve:'<path d="M9 11l3 3 8-8"/><path d="M20 12v6a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h9"/>',
+    set:'<path d="M4 7h16M4 12h10M4 17h7"/>',
+    flag:'<path d="M4 21V4h13l-2 4 2 4H4"/>',
+    stop:'<rect x="5" y="5" width="14" height="14" rx="2"/>'
+  };
+  function svg(p){ return '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round">'+p+'</svg>'; }
+
+  // category → css var
+  const CAT = {
+    trigger:'--c-trigger', agent:'--c-agent', tool:'--c-tool',
+    logic:'--c-logic', output:'--c-output'
+  };
+
+  // ---- Palette definition (grounded in real CommandCenter capabilities)
+  const PALETTE = [
+    { cat:'trigger', label:'Triggers', items:[
+      {t:'trigger', icon:'mail',  name:'Inbound email',   sub:'Gmail ingestion'},
+      {t:'trigger', icon:'clock', name:'Schedule (cron)', sub:'Recurring'},
+      {t:'trigger', icon:'hook',  name:'Webhook',         sub:'ClickUp / Zoho event'},
+      {t:'trigger', icon:'api',   name:'Incoming API call',sub:'Per-workflow key'},
+    ]},
+    { cat:'agent', label:'Agents', items:[
+      {t:'agent', icon:'bot', name:'Email Assistant', sub:'agent-email-assistant'},
+      {t:'agent', icon:'bot', name:'Task Manager',    sub:'agent-task-manager'},
+      {t:'agent', icon:'bot', name:'Run agent…',      sub:'free-form instructions'},
+      {t:'agent', icon:'ask', name:'Ask a question',  sub:'elicitation'},
+    ]},
+    { cat:'tool', label:'Tools & integrations', items:[
+      {t:'tool', icon:'crm',   name:'Zoho CRM',      sub:'create / update lead'},
+      {t:'tool', icon:'send',  name:'Send email',    sub:'gmail-send'},
+      {t:'tool', icon:'task',  name:'ClickUp task',  sub:'create task'},
+      {t:'tool', icon:'sheet', name:'Google Sheets', sub:'append row'},
+      {t:'tool', icon:'http',  name:'HTTP request',  sub:'REST call'},
+      {t:'tool', icon:'mcp',   name:'MCP tool',      sub:'any MCP server'},
+    ]},
+    { cat:'logic', label:'Logic', items:[
+      {t:'logic', icon:'branch',  name:'Condition',    sub:'if / else'},
+      {t:'logic', icon:'loop',    name:'Loop',         sub:'for-each / while'},
+      {t:'logic', icon:'approve', name:'Human approval',sub:'gate risky steps'},
+      {t:'logic', icon:'wait',    name:'Wait / delay',  sub:'pause'},
+      {t:'logic', icon:'set',     name:'Set variable', sub:'assign state'},
+      {t:'logic', icon:'code',    name:'Transform',    sub:'sandboxed code'},
+    ]},
+    { cat:'output', label:'Output', items:[
+      {t:'output', icon:'flag', name:'End / Return', sub:'workflow result'},
+      {t:'output', icon:'stop', name:'Notify',       sub:'post result'},
+    ]},
+  ];
+
+  // ---- Example workflow (nodes + edges) -----------------------------
+  // type maps to a category for coloring: trigger/agent/tool/logic/output
+  let uid = 100;
+  const nodes = [
+    { id:'n1', type:'trigger', cat:'trigger', icon:'mail', kind:'Trigger', title:'Inbound email',
+      desc:'When a new email arrives in the sales inbox.',
+      x:300, y:40,
+      fields:[
+        {l:'Source', k:'select', v:'Gmail · sales@fracktal.in'},
+        {l:'Filter', k:'text', v:'label:inbound -label:internal'},
+      ],
+      outs:[['from','string'],['subject','string'],['body','string']] },
+
+    { id:'n2', type:'agent', cat:'agent', icon:'bot', kind:'Agent', title:'Email Triage',
+      desc:'Classify intent with <code>agent-email-assistant</code>.',
+      x:300, y:198,
+      fields:[
+        {l:'Agent', k:'select', v:'email-assistant'},
+        {l:'Instruction', k:'area', v:'Classify this email. Return intent (lead | support | spam) and a confidence 0–1.\n\nSubject: {{trigger.subject}}\nBody: {{trigger.body}}'},
+        {l:'Output schema', k:'mono', v:'{ intent, confidence, summary }'},
+      ],
+      outs:[['intent','string'],['confidence','number'],['summary','string']] },
+
+    { id:'n3', type:'logic', cat:'logic', icon:'branch', kind:'Condition', title:'Is a sales lead?',
+      desc:'<code>{{n2.intent}} == "lead"</code> and confidence ≥ 0.6',
+      x:300, y:356, branch:true,
+      fields:[
+        {l:'Expression', k:'mono', v:'{{n2.intent}} == "lead" && {{n2.confidence}} >= 0.6'},
+      ],
+      outs:[] },
+
+    // TRUE branch (right)
+    { id:'n4', type:'tool', cat:'tool', icon:'crm', kind:'Tool', title:'Create Zoho lead',
+      desc:'Push contact to <code>zoho-crm</code>.',
+      x:540, y:508,
+      fields:[
+        {l:'Integration', k:'select', v:'zoho-crm · create lead'},
+        {l:'Email', k:'var', v:'{{trigger.from}}'},
+        {l:'Notes', k:'var', v:'{{n2.summary}}'},
+      ],
+      outs:[['lead_id','string'],['url','string']] },
+
+    { id:'n5', type:'agent', cat:'agent', icon:'bot', kind:'Agent', title:'Draft reply',
+      desc:'Draft a personalized response.',
+      x:540, y:648,
+      fields:[
+        {l:'Agent', k:'select', v:'email-assistant'},
+        {l:'Instruction', k:'area', v:'Draft a warm reply to {{trigger.from}} about: {{n2.summary}}. Reference lead {{n4.lead_id}}.'},
+      ],
+      outs:[['draft','string']] },
+
+    { id:'n6', type:'logic', cat:'logic', icon:'approve', kind:'Human approval', title:'Approve send',
+      desc:'Route to the approval inbox before sending.',
+      x:540, y:788,
+      fields:[
+        {l:'Message', k:'text', v:'Approve reply to {{trigger.from}}?'},
+        {l:'Approvers', k:'select', v:'Sales team'},
+        {l:'On timeout', k:'select', v:'Hold (do not send)'},
+      ],
+      outs:[['approved','boolean']] },
+
+    { id:'n7', type:'tool', cat:'tool', icon:'send', kind:'Tool', title:'Send email',
+      desc:'Send the approved reply via <code>gmail-send</code>.',
+      x:540, y:928,
+      fields:[
+        {l:'Integration', k:'select', v:'gmail-send'},
+        {l:'To', k:'var', v:'{{trigger.from}}'},
+        {l:'Body', k:'var', v:'{{n5.draft}}'},
+      ],
+      outs:[['message_id','string']] },
+
+    // FALSE branch (left)
+    { id:'n8', type:'tool', cat:'tool', icon:'task', kind:'Tool', title:'Create ClickUp task',
+      desc:'Log non-lead emails for review.',
+      x:60, y:508,
+      fields:[
+        {l:'Integration', k:'select', v:'clickup · create task'},
+        {l:'List', k:'select', v:'Inbox / Triage'},
+        {l:'Title', k:'var', v:'{{trigger.subject}}'},
+      ],
+      outs:[['task_id','string']] },
+
+    { id:'n10', type:'output', cat:'output', icon:'flag', kind:'Output', title:'End',
+      desc:'Return the run result.',
+      x:300, y:1080,
+      fields:[ {l:'Return', k:'mono', v:'{ handled: true, path }'} ],
+      outs:[] },
+  ];
+
+  const edges = [
+    { from:'n1', to:'n2' },
+    { from:'n2', to:'n3' },
+    { from:'n3', to:'n4', handle:'yes', label:'Yes' },
+    { from:'n3', to:'n8', handle:'no',  label:'No' },
+    { from:'n4', to:'n5' },
+    { from:'n5', to:'n6' },
+    { from:'n6', to:'n7' },
+    { from:'n7', to:'n10' },
+    { from:'n8', to:'n10' },
+  ];
+
+  const NODE_W = 208;
+  const nodeById = id => nodes.find(n => n.id === id);
+
+  // ---- View state ---------------------------------------------------
+  const view = { scale: 0.82, x: 40, y: 24 };
+  const viewport = document.getElementById('viewport');
+  const edgesSvg = document.getElementById('edges');
+  const canvasWrap = document.getElementById('canvasWrap');
+  const canvasBg = document.getElementById('canvasBg');
+
+  function applyView() {
+    viewport.style.transform = `translate(${view.x}px, ${view.y}px) scale(${view.scale})`;
+  }
+
+  // ---- Render palette ----------------------------------------------
+  const palGroups = document.getElementById('palGroups');
+  PALETTE.forEach(g => {
+    const grp = document.createElement('div');
+    grp.className = 'pal-group';
+    grp.style.setProperty('--cat', `var(${CAT[g.cat]})`);
+    grp.innerHTML = `<div class="eyebrow">${g.label}</div>`;
+    g.items.forEach(it => {
+      const el = document.createElement('div');
+      el.className = 'pal-item';
+      el.style.setProperty('--cat', `var(${CAT[g.cat]})`);
+      el.innerHTML = `<span class="pal-ico">${svg(I[it.icon])}</span>
+        <div style="min-width:0"><div style="font-weight:560;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">${it.name}</div>
+        <div style="font-size:10.5px;color:var(--faint);font-family:var(--font-mono)">${it.sub}</div></div>
+        <span class="plus">+</span>`;
+      el.addEventListener('click', () => addNode(g.cat, it));
+      grp.appendChild(el);
+    });
+    palGroups.appendChild(grp);
+  });
+
+  // ---- Render nodes -------------------------------------------------
+  const nodeEls = {};
+  function renderNodes() {
+    nodes.forEach(n => {
+      let el = nodeEls[n.id];
+      if (!el) {
+        el = document.createElement('div');
+        el.className = 'node';
+        el.style.setProperty('--cat', `var(${CAT[n.cat]})`);
+        el.dataset.id = n.id;
+        const ports = n.branch
+          ? `<span class="port in"></span><span class="port out no" title="No"></span><span class="port out yes" title="Yes"></span>`
+          : `${n.type==='trigger'?'':'<span class="port in"></span>'}${n.type==='output'?'':'<span class="port out"></span>'}`;
+        el.innerHTML = `
+          <div class="node-head">
+            <span class="node-ico">${svg(I[n.icon])}</span>
+            <div class="node-titles">
+              <div class="node-kind">${n.kind}</div>
+              <div class="node-title">${n.title}</div>
+            </div>
+          </div>
+          <div class="node-body"><div class="node-desc">${n.desc}</div></div>
+          <div class="node-foot"><span class="node-status"><span class="s-dot"></span><span class="st">idle</span></span></div>
+          ${ports}`;
+        el.addEventListener('pointerdown', e => startNodeDrag(e, n, el));
+        viewport.appendChild(el);
+        nodeEls[n.id] = el;
+      }
+      el.style.left = n.x + 'px';
+      el.style.top = n.y + 'px';
+    });
+  }
+
+  // ---- Render edges (bezier) ---------------------------------------
+  function nodeHeight(n){ const el = nodeEls[n.id]; return el ? el.offsetHeight : 110; }
+  function renderEdges() {
+    let out = '';
+    edges.forEach(e => {
+      const a = nodeById(e.from), b = nodeById(e.to);
+      if (!a || !b) return;
+      const ah = nodeHeight(a);
+      let sx = a.x + NODE_W/2, sy = a.y + ah;
+      if (e.handle === 'yes') sx = a.x + NODE_W - 28 - 0;
+      if (e.handle === 'no')  sx = a.x + 28;
+      const tx = b.x + NODE_W/2, ty = b.y - 2;
+      const dy = Math.max(40, (ty - sy) * 0.5);
+      const cls = 'edge-path' + (e.handle==='yes'?' branch-yes':'') + (e.handle==='no'?' branch-no':'') + (e.hot?' hot':'');
+      const d = `M ${sx} ${sy} C ${sx} ${sy+dy}, ${tx} ${ty-dy}, ${tx} ${ty}`;
+      out += `<path class="${cls}" d="${d}" data-edge="${e.from}-${e.to}"/>`;
+      if (e.label) {
+        const mx = (sx+tx)/2, my = (sy+ty)/2;
+        out += `<rect class="edge-label-bg" x="${mx-15}" y="${my-9}" width="30" height="16" rx="4"/>`;
+        out += `<text class="edge-label" x="${mx}" y="${my+3}" text-anchor="middle">${e.label}</text>`;
+      }
+    });
+    // size svg to content
+    edgesSvg.innerHTML = out;
+    edgesSvg.setAttribute('width', 2000);
+    edgesSvg.setAttribute('height', 1400);
+  }
+
+  function renderAll(){ renderNodes(); renderEdges(); }
+
+  // ---- Node drag ----------------------------------------------------
+  let drag = null;
+  function startNodeDrag(e, n, el) {
+    if (e.button !== 0) return;
+    e.stopPropagation();
+    selectNode(n.id);
+    drag = { n, el, ox: e.clientX, oy: e.clientY, sx: n.x, sy: n.y };
+    el.classList.add('dragging');
+    el.setPointerCapture(e.pointerId);
+    el.addEventListener('pointermove', onNodeDrag);
+    el.addEventListener('pointerup', endNodeDrag);
+  }
+  function onNodeDrag(e) {
+    if (!drag) return;
+    drag.n.x = drag.sx + (e.clientX - drag.ox) / view.scale;
+    drag.n.y = drag.sy + (e.clientY - drag.oy) / view.scale;
+    drag.el.style.left = drag.n.x + 'px';
+    drag.el.style.top = drag.n.y + 'px';
+    renderEdges();
+  }
+  function endNodeDrag(e) {
+    if (!drag) return;
+    drag.el.classList.remove('dragging');
+    drag.el.removeEventListener('pointermove', onNodeDrag);
+    drag.el.removeEventListener('pointerup', endNodeDrag);
+    drag = null;
+  }
+
+  // ---- Canvas pan / zoom -------------------------------------------
+  let pan = null;
+  canvasBg.addEventListener('pointerdown', e => {
+    pan = { ox:e.clientX, oy:e.clientY, sx:view.x, sy:view.y };
+    canvasBg.classList.add('panning');
+    canvasBg.setPointerCapture(e.pointerId);
+    selectNode(null);
+  });
+  canvasBg.addEventListener('pointermove', e => {
+    if (!pan) return;
+    view.x = pan.sx + (e.clientX - pan.ox);
+    view.y = pan.sy + (e.clientY - pan.oy);
+    applyView();
+  });
+  canvasBg.addEventListener('pointerup', e => { pan=null; canvasBg.classList.remove('panning'); });
+  canvasWrap.addEventListener('wheel', e => {
+    e.preventDefault();
+    const rect = canvasWrap.getBoundingClientRect();
+    const mx = e.clientX - rect.left, my = e.clientY - rect.top;
+    const factor = e.deltaY < 0 ? 1.08 : 0.925;
+    const ns = Math.min(1.6, Math.max(0.35, view.scale * factor));
+    // zoom toward cursor
+    view.x = mx - (mx - view.x) * (ns / view.scale);
+    view.y = my - (my - view.y) * (ns / view.scale);
+    view.scale = ns;
+    applyView();
+  }, { passive:false });
+
+  document.getElementById('zoomIn').onclick = () => { view.scale = Math.min(1.6, view.scale*1.15); applyView(); };
+  document.getElementById('zoomOut').onclick = () => { view.scale = Math.max(0.35, view.scale/1.15); applyView(); };
+  document.getElementById('zoomFit').onclick = () => { view.scale=0.82; view.x=40; view.y=24; applyView(); };
+
+  // ---- Inspector ----------------------------------------------------
+  let selected = null;
+  const inspEmpty = document.getElementById('inspEmpty');
+  const inspContent = document.getElementById('inspContent');
+
+  function selectNode(id) {
+    selected = id;
+    Object.values(nodeEls).forEach(el => el.classList.remove('selected'));
+    if (!id) { inspEmpty.style.display='block'; inspContent.style.display='none'; return; }
+    nodeEls[id].classList.add('selected');
+    const n = nodeById(id);
+    inspEmpty.style.display='none';
+    inspContent.style.display='block';
+
+    let fields = n.fields.map(f => {
+      if (f.k === 'select') return field(f.l, `<select class="ctrl"><option>${f.v}</option></select>`);
+      if (f.k === 'area')   return field(f.l, `<textarea class="ctrl mono" rows="4">${escapeHtml(f.v)}</textarea>`);
+      if (f.k === 'mono')   return field(f.l, `<input class="ctrl mono" value="${escapeHtml(f.v)}">`);
+      if (f.k === 'var')    return field(f.l, `<input class="ctrl mono" value="${escapeHtml(f.v)}"><div style="margin-top:6px" class="eyebrow" >maps upstream output</div>`);
+      return field(f.l, `<input class="ctrl" value="${escapeHtml(f.v)}">`);
+    }).join('');
+
+    // upstream variable picker
+    const upstream = upstreamOutputs(id);
+    let vars = '';
+    if (upstream.length) {
+      vars = `<div class="insp-section-label eyebrow">Available data</div>
+        <div>${upstream.map(([nid,k,t]) => `<span class="var-pill" title="${t}">{{${nid}.${k}}}</span>`).join('')}</div>`;
+    }
+    // this node's outputs
+    let outs = '';
+    if (n.outs && n.outs.length) {
+      outs = `<div class="insp-section-label eyebrow">Outputs</div>
+        <div class="outputs-box">${n.outs.map(([k,t]) => `<div class="out-row"><span class="k">${k}</span><span class="t">${t}</span></div>`).join('')}</div>`;
+    }
+
+    inspContent.innerHTML = `
+      <div class="insp-head">
+        <div class="eyebrow" style="color:var(${CAT[n.cat]})">${n.kind}</div>
+        <div class="row" style="margin-top:6px">
+          <span class="insp-ico" style="--cat:var(${CAT[n.cat]})">${svg(I[n.icon])}</span>
+          <div class="insp-title">${n.title}</div>
+        </div>
+      </div>
+      <div class="insp-body">
+        ${fields}
+        ${vars}
+        ${outs}
+      </div>`;
+  }
+  function field(label, ctrl){ return `<div class="field"><label>${label}</label>${ctrl}</div>`; }
+  function escapeHtml(s){ return String(s).replace(/[&<>"]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c])); }
+
+  // outputs of nodes topologically before `id`
+  function upstreamOutputs(id) {
+    const order = ['n1','n2','n3','n4','n5','n6','n7','n8','n10'];
+    const idx = order.indexOf(id);
+    const res = [];
+    order.slice(0, idx).forEach(nid => {
+      const n = nodeById(nid);
+      if (n && n.outs) n.outs.forEach(([k,t]) => res.push([nid, k, t]));
+    });
+    if (nodeById('n1') && id !== 'n1') { /* trigger already included via n1 */ }
+    return res.map(([nid,k,t]) => [nid==='n1'?'trigger':nid, k, t]);
+  }
+
+  // ---- Add node from palette ---------------------------------------
+  function addNode(cat, it) {
+    const id = 'x' + (uid++);
+    // drop near current viewport center
+    const cx = (canvasWrap.clientWidth/2 - view.x)/view.scale - NODE_W/2;
+    const cy = (canvasWrap.clientHeight/2 - view.y)/view.scale - 40;
+    const n = {
+      id, type:cat, cat, icon:it.icon, kind: it.name,
+      title: it.name, desc: `<code>${it.sub}</code>`,
+      x: cx, y: cy, branch: (cat==='logic' && /condition/i.test(it.name)),
+      fields:[{l:'Label', k:'text', v:it.name}, {l:'Config', k:'text', v:it.sub}],
+      outs: cat==='output' ? [] : [['result','any']]
+    };
+    nodes.push(n);
+    renderAll();
+    selectNode(id);
+    toast(`Added “${it.name}” — connect it up in the canvas`);
+  }
+
+  // ---- Toast --------------------------------------------------------
+  const toastEl = document.getElementById('toast');
+  let toastT;
+  function toast(msg){ toastEl.textContent = msg; toastEl.classList.add('show'); clearTimeout(toastT); toastT=setTimeout(()=>toastEl.classList.remove('show'), 2400); }
+
+  // ---- Console ------------------------------------------------------
+  const consoleEl = document.getElementById('console');
+  const consoleLog = document.getElementById('consoleLog');
+  const consoleStatus = document.getElementById('consoleStatus');
+  document.getElementById('consoleHead').onclick = () => consoleEl.classList.toggle('open');
+  let clock = 9*3600 + 41*60 + 3;
+  function stamp(){ clock += Math.floor(1+Math.random()*3); const h=(clock/3600|0)%24, m=(clock/60|0)%60, s=clock%60; const p=x=>String(x).padStart(2,'0'); return `${p(h)}:${p(m)}:${p(s)}`; }
+  function logLine(tag, cls, msg){
+    const div = document.createElement('div');
+    div.className = 'log-line ' + cls;
+    div.innerHTML = `<span class="ts">${stamp()}</span><span class="tag">${tag}</span><span class="msg">${msg}</span>`;
+    consoleLog.appendChild(div);
+    consoleLog.scrollTop = consoleLog.scrollHeight;
+  }
+
+  function setStatus(node, st){
+    const el = nodeEls[node]; if(!el) return;
+    el.dataset.status = st;
+    const map = {running:'running', ok:'done', wait:'waiting', idle:'idle', skipped:'skipped'};
+    el.querySelector('.st').textContent = map[st] || st;
+    if (st==='skipped') el.classList.add('skipped');
+  }
+  function setEdgeHot(from, to, on){
+    const p = edgesSvg.querySelector(`[data-edge="${from}-${to}"]`);
+    if (p) p.classList.toggle('hot', on);
+  }
+  const wait = ms => new Promise(r => setTimeout(r, ms));
+
+  let running = false;
+  async function testRun() {
+    if (running) return;
+    running = true;
+    consoleEl.classList.add('open','running');
+    consoleStatus.textContent = 'running';
+    consoleStatus.style.color = 'var(--run)';
+    nodes.forEach(n => { setStatus(n.id,'idle'); nodeEls[n.id].classList.remove('skipped'); });
+    edgesSvg.querySelectorAll('.hot').forEach(p=>p.classList.remove('hot'));
+
+    logLine('RUN', 'run', 'Starting test run with sample trigger payload…');
+    await wait(400);
+
+    // linear part
+    await step('n1', 'run', 'Trigger fired — <b>email</b> from lead@acme-robotics.com', 'from = lead@acme-robotics.com · subject = "Bulk 3D printer quote"');
+    setEdgeHot('n1','n2',true);
+    await step('n2', 'run', 'agent-email-assistant classifying intent…', 'intent = <b>lead</b> · confidence = 0.91');
+    setEdgeHot('n2','n3',true);
+    await step('n3', 'run', 'Condition <b>{{n2.intent}} == "lead" && conf ≥ 0.6</b> → <b>Yes</b>', 'branch = yes');
+    // decision
+    setEdgeHot('n3','n4',true);
+    setStatus('n8','skipped');
+    logLine('SKIP', 'wait', 'Branch <b>No</b> skipped (n8 · Create ClickUp task)');
+    await wait(300);
+
+    await step('n4', 'run', 'zoho-crm → create lead', 'lead_id = LD-48213 · url = crm.zoho.com/…');
+    setEdgeHot('n4','n5',true);
+    await step('n5', 'run', 'agent-email-assistant drafting reply…', 'draft = "Hi — thanks for reaching out about bulk pricing…"');
+    setEdgeHot('n5','n6',true);
+
+    // approval pause
+    setStatus('n6','wait');
+    consoleStatus.textContent = 'waiting for approval';
+    consoleStatus.style.color = 'var(--c-trigger)';
+    logLine('WAIT', 'wait', 'Human approval required — run <b>snapshotted</b> & paused → approval inbox');
+    await wait(1400);
+    logLine('WAIT', 'wait', 'Approver <b>accepted</b> — resuming from snapshot');
+    setStatus('n6','ok');
+    consoleStatus.textContent = 'running';
+    consoleStatus.style.color = 'var(--run)';
+    setEdgeHot('n6','n7',true);
+    await wait(200);
+
+    await step('n7', 'run', 'gmail-send → reply delivered', 'message_id = 18f2a…');
+    setEdgeHot('n7','n10',true);
+    await step('n10','run', 'Workflow complete', 'handled = true · path = lead');
+
+    logLine('DONE', 'ok', 'Run finished in <b>3.9s</b> · 7 blocks executed, 1 skipped, 1 approval');
+    consoleEl.classList.remove('running');
+    consoleStatus.textContent = 'succeeded';
+    consoleStatus.style.color = 'var(--ok)';
+    running = false;
+  }
+
+  async function step(id, cls, msg, result) {
+    setStatus(id, 'running');
+    const n = nodeById(id);
+    logLine('RUN', 'run', `<b>${n.title}</b> — ${msg}`);
+    await wait(650 + Math.random()*350);
+    setStatus(id, 'ok');
+    if (result) logLine('OK', 'ok', `${n.title} → ${result}`);
+    await wait(140);
+  }
+
+  document.getElementById('testBtn').onclick = testRun;
+  document.getElementById('publishBtn').onclick = () => {
+    toast('Published v3 — triggers active. In-flight runs keep v2.');
+    document.querySelector('.wf-name .dot').style.background = 'var(--ok)';
+  };
+
+  // ---- NL generate (describe → generate → refine) ------------------
+  document.getElementById('nlBtn').onclick = () => {
+    const v = document.getElementById('nlInput').value.trim();
+    toast(v ? 'Generating graph from your description…' : 'Describe an automation first');
+    if (v) {
+      setTimeout(()=>toast('In the real build, the LLM emits node JSON onto the canvas to refine.'), 1600);
+    }
+  };
+  document.getElementById('nlInput').addEventListener('keydown', e => { if(e.key==='Enter') document.getElementById('nlBtn').click(); });
+
+  // ---- Theme toggle -------------------------------------------------
+  document.getElementById('themeBtn').onclick = () => {
+    const root = document.documentElement;
+    const cur = root.getAttribute('data-theme')
+      || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light');
+    root.setAttribute('data-theme', cur === 'dark' ? 'light' : 'dark');
+  };
+
+  // ---- Init ---------------------------------------------------------
+  applyView();
+  renderAll();
+  // reflow edges once node heights are known
+  requestAnimationFrame(renderEdges);
+  window.addEventListener('resize', renderEdges);
+})();
+</script>

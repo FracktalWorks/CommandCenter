@@ -26,11 +26,11 @@ PostSyncHook = Callable[[str], Awaitable[None]]
 class PostSyncHooks:
     """The callbacks the scheduler invokes after a successful account sync."""
 
-    # Run only when the sync brought in new mail:
-    auto_run_rules: PostSyncHook | None = None
-    categorize_senders: PostSyncHook | None = None
-    classify_threads: PostSyncHook | None = None
-    auto_archive: PostSyncHook | None = None
+    # The new-mail pipeline (auto-run rules → categorize senders → classify
+    # threads → auto-archive), run when a sync brought in new mail. The SAME
+    # hook is enqueued by the manual-sync route and the webhook (H1), so new mail
+    # is processed identically however it arrived.
+    on_new_mail: PostSyncHook | None = None
     # Run every cycle (each is internally time-gated):
     send_digest: PostSyncHook | None = None
     send_follow_up_reminders: PostSyncHook | None = None

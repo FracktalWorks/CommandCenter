@@ -14,10 +14,7 @@ REPO = Path(__file__).resolve().parents[2]
 _SCHEDULER = REPO / "apps/services/email_ingestion/email_ingestion/scheduler.py"
 
 _HOOK_NAMES = (
-    "auto_run_rules",
-    "categorize_senders",
-    "classify_threads",
-    "auto_archive",
+    "on_new_mail",
     "send_digest",
     "send_follow_up_reminders",
     "ensure_subscription",
@@ -47,3 +44,25 @@ async def test_unregistered_hook_is_a_noop():
 
     # Passing no hook must be a silent no-op (lets ingestion run without a gateway).
     await run_hook(None, "acct-1")
+
+
+def test_all_sync_paths_use_the_shared_new_mail_pipeline():
+    """H1: the scheduler, manual-sync route, and Graph webhook all funnel new
+    mail through the ONE shared pipeline (``process_new_mail`` / the
+    ``on_new_mail`` hook), so mail is processed identically however it arrived —
+    and the manual sync enqueues it as a background task so its response stays
+    fast (Option C)."""
+    sched = _SCHEDULER.read_text(encoding="utf-8")
+    assert "hooks.on_new_mail" in sched, (
+        "the scheduler loop no longer calls the shared new-mail hook"
+    )
+    sync = (
+        REPO / "apps/services/gateway/gateway/routes/email/transport/sync.py"
+    ).read_text(encoding="utf-8")
+    # Both the manual-sync route and the Graph webhook route through it.
+    assert sync.count("process_new_mail") >= 2, (
+        "manual sync / Graph webhook no longer route through process_new_mail"
+    )
+    assert "background.add_task(process_new_mail" in sync, (
+        "manual sync should enqueue process_new_mail (H1 Option C: fast response)"
+    )

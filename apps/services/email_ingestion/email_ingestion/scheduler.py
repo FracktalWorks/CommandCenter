@@ -474,22 +474,6 @@ async def _sync_account(
 # -- Per-account sync loop ----------------------------------------------------
 
 
-async def _maybe_auto_run_rules(account_id: str) -> None:
-    """Process freshly-synced inbox mail with the Assistant rules engine.
-
-    Delegates to the gateway-registered ``auto_run_rules`` hook (see
-    :mod:`email_ingestion.post_sync`), which owns the "auto_run switch + has a
-    rule?" gating and the rules worker. Best-effort: a failure is logged and
-    never breaks the sync loop. No-op if the gateway hasn't registered the hook.
-    """
-    try:
-        await run_hook(hooks.auto_run_rules, account_id)
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "sync.auto_run_failed account_id=%s error=%s", account_id, str(exc)
-        )
-
-
 async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
     """Run sync in a loop for a single account forever."""
     logger.info(
@@ -500,38 +484,18 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
         try:
             result = await _sync_account(account_id)
             new_mail = isinstance(result, dict) and result.get("synced", 0)
-            # Auto-run Assistant rules on newly-synced mail (opt-in per account).
-            if new_mail:
-                await _maybe_auto_run_rules(account_id)
-            # Auto-categorize senders newly seen this cycle (just-in-time). The
-            # job only touches uncategorized senders and makes no LLM call when
-            # there is nothing new, so it is cheap to run every cycle.
-            if new_mail:
-                try:
-                    await run_hook(hooks.categorize_senders, account_id)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "sync.categorize_failed account_id=%s error=%s",
-                        account_id, str(exc),
-                    )
-            # Reply Zero: classify thread reply-status (needs reply / FYI /
-            # awaiting) on new mail so the view reflects real intent.
+            # Process new mail through the shared pipeline — auto-run rules,
+            # categorize senders, classify threads (Reply Zero), auto-archive.
+            # The gateway registers this hook; it isolates each step's failures
+            # internally. The SAME pipeline is enqueued by the manual-sync route
+            # and the webhook (H1) so mail is processed identically however it
+            # arrived.
             if new_mail:
                 try:
-                    await run_hook(hooks.classify_threads, account_id)
+                    await run_hook(hooks.on_new_mail, account_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "sync.classify_threads_failed account_id=%s error=%s",
-                        account_id, str(exc),
-                    )
-            # Auto-archive new inbox mail from senders marked AUTO_ARCHIVED
-            # (bulk-archive "Auto") so it applies to future mail, not just past.
-            if new_mail:
-                try:
-                    await run_hook(hooks.auto_archive, account_id)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "sync.auto_archive_failed account_id=%s error=%s",
+                        "sync.process_new_mail_failed account_id=%s error=%s",
                         account_id, str(exc),
                     )
             # Send a scheduled digest if one is due (opt-in per account).

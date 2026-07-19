@@ -166,6 +166,7 @@ class SyncRequest(BaseModel):
 @router.post("/sync")
 async def trigger_sync(
     req: SyncRequest,
+    background: BackgroundTasks,
     user: UserContext = Depends(get_current_user),
 ):
     """Trigger a manual email sync for an account.
@@ -492,23 +493,17 @@ async def trigger_sync(
             )
             await db.commit()
 
-            # Recompute Reply-Zero thread status on newly-synced mail so the
-            # category/status pill reflects reality — in particular an upstream
-            # reply the user sent from Outlook/Gmail (a new "sent"-folder message
-            # in the thread) flips the thread Reply → Done. Without this,
-            # a manual/pull-to-refresh sync persisted the reply but left the pill
-            # stale until the background scheduler poll ran (the scheduler does
-            # this; the UI-triggered sync did not — that was the gap). Best-effort
-            # + gated on new mail so it's a no-op/cheap when nothing changed.
+            # Process newly-synced mail through the shared pipeline (auto-run
+            # rules → categorize → classify threads → auto-archive) AFTER the
+            # response is sent, so the manual sync stays fast but new mail still
+            # gets rules/labels/archive applied and its Reply-Zero status
+            # recomputed — the SAME pipeline the scheduler + Graph webhook run
+            # (H1). Previously a UI-triggered sync only re-classified thread
+            # status inline, so new mail showed up unlabeled/un-archived until the
+            # next background poll (up to sync_interval_secs later) — that gap.
             if persisted_count:
-                try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _maybe_classify_threads,
-                    )
-                    await _maybe_classify_threads(req.account_id)
-                except Exception as exc:  # noqa: BLE001
-                    _log.warning("email.sync_classify_threads_failed",
-                                 account_id=req.account_id, error=str(exc)[:200])
+                from gateway.routes.email.scheduler_hooks import process_new_mail
+                background.add_task(process_new_mail, req.account_id)
 
             return {
                 "ok": True,
@@ -594,26 +589,16 @@ async def resync_account(
 
 
 async def _webhook_sync(account_id: str) -> None:
-    """Triggered by a Graph notification: incremental sync + auto-run rules."""
+    """Triggered by a Graph notification: incremental sync, then the shared
+    new-mail pipeline (auto-run rules → categorize → classify → auto-archive) —
+    the same pipeline the scheduler and manual sync use, so push-delivered mail
+    is processed identically."""
     try:
-        from email_ingestion.scheduler import (  # noqa: PLC0415
-            _maybe_auto_run_rules,
-            _sync_account,
-        )
+        from email_ingestion.scheduler import _sync_account  # noqa: PLC0415
+        from gateway.routes.email.scheduler_hooks import process_new_mail
         res = await _sync_account(account_id)
         if isinstance(res, dict) and res.get("synced", 0):
-            await _maybe_auto_run_rules(account_id)
-            # Also recompute thread status so an upstream reply (native-client
-            # send landing via the Graph notification) flips the pill — the
-            # webhook previously re-ran rules but not the Reply-Zero classifier.
-            try:
-                from gateway.routes.email import (  # noqa: PLC0415
-                    _maybe_classify_threads,
-                )
-                await _maybe_classify_threads(account_id)
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("email.webhook_classify_failed",
-                             account_id=account_id, error=str(exc)[:200])
+            await process_new_mail(account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.webhook_sync_failed", account_id=account_id,
                      error=str(exc)[:200])

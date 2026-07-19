@@ -54,6 +54,41 @@ async def auto_run_rules_for_account(account_id: str) -> None:
     await _run_rules_job(account_id, 50, False, "scheduler")
 
 
+async def process_new_mail(account_id: str) -> None:
+    """The shared new-mail pipeline (H1): auto-run rules → categorize senders →
+    classify threads (Reply Zero) → auto-archive.
+
+    Each step is isolated so one failure never skips the rest (same guarantee the
+    scheduler loop gave when these were separate steps). Registered as the
+    ``on_new_mail`` hook AND called directly by the manual-sync route + webhook,
+    so new mail is processed identically however it arrived.
+    """
+    from gateway.routes.email.automation.replyzero import _maybe_classify_threads
+    from gateway.routes.email.automation.senders import (
+        _categorize_senders_job,
+        _maybe_auto_archive,
+    )
+
+    try:
+        await auto_run_rules_for_account(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sync.auto_run_failed", account_id=account_id, error=str(exc)[:200])
+    try:
+        await _categorize_senders_job(account_id, 25)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sync.categorize_failed", account_id=account_id, error=str(exc)[:200])
+    try:
+        await _maybe_classify_threads(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sync.classify_threads_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    try:
+        await _maybe_auto_archive(account_id)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sync.auto_archive_failed", account_id=account_id,
+                     error=str(exc)[:200])
+
+
 def register_email_post_sync_hooks() -> None:
     """Register every email post-sync callback into the scheduler registry.
 
@@ -62,19 +97,10 @@ def register_email_post_sync_hooks() -> None:
     so importing this module during app import can't create a cycle.
     """
     from gateway.routes.email.automation.replyzero import (
-        _maybe_classify_threads,
         _maybe_send_follow_up_reminders,
-    )
-    from gateway.routes.email.automation.senders import (
-        _categorize_senders_job,
-        _maybe_auto_archive,
     )
     from gateway.routes.email.digest import _maybe_send_digest
     from gateway.routes.email.transport.sync import _ensure_subscription
-
-    async def _categorize(account_id: str) -> None:
-        # The scheduler always categorised newly-seen senders in batches of 25.
-        await _categorize_senders_job(account_id, 25)
 
     async def _follow_up(account_id: str) -> None:
         # Follow-up reminders return a small stats dict; the scheduler runs it
@@ -82,10 +108,7 @@ def register_email_post_sync_hooks() -> None:
         await _maybe_send_follow_up_reminders(account_id)
 
     register_post_sync_hooks(
-        auto_run_rules=auto_run_rules_for_account,
-        categorize_senders=_categorize,
-        classify_threads=_maybe_classify_threads,
-        auto_archive=_maybe_auto_archive,
+        on_new_mail=process_new_mail,
         send_digest=_maybe_send_digest,
         send_follow_up_reminders=_follow_up,
         ensure_subscription=_ensure_subscription,

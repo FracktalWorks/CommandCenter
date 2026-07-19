@@ -38,7 +38,7 @@ const AUTOMATION_ITEMS: {
 }[] = [
   { key: "chat", label: "Chat", icon: MessageSquare },
   { key: "digest", label: "Digest", icon: Newspaper },
-  { key: "unsubscribe", label: "Inbox Cleaner", icon: MailMinus },
+  { key: "unsubscribe", label: "Email Cleaner", icon: MailMinus },
   { key: "assistant", label: "AI Settings", icon: Sparkles },
   { key: "analytics", label: "Analytics", icon: BarChart3 },
 ];

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import base64
 import json
+import logging
 from datetime import datetime, timezone
 from email.mime.text import MIMEText
 from typing import Any
@@ -26,6 +27,8 @@ from .base import (
     canonical_folder,
     find_unsubscribe_link_in_html,
 )
+
+logger = logging.getLogger(__name__)
 
 # Gmail label IDs → canonical folder keys.  A message can carry several labels;
 # the first match (in this priority order) wins.
@@ -278,6 +281,40 @@ class GmailProvider(BaseEmailProvider):
         next_token = data.get("nextPageToken")
         return messages, next_token
 
+    async def fetch_label_assignments(
+        self, max_pages: int = 20,
+    ) -> dict[str, list[str]]:
+        """``{message id: [user label name, …]}`` via one paged list per label.
+
+        Gmail can filter the message list by label ID, so this reads the whole
+        mailbox's label assignments in ~one request per label per 500 messages —
+        orders of magnitude cheaper than re-fetching messages. Used to restore
+        ``email_messages.categories`` after it was lost locally.
+        """
+        client = await self._get_client()
+        await self._ensure_label_names()
+        out: dict[str, list[str]] = {}
+        for lid, name in self._label_names_by_id.items():
+            token: str | None = None
+            for _ in range(max_pages):
+                params: dict[str, Any] = {"labelIds": [lid], "maxResults": 500}
+                if token:
+                    params["pageToken"] = token
+                try:
+                    resp = await client.get("/users/me/messages", params=params)
+                    resp.raise_for_status()
+                except httpx.HTTPError:
+                    break  # one bad label must not abort the whole restore
+                data = resp.json()
+                for ref in data.get("messages", []) or []:
+                    mid = ref.get("id")
+                    if mid:
+                        out.setdefault(mid, []).append(name)
+                token = data.get("nextPageToken")
+                if not token:
+                    break
+        return out
+
     async def _ensure_label_names(self) -> None:
         """Best-effort warm of the label-id → name cache before parsing.
 
@@ -491,6 +528,59 @@ class GmailProvider(BaseEmailProvider):
             await self.modify_message(
                 provider_message_id, add_labels=add or None, remove_labels=remove or None
             )
+
+    # Gmail's documented ceiling for users.messages.batchModify.
+    _BATCH_MODIFY_MAX = 1000
+
+    # Bulk actions expressible as a pure label mutation → (add, remove).
+    # Trash is deliberately absent: it has its own endpoint with its own
+    # semantics, and guessing that batchModify accepts the TRASH system label
+    # is not something to find out on a destructive path.
+    _BULK_LABEL_OPS: dict[str, tuple[list[str], list[str]]] = {
+        "archive": ([], ["INBOX"]),
+        "read": ([], ["UNREAD"]),
+        "unread": (["UNREAD"], []),
+        "star": (["STARRED"], []),
+        "unstar": ([], ["STARRED"]),
+    }
+
+    async def bulk_apply(
+        self, provider_message_ids: list[str], action: str
+    ) -> dict[str, str]:
+        """Collapse a bulk label action into batchModify calls of 1000.
+
+        The base implementation is one HTTP round-trip per message, which at
+        mailbox scale is hours of wall-clock and a rate-limit ban. Gmail applies
+        the same label mutation to 1000 messages in a single request, so
+        archiving a 40k-message newsletter backlog costs 40 calls, not 40,000.
+
+        Gmail never re-keys a message id, so the return is always empty.
+        """
+        ops = self._BULK_LABEL_OPS.get(action)
+        if ops is None:
+            return await super().bulk_apply(provider_message_ids, action)
+        add, remove = ops
+        client = await self._get_client()
+        for i in range(0, len(provider_message_ids), self._BATCH_MODIFY_MAX):
+            chunk = provider_message_ids[i:i + self._BATCH_MODIFY_MAX]
+            body: dict[str, Any] = {"ids": chunk}
+            if add:
+                body["addLabelIds"] = add
+            if remove:
+                body["removeLabelIds"] = remove
+            try:
+                resp = await client.post("/users/me/messages/batchModify", json=body)
+                resp.raise_for_status()
+            except Exception as exc:  # noqa: BLE001
+                # A whole chunk failing is worth a retry one message at a time:
+                # batchModify is all-or-nothing, so one stale id would otherwise
+                # cost the other 999 their update.
+                logger.warning(
+                    "gmail.batch_modify_failed action=%s size=%d error=%s",
+                    action, len(chunk), str(exc)[:160],
+                )
+                await super().bulk_apply(chunk, action)
+        return {}
 
     async def move_to_folder(self, provider_message_id: str, folder: str) -> None:
         """Move via Gmail label mutation (Gmail has labels, not folders)."""

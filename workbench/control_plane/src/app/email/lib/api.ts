@@ -519,7 +519,7 @@ export interface ListEmailsParams {
   /** Filter to messages carrying this label/category. */
   label?: string;
   /** Filter to messages whose SENDER has this category (email_senders) —
-   *  the always-on categorizer that also powers the Inbox Cleaner. */
+   *  the always-on categorizer that also powers the Email Cleaner. */
   senderCategory?: string;
   query?: string;
   page?: number;
@@ -560,6 +560,26 @@ export async function listEmails(
   };
 }
 
+/** What the current folder actually contains, so the chip row can offer only
+ *  the filters with mail behind them. */
+export interface MessageFacets {
+  folder: string;
+  total: number;
+  unread: number;
+  uncategorized: number;
+  /** Lowercased rule label → count. */
+  labels: Record<string, number>;
+}
+
+export async function getMessageFacets(
+  accountId: string | null,
+  folder: string
+): Promise<MessageFacets> {
+  const sp = new URLSearchParams({ folder });
+  if (accountId) sp.set("account_id", accountId);
+  return gatewayFetch(`/email/messages/facets?${sp}`);
+}
+
 export interface SearchEmailsParams {
   /** Search text (websearch syntax). Optional: a filters-only search (tag pills,
    *  from/to, unread/…) with no typed text is a first-class query. */
@@ -573,6 +593,9 @@ export interface SearchEmailsParams {
   /** Tag pills. A message must carry ALL of them (each pill narrows). Matched
    *  against user labels OR rule-engine categories ("Reply", "Newsletter"). */
   labels?: string[];
+  /** Only mail carrying NONE of the rule-engine labels — the complement of the
+   *  tag pills, and the same definition the Email Cleaner uses. */
+  uncategorized?: boolean;
   /** `from:` pill — substring match on the sender's address or display name. */
   fromAddr?: string;
   /** `to:` pill — substring match on any To/Cc recipient. */
@@ -620,6 +643,7 @@ export async function searchEmails(
   if (params.isStarred != null) sp.set("is_starred", String(params.isStarred));
   if (params.hasAttachments != null)
     sp.set("has_attachments", String(params.hasAttachments));
+  if (params.uncategorized) sp.set("uncategorized", "true");
   if (params.receivedAfter) sp.set("received_after", params.receivedAfter);
   if (params.receivedBefore) sp.set("received_before", params.receivedBefore);
   if (params.hybrid) sp.set("hybrid", "true");
@@ -978,18 +1002,25 @@ export async function getAnalyticsOverview(
 
 // ── Senders + bulk actions ──────────────────────────────────────────────────
 
+/** Senders across the WHOLE mailbox (trash/junk/drafts excluded) unless a
+ *  `folder` is given. `total` is the distinct sender count in scope, so the
+ *  caller can tell the user when the list is capped instead of implying it
+ *  covers everything. */
 export async function listSenders(
   accountId?: string,
   folder?: string,
-  limit = 200
-): Promise<SenderStat[]> {
+  limit = 200,
+  offset = 0
+): Promise<{ senders: SenderStat[]; total: number }> {
   const sp = new URLSearchParams({ limit: String(limit) });
+  if (offset) sp.set("offset", String(offset));
   if (accountId) sp.set("account_id", accountId);
   if (folder) sp.set("folder", folder);
-  const res = await gatewayFetch<{ senders: SenderStat[] }>(
+  const res = await gatewayFetch<{ senders: SenderStat[]; total?: number }>(
     `/email/senders?${sp}`
   );
-  return res.senders ?? [];
+  const senders = res.senders ?? [];
+  return { senders, total: res.total ?? senders.length };
 }
 
 export interface BulkActionParams {
@@ -1468,7 +1499,7 @@ export async function getSenderCategories(
   );
 }
 
-// ── Uncategorized-inbox sweep (Inbox Cleaner) ───────────────────────────────
+// ── Uncategorized-inbox sweep (Email Cleaner) ───────────────────────────────
 
 /** Result of projecting existing categorization onto uncategorized inbox mail.
  *  `no_evidence` is mail the sweep deliberately refused to guess at — it needs a
@@ -1480,13 +1511,19 @@ export interface CleanupSweepResult {
   by_category: Record<string, number>;
   by_reason: Record<string, number>;
   dry_run: boolean;
+  /** The mailbox actually ran dry, rather than the run hitting its bound. */
+  exhausted?: boolean;
+  /** Preview only: it stopped at its sample bound, so these numbers describe
+   *  part of the mailbox, not all of it. */
+  sampled?: boolean;
   error?: string;
 }
 
-/** Preview the sweep: decides everything, writes nothing, returns the verdicts. */
+/** Preview the sweep. Bounded server-side to stay inside one request — the
+ *  result carries `sampled: true` when it only saw part of the mailbox. */
 export async function previewAutoCategorize(
   accountId: string,
-  limit = 500
+  limit = 0
 ): Promise<CleanupSweepResult> {
   return gatewayFetch("/email/cleanup/auto-categorize", {
     method: "POST",
@@ -1494,10 +1531,11 @@ export async function previewAutoCategorize(
   });
 }
 
-/** Run the sweep for real (background — poll `getCleanupStatus`). */
+/** Run the sweep for real over the WHOLE mailbox (`limit: 0`), in the
+ *  background — poll `getCleanupStatus`. */
 export async function runAutoCategorize(
   accountId: string,
-  limit = 500
+  limit = 0
 ): Promise<{ scheduled: boolean }> {
   return gatewayFetch("/email/cleanup/auto-categorize", {
     method: "POST",
@@ -1513,6 +1551,23 @@ export async function getCleanupStatus(
   return gatewayFetch(
     `/email/cleanup/status?account_id=${encodeURIComponent(accountId)}`
   );
+}
+
+/** Re-read every label from the provider back into `categories`.
+ *  The repair path when labels were lost locally — the truth still lives
+ *  upstream, so this restores in seconds without a deep re-sync. */
+export async function restoreProviderLabels(
+  accountId: string
+): Promise<{
+  messages: number;
+  labels: number;
+  updated: number;
+  error?: string;
+}> {
+  return gatewayFetch("/email/cleanup/restore-labels", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId }),
+  });
 }
 
 export async function getUncategorizedOverview(

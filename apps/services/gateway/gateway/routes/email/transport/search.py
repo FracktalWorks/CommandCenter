@@ -40,6 +40,8 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
 from gateway.routes.email.core import (
+    KNOWN_LABELS_LOWER,
+    UNCATEGORIZED_SQL,
     _account_scope,
     _get_db,
     _row_to_message,
@@ -152,6 +154,8 @@ async def search_messages(
     label: str | None = Query(None),
     labels: list[str] | None = Query(
         None, description="Tag pills — repeatable; a message must carry ALL"),
+    uncategorized: bool = Query(
+        False, description="Only mail carrying none of the rule-engine labels"),
     from_addr: str | None = Query(
         None, description="Substring match on the sender name or address"),
     to_addr: str | None = Query(
@@ -194,6 +198,11 @@ async def search_messages(
         if folder_sql:
             where.append(folder_sql)
         _tag_filters(where, params, label, labels)
+        if uncategorized:
+            # The complement of every tag pill. Defined in core so the inbox
+            # chip and the Email Cleaner's Uncategorized tab mean the same mail.
+            where.append(UNCATEGORIZED_SQL)
+            params["known_labels"] = KNOWN_LABELS_LOWER
         _address_filters(where, params, from_addr, to_addr)
         _state_filters(where, params, {
             "received_after": received_after,

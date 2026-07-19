@@ -1,6 +1,6 @@
 """Automation · uncategorized-inbox sweep.
 
-The Inbox Cleaner can only clean what it can see, and it sees mail through the
+The Email Cleaner can only clean what it can see, and it sees mail through the
 rule engine's per-message labels (``email_messages.categories``). Inbox mail the
 rules never reached is therefore invisible to every category chip and filter tab
 — it just sits there as an uncategorized sender with no disposition.
@@ -42,6 +42,7 @@ from gateway.routes.email.automation.engine import (
 )
 from gateway.routes.email.automation.senders import (
     _KNOWN_LABELS_LOWER,
+    _NOT_DISPOSED,
     canonical_cleanup_category,
 )
 from gateway.routes.email.core import (
@@ -74,7 +75,16 @@ _SHARED_DOMAINS = {
     "qq.com", "163.com", "126.com", "yandex.ru", "msn.com",
 }
 
-_MAX_SWEEP = 2000
+# The sweep pages through the mailbox until it runs out of uncategorized mail.
+# _MAX_SWEEP is a runaway backstop, not a product limit: a cap low enough to
+# stop a real mailbox short would leave the user believing the cleaner finished
+# when it had merely given up.
+_MAX_SWEEP = 200_000
+_SWEEP_PAGE = 500
+
+# A preview must return inside one HTTP request, so it decides a sample of the
+# most recent mail and says so (`sampled`). The live run is unbounded.
+_PREVIEW_MAX = 2000
 
 # In-memory progress, same contract and lifetime as runner._PAST_JOBS: the
 # gateway runs a single worker, so the request handler and the background task
@@ -161,27 +171,32 @@ async def _label_tallies(
 
 
 async def _uncategorized_inbox(
-    db: Any, account_id: str, limit: int,
+    db: Any, account_id: str, limit: int, offset: int = 0,
 ) -> list[Any]:
-    """Inbox mail carrying NO label the rollup understands.
+    """One page of mail carrying NO label the rollup understands.
 
     "Uncategorized" means no cleanup category *and* no conversation label — a
     thread already marked Reply/Awaiting is classified, it simply isn't cleanup
     material, and re-sweeping it every run would be noise.
+
+    ``offset`` exists because the sweep pages through the whole mailbox and
+    messages it categorizes drop OUT of this result set. Rows left behind — the
+    ones with no evidence — would otherwise be re-read forever, so the caller
+    advances the offset past exactly those.
     """
     return (await db.execute(text(
-        """SELECT em.id, em.provider_message_id, em.subject,
+        f"""SELECT em.id, em.provider_message_id, em.subject,
                   em.from_address, em.received_at
              FROM email_messages em
-            WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
+            WHERE em.account_id = :aid AND {_NOT_DISPOSED}
               AND COALESCE(em.from_address->>'email','') <> ''
               AND NOT EXISTS (
                     SELECT 1 FROM unnest(em.categories) AS c
                      WHERE LOWER(TRIM(c)) = ANY(:labels))
             ORDER BY em.received_at DESC
-            LIMIT :limit"""
+            LIMIT :limit OFFSET :offset"""
     ), {"aid": account_id, "labels": _KNOWN_LABELS_LOWER,
-        "limit": limit})).fetchall()
+        "limit": limit, "offset": offset})).fetchall()
 
 
 def _decide(
@@ -228,87 +243,120 @@ def _decide(
 async def sweep_uncategorized(
     account_id: str, limit: int, *, dry_run: bool, owner: str = "",
 ) -> dict[str, Any]:
-    """Project existing categorization onto uncategorized inbox mail.
+    """Project existing categorization onto uncategorized mail.
+
+    Pages through the mailbox until it runs out of uncategorized mail or hits
+    ``limit`` messages scanned. It does NOT stop after one page: a cleaner that
+    quietly handles the first N and reports success is worse than one that
+    refuses, because the user stops looking.
 
     Returns a summary: how many were matched, the per-category breakdown, and
     how many carry no evidence at all (those need an actual rules run — see
-    ``/email/rules/process-past``).
+    ``/email/rules/process-past``). ``exhausted`` says whether the mailbox
+    actually ran dry, so the caller never implies "done" when it means "stopped".
     """
     summary: dict[str, Any] = {
         "scanned": 0, "categorized": 0, "no_evidence": 0,
         "by_category": {}, "by_reason": {}, "dry_run": dry_run,
+        "exhausted": False,
     }
     db = await _get_db()
     provider = None
     store = None
     try:
-        rows = await _uncategorized_inbox(db, account_id, limit)
-        summary["scanned"] = len(rows)
-        if not rows:
-            return summary
-
         patterns = await _load_rule_patterns(db, account_id)
         rule_labels = await _rule_label_by_id(db, account_id)
+        # Tallies are read ONCE and held for the whole sweep. Refreshing them
+        # per page would let the sweep's own projections become evidence for
+        # further projections — one wrong guess compounding into a category
+        # applied across the mailbox. Evidence stays what the user and the rules
+        # decided, never what this run decided.
         by_sender, by_domain = await _label_tallies(db, account_id)
 
-        # Decide everything first — a dry run must never touch the provider, and
-        # the preview and the apply must agree on exactly the same verdicts.
-        decisions: list[tuple[Any, str, str]] = []
-        for r in rows:
-            verdict = _decide(r, patterns, rule_labels, by_sender, by_domain)
-            if verdict is None:
-                summary["no_evidence"] += 1
-                continue
-            cat, reason = verdict
-            decisions.append((r, cat, reason))
-            summary["by_category"][cat] = summary["by_category"].get(cat, 0) + 1
-            summary["by_reason"][reason] = summary["by_reason"].get(reason, 0) + 1
-        summary["categorized"] = len(decisions)
-        if dry_run or not decisions:
-            return summary
+        if not dry_run:
+            acc = (await db.execute(text(
+                "SELECT provider, credentials_encrypted FROM email_accounts "
+                "WHERE id = :id"
+            ), {"id": account_id})).fetchone()
+            if acc:
+                import json  # noqa: PLC0415
 
-        acc = (await db.execute(text(
-            "SELECT provider, credentials_encrypted FROM email_accounts "
-            "WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if acc:
-            import json  # noqa: PLC0415
-
-            from acb_llm.key_store import get_key_store  # noqa: PLC0415
-            store = get_key_store()
-            creds = json.loads(store.decrypt(acc.credentials_encrypted))
-            provider = _instantiate_provider(acc.provider, creds)
-            if not await provider.authenticate():
-                provider = None
+                from acb_llm.key_store import get_key_store  # noqa: PLC0415
+                store = get_key_store()
+                creds = json.loads(store.decrypt(acc.credentials_encrypted))
+                provider = _instantiate_provider(acc.provider, creds)
+                if not await provider.authenticate():
+                    provider = None
 
         from gateway.routes.email.automation.runner import (  # noqa: PLC0415
             apply_label,
         )
         applied = 0
-        for r, cat, reason in decisions:
-            try:
-                await apply_label(
-                    db, provider, str(r.id), r.provider_message_id, cat)
-                frm = r.from_address if isinstance(r.from_address, dict) else {}
-                await db.execute(text(
-                    """INSERT INTO email_executed_rules
-                         (account_id, rule_id, rule_name, message_id,
-                          provider_message_id, subject, from_address, status,
-                          automated, actions_taken, reason)
-                       VALUES (:aid, NULL, :rname, :mid, :pmid, :subj, :frm,
-                               'APPLIED', true, '["LABEL"]', :reason)"""
-                ), {"aid": account_id, "rname": f"Inbox Cleaner · {cat}",
-                    "mid": str(r.id), "pmid": r.provider_message_id,
-                    "subj": r.subject or "", "frm": frm.get("email", ""),
-                    "reason": f"Categorized as {cat} from {reason}."})
-                await db.commit()
-                applied += 1
-                _sweep_tick(account_id, applied)
-            except Exception as exc:  # noqa: BLE001 — one bad message must not
-                # abort the sweep; the rest of the inbox still gets cleaned.
-                _log.warning("email.cleanup_apply_failed", account_id=account_id,
-                             message_id=str(r.id), error=str(exc)[:160])
+        offset = 0
+        while summary["scanned"] < limit:
+            page_size = min(_SWEEP_PAGE, limit - summary["scanned"])
+            rows = await _uncategorized_inbox(db, account_id, page_size, offset)
+            if not rows:
+                summary["exhausted"] = True
+                break
+            summary["scanned"] += len(rows)
+
+            # Decide the page first — a dry run must never touch the provider,
+            # and the preview and the apply must agree on the same verdicts.
+            decisions: list[tuple[Any, str, str]] = []
+            for r in rows:
+                verdict = _decide(r, patterns, rule_labels, by_sender, by_domain)
+                if verdict is None:
+                    summary["no_evidence"] += 1
+                    continue
+                cat, reason = verdict
+                decisions.append((r, cat, reason))
+                summary["by_category"][cat] = summary["by_category"].get(cat, 0) + 1
+                summary["by_reason"][reason] = summary["by_reason"].get(reason, 0) + 1
+
+            if dry_run:
+                applied += len(decisions)
+                # Nothing was written, so nothing drops out of the next page.
+                offset += len(rows)
+            else:
+                page_applied = 0
+                for r, cat, reason in decisions:
+                    try:
+                        await apply_label(
+                            db, provider, str(r.id), r.provider_message_id, cat)
+                        frm = (r.from_address
+                               if isinstance(r.from_address, dict) else {})
+                        await db.execute(text(
+                            """INSERT INTO email_executed_rules
+                                 (account_id, rule_id, rule_name, message_id,
+                                  provider_message_id, subject, from_address,
+                                  status, automated, actions_taken, reason)
+                               VALUES (:aid, NULL, :rname, :mid, :pmid, :subj,
+                                       :frm, 'APPLIED', true, '["LABEL"]',
+                                       :reason)"""
+                        ), {"aid": account_id, "rname": f"Email Cleaner · {cat}",
+                            "mid": str(r.id), "pmid": r.provider_message_id,
+                            "subj": r.subject or "", "frm": frm.get("email", ""),
+                            "reason": f"Categorized as {cat} from {reason}."})
+                        await db.commit()
+                        applied += 1
+                        page_applied += 1
+                        _sweep_tick(account_id, applied, summary["scanned"])
+                    except Exception as exc:  # noqa: BLE001 — one bad message
+                        # must not abort the sweep; the rest still gets cleaned.
+                        _log.warning("email.cleanup_apply_failed",
+                                     account_id=account_id,
+                                     message_id=str(r.id), error=str(exc)[:160])
+                # Categorized rows no longer match the query, so they shift the
+                # window on their own. Advance past only what stayed behind —
+                # the no-evidence rows and any that failed to apply.
+                offset += len(rows) - page_applied
+            if len(rows) < page_size:
+                summary["exhausted"] = True
+                break
         summary["categorized"] = applied
+        if dry_run:
+            return summary
         if provider is not None and store is not None:
             await _persist_rotated_creds(db, store, account_id, provider)
             await db.commit()
@@ -325,10 +373,12 @@ async def sweep_uncategorized(
         await db.close()
 
 
-def _sweep_tick(account_id: str, applied: int) -> None:
+def _sweep_tick(account_id: str, applied: int, scanned: int = 0) -> None:
     job = _SWEEP_JOBS.get(account_id)
     if job:
         job["applied"] = applied
+        if scanned:
+            job["scanned"] = scanned
 
 
 async def _sweep_job(account_id: str, limit: int, owner: str) -> None:
@@ -348,9 +398,98 @@ async def _sweep_job(account_id: str, limit: int, owner: str) -> None:
         }
 
 
+async def restore_provider_labels(account_id: str) -> dict[str, Any]:
+    """Re-read every label from the provider and write it back to ``categories``.
+
+    The repair path for a mailbox whose stored labels were lost. Labels live
+    upstream — ``apply_label`` always writes the provider first — so the truth
+    was never destroyed, only our copy of it. This reads it back in roughly one
+    request per label (see BaseProvider.fetch_label_assignments) instead of
+    forcing a deep re-sync that would re-download a year of message bodies.
+
+    Only messages the provider reports labels FOR are touched. A message with no
+    upstream labels is left exactly as-is rather than cleared, so a label that
+    only ever existed locally isn't destroyed by the very job meant to repair.
+    """
+    out: dict[str, Any] = {"messages": 0, "labels": 0, "updated": 0}
+    db = await _get_db()
+    try:
+        acc = (await db.execute(text(
+            "SELECT provider, credentials_encrypted FROM email_accounts "
+            "WHERE id = :id"
+        ), {"id": account_id})).fetchone()
+        if not acc:
+            return out
+        import json  # noqa: PLC0415
+
+        from acb_llm.key_store import get_key_store  # noqa: PLC0415
+        store = get_key_store()
+        creds = json.loads(store.decrypt(acc.credentials_encrypted))
+        provider = _instantiate_provider(acc.provider, creds)
+        if not await provider.authenticate():
+            out["error"] = "auth-failed"
+            return out
+
+        assignments = await provider.fetch_label_assignments()
+        out["messages"] = len(assignments)
+        out["labels"] = len({lbl for v in assignments.values() for lbl in v})
+        # Group by label-set and write one statement per DISTINCT set rather
+        # than one per message. A mailbox has a handful of label combinations
+        # and tens of thousands of messages, so this is ~20 round-trips instead
+        # of 40,000 — the difference between a route that returns and one that
+        # times out on exactly the large mailbox that needs it most.
+        by_labels: dict[tuple[str, ...], list[str]] = {}
+        for pmid, labels in assignments.items():
+            by_labels.setdefault(tuple(labels), []).append(pmid)
+        for labels_key, pmids in by_labels.items():
+            res = await db.execute(text(
+                "UPDATE email_messages SET categories = :cats, updated_at = now() "
+                "WHERE account_id = :aid AND provider_message_id = ANY(:pmids) "
+                "AND categories IS DISTINCT FROM :cats"
+            ), {"aid": account_id, "pmids": pmids, "cats": list(labels_key)})
+            out["updated"] += res.rowcount or 0
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        _log.info("email.restore_labels", account_id=account_id, **{
+            k: v for k, v in out.items() if isinstance(v, int)})
+        return out
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.restore_labels_failed", account_id=account_id,
+                     error=str(exc)[:200])
+        out["error"] = str(exc)[:200]
+        return out
+    finally:
+        await db.close()
+
+
+class RestoreLabelsRequest(BaseModel):
+    account_id: str
+
+
+@router.post("/cleanup/restore-labels")
+async def restore_labels(
+    req: RestoreLabelsRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Repair locally-lost categories by re-reading them from the provider.
+
+    Synchronous — it is a handful of list calls, not a per-message fetch — so the
+    caller gets the real counts back rather than having to poll.
+    """
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    return await restore_provider_labels(req.account_id)
+
+
 class CleanupSweepRequest(BaseModel):
     account_id: str
-    limit: int = 500
+    # Max messages to SCAN. 0 (the default) means "the whole mailbox" — the
+    # cleaner's job is to finish, not to nibble. A caller can still pass a
+    # smaller number to take a bite.
+    limit: int = 0
     # Preview only: decide everything, touch nothing. Cheap (no provider calls),
     # so the UI can show "N will be categorized" before the user commits.
     dry_run: bool = False
@@ -368,12 +507,15 @@ async def auto_categorize_inbox(
     the rules never reached. Runs no classifier of its own — anything without
     evidence is reported in ``no_evidence`` and needs a real rules run.
 
-    ``dry_run`` returns the verdicts synchronously without writing. A live run is
-    scheduled in the background (it writes to the provider per message); poll
+    ``dry_run`` returns the verdicts synchronously without writing, over a
+    bounded sample of the most recent mail so the request stays fast; it sets
+    ``sampled`` when it stopped early. A live run covers the WHOLE mailbox and
+    is scheduled in the background (it writes to the provider per message); poll
     ``GET /email/cleanup/status``.
     """
     owner = user.email or "anonymous"
-    limit = max(1, min(req.limit, _MAX_SWEEP))
+    # limit=0 means "everything"; _MAX_SWEEP is only a runaway backstop.
+    limit = min(req.limit, _MAX_SWEEP) if req.limit > 0 else _MAX_SWEEP
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, owner)
@@ -381,8 +523,13 @@ async def auto_categorize_inbox(
         await db.close()
 
     if req.dry_run:
-        return await sweep_uncategorized(
-            req.account_id, limit, dry_run=True, owner=owner)
+        preview_limit = min(limit, _PREVIEW_MAX)
+        res = await sweep_uncategorized(
+            req.account_id, preview_limit, dry_run=True, owner=owner)
+        # Be explicit when the preview only saw part of the mailbox, so the UI
+        # never presents a sample's numbers as the full picture.
+        res["sampled"] = not res.get("exhausted", False)
+        return res
 
     _SWEEP_JOBS[req.account_id] = {
         "owner": owner, "status": "running", "applied": 0,
@@ -411,25 +558,25 @@ async def uncategorized_overview(
 ):
     """How much inbox mail carries no rule label, and who it's from.
 
-    Powers the Inbox Cleaner's "Uncategorized" tab: the count drives the badge,
+    Powers the Email Cleaner's "Uncategorized" tab: the count drives the badge,
     the sender breakdown tells the user whether one noisy sender is the problem.
     """
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         total = (await db.execute(text(
-            """SELECT COUNT(*) AS c FROM email_messages em
-                WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
+            f"""SELECT COUNT(*) AS c FROM email_messages em
+                WHERE em.account_id = :aid AND {_NOT_DISPOSED}
                   AND NOT EXISTS (
                         SELECT 1 FROM unnest(em.categories) AS c
                          WHERE LOWER(TRIM(c)) = ANY(:labels))"""
         ), {"aid": account_id, "labels": _KNOWN_LABELS_LOWER})).fetchone()
         rows = (await db.execute(text(
-            """SELECT LOWER(em.from_address->>'email') AS email,
+            f"""SELECT LOWER(em.from_address->>'email') AS email,
                       MAX(em.from_address->>'name') AS name,
                       COUNT(*) AS n
                  FROM email_messages em
-                WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
+                WHERE em.account_id = :aid AND {_NOT_DISPOSED}
                   AND COALESCE(em.from_address->>'email','') <> ''
                   AND NOT EXISTS (
                         SELECT 1 FROM unnest(em.categories) AS c

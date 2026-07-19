@@ -126,3 +126,218 @@ def test_consensus_requires_both_volume_and_dominance() -> None:
     assert c._consensus({"Newsletter": 5}, 2, 0.8) == "Newsletter"
     assert c._consensus({"Newsletter": 1}, 2, 0.8) is None          # too few
     assert c._consensus({"Newsletter": 5, "Receipt": 4}, 2, 0.8) is None  # split
+
+
+# ── Label restore (repair path) ─────────────────────────────────────────────
+# This job WRITES to email_messages.categories, so a mistake here is destructive.
+# It exists because labels live upstream while our copy can be lost.
+
+async def test_restore_only_touches_messages_the_provider_reports() -> None:
+    """A message with no upstream labels must be left ALONE, not cleared.
+
+    Clearing it would let the repair job destroy a label that only ever existed
+    locally — the exact failure it is meant to undo.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    updates: list[dict] = []
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            sql = str(clause)
+            if "SELECT provider, credentials_encrypted" in sql:
+                return MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(
+                    provider="gmail", credentials_encrypted="x")))
+            if "UPDATE email_messages SET categories" in sql:
+                updates.append(params or {})
+                return SimpleNamespace(rowcount=1)
+            return MagicMock(fetchone=MagicMock(return_value=None))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    provider = MagicMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    provider.fetch_label_assignments = AsyncMock(return_value={
+        "pm-1": ["Newsletter"],
+        "pm-2": ["Marketing", "Receipt"],
+        "pm-3": ["Newsletter"],
+    })
+
+    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch.object(c, "_persist_rotated_creds", AsyncMock()), \
+            patch("acb_llm.key_store.get_key_store",
+                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
+                      return_value="{}")))):
+        res = await c.restore_provider_labels("acc-1")
+
+    # Exactly the three reported messages were written — nothing else.
+    written = {p for u in updates for p in u["pmids"]}
+    assert written == {"pm-1", "pm-2", "pm-3"}
+    cats_by_pmid = {p: u["cats"] for u in updates for p in u["pmids"]}
+    assert cats_by_pmid["pm-2"] == ["Marketing", "Receipt"]
+    assert cats_by_pmid["pm-1"] == ["Newsletter"]
+    # ...in one statement per DISTINCT label-set, not one per message. At
+    # mailbox scale the per-message version is tens of thousands of round-trips
+    # and the route times out on exactly the mailbox that needs repairing.
+    assert len(updates) == 2
+    assert res["messages"] == 3
+    assert res["labels"] == 3      # Newsletter, Marketing, Receipt
+    assert res["updated"] == 2
+
+
+# ── paging: the sweep must FINISH, not stop after one page ──────────────────
+# A cleaner that quietly handles the first N and reports success is worse than
+# one that refuses, because the user stops looking.
+
+
+async def test_sweep_pages_until_the_mailbox_runs_dry() -> None:
+    """Every uncategorized message is seen exactly once, across pages.
+
+    The tricky part is the offset. Categorized rows drop OUT of the query (they
+    now carry a label), while no-evidence rows stay in it forever. Advancing the
+    offset by a whole page would skip mail; not advancing it at all would re-read
+    the same no-evidence rows until the runaway backstop fired. It must advance
+    by exactly what stayed behind.
+    """
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    msgs = [_msg("news@site.com", mid=f"m{i}") for i in (1, 2, 3)] + [
+        _msg("stranger@nowhere.io", mid=f"m{i}") for i in (4, 5)
+    ]
+    labelled: set[str] = set()
+    seen: list[str] = []
+    pages: list[tuple[int, int]] = []
+
+    async def fake_page(db, aid, limit, offset=0):
+        pages.append((limit, offset))
+        remaining = [m for m in msgs if m.id not in labelled]
+        return remaining[offset:offset + limit]
+
+    async def fake_apply(db, provider, mid, pmid, label):
+        labelled.add(mid)
+        seen.append(mid)
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            return MagicMock(fetchone=MagicMock(return_value=None),
+                             fetchall=MagicMock(return_value=[]))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    import gateway.routes.email.automation.runner as runner
+
+    with patch.object(c, "_SWEEP_PAGE", 2), \
+            patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_uncategorized_inbox", fake_page), \
+            patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
+            patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
+            patch.object(c, "_label_tallies", AsyncMock(return_value=(
+                {"news@site.com": {"Newsletter": 6}}, {}))), \
+            patch.object(runner, "apply_label", fake_apply):
+        res = await c.sweep_uncategorized("acc-1", 100, dry_run=False)
+
+    # All five were scanned, each exactly once — no skips, no re-reads.
+    assert res["scanned"] == 5
+    assert res["categorized"] == 3
+    assert res["no_evidence"] == 2
+    assert res["exhausted"] is True
+    assert seen == ["m1", "m2", "m3"]
+    # Offsets step past only the rows that stayed uncategorized.
+    assert pages == [(2, 0), (2, 0), (2, 1)]
+
+
+async def test_sweep_honours_an_explicit_limit_and_says_it_stopped_short() -> None:
+    """A bounded run must NOT claim the mailbox is exhausted."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    msgs = [_msg("stranger@nowhere.io", mid=f"m{i}") for i in range(20)]
+
+    async def fake_page(db, aid, limit, offset=0):
+        return msgs[offset:offset + limit]
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            return MagicMock(fetchone=MagicMock(return_value=None),
+                             fetchall=MagicMock(return_value=[]))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    with patch.object(c, "_SWEEP_PAGE", 2), \
+            patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_uncategorized_inbox", fake_page), \
+            patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
+            patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
+            patch.object(c, "_label_tallies", AsyncMock(return_value=({}, {}))):
+        res = await c.sweep_uncategorized("acc-1", 5, dry_run=True)
+
+    assert res["scanned"] == 5
+    assert res["exhausted"] is False
+
+
+async def test_dry_run_pages_by_the_full_window() -> None:
+    """Nothing is written in a preview, so nothing drops out of the query — the
+    offset has to advance by the whole page or the preview loops forever on the
+    same mail."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    msgs = [_msg("news@site.com", mid=f"m{i}") for i in range(4)]
+    pages: list[int] = []
+
+    async def fake_page(db, aid, limit, offset=0):
+        pages.append(offset)
+        return msgs[offset:offset + limit]
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            return MagicMock(fetchone=MagicMock(return_value=None),
+                             fetchall=MagicMock(return_value=[]))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    with patch.object(c, "_SWEEP_PAGE", 2), \
+            patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_uncategorized_inbox", fake_page), \
+            patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
+            patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
+            patch.object(c, "_label_tallies", AsyncMock(return_value=(
+                {"news@site.com": {"Newsletter": 6}}, {}))):
+        res = await c.sweep_uncategorized("acc-1", 100, dry_run=True)
+
+    assert pages == [0, 2, 4]
+    assert res["scanned"] == 4
+    assert res["categorized"] == 4
+    assert res["exhausted"] is True
+
+
+async def test_restore_reports_auth_failure_instead_of_wiping() -> None:
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            if "SELECT provider, credentials_encrypted" in str(clause):
+                return MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(
+                    provider="gmail", credentials_encrypted="x")))
+            raise AssertionError("must not touch messages when auth fails")
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    provider = MagicMock()
+    provider.authenticate = AsyncMock(return_value=False)
+
+    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch("acb_llm.key_store.get_key_store",
+                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
+                      return_value="{}")))):
+        res = await c.restore_provider_labels("acc-1")
+
+    assert res["error"] == "auth-failed"
+    assert res["updated"] == 0

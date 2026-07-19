@@ -984,10 +984,30 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   setSearchScope: (scope: string | null) => {
-    set({ searchScope: scope, selectedEmailId: null, selectedEmailOverride: null });
-    // Re-scoping only changes what's on screen while a search is running; with
-    // an empty bar the folder list already answers "what's in this folder".
-    if (searchActive(get())) get().fetchEmails();
+    // Picking a scope IS navigating there. Searching "Sent" while the sidebar
+    // still highlights Inbox leaves the two disagreeing about where you are,
+    // and the results read as if they came from the folder you're looking at.
+    //
+    // Moving `selectedFolder` (rather than holding an override in
+    // `searchScope`) also means clearing the search leaves you standing in the
+    // folder you searched, instead of teleporting back to where you started.
+    // Note this deliberately does NOT go through `selectFolder`, which ends the
+    // search — here the query is the whole point and must survive.
+    if (scope) {
+      set({
+        selectedFolder: scope,
+        searchScope: null,
+        selectedLabel: null,
+        selectedIds: new Set(),
+        selectedEmailId: null,
+        selectedEmailOverride: null,
+      });
+    } else {
+      set({ searchScope: null, selectedEmailId: null, selectedEmailOverride: null });
+    }
+    // With an empty bar the folder list still has to reload — the folder itself
+    // changed, not just the search's reach.
+    get().fetchEmails();
   },
 
   setSearchFilters: (filters: SearchFilter[]) => {

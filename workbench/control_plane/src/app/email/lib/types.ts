@@ -185,7 +185,7 @@ export interface SenderStat {
    *  per-message categories (never a provisional guess). null = uncategorized. */
   category?: string | null;
   /** All distinct cleanup categories present on this sender's mail — powers the
-   *  category filter tabs in the Inbox Cleaner. */
+   *  category filter tabs in the Email Cleaner. */
   categories?: string[];
   /** Provenance of `category`. Always 'rule'/'user' now (provisional 'inferred'
    *  guesses were removed); retained for forward-compat. */
@@ -193,7 +193,7 @@ export interface SenderStat {
   /** How many of this sender's messages carry ANY rule label (cleanup or
    *  conversation). 0 means the rules never reached this sender — which is a
    *  different problem from "the rules ran and found nothing to clean up", and
-   *  is what the Inbox Cleaner's "Uncategorized" filter surfaces. */
+   *  is what the Email Cleaner's "Uncategorized" filter surfaces. */
   labelled?: number;
 }
 

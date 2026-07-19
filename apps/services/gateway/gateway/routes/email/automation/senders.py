@@ -15,6 +15,9 @@ from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from gateway.routes.email.automation.identity import sender_scope
 from gateway.routes.email.core import (
+    CLEANUP_CATEGORIES,
+    CONVERSATION_LABELS_LOWER,
+    KNOWN_LABELS_LOWER,
     _account_scope,
     _assert_account_owner,
     _get_db,
@@ -154,52 +157,72 @@ async def analytics_overview(
         await db.close()
 
 
+# Folders whose mail is already disposed of (or was never received). The Email
+# Cleaner and its uncategorized sweep both exclude these, so a sender is never
+# inflated by mail the user has already dealt with. ONE definition, interpolated
+# into both — a fixed constant, not user input, so it is safe in an f-string.
+DISPOSED_FOLDERS = "('trash', 'junk', 'spam', 'drafts', 'draft')"
+_NOT_DISPOSED = f"LOWER(COALESCE(em.folder,'')) NOT IN {DISPOSED_FOLDERS}"
+
+
 @router.get("/senders")
 async def list_senders(
     account_id: str | None = Query(None),
     folder: str | None = Query(None),
     limit: int = Query(200, ge=1, le=1000),
+    offset: int = Query(0, ge=0),
     user: UserContext = Depends(get_current_user),
 ):
     """Aggregate messages by sender, merged with newsletter status.
 
-    Powers Archiver (volume per sender) and Unsubscriber (read-rate +
-    unsubscribe link + approve/unsubscribe disposition).
+    Powers the Email Cleaner: volume per sender, read-rate, unsubscribe link and
+    approve/unsubscribe disposition.
+
+    Scope is the WHOLE MAILBOX by default, not the inbox. Cleaning up is a
+    per-sender decision — "do I still want mail from this company at all?" — and
+    that question doesn't stop at the inbox. Scoping to the inbox also made the
+    tool structurally unable to show its own categories: the Marketing and Cold
+    Email preset rules label AND archive on Gmail, so the mail was gone from the
+    inbox by the time the cleaner looked, and those chips were permanently empty.
+
+    Trash / junk / drafts are excluded — that mail is already disposed of (or was
+    never received), so counting it would inflate every sender with noise the
+    user has already dealt with. Pass ``folder`` to narrow to one folder.
+
+    ``limit``/``offset`` page the list (ordered by volume, loudest first). The
+    per-request cap is a payload bound, not a scope bound: ``total`` reports how
+    many senders exist and every one of them is reachable by paging, so the quiet
+    tail can still be cleaned up.
     """
     db = await _get_db()
     try:
-        params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
+        params: dict[str, Any] = {"uid": user.email or "anonymous",
+                                  "limit": limit, "offset": offset}
         scope = _account_scope(account_id, params)
-        folder_sql = ""
+        # Already-disposed mail never counts toward "how noisy is this sender".
+        folder_sql = f" AND {_NOT_DISPOSED}"
         if folder:
-            # Focus the list on the requested folder (the inbox) for discovery,
-            # but NEVER hide a sender we've already acted on: unsubscribing /
-            # auto-archiving moves their mail out of the inbox, so also include
-            # any sender that carries a saved disposition. Otherwise the
-            # Unsubscribed / Auto-archive tabs go empty after a refresh and the
-            # user can't review or undo their decisions.
+            # Narrowing to one folder still must NEVER hide a sender we've acted
+            # on: unsubscribing / auto-archiving moves their mail out of the
+            # inbox, so also include any sender carrying a saved disposition.
+            # Otherwise the Unsubscribed / Auto-archive tabs go empty after a
+            # refresh and the user can't review or undo their decisions.
             nl_sub = "account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid"
             if account_id:
                 nl_sub += " AND id = :aid"
             nl_sub += ")"
-            folder_sql = (
+            folder_sql += (
                 " AND (LOWER(em.folder) = LOWER(:folder)"
                 " OR LOWER(em.from_address->>'email') IN ("
                 f"SELECT LOWER(email) FROM email_newsletters WHERE {nl_sub}))"
             )
             params["folder"] = folder
 
-        # How many of the sender's counted messages are actually IN the requested
-        # folder. The rollup deliberately reaches outside it (above) so a sender
-        # we've already unsubscribed/auto-archived doesn't vanish — but that made
-        # `count` mean two different things depending on the row: inbox mail for a
-        # fresh sender, mail-everywhere for one with a disposition. A blocked
-        # sender then showed "412 emails" with nothing left in the inbox at all.
-        # Report both, and let the UI lead with the folder-scoped number.
-        in_folder_sql = (
-            "COUNT(*) FILTER (WHERE LOWER(folder) = LOWER(:folder))"
-            if folder else "COUNT(*)"
-        )
+        # Always report how much of a sender's mail is still sitting in the inbox,
+        # independent of the list scope, so the UI can lead with "still in your
+        # inbox" while `count` covers the whole mailbox. Without this the number
+        # meant different things on different rows.
+        in_folder_sql = "COUNT(*) FILTER (WHERE LOWER(folder) = 'inbox')"
         rows = (await db.execute(text(
             f"""SELECT LOWER(from_address->>'email') AS email,
                        MAX(from_address->>'name') AS name,
@@ -218,8 +241,26 @@ async def list_senders(
                     SELECT LOWER(email_address) FROM email_accounts
                     WHERE user_id = :uid)
                 GROUP BY LOWER(from_address->>'email')
-                ORDER BY count DESC LIMIT :limit"""
+                -- Tie-break on the address so paging is stable: without a
+                -- deterministic order, senders with equal volume could shuffle
+                -- between pages and a row would be skipped or shown twice.
+                ORDER BY count DESC, email ASC
+                LIMIT :limit OFFSET :offset"""
         ), params)).fetchall()
+
+        # How many distinct senders exist in scope, so the UI can say "showing
+        # the top 1000 of 4,312" and offer the rest. A cleanup tool that quietly
+        # hides the tail is worse than useless — the user believes they've dealt
+        # with everything.
+        total_row = (await db.execute(text(
+            f"""SELECT COUNT(DISTINCT LOWER(from_address->>'email')) AS c
+                FROM email_messages em
+                WHERE {scope}{folder_sql}
+                  AND COALESCE(from_address->>'email','') <> ''
+                  AND LOWER(from_address->>'email') NOT IN (
+                    SELECT LOWER(email_address) FROM email_accounts
+                    WHERE user_id = :uid)"""
+        ), params)).fetchone()
 
         # Merge newsletter disposition (APPROVED/UNSUBSCRIBED/AUTO_ARCHIVED).
         nl_params: dict[str, Any] = {"uid": user.email or "anonymous"}
@@ -331,7 +372,10 @@ async def list_senders(
                     "labelled": _labelled_count(r.email),
                 }
                 for r in rows
-            ]
+            ],
+            # Distinct senders in scope. > len(senders) means the list is capped
+            # and the UI must say so rather than imply completeness.
+            "total": int(total_row.c) if total_row else len(rows),
         }
     finally:
         await db.close()
@@ -357,9 +401,6 @@ _BULK_DB_UPDATE = {
 }
 
 
-_BULK_MAX = 1000
-
-
 @router.post("/messages/bulk")
 async def bulk_action(
     req: BulkActionRequest,
@@ -370,12 +411,30 @@ async def bulk_action(
 
     The local DB is updated synchronously (authoritative for the UI); the
     provider is reconciled in the background so the request stays fast.
+
+    There is deliberately NO row cap. A cap on a bulk action is silent
+    truncation of something the user believes finished: "archive everything
+    from this sender" would stop at N, report success, and leave the rest
+    sitting there. The DB update is set-based, so its cost is the same whether
+    it moves 50 rows or 50,000; the expensive side is the provider, which is
+    batched and runs in the background (``_bulk_reconcile_provider``).
+
+    What IS refused is an *unfiltered* bulk action — no ids, no sender, no
+    folder, no age. That request means "trash my entire mailbox", which is
+    never what a click in the cleaner meant, and uncapping made it reachable.
     """
     if req.action not in _BULK_DB_UPDATE:
         raise HTTPException(
             status_code=400,
             detail=f"Unknown action '{req.action}'. "
             f"Supported: {', '.join(_BULK_DB_UPDATE)}",
+        )
+    if not (req.message_ids or req.sender_email or req.folder
+            or req.older_than_days or req.only_read):
+        raise HTTPException(
+            status_code=400,
+            detail="Refusing an unfiltered bulk action: pass at least one of "
+                   "message_ids, sender_email, folder, older_than_days, only_read.",
         )
 
     db = await _get_db()
@@ -399,22 +458,18 @@ async def bulk_action(
             clauses.append("em.is_read = true")
         where_sql = " AND ".join(clauses)
 
-        # Resolve target rows (capped) — keep provider ids for reconciliation.
+        # One set-based UPDATE, RETURNING the provider ids we need to reconcile.
+        # Doing it in a single statement (rather than SELECT-then-UPDATE-by-id)
+        # keeps the write atomic and avoids shipping a 50k-element id array back
+        # into the next query.
         rows = (await db.execute(text(
-            f"""SELECT em.id, em.provider_message_id, em.account_id, ea.provider
-                FROM email_messages em
-                JOIN email_accounts ea ON em.account_id = ea.id
-                WHERE {where_sql}
-                LIMIT {_BULK_MAX}"""
+            f"""UPDATE email_messages SET {_BULK_DB_UPDATE[req.action]},
+                       updated_at = now()
+                 WHERE id IN (SELECT em.id FROM email_messages em WHERE {where_sql})
+             RETURNING id, provider_message_id, account_id"""
         ), params)).fetchall()
         if not rows:
             return {"affected": 0}
-
-        ids = [str(r.id) for r in rows]
-        await db.execute(text(
-            f"UPDATE email_messages SET {_BULK_DB_UPDATE[req.action]}, "
-            f"updated_at = now() WHERE id::text = ANY(:ids)"
-        ), {"ids": ids})
         await db.commit()
 
         # Group provider message ids per account for background reconciliation.
@@ -424,7 +479,7 @@ async def bulk_action(
         for aid, pmids in per_account.items():
             background.add_task(_bulk_reconcile_provider, aid, pmids, req.action)
 
-        return {"affected": len(ids)}
+        return {"affected": len(rows)}
     finally:
         await db.close()
 
@@ -432,7 +487,13 @@ async def bulk_action(
 async def _bulk_reconcile_provider(
     account_id: str, provider_msg_ids: list[str], action: str
 ) -> None:
-    """Best-effort: push a bulk action to the provider (runs in background)."""
+    """Best-effort: push a bulk action to the provider (runs in background).
+
+    Unbounded by design — this is where an uncapped bulk action gets paid for,
+    off the request path. The per-provider ``bulk_apply`` decides how: Gmail
+    collapses it into batchModify calls of 1000, everything else walks the
+    per-message API and swallows individual failures.
+    """
     db = await _get_db()
     try:
         row = (await db.execute(text(
@@ -446,23 +507,17 @@ async def _bulk_reconcile_provider(
         provider = _instantiate_provider(row.provider, creds)
         if not await provider.authenticate():
             return
-        for pmid in provider_msg_ids:
-            try:
-                if action == "archive":
-                    await provider.move_to_folder(pmid, "archive")
-                elif action == "trash":
-                    await provider.trash_message(pmid)
-                elif action == "read":
-                    await provider.apply_flags(pmid, is_read=True)
-                elif action == "unread":
-                    await provider.apply_flags(pmid, is_read=False)
-                elif action == "star":
-                    await provider.apply_flags(pmid, is_starred=True)
-                elif action == "unstar":
-                    await provider.apply_flags(pmid, is_starred=False)
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("email.bulk_reconcile_item_failed",
-                             pmid=pmid, action=action, error=str(exc)[:120])
+        rekeys = await provider.bulk_apply(provider_msg_ids, action)
+        # Outlook's /move mints a NEW message id and invalidates the old one.
+        # Dropping these (as this job used to) leaves every bulk-archived
+        # Outlook message pointing at a dead id, so the next action on it 404s
+        # until a full re-sync happens to notice.
+        for old_id, new_id in rekeys.items():
+            await db.execute(text(
+                "UPDATE email_messages SET provider_message_id = :new, "
+                "updated_at = now() "
+                "WHERE account_id = :aid AND provider_message_id = :old"
+            ), {"aid": account_id, "old": old_id, "new": new_id})
         await _persist_rotated_creds(db, store, account_id, provider)
         await db.commit()
     except Exception as exc:  # noqa: BLE001
@@ -872,22 +927,15 @@ EMAIL_CATEGORIES = [
     "Cold Email", "Personal", "Support", "Unknown",
 ]
 
-# The sender-stable categories the RULE ENGINE writes to email_messages.categories
-# (the cleanup preset rules). A sender's category is rolled up from these — the
-# Inbox Cleaner PROJECTS the rules, it never re-classifies. Personal is inferred
-# from conversation activity; Support/Unknown are vocabulary-only (no producer).
-_CLEANUP_CATEGORIES = [
-    "Newsletter", "Marketing", "Receipt", "Calendar", "Notification", "Cold Email",
-]
+# The label vocabulary now lives in core, because the inbox's Uncategorized chip
+# and the Email Cleaner's Uncategorized tab must agree on what "categorized"
+# means. A sender's category is rolled up from these — the Email Cleaner
+# PROJECTS the rules, it never re-classifies. Personal is inferred from
+# conversation activity; Support/Unknown are vocabulary-only (no producer).
+_CLEANUP_CATEGORIES = list(CLEANUP_CATEGORIES)
 _CLEANUP_BY_LOWER = {c.lower(): c for c in _CLEANUP_CATEGORIES}
-# Reply Zero conversation labels (also rule-engine output) — a sender you
-# converse with is a person, not a bulk sender. "follow-up" is written by
-# replyzero._maybe_send_follow_up_reminders and belongs here for the same reason.
-_CONVERSATION_LOWER = {"reply", "awaiting reply", "fyi", "done", "follow-up",
-                       "to reply", "actioned"}  # + legacy names, pre-rename
-# All labels the rollup understands — the single list both the /senders read path
-# and the sender-category job match on.
-_KNOWN_LABELS_LOWER = list(_CLEANUP_BY_LOWER) + sorted(_CONVERSATION_LOWER)
+_CONVERSATION_LOWER = CONVERSATION_LABELS_LOWER
+_KNOWN_LABELS_LOWER = KNOWN_LABELS_LOWER
 # How many of a sender's messages the rules must have labelled before the sender
 # is *persisted* with that category (mirrors the auto-learn consistency bar).
 _MIN_RULE_MESSAGES = 3
@@ -974,7 +1022,7 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
     from the rule engine's per-message labels (``email_messages.categories``) —
     the dominant cleanup category, or Personal for a reply-active correspondent.
     There is no second opinion: a sender the rules haven't labelled stays
-    uncategorized until they do, and the Inbox Cleaner lists it either way.
+    uncategorized until they do, and the Email Cleaner lists it either way.
 
     It exists (rather than everything reading ``email_messages.categories``
     live) because the digest and the ``sender_category`` search filter need a

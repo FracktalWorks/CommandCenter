@@ -6,11 +6,14 @@ The sync engine calls these methods without knowing the provider details.
 
 from __future__ import annotations
 
+import logging
 import re
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 # Canonical folder keys shared by the whole stack (DB, gateway query, UI store).
 # Provider-specific folder names/IDs (Outlook ``parentFolderId``, Gmail label IDs,
@@ -324,6 +327,48 @@ class BaseEmailProvider(ABC):
         """
         return None
 
+    # Canonical bulk actions, shared by every provider so callers name them once.
+    BULK_ACTIONS = ("archive", "trash", "read", "unread", "star", "unstar")
+
+    async def bulk_apply(
+        self, provider_message_ids: list[str], action: str
+    ) -> dict[str, str]:
+        """Apply one of :attr:`BULK_ACTIONS` to many messages.
+
+        Returns ``{old_provider_id: new_provider_id}`` for messages the provider
+        re-keyed (Outlook ``/move`` mints a fresh id); callers MUST persist those
+        or every follow-up action on the message 404s until the next full sync.
+
+        The default walks the per-message API one call at a time — correct
+        everywhere, slow at volume. Providers with a native batch endpoint
+        override this (see :class:`GmailProvider`). One failed message never
+        aborts the rest: at 10,000 messages a single 404 on a since-deleted mail
+        would otherwise strand the other 9,999 half-applied.
+        """
+        rekeys: dict[str, str] = {}
+        for pmid in provider_message_ids:
+            try:
+                new_id: str | None = None
+                if action == "archive":
+                    new_id = await self.move_to_folder(pmid, "archive")
+                elif action == "trash":
+                    new_id = await self.trash_message(pmid)
+                elif action in ("read", "unread"):
+                    await self.apply_flags(pmid, is_read=action == "read")
+                elif action in ("star", "unstar"):
+                    await self.apply_flags(pmid, is_starred=action == "star")
+                else:
+                    raise ValueError(f"unknown bulk action {action!r}")
+                if new_id and new_id != pmid:
+                    rekeys[pmid] = new_id
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "provider.bulk_apply_item_failed provider=%s action=%s "
+                    "pmid=%s error=%s",
+                    self.__class__.__name__, action, pmid, str(exc)[:120],
+                )
+        return rekeys
+
     async def create_folder(self, name: str) -> EmailFolder:
         """Create (or reuse) a folder named ``name`` and return it normalized.
 
@@ -381,6 +426,23 @@ class BaseEmailProvider(ABC):
         Default is a no-op so providers without labels degrade gracefully.
         """
         return None
+
+    async def fetch_label_assignments(
+        self, max_pages: int = 20,
+    ) -> dict[str, list[str]]:
+        """``{provider_message_id: [label name, …]}`` for the whole mailbox.
+
+        The cheap way to answer "which of my messages carry which labels" without
+        re-downloading a single message body — Gmail can list message IDs per
+        label, so this costs roughly one paged request PER LABEL rather than per
+        message.
+
+        Exists to repair local state: labels live upstream, and a mailbox whose
+        stored ``categories`` were lost (see EmailMessage.categories_
+        authoritative) can be restored from this in seconds instead of forcing a
+        full deep re-sync. Default {} for providers with no label concept.
+        """
+        return {}
 
     async def set_label_color(self, name: str, color: str) -> None:
         """Set a label/category's colour (canonical 'presetN' token).

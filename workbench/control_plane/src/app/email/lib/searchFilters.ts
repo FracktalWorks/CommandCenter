@@ -20,7 +20,11 @@ export type SearchFilterKind =
   | "unread"
   | "read"
   | "starred"
-  | "attachments";
+  | "attachments"
+  /** Mail carrying none of the rule-engine labels. The complement of every tag
+   *  pill, and the same definition the Email Cleaner's Uncategorized tab uses
+   *  (core.UNCATEGORIZED_SQL) — one meaning of "uncategorized" per mailbox. */
+  | "uncategorized";
 
 export interface SearchFilter {
   kind: SearchFilterKind;
@@ -29,7 +33,9 @@ export interface SearchFilter {
 }
 
 /** Flag pills carry no value — their presence IS the filter. */
-const FLAG_KINDS: SearchFilterKind[] = ["unread", "read", "starred", "attachments"];
+const FLAG_KINDS: SearchFilterKind[] = [
+  "unread", "read", "starred", "attachments", "uncategorized",
+];
 
 export function isFlagKind(kind: SearchFilterKind): boolean {
   return FLAG_KINDS.includes(kind);
@@ -63,6 +69,8 @@ const VALUE_PREFIXES: Record<string, SearchFilterKind> = {
 /** Whole tokens that map to a flag pill, e.g. `is:unread`. */
 const FLAG_TOKENS: Record<string, SearchFilterKind> = {
   "is:unread": "unread",
+  "is:uncategorized": "uncategorized",
+  "is:untagged": "uncategorized",
   "is:read": "read",
   "is:starred": "starred",
   "has:attachment": "attachments",
@@ -77,6 +85,7 @@ const PILL_LABELS: Record<SearchFilterKind, string> = {
   read: "Read",
   starred: "Starred",
   attachments: "Has attachment",
+  uncategorized: "Uncategorized",
 };
 
 /** Human text for a chip: "From: Fracktal Finance", "Unread". */
@@ -167,7 +176,13 @@ export function toSearchParams(
   filters: SearchFilter[]
 ): Pick<
   SearchEmailsParams,
-  "labels" | "fromAddr" | "toAddr" | "isRead" | "isStarred" | "hasAttachments"
+  | "labels"
+  | "fromAddr"
+  | "toAddr"
+  | "isRead"
+  | "isStarred"
+  | "hasAttachments"
+  | "uncategorized"
 > {
   const labels = filters.filter((f) => f.kind === "tag").map((f) => f.value);
   // Multiple from:/to: pills would AND into nothing (one sender can't be two
@@ -183,6 +198,7 @@ export function toSearchParams(
     isRead: has("unread") ? false : has("read") ? true : undefined,
     isStarred: has("starred") ? true : undefined,
     hasAttachments: has("attachments") ? true : undefined,
+    uncategorized: has("uncategorized") ? true : undefined,
   };
 }
 

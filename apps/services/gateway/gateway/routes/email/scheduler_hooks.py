@@ -63,7 +63,7 @@ async def process_new_mail(account_id: str) -> None:
     rules never reached — the rule run is capped per cycle, and mail processed
     before a rule existed is stamped ``rules_processed_at`` and never revisited,
     so without this step a real backlog stays permanently uncategorized and
-    invisible to the Inbox Cleaner. Sender rollup runs after both so it sees the
+    invisible to the Email Cleaner. Sender rollup runs after both so it sees the
     complete label set.
 
     Each step is isolated so one failure never skips the rest (same guarantee the

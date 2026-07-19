@@ -9,8 +9,10 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
 from gateway.routes.email.core import (
+    KNOWN_LABELS_LOWER,
     MAX_BODY_HTML_BYTES,
     MAX_BODY_TEXT_BYTES,
+    UNCATEGORIZED_SQL,
     AttachmentModel,
     EmailMessageModel,
     _assert_account_owner,
@@ -59,11 +61,80 @@ def _parse_dt(value: str | None) -> Any:
         return None
 
 
+@router.get("/messages/facets")
+async def message_facets(
+    account_id: str | None = Query(None),
+    folder: str = Query("INBOX"),
+    user: UserContext = Depends(get_current_user),
+):
+    """Which quick filters actually have mail behind them, in THIS folder.
+
+    The inbox's chip row used to be a fixed list, so it offered "Cold Email" in
+    Sent and "Needs reply" in Drafts — filters guaranteed to return nothing.
+    Worse, a chip that comes back empty is ambiguous: the user can't tell "no
+    such mail here" from "the filter is broken".
+
+    Returns a count per known label plus ``uncategorized`` and ``unread``, so
+    the UI can hide the dead chips and show the live ones with their size.
+    Counts, not booleans, because the same query yields them and "Newsletter
+    1,204" is the number that tells you where to start.
+    """
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"user_id": user.email or "anonymous"}
+        where = ["ea.user_id = :user_id"]
+        if account_id:
+            where.append("em.account_id = :account_id")
+            params["account_id"] = account_id
+        folder_sql = folder_scope(folder, params)
+        if folder_sql:
+            where.append(folder_sql)
+        where_sql = " AND ".join(where)
+        params["known_labels"] = KNOWN_LABELS_LOWER
+
+        # One pass over the folder: per-label tallies via LATERAL unnest, and
+        # the two scalar buckets that aren't labels at all.
+        rows = (await db.execute(text(
+            f"""SELECT LOWER(TRIM(c)) AS label, COUNT(*) AS n
+                  FROM email_messages em
+                  JOIN email_accounts ea ON em.account_id = ea.id
+                  CROSS JOIN LATERAL unnest(COALESCE(em.categories, '{{}}')) AS c
+                 WHERE {where_sql}
+                   AND LOWER(TRIM(c)) = ANY(:known_labels)
+                 GROUP BY 1"""
+        ), params)).fetchall()
+
+        totals = (await db.execute(text(
+            f"""SELECT COUNT(*) AS total,
+                       COUNT(*) FILTER (WHERE em.is_read = false) AS unread,
+                       COUNT(*) FILTER (WHERE {UNCATEGORIZED_SQL}) AS uncategorized
+                  FROM email_messages em
+                  JOIN email_accounts ea ON em.account_id = ea.id
+                 WHERE {where_sql}"""
+        ), params)).fetchone()
+
+        return {
+            "folder": folder,
+            "total": int(getattr(totals, "total", 0) or 0),
+            "unread": int(getattr(totals, "unread", 0) or 0),
+            "uncategorized": int(getattr(totals, "uncategorized", 0) or 0),
+            # Keyed by the LOWERCASED label; the UI matches its chips
+            # case-insensitively so a hand-edited rule writing "newsletter"
+            # still lights up the Newsletter chip.
+            "labels": {r.label: int(r.n or 0) for r in rows},
+        }
+    finally:
+        await db.close()
+
+
 @router.get("/messages")
 async def list_messages(
     account_id: str | None = Query(None),
     folder: str = Query("INBOX"),
     label: str | None = Query(None),
+    # Mail carrying none of the rule-engine labels (same definition the Email
+    # Cleaner's Uncategorized tab uses — see core.UNCATEGORIZED_SQL).
+    uncategorized: bool = Query(False),
     query: str | None = Query(None),
     thread_id: str | None = Query(None),
     # ── Rich filters (used by the assistant's inbox-query tools; all optional and
@@ -126,6 +197,12 @@ async def list_messages(
                 " OR :label = ANY(em.categories))"
             )
             params["label"] = label
+        if uncategorized:
+            # The inverse of every rule label — the mail the rules never reached.
+            # Shares its definition with the Email Cleaner via core, so the two
+            # Uncategorized views of one mailbox can't disagree.
+            where_clauses.append(UNCATEGORIZED_SQL)
+            params["known_labels"] = KNOWN_LABELS_LOWER
         if query:
             where_clauses.append(
                 """to_tsvector('english',

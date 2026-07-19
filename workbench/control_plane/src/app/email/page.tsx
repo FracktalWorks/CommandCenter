@@ -437,7 +437,7 @@ export default function EmailPage() {
           t.isContentEditable);
       if (typing || e.metaKey || e.ctrlKey || e.altKey) return;
       if (composeOpen || showAddModal || showOnboarding || paletteOpen) return;
-      // An automation scene (Assistant / Chat / Inbox Cleaner / …) replaces the
+      // An automation scene (Assistant / Chat / Email Cleaner / …) replaces the
       // inbox panes and owns its own shortcuts — don't act on the background
       // selectedEmail while one is open.
       if (automationFeature) return;

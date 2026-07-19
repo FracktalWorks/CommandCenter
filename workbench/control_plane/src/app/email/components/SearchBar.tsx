@@ -136,8 +136,9 @@ export function SearchBar() {
                   <button
                     key={o.key}
                     onClick={() => {
-                      // Picking the open folder = "follow the folder" (null),
-                      // so navigating on keeps the bar pointed at where you are.
+                      // Picking a scope navigates the sidebar there too, so the
+                      // list, the bar and the sidebar all name the same place.
+                      // Re-picking the folder you're already in is a no-op.
                       setSearchScope(o.key === selectedFolder ? null : o.key);
                       setScopeOpen(false);
                       inputRef.current?.focus();

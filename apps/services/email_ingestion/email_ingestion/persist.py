@@ -81,7 +81,7 @@ _INSERT = """INSERT INTO email_messages
 # ``categories`` is the same class of hazard but far more destructive, so it gets
 # an explicit opt-in instead of an emptiness check: it is the column the RULE
 # ENGINE writes its labels to (Newsletter / Marketing / Notification / …), and
-# it is what the Inbox Cleaner, the category chips and the quick filters all read.
+# it is what the Email Cleaner, the category chips and the quick filters all read.
 # A provider that simply doesn't report categories (generic IMAP; Gmail before it
 # resolved user-label IDs to names) would send ``{}`` on every tick and erase the
 # lot — permanently, because ``rules_processed_at`` is already stamped so the

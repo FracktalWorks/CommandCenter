@@ -710,7 +710,7 @@ async def auto_categorize_inbox(account_id: str, apply: bool = False) -> str:
     )
     if apply:
         return (
-            "Auto-categorize started in the background. Check the inbox cleaner "
+            "Auto-categorize started in the background. Check the email cleaner "
             "or the assistant history in a moment for what was applied."
         )
     n = data.get("categorized", 0)

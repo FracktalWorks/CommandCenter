@@ -300,6 +300,39 @@ FOLDER_ALL = "all"
 FOLDER_ALL_EXCLUDES = ("junk", "trash")
 
 
+# ── Label vocabulary ────────────────────────────────────────────────────────
+# Every label the RULE ENGINE writes to email_messages.categories. It lives in
+# core (not in automation) because both layers need the same answer to "is this
+# message categorized?" — the Email Cleaner's Uncategorized tab and the inbox's
+# Uncategorized chip look at the same mailbox, and two definitions of
+# "uncategorized" in two views of one mailbox is exactly the drift this package
+# keeps paying down.
+
+# Sender-stable cleanup categories (the preset cleanup rules).
+CLEANUP_CATEGORIES = (
+    "Newsletter", "Marketing", "Receipt", "Calendar", "Notification", "Cold Email",
+)
+# Reply Zero conversation labels, plus the legacy names from before the rename —
+# mail stamped with an old name is still categorized and must not resurface as
+# uncategorized.
+CONVERSATION_LABELS_LOWER = frozenset({
+    "reply", "awaiting reply", "fyi", "done", "follow-up",
+    "to reply", "actioned",
+})
+KNOWN_LABELS_LOWER: list[str] = (
+    [c.lower() for c in CLEANUP_CATEGORIES] + sorted(CONVERSATION_LABELS_LOWER)
+)
+
+# "Uncategorized" = carries none of the labels above. NOT "has no labels at
+# all": a user's own hand-made label doesn't make a message categorized as far
+# as the rules are concerned, and treating it as such would hide exactly the
+# mail the cleaner exists to find.
+UNCATEGORIZED_SQL = (
+    "NOT EXISTS (SELECT 1 FROM unnest(COALESCE(em.categories, '{}')) AS c"
+    " WHERE LOWER(TRIM(c)) = ANY(:known_labels))"
+)
+
+
 def folder_scope(folder: str | None, params: dict[str, Any]) -> str | None:
     """SQL scoping `em` to a folder, or None when the scope spans every folder.
 

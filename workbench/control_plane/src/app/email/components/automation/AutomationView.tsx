@@ -40,8 +40,8 @@ const META: Record<
     icon: Newspaper,
   },
   unsubscribe: {
-    title: "Inbox Cleaner",
-    subtitle: "Unsubscribe, auto-archive & clear out the inbox",
+    title: "Email Cleaner",
+    subtitle: "Unsubscribe, auto-archive & clear out your whole mailbox",
     icon: MailMinus,
   },
   analytics: {

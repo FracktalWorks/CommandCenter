@@ -9,7 +9,7 @@ import {
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
   searchEmails, previewAutoCategorize, runAutoCategorize, getCleanupStatus,
-  CleanupSweepResult,
+  restoreProviderLabels, CleanupSweepResult,
 } from "../../lib/api";
 import { SenderStat, NewsletterStatus, SenderStatus, Email } from "../../lib/types";
 import { chipColors } from "../../lib/labelColors";
@@ -44,13 +44,24 @@ const CATEGORY_TABS = [
  *  confused for a classification. */
 const UNCATEGORIZED = "__uncategorized__";
 
+/** Senders per request. This is a PAYLOAD bound, not a scope bound — the
+ *  backend caps a single response at 1000, and everything past it is reachable
+ *  by paging (`offset`). `total` says how many exist, so the list can offer the
+ *  rest instead of quietly ending. */
+const SENDER_PAGE = 1000;
+
+/** 2s polls, so ~20 minutes. The sweep now covers the whole mailbox instead of
+ *  one 2000-message page, and a ceiling shorter than the job just makes a
+ *  finished run look like a failed one. */
+const POLL_MAX = 600;
+
 const STATUS_META: Record<SenderStatus, { label: string; cls: string; help: string }> = {
   UNHANDLED: {
     label: "Unhandled", cls: "bg-secondary text-muted-foreground",
     help: "No decision yet",
   },
   APPROVED: {
-    label: "Kept", cls: "bg-emerald-500/15 text-emerald-400",
+    label: "Keep", cls: "bg-emerald-500/15 text-emerald-400",
     help: "Approved — stays in your inbox",
   },
   UNSUBSCRIBED: {
@@ -58,22 +69,27 @@ const STATUS_META: Record<SenderStatus, { label: string; cls: string; help: stri
     help: "We sent a real unsubscribe request to the sender",
   },
   AUTO_ARCHIVED: {
-    label: "Auto-archived", cls: "bg-amber-500/15 text-amber-400",
-    help: "Future mail is archived automatically (blocked at the source)",
+    label: "Auto-archive", cls: "bg-amber-500/15 text-amber-400",
+    help: "Future mail from this sender is archived automatically",
   },
 };
 
-/** Display status: "blocked" is not a stored status — it's the auto-archive
- *  fallback when a sender has no unsubscribe link (we couldn't unsubscribe, so we
- *  block future mail via a provider filter). Surface it distinctly from a
- *  deliberate "Auto-archived" so the user can tell them apart. */
+/** The pill shows the sender's DISPOSITION — the decision you made — and
+ *  nothing else.
+ *
+ *  This used to relabel AUTO_ARCHIVED as "Blocked" whenever the sender had no
+ *  unsubscribe link, meaning to distinguish "we tried to unsubscribe, couldn't,
+ *  so we filtered them" from "you deliberately chose auto-archive". But the
+ *  absence of a List-Unsubscribe header is a property of the SENDER, not of how
+ *  the decision was reached — plenty of senders you deliberately auto-archive
+ *  (notifications, transactional mail, cold outreach) have no link either. So a
+ *  deliberate choice rendered as a scarier-sounding status the user never
+ *  picked, and "Blocked" read as a fourth state that doesn't exist.
+ *
+ *  The mechanism it was trying to convey — a provider-side filter — already has
+ *  its own "Filtered" pill next to this one, so the row was saying it twice
+ *  while hiding the actual disposition. */
 function displayStatus(s: SenderStat): { label: string; cls: string; help: string } {
-  if (s.status === "AUTO_ARCHIVED" && s.filter_active && !s.unsubscribe_link) {
-    return {
-      label: "Blocked", cls: "bg-orange-500/15 text-orange-400",
-      help: "No unsubscribe link — future mail is blocked at the source by a provider filter",
-    };
-  }
   return STATUS_META[s.status];
 }
 
@@ -102,7 +118,10 @@ export function BulkUnsubscribeView({
   const { isMobile } = useViewMode();
   const labelColors = useEmailStore((s) => s.labelColors);
   const [senders, setSenders] = useState<SenderStat[]>([]);
+  // Distinct senders in the mailbox; > senders.length means the list is capped.
+  const [totalSenders, setTotalSenders] = useState(0);
   const [loading, setLoading] = useState(true);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
@@ -131,13 +150,40 @@ export function BulkUnsubscribeView({
     }
     setLoading(true);
     setError(null);
-    listSenders(accountId, "inbox", 300)
-      .then(setSenders)
+    // The WHOLE mailbox, not just the inbox. Deciding you're done with a sender
+    // isn't an inbox-scoped question, and the inbox scope also made the category
+    // chips structurally unfillable: the Marketing / Cold Email rules archive as
+    // they label, so that mail had already left the inbox by the time we looked.
+    listSenders(accountId, undefined, SENDER_PAGE)
+      .then(({ senders: s, total }) => {
+        setSenders(s);
+        setTotalSenders(total);
+      })
       .catch((e) => setError(e.message || "Failed to load senders"))
       .finally(() => setLoading(false));
   }, [accountId]);
 
   useEffect(load, [load]);
+
+  /** Append the next page. The tail is quiet senders — one or two mails each —
+   *  but "clean up my email" doesn't stop at the loud ones, so they have to be
+   *  reachable rather than merely counted. */
+  const loadMore = useCallback(() => {
+    if (!accountId) return;
+    setLoadingMore(true);
+    listSenders(accountId, undefined, SENDER_PAGE, senders.length)
+      .then(({ senders: s, total }) => {
+        // De-dupe on email: rows can shift between pages if mail arrives
+        // mid-scroll, and a duplicate key would break the list.
+        setSenders((prev) => {
+          const seen = new Set(prev.map((x) => x.email));
+          return [...prev, ...s.filter((x) => !seen.has(x.email))];
+        });
+        setTotalSenders(total);
+      })
+      .catch((e) => setError(e.message || "Failed to load more senders"))
+      .finally(() => setLoadingMore(false));
+  }, [accountId, senders.length]);
 
   // Auto-dismiss the transient result banner.
   useEffect(() => {
@@ -160,7 +206,7 @@ export function BulkUnsubscribeView({
     let alive = true;
     void (async () => {
       try {
-        const r = await previewAutoCategorize(accountId, 500);
+        const r = await previewAutoCategorize(accountId);
         if (alive) setPreview(r);
       } catch {
         /* the sweep is an offer, not a requirement — stay quiet on failure */
@@ -389,16 +435,26 @@ export function BulkUnsubscribeView({
       const { affected } = await bulkAction({
         action, accountId, senderEmail: s.email,
       });
-      // The sender's inbox mail just left for Archive/Trash, so its row is stale.
-      // Drop it optimistically (and from any selection) rather than leaving it on
-      // screen with a now-wrong count until a manual reload — the reported bug.
+      // Now that the list spans the whole mailbox, archiving and trashing differ.
+      // Trashed mail leaves the scope entirely (trash is excluded), so the row
+      // goes. ARCHIVED mail is still theirs — dropping the row would hide a
+      // sender the user may still want to unsubscribe from, so just zero out the
+      // inbox count in place.
       if (affected > 0) {
-        setSenders((prev) => prev.filter((x) => x.email !== s.email));
-        setSelected((prev) => {
-          const n = new Set(prev);
-          n.delete(s.email);
-          return n;
-        });
+        if (action === "trash") {
+          setSenders((prev) => prev.filter((x) => x.email !== s.email));
+          setSelected((prev) => {
+            const n = new Set(prev);
+            n.delete(s.email);
+            return n;
+          });
+        } else {
+          setSenders((prev) =>
+            prev.map((x) =>
+              x.email === s.email ? { ...x, in_folder: 0 } : x
+            )
+          );
+        }
       }
       setNotice(
         `${action === "archive" ? "Archived" : "Trashed"} ${affected} ` +
@@ -437,10 +493,18 @@ export function BulkUnsubscribeView({
           /* skip a failed sender, keep going */
         }
       }
-      // Drop the senders whose mail we just cleared out — their rows are stale.
+      // Same split as the single-sender action: trashed mail leaves the scope
+      // so the rows go; archived mail is still theirs, so keep the rows and just
+      // zero their inbox counts.
       if (done.length) {
-        const gone = new Set(done);
-        setSenders((prev) => prev.filter((x) => !gone.has(x.email)));
+        const touched = new Set(done);
+        setSenders((prev) =>
+          action === "trash"
+            ? prev.filter((x) => !touched.has(x.email))
+            : prev.map((x) =>
+                touched.has(x.email) ? { ...x, in_folder: 0 } : x
+              )
+        );
       }
       clearSelection();
       setNotice(
@@ -463,10 +527,13 @@ export function BulkUnsubscribeView({
     setCategorizing(true);
     setError(null);
     try {
-      await runAutoCategorize(accountId, 500);
+      // limit 0 = the whole mailbox. The sweep pages until it runs dry, so on a
+      // large mailbox this is minutes, not seconds — hence the live progress
+      // below and the much longer ceiling.
+      await runAutoCategorize(accountId, 0);
       // Poll to completion, with a hard ceiling so a stalled job can't leave the
       // spinner running forever.
-      for (let i = 0; i < 60; i++) {
+      for (let i = 0; i < POLL_MAX; i++) {
         await new Promise((r) => setTimeout(r, 2000));
         const st = await getCleanupStatus(accountId);
         if (st.status === "done") {
@@ -481,7 +548,14 @@ export function BulkUnsubscribeView({
           setError("Auto-categorize failed — see the assistant history.");
           break;
         }
-        if (i === 59) {
+        // Show real progress rather than an opaque spinner: a whole-mailbox
+        // sweep runs long enough that silence reads as "stuck".
+        if (st.scanned) {
+          setNotice(
+            `Categorizing… ${st.applied ?? 0} labelled, ${st.scanned} scanned.`
+          );
+        }
+        if (i === POLL_MAX - 1) {
           setNotice("Still categorizing — the list will catch up on refresh.");
         }
       }
@@ -490,6 +564,40 @@ export function BulkUnsubscribeView({
       onArchived?.();
     } catch (e) {
       setError((e as Error).message || "Auto-categorize failed");
+    } finally {
+      setCategorizing(false);
+    }
+  };
+
+  // Pull the labels back from Gmail/Outlook into our copy. Needed when the local
+  // categories were lost: the sweep above can only PROJECT existing
+  // categorization, so with every label missing it has no evidence and correctly
+  // does nothing. This restores the evidence, after which the sweep can work.
+  const restoreLabels = async () => {
+    if (!accountId) return;
+    setCategorizing(true);
+    setError(null);
+    try {
+      const r = await restoreProviderLabels(accountId);
+      if (r.error) {
+        setError(`Couldn't read labels from your mail provider: ${r.error}`);
+      } else if (r.updated > 0) {
+        setNotice(
+          `Restored ${r.updated} email${r.updated === 1 ? "" : "s"} from ` +
+            `${r.labels} label${r.labels === 1 ? "" : "s"} in your mailbox.`
+        );
+      } else {
+        setNotice(
+          r.messages > 0
+            ? "Your labels were already in sync — nothing to restore."
+            : "No labels found in your mailbox. Run your rules to create some."
+        );
+      }
+      setPreview(null);
+      previewed.current.delete(accountId);
+      load();
+    } catch (e) {
+      setError((e as Error).message || "Restore failed");
     } finally {
       setCategorizing(false);
     }
@@ -647,10 +755,42 @@ export function BulkUnsubscribeView({
           to act on, and it states plainly what it can and cannot resolve — the
           leftover is mail no pattern covers, which needs the assistant's rules
           to run rather than a guess from here. */}
+      {/* Nothing in the mailbox carries a label. The sweep can't help — it
+          projects existing categorization and there is none — so offer the one
+          thing that can: pull the labels back from the provider, where they
+          still live. */}
+      {!loading && senders.length > 0 &&
+        senders.every((s) => !(s.labelled ?? 0)) && (
+        <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-amber-500/10 flex-shrink-0">
+          <RotateCcw size={13} className="text-amber-500 flex-shrink-0" />
+          <span className="text-[11px] text-foreground">
+            None of your email is categorized here yet — your labels may not have
+            synced down from your mail provider.
+          </span>
+          <button
+            onClick={restoreLabels}
+            disabled={categorizing}
+            title="Read the labels back from Gmail / Outlook into this view"
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-amber-500 text-white text-[11px] font-medium hover:bg-amber-500/90 transition-colors disabled:opacity-50"
+          >
+            {categorizing ? (
+              <Loader2 className="animate-spin" size={12} />
+            ) : (
+              <RotateCcw size={12} />
+            )}
+            Restore labels
+          </button>
+        </div>
+      )}
+
       {preview && preview.categorized > 0 && (
         <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-primary/5 flex-shrink-0">
           <Sparkles size={13} className="text-primary flex-shrink-0" />
           <span className="text-[11px] text-foreground">
+            {/* "at least" when the preview only sampled: the real run covers
+                the whole mailbox, so promising an exact number the sample
+                produced would undersell it and read as a miscount afterwards. */}
+            {preview.sampled ? "At least " : ""}
             <strong className="font-semibold">{preview.categorized}</strong>{" "}
             uncategorized email
             {preview.categorized === 1 ? "" : "s"} match patterns you&apos;ve
@@ -798,6 +938,16 @@ export function BulkUnsubscribeView({
           <span className="text-[10px] text-muted-foreground">
             {selectedVisible.length > 0 ? `${selectedVisible.length} selected` : "Select all"}
           </span>
+          {/* Never let a paged list read as "this is everything" — a cleanup
+              tool that hides the tail leaves the user believing they're done. */}
+          {totalSenders > senders.length && (
+            <span
+              className="text-[10px] text-muted-foreground"
+              title={`Your mailbox has ${totalSenders} senders; ${senders.length} loaded so far. Load more at the bottom of the list.`}
+            >
+              · {senders.length} of {totalSenders}
+            </span>
+          )}
           {suggested.length > 0 && (
             <button
               onClick={selectSuggested}
@@ -945,21 +1095,16 @@ export function BulkUnsubscribeView({
                     <div
                       className="text-right leading-none"
                       title={
-                        inInbox === s.count
-                          ? `${s.count} emails in your inbox`
-                          : `${inInbox} in your inbox · ${s.count} total (the rest are already archived or trashed)`
+                        inInbox > 0
+                          ? `${s.count} emails in your mailbox · ${inInbox} still in the inbox`
+                          : `${s.count} emails in your mailbox — none left in the inbox`
                       }
                     >
                       <div className="text-xs font-semibold text-foreground tabular-nums">
-                        {inInbox}
-                        {inInbox !== s.count && (
-                          <span className="text-muted-foreground font-normal">
-                            /{s.count}
-                          </span>
-                        )}
+                        {s.count}
                       </div>
                       <div className="text-[8px] text-muted-foreground mt-0.5">
-                        {inInbox === s.count ? "emails" : "in inbox"}
+                        {inInbox > 0 ? `${inInbox} in inbox` : "emails"}
                       </div>
                     </div>
                     <ReadRing value={s.read_rate} />
@@ -1056,6 +1201,20 @@ export function BulkUnsubscribeView({
                 </div>
               );
             })}
+            {/* The tail is reachable, not just counted. Without this the list
+                simply ends and the remaining senders are invisible. */}
+            {totalSenders > senders.length && (
+              <div className="p-3 flex justify-center">
+                <button
+                  onClick={loadMore}
+                  disabled={loadingMore}
+                  className="flex items-center gap-1.5 px-3 py-1.5 rounded-md border border-border text-[11px] text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+                >
+                  {loadingMore && <Loader2 className="animate-spin" size={12} />}
+                  Load more senders ({totalSenders - senders.length} left)
+                </button>
+              </div>
+            )}
           </div>
         )}
       </div>
@@ -1064,7 +1223,7 @@ export function BulkUnsubscribeView({
       <div className="flex-shrink-0 flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-t border-border bg-card/40">
         <Clock size={12} className="text-primary flex-shrink-0" />
         <span className="text-[11px] text-muted-foreground">
-          Archive {onlyRead ? "read " : ""}mail older than
+          Archive {onlyRead ? "read " : ""}inbox mail older than
         </span>
         <div className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5">
           {AGE_OPTIONS.map((o) => (

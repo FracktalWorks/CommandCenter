@@ -9,7 +9,13 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
-from gateway.routes.email.core import _assert_account_owner, _get_db, _log, _safe_json, router
+from gateway.routes.email.core import (
+    _assert_account_owner,
+    _get_db,
+    _llm_json,
+    _log,
+    router,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -442,7 +448,6 @@ async def _llm_generate_rules(prompt: str) -> list[dict[str, Any]]:
     Returns a list of dicts shaped like RuleModel (minus account_id). Best
     effort: returns [] if the LLM is unavailable or nothing parses."""
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You convert a user's plain-English description of email rules into "
             "structured automation rules. The user may describe several rules "
@@ -467,14 +472,12 @@ async def _llm_generate_rules(prompt: str) -> list[dict[str, Any]]:
         )
         # Rule authoring is quality-sensitive generation → powerful tier; JSON
         # forced; generous budget so several rules aren't truncated.
-        resp, _ = await acompletion_with_fallback(
-            model="tier-powerful",
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": prompt[:4000]}],
-            temperature=0, max_tokens=2500,
-            response_format={"type": "json_object"},
+        data, _content, _used = await _llm_json(
+            "tier-powerful",
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": prompt[:4000]}],
+            max_tokens=2500,
         )
-        data = _safe_json(resp.choices[0].message.content or "")
         rules = data.get("rules") if isinstance(data, dict) else data
         return _normalize_generated_rules(rules)
     except Exception as exc:  # noqa: BLE001

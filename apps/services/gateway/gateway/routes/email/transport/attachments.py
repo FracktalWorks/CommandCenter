@@ -7,13 +7,20 @@ import io
 import ipaddress
 import json
 import socket
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
-from gateway.routes.email.core import ATTACHMENT_CACHE_TTL_SECS, _get_db, _get_redis, _log, router
+from gateway.routes.email.core import (
+    ATTACHMENT_CACHE_TTL_SECS,
+    _get_db,
+    _get_redis,
+    _instantiate_provider,
+    _log,
+    router,
+)
 from sqlalchemy import text
 
 MAX_PROXY_IMAGE_BYTES = 15 * 1024 * 1024  # 15 MB
@@ -55,6 +62,12 @@ async def image_proxy(
     seeing the *user's* IP — only the gateway's IP is exposed.  Guarded
     against SSRF (scheme + private-IP checks) and size-capped.
     """
+    # This proxy fetches arbitrary URLs server-side, so it must not be an open
+    # relay: require an authenticated caller. (Direct-to-gateway requests resolve
+    # to anonymous now that the header-trust bypass is closed.)
+    if not user.email:
+        raise HTTPException(status_code=401, detail="Unauthorized")
+
     parsed = urlparse(url)
     if parsed.scheme not in ("http", "https") or not parsed.hostname:
         raise HTTPException(status_code=400, detail="Invalid image URL")
@@ -62,16 +75,37 @@ async def image_proxy(
         raise HTTPException(status_code=400, detail="Blocked image host")
 
     try:
+        # Follow redirects MANUALLY, re-validating each hop's host against the
+        # public-IP guard. httpx's own follow_redirects only checks the first URL,
+        # then happily jumps to an internal target (SSRF). Images legitimately
+        # redirect via CDNs, so we can't just disable redirects here.
         async with httpx.AsyncClient(
-            follow_redirects=True, timeout=15.0, max_redirects=3
+            follow_redirects=False, timeout=15.0
         ) as client:
-            resp = await client.get(
-                url,
-                headers={
-                    "User-Agent": "Mozilla/5.0 (CommandCenter image proxy)",
-                    "Accept": "image/*",
-                },
-            )
+            current = url
+            resp = None
+            for _ in range(4):  # initial request + up to 3 redirects
+                resp = await client.get(
+                    current,
+                    headers={
+                        "User-Agent": "Mozilla/5.0 (CommandCenter image proxy)",
+                        "Accept": "image/*",
+                    },
+                )
+                if resp.is_redirect and resp.headers.get("location"):
+                    nxt = urljoin(current, resp.headers["location"])
+                    p = urlparse(nxt)
+                    if p.scheme not in ("http", "https") or not p.hostname:
+                        raise HTTPException(
+                            status_code=400, detail="Invalid redirect")
+                    if not await asyncio.to_thread(_resolve_is_public, p.hostname):
+                        raise HTTPException(
+                            status_code=400, detail="Blocked redirect host")
+                    current = nxt
+                    continue
+                break
+            else:
+                raise HTTPException(status_code=400, detail="Too many redirects")
             resp.raise_for_status()
             content_type = resp.headers.get("content-type", "")
             if not content_type.startswith("image/"):
@@ -104,27 +138,6 @@ async def download_attachment(
     Checks Redis cache first (TTL 1 hour) to avoid redundant provider API
     calls for attachments downloaded multiple times.
     """
-    # ── Check Redis cache first ──
-    redis = await _get_redis()
-    if redis:
-        try:
-            cache_key = f"email:att:cache:{attachment_id}"
-            cached = await redis.get(cache_key)
-            if cached:
-                return StreamingResponse(
-                    io.BytesIO(cached),
-                    media_type="application/octet-stream",
-                    headers={
-                        "Content-Disposition": (
-                            f'attachment; filename="cached"'
-                        ),
-                        "Content-Length": str(len(cached)),
-                        "X-Cache": "HIT",
-                    },
-                )
-        except Exception:
-            redis = None  # fall through to provider fetch
-
     db = await _get_db()
     try:
         # Look up attachment and verify user owns the parent message
@@ -144,26 +157,43 @@ async def download_attachment(
         if not row:
             raise HTTPException(status_code=404, detail="Attachment not found")
 
+        # Sanitise the filename for the Content-Disposition header — strip quotes
+        # / CR / LF so an attacker-controlled attachment name can't break out of
+        # the quoted value (header-injection / filename-spoofing).
+        safe_name = (
+            (row.filename or "attachment")
+            .replace('"', "'").replace("\n", " ").replace("\r", " ")
+        )
+
+        # ── Ownership confirmed — NOW it's safe to serve from the Redis cache.
+        #    Reading the cache before this check was an IDOR: any caller who knew
+        #    an attachment_id could pull another user's cached bytes. ──
+        redis = await _get_redis()
+        if redis:
+            try:
+                cached = await redis.get(f"email:att:cache:{attachment_id}")
+                if cached:
+                    return StreamingResponse(
+                        io.BytesIO(cached),
+                        media_type=row.mime_type or "application/octet-stream",
+                        headers={
+                            "Content-Disposition": (
+                                f'attachment; filename="{safe_name}"'
+                            ),
+                            "Content-Length": str(len(cached)),
+                            "X-Cache": "HIT",
+                        },
+                    )
+            except Exception:
+                redis = None  # fall through to provider fetch
+
         # Decrypt credentials
         from acb_llm.key_store import get_key_store
         store = get_key_store()
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
         # Instantiate provider
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown provider: {row.provider}",
-            )
+        provider = _instantiate_provider(row.provider, creds)
 
         content = await provider.get_attachment(
             row.provider_message_id, row.provider_attachment_id
@@ -184,7 +214,7 @@ async def download_attachment(
             media_type=row.mime_type,
             headers={
                 "Content-Disposition": (
-                    f'attachment; filename="{row.filename}"'
+                    f'attachment; filename="{safe_name}"'
                 ),
                 "Content-Length": str(len(content)),
                 "X-Cache": "MISS",

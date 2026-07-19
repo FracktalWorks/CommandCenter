@@ -1,9 +1,11 @@
 """Unit tests for sender auto-categorization (`_categorize_senders_job`).
 
-Convergence with the rule engine: a sender's category is PROJECTED from the
-rules' per-message labels (email_messages.categories) when coverage is
-sufficient; the standalone LLM classifier is only a COLD-START fallback for a
-still-uncategorized sender the rules haven't labelled enough of. DB + LLM mocked.
+A sender's category is PROJECTED from the rule engine's per-message labels
+(email_messages.categories) — the same categorization the rest of the app shows.
+The old cold-start LLM fallback (persisted as provisional 'inferred' guesses) was
+removed: it ran on a thin signal, never self-corrected and misled the cleaner, so
+the job now only projects rules and retires any leftover 'inferred' rows.
+DB + LLM mocked.
 """
 from __future__ import annotations
 
@@ -44,6 +46,7 @@ class _FakeDB:
         self.senders, self.tally = senders, tally or []
         self.account_email = account_email
         self.inserts: list[dict] = []
+        self.deleted_inferred = False
         self.commits = 0
         self.closed = False
 
@@ -55,8 +58,11 @@ class _FakeDB:
             return _Result(one=SimpleNamespace(email_address=self.account_email))
         if "unnest(em.categories)" in sql:
             return _Result(rows=self.tally)
-        if sql.lstrip().upper().startswith("INSERT INTO EMAIL_SENDERS"):
+        upper = sql.lstrip().upper()
+        if upper.startswith("INSERT INTO EMAIL_SENDERS"):
             self.inserts.append(params or {})
+        if upper.startswith("DELETE FROM EMAIL_SENDERS") and "'INFERRED'" in upper:
+            self.deleted_inferred = True
         return _Result()
 
     async def commit(self):
@@ -108,22 +114,23 @@ async def test_reply_active_sender_projects_personal() -> None:
     assert db.inserts[0]["src"] == "rule"
 
 
-async def test_cold_start_falls_back_to_llm_and_marks_inferred() -> None:
-    # No rule labels yet + uncategorized → the LLM cold-start classifier runs and
-    # the result is stored as provisional ('inferred').
+async def test_cold_start_no_llm_and_no_inferred_guess() -> None:
+    # No rule labels yet + uncategorized → NOTHING is written. The provisional
+    # cold-start was removed, so no 'inferred' guess is created and the LLM
+    # classifier is never called (even if patched to return a category).
     db = _FakeDB([_srow("news@a.com", cur_category=None)], tally=[])
     llm = AsyncMock(return_value={"news@a.com": "Newsletter"})
     p1, p2, p3 = _run(db, llm=llm)
     with p1, p2, p3:
         await m._categorize_senders_job("acc-1", 25)
-    llm.assert_awaited_once()
-    assert db.inserts[0]["cat"] == "Newsletter"
-    assert db.inserts[0]["src"] == "inferred"
+    llm.assert_not_awaited()
+    assert db.inserts == []
 
 
-async def test_inferred_sender_without_rule_coverage_is_left_alone() -> None:
-    # Already has a provisional guess and the rules still haven't labelled it →
-    # don't re-run the LLM, don't rewrite it (avoids thrash/cost).
+async def test_leftover_inferred_guesses_are_retired() -> None:
+    # A sender still carrying a provisional 'inferred' guess with no rule coverage:
+    # the LLM is not re-run, no new category is written, and the stale inferred row
+    # is deleted so it stops surfacing in the cleaner.
     db = _FakeDB([_srow("news@a.com", cur_category="Marketing",
                         cur_source="inferred")], tally=[])
     llm = AsyncMock()
@@ -132,22 +139,24 @@ async def test_inferred_sender_without_rule_coverage_is_left_alone() -> None:
         await m._categorize_senders_job("acc-1", 25)
     llm.assert_not_awaited()
     assert db.inserts == []
+    assert db.deleted_inferred is True
 
 
 async def test_excludes_the_account_owner_as_a_sender() -> None:
     # The account's own address must never be categorized (else it surfaces as
-    # "you email yourself"); teammates/externals are kept.
-    db = _FakeDB([_srow("me@acme.com"), _srow("news@a.com")], tally=[])
-    captured: dict[str, list[str]] = {}
-
-    async def llm(items, *, model):
-        captured["emails"] = [it["email"] for it in items]
-        return {it["email"]: "Newsletter" for it in items}
-
-    p1, p2, p3 = _run(db, llm=AsyncMock(side_effect=llm))
+    # "you email yourself"); teammates/externals are kept. Verified via the rule
+    # projection now that there's no LLM candidate list.
+    db = _FakeDB(
+        [_srow("me@acme.com"), _srow("news@a.com")],
+        tally=[_trow("me@acme.com", "marketing", 5),
+               _trow("news@a.com", "marketing", 5)],
+    )
+    llm = AsyncMock()
+    p1, p2, p3 = _run(db, llm=llm)
     with p1, p2, p3:
         await m._categorize_senders_job("acc-1", 25)
-    assert captured["emails"] == ["news@a.com"]   # self dropped
+    llm.assert_not_awaited()
+    assert {i["email"] for i in db.inserts} == {"news@a.com"}   # self dropped
 
 
 async def test_user_override_is_never_touched() -> None:

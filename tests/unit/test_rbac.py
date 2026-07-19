@@ -68,11 +68,16 @@ def _make_app():
     return app
 
 
-def test_get_current_user_from_headers():
+def test_get_current_user_from_headers(monkeypatch):
+    # SSO headers ALONE (no internal Bearer) no longer authenticate when a gateway
+    # token is configured — a bare X-User-Email is spoofable by anyone who reaches
+    # the gateway directly. Real identity now requires the Next.js proxy's Bearer
+    # (see TestBearerIdentityChain); here the header resolves to anonymous.
+    monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "tok")
     client = TestClient(_make_app())
     r = client.get("/whoami", headers={"X-User-Email": "ceo@fracktal.in", "X-User-Role": "executive"})
     assert r.status_code == 200
-    assert r.json() == {"email": "ceo@fracktal.in", "role": "executive"}
+    assert r.json()["email"] is None
 
 
 def test_get_current_user_no_headers_defaults_to_employee():
@@ -248,8 +253,10 @@ class TestBearerIdentityChain:
 
     # ── Bearer mismatch → falls through ────────────────────────────────
 
-    def test_bearer_wrong_token_with_user_email_falls_to_sso(self):
-        """Wrong Bearer + valid user headers → SSO path (not agent)."""
+    def test_bearer_wrong_token_with_user_email_is_anonymous(self):
+        """Wrong Bearer + user headers → NOT trusted. A bare X-User-Email is
+        spoofable, so with a token configured it resolves to anonymous rather
+        than the old (insecure) SSO-trust path."""
         client = TestClient(_bearer_app(self.TOKEN))
         r = client.get("/whoami", headers={
             "Authorization": "Bearer wrong-token",
@@ -257,9 +264,7 @@ class TestBearerIdentityChain:
             "X-User-Role": "employee",
         })
         assert r.status_code == 200
-        data = r.json()
-        assert data["email"] == "dev@fracktal.in"
-        assert data["role"] == "employee"
+        assert r.json()["email"] is None
 
     def test_bearer_wrong_token_no_headers_anonymous(self):
         """Wrong Bearer, no user headers → anonymous (email=None)."""
@@ -274,16 +279,14 @@ class TestBearerIdentityChain:
 
     # ── Token disabled (empty GATEWAY_INTERNAL_TOKEN) ───────────────────
 
-    def test_bearer_disabled_when_token_empty(self):
-        """Empty GATEWAY_INTERNAL_TOKEN → Bearer auth disabled → SSO path."""
-        # explicitly set to empty
-        _os.environ["GATEWAY_INTERNAL_TOKEN"] = ""
-        _os.environ.pop("LITELLM_MASTER_KEY", None)
-
-        client = TestClient(_bearer_app(None))  # None = don't overwrite
-        # Send a Bearer token — it won't matter because _get_internal_token
-        # returns "" and the guard `if expected and submitted == expected`
-        # evaluates to False, so bearer_ok stays False.
+    def test_bearer_disabled_when_token_empty(self, monkeypatch):
+        """No internal token configured → Bearer auth disabled → fail OPEN. We
+        preserve the old SSO-header trust so an unprovisioned/dev gateway isn't
+        bricked (mirrors require_internal_auth's fail-open contract)."""
+        # Force an empty token deterministically — env alone is unreliable, the
+        # cached Settings may still carry LITELLM_MASTER_KEY from .env.
+        monkeypatch.setattr("acb_auth.deps._get_internal_token", lambda: "")
+        client = TestClient(_bearer_app(None))
         r = client.get("/whoami", headers={
             "Authorization": "Bearer anything",
             "X-User-Email": "dev@fracktal.in",
@@ -316,8 +319,21 @@ class TestBearerIdentityChain:
 
     # ── SSO headers without Bearer (direct access) ─────────────────────
 
-    def test_sso_without_bearer_allows_fracktal(self):
-        """SSO headers without Bearer → fracktal.in email accepted."""
+    def test_sso_without_bearer_is_anonymous_when_token_set(self):
+        """SSO headers WITHOUT the internal Bearer → not trusted (spoofable),
+        even for a fracktal.in address, when a gateway token is configured."""
+        client = TestClient(_bearer_app(self.TOKEN))
+        r = client.get("/whoami", headers={
+            "X-User-Email": "dev@fracktal.in",
+            "X-User-Role": "employee",
+        })
+        assert r.status_code == 200
+        assert r.json()["email"] is None
+
+    def test_sso_without_bearer_trusts_with_escape_hatch(self, monkeypatch):
+        """The rollback escape hatch restores the old SSO-header trust — for a
+        token-mismatch emergency only."""
+        monkeypatch.setenv("GATEWAY_TRUST_UNVERIFIED_SSO_HEADERS", "1")
         client = TestClient(_bearer_app(self.TOKEN))
         r = client.get("/whoami", headers={
             "X-User-Email": "dev@fracktal.in",
@@ -327,7 +343,8 @@ class TestBearerIdentityChain:
         assert r.json()["email"] == "dev@fracktal.in"
 
     def test_sso_without_bearer_rejects_non_fracktal(self):
-        """SSO headers without Bearer → non-fracktal.in → email stripped."""
+        """SSO headers without Bearer → anonymous (email None) regardless of
+        domain when a token is configured; the spoofed role is dropped too."""
         client = TestClient(_bearer_app(self.TOKEN))
         r = client.get("/whoami", headers={
             "X-User-Email": "hacker@gmail.com",
@@ -335,7 +352,6 @@ class TestBearerIdentityChain:
         })
         assert r.status_code == 200
         data = r.json()
-        assert data["email"] is None           # domain rejected
-        # role preserved even when email stripped (defence in depth)
-        assert data["role"] == "executive"
+        assert data["email"] is None           # untrusted → anonymous
+        assert data["role"] == "employee"      # spoofed role dropped
 

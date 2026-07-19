@@ -78,20 +78,7 @@ async def list_folders(
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
         # Instantiate provider
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown provider: {row.provider}",
-            )
+        provider = _instantiate_provider(row.provider, creds)
 
         # Authenticate and fetch folders
         if not await provider.authenticate():
@@ -250,16 +237,10 @@ async def list_labels(
         store = get_key_store()
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
+        try:
+            provider = _instantiate_provider(row.provider, creds)
+        except HTTPException:
+            # list_labels degrades gracefully for an unknown provider.
             return []
 
         if not await provider.authenticate():
@@ -377,19 +358,7 @@ async def backfill_folder(
         store = get_key_store()
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
-            raise HTTPException(
-                status_code=400, detail=f"Unknown provider: {row.provider}"
-            )
+        provider = _instantiate_provider(row.provider, creds)
 
         if not await provider.authenticate():
             raise HTTPException(

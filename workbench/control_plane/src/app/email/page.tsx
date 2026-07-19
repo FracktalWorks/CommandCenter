@@ -22,6 +22,7 @@ import { useMobileDrawer } from "@/components/AppShell";
 import { AccountSidebar } from "./components/AccountSidebar";
 import { EmailList } from "./components/EmailList";
 import { EmailToolbar } from "./components/EmailToolbar";
+import { QuickFilters } from "./components/QuickFilters";
 import { SearchBar } from "./components/SearchBar";
 import { MailboxActions } from "./components/MailboxActions";
 import { EmailDetail } from "./components/EmailDetail";
@@ -872,6 +873,11 @@ export default function EmailPage() {
         {/* ── Unified action toolbar — spans the list + viewer columns, just
             below the top bar (desktop only; mobile keeps per-view toolbars). ── */}
         {!isMobile && <EmailToolbar />}
+
+        {/* ── Quick-filter chips — one-click triage buckets (Needs reply,
+            Follow-up, Newsletter, …) that replaced the old Rapid Inbox view.
+            Hidden on the mobile detail screen (no list to filter there). ── */}
+        {(!isMobile || mobileView === "inbox") && <QuickFilters />}
 
         {/* ── Content: email list + detail ── */}
         <div className="flex-1 flex min-w-0 overflow-hidden">

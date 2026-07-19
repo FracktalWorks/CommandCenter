@@ -44,7 +44,33 @@ async function buildGatewayHeaders(): Promise<Record<string, string>> {
 }
 
 function buildUpstreamUrl(path: string[], req: NextRequest): string {
+  // Path-traversal guard: this [...path] catch-all must only ever hit the
+  // gateway's /email/* surface. A segment of ".." (or one Next decodes to it
+  // from %2e%2e) could otherwise normalise upstream to a SIBLING gateway route
+  // (e.g. /v1/chat/completions, /actions/*) — and this proxy attaches the
+  // internal Bearer token, so that would hand a workbench user agent-level
+  // access to internal-only endpoints. Reject anything that isn't a plain
+  // segment, then confirm the resolved URL is still under /email/.
+  for (const seg of path) {
+    if (
+      !seg ||
+      seg === "." ||
+      seg === ".." ||
+      seg.includes("/") ||
+      seg.includes("\\")
+    ) {
+      throw new Error("Invalid email proxy path");
+    }
+  }
   const base = `${GATEWAY_URL}/email/${path.join("/")}`;
+  const resolved = new URL(base);
+  const root = new URL(`${GATEWAY_URL}/email/`);
+  if (
+    resolved.origin !== root.origin ||
+    !resolved.pathname.startsWith("/email/")
+  ) {
+    throw new Error("Email proxy path escaped /email/");
+  }
   const qs = req.nextUrl.searchParams.toString();
   return qs ? `${base}?${qs}` : base;
 }

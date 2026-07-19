@@ -14,27 +14,13 @@ from gateway.routes.email.automation.identity import (
     sender_scope,
 )
 from gateway.routes.email.automation.rules import _load_rules
-from gateway.routes.email.core import _attachment_summaries, _log, _safe_json
+from gateway.routes.email.core import (
+    _attachment_summaries,
+    _fmt_addr_list,
+    _llm_json,
+    _log,
+)
 from sqlalchemy import text
-
-
-def _fmt_recipients(field: Any) -> str:
-    """A JSONB ``[{name, email}]`` recipient list → ``"Name <email>, …"`` for the
-    classifier prompt. Empty string when there are none."""
-    try:
-        items = field if isinstance(field, list) else json.loads(field or "[]")
-    except Exception:  # noqa: BLE001
-        return ""
-    out: list[str] = []
-    for it in items or []:
-        if not isinstance(it, dict):
-            continue
-        em, nm = (it.get("email") or "").strip(), (it.get("name") or "").strip()
-        if em and nm:
-            out.append(f"{nm} <{em}>")
-        elif em or nm:
-            out.append(em or nm)
-    return ", ".join(out)
 
 
 def _addr_emails(field: Any) -> set[str]:
@@ -85,8 +71,8 @@ def email_dict_from_row(
         "from": frm.get("email", ""),
         "from_name": frm.get("name", "") or "",
         "body": getattr(row, "body_text", None) or getattr(row, "snippet", None) or "",
-        "to": _fmt_recipients(getattr(row, "to_addresses", None)),
-        "cc": _fmt_recipients(getattr(row, "cc_addresses", None)),
+        "to": _fmt_addr_list(getattr(row, "to_addresses", None)),
+        "cc": _fmt_addr_list(getattr(row, "cc_addresses", None)),
         "self": self_email or "",
         "self_name": self_name or "",
         "about": about or "",
@@ -239,8 +225,6 @@ async def _llm_pick_rule(
     if not rules:
         return None
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
-
         rule_lines = "\n".join(
             f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
             for i, r in enumerate(rules)
@@ -255,18 +239,15 @@ async def _llm_pick_rule(
         user_prompt = (
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
         )
-        resp, _used = await acompletion_with_fallback(
-            model=model,
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=800,
-            # Force structured output so the reply is parseable JSON, not prose
-            # we have to scrape (the #1 cause of silent "no match"). Dropped
-            # automatically for models that don't support it (drop_params=True).
-            response_format={"type": "json_object"},
+        # Force structured output so the reply is parseable JSON, not prose we
+        # have to scrape (the #1 cause of silent "no match"); _llm_json drops
+        # json_object automatically for models that don't support it.
+        data, content, _used = await _llm_json(
+            model,
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user_prompt}],
+            max_tokens=800,
         )
-        content = resp.choices[0].message.content or ""
-        data = _safe_json(content)
         if isinstance(data, dict) and isinstance(data.get("index"), int):
             idx = data["index"]
             if 0 <= idx < len(rules):
@@ -299,8 +280,6 @@ async def _llm_pick_rules(
     if not rules:
         return []
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
-
         rule_lines = "\n".join(
             f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
             for i, r in enumerate(rules)
@@ -319,17 +298,14 @@ async def _llm_pick_rules(
         user_prompt = (
             f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
         )
-        resp, _used = await acompletion_with_fallback(
-            model=model,
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=1500,
-            # Force structured output (see _llm_pick_rule); a generous budget so a
-            # multi-rule object with several reasons isn't truncated mid-JSON.
-            response_format={"type": "json_object"},
+        # Force structured output (see _llm_pick_rule); a generous budget so a
+        # multi-rule object with several reasons isn't truncated mid-JSON.
+        data, content, _used = await _llm_json(
+            model,
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user_prompt}],
+            max_tokens=1500,
         )
-        content = resp.choices[0].message.content or ""
-        data = _safe_json(content)
         out: list[dict[str, Any]] = []
         seen: set[int] = set()
         if isinstance(data, dict) and isinstance(data.get("matches"), list):

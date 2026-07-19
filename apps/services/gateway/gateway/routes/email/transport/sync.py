@@ -218,20 +218,7 @@ async def trigger_sync(
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
         # Instantiate provider
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Sync not supported for provider: {row.provider}"
-            )
+        provider = _instantiate_provider(row.provider, creds)
 
         try:
             if not await provider.authenticate():
@@ -323,9 +310,22 @@ async def trigger_sync(
                                 cc_addresses = EXCLUDED.cc_addresses,
                                 bcc_addresses = EXCLUDED.bcc_addresses,
                                 subject = EXCLUDED.subject,
-                                body_text = EXCLUDED.body_text,
-                                body_html = EXCLUDED.body_html,
-                                snippet = EXCLUDED.snippet,
+                                -- Never clobber a stored body/snippet with an
+                                -- empty one. Providers that list headers-only
+                                -- (Outlook) re-sync with an empty body_text; a
+                                -- plain EXCLUDED overwrite wiped a body the user
+                                -- had already lazily hydrated, so the reading
+                                -- pane fell back to the snippet on every refresh.
+                                -- Matches core._upsert_message + the scheduler.
+                                body_text = COALESCE(
+                                    NULLIF(EXCLUDED.body_text, ''),
+                                    email_messages.body_text),
+                                body_html = COALESCE(
+                                    NULLIF(EXCLUDED.body_html, ''),
+                                    email_messages.body_html),
+                                snippet = COALESCE(
+                                    NULLIF(EXCLUDED.snippet, ''),
+                                    email_messages.snippet),
                                 has_attachments = EXCLUDED.has_attachments,
                                 is_read = EXCLUDED.is_read,
                                 is_starred = EXCLUDED.is_starred,
@@ -373,19 +373,6 @@ async def trigger_sync(
                             "is_flagged": msg.is_flagged,
                             "unsubscribe_link": getattr(
                                 msg, "unsubscribe_link", None),
-                            "body_truncated": (
-                                len(msg.body_text.encode("utf-8", errors="replace"))
-                                > MAX_BODY_TEXT_BYTES
-                                or (
-                                    bool(msg.body_html)
-                                    and len(
-                                        (msg.body_html or "").encode(
-                                            "utf-8", errors="replace"
-                                        )
-                                    )
-                                    > MAX_BODY_HTML_BYTES
-                                )
-                            ),
                             "received_at": msg.received_at,
                         },
                     )

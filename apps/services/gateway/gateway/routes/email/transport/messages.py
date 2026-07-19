@@ -17,6 +17,7 @@ from gateway.routes.email.core import (
     _fetch_attachments,
     _fetch_attachments_batch,
     _get_db,
+    _instantiate_provider,
     _log,
     _persist_rotated_creds,
     _provider_for_message,
@@ -785,20 +786,7 @@ async def get_full_body(
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
         # Instantiate provider
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Unknown provider: {row.provider}",
-            )
+        provider = _instantiate_provider(row.provider, creds)
 
         if not await provider.authenticate():
             raise HTTPException(

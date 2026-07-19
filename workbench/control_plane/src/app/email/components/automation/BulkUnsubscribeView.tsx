@@ -4,13 +4,15 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   Loader2, Archive, ArchiveRestore, Check, ExternalLink, Search,
   ShieldX, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
-  ChevronDown,
+  ChevronDown, ChevronRight,
 } from "lucide-react";
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
-  categorizeSenders,
+  categorizeSenders, searchEmails,
 } from "../../lib/api";
-import { SenderStat, NewsletterStatus, SenderStatus } from "../../lib/types";
+import { SenderStat, NewsletterStatus, SenderStatus, Email } from "../../lib/types";
+import { chipColors } from "../../lib/labelColors";
+import { useEmailStore } from "../../lib/emailStore";
 import { useViewMode } from "@/components/ViewModeProvider";
 
 interface BulkUnsubscribeViewProps {
@@ -27,15 +29,46 @@ const AGE_OPTIONS = [
   { label: "1y", days: 365 },
 ];
 
-/** AI categories that count as bulk/promotional mail for "Newsletters only". */
-const BULK_CATEGORIES = new Set(["Newsletter", "Marketing", "Notification"]);
+/** Cleanup categories used as filter tabs — derived from the rule-labelled
+ *  per-message categories (email_messages.categories), most-cleanable first.
+ *  Driving the cleaner off these (not a provisional sender guess) is what makes
+ *  newsletters / marketing / notifications / cold email actually surface. */
+const CATEGORY_TABS = [
+  "Newsletter", "Marketing", "Notification", "Cold Email", "Receipt", "Calendar",
+] as const;
 
-const STATUS_META: Record<SenderStatus, { label: string; cls: string }> = {
-  UNHANDLED: { label: "Unhandled", cls: "bg-secondary text-muted-foreground" },
-  APPROVED: { label: "Approved", cls: "bg-emerald-500/15 text-emerald-400" },
-  UNSUBSCRIBED: { label: "Unsubscribed", cls: "bg-red-500/15 text-red-400" },
-  AUTO_ARCHIVED: { label: "Auto-archive", cls: "bg-amber-500/15 text-amber-400" },
+const STATUS_META: Record<SenderStatus, { label: string; cls: string; help: string }> = {
+  UNHANDLED: {
+    label: "Unhandled", cls: "bg-secondary text-muted-foreground",
+    help: "No decision yet",
+  },
+  APPROVED: {
+    label: "Kept", cls: "bg-emerald-500/15 text-emerald-400",
+    help: "Approved — stays in your inbox",
+  },
+  UNSUBSCRIBED: {
+    label: "Unsubscribed", cls: "bg-red-500/15 text-red-400",
+    help: "We sent a real unsubscribe request to the sender",
+  },
+  AUTO_ARCHIVED: {
+    label: "Auto-archived", cls: "bg-amber-500/15 text-amber-400",
+    help: "Future mail is archived automatically (blocked at the source)",
+  },
 };
+
+/** Display status: "blocked" is not a stored status — it's the auto-archive
+ *  fallback when a sender has no unsubscribe link (we couldn't unsubscribe, so we
+ *  block future mail via a provider filter). Surface it distinctly from a
+ *  deliberate "Auto-archived" so the user can tell them apart. */
+function displayStatus(s: SenderStat): { label: string; cls: string; help: string } {
+  if (s.status === "AUTO_ARCHIVED" && s.filter_active && !s.unsubscribe_link) {
+    return {
+      label: "Blocked", cls: "bg-orange-500/15 text-orange-400",
+      help: "No unsubscribe link — future mail is blocked at the source by a provider filter",
+    };
+  }
+  return STATUS_META[s.status];
+}
 
 type StatusTab = "all" | SenderStatus;
 const STATUS_TABS: { key: StatusTab; label: string }[] = [
@@ -60,22 +93,27 @@ export function BulkUnsubscribeView({
   onArchived,
 }: BulkUnsubscribeViewProps) {
   const { isMobile } = useViewMode();
+  const labelColors = useEmailStore((s) => s.labelColors);
   const [senders, setSenders] = useState<SenderStat[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [filter, setFilter] = useState("");
-  const [onlyNewsletters, setOnlyNewsletters] = useState(true);
+  // Category filter (derived from per-message rule labels). "all" = every sender.
+  const [categoryTab, setCategoryTab] = useState<string>("all");
   // "Quick clean" age sweep (folded in from the old Archiver).
   const [olderThan, setOlderThan] = useState(30);
   const [onlyRead, setOnlyRead] = useState(true);
-  // Default to the "Unhandled" queue (inbox-zero parity) — the senders that
-  // still need a decision, not everything.
-  const [statusTab, setStatusTab] = useState<StatusTab>("UNHANDLED");
+  // Show every sender by default so nothing is hidden — the category chips and
+  // status tabs narrow it. (The old "Unhandled + newsletters-only" default hid
+  // most notification/marketing senders, the reported problem.)
+  const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [categorizing, setCategorizing] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
+  // Which sender row is expanded to show its individual messages (drill-down).
+  const [expanded, setExpanded] = useState<string | null>(null);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -126,20 +164,18 @@ export function BulkUnsubscribeView({
     })();
   }, [accountId, loading, senders, load]);
 
-  const isNewsletter = (s: SenderStat) =>
-    // Always keep a sender we've already acted on visible, so the toggle can't
-    // hide a decision. For an undecided sender, only treat it as a newsletter on
-    // a STRONG signal — a real List-Unsubscribe link, or the AI categorised it as
-    // bulk/promotional. (The old `count>=3 || read<0.4` matched almost every
-    // sender, so the toggle effectively did nothing.)
-    s.status !== "UNHANDLED" ||
-    !!s.unsubscribe_link ||
-    (s.category ? BULK_CATEGORIES.has(s.category) : false);
+  // A sender matches the active category when any of its mail carries that
+  // rule-label (its derived `categories`). "all" matches everyone.
+  const matchesCategory = useCallback(
+    (s: SenderStat) =>
+      categoryTab === "all" || (s.categories || []).includes(categoryTab),
+    [categoryTab]
+  );
 
   const visible = useMemo(
     () =>
       senders
-        .filter((s) => !onlyNewsletters || isNewsletter(s))
+        .filter(matchesCategory)
         .filter((s) => statusTab === "all" || s.status === statusTab)
         .filter(
           (s) =>
@@ -152,16 +188,28 @@ export function BulkUnsubscribeView({
           // surfaces the senders most worth unsubscribing from).
           sortBy === "read" ? a.read_rate - b.read_rate : b.count - a.count
         ),
-    [senders, onlyNewsletters, statusTab, filter, sortBy]
+    [senders, matchesCategory, statusTab, filter, sortBy]
   );
 
-  // Status counts for the tab badges (respecting the newsletters-only toggle).
+  // Status-tab badges: count within the active category (not status).
   const counts = useMemo(() => {
-    const base = senders.filter((s) => !onlyNewsletters || isNewsletter(s));
+    const base = senders.filter(matchesCategory);
     const c: Record<string, number> = { all: base.length };
     for (const s of base) c[s.status] = (c[s.status] ?? 0) + 1;
     return c;
-  }, [senders, onlyNewsletters]);
+  }, [senders, matchesCategory]);
+
+  // Category-chip badges: count within the active status (not category).
+  const categoryCounts = useMemo(() => {
+    const base = senders.filter(
+      (s) => statusTab === "all" || s.status === statusTab
+    );
+    const c: Record<string, number> = { all: base.length };
+    for (const cat of CATEGORY_TABS) {
+      c[cat] = base.filter((s) => (s.categories || []).includes(cat)).length;
+    }
+    return c;
+  }, [senders, statusTab]);
 
   // Drop selections that are no longer visible (e.g. after a filter change).
   const visibleEmails = useMemo(() => new Set(visible.map((s) => s.email)), [visible]);
@@ -329,10 +377,23 @@ export function BulkUnsubscribeView({
       const { affected } = await bulkAction({
         action, accountId, senderEmail: s.email,
       });
+      // The sender's inbox mail just left for Archive/Trash, so its row is stale.
+      // Drop it optimistically (and from any selection) rather than leaving it on
+      // screen with a now-wrong count until a manual reload — the reported bug.
+      if (affected > 0) {
+        setSenders((prev) => prev.filter((x) => x.email !== s.email));
+        setSelected((prev) => {
+          const n = new Set(prev);
+          n.delete(s.email);
+          return n;
+        });
+      }
       setNotice(
         `${action === "archive" ? "Archived" : "Trashed"} ${affected} ` +
           `email${affected === 1 ? "" : "s"} from ${s.name || s.email}.`
       );
+      // Keep the main inbox pane in sync with what we just removed.
+      onArchived?.();
     } catch (e) {
       setError((e as Error).message || "Action failed");
     } finally {
@@ -351,6 +412,7 @@ export function BulkUnsubscribeView({
     }
     setBusy("__bulk__");
     let total = 0;
+    const done: string[] = [];
     try {
       for (const s of targets) {
         try {
@@ -358,15 +420,22 @@ export function BulkUnsubscribeView({
             action, accountId, senderEmail: s.email,
           });
           total += affected;
+          if (affected > 0) done.push(s.email);
         } catch {
           /* skip a failed sender, keep going */
         }
+      }
+      // Drop the senders whose mail we just cleared out — their rows are stale.
+      if (done.length) {
+        const gone = new Set(done);
+        setSenders((prev) => prev.filter((x) => !gone.has(x.email)));
       }
       clearSelection();
       setNotice(
         `${action === "archive" ? "Archived" : "Trashed"} ${total} ` +
           `email(s) from ${targets.length} sender(s).`
       );
+      onArchived?.();
     } finally {
       setBusy(null);
     }
@@ -433,15 +502,6 @@ export function BulkUnsubscribeView({
             className="bg-transparent outline-none text-xs w-full text-foreground placeholder:text-muted-foreground"
           />
         </div>
-        <label className="flex items-center gap-1.5 text-xs text-muted-foreground cursor-pointer">
-          <input
-            type="checkbox"
-            checked={onlyNewsletters}
-            onChange={(e) => setOnlyNewsletters(e.target.checked)}
-            className="accent-primary"
-          />
-          Newsletters only
-        </label>
         <div className="flex items-center gap-1 bg-secondary rounded-md p-0.5">
           {(["count", "read"] as const).map((k) => (
             <button
@@ -465,6 +525,47 @@ export function BulkUnsubscribeView({
             <Loader2 className="animate-spin" size={13} /> Categorizing…
           </div>
         )}
+      </div>
+
+      {/* Category filter — driven off per-message rule labels, so newsletters,
+          marketing, notifications & cold email actually surface here (the old
+          "Newsletters only" toggle hid most of them). */}
+      <div className="flex items-center gap-1.5 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
+        <button
+          onClick={() => setCategoryTab("all")}
+          className={`px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap transition-colors ${
+            categoryTab === "all"
+              ? "bg-primary/15 text-primary"
+              : "text-muted-foreground hover:text-foreground hover:bg-secondary"
+          }`}
+        >
+          All <span className="opacity-60">{categoryCounts.all ?? 0}</span>
+        </button>
+        {CATEGORY_TABS.map((cat) => {
+          const active = categoryTab === cat;
+          const c = chipColors(cat, labelColors);
+          return (
+            <button
+              key={cat}
+              onClick={() => setCategoryTab(active ? "all" : cat)}
+              style={active ? { backgroundColor: c.bg, color: c.text } : undefined}
+              className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap border transition-colors ${
+                active
+                  ? "border-transparent"
+                  : "border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+              }`}
+            >
+              {!active && (
+                <span
+                  className="w-2 h-2 rounded-full flex-shrink-0"
+                  style={{ backgroundColor: c.bg }}
+                />
+              )}
+              {cat}
+              <span className="opacity-60">{categoryCounts[cat] ?? 0}</span>
+            </button>
+          );
+        })}
       </div>
 
       {/* Status filter tabs */}
@@ -650,6 +751,9 @@ export function BulkUnsubscribeView({
               return (
                 <div
                   key={s.email}
+                  className={expanded === s.email ? "bg-secondary/20" : ""}
+                >
+                <div
                   className={`flex items-center gap-3 px-3 sm:px-5 py-2.5 transition-colors ${
                     isSel ? "bg-primary/5" : "hover:bg-secondary/40"
                   }`}
@@ -660,14 +764,40 @@ export function BulkUnsubscribeView({
                     onChange={() => toggleOne(s.email)}
                     className="accent-primary flex-shrink-0"
                   />
+                  <button
+                    onClick={() =>
+                      setExpanded(expanded === s.email ? null : s.email)
+                    }
+                    title={
+                      expanded === s.email
+                        ? "Hide this sender's messages"
+                        : "Show this sender's messages"
+                    }
+                    aria-label="Toggle messages"
+                    className="p-0.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
+                  >
+                    {expanded === s.email ? (
+                      <ChevronDown size={13} />
+                    ) : (
+                      <ChevronRight size={13} />
+                    )}
+                  </button>
                   <div className="flex-1 min-w-0">
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-medium text-foreground truncate">
                         {s.name || s.email}
                       </span>
-                      <span className={`text-[9px] px-1.5 py-0.5 rounded-full ${STATUS_META[s.status].cls}`}>
-                        {STATUS_META[s.status].label}
-                      </span>
+                      {(() => {
+                        const d = displayStatus(s);
+                        return (
+                          <span
+                            title={d.help}
+                            className={`text-[9px] px-1.5 py-0.5 rounded-full ${d.cls}`}
+                          >
+                            {d.label}
+                          </span>
+                        );
+                      })()}
                       {s.filter_active && (
                         <span
                           title="Future mail blocked at the source by a provider filter"
@@ -676,23 +806,22 @@ export function BulkUnsubscribeView({
                           <ShieldX size={9} /> Filtered
                         </span>
                       )}
-                      {s.category && s.category !== "Unknown" && (
-                        s.category_source === "rule" || s.category_source === "user" ? (
+                      {/* Category chips — the rule-labelled cleanup categories on
+                          this sender's mail (never a provisional guess), coloured
+                          with the same scheme as chips app-wide. */}
+                      {(s.categories || []).slice(0, 2).map((cat) => {
+                        const c = chipColors(cat, labelColors);
+                        return (
                           <span
+                            key={cat}
                             title="From your rules — same categorization as the rest of the app"
-                            className="text-[9px] px-1.5 py-0.5 rounded-full bg-primary/15 text-primary"
+                            style={{ backgroundColor: c.bg, color: c.text }}
+                            className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
                           >
-                            {s.category}
+                            {cat}
                           </span>
-                        ) : (
-                          <span
-                            title="Provisional guess — updates to match your rules once they've labelled enough of this sender's mail"
-                            className="text-[9px] px-1.5 py-0.5 rounded-full border border-dashed border-primary/40 text-muted-foreground"
-                          >
-                            {s.category}?
-                          </span>
-                        )
-                      )}
+                        );
+                      })}
                     </div>
                     <div className="text-[11px] text-muted-foreground truncate">{s.email}</div>
                   </div>
@@ -792,6 +921,14 @@ export function BulkUnsubscribeView({
                     )}
                   </div>
                 </div>
+                {expanded === s.email && (
+                  <SenderMessages
+                    accountId={accountId}
+                    email={s.email}
+                    labelColors={labelColors}
+                  />
+                )}
+                </div>
               );
             })}
           </div>
@@ -842,6 +979,138 @@ export function BulkUnsubscribeView({
           Archive old mail
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Drill-down: the individual messages from one sender, so the user can see
+ *  exactly which emails are affected (blocked / auto-archived / …) and act on
+ *  them one at a time. Fetched on demand via the search endpoint (from: sender)
+ *  across all folders. */
+function SenderMessages({
+  accountId,
+  email,
+  labelColors,
+}: {
+  accountId: string;
+  email: string;
+  labelColors: Record<string, string | null>;
+}) {
+  const [msgs, setMsgs] = useState<Email[] | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  useEffect(() => {
+    let alive = true;
+    searchEmails({ accountId, fromAddr: email, folder: "all", pageSize: 25 })
+      .then((r) => {
+        if (alive) setMsgs(r.emails);
+      })
+      .catch((e) => {
+        if (alive) setErr((e as Error).message || "Failed to load messages");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [accountId, email]);
+
+  const act = async (id: string, action: "archive" | "trash") => {
+    setBusyId(id);
+    try {
+      await bulkAction({ action, accountId, messageIds: [id] });
+      setMsgs((prev) => (prev || []).filter((m) => m.id !== id));
+    } catch (e) {
+      setErr((e as Error).message || "Action failed");
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  if (err) {
+    return <div className="px-10 py-2 text-[11px] text-destructive">{err}</div>;
+  }
+  if (!msgs) {
+    return (
+      <div className="px-10 py-3 text-[11px] text-muted-foreground flex items-center gap-1.5">
+        <Loader2 className="animate-spin" size={12} /> Loading messages…
+      </div>
+    );
+  }
+  if (msgs.length === 0) {
+    return (
+      <div className="px-10 py-2 text-[11px] text-muted-foreground">
+        No messages found for this sender.
+      </div>
+    );
+  }
+  return (
+    <div className="pl-10 pr-3 sm:pr-5 pb-2 divide-y divide-border/60">
+      {msgs.map((m) => (
+        <div key={m.id} className="flex items-center gap-2 py-1.5">
+          {!m.isRead && (
+            <span
+              className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0"
+              title="Unread"
+            />
+          )}
+          <div className="flex-1 min-w-0">
+            <div className="text-[11px] text-foreground truncate">
+              {m.subject || "(no subject)"}
+            </div>
+            {m.snippet && (
+              <div className="text-[10px] text-muted-foreground truncate">
+                {m.snippet}
+              </div>
+            )}
+          </div>
+          {(m.categories || []).slice(0, 2).map((cat) => {
+            const c = chipColors(cat, labelColors);
+            return (
+              <span
+                key={cat}
+                style={{ backgroundColor: c.bg, color: c.text }}
+                className="text-[9px] px-1.5 py-0.5 rounded-full font-medium flex-shrink-0"
+              >
+                {cat}
+              </span>
+            );
+          })}
+          <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground flex-shrink-0 capitalize">
+            {m.folder}
+          </span>
+          <span className="text-[10px] text-muted-foreground tabular-nums flex-shrink-0 w-12 text-right">
+            {m.receivedAt
+              ? new Date(m.receivedAt).toLocaleDateString(undefined, {
+                  month: "short",
+                  day: "numeric",
+                })
+              : ""}
+          </span>
+          {busyId === m.id ? (
+            <Loader2
+              className="animate-spin text-muted-foreground flex-shrink-0"
+              size={12}
+            />
+          ) : (
+            <>
+              <button
+                onClick={() => act(m.id, "archive")}
+                title="Archive this message"
+                className="p-1 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex-shrink-0"
+              >
+                <Archive size={12} />
+              </button>
+              <button
+                onClick={() => act(m.id, "trash")}
+                title="Delete this message (move to Trash)"
+                className="p-1 rounded text-muted-foreground hover:text-red-400 hover:bg-red-500/10 transition-colors flex-shrink-0"
+              >
+                <Trash2 size={12} />
+              </button>
+            </>
+          )}
+        </div>
+      ))}
     </div>
   );
 }

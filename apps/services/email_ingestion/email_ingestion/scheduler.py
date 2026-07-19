@@ -22,9 +22,12 @@ from datetime import datetime, timedelta, timezone
 from typing import Any
 from uuid import uuid4
 
-from email_ingestion.reconcile import reconcile_full_snapshot
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
+from sqlalchemy.pool import NullPool
+
+from email_ingestion.providers.factory import build_provider
+from email_ingestion.reconcile import reconcile_full_snapshot
 
 # Deep initial-sync history window (days). Older mail is pulled lazily via the
 # /backfill endpoint.
@@ -93,8 +96,15 @@ async def _sync_account(
     behaviour exactly.
     """
     db_url = _get_db_url()
+    # NullPool: this engine is created per sync call and the ``engine.dispose()``
+    # at the tail is unreachable (every branch below returns from inside the
+    # ``async with``). With the default QueuePool that leaked one idle connection
+    # per tick until GC — on a multi-account box that exhausted Postgres
+    # ``max_connections``. NullPool closes each connection deterministically when
+    # the session releases it, so the missing dispose no longer leaks.
     engine = create_async_engine(
-        db_url, echo=False, connect_args={"timeout": _connect_timeout()}
+        db_url, echo=False, poolclass=NullPool,
+        connect_args={"timeout": _connect_timeout()},
     )
     session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
@@ -143,18 +153,9 @@ async def _sync_account(
             store = get_key_store()
             creds = json.loads(store.decrypt(row.credentials_encrypted))
 
-            # Instantiate provider
-            if provider_name == "gmail":
-                from email_ingestion.providers.gmail import GmailProvider
-                provider = GmailProvider(creds)
-            elif provider_name == "microsoft":
-                from email_ingestion.providers.outlook import OutlookProvider
-                provider = OutlookProvider(creds)
-            elif provider_name == "imap":
-                from email_ingestion.providers.imap import IMAPProvider
-                provider = IMAPProvider(creds)
-            else:
-                raise ValueError(f"Sync not supported for provider: {provider_name}")
+            # Instantiate provider (raises ValueError for an unknown provider,
+            # surfaced as a sync failure by the outer handler).
+            provider = build_provider(provider_name, creds)
 
             if not await provider.authenticate():
                 raise RuntimeError("Provider authentication failed")
@@ -224,7 +225,7 @@ async def _sync_account(
                                 cc_addresses, bcc_addresses, subject,
                                 body_text, body_html, snippet,
                                 has_attachments, is_read, is_starred, is_flagged,
-                                received_at, synced_at)
+                                unsubscribe_link, received_at, synced_at)
                                VALUES
                                (:id, :account_id, :provider_id, :thread_id,
                                 :folder, :labels, :categories, :importance,
@@ -232,7 +233,7 @@ async def _sync_account(
                                 :cc_addrs, :bcc_addrs, :subject,
                                 :body_text, :body_html, :snippet,
                                 :has_attachments, :is_read, :is_starred, :is_flagged,
-                                :received_at, now())
+                                :unsubscribe_link, :received_at, now())
                                ON CONFLICT (account_id, provider_message_id)
                                DO UPDATE SET
                                 thread_id = EXCLUDED.thread_id,
@@ -265,6 +266,14 @@ async def _sync_account(
                                 is_read = EXCLUDED.is_read,
                                 is_starred = EXCLUDED.is_starred,
                                 is_flagged = EXCLUDED.is_flagged,
+                                -- Keep an already-parsed unsubscribe link when a
+                                -- later sync re-sends the row without one, and
+                                -- match the manual-sync path (transport/sync.py)
+                                -- so a background-synced message is equally
+                                -- unsubscribe-eligible / Reply-Zero-classified.
+                                unsubscribe_link = COALESCE(
+                                    EXCLUDED.unsubscribe_link,
+                                    email_messages.unsubscribe_link),
                                 received_at = EXCLUDED.received_at,
                                 updated_at = now()"""
                         ),
@@ -298,6 +307,8 @@ async def _sync_account(
                             "is_read": msg.is_read,
                             "is_starred": msg.is_starred,
                             "is_flagged": msg.is_flagged,
+                            "unsubscribe_link": getattr(
+                                msg, "unsubscribe_link", None),
                             "received_at": msg.received_at,
                         },
                     )

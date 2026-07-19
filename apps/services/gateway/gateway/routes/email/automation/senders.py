@@ -19,10 +19,10 @@ from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
     _instantiate_provider,
+    _llm_json,
     _log,
     _persist_rotated_creds,
     _provider_for_account,
-    _safe_json,
     router,
 )
 from pydantic import BaseModel
@@ -227,19 +227,55 @@ async def list_senders(
             r.email for r in nl_rows if r.auto_archive_filter_id
         }
 
-        # Merge assigned categories (same account scope as newsletters).
+        # Merge assigned categories (same account scope as newsletters). We keep
+        # ONLY trustworthy sources — 'rule' (projected from the rule engine) and
+        # 'user' (manual). Provisional 'inferred' cold-start guesses are dropped
+        # entirely: they came from a thin LLM signal, never self-corrected, and
+        # misled the cleaner. Categorization is now driven off the rule-labelled
+        # per-message categories below, which is the same categorization the rest
+        # of the app shows.
         cat_rows = (await db.execute(text(
             f"SELECT LOWER(email) AS email, category, category_source "
             f"FROM email_senders WHERE {nl_scope}"
         ), nl_params)).fetchall()
-        category_by_email = {r.email: r.category for r in cat_rows if r.category}
-        # Where each category came from: 'rule' (projected from the rule engine),
-        # 'inferred' (provisional cold-start guess) or 'user'. Lets the UI flag a
-        # provisional tag honestly instead of implying the rules decided it.
-        source_by_email = {
-            r.email: r.category_source for r in cat_rows
-            if r.category and getattr(r, "category_source", None)
+        sender_cat_by_email = {
+            r.email: r.category for r in cat_rows
+            if r.category and getattr(r, "category_source", None) in ("rule", "user")
         }
+
+        # Per-sender cleanup categories DERIVED from the rule-labelled per-message
+        # categories (email_messages.categories). This is the reliable signal the
+        # cleaner now runs on: the set powers the category filter tabs, and the
+        # most-frequent one is the chip. Same scope/folder as the sender rollup.
+        msgcat_rows = (await db.execute(text(
+            f"""SELECT LOWER(em.from_address->>'email') AS email, cat,
+                       COUNT(*) AS n
+                FROM email_messages em, LATERAL unnest(em.categories) AS cat
+                WHERE {scope}{folder_sql}
+                  AND cat = ANY(:cleanup)
+                  AND COALESCE(em.from_address->>'email','') <> ''
+                  AND LOWER(em.from_address->>'email') NOT IN (
+                    SELECT LOWER(email_address) FROM email_accounts
+                    WHERE user_id = :uid)
+                GROUP BY email, cat"""
+        ), {**params, "cleanup": _CLEANUP_CATEGORIES})).fetchall()
+        # email -> [(category, count)] sorted by count desc.
+        msg_cats: dict[str, list[tuple[str, int]]] = {}
+        for r in msgcat_rows:
+            msg_cats.setdefault(r.email, []).append((r.cat, r.n or 0))
+        for v in msg_cats.values():
+            v.sort(key=lambda kv: kv[1], reverse=True)
+
+        def _categories_for(email: str) -> list[str]:
+            """Distinct cleanup categories on this sender's mail (chip + tabs)."""
+            derived = [c for c, _ in msg_cats.get(email, [])]
+            # Fall back to a trustworthy sender-level (rule/user) category when the
+            # messages themselves carry no cleanup label yet.
+            if not derived and sender_cat_by_email.get(email):
+                sc = sender_cat_by_email[email]
+                if sc and sc != "Unknown":
+                    derived = [sc]
+            return derived
 
         return {
             "senders": [
@@ -260,8 +296,12 @@ async def list_senders(
                     # True when a provider-native auto-archive filter is in place
                     # (future mail blocked at the source, not just our sweep).
                     "filter_active": r.email in filtered_emails,
-                    "category": category_by_email.get(r.email),
-                    "category_source": source_by_email.get(r.email),
+                    # Dominant cleanup category (chip) + the full set (filter tabs).
+                    # Both are derived from rule labels, so there is no provisional
+                    # guess to flag — category_source is always trustworthy here.
+                    "category": (_categories_for(r.email) or [None])[0],
+                    "categories": _categories_for(r.email),
+                    "category_source": "rule",
                 }
                 for r in rows
             ]
@@ -609,8 +649,13 @@ async def _http_unsubscribe(url: str) -> tuple[bool, str]:
     if not await _is_safe_external_url(url):
         return False, "unsafe-url"
     try:
+        # follow_redirects=False: the initial URL is SSRF-validated, but httpx
+        # would follow a 3xx to an UNVALIDATED internal target (cloud metadata
+        # 169.254.169.254, localhost, private ranges) — the guard only ran on the
+        # first hop. RFC 8058 one-click returns 200 directly, so we don't chase
+        # redirects; the mailto / provider-filter fallbacks cover the rest.
         async with httpx.AsyncClient(
-            follow_redirects=True, max_redirects=5, timeout=10.0,
+            follow_redirects=False, timeout=10.0,
             headers={"User-Agent": "CommandCenter-Unsubscribe/1.0"},
         ) as client:
             try:
@@ -850,8 +895,6 @@ async def _llm_categorize_senders(
     if not items:
         return {}
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
-
         def _line(i: int, it: dict[str, Any]) -> str:
             tag = (" [YOUR ORGANISATION — internal/outbound]"
                    if it.get("scope") in ("self", "internal") else "")
@@ -882,14 +925,12 @@ async def _llm_categorize_senders(
         )
         # JSON-forced (object wrapper required by json_object mode); a generous
         # budget so a large sender batch isn't truncated mid-array.
-        resp, _ = await acompletion_with_fallback(
-            model=model,
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": listing}],
-            temperature=0, max_tokens=2000,
-            response_format={"type": "json_object"},
+        data, _content, _used = await _llm_json(
+            model,
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": listing}],
+            max_tokens=2000,
         )
-        data = _safe_json(resp.choices[0].message.content or "")
         rows = data.get("results") if isinstance(data, dict) else (
             data if isinstance(data, list) else None)
         out: dict[str, str] = {}
@@ -997,39 +1038,26 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
         for t in tally_rows:
             counts.setdefault(t.email, {})[t.label] = int(t.n)
 
-        # Rule-projected senders first (cheap, no LLM); the rest that are still
-        # uncategorized fall through to the cold-start LLM classifier.
-        needs_llm: list[Any] = []
+        # Project the rule engine's per-message labels into a sender category —
+        # the ONLY categorization the cleaner trusts now. The old cold-start LLM
+        # fallback (persisted as provisional 'inferred' guesses) was removed: it
+        # ran on a thin signal, never self-corrected, and misled the user. A
+        # sender the rules haven't labelled simply stays uncategorized until they
+        # do (the cleaner still lists it; it just carries no category chip).
         for r in cands:
             rcat = _rule_category(counts.get(r.email, {}))
             if rcat:
                 await _upsert_sender_category(
                     db, account_id, r.email, r.name or "", rcat, "rule")
-            elif not (r.cur_category or "").strip():
-                needs_llm.append(r)
-            # else: keep the existing 'inferred' guess until rule coverage grows.
         await db.commit()
 
-        if needs_llm:
-            from gateway.routes.email.automation.assistant import _account_models  # noqa: PLC0415
-            rule_model = (await _account_models(db, account_id))["rule"]
-            items = [
-                {"email": r.email, "name": r.name or "",
-                 "subjects": [s for s in (r.subjects or []) if s],
-                 "scope": sender_scope(r.email, self_email, org_domains),
-                 "volume": int(getattr(r, "volume", 0) or 0),
-                 "unread": int(getattr(r, "unread", 0) or 0),
-                 "has_unsub": bool(getattr(r, "has_unsub", False))}
-                for r in needs_llm
-            ]
-            for i in range(0, len(items), 10):
-                batch = items[i:i + 10]
-                cats = await _llm_categorize_senders(batch, model=rule_model)
-                for it in batch:
-                    await _upsert_sender_category(
-                        db, account_id, it["email"], it["name"],
-                        cats.get(it["email"], "Unknown"), "inferred")
-                await db.commit()
+        # One-time cleanup: retire any stale 'inferred' guesses left by earlier
+        # runs so they stop surfacing (rule/user categories are untouched).
+        await db.execute(text(
+            "DELETE FROM email_senders WHERE account_id = :aid "
+            "AND category_source = 'inferred'"
+        ), {"aid": account_id})
+        await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.categorize_job_failed", account_id=account_id,
                      error=str(exc)[:200])
@@ -1083,7 +1111,6 @@ async def sender_categories(
 async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
     """Classify whether an email is cold outreach. (is_cold, reason)."""
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "Decide if this is a COLD email: unsolicited sales, marketing, or "
             "recruiting outreach from someone with no prior relationship to the "
@@ -1103,14 +1130,12 @@ async def _llm_is_cold(email: dict[str, str]) -> tuple[bool, str]:
             f"Subject: {email.get('subject', '')}\n"
             f"Body:\n{(email.get('body', '') or '')[:1500]}"
         )
-        resp, _ = await acompletion_with_fallback(
-            model="tier-fast",
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=500,
-            response_format={"type": "json_object"},
+        data, _content, _used = await _llm_json(
+            "tier-fast",
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user_prompt}],
+            max_tokens=500,
         )
-        data = _safe_json(resp.choices[0].message.content or "")
         if isinstance(data, dict):
             return bool(data.get("cold")), str(data.get("reason", ""))[:300]
         return False, ""

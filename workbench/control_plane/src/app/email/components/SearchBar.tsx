@@ -10,6 +10,7 @@ import {
   filterLabel,
   parseQuery,
 } from "../lib/searchFilters";
+import { chipColors } from "../lib/labelColors";
 import { folderLabel } from "../lib/utils";
 
 /**
@@ -31,6 +32,7 @@ export function SearchBar() {
   const selectedFolder = useEmailStore((s) => s.selectedFolder);
   const folders = useEmailStore((s) => s.folders);
   const availableLabels = useEmailStore((s) => s.availableLabels);
+  const labelColors = useEmailStore((s) => s.labelColors);
   const setSearchQuery = useEmailStore((s) => s.setSearchQuery);
   const setSearchScope = useEmailStore((s) => s.setSearchScope);
   const setSearchFilters = useEmailStore((s) => s.setSearchFilters);
@@ -158,21 +160,31 @@ export function SearchBar() {
 
         {/* ── Pills + input share a scrollable row ── */}
         <div className="flex items-center gap-1 flex-1 min-w-0 overflow-x-auto scrollbar-hide py-1">
-          {searchFilters.map((f) => (
-            <span
-              key={filterKey(f)}
-              className="flex items-center gap-1 flex-shrink-0 rounded-full bg-primary/10 text-primary pl-2 pr-1 py-0.5 text-[11px] font-medium max-w-[180px]"
-            >
-              <span className="truncate">{filterLabel(f)}</span>
-              <button
-                onClick={() => removeFilter(f)}
-                aria-label={`Remove ${filterLabel(f)} filter`}
-                className="rounded-full p-0.5 hover:bg-primary/20 transition-colors flex-shrink-0"
+          {searchFilters.map((f) => {
+            // Tag pills wear their category colour (the same scheme as chips
+            // everywhere else); from/to/flag pills stay neutral primary.
+            const c = f.kind === "tag" ? chipColors(f.value, labelColors) : null;
+            return (
+              <span
+                key={filterKey(f)}
+                style={c ? { backgroundColor: c.bg, color: c.text } : undefined}
+                className={`flex items-center gap-1 flex-shrink-0 rounded-full pl-2 pr-1 py-0.5 text-[11px] font-medium max-w-[180px] ${
+                  c ? "" : "bg-primary/10 text-primary"
+                }`}
               >
-                <X size={9} />
-              </button>
-            </span>
-          ))}
+                <span className="truncate">{filterLabel(f)}</span>
+                <button
+                  onClick={() => removeFilter(f)}
+                  aria-label={`Remove ${filterLabel(f)} filter`}
+                  className={`rounded-full p-0.5 transition-colors flex-shrink-0 ${
+                    c ? "hover:bg-black/15" : "hover:bg-primary/20"
+                  }`}
+                >
+                  <X size={9} />
+                </button>
+              </span>
+            );
+          })}
           <input
             ref={inputRef}
             type="text"
@@ -228,8 +240,9 @@ export function SearchBar() {
               <FilterMenu
                 filters={searchFilters}
                 labels={availableLabels}
-                onAdd={(f) => {
-                  apply(addFilter(searchFilters, f));
+                labelColors={labelColors}
+                onAdd={(f) => apply(addFilter(searchFilters, f))}
+                onClose={() => {
                   setFilterOpen(false);
                   inputRef.current?.focus();
                 }}
@@ -242,17 +255,22 @@ export function SearchBar() {
   );
 }
 
-/** The filter picker — tags the mail actually carries, plus the state toggles.
- *  Everything here is also typeable (`tag:Newsletter`, `is:unread`); this is the
- *  half a user can find without knowing the grammar. */
+/** The filter picker — tags the mail actually carries, sender/recipient address
+ *  filters, plus the state toggles. Everything here is also typeable
+ *  (`tag:Newsletter`, `from:alice`, `is:unread`); this is the half a user can
+ *  find without knowing the grammar. */
 function FilterMenu({
   filters,
   labels,
+  labelColors,
   onAdd,
+  onClose,
 }: {
   filters: SearchFilter[];
   labels: string[];
+  labelColors: Record<string, string | null>;
   onAdd: (f: SearchFilter) => void;
+  onClose: () => void;
 }) {
   const [tagQuery, setTagQuery] = useState("");
   const has = (f: SearchFilter) => filters.some((x) => filterKey(x) === filterKey(f));
@@ -274,7 +292,7 @@ function FilterMenu({
     <div
       role="menu"
       aria-label="Filter menu"
-      className="absolute right-0 top-full mt-1 z-30 bg-popover border border-border rounded-lg shadow-xl py-1 w-60"
+      className="absolute right-0 top-full mt-1 z-30 bg-popover border border-border rounded-lg shadow-xl py-1 w-64"
     >
       <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
         Filter by
@@ -293,6 +311,18 @@ function FilterMenu({
             {t.label}
           </button>
         ))}
+      </div>
+
+      {/* From / To — the address filters the backend already supports; typing
+          `from:`/`to:` does the same, this is the discoverable half. */}
+      <div className="border-t border-border pt-1">
+        <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+          People
+        </div>
+        <div className="px-2 pb-2 space-y-1">
+          <AddrInput label="From" onAdd={(v) => onAdd({ kind: "from", value: v })} />
+          <AddrInput label="To" onAdd={(v) => onAdd({ kind: "to", value: v })} />
+        </div>
       </div>
 
       <div className="border-t border-border pt-1">
@@ -320,13 +350,21 @@ function FilterMenu({
           ) : (
             shown.map((name) => {
               const f: SearchFilter = { kind: "tag", value: name };
+              // Colour dot = the same category colour used on chips app-wide.
+              const dot = chipColors(name, labelColors).bg;
               return (
                 <button
                   key={name}
                   onClick={() => onAdd(f)}
-                  className="flex items-center justify-between w-full text-left px-3 py-1.5 text-xs text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+                  className="flex items-center justify-between gap-2 w-full text-left px-3 py-1.5 text-xs text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
                 >
-                  <span className="truncate">{name}</span>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span
+                      className="w-2.5 h-2.5 rounded-full flex-shrink-0"
+                      style={{ backgroundColor: dot }}
+                    />
+                    <span className="truncate">{name}</span>
+                  </span>
                   {has(f) && <Check size={11} className="text-primary flex-shrink-0" />}
                 </button>
               );
@@ -334,6 +372,50 @@ function FilterMenu({
           )}
         </div>
       </div>
+
+      <div className="border-t border-border mt-1 pt-1 px-2">
+        <button
+          onClick={onClose}
+          className="w-full text-center py-1 rounded text-[11px] text-primary hover:bg-secondary transition-colors"
+        >
+          Done
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** Small labelled address input: Enter adds a From/To pill. */
+function AddrInput({
+  label,
+  onAdd,
+}: {
+  label: string;
+  onAdd: (value: string) => void;
+}) {
+  const [v, setV] = useState("");
+  const submit = () => {
+    const t = v.trim();
+    if (t) {
+      onAdd(t);
+      setV("");
+    }
+  };
+  return (
+    <div className="flex items-center gap-1.5 bg-secondary rounded px-2 py-1">
+      <span className="text-[10px] text-muted-foreground w-8 flex-shrink-0">{label}</span>
+      <input
+        value={v}
+        onChange={(e) => setV(e.target.value)}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.preventDefault();
+            submit();
+          }
+        }}
+        placeholder="name or email…"
+        className="flex-1 min-w-0 bg-transparent outline-none text-[11px] text-foreground placeholder:text-muted-foreground"
+      />
     </div>
   );
 }

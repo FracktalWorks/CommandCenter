@@ -37,7 +37,6 @@ const AUTOMATION_ITEMS: {
   icon: React.ElementType;
 }[] = [
   { key: "chat", label: "Chat", icon: MessageSquare },
-  { key: "reply-zero", label: "Rapid Inbox", icon: Zap },
   { key: "digest", label: "Digest", icon: Newspaper },
   { key: "unsubscribe", label: "Inbox Cleaner", icon: MailMinus },
   { key: "assistant", label: "AI Settings", icon: Sparkles },

@@ -83,7 +83,6 @@ export interface QuickAction {
 export type AutomationFeature =
   | "chat"
   | "assistant"
-  | "reply-zero"
   | "digest"
   | "unsubscribe"
   | "analytics";
@@ -197,9 +196,14 @@ export interface SenderStat {
   /** True when a provider-native auto-archive filter is in place for this sender
    *  (future mail blocked at the source — Gmail filter / Outlook rule). */
   filter_active?: boolean;
+  /** Dominant cleanup category for this sender, derived from the rule-labelled
+   *  per-message categories (never a provisional guess). null = uncategorized. */
   category?: string | null;
-  /** Where `category` came from: 'rule' (projected from the rule engine),
-   *  'inferred' (provisional cold-start guess) or 'user'. */
+  /** All distinct cleanup categories present on this sender's mail — powers the
+   *  category filter tabs in the Inbox Cleaner. */
+  categories?: string[];
+  /** Provenance of `category`. Always 'rule'/'user' now (provisional 'inferred'
+   *  guesses were removed); retained for forward-compat. */
   category_source?: string | null;
 }
 

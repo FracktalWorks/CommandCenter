@@ -20,12 +20,12 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from email_ingestion.persist import upsert_message
 from email_ingestion.post_sync import hooks, run_hook
 from email_ingestion.providers.factory import build_provider
 from email_ingestion.reconcile import reconcile_full_snapshot
@@ -217,129 +217,10 @@ async def _sync_account(
                     )
                     persisted_count += 1
                 else:
-                    await db.execute(
-                        text(
-                            """INSERT INTO email_messages
-                               (id, account_id, provider_message_id, thread_id,
-                                folder, labels, categories, importance,
-                                from_address, to_addresses,
-                                cc_addresses, bcc_addresses, subject,
-                                body_text, body_html, snippet,
-                                has_attachments, is_read, is_starred, is_flagged,
-                                unsubscribe_link, received_at, synced_at)
-                               VALUES
-                               (:id, :account_id, :provider_id, :thread_id,
-                                :folder, :labels, :categories, :importance,
-                                :from_addr, :to_addrs,
-                                :cc_addrs, :bcc_addrs, :subject,
-                                :body_text, :body_html, :snippet,
-                                :has_attachments, :is_read, :is_starred, :is_flagged,
-                                :unsubscribe_link, :received_at, now())
-                               ON CONFLICT (account_id, provider_message_id)
-                               DO UPDATE SET
-                                thread_id = EXCLUDED.thread_id,
-                                folder = EXCLUDED.folder,
-                                labels = EXCLUDED.labels,
-                                categories = EXCLUDED.categories,
-                                importance = EXCLUDED.importance,
-                                from_address = EXCLUDED.from_address,
-                                to_addresses = EXCLUDED.to_addresses,
-                                cc_addresses = EXCLUDED.cc_addresses,
-                                bcc_addresses = EXCLUDED.bcc_addresses,
-                                subject = EXCLUDED.subject,
-                                -- Never overwrite a stored body with an empty
-                                -- one: Outlook re-syncs headers-only (empty
-                                -- body) on every tick, which would otherwise
-                                -- clobber a body filled by lazy-open hydration
-                                -- OR the search body-backfill sweep. Keep the
-                                -- existing body when the incoming one is empty.
-                                body_text = COALESCE(
-                                    NULLIF(EXCLUDED.body_text, ''),
-                                    email_messages.body_text),
-                                body_html = COALESCE(
-                                    NULLIF(EXCLUDED.body_html, ''),
-                                    email_messages.body_html),
-                                snippet = CASE
-                                    WHEN COALESCE(EXCLUDED.snippet, '') <> ''
-                                    THEN EXCLUDED.snippet
-                                    ELSE email_messages.snippet END,
-                                has_attachments = EXCLUDED.has_attachments,
-                                is_read = EXCLUDED.is_read,
-                                is_starred = EXCLUDED.is_starred,
-                                is_flagged = EXCLUDED.is_flagged,
-                                -- Keep an already-parsed unsubscribe link when a
-                                -- later sync re-sends the row without one, and
-                                -- match the manual-sync path (transport/sync.py)
-                                -- so a background-synced message is equally
-                                -- unsubscribe-eligible / Reply-Zero-classified.
-                                unsubscribe_link = COALESCE(
-                                    EXCLUDED.unsubscribe_link,
-                                    email_messages.unsubscribe_link),
-                                received_at = EXCLUDED.received_at,
-                                updated_at = now()"""
-                        ),
-                        {
-                            "id": str(uuid4()),
-                            "account_id": account_id,
-                            "provider_id": msg.provider_message_id,
-                            "thread_id": msg.thread_id,
-                            "folder": msg.folder or "INBOX",
-                            "labels": msg.labels,
-                            "categories": getattr(msg, "categories", []) or [],
-                            "importance": getattr(msg, "importance", "normal") or "normal",
-                            "from_addr": json.dumps({
-                                "name": msg.from_address.name if msg.from_address else "",
-                                "email": msg.from_address.email if msg.from_address else "",
-                            }),
-                            "to_addrs": json.dumps(
-                                [{"name": a.name, "email": a.email} for a in msg.to_addresses]
-                            ),
-                            "cc_addrs": json.dumps(
-                                [{"name": a.name, "email": a.email} for a in msg.cc_addresses]
-                            ),
-                            "bcc_addrs": json.dumps(
-                                [{"name": a.name, "email": a.email} for a in msg.bcc_addresses]
-                            ),
-                            "subject": msg.subject,
-                            "body_text": msg.body_text,
-                            "body_html": msg.body_html,
-                            "snippet": msg.snippet[:200] if msg.snippet else "",
-                            "has_attachments": msg.has_attachments,
-                            "is_read": msg.is_read,
-                            "is_starred": msg.is_starred,
-                            "is_flagged": msg.is_flagged,
-                            "unsubscribe_link": getattr(
-                                msg, "unsubscribe_link", None),
-                            "received_at": msg.received_at,
-                        },
-                    )
+                    # ONE shared ingest upsert (message + attachments); see
+                    # email_ingestion.persist.upsert_message.
+                    await upsert_message(db, account_id, msg)
                     persisted_count += 1
-
-                    # Persist attachments
-                    for att in msg.attachments:
-                        await db.execute(
-                            text(
-                                """INSERT INTO email_attachments
-                                   (message_id, filename, mime_type, size_bytes,
-                                    provider_attachment_id)
-                                   VALUES (
-                                    (SELECT id FROM email_messages
-                                     WHERE account_id = :account_id
-                                       AND provider_message_id = :provider_id),
-                                    :filename, :mime_type, :size_bytes,
-                                    :provider_attachment_id
-                                   )
-                                   ON CONFLICT DO NOTHING"""
-                            ),
-                            {
-                                "account_id": account_id,
-                                "provider_id": msg.provider_message_id,
-                                "filename": att.filename,
-                                "mime_type": att.mime_type,
-                                "size_bytes": att.size_bytes,
-                                "provider_attachment_id": att.provider_attachment_id,
-                            },
-                        )
 
             await db.commit()
 
@@ -423,8 +304,7 @@ async def _sync_account(
             # messages for hybrid vector ranking. No-op unless
             # email_semantic_search_enabled. Best-effort; never fails the sync.
             try:
-                from email_ingestion.email_embeddings import (
-                    embed_pending_messages)
+                from email_ingestion.email_embeddings import embed_pending_messages
                 await embed_pending_messages(db, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("sync.email_embed_failed account=%s err=%s",

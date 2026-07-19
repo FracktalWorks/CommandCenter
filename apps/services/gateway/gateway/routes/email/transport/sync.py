@@ -8,25 +8,21 @@ import os
 import secrets
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_settings
+from email_ingestion.persist import upsert_message
 from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from gateway.routes.email.core import (
-    MAX_BODY_HTML_BYTES,
-    MAX_BODY_TEXT_BYTES,
     _get_db,
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
-    _truncate_body,
     router,
 )
 from pydantic import BaseModel
 from sqlalchemy import text
-
 
 # Deep initial-sync history window (days); keep in step with the scheduler.
 INITIAL_SYNC_DAYS = 365
@@ -280,103 +276,9 @@ async def trigger_sync(
                             "pid": msg.provider_message_id})).fetchone()
                         old_categories = (
                             list(ocr.categories or []) if ocr else None)
-                    # Upsert message
-                    await db.execute(
-                        text(
-                            """INSERT INTO email_messages
-                               (id, account_id, provider_message_id, thread_id,
-                                folder, labels, categories, importance,
-                                from_address, to_addresses,
-                                cc_addresses, bcc_addresses, subject,
-                                body_text, body_html, snippet,
-                                has_attachments, is_read, is_starred, is_flagged,
-                                unsubscribe_link, received_at, synced_at)
-                               VALUES
-                               (:id, :account_id, :provider_id, :thread_id,
-                                :folder, :labels, :categories, :importance,
-                                :from_addr, :to_addrs,
-                                :cc_addrs, :bcc_addrs, :subject,
-                                :body_text, :body_html, :snippet,
-                                :has_attachments, :is_read, :is_starred, :is_flagged,
-                                :unsubscribe_link, :received_at, now())
-                               ON CONFLICT (account_id, provider_message_id)
-                               DO UPDATE SET
-                                thread_id = EXCLUDED.thread_id,
-                                folder = EXCLUDED.folder,
-                                labels = EXCLUDED.labels,
-                                categories = EXCLUDED.categories,
-                                importance = EXCLUDED.importance,
-                                from_address = EXCLUDED.from_address,
-                                to_addresses = EXCLUDED.to_addresses,
-                                cc_addresses = EXCLUDED.cc_addresses,
-                                bcc_addresses = EXCLUDED.bcc_addresses,
-                                subject = EXCLUDED.subject,
-                                -- Never clobber a stored body/snippet with an
-                                -- empty one. Providers that list headers-only
-                                -- (Outlook) re-sync with an empty body_text; a
-                                -- plain EXCLUDED overwrite wiped a body the user
-                                -- had already lazily hydrated, so the reading
-                                -- pane fell back to the snippet on every refresh.
-                                -- Matches core._upsert_message + the scheduler.
-                                body_text = COALESCE(
-                                    NULLIF(EXCLUDED.body_text, ''),
-                                    email_messages.body_text),
-                                body_html = COALESCE(
-                                    NULLIF(EXCLUDED.body_html, ''),
-                                    email_messages.body_html),
-                                snippet = COALESCE(
-                                    NULLIF(EXCLUDED.snippet, ''),
-                                    email_messages.snippet),
-                                has_attachments = EXCLUDED.has_attachments,
-                                is_read = EXCLUDED.is_read,
-                                is_starred = EXCLUDED.is_starred,
-                                is_flagged = EXCLUDED.is_flagged,
-                                unsubscribe_link = COALESCE(
-                                    EXCLUDED.unsubscribe_link,
-                                    email_messages.unsubscribe_link),
-                                received_at = EXCLUDED.received_at,
-                                updated_at = now()"""
-                        ),
-                        {
-                            "id": str(uuid4()),
-                            "account_id": req.account_id,
-                            "provider_id": msg.provider_message_id,
-                            "thread_id": msg.thread_id,
-                            "folder": msg.folder or "INBOX",
-                            "labels": msg.labels,
-                            "categories": getattr(msg, "categories", []) or [],
-                            "importance": getattr(msg, "importance", "normal") or "normal",
-                            "from_addr": json.dumps({
-                                "name": msg.from_address.name if msg.from_address else "",
-                                "email": msg.from_address.email if msg.from_address else "",
-                            }),
-                            "to_addrs": json.dumps([
-                                {"name": a.name, "email": a.email}
-                                for a in msg.to_addresses
-                            ]),
-                            "cc_addrs": json.dumps([
-                                {"name": a.name, "email": a.email}
-                                for a in msg.cc_addresses
-                            ]),
-                            "bcc_addrs": json.dumps([
-                                {"name": a.name, "email": a.email}
-                                for a in msg.bcc_addresses
-                            ]),
-                            "subject": msg.subject,
-                            "body_text": _truncate_body(msg.body_text, MAX_BODY_TEXT_BYTES),
-                            "body_html": _truncate_body(
-                                msg.body_html, MAX_BODY_HTML_BYTES
-                            ) if msg.body_html else None,
-                                            "snippet": msg.snippet[:200] if msg.snippet else "",
-                            "has_attachments": msg.has_attachments,
-                            "is_read": msg.is_read,
-                            "is_starred": msg.is_starred,
-                            "is_flagged": msg.is_flagged,
-                            "unsubscribe_link": getattr(
-                                msg, "unsubscribe_link", None),
-                            "received_at": msg.received_at,
-                        },
-                    )
+                    # ONE shared ingest upsert (message + attachments);
+                    # see email_ingestion.persist.upsert_message.
+                    await upsert_message(db, req.account_id, msg)
                     persisted_count += 1
 
                     # Learn from manual label add/remove (existing rows only —
@@ -386,32 +288,6 @@ async def trigger_sync(
                             db, req.account_id, msg, old_categories,
                             getattr(msg, "categories", []) or [], label_rule_map,
                             conv_rule_keys, status_corrections)
-
-                    # Persist attachment metadata
-                    for att in msg.attachments:
-                        await db.execute(
-                            text(
-                                """INSERT INTO email_attachments
-                                   (message_id, filename, mime_type, size_bytes,
-                                    provider_attachment_id)
-                                   VALUES (
-                                    (SELECT id FROM email_messages
-                                     WHERE account_id = :account_id
-                                       AND provider_message_id = :provider_id),
-                                    :filename, :mime_type, :size_bytes,
-                                    :provider_attachment_id
-                                   )
-                                   ON CONFLICT DO NOTHING"""
-                            ),
-                            {
-                                "account_id": req.account_id,
-                                "provider_id": msg.provider_message_id,
-                                "filename": att.filename,
-                                "mime_type": att.mime_type,
-                                "size_bytes": att.size_bytes,
-                                "provider_attachment_id": att.provider_attachment_id,
-                            },
-                        )
 
             await db.commit()
 

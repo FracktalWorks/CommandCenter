@@ -20,12 +20,13 @@ import logging
 import os
 from datetime import datetime, timedelta, timezone
 from typing import Any
-from uuid import uuid4
 
 from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from email_ingestion.persist import upsert_message
+from email_ingestion.post_sync import hooks, run_hook
 from email_ingestion.providers.factory import build_provider
 from email_ingestion.reconcile import reconcile_full_snapshot
 
@@ -216,129 +217,10 @@ async def _sync_account(
                     )
                     persisted_count += 1
                 else:
-                    await db.execute(
-                        text(
-                            """INSERT INTO email_messages
-                               (id, account_id, provider_message_id, thread_id,
-                                folder, labels, categories, importance,
-                                from_address, to_addresses,
-                                cc_addresses, bcc_addresses, subject,
-                                body_text, body_html, snippet,
-                                has_attachments, is_read, is_starred, is_flagged,
-                                unsubscribe_link, received_at, synced_at)
-                               VALUES
-                               (:id, :account_id, :provider_id, :thread_id,
-                                :folder, :labels, :categories, :importance,
-                                :from_addr, :to_addrs,
-                                :cc_addrs, :bcc_addrs, :subject,
-                                :body_text, :body_html, :snippet,
-                                :has_attachments, :is_read, :is_starred, :is_flagged,
-                                :unsubscribe_link, :received_at, now())
-                               ON CONFLICT (account_id, provider_message_id)
-                               DO UPDATE SET
-                                thread_id = EXCLUDED.thread_id,
-                                folder = EXCLUDED.folder,
-                                labels = EXCLUDED.labels,
-                                categories = EXCLUDED.categories,
-                                importance = EXCLUDED.importance,
-                                from_address = EXCLUDED.from_address,
-                                to_addresses = EXCLUDED.to_addresses,
-                                cc_addresses = EXCLUDED.cc_addresses,
-                                bcc_addresses = EXCLUDED.bcc_addresses,
-                                subject = EXCLUDED.subject,
-                                -- Never overwrite a stored body with an empty
-                                -- one: Outlook re-syncs headers-only (empty
-                                -- body) on every tick, which would otherwise
-                                -- clobber a body filled by lazy-open hydration
-                                -- OR the search body-backfill sweep. Keep the
-                                -- existing body when the incoming one is empty.
-                                body_text = COALESCE(
-                                    NULLIF(EXCLUDED.body_text, ''),
-                                    email_messages.body_text),
-                                body_html = COALESCE(
-                                    NULLIF(EXCLUDED.body_html, ''),
-                                    email_messages.body_html),
-                                snippet = CASE
-                                    WHEN COALESCE(EXCLUDED.snippet, '') <> ''
-                                    THEN EXCLUDED.snippet
-                                    ELSE email_messages.snippet END,
-                                has_attachments = EXCLUDED.has_attachments,
-                                is_read = EXCLUDED.is_read,
-                                is_starred = EXCLUDED.is_starred,
-                                is_flagged = EXCLUDED.is_flagged,
-                                -- Keep an already-parsed unsubscribe link when a
-                                -- later sync re-sends the row without one, and
-                                -- match the manual-sync path (transport/sync.py)
-                                -- so a background-synced message is equally
-                                -- unsubscribe-eligible / Reply-Zero-classified.
-                                unsubscribe_link = COALESCE(
-                                    EXCLUDED.unsubscribe_link,
-                                    email_messages.unsubscribe_link),
-                                received_at = EXCLUDED.received_at,
-                                updated_at = now()"""
-                        ),
-                        {
-                            "id": str(uuid4()),
-                            "account_id": account_id,
-                            "provider_id": msg.provider_message_id,
-                            "thread_id": msg.thread_id,
-                            "folder": msg.folder or "INBOX",
-                            "labels": msg.labels,
-                            "categories": getattr(msg, "categories", []) or [],
-                            "importance": getattr(msg, "importance", "normal") or "normal",
-                            "from_addr": json.dumps({
-                                "name": msg.from_address.name if msg.from_address else "",
-                                "email": msg.from_address.email if msg.from_address else "",
-                            }),
-                            "to_addrs": json.dumps(
-                                [{"name": a.name, "email": a.email} for a in msg.to_addresses]
-                            ),
-                            "cc_addrs": json.dumps(
-                                [{"name": a.name, "email": a.email} for a in msg.cc_addresses]
-                            ),
-                            "bcc_addrs": json.dumps(
-                                [{"name": a.name, "email": a.email} for a in msg.bcc_addresses]
-                            ),
-                            "subject": msg.subject,
-                            "body_text": msg.body_text,
-                            "body_html": msg.body_html,
-                            "snippet": msg.snippet[:200] if msg.snippet else "",
-                            "has_attachments": msg.has_attachments,
-                            "is_read": msg.is_read,
-                            "is_starred": msg.is_starred,
-                            "is_flagged": msg.is_flagged,
-                            "unsubscribe_link": getattr(
-                                msg, "unsubscribe_link", None),
-                            "received_at": msg.received_at,
-                        },
-                    )
+                    # ONE shared ingest upsert (message + attachments); see
+                    # email_ingestion.persist.upsert_message.
+                    await upsert_message(db, account_id, msg)
                     persisted_count += 1
-
-                    # Persist attachments
-                    for att in msg.attachments:
-                        await db.execute(
-                            text(
-                                """INSERT INTO email_attachments
-                                   (message_id, filename, mime_type, size_bytes,
-                                    provider_attachment_id)
-                                   VALUES (
-                                    (SELECT id FROM email_messages
-                                     WHERE account_id = :account_id
-                                       AND provider_message_id = :provider_id),
-                                    :filename, :mime_type, :size_bytes,
-                                    :provider_attachment_id
-                                   )
-                                   ON CONFLICT DO NOTHING"""
-                            ),
-                            {
-                                "account_id": account_id,
-                                "provider_id": msg.provider_message_id,
-                                "filename": att.filename,
-                                "mime_type": att.mime_type,
-                                "size_bytes": att.size_bytes,
-                                "provider_attachment_id": att.provider_attachment_id,
-                            },
-                        )
 
             await db.commit()
 
@@ -422,8 +304,7 @@ async def _sync_account(
             # messages for hybrid vector ranking. No-op unless
             # email_semantic_search_enabled. Best-effort; never fails the sync.
             try:
-                from email_ingestion.email_embeddings import (
-                    embed_pending_messages)
+                from email_ingestion.email_embeddings import embed_pending_messages
                 await embed_pending_messages(db, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning("sync.email_embed_failed account=%s err=%s",
@@ -473,50 +354,6 @@ async def _sync_account(
 # -- Per-account sync loop ----------------------------------------------------
 
 
-async def _maybe_auto_run_rules(account_id: str) -> None:
-    """Process freshly-synced inbox mail with the Assistant rules engine when the
-    account's global "Run rules automatically" switch is on and it has ≥1 enabled
-    rule.
-
-    The switch (`email_assistant_settings.auto_run`) is the inbox-zero-style
-    global on/off. It defaults ON: a missing settings row is treated as enabled
-    so a fresh account auto-runs once it has rules; only an explicit OFF stops it.
-
-    The rules worker lives in the gateway; it's imported lazily so the email
-    ingestion package keeps no static dependency on the gateway package.
-    """
-    try:
-        from gateway.routes.email import _get_db, _run_rules_job  # noqa: PLC0415
-        db = await _get_db()
-        try:
-            settings = (await db.execute(
-                text(
-                    "SELECT auto_run FROM email_assistant_settings "
-                    "WHERE account_id = :aid"
-                ),
-                {"aid": account_id},
-            )).fetchone()
-            # Global switch: explicit OFF stops auto-run; missing row → ON.
-            if settings is not None and not settings.auto_run:
-                return
-            has_rule = (await db.execute(
-                text(
-                    "SELECT 1 FROM email_rules "
-                    "WHERE account_id = :aid AND enabled = true LIMIT 1"
-                ),
-                {"aid": account_id},
-            )).fetchone()
-            if not has_rule:
-                return
-        finally:
-            await db.close()
-        await _run_rules_job(account_id, 50, False, "scheduler")
-    except Exception as exc:  # noqa: BLE001
-        logger.warning(
-            "sync.auto_run_failed account_id=%s error=%s", account_id, str(exc)
-        )
-
-
 async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
     """Run sync in a loop for a single account forever."""
     logger.info(
@@ -527,53 +364,23 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
         try:
             result = await _sync_account(account_id)
             new_mail = isinstance(result, dict) and result.get("synced", 0)
-            # Auto-run Assistant rules on newly-synced mail (opt-in per account).
-            if new_mail:
-                await _maybe_auto_run_rules(account_id)
-            # Auto-categorize senders newly seen this cycle (just-in-time). The
-            # job only touches uncategorized senders and makes no LLM call when
-            # there is nothing new, so it is cheap to run every cycle.
-            if new_mail:
-                try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _categorize_senders_job,
-                    )
-                    await _categorize_senders_job(account_id, 25)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "sync.categorize_failed account_id=%s error=%s",
-                        account_id, str(exc),
-                    )
-            # Reply Zero: classify thread reply-status (needs reply / FYI /
-            # awaiting) on new mail so the view reflects real intent.
+            # Process new mail through the shared pipeline — auto-run rules,
+            # categorize senders, classify threads (Reply Zero), auto-archive.
+            # The gateway registers this hook; it isolates each step's failures
+            # internally. The SAME pipeline is enqueued by the manual-sync route
+            # and the webhook (H1) so mail is processed identically however it
+            # arrived.
             if new_mail:
                 try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _maybe_classify_threads,
-                    )
-                    await _maybe_classify_threads(account_id)
+                    await run_hook(hooks.on_new_mail, account_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
-                        "sync.classify_threads_failed account_id=%s error=%s",
-                        account_id, str(exc),
-                    )
-            # Auto-archive new inbox mail from senders marked AUTO_ARCHIVED
-            # (bulk-archive "Auto") so it applies to future mail, not just past.
-            if new_mail:
-                try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _maybe_auto_archive,
-                    )
-                    await _maybe_auto_archive(account_id)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning(
-                        "sync.auto_archive_failed account_id=%s error=%s",
+                        "sync.process_new_mail_failed account_id=%s error=%s",
                         account_id, str(exc),
                     )
             # Send a scheduled digest if one is due (opt-in per account).
             try:
-                from gateway.routes.email import _maybe_send_digest  # noqa: PLC0415
-                await _maybe_send_digest(account_id)
+                await run_hook(hooks.send_digest, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "sync.digest_check_failed account_id=%s error=%s",
@@ -581,10 +388,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                 )
             # Label / nudge threads waiting too long for a reply (opt-in).
             try:
-                from gateway.routes.email import (  # noqa: PLC0415
-                    _maybe_send_follow_up_reminders,
-                )
-                await _maybe_send_follow_up_reminders(account_id)
+                await run_hook(hooks.send_follow_up_reminders, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "sync.follow_up_check_failed account_id=%s error=%s",
@@ -593,8 +397,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
             # Ensure a Graph push subscription exists / is renewed so new mail
             # is processed in near real time (polling stays as a fallback).
             try:
-                from gateway.routes.email import _ensure_subscription  # noqa: PLC0415
-                await _ensure_subscription(account_id)
+                await run_hook(hooks.ensure_subscription, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "sync.subscription_check_failed account_id=%s error=%s",

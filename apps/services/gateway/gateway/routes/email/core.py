@@ -12,7 +12,6 @@ import json
 import os
 from datetime import datetime, timezone
 from typing import Any
-from uuid import uuid4
 
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException
@@ -581,112 +580,15 @@ def _row_to_message(row: Any) -> EmailMessageModel:
 
 
 async def _upsert_message(db: Any, account_id: str, msg: Any) -> None:
-    """Insert/update one normalized provider message into email_messages.
+    """Insert/update one normalized provider message into ``email_messages``.
 
-    Mirrors the persist logic in /sync; used by the on-demand history backfill.
+    Thin gateway adapter over the shared ingest helper
+    (:func:`email_ingestion.persist.upsert_message`) — the ONE upsert every
+    ingest path shares. Used here by the on-demand history backfill.
     """
-    await db.execute(
-        text(
-            """INSERT INTO email_messages
-               (id, account_id, provider_message_id, thread_id,
-                folder, labels, categories, importance,
-                from_address, to_addresses,
-                cc_addresses, bcc_addresses, subject,
-                body_text, body_html, snippet,
-                has_attachments, is_read, is_starred, is_flagged,
-                unsubscribe_link, received_at, synced_at)
-               VALUES
-               (:id, :account_id, :provider_id, :thread_id,
-                :folder, :labels, :categories, :importance,
-                :from_addr, :to_addrs,
-                :cc_addrs, :bcc_addrs, :subject,
-                :body_text, :body_html, :snippet,
-                :has_attachments, :is_read, :is_starred, :is_flagged,
-                :unsubscribe_link, :received_at, now())
-               ON CONFLICT (account_id, provider_message_id)
-               DO UPDATE SET
-                thread_id = EXCLUDED.thread_id,
-                folder = EXCLUDED.folder,
-                labels = EXCLUDED.labels,
-                categories = EXCLUDED.categories,
-                importance = EXCLUDED.importance,
-                from_address = EXCLUDED.from_address,
-                to_addresses = EXCLUDED.to_addresses,
-                cc_addresses = EXCLUDED.cc_addresses,
-                bcc_addresses = EXCLUDED.bcc_addresses,
-                subject = EXCLUDED.subject,
-                body_text = COALESCE(NULLIF(EXCLUDED.body_text, ''),
-                                     email_messages.body_text),
-                body_html = COALESCE(NULLIF(EXCLUDED.body_html, ''),
-                                     email_messages.body_html),
-                snippet = EXCLUDED.snippet,
-                has_attachments = EXCLUDED.has_attachments,
-                is_read = EXCLUDED.is_read,
-                is_starred = EXCLUDED.is_starred,
-                is_flagged = EXCLUDED.is_flagged,
-                unsubscribe_link = COALESCE(
-                    EXCLUDED.unsubscribe_link, email_messages.unsubscribe_link),
-                received_at = EXCLUDED.received_at,
-                updated_at = now()"""
-        ),
-        {
-            "id": str(uuid4()),
-            "account_id": account_id,
-            "provider_id": msg.provider_message_id,
-            "thread_id": msg.thread_id,
-            "folder": msg.folder or "INBOX",
-            "labels": msg.labels,
-            "categories": getattr(msg, "categories", []) or [],
-            "importance": getattr(msg, "importance", "normal") or "normal",
-            "from_addr": json.dumps({
-                "name": msg.from_address.name if msg.from_address else "",
-                "email": msg.from_address.email if msg.from_address else "",
-            }),
-            "to_addrs": json.dumps(
-                [{"name": a.name, "email": a.email} for a in msg.to_addresses]
-            ),
-            "cc_addrs": json.dumps(
-                [{"name": a.name, "email": a.email} for a in msg.cc_addresses]
-            ),
-            "bcc_addrs": json.dumps(
-                [{"name": a.name, "email": a.email} for a in msg.bcc_addresses]
-            ),
-            "subject": msg.subject,
-            "body_text": _truncate_body(msg.body_text, MAX_BODY_TEXT_BYTES),
-            "body_html": _truncate_body(msg.body_html, MAX_BODY_HTML_BYTES)
-            if msg.body_html else None,
-            "snippet": msg.snippet[:200] if msg.snippet else "",
-            "has_attachments": msg.has_attachments,
-            "is_read": msg.is_read,
-            "is_starred": msg.is_starred,
-            "is_flagged": msg.is_flagged,
-            "unsubscribe_link": getattr(msg, "unsubscribe_link", None),
-            "received_at": msg.received_at,
-        },
-    )
-    for att in msg.attachments:
-        await db.execute(
-            text(
-                """INSERT INTO email_attachments
-                   (message_id, filename, mime_type, size_bytes,
-                    provider_attachment_id)
-                   VALUES (
-                    (SELECT id FROM email_messages
-                     WHERE account_id = :account_id
-                       AND provider_message_id = :provider_id),
-                    :filename, :mime_type, :size_bytes, :provider_attachment_id
-                   )
-                   ON CONFLICT DO NOTHING"""
-            ),
-            {
-                "account_id": account_id,
-                "provider_id": msg.provider_message_id,
-                "filename": att.filename,
-                "mime_type": att.mime_type,
-                "size_bytes": att.size_bytes,
-                "provider_attachment_id": att.provider_attachment_id,
-            },
-        )
+    from email_ingestion.persist import upsert_message
+
+    await upsert_message(db, account_id, msg)
 
 
 async def _fetch_attachments(db: Any, message_id: str) -> list[AttachmentModel]:

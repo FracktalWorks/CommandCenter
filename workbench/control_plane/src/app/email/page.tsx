@@ -174,8 +174,11 @@ export default function EmailPage() {
   // to ask for older mail from), so never offer "load older" on those views.
   const canBackfillFolder =
     isRealFolder(selectedFolder) && !backfillExhausted[selectedFolder];
+  // "processing" (the background rules/labels pipeline after H1) counts as busy
+  // too, so the top-bar refresh button keeps spinning until it settles.
   const syncing = selectedAccountId
-    ? syncStatus[selectedAccountId] === "syncing"
+    ? syncStatus[selectedAccountId] === "syncing" ||
+      syncStatus[selectedAccountId] === "processing"
     : false;
 
   // Reset mobile view when folder/account changes

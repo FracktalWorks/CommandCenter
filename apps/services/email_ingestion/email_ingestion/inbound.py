@@ -18,7 +18,6 @@ from __future__ import annotations
 
 import asyncio
 import email as email_lib
-import json
 import logging
 from datetime import datetime, timezone
 from email.header import decode_header
@@ -29,6 +28,7 @@ from uuid import uuid4
 from aiosmtpd.controller import Controller
 from aiosmtpd.smtp import SMTP, Envelope, Session
 
+from .persist import upsert_message
 from .providers.base import Attachment, EmailAddress, EmailMessage
 
 logger = logging.getLogger(__name__)
@@ -268,7 +268,6 @@ async def _persist_message(msg: EmailMessage) -> None:
         return
 
     try:
-        from sqlalchemy import text
         from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
         engine = create_async_engine(
@@ -277,84 +276,12 @@ async def _persist_message(msg: EmailMessage) -> None:
         session_factory = async_sessionmaker(engine, expire_on_commit=False)
 
         async with session_factory() as db:
-            await db.execute(
-                text(
-                    """INSERT INTO email_messages
-                       (id, account_id, provider_message_id, thread_id,
-                        folder, labels, from_address, to_addresses,
-                        cc_addresses, bcc_addresses, subject,
-                        body_text, body_html, snippet,
-                        has_attachments, is_read, is_starred, is_flagged,
-                        unsubscribe_link, received_at, synced_at)
-                       VALUES
-                       (:id, :account_id, :provider_id, :thread_id,
-                        :folder, :labels, :from_addr, :to_addrs,
-                        :cc_addrs, :bcc_addrs, :subject,
-                        :body_text, :body_html, :snippet,
-                        :has_attachments, :is_read, :is_starred, :is_flagged,
-                        :unsubscribe_link, :received_at, now())
-                       ON CONFLICT (account_id, provider_message_id) DO NOTHING"""
-                ),
-                {
-                    "id": str(uuid4()),
-                    "account_id": _inbound_account_id,
-                    "provider_id": msg.provider_message_id,
-                    "thread_id": msg.thread_id,
-                    "folder": msg.folder or "INBOX",
-                    "labels": msg.labels,
-                    "from_addr": json.dumps(
-                        {
-                            "name": msg.from_address.name if msg.from_address else "",
-                            "email": msg.from_address.email if msg.from_address else "",
-                        }
-                    ),
-                    "to_addrs": json.dumps(
-                        [{"name": a.name, "email": a.email} for a in msg.to_addresses]
-                    ),
-                    "cc_addrs": json.dumps(
-                        [{"name": a.name, "email": a.email} for a in msg.cc_addresses]
-                    ),
-                    "bcc_addrs": json.dumps(
-                        [{"name": a.name, "email": a.email} for a in msg.bcc_addresses]
-                    ),
-                    "subject": msg.subject,
-                    "body_text": msg.body_text,
-                    "body_html": msg.body_html,
-                    "snippet": msg.snippet[:200] if msg.snippet else "",
-                    "has_attachments": msg.has_attachments,
-                    "is_read": msg.is_read,
-                    "is_starred": msg.is_starred,
-                    "is_flagged": msg.is_flagged,
-                    "unsubscribe_link": getattr(msg, "unsubscribe_link", None),
-                    "received_at": msg.received_at,
-                },
+            # ONE shared ingest upsert (message + attachments). Inbound mail is
+            # insert-only — the sync paths reconcile any later edits — so pass
+            # on_conflict="nothing". See email_ingestion.persist.upsert_message.
+            await upsert_message(
+                db, _inbound_account_id, msg, on_conflict="nothing"
             )
-
-            # Persist attachment metadata
-            for att in msg.attachments:
-                await db.execute(
-                    text(
-                        """INSERT INTO email_attachments
-                           (message_id, filename, mime_type, size_bytes,
-                            provider_attachment_id)
-                           VALUES (
-                            (SELECT id FROM email_messages
-                             WHERE account_id = :account_id
-                               AND provider_message_id = :provider_id),
-                            :filename, :mime_type, :size_bytes,
-                            :provider_attachment_id
-                           )
-                           ON CONFLICT DO NOTHING"""
-                    ),
-                    {
-                        "account_id": _inbound_account_id,
-                        "provider_id": msg.provider_message_id,
-                        "filename": att.filename,
-                        "mime_type": att.mime_type,
-                        "size_bytes": att.size_bytes,
-                        "provider_attachment_id": att.provider_attachment_id,
-                    },
-                )
 
             await db.commit()
 

@@ -188,9 +188,17 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.key_store_skipped", error=str(exc))
 
-    # Start background email sync scheduler
+    # Start background email sync scheduler. First wire the gateway's post-sync
+    # callbacks (rules / categorize / classify / digest / follow-up) into the
+    # scheduler's hook registry, so the scheduler runs them without importing up
+    # into the gateway (C2 layering inversion).
     try:
         from email_ingestion.scheduler import start_background_sync
+
+        from gateway.routes.email.scheduler_hooks import (
+            register_email_post_sync_hooks,
+        )
+        register_email_post_sync_hooks()
         await start_background_sync()
         _log.info("gateway.email_sync_started")
     except Exception as exc:

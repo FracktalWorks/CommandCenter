@@ -26,6 +26,7 @@ from sqlalchemy import text
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
+from email_ingestion.post_sync import hooks, run_hook
 from email_ingestion.providers.factory import build_provider
 from email_ingestion.reconcile import reconcile_full_snapshot
 
@@ -474,43 +475,15 @@ async def _sync_account(
 
 
 async def _maybe_auto_run_rules(account_id: str) -> None:
-    """Process freshly-synced inbox mail with the Assistant rules engine when the
-    account's global "Run rules automatically" switch is on and it has ≥1 enabled
-    rule.
+    """Process freshly-synced inbox mail with the Assistant rules engine.
 
-    The switch (`email_assistant_settings.auto_run`) is the inbox-zero-style
-    global on/off. It defaults ON: a missing settings row is treated as enabled
-    so a fresh account auto-runs once it has rules; only an explicit OFF stops it.
-
-    The rules worker lives in the gateway; it's imported lazily so the email
-    ingestion package keeps no static dependency on the gateway package.
+    Delegates to the gateway-registered ``auto_run_rules`` hook (see
+    :mod:`email_ingestion.post_sync`), which owns the "auto_run switch + has a
+    rule?" gating and the rules worker. Best-effort: a failure is logged and
+    never breaks the sync loop. No-op if the gateway hasn't registered the hook.
     """
     try:
-        from gateway.routes.email import _get_db, _run_rules_job  # noqa: PLC0415
-        db = await _get_db()
-        try:
-            settings = (await db.execute(
-                text(
-                    "SELECT auto_run FROM email_assistant_settings "
-                    "WHERE account_id = :aid"
-                ),
-                {"aid": account_id},
-            )).fetchone()
-            # Global switch: explicit OFF stops auto-run; missing row → ON.
-            if settings is not None and not settings.auto_run:
-                return
-            has_rule = (await db.execute(
-                text(
-                    "SELECT 1 FROM email_rules "
-                    "WHERE account_id = :aid AND enabled = true LIMIT 1"
-                ),
-                {"aid": account_id},
-            )).fetchone()
-            if not has_rule:
-                return
-        finally:
-            await db.close()
-        await _run_rules_job(account_id, 50, False, "scheduler")
+        await run_hook(hooks.auto_run_rules, account_id)
     except Exception as exc:  # noqa: BLE001
         logger.warning(
             "sync.auto_run_failed account_id=%s error=%s", account_id, str(exc)
@@ -535,10 +508,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
             # there is nothing new, so it is cheap to run every cycle.
             if new_mail:
                 try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _categorize_senders_job,
-                    )
-                    await _categorize_senders_job(account_id, 25)
+                    await run_hook(hooks.categorize_senders, account_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "sync.categorize_failed account_id=%s error=%s",
@@ -548,10 +518,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
             # awaiting) on new mail so the view reflects real intent.
             if new_mail:
                 try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _maybe_classify_threads,
-                    )
-                    await _maybe_classify_threads(account_id)
+                    await run_hook(hooks.classify_threads, account_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "sync.classify_threads_failed account_id=%s error=%s",
@@ -561,10 +528,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
             # (bulk-archive "Auto") so it applies to future mail, not just past.
             if new_mail:
                 try:
-                    from gateway.routes.email import (  # noqa: PLC0415
-                        _maybe_auto_archive,
-                    )
-                    await _maybe_auto_archive(account_id)
+                    await run_hook(hooks.auto_archive, account_id)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning(
                         "sync.auto_archive_failed account_id=%s error=%s",
@@ -572,8 +536,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                     )
             # Send a scheduled digest if one is due (opt-in per account).
             try:
-                from gateway.routes.email import _maybe_send_digest  # noqa: PLC0415
-                await _maybe_send_digest(account_id)
+                await run_hook(hooks.send_digest, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "sync.digest_check_failed account_id=%s error=%s",
@@ -581,10 +544,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                 )
             # Label / nudge threads waiting too long for a reply (opt-in).
             try:
-                from gateway.routes.email import (  # noqa: PLC0415
-                    _maybe_send_follow_up_reminders,
-                )
-                await _maybe_send_follow_up_reminders(account_id)
+                await run_hook(hooks.send_follow_up_reminders, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "sync.follow_up_check_failed account_id=%s error=%s",
@@ -593,8 +553,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
             # Ensure a Graph push subscription exists / is renewed so new mail
             # is processed in near real time (polling stays as a fallback).
             try:
-                from gateway.routes.email import _ensure_subscription  # noqa: PLC0415
-                await _ensure_subscription(account_id)
+                await run_hook(hooks.ensure_subscription, account_id)
             except Exception as exc:  # noqa: BLE001
                 logger.warning(
                     "sync.subscription_check_failed account_id=%s error=%s",

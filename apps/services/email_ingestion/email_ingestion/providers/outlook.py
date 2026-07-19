@@ -1056,7 +1056,10 @@ class OutlookProvider(BaseEmailProvider):
             fa = raw["from"].get("emailAddress", {})
             from_addr = EmailAddress(name=fa.get("name", ""), email=fa.get("address", ""))
 
-        # Categories (Outlook user categories, e.g. "Red category")
+        # Categories (Outlook user categories, e.g. "Red category"). Graph
+        # returns the full category list on every message, and set_labels writes
+        # back to the same field, so this genuinely round-trips — an empty list
+        # means the user cleared them, not that we failed to look.
         categories = raw.get("categories", []) or []
 
         # Flag status
@@ -1113,6 +1116,7 @@ class OutlookProvider(BaseEmailProvider):
             is_flagged=is_flagged,
             importance=importance,
             categories=categories,
+            categories_authoritative=True,
             unsubscribe_link=unsubscribe_link,
             received_at=self._parse_received_datetime(raw.get("receivedDateTime")),
             raw=raw,

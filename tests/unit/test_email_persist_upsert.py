@@ -53,6 +53,7 @@ class _Msg:
     is_flagged: bool = False
     importance: str = "normal"
     categories: list = field(default_factory=list)
+    categories_authoritative: bool = False
     unsubscribe_link: str | None = "https://unsub.example/x"
     received_at: Any = None
 
@@ -79,6 +80,39 @@ async def test_update_mode_emits_do_update_and_preserves_unsubscribe():
     assert params["unsubscribe_link"] == "https://unsub.example/x"
     assert params["account_id"] == "acct-1"
     assert params["provider_id"] == "pm-1"
+
+
+async def test_resync_never_clobbers_labels_a_provider_cannot_report():
+    """The regression that made the Inbox Cleaner look empty.
+
+    ``email_messages.categories`` is where the RULE ENGINE writes its labels
+    (Newsletter / Marketing / Notification / …) and what every category chip,
+    quick filter and the cleaner read. A provider that simply doesn't report
+    categories — generic IMAP, and Gmail before it resolved user-label IDs to
+    names — sends ``{}`` on every tick. The old unconditional
+    ``categories = EXCLUDED.categories`` therefore erased the lot on the next
+    re-sync, permanently: ``rules_processed_at`` is already stamped, so the
+    rules never re-applied them. The replace is now opt-in per provider.
+    """
+    db = _FakeDB()
+    await upsert_message(db, "acct-1", _Msg())
+    sql, params = db.calls[0]
+    assert "categories = CASE WHEN :categories_authoritative" in sql
+    assert "ELSE email_messages.categories END" in sql
+    assert params["categories_authoritative"] is False
+
+
+async def test_a_round_tripping_provider_stays_authoritative():
+    """Gmail (with its label map loaded) and Outlook do report the full label
+    set, so an empty list genuinely means "the user cleared them" and must
+    propagate — otherwise a label removed upstream could never be removed."""
+    db = _FakeDB()
+    await upsert_message(
+        db, "acct-1", _Msg(categories=["Newsletter"], categories_authoritative=True)
+    )
+    _, params = db.calls[0]
+    assert params["categories_authoritative"] is True
+    assert params["categories"] == ["Newsletter"]
 
 
 async def test_nothing_mode_emits_do_nothing_only():

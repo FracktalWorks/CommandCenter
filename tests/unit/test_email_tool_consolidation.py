@@ -98,7 +98,10 @@ def calls(monkeypatch):
 
 def test_surface_shrank_and_merged_names_gone() -> None:
     tools = agents._register_agent_tools()
-    assert len(tools) == 41
+    # 41 after the consolidation pass, +1 for auto_categorize_inbox (the
+    # uncategorized-inbox sweep — categorize_senders only re-projects existing
+    # rule labels and cannot categorize mail the rules never reached).
+    assert len(tools) == 42
     for gone in ("search_emails", "get_important_emails", "find_urgent",
                  "find_needs_reply", "get_full_body_email", "update_rule_state",
                  "approve_execution", "reject_execution", "undo_execution",

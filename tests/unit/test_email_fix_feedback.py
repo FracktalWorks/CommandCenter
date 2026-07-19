@@ -37,6 +37,10 @@ async def _run_feedback(req, *, rules, status_result=None):
 
     async def fake_upsert(_db, aid, rid, val, exclude, *a, **k):
         upserts.append((rid, val, exclude))
+        # Mirrors the real helper's contract: True == a pattern was stored. The
+        # caller only reports "learned" when this is True, so a mock returning
+        # None would (correctly) produce created=False.
+        return True
 
     async def fake_status(aid, tid, key):
         status_calls.append((aid, tid, key))
@@ -90,3 +94,34 @@ async def test_fix_to_cleanup_rule_learns_from_pattern() -> None:
 async def test_apply_status_correction_rejects_unknown_key() -> None:
     res = await _rz.apply_thread_status_correction("acc-1", "t1", "BOGUS")
     assert res == {"ok": False}
+
+
+async def test_refused_pattern_is_not_reported_as_learned() -> None:
+    """_upsert_rule_pattern refuses some writes on purpose (a conversation rule
+    can't be sender-pinned; the mailbox's own address is never pinned). Those
+    used to still be reported as "Learned — emails from X will now match Y",
+    so the user saw a success toast, nothing changed, and they repeated the same
+    correction forever with no effect."""
+    rules = [_rule("r-news", "Newsletter")]
+    req = m.RuleFeedbackRequest(
+        account_id="acc-1", sender="news@brand.com", expected="r-news",
+        message_id="m1")
+
+    db = AsyncMock()
+    res = MagicMock()
+    res.fetchone.return_value = SimpleNamespace(thread_id="t1")
+    db.execute.return_value = res
+
+    async def refuse(*_a, **_k):
+        return False           # every write refused by a guard
+
+    user = SimpleNamespace(email="u@example.com")
+    with patch.object(_rules, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(_rules, "_assert_account_owner", AsyncMock()), \
+            patch.object(_rules, "_load_rules", AsyncMock(return_value=rules)), \
+            patch.object(_rules, "_upsert_rule_pattern",
+                         AsyncMock(side_effect=refuse)):
+        resp = await m.rule_feedback(req, user=user)
+
+    assert resp["learned"] == []
+    assert resp["created"] is False

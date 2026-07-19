@@ -189,10 +189,22 @@ async def list_senders(
             )
             params["folder"] = folder
 
+        # How many of the sender's counted messages are actually IN the requested
+        # folder. The rollup deliberately reaches outside it (above) so a sender
+        # we've already unsubscribed/auto-archived doesn't vanish — but that made
+        # `count` mean two different things depending on the row: inbox mail for a
+        # fresh sender, mail-everywhere for one with a disposition. A blocked
+        # sender then showed "412 emails" with nothing left in the inbox at all.
+        # Report both, and let the UI lead with the folder-scoped number.
+        in_folder_sql = (
+            "COUNT(*) FILTER (WHERE LOWER(folder) = LOWER(:folder))"
+            if folder else "COUNT(*)"
+        )
         rows = (await db.execute(text(
             f"""SELECT LOWER(from_address->>'email') AS email,
                        MAX(from_address->>'name') AS name,
                        COUNT(*) AS count,
+                       {in_folder_sql} AS in_folder,
                        COUNT(*) FILTER (WHERE is_read = false) AS unread,
                        COUNT(*) FILTER (WHERE LOWER(folder) = 'archive') AS archived,
                        MAX(received_at) AS last_received,
@@ -245,30 +257,28 @@ async def list_senders(
 
         # Per-sender cleanup categories DERIVED from the rule-labelled per-message
         # categories (email_messages.categories). This is the reliable signal the
-        # cleaner now runs on: the set powers the category filter tabs, and the
+        # cleaner runs on: the set powers the category filter tabs, and the
         # most-frequent one is the chip. Same scope/folder as the sender rollup.
+        #
+        # Matched on LOWER(TRIM(cat)) via the shared _LABEL_TALLY_SQL. The writer
+        # (runner.py's LABEL action) stores the rule's label verbatim and never
+        # trims, so an exact-case comparison here silently dropped every label
+        # whose rule name differed by case or stray whitespace — the sender then
+        # rendered as uncategorized despite its mail being labelled.
+        not_self = (" AND LOWER(em.from_address->>'email') NOT IN ("
+                    "SELECT LOWER(email_address) FROM email_accounts "
+                    "WHERE user_id = :uid)")
         msgcat_rows = (await db.execute(text(
-            f"""SELECT LOWER(em.from_address->>'email') AS email, cat,
-                       COUNT(*) AS n
-                FROM email_messages em, LATERAL unnest(em.categories) AS cat
-                WHERE {scope}{folder_sql}
-                  AND cat = ANY(:cleanup)
-                  AND COALESCE(em.from_address->>'email','') <> ''
-                  AND LOWER(em.from_address->>'email') NOT IN (
-                    SELECT LOWER(email_address) FROM email_accounts
-                    WHERE user_id = :uid)
-                GROUP BY email, cat"""
-        ), {**params, "cleanup": _CLEANUP_CATEGORIES})).fetchall()
-        # email -> [(category, count)] sorted by count desc.
-        msg_cats: dict[str, list[tuple[str, int]]] = {}
+            _LABEL_TALLY_SQL.format(scope=scope, extra=folder_sql + not_self)
+        ), {**params, "labels": _KNOWN_LABELS_LOWER})).fetchall()
+        # email -> {lowercased label: count}
+        label_counts: dict[str, dict[str, int]] = {}
         for r in msgcat_rows:
-            msg_cats.setdefault(r.email, []).append((r.cat, r.n or 0))
-        for v in msg_cats.values():
-            v.sort(key=lambda kv: kv[1], reverse=True)
+            label_counts.setdefault(r.email, {})[r.label] = int(r.n or 0)
 
         def _categories_for(email: str) -> list[str]:
             """Distinct cleanup categories on this sender's mail (chip + tabs)."""
-            derived = [c for c, _ in msg_cats.get(email, [])]
+            derived = _cleanup_categories_ranked(label_counts.get(email, {}))
             # Fall back to a trustworthy sender-level (rule/user) category when the
             # messages themselves carry no cleanup label yet.
             if not derived and sender_cat_by_email.get(email):
@@ -277,12 +287,25 @@ async def list_senders(
                     derived = [sc]
             return derived
 
+        def _labelled_count(email: str) -> int:
+            """How many of this sender's messages carry ANY known rule label.
+
+            Distinguishes "the rules ran and found nothing to clean up" from
+            "the rules never reached this sender" — the latter is what the
+            uncategorized sweep targets.
+            """
+            return sum(label_counts.get(email, {}).values())
+
         return {
             "senders": [
                 {
                     "email": r.email,
                     "name": r.name or "",
                     "count": r.count,
+                    # Of `count`, how many sit in the folder being cleaned.
+                    # Differs from `count` only for senders pulled in by their
+                    # saved disposition (see the query comment above).
+                    "in_folder": r.in_folder or 0,
                     "unread": r.unread or 0,
                     "archived": r.archived or 0,
                     "read_rate": round((r.count - (r.unread or 0)) / r.count, 4)
@@ -302,6 +325,10 @@ async def list_senders(
                     "category": (_categories_for(r.email) or [None])[0],
                     "categories": _categories_for(r.email),
                     "category_source": "rule",
+                    # Messages the rules have labelled (any label, cleanup or
+                    # conversation). 0 ⇒ this sender's mail was never classified,
+                    # which is what the "Uncategorized" tab surfaces.
+                    "labelled": _labelled_count(r.email),
                 }
                 for r in rows
             ]
@@ -847,19 +874,59 @@ EMAIL_CATEGORIES = [
 
 # The sender-stable categories the RULE ENGINE writes to email_messages.categories
 # (the cleanup preset rules). A sender's category is rolled up from these — the
-# Inbox Cleaner projects the rules, it does not re-classify. Personal/Support/
-# Unknown are NOT rule categories, so they only come from the cold-start fallback.
+# Inbox Cleaner PROJECTS the rules, it never re-classifies. Personal is inferred
+# from conversation activity; Support/Unknown are vocabulary-only (no producer).
 _CLEANUP_CATEGORIES = [
     "Newsletter", "Marketing", "Receipt", "Calendar", "Notification", "Cold Email",
 ]
 _CLEANUP_BY_LOWER = {c.lower(): c for c in _CLEANUP_CATEGORIES}
 # Reply Zero conversation labels (also rule-engine output) — a sender you
-# converse with is a person, not a bulk sender.
-_CONVERSATION_LOWER = {"reply", "awaiting reply", "fyi", "done",
+# converse with is a person, not a bulk sender. "follow-up" is written by
+# replyzero._maybe_send_follow_up_reminders and belongs here for the same reason.
+_CONVERSATION_LOWER = {"reply", "awaiting reply", "fyi", "done", "follow-up",
                        "to reply", "actioned"}  # + legacy names, pre-rename
-# How many of a sender's messages the rules must have labelled before we trust
-# the rollup over the cold-start guess (mirrors the auto-learn consistency bar).
+# All labels the rollup understands — the single list both the /senders read path
+# and the sender-category job match on.
+_KNOWN_LABELS_LOWER = list(_CLEANUP_BY_LOWER) + sorted(_CONVERSATION_LOWER)
+# How many of a sender's messages the rules must have labelled before the sender
+# is *persisted* with that category (mirrors the auto-learn consistency bar).
 _MIN_RULE_MESSAGES = 3
+
+
+def canonical_cleanup_category(label: str | None) -> str | None:
+    """Canonical cleanup-category name for a raw per-message label, else None.
+
+    The rule engine writes ``email_actions.label`` verbatim, so a hand-edited
+    rule can store " newsletter" or "NEWSLETTER" and still mean the preset. Both
+    readers normalise through here so the chips, the filter tabs and the sender
+    rollup can never disagree about what counts as a Newsletter.
+    """
+    return _CLEANUP_BY_LOWER.get((label or "").strip().lower())
+
+
+# One tally query, used by BOTH the /senders read path and the sender-category
+# job, so the two can't drift on casing or on which labels count. Callers
+# interpolate ``scope``/``extra`` and bind :labels.
+_LABEL_TALLY_SQL = """
+    SELECT LOWER(em.from_address->>'email') AS email,
+           LOWER(TRIM(cat)) AS label,
+           COUNT(DISTINCT em.id) AS n
+      FROM email_messages em
+      CROSS JOIN LATERAL unnest(em.categories) AS cat
+     WHERE {scope}{extra}
+       AND LOWER(TRIM(cat)) = ANY(:labels)
+       AND COALESCE(em.from_address->>'email','') <> ''
+     GROUP BY 1, 2
+"""
+
+
+def _cleanup_categories_ranked(label_counts: dict[str, int]) -> list[str]:
+    """Cleanup categories present on a sender's mail, most-used first."""
+    hits = [(_CLEANUP_BY_LOWER[low], n)
+            for low, n in label_counts.items()
+            if n and low in _CLEANUP_BY_LOWER]
+    hits.sort(key=lambda kv: kv[1], reverse=True)
+    return [c for c, _ in hits]
 
 
 def _rule_category(label_counts: dict[str, int]) -> str | None:
@@ -868,7 +935,8 @@ def _rule_category(label_counts: dict[str, int]) -> str | None:
     ``label_counts`` maps a lowercased rule label → how many of the sender's
     messages carry it. Returns the dominant cleanup category when the rules have
     labelled enough of the sender's mail, else "Personal" when they're a
-    reply-active correspondent, else None (defer to the cold-start fallback)."""
+    reply-active correspondent, else None (the sender simply stays
+    uncategorized — there is no second classifier to fall back to)."""
     cleanup = {proper: label_counts.get(low, 0)
                for low, proper in _CLEANUP_BY_LOWER.items()}
     top_cat, top_n = max(cleanup.items(), key=lambda kv: kv[1], default=(None, 0))
@@ -878,73 +946,6 @@ def _rule_category(label_counts: dict[str, int]) -> str | None:
     if conv_n >= _MIN_RULE_MESSAGES and top_n == 0:
         return "Personal"
     return None
-
-
-async def _llm_categorize_senders(
-    items: list[dict[str, Any]], *, model: str = "tier-fast",
-) -> dict[str, str]:
-    """Categorize a batch of senders. items: [{email, name, subjects, scope?}].
-
-    Runs on the account's rule-evaluation ``model`` (labeling is part of rule
-    evaluation). ``scope`` (self/internal/external — see identity.py) lets the
-    model refuse RECEIVE-only categories for the user's own / same-org senders, so
-    a teammate's address that sends invoices isn't bucketed as ``Receipt``.
-    Returns {email: category}; empty dict on LLM failure (callers default to
-    'Unknown').
-    """
-    if not items:
-        return {}
-    try:
-        def _line(i: int, it: dict[str, Any]) -> str:
-            tag = (" [YOUR ORGANISATION — internal/outbound]"
-                   if it.get("scope") in ("self", "internal") else "")
-            # Volume / read-rate / one-click-unsubscribe are strong signals:
-            # high-volume + low-read + has-unsubscribe ⇒ Newsletter/Marketing.
-            vol = int(it.get("volume", 0) or 0)
-            unread = int(it.get("unread", 0) or 0)
-            read_pct = round((vol - unread) / vol * 100) if vol else 0
-            unsub = " [has one-click unsubscribe]" if it.get("has_unsub") else ""
-            stats = f" ({vol} emails, {read_pct}% read){unsub}" if vol else unsub
-            return (f"{i}. {it.get('name') or ''} <{it['email']}>{tag}{stats} — "
-                    f"subjects: {'; '.join((it.get('subjects') or [])[:3])}")
-        listing = "\n".join(_line(i, it) for i, it in enumerate(items))
-        sys_prompt = (
-            "Classify each email sender into exactly one category from: "
-            f"{', '.join(EMAIL_CATEGORIES)}. Use the sender address, recent "
-            "subjects, and the signals in brackets: a sender with a one-click "
-            "unsubscribe and/or high volume + low read-rate is almost certainly "
-            "Newsletter or Marketing; a low-volume sender you read is more likely "
-            "Personal/Support. Senders tagged [YOUR ORGANISATION] are the user's "
-            "own address or company (same domain) — their mail is internal/"
-            "outbound, so NEVER classify them as Receipt, Newsletter, Marketing, "
-            "Cold Email or Notification (those are for mail RECEIVED from outside "
-            "parties); use Personal, Support, Calendar or Unknown instead. "
-            "Respond with ONLY "
-            'a JSON object '
-            '{"results": [{"index": <n>, "category": "<one category>"}]}.'
-        )
-        # JSON-forced (object wrapper required by json_object mode); a generous
-        # budget so a large sender batch isn't truncated mid-array.
-        data, _content, _used = await _llm_json(
-            model,
-            [{"role": "system", "content": sys_prompt},
-             {"role": "user", "content": listing}],
-            max_tokens=2000,
-        )
-        rows = data.get("results") if isinstance(data, dict) else (
-            data if isinstance(data, list) else None)
-        out: dict[str, str] = {}
-        if isinstance(rows, list):
-            for d in rows:
-                idx = d.get("index") if isinstance(d, dict) else None
-                cat = d.get("category") if isinstance(d, dict) else None
-                if isinstance(idx, int) and 0 <= idx < len(items) \
-                        and cat in EMAIL_CATEGORIES:
-                    out[items[idx]["email"]] = cat
-        return out
-    except Exception as exc:  # noqa: BLE001
-        _log.warning("email.categorize_failed", error=str(exc)[:200])
-        return {}
 
 
 async def _upsert_sender_category(
@@ -969,26 +970,26 @@ async def _upsert_sender_category(
 async def _categorize_senders_job(account_id: str, limit: int) -> None:
     """Background: assign a category to the account's busiest senders.
 
-    Convergence with the rule engine: a sender's category is PROJECTED from the
-    rules' per-message labels (email_messages.categories) — the dominant cleanup
-    category, or Personal for a reply-active correspondent. The standalone LLM
-    classifier is now only a COLD-START fallback, used for a still-uncategorized
-    sender the rules haven't labelled enough of yet. So the Inbox Cleaner agrees
-    with the rest of the app instead of running a parallel classifier."""
+    This is a PROJECTION, not a classifier. A sender's category is rolled up
+    from the rule engine's per-message labels (``email_messages.categories``) —
+    the dominant cleanup category, or Personal for a reply-active correspondent.
+    There is no second opinion: a sender the rules haven't labelled stays
+    uncategorized until they do, and the Inbox Cleaner lists it either way.
+
+    It exists (rather than everything reading ``email_messages.categories``
+    live) because the digest and the ``sender_category`` search filter need a
+    stable per-sender column. ``/senders`` derives the same values on the fly
+    through the same ``_LABEL_TALLY_SQL`` + ``_rule_category`` helpers, so the
+    two views cannot disagree.
+    """
     db = await _get_db()
     try:
-        # Busiest senders, with their CURRENT category/source (so we can upgrade a
-        # provisional 'inferred' guess to a 'rule' projection, but never re-run the
-        # LLM on a sender that already has one and still lacks rule coverage).
+        # Busiest senders, with their CURRENT category/source so a 'user'
+        # override is never overwritten.
         rows = (await db.execute(text(
             """SELECT LOWER(em.from_address->>'email') AS email,
                       MAX(em.from_address->>'name') AS name,
-                      (array_agg(em.subject ORDER BY em.received_at DESC))[1:3]
-                        AS subjects,
                       COUNT(*) AS volume,
-                      COUNT(*) FILTER (WHERE em.is_read = false) AS unread,
-                      bool_or(em.unsubscribe_link IS NOT NULL) AS has_unsub,
-                      MAX(se.category) AS cur_category,
                       MAX(se.category_source) AS cur_source
                FROM email_messages em
                LEFT JOIN email_senders se
@@ -1021,34 +1022,45 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
             return
 
         # Roll up the rule engine's per-message labels for these senders in one
-        # pass: {email: {lowercased label: message count}}.
-        known = list(_CLEANUP_BY_LOWER) + list(_CONVERSATION_LOWER)
+        # pass: {email: {lowercased label: message count}}. Shares the exact SQL
+        # the /senders read path uses so the persisted column and the live
+        # derivation can never disagree.
         emails = [r.email for r in cands]
         tally_rows = (await db.execute(text(
-            """SELECT LOWER(em.from_address->>'email') AS email,
-                      LOWER(TRIM(cat)) AS label, COUNT(DISTINCT em.id) AS n
-               FROM email_messages em
-               CROSS JOIN LATERAL unnest(em.categories) AS cat
-               WHERE em.account_id = :aid
-                 AND LOWER(em.from_address->>'email') = ANY(:emails)
-                 AND LOWER(TRIM(cat)) = ANY(:labels)
-               GROUP BY 1, 2"""
-        ), {"aid": account_id, "emails": emails, "labels": known})).fetchall()
+            _LABEL_TALLY_SQL.format(
+                scope="em.account_id = :aid",
+                extra=" AND LOWER(em.from_address->>'email') = ANY(:emails)",
+            )
+        ), {"aid": account_id, "emails": emails,
+            "labels": _KNOWN_LABELS_LOWER})).fetchall()
         counts: dict[str, dict[str, int]] = {}
         for t in tally_rows:
             counts.setdefault(t.email, {})[t.label] = int(t.n)
 
         # Project the rule engine's per-message labels into a sender category —
-        # the ONLY categorization the cleaner trusts now. The old cold-start LLM
-        # fallback (persisted as provisional 'inferred' guesses) was removed: it
-        # ran on a thin signal, never self-corrected, and misled the user. A
-        # sender the rules haven't labelled simply stays uncategorized until they
-        # do (the cleaner still lists it; it just carries no category chip).
+        # the ONLY categorization there is. There is no cold-start LLM fallback:
+        # the old one persisted provisional 'inferred' guesses off a thin signal,
+        # never self-corrected, and misled the user. A sender the rules haven't
+        # labelled stays uncategorized until they do (the cleaner still lists it;
+        # it just carries no category chip, and the uncategorized sweep can fill
+        # it in from learned patterns).
+        stale: list[str] = []
         for r in cands:
             rcat = _rule_category(counts.get(r.email, {}))
             if rcat:
                 await _upsert_sender_category(
                     db, account_id, r.email, r.name or "", rcat, "rule")
+            else:
+                stale.append(r.email)
+        # A sender whose labels were since removed (rule deleted, user cleared
+        # the chips) must lose its projection too, else the digest and the
+        # sender_category search filter keep reporting a category /senders no
+        # longer shows. 'user' overrides are excluded from cands already.
+        if stale:
+            await db.execute(text(
+                "DELETE FROM email_senders WHERE account_id = :aid "
+                "AND email = ANY(:emails) AND category_source = 'rule'"
+            ), {"aid": account_id, "emails": stale})
         await db.commit()
 
         # One-time cleanup: retire any stale 'inferred' guesses left by earlier
@@ -1076,7 +1088,12 @@ async def categorize_senders(
     background: BackgroundTasks,
     user: UserContext = Depends(get_current_user),
 ):
-    """Schedule LLM categorization of the account's senders (background)."""
+    """Re-project sender categories from the rule labels (background).
+
+    Not a classifier — it only rolls up ``email_messages.categories``. To make
+    the rules actually label more mail, use ``/email/senders/auto-categorize``
+    (learned-pattern sweep) or ``/email/rules/process-past`` (full re-run).
+    """
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
@@ -1186,7 +1203,16 @@ async def _maybe_block_cold(
             actions = ["ARCHIVE", "LABEL"]
         else:
             actions = ["LABEL"]
-        await provider.set_labels(provider_msg_id, add=["Cold Email"], remove=[])
+        # Through the shared label writer, so the label lands on BOTH surfaces.
+        # This used to push to the provider only, which made an AI-blocked cold
+        # email invisible to the Cold Email chip, the quick filter and this very
+        # cleaner — the one place the user goes to deal with cold outreach.
+        # Lazy import: runner imports _maybe_block_cold from here.
+        from gateway.routes.email.automation.runner import (  # noqa: PLC0415
+            apply_label,
+        )
+        await apply_label(
+            db, provider, message_id, provider_msg_id, "Cold Email")
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.cold_action_failed", error=str(exc)[:120])
     await db.execute(text(

@@ -55,14 +55,23 @@ async def auto_run_rules_for_account(account_id: str) -> None:
 
 
 async def process_new_mail(account_id: str) -> None:
-    """The shared new-mail pipeline (H1): auto-run rules → categorize senders →
-    classify threads (Reply Zero) → auto-archive.
+    """The shared new-mail pipeline (H1): auto-run rules → sweep the leftovers →
+    categorize senders → classify threads (Reply Zero) → auto-archive.
+
+    Order matters. The rules run first and are the only thing that *classifies*.
+    The sweep then projects that (plus learned patterns) onto inbox mail the
+    rules never reached — the rule run is capped per cycle, and mail processed
+    before a rule existed is stamped ``rules_processed_at`` and never revisited,
+    so without this step a real backlog stays permanently uncategorized and
+    invisible to the Inbox Cleaner. Sender rollup runs after both so it sees the
+    complete label set.
 
     Each step is isolated so one failure never skips the rest (same guarantee the
     scheduler loop gave when these were separate steps). Registered as the
     ``on_new_mail`` hook AND called directly by the manual-sync route + webhook,
     so new mail is processed identically however it arrived.
     """
+    from gateway.routes.email.automation.cleanup import sweep_uncategorized
     from gateway.routes.email.automation.replyzero import _maybe_classify_threads
     from gateway.routes.email.automation.senders import (
         _categorize_senders_job,
@@ -73,6 +82,14 @@ async def process_new_mail(account_id: str) -> None:
         await auto_run_rules_for_account(account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("sync.auto_run_failed", account_id=account_id, error=str(exc)[:200])
+    try:
+        # Bounded per cycle: this writes a label to the provider per message, and
+        # the backlog drains a bit on every sync rather than stalling one tick.
+        await sweep_uncategorized(account_id, 100, dry_run=False,
+                                  owner="scheduler")
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("sync.cleanup_sweep_failed", account_id=account_id,
+                     error=str(exc)[:200])
     try:
         await _categorize_senders_job(account_id, 25)
     except Exception as exc:  # noqa: BLE001

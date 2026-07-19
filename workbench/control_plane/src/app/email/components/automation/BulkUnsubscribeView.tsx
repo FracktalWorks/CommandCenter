@@ -4,11 +4,12 @@ import { useEffect, useState, useCallback, useMemo, useRef } from "react";
 import {
   Loader2, Archive, ArchiveRestore, Check, ExternalLink, Search,
   ShieldX, Mail, X, MoreHorizontal, Trash2, RotateCcw, Clock,
-  ChevronDown, ChevronRight,
+  ChevronDown, ChevronRight, Sparkles, HelpCircle,
 } from "lucide-react";
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
-  categorizeSenders, searchEmails,
+  searchEmails, previewAutoCategorize, runAutoCategorize, getCleanupStatus,
+  CleanupSweepResult,
 } from "../../lib/api";
 import { SenderStat, NewsletterStatus, SenderStatus, Email } from "../../lib/types";
 import { chipColors } from "../../lib/labelColors";
@@ -36,6 +37,12 @@ const AGE_OPTIONS = [
 const CATEGORY_TABS = [
   "Newsletter", "Marketing", "Notification", "Cold Email", "Receipt", "Calendar",
 ] as const;
+
+/** Pseudo-category for senders the rules never labelled at all. Not a real
+ *  category — it's the *absence* of one, and it's the pile the auto-categorize
+ *  sweep exists to drain. Kept separate from the real chips so it can never be
+ *  confused for a classification. */
+const UNCATEGORIZED = "__uncategorized__";
 
 const STATUS_META: Record<SenderStatus, { label: string; cls: string; help: string }> = {
   UNHANDLED: {
@@ -110,6 +117,8 @@ export function BulkUnsubscribeView({
   // most notification/marketing senders, the reported problem.)
   const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [categorizing, setCategorizing] = useState(false);
+  // Dry-run verdict for the uncategorized sweep: what it *would* do.
+  const [preview, setPreview] = useState<CleanupSweepResult | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
   // Which sender row is expanded to show its individual messages (drill-down).
@@ -137,38 +146,40 @@ export function BulkUnsubscribeView({
     return () => clearTimeout(t);
   }, [notice]);
 
-  // Categorisation already runs automatically on every sync (just-in-time, per
-  // the ingestion scheduler) — so there's no manual "Categorize" button. If a
-  // backlog of uncategorised senders is still showing (e.g. a fresh account the
-  // sync hasn't caught up on), kick off ONE catch-up pass per account so the
-  // category chips + "Newsletters only" filter fill in on their own.
-  const autoCategorized = useRef<Set<string>>(new Set());
+  // Preview of what the auto-categorize sweep would do, fetched once per account.
+  // It's a dry run — decides everything, writes nothing — so it's safe to fire on
+  // load and it tells the user the honest split: how much can be resolved from
+  // what they've already taught the assistant, and how much genuinely needs the
+  // rules to run. The previous version of this effect silently POSTed a
+  // categorize job and waited 8s on a timer; it re-projected the same labels it
+  // already had, so it could never change anything the user was looking at.
+  const previewed = useRef<Set<string>>(new Set());
   useEffect(() => {
-    if (!accountId || loading || autoCategorized.current.has(accountId)) return;
-    const uncategorized = senders.filter(
-      (s) => !s.category || s.category === "Unknown"
-    ).length;
-    if (uncategorized < 10) return;
-    autoCategorized.current.add(accountId);
+    if (!accountId || loading || previewed.current.has(accountId)) return;
+    previewed.current.add(accountId);
+    let alive = true;
     void (async () => {
-      setCategorizing(true);
       try {
-        await categorizeSenders(accountId, 100);
+        const r = await previewAutoCategorize(accountId, 500);
+        if (alive) setPreview(r);
       } catch {
-        /* sync will categorise on its next cycle anyway */
+        /* the sweep is an offer, not a requirement — stay quiet on failure */
       }
-      setTimeout(() => {
-        load();
-        setCategorizing(false);
-      }, 8000);
     })();
-  }, [accountId, loading, senders, load]);
+    return () => {
+      alive = false;
+    };
+  }, [accountId, loading]);
 
   // A sender matches the active category when any of its mail carries that
-  // rule-label (its derived `categories`). "all" matches everyone.
+  // rule-label (its derived `categories`). "all" matches everyone, and the
+  // Uncategorized pseudo-tab matches senders the rules never labelled.
   const matchesCategory = useCallback(
-    (s: SenderStat) =>
-      categoryTab === "all" || (s.categories || []).includes(categoryTab),
+    (s: SenderStat) => {
+      if (categoryTab === "all") return true;
+      if (categoryTab === UNCATEGORIZED) return !(s.labelled ?? 0);
+      return (s.categories || []).includes(categoryTab);
+    },
     [categoryTab]
   );
 
@@ -208,6 +219,7 @@ export function BulkUnsubscribeView({
     for (const cat of CATEGORY_TABS) {
       c[cat] = base.filter((s) => (s.categories || []).includes(cat)).length;
     }
+    c[UNCATEGORIZED] = base.filter((s) => !(s.labelled ?? 0)).length;
     return c;
   }, [senders, statusTab]);
 
@@ -441,6 +453,48 @@ export function BulkUnsubscribeView({
     }
   };
 
+  // Auto-categorize: drain the uncategorized pile by projecting what the
+  // assistant already knows — learned patterns first, then this sender's own
+  // label history, then their domain's. It runs no classifier of its own, so
+  // anything it can't justify is left alone and reported as needing a rules run.
+  // Runs in the background (a provider label write per message), so we poll.
+  const autoCategorize = async () => {
+    if (!accountId || !preview?.categorized) return;
+    setCategorizing(true);
+    setError(null);
+    try {
+      await runAutoCategorize(accountId, 500);
+      // Poll to completion, with a hard ceiling so a stalled job can't leave the
+      // spinner running forever.
+      for (let i = 0; i < 60; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await getCleanupStatus(accountId);
+        if (st.status === "done") {
+          const n = st.categorized ?? st.applied ?? 0;
+          setNotice(
+            `Categorized ${n} email${n === 1 ? "" : "s"} from patterns you've ` +
+              `already taught the assistant.`
+          );
+          break;
+        }
+        if (st.status === "error") {
+          setError("Auto-categorize failed — see the assistant history.");
+          break;
+        }
+        if (i === 59) {
+          setNotice("Still categorizing — the list will catch up on refresh.");
+        }
+      }
+      setPreview(null);
+      load();
+      onArchived?.();
+    } catch (e) {
+      setError((e as Error).message || "Auto-categorize failed");
+    } finally {
+      setCategorizing(false);
+    }
+  };
+
   // "Quick clean": archive inbox mail older than N days (optionally read-only),
   // across all senders — a non-sender-specific sweep to hit inbox zero fast.
   const quickClean = async () => {
@@ -566,7 +620,63 @@ export function BulkUnsubscribeView({
             </button>
           );
         })}
+        {/* Not a category — the absence of one. Kept visually distinct (dashed,
+            muted, no colour dot) so it never reads as a classification. */}
+        {(categoryCounts[UNCATEGORIZED] ?? 0) > 0 && (
+          <button
+            onClick={() =>
+              setCategoryTab(
+                categoryTab === UNCATEGORIZED ? "all" : UNCATEGORIZED
+              )
+            }
+            title="Senders whose mail your rules have never labelled"
+            className={`flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] whitespace-nowrap border border-dashed transition-colors ${
+              categoryTab === UNCATEGORIZED
+                ? "border-primary text-primary bg-primary/10"
+                : "border-border text-muted-foreground hover:text-foreground hover:bg-secondary"
+            }`}
+          >
+            <HelpCircle size={10} />
+            Uncategorized
+            <span className="opacity-60">{categoryCounts[UNCATEGORIZED]}</span>
+          </button>
+        )}
       </div>
+
+      {/* Auto-categorize offer. Only shown when the sweep actually has evidence
+          to act on, and it states plainly what it can and cannot resolve — the
+          leftover is mail no pattern covers, which needs the assistant's rules
+          to run rather than a guess from here. */}
+      {preview && preview.categorized > 0 && (
+        <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-primary/5 flex-shrink-0">
+          <Sparkles size={13} className="text-primary flex-shrink-0" />
+          <span className="text-[11px] text-foreground">
+            <strong className="font-semibold">{preview.categorized}</strong>{" "}
+            uncategorized email
+            {preview.categorized === 1 ? "" : "s"} match patterns you&apos;ve
+            already taught the assistant
+            {preview.no_evidence > 0 && (
+              <span className="text-muted-foreground">
+                {" "}
+                · {preview.no_evidence} need the rules to run
+              </span>
+            )}
+          </span>
+          <button
+            onClick={autoCategorize}
+            disabled={categorizing}
+            title="Apply the categories these emails' senders, domains and learned patterns already imply"
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {categorizing ? (
+              <Loader2 className="animate-spin" size={12} />
+            ) : (
+              <Sparkles size={12} />
+            )}
+            Categorize
+          </button>
+        </div>
+      )}
 
       {/* Status filter tabs */}
       <div className="flex items-center gap-1 px-3 sm:px-5 py-2 border-b border-border flex-shrink-0 overflow-x-auto scrollbar-hide">
@@ -710,6 +820,9 @@ export function BulkUnsubscribeView({
           <div className="divide-y divide-border">
             {visible.map((s) => {
               const isSel = selected.has(s.email);
+              // Older payloads have no in_folder — fall back to count so the
+              // number never renders as 0 against a populated row.
+              const inInbox = s.in_folder ?? s.count;
               const isMailto = (s.unsubscribe_link || "").toLowerCase().startsWith("mailto:");
               const blocked =
                 s.status === "UNSUBSCRIBED" || s.status === "AUTO_ARCHIVED";
@@ -829,12 +942,24 @@ export function BulkUnsubscribeView({
                   {/* Stats — email volume (the priority signal) + a compact
                       read-rate ring. Visible on mobile and desktop alike. */}
                   <div className="flex items-center gap-2.5 flex-shrink-0">
-                    <div className="text-right leading-none">
+                    <div
+                      className="text-right leading-none"
+                      title={
+                        inInbox === s.count
+                          ? `${s.count} emails in your inbox`
+                          : `${inInbox} in your inbox · ${s.count} total (the rest are already archived or trashed)`
+                      }
+                    >
                       <div className="text-xs font-semibold text-foreground tabular-nums">
-                        {s.count}
+                        {inInbox}
+                        {inInbox !== s.count && (
+                          <span className="text-muted-foreground font-normal">
+                            /{s.count}
+                          </span>
+                        )}
                       </div>
                       <div className="text-[8px] text-muted-foreground mt-0.5">
-                        emails
+                        {inInbox === s.count ? "emails" : "in inbox"}
                       </div>
                     </div>
                     <ReadRing value={s.read_rate} />

@@ -679,11 +679,58 @@ async def draft_reply(email_id: str, account_id: str, save: bool = False) -> str
 # ── Sender categorization tools ──────────────────────────────────────────────
 
 async def categorize_senders(account_id: str) -> str:
-    """Kick off AI categorization of the account's senders (runs in background)."""
+    """Re-project sender categories from the labels the user's rules applied.
+
+    NOT a classifier — it only rolls up existing rule labels, so it cannot
+    categorize a sender whose mail the rules never labelled. To categorize MORE
+    mail, use auto_categorize_inbox (projects learned patterns onto the
+    leftovers) or run the rules over past mail.
+    """
     await _post("/email/senders/categorize", {"account_id": account_id, "limit": 100})
     return (
-        "Categorization started in the background. Ask for the account overview "
-        "in a moment to see category counts."
+        "Re-projecting sender categories from your rules' labels in the "
+        "background. This only rolls up categorization that already exists — if "
+        "senders are still uncategorized afterwards, their mail was never "
+        "labelled by a rule; try auto_categorize_inbox."
+    )
+
+
+async def auto_categorize_inbox(account_id: str, apply: bool = False) -> str:
+    """Categorize uncategorized inbox mail from patterns already learned.
+
+    Projects the user's learned patterns and their per-sender / per-domain label
+    history onto inbox mail the rules never reached. Runs no classifier of its
+    own, so anything it cannot justify is reported as needing a rules run.
+
+    Call with apply=False first to preview; only apply=True writes labels.
+    """
+    data = await _post(
+        "/email/cleanup/auto-categorize",
+        {"account_id": account_id, "limit": 500, "dry_run": not apply},
+    )
+    if apply:
+        return (
+            "Auto-categorize started in the background. Check the inbox cleaner "
+            "or the assistant history in a moment for what was applied."
+        )
+    n = data.get("categorized", 0)
+    if not n:
+        return (
+            f"Nothing to auto-categorize: scanned {data.get('scanned', 0)} "
+            f"uncategorized email(s) and none matched a learned pattern or a "
+            f"sender/domain with a consistent label history. These need the "
+            f"rules to actually run over them."
+        )
+    by_cat = ", ".join(
+        f"{v} {k}" for k, v in (data.get("by_category") or {}).items()
+    )
+    left = data.get("no_evidence", 0)
+    return (
+        f"{n} uncategorized email(s) can be categorized from existing "
+        f"patterns ({by_cat})."
+        + (f" {left} more have no matching pattern and need a rules run." if left
+           else "")
+        + " Call again with apply=true to apply."
     )
 
 
@@ -693,7 +740,8 @@ async def get_sender_categories(account_id: str) -> str:
     counts = data.get("counts", {})
     if not counts:
         return (
-            "No senders categorized yet. Run categorize_senders first. "
+            "No senders categorized yet — the rules have not labelled this "
+            "mailbox's mail. Install/run rules, or try auto_categorize_inbox. "
             f"Categories: {', '.join(data.get('categories', []))}."
         )
     return "Sender categories:\n" + "\n".join(
@@ -1622,7 +1670,8 @@ async def list_senders(
       • ``top`` (default) — the biggest senders by volume (with unread count and
         whether a one-click unsubscribe exists). "Who emails me most?".
       • ``categories`` — the sender-category vocabulary and how many senders fall
-        in each (run categorize_senders first if empty).
+        in each. Empty means the rules have not labelled this mailbox's mail yet
+        — the fix is rules (or auto_categorize_inbox), not re-running the rollup.
       • ``unsubscribe`` — likely newsletters/subscriptions to consider cutting
         (low read-rate or an unsubscribe link).
       • ``cold`` — senders flagged by the cold-email blocker.
@@ -1739,6 +1788,7 @@ _TOOLS = [
     list_artifacts,
     # Senders / categorization
     categorize_senders,
+    auto_categorize_inbox,
     list_senders,
     # Rules + history
     get_rules_and_settings,

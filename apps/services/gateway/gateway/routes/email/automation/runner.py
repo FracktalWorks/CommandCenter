@@ -446,6 +446,39 @@ _PAST_JOBS: dict[str, dict[str, Any]] = {}
 _PAST_JOB_SEQ = 0  # monotonic token so a stale job can't clobber a newer run
 
 
+async def apply_label(
+    db: Any, provider: Any, message_id: str, provider_msg_id: str, label: str,
+) -> None:
+    """THE way a category label gets onto a message. One writer, two surfaces.
+
+    Writes the provider FIRST, then mirrors into ``email_messages.categories``
+    so the viewer shows the chip immediately instead of waiting for the next
+    upstream sync. Both halves matter:
+
+    * local-only would be erased on the next re-sync, because providers that
+      round-trip labels are authoritative (see EmailMessage.categories_
+      authoritative) — and ``rules_processed_at`` is already stamped, so the
+      rules would never re-apply it;
+    * provider-only leaves the label invisible in-app until a sync catches up.
+
+    The mirror is an atomic append-if-absent on the TEXT[] (race-free, no
+    read-modify-write). Every categorizer — the rule engine's LABEL action and
+    the uncategorized-inbox sweep — goes through here, so there is exactly one
+    place that decides what "applying a label" means.
+    """
+    lbl = (label or "").strip()
+    if not lbl:
+        return
+    if provider is not None and provider_msg_id:
+        await provider.set_labels(provider_msg_id, add=[lbl], remove=[])
+    await db.execute(text(
+        "UPDATE email_messages SET categories = "
+        "CASE WHEN :lbl = ANY(categories) THEN categories "
+        "ELSE array_append(categories, :lbl) END, "
+        "updated_at = now() WHERE id = :id"
+    ), {"id": message_id, "lbl": lbl})
+
+
 def _now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
@@ -836,8 +869,14 @@ async def _process_past_emails_job(
     except Exception as e:  # noqa: BLE001 — never abort the apply on a backfill error
         _log.warning("email.process_past_sync_failed",
                      account_id=account_id, error=str(e)[:200])
-    db = await _get_db()
+    # _get_db() is INSIDE the try: if the pool is exhausted or Postgres blips,
+    # the exception used to escape the BackgroundTask entirely, leaving the
+    # tracker stuck on {"status": "running"} forever. The UI then polls every
+    # 1.5s for the rest of the session behind a banner whose dismiss button is
+    # hidden precisely because it thinks a run is in flight.
+    db = None
     try:
+        db = await _get_db()
         clause, params = _date_range_clause(account_id, start, end, only_unread)
         params["limit"] = limit
         rows = (await db.execute(text(
@@ -912,7 +951,9 @@ async def _process_past_emails_job(
                 ), {"aid": account_id, "mid": str(r.id),
                     "pmid": r.provider_message_id, "tid": r.thread_id,
                     "subj": r.subject or "", "frm": frm.get("email", "")})
-            if not dry_run:
+            # Same rule as _run_rules_job: never burn the watermark on a run
+            # that had no provider to act through (see the comment there).
+            if not dry_run and provider is not None:
                 await db.execute(text(
                     "UPDATE email_messages SET rules_processed_at = now() "
                     "WHERE id = :id"
@@ -929,7 +970,8 @@ async def _process_past_emails_job(
         _log.warning("email.process_past_failed", account_id=account_id, error=str(e)[:200])
         _past_job_finish(account_id, token=job_token, error=str(e))
     finally:
-        await db.close()
+        if db is not None:
+            await db.close()
 
 
 async def _run_rules_job(
@@ -974,8 +1016,11 @@ async def _run_rules_job(
             multi_rule = bool(cb_row.multi_rule_execution)
         # Configured extra "your organisation" domains → direction-aware
         # classification (outbound/internal mail isn't a received category).
-        org_domains = frozenset(getattr(cb_row, "org_domains", None) or []) \
-            if cb_row else frozenset()
+        # Via resolve_org_domains, like every other caller: reading the column
+        # raw skipped normalize_domain, so a user who typed "ops@acme.com" or
+        # "https://acme.com" got their org recognised on the test/process-past
+        # paths and NOT on this one — the path that actually processes new mail.
+        org_domains = await resolve_org_domains(db, account_id)
 
         provider = None
         store = None
@@ -1069,12 +1114,24 @@ async def _run_rules_job(
                 except Exception as exc:  # noqa: BLE001
                     _log.warning("email.project_reply_status_failed",
                                  account_id=account_id, error=str(exc)[:160])
-            if not dry_run:
+            # Stamp the watermark ONLY when the run could actually act. The
+            # watermark is permanent — /rules/run selects `rules_processed_at IS
+            # NULL` — so stamping a message we couldn't apply anything to burns
+            # it forever. That is what an expired refresh token used to do: one
+            # scheduler tick with a failed authenticate() marked 50 emails
+            # processed, applied nothing, and they were never looked at again.
+            if not dry_run and provider is not None:
                 await db.execute(text(
                     "UPDATE email_messages SET rules_processed_at = now() "
                     "WHERE id = :id"
                 ), {"id": str(r.id)})
             await db.commit()
+
+        if not dry_run and provider is None:
+            _log.warning("email.run_rules_no_provider", account_id=account_id,
+                         messages=len(rows),
+                         reason="provider auth failed — nothing applied, "
+                                "mail left unprocessed for the next run")
 
         if provider is not None and store is not None:
             await _persist_rotated_creds(db, store, account_id, provider)
@@ -1272,17 +1329,8 @@ async def _apply_rule_actions(
                 if a.get("label_ai"):
                     lbl = (await _render_template(lbl, email)).strip()
                 if lbl:
-                    await provider.set_labels(provider_msg_id, add=[lbl], remove=[])
-                    # Mirror the label into the local row NOW so the viewer shows
-                    # it immediately, instead of waiting for the next upstream sync
-                    # to re-fetch categories. Atomic append-if-absent on the
-                    # TEXT[] (race-free, no read-modify-write).
-                    await db.execute(text(
-                        "UPDATE email_messages SET categories = "
-                        "CASE WHEN :lbl = ANY(categories) THEN categories "
-                        "ELSE array_append(categories, :lbl) END, "
-                        "updated_at = now() WHERE id = :id"
-                    ), {"id": message_id, "lbl": lbl})
+                    await apply_label(
+                        db, provider, message_id, provider_msg_id, lbl)
             elif t in ("REPLY", "DRAFT_EMAIL"):
                 # Manual template wins; otherwise the AI drafts. A template with
                 # {{...}} placeholders is rendered against the email first.

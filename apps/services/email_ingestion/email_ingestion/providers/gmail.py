@@ -144,6 +144,13 @@ class GmailProvider(BaseEmailProvider):
         self._token_expiry: str | None = credentials.get("token_expiry")
         self._http: httpx.AsyncClient | None = None
         self._creds_dirty = False
+        # Gmail returns opaque label IDs on every message; the *names* live in a
+        # separate /labels listing. Cache both directions for the life of the
+        # provider instance (one instance per sync/run) so parsing a message can
+        # resolve its user labels synchronously, and so set_labels stops re-
+        # fetching the whole label list once per label per message.
+        self._label_ids_by_name: dict[str, str] | None = None   # lower name → id
+        self._label_names_by_id: dict[str, str] = {}            # id → display name
 
     def credentials_dirty(self) -> bool:
         return self._creds_dirty
@@ -271,8 +278,24 @@ class GmailProvider(BaseEmailProvider):
         next_token = data.get("nextPageToken")
         return messages, next_token
 
+    async def _ensure_label_names(self) -> None:
+        """Best-effort warm of the label-id → name cache before parsing.
+
+        Parsing is synchronous but needs the names, so the (cached) fetch has to
+        happen here. A failure is non-fatal: the message still syncs, it just
+        reports ``categories_authoritative=False`` so ingest keeps the labels
+        already stored rather than erasing them.
+        """
+        if self._label_ids_by_name is not None:
+            return
+        try:
+            await self._label_name_id_map()
+        except Exception:  # noqa: BLE001 — labels are optional for a sync
+            pass
+
     async def get_message(self, provider_message_id: str) -> EmailMessage:
         client = await self._get_client()
+        await self._ensure_label_names()
         resp = await client.get(
             f"/users/me/messages/{provider_message_id}",
             params={"format": "full"},
@@ -514,16 +537,37 @@ class GmailProvider(BaseEmailProvider):
                 )
         return sorted(out, key=lambda x: (x["name"] or "").lower())
 
-    async def _label_name_id_map(self) -> dict[str, str]:
-        """Lower-cased label name → id for the account's labels."""
+    async def _label_name_id_map(self, *, refresh: bool = False) -> dict[str, str]:
+        """Lower-cased label name → id for the account's labels.
+
+        Cached per provider instance. Also populates ``_label_names_by_id`` with
+        the *user* labels only, which is what ``_parse_gmail_message`` projects
+        into ``EmailMessage.categories`` — Gmail puts opaque IDs on the message
+        and the names only exist here.
+        """
+        if self._label_ids_by_name is not None and not refresh:
+            return self._label_ids_by_name
         client = await self._get_client()
         resp = await client.get("/users/me/labels")
         resp.raise_for_status()
-        return {
+        labels = resp.json().get("labels", [])
+        self._label_ids_by_name = {
             lbl.get("name", "").lower(): lbl["id"]
-            for lbl in resp.json().get("labels", [])
+            for lbl in labels
             if lbl.get("name")
         }
+        # User labels only: system IDs (INBOX/SENT/UNREAD/…) are folder & flag
+        # state, already mapped elsewhere, and Gmail's own CATEGORY_* tabs
+        # (Promotions/Social/…) are not user labels — neither belongs in the
+        # categories column the rule engine owns.
+        self._label_names_by_id = {
+            lbl["id"]: lbl["name"]
+            for lbl in labels
+            if lbl.get("name") and lbl.get("id")
+            and lbl.get("type") == "user"
+            and not lbl["name"].startswith("CATEGORY_")
+        }
+        return self._label_ids_by_name
 
     async def _ensure_label_id(
         self, name: str, color: str | None = None
@@ -552,8 +596,18 @@ class GmailProvider(BaseEmailProvider):
             body.pop("color", None)
             resp = await client.post("/users/me/labels", json=body)
         if resp.is_success:
-            return resp.json().get("id")
-        return None
+            new_id = resp.json().get("id")
+            if new_id:
+                # Keep the cache coherent so the very next message that carries
+                # this label resolves its name instead of falling back to a
+                # stale map (and so we don't re-POST a duplicate).
+                if self._label_ids_by_name is not None:
+                    self._label_ids_by_name[name.lower()] = new_id
+                self._label_names_by_id[new_id] = name
+            return new_id
+        # Creation failed — most often because the label already exists and our
+        # cache predates it. Re-read the label list once and try to resolve.
+        return (await self._label_name_id_map(refresh=True)).get(name.lower())
 
     async def set_label_color(self, name: str, color: str) -> None:
         """Set a Gmail user label's colour (creating the label if needed)."""
@@ -863,9 +917,18 @@ class GmailProvider(BaseEmailProvider):
         is_starred = "STARRED" in label_ids
         is_flagged = "IMPORTANT" in label_ids
         importance = "high" if "IMPORTANT" in label_ids else "normal"
-        # Gmail user-label *names* require a separate label-map lookup; expose
-        # only the raw IDs as labels and leave categories empty for now.
-        categories: list[str] = []
+        # Gmail puts opaque label IDs on the message; the display names live in
+        # the /labels listing, cached in _label_names_by_id (user labels only).
+        # Projecting them here is what makes a rule-applied label ("Newsletter",
+        # "Cold Email", …) survive a re-sync — set_labels writes the label to
+        # Gmail, and this reads it back, so the round-trip is closed and the
+        # ingest upsert can safely treat categories as authoritative.
+        # If the map was never loaded (a label-list fetch failure), we say so
+        # rather than reporting a confident empty list that would erase labels.
+        names_by_id = self._label_names_by_id
+        categories: list[str] = [
+            names_by_id[lid] for lid in label_ids if lid in names_by_id
+        ]
 
         unsubscribe_link = _parse_list_unsubscribe(
             headers.get("List-Unsubscribe", "")
@@ -894,6 +957,10 @@ class GmailProvider(BaseEmailProvider):
             is_flagged=is_flagged,
             importance=importance,
             categories=categories,
+            # Only authoritative once the label map actually loaded — otherwise
+            # an empty list is ignorance, not "the user removed the labels", and
+            # ingest must keep whatever is already stored.
+            categories_authoritative=self._label_ids_by_name is not None,
             unsubscribe_link=unsubscribe_link,
             received_at=self._parse_internal_date(raw.get("internalDate")),
             raw=raw,

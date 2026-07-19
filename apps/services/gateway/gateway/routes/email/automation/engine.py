@@ -474,6 +474,36 @@ def _generalize_subject(s: str) -> str:
     return re.sub(r"\s+", " ", s).strip()
 
 
+# A generalised SUBJECT pattern has had its numbers and parenthesised parts
+# stripped, so it can collapse to something far broader than what the user
+# taught. "Re: 12345" becomes "re:", which is a substring of every reply in the
+# mailbox — and a pattern hit short-circuits the whole classifier, so one such
+# pattern silently mislabels everything. Require the residue to still carry real
+# signal before trusting it. The raw (ungeneralised) value is unaffected: if the
+# user's literal text appears in the subject, that is an exact match either way.
+_MIN_GENERALIZED_SUBJECT_CHARS = 6
+_MIN_GENERALIZED_SUBJECT_WORDS = 2
+# Reply/forward prefixes carry no topical signal — a generalised pattern made
+# only of these is exactly the runaway case above.
+_SUBJECT_NOISE_WORDS = {"re", "re:", "fw", "fw:", "fwd", "fwd:", "aw", "sv",
+                        "the", "a", "an", "your", "you", "and", "for", "to"}
+
+
+def _generalized_subject_is_specific(gv: str) -> bool:
+    """True if a generalised SUBJECT pattern is still discriminating enough.
+
+    Guards the runaway case: strip the numbers out of "Order #1042" and you get
+    "order", out of "Re: 12345" and you get "re:". Matching on those turns one
+    Fix click into a mailbox-wide mislabel.
+    """
+    words = [w for w in gv.split() if w not in _SUBJECT_NOISE_WORDS]
+    if not words:
+        return False
+    residue = " ".join(words)
+    return (len(residue) >= _MIN_GENERALIZED_SUBJECT_CHARS
+            or len(words) >= _MIN_GENERALIZED_SUBJECT_WORDS)
+
+
 def _pattern_hit(pat: tuple[str, str], email: dict[str, str]) -> bool:
     """True if a learned pattern (type, value) matches the email — inbox-zero
     parity: FROM is a *bidirectional* case-insensitive substring; SUBJECT matches
@@ -487,21 +517,57 @@ def _pattern_hit(pat: tuple[str, str], email: dict[str, str]) -> bool:
         if v in subj:
             return True
         gv = _generalize_subject(v)
-        return bool(gv) and gv in _generalize_subject(subj)
+        if not _generalized_subject_is_specific(gv):
+            return False
+        return gv in _generalize_subject(subj)
     frm = (email.get("from", "") or "").lower()  # FROM (bidirectional)
     if not frm:
         return False
     # The full sender contained in the pattern value (e.g. value "Jo <jo@x.com>",
-    # sender "jo@x.com") is inherently specific — always allowed.
-    if frm in v:
+    # sender "jo@x.com") is specific — but only when the sender appears as a
+    # whole address, not as a SUFFIX of a longer one. Without that check,
+    # "reply@github.com" matches a pattern learned for "noreply@github.com" (and
+    # "no-reply@stripe.com" ⊃ "reply@stripe.com"), short-circuiting the
+    # classifier onto a rule the user never taught for that sender.
+    if frm in v and _whole_address_in(frm, v):
         return True
     # The other direction (value is a substring of the sender) must NOT let a
     # short/generic value match every sender: require an address- or domain-shaped
     # token (contains '@' or '.', length >= 4). Learned FROM values are real
     # sender addresses/domains, so this only rejects over-broad fragments.
     if len(v) >= 4 and ("@" in v or "." in v):
-        return v in frm
+        return v in frm and (v.startswith("@") or _whole_address_in(v, frm)
+                             or _domain_suffix_of(v, frm))
     return False
+
+
+def _whole_address_in(needle: str, haystack: str) -> bool:
+    """``needle`` occurs in ``haystack`` on an address boundary, not mid-token.
+
+    "reply@github.com" is *inside* "noreply@github.com" but is a different
+    address; requiring the preceding character to be a non-address character
+    (whitespace, '<', ',', ':') rejects that while still allowing the real case
+    of a display-name-wrapped address, "Jo <jo@x.com>".
+    """
+    i = haystack.find(needle)
+    while i != -1:
+        before = haystack[i - 1] if i > 0 else " "
+        if not (before.isalnum() or before in "._%+-"):
+            return True
+        i = haystack.find(needle, i + 1)
+    return False
+
+
+def _domain_suffix_of(value: str, frm: str) -> bool:
+    """``value`` is a bare domain and ``frm``'s address sits on that domain.
+
+    Keeps the intended "learn the whole domain" behaviour ("github.com" matching
+    "noreply@github.com") that the address-boundary check would otherwise reject.
+    """
+    if "@" in value:
+        return False
+    domain = frm.rsplit("@", 1)[-1].strip(" >")
+    return domain == value or domain.endswith("." + value)
 
 
 def _patterns_excluded_rules(

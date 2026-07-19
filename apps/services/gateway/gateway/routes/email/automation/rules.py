@@ -322,11 +322,30 @@ async def reset_rules(
     """Delete ALL of an account's rules and reinstall the default inbox-zero set
     fresh. Provider-aware: on Outlook the cleanup categories file mail into
     folders, on Gmail they label. Backs Settings → 'Reset rules' (the UI guards
-    this destructive action behind a confirmation prompt)."""
+    this destructive action behind a confirmation prompt).
+
+    LEARNED PATTERNS SURVIVE. ``email_rule_patterns.rule_id`` is ON DELETE
+    CASCADE, so dropping the rules used to silently destroy every correction the
+    user had ever made (Fix, auto-learn, label-sync) — months of training gone,
+    unrecoverably, behind a dialog that only mentioned rules. Patterns attached
+    to a preset are carried across by NAME and re-pointed at the reseeded rule's
+    new id. Patterns belonging to a custom rule the user is deleting here are
+    genuinely gone with it, which is the expected meaning of 'reset'.
+    """
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         provider = await _account_provider(db, account_id)
+        # Snapshot the learned patterns keyed by their rule's NAME — the reseed
+        # mints fresh UUIDs, so the name is the only stable join.
+        saved = (await db.execute(text(
+            """SELECT r.name AS rule_name, p.pattern_type, p.value, p.exclude,
+                      p.source, p.reason
+                 FROM email_rule_patterns p
+                 JOIN email_rules r ON r.id = p.rule_id
+                WHERE p.account_id = :aid"""
+        ), {"aid": account_id})).fetchall()
+
         # Drop every existing rule (actions cascade) before reseeding so stale
         # label-only rules are replaced by the current provider-aware defaults.
         await db.execute(
@@ -334,9 +353,30 @@ async def reset_rules(
             {"aid": account_id})
         installed = await _seed_preset_rules(
             db, account_id, provider, skip_existing=False)
+
+        restored = 0
+        if saved:
+            new_ids = {
+                (r["name"] or "").lower(): r["id"]
+                for r in await _load_rules(db, account_id)
+            }
+            for s in saved:
+                rid = new_ids.get((s.rule_name or "").lower())
+                if not rid:
+                    continue  # belonged to a custom rule the reset removed
+                await db.execute(text(
+                    """INSERT INTO email_rule_patterns
+                         (account_id, rule_id, pattern_type, value, exclude,
+                          source, reason)
+                       VALUES (:aid, :rid, :ptype, :val, :excl, :src, :reason)
+                       ON CONFLICT DO NOTHING"""
+                ), {"aid": account_id, "rid": rid, "ptype": s.pattern_type,
+                    "val": s.value, "excl": s.exclude, "src": s.source,
+                    "reason": s.reason})
+                restored += 1
         await db.commit()
-        return {"installed": installed,
-                "total_presets": len(_PRESET_RULES), "reset": True}
+        return {"installed": installed, "total_presets": len(_PRESET_RULES),
+                "reset": True, "patterns_restored": restored}
     finally:
         await db.close()
 
@@ -634,10 +674,15 @@ async def _upsert_rule_pattern(
     db: Any, account_id: str, rule_id: str, value: str, exclude: bool,
     source: str, reason: str | None, message_id: str | None, thread_id: str | None,
     pattern_type: str = "FROM",
-) -> None:
+) -> bool:
     """Record a learned classification pattern (FROM sender or SUBJECT keyword)
     for a rule. Removes the opposite (include vs exclude) for the same
     type+value so a correction never contradicts itself.
+
+    Returns True only if a pattern was actually stored. The guards below refuse
+    writes silently, and callers used to report "Learned" regardless — so a user
+    whose correction hit a guard was told it worked, forever, while nothing was
+    ever recorded. Callers must honour the return value.
 
     Centralized backstop for two anti-patterns that every learning path (Fix,
     auto-learn, label sync) must avoid — enforced HERE so no single path can
@@ -648,7 +693,7 @@ async def _upsert_rule_pattern(
       2. Pinning the mailbox's OWN address to any rule (e.g. "vjvarada@… →
          Reply") — a meaningless self-reference from a stray label delta."""
     if not (value or "").strip():
-        return
+        return False
     ptype = "SUBJECT" if (pattern_type or "").upper() == "SUBJECT" else "FROM"
     # (1) Never pin a sender/subject to a conversation-status rule. Mirrors
     #     engine._conversation_rule_key: system_type when set, else the name.
@@ -662,7 +707,7 @@ async def _upsert_rule_pattern(
         # still recognised and never sender-pinned (the anti-pattern this guards).
         if key in {"REPLY", "AWAITING_REPLY", "FYI", "DONE",
                    "TO_REPLY", "ACTIONED"}:
-            return
+            return False
     # (2) Never pin the mailbox's own address (FROM patterns only).
     if ptype == "FROM":
         acct = (await db.execute(text(
@@ -671,7 +716,7 @@ async def _upsert_rule_pattern(
         own = (getattr(acct, "email_address", "") or "").strip().lower()
         val_l = value.strip().lower()
         if own and (own in val_l or val_l in own):
-            return
+            return False
     # Drop the opposite disposition for this (rule, type, value) first.
     await db.execute(text(
         "DELETE FROM email_rule_patterns WHERE account_id = :aid AND rule_id = :rid "
@@ -756,11 +801,23 @@ async def rule_feedback(
         if subject_kw:
             signals.append(("SUBJECT", subject_kw))
 
-        async def _teach(rule_id: str, exclude: bool) -> None:
+        async def _teach(rule_id: str, exclude: bool) -> bool:
+            """Store the signals for a rule; True if anything was actually saved.
+
+            _upsert_rule_pattern refuses some writes on purpose (conversation
+            rules can't be sender-pinned; the mailbox's own address is never
+            pinned). Reporting those as "learned" is worse than reporting
+            nothing — the user sees a success toast, changes nothing, and repeats
+            the same correction forever.
+            """
+            saved = False
             for ptype, val in signals:
-                await _upsert_rule_pattern(
+                if await _upsert_rule_pattern(
                     db, req.account_id, rule_id, val, exclude, "FIX", reason,
-                    req.message_id, req.thread_id, pattern_type=ptype)
+                    req.message_id, req.thread_id, pattern_type=ptype,
+                ):
+                    saved = True
+            return saved
 
         learned: list[dict[str, Any]] = []
         status_correction: dict[str, Any] | None = None
@@ -770,8 +827,8 @@ async def rule_feedback(
             # rules can't be pattern-excluded — they're thread-state).
             for rid in req.matched_rule_ids:
                 if rid and not _conv_key(rid) and signals:
-                    await _teach(rid, True)
-                    learned.append({"rule_id": rid, "exclude": True})
+                    if await _teach(rid, True):
+                        learned.append({"rule_id": rid, "exclude": True})
         else:
             ck = _conv_key(req.expected)
             if ck:
@@ -789,14 +846,14 @@ async def rule_feedback(
                     if status_correction and status_correction.get("ok"):
                         learned.append({"rule_id": req.expected, "status_set": ck})
             elif signals:
-                await _teach(req.expected, False)
-                learned.append({"rule_id": req.expected, "exclude": False})
+                if await _teach(req.expected, False):
+                    learned.append({"rule_id": req.expected, "exclude": False})
             # Stop the wrong CLEANUP rules from matching this sender too.
             for rid in req.matched_rule_ids:
                 if (rid and rid != req.expected and not _conv_key(rid)
                         and signals):
-                    await _teach(rid, True)
-                    learned.append({"rule_id": rid, "exclude": True})
+                    if await _teach(rid, True):
+                        learned.append({"rule_id": rid, "exclude": True})
 
         await db.commit()
         created = bool(learned or (status_correction and status_correction.get("ok")))

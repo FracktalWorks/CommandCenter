@@ -106,9 +106,21 @@ Confirm each change and summarize the final setup.
 
 ## Categorizing senders
 
-Classify a sender from their name, address, and recent subjects into exactly one
-of: Newsletter, Marketing, Receipt, Calendar, Notification, Cold Email, Personal,
-Support — or **Unknown** if uncertain. Use `categorize_senders` to run it in bulk.
+There is exactly ONE categorizer: the user's **rules**. A sender's category is
+rolled up from the labels the rules put on that sender's mail — never guessed
+here. Do not classify senders yourself, and do not describe a sender's category
+as your own judgement.
+
+- `categorize_senders` only re-projects existing rule labels onto senders. It
+  cannot categorize mail the rules never labelled, so running it on a sender with
+  no labelled history does nothing — say so rather than reporting success.
+- To make MORE mail categorized, the fix is more/better rules: install the
+  presets, add a rule, or re-run the rules over past mail. If a sender is
+  consistently mislabelled, correct it once and the assistant learns the pattern.
+
+Categories the rules can assign: Newsletter, Marketing, Receipt, Calendar,
+Notification, Cold Email (cleanup), plus Reply / Awaiting Reply / FYI / Done
+(conversation state). Personal is inferred for reply-active correspondents.
 
 ## Working style
 

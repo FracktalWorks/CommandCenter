@@ -77,12 +77,25 @@ _INSERT = """INSERT INTO email_messages
 # body / snippet / unsubscribe link when the incoming row is empty. Outlook lists
 # headers-only (empty body) on every tick, which would otherwise clobber a body
 # the user had lazily hydrated or the search backfill had filled.
+#
+# ``categories`` is the same class of hazard but far more destructive, so it gets
+# an explicit opt-in instead of an emptiness check: it is the column the RULE
+# ENGINE writes its labels to (Newsletter / Marketing / Notification / …), and
+# it is what the Inbox Cleaner, the category chips and the quick filters all read.
+# A provider that simply doesn't report categories (generic IMAP; Gmail before it
+# resolved user-label IDs to names) would send ``{}`` on every tick and erase the
+# lot — permanently, because ``rules_processed_at`` is already stamped so the
+# rules never re-apply. Only a provider that genuinely round-trips labels sets
+# ``categories_authoritative``, and only then does an empty array mean "the user
+# cleared them". See EmailMessage.categories_authoritative.
 _ON_CONFLICT_UPDATE = """
    ON CONFLICT (account_id, provider_message_id) DO UPDATE SET
      thread_id = EXCLUDED.thread_id,
      folder = EXCLUDED.folder,
      labels = EXCLUDED.labels,
-     categories = EXCLUDED.categories,
+     categories = CASE WHEN :categories_authoritative
+                       THEN EXCLUDED.categories
+                       ELSE email_messages.categories END,
      importance = EXCLUDED.importance,
      from_address = EXCLUDED.from_address,
      to_addresses = EXCLUDED.to_addresses,
@@ -133,6 +146,11 @@ def _message_params(account_id: str, msg: Any) -> dict[str, Any]:
         "folder": msg.folder or "INBOX",
         "labels": msg.labels,
         "categories": getattr(msg, "categories", []) or [],
+        # Opt-in flag guarding the ON CONFLICT categories replace (see above).
+        # Bound for the insert-only path too — the param must exist either way.
+        "categories_authoritative": bool(
+            getattr(msg, "categories_authoritative", False)
+        ),
         "importance": getattr(msg, "importance", "normal") or "normal",
         "from_addr": json.dumps({
             "name": msg.from_address.name if msg.from_address else "",

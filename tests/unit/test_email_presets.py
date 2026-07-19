@@ -74,11 +74,16 @@ async def test_install_presets_uses_folder_actions_for_outlook() -> None:
     assert "MOVE_FOLDER" in all_types  # Outlook files promo mail into folders
 
 
-def _db_with_provider(provider: str = "gmail") -> AsyncMock:
-    """AsyncMock db whose provider-lookup SELECT returns ``provider``."""
+def _db_with_provider(provider: str = "gmail", patterns=None) -> AsyncMock:
+    """AsyncMock db whose provider-lookup SELECT returns ``provider``.
+
+    ``patterns`` is what the learned-pattern snapshot SELECT returns (reset
+    carries these across the reseed — see test_reset_preserves_learned_patterns).
+    """
     db = AsyncMock()
     db.execute.return_value = MagicMock(
-        fetchone=MagicMock(return_value=SimpleNamespace(provider=provider))
+        fetchone=MagicMock(return_value=SimpleNamespace(provider=provider)),
+        fetchall=MagicMock(return_value=patterns or []),
     )
     return db
 
@@ -130,3 +135,46 @@ async def test_reset_rules_deletes_then_reinstalls_every_preset() -> None:
     sql = " ".join(str(c.args[0]) for c in db.execute.call_args_list if c.args)
     assert "DELETE FROM email_rules" in sql
     db.commit.assert_awaited()
+
+
+async def test_reset_preserves_learned_patterns_across_the_reseed() -> None:
+    """Reset must not destroy the user's training.
+
+    email_rule_patterns.rule_id is ON DELETE CASCADE, so wiping the rules used to
+    take every Fix / auto-learned / label-synced pattern with it — months of
+    corrections gone behind a dialog that only mentioned rules. The reseed mints
+    fresh UUIDs, so patterns are carried across by rule NAME and re-pointed.
+    """
+    saved = [
+        SimpleNamespace(rule_name="Newsletter", pattern_type="FROM",
+                        value="news@brand.com", exclude=False, source="FIX",
+                        reason="user fix"),
+        SimpleNamespace(rule_name="Receipt", pattern_type="SUBJECT",
+                        value="your order", exclude=True, source="FIX",
+                        reason=None),
+        # Belonged to a custom rule the reset removes — legitimately dropped.
+        SimpleNamespace(rule_name="My Custom Rule", pattern_type="FROM",
+                        value="x@y.com", exclude=False, source="FIX",
+                        reason=None),
+    ]
+    db = _db_with_provider("gmail", patterns=saved)
+    user = SimpleNamespace(email="u@example.com")
+    reseeded = [{"id": f"new-{p['name']}", "name": p["name"]}
+                for p in m._PRESET_RULES]
+    with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.rules, "_assert_account_owner", AsyncMock()), \
+            patch.object(m.automation.rules, "_load_rules",
+                         AsyncMock(return_value=reseeded)), \
+            patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
+        res = await m.reset_rules(account_id="acc-1", user=user)
+
+    # The two preset-attached patterns were restored; the custom-rule one wasn't.
+    assert res["patterns_restored"] == 2
+    inserts = [
+        c.args[1] for c in db.execute.call_args_list
+        if len(c.args) > 1 and "INSERT INTO email_rule_patterns" in str(c.args[0])
+    ]
+    assert {(i["rid"], i["val"], i["excl"]) for i in inserts} == {
+        ("new-Newsletter", "news@brand.com", False),
+        ("new-Receipt", "your order", True),
+    }

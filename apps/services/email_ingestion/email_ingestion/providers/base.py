@@ -155,6 +155,15 @@ class EmailMessage:
     is_flagged: bool = False
     importance: str = "normal"  # 'high' | 'normal' | 'low'
     categories: list[str] = field(default_factory=list)
+    # True only when this provider genuinely round-trips user labels/categories,
+    # so an empty ``categories`` means "the user removed them" rather than "this
+    # provider doesn't report them". Ingest REPLACES the stored categories only
+    # when this is set; otherwise it keeps what's already there. Without this,
+    # a provider that never fills ``categories`` (generic IMAP, and Gmail before
+    # its label-name map existed) silently erased every label the rule engine had
+    # applied on the next re-sync — and since ``rules_processed_at`` was already
+    # stamped, the rules never re-applied them. See persist._ON_CONFLICT_UPDATE.
+    categories_authoritative: bool = False
     # Best unsubscribe target parsed from the List-Unsubscribe header (https
     # one-click preferred, else mailto:). Powers bulk unsubscribe.
     unsubscribe_link: str | None = None

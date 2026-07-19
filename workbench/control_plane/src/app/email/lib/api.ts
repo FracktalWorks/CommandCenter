@@ -2,7 +2,7 @@ import {
   Email, EmailAccount,
   AnalyticsOverview, SenderStat, NewsletterStatus, UnsubscribeResult,
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
-  RecentTestResult, ColdSender, ReplyZeroThread, KnowledgeEntry,
+  RecentTestResult, ColdSender, KnowledgeEntry,
   LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
 } from "./types";
 
@@ -1468,6 +1468,64 @@ export async function getSenderCategories(
   );
 }
 
+// ── Uncategorized-inbox sweep (Inbox Cleaner) ───────────────────────────────
+
+/** Result of projecting existing categorization onto uncategorized inbox mail.
+ *  `no_evidence` is mail the sweep deliberately refused to guess at — it needs a
+ *  real rules run, not a second classifier. */
+export interface CleanupSweepResult {
+  scanned: number;
+  categorized: number;
+  no_evidence: number;
+  by_category: Record<string, number>;
+  by_reason: Record<string, number>;
+  dry_run: boolean;
+  error?: string;
+}
+
+/** Preview the sweep: decides everything, writes nothing, returns the verdicts. */
+export async function previewAutoCategorize(
+  accountId: string,
+  limit = 500
+): Promise<CleanupSweepResult> {
+  return gatewayFetch("/email/cleanup/auto-categorize", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, limit, dry_run: true }),
+  });
+}
+
+/** Run the sweep for real (background — poll `getCleanupStatus`). */
+export async function runAutoCategorize(
+  accountId: string,
+  limit = 500
+): Promise<{ scheduled: boolean }> {
+  return gatewayFetch("/email/cleanup/auto-categorize", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, limit, dry_run: false }),
+  });
+}
+
+export async function getCleanupStatus(
+  accountId: string
+): Promise<
+  Partial<CleanupSweepResult> & { status: string; applied?: number }
+> {
+  return gatewayFetch(
+    `/email/cleanup/status?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
+export async function getUncategorizedOverview(
+  accountId: string
+): Promise<{
+  uncategorized: number;
+  top_senders: { email: string; name: string; count: number }[];
+}> {
+  return gatewayFetch(
+    `/email/cleanup/uncategorized?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
 // ── Cold-email blocker ──────────────────────────────────────────────────────
 
 export async function listColdSenders(
@@ -1490,54 +1548,6 @@ export async function upsertColdSender(params: {
       account_id: params.accountId,
       from_email: params.fromEmail,
       status: params.status,
-    }),
-  });
-}
-
-// ── Reply Zero ──────────────────────────────────────────────────────────────
-
-export async function getReplyZero(
-  accountId: string,
-  type: "needs_reply" | "awaiting" | "done" = "needs_reply",
-  limit = 50
-): Promise<ReplyZeroThread[]> {
-  const sp = new URLSearchParams({
-    account_id: accountId,
-    type,
-    limit: String(limit),
-  });
-  const res = await gatewayFetch<{ threads: ReplyZeroThread[] }>(
-    `/email/reply-zero?${sp}`
-  );
-  return res.threads ?? [];
-}
-
-/**
- * Rebuild Reply Zero from scratch with the current rules-based logic. Clears the
- * derived statuses (Reply / Awaiting / FYI) but keeps threads marked Done,
- * then reclassifies in the background. Poll getReplyZero afterwards.
- */
-export async function reclassifyReplyZero(
-  accountId: string
-): Promise<{ scheduled: boolean }> {
-  return gatewayFetch("/email/reply-zero/reclassify", {
-    method: "POST",
-    body: JSON.stringify({ account_id: accountId }),
-  });
-}
-
-/** Mark a thread done (inbox-zero "Mark Done") or reopen it. */
-export async function resolveThread(
-  accountId: string,
-  threadId: string,
-  done = true
-): Promise<void> {
-  await gatewayFetch("/email/reply-zero/resolve", {
-    method: "POST",
-    body: JSON.stringify({
-      account_id: accountId,
-      thread_id: threadId,
-      done,
     }),
   });
 }

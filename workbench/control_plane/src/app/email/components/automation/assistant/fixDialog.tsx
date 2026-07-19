@@ -121,6 +121,20 @@ function FixDialog({
         onReran?.();
         return;
       }
+      // Nothing was persisted. The backend refuses some corrections on purpose
+      // (a conversation rule can't be sender-pinned, and with no resolvable
+      // thread there is nowhere to put the status), and it used to report those
+      // as "Learned" anyway — so the user got a success message, nothing
+      // changed, and they repeated the same correction forever. Say what
+      // actually happened instead.
+      if (!res?.created) {
+        setError(
+          messageId
+            ? "Nothing was saved — this correction can't be learned for this rule."
+            : "Couldn't apply this correction here — open the email and fix it from there.",
+        );
+        return;
+      }
       // Cleanup-rule / "None" correction → re-run THIS email so the new
       // label/action applies immediately now that the pattern is learned.
       let reran: RunMessageResult | null = null;

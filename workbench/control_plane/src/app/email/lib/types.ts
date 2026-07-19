@@ -117,27 +117,6 @@ export interface ColdSender {
   updated_at: string | null;
 }
 
-export interface ReplyZeroThread {
-  thread_id: string;
-  message_id: string;
-  subject: string;
-  from: string;
-  from_email: string;
-  received_at: string | null;
-  is_read: boolean;
-  /** Why the classifier flagged this thread (needs-reply rationale). */
-  reason?: string;
-  /** Days since the last message (used for the follow-up window). */
-  awaiting_days?: number | null;
-  /** True when an awaiting thread is older than the follow-up window. */
-  needs_follow_up?: boolean;
-  /** Local id of an existing draft in this thread (auto-drafted or saved), if
-   *  any — the UI offers "View draft" instead of drafting a second reply. */
-  draft_id?: string | null;
-  /** The existing draft's body text, for inline preview. */
-  draft_preview?: string | null;
-}
-
 // ── Analytics ──────────────────────────────────────────────────────────────
 
 export interface AnalyticsOverview {
@@ -186,7 +165,13 @@ export type SenderStatus = NewsletterStatus | "UNHANDLED";
 export interface SenderStat {
   email: string;
   name: string;
+  /** Total messages counted for this sender. For a sender with a saved
+   *  disposition this reaches outside the requested folder (so an unsubscribed
+   *  sender doesn't disappear from the list) — use `in_folder` for "how much is
+   *  still in the inbox". */
   count: number;
+  /** How many of `count` are actually in the requested folder. */
+  in_folder?: number;
   unread: number;
   archived: number;
   read_rate: number;
@@ -205,6 +190,11 @@ export interface SenderStat {
   /** Provenance of `category`. Always 'rule'/'user' now (provisional 'inferred'
    *  guesses were removed); retained for forward-compat. */
   category_source?: string | null;
+  /** How many of this sender's messages carry ANY rule label (cleanup or
+   *  conversation). 0 means the rules never reached this sender — which is a
+   *  different problem from "the rules ran and found nothing to clean up", and
+   *  is what the Inbox Cleaner's "Uncategorized" filter surfaces. */
+  labelled?: number;
 }
 
 /** Result of a real unsubscribe attempt (POST /email/unsubscribe). */

@@ -214,6 +214,13 @@ export function TestTab({ accountId }: { accountId: string | null }) {
                           ruleName: res.rule?.name ?? null,
                           ruleId: res.rule?.id ?? null,
                         }}
+                        // Required, not optional. Without it the backend can't
+                        // resolve the thread, so a correction to a conversation
+                        // rule (Reply / Awaiting / FYI / Done) silently does
+                        // nothing while the dialog still reports "Learned".
+                        // Conversation state is set on the THREAD, so there is
+                        // no pattern to fall back on.
+                        messageId={e.id}
                       />
                       <button
                         onClick={() => runOne(e.id)}

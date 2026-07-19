@@ -357,8 +357,8 @@ export function DraftCard({
   const [to, setTo] = useState(replyAllTo.join(", "));
   const [cc, setCc] = useState(replyAllCc.join(", "));
   const [bcc, setBcc] = useState("");
-  // Default to reply-all when replying to a real message (parity with EmailDetail
-  // and Rapid Inbox); the toggle narrows to the sender only.
+  // Default to reply-all when replying to a real message (parity with
+  // EmailDetail); the toggle narrows to the sender only.
   const [replyAll, setReplyAll] = useState(hasReplyTarget);
   // Show Cc/Bcc up-front on a reply so they're always visible; keep them behind
   // the reveal button only for a from-scratch draft.

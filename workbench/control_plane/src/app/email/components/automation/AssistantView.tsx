@@ -41,14 +41,30 @@ function usePastJobStatus(accountId: string | null) {
     if (!accountId) return;
     let cancelled = false;
     let timer: ReturnType<typeof setTimeout> | null = null;
+    // A single transient failure used to kill the loop outright, freezing the
+    // banner mid-progress with no dismiss button (it's hidden while `running`)
+    // for the rest of the session. Retry with backoff, and give up loudly —
+    // as an `error` status, which IS dismissible — rather than silently.
+    let failures = 0;
     const tick = async () => {
       try {
         const s = await getProcessPastStatus(accountId);
         if (cancelled) return;
+        failures = 0;
         setStatus(s);
         if (s.status === "running") timer = setTimeout(tick, 1500);
       } catch {
-        /* stop polling on error */
+        if (cancelled) return;
+        failures += 1;
+        if (failures <= 5) {
+          timer = setTimeout(tick, 1500 * 2 ** (failures - 1));
+        } else {
+          setStatus((prev) =>
+            prev
+              ? { ...prev, status: "error", error: "lost contact with the server" }
+              : prev,
+          );
+        }
       }
     };
     tick();

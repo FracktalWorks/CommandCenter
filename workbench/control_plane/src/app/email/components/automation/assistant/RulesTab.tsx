@@ -154,6 +154,7 @@ export function RuleEditorModalLoader({
 }) {
   const [rule, setRule] = useState<AutomationRule | null>(null);
   const [err, setErr] = useState<string | null>(null);
+  const [saveErr, setSaveErr] = useState<string | null>(null);
   useEffect(() => {
     let cancelled = false;
     listRules(accountId)
@@ -173,10 +174,16 @@ export function RuleEditorModalLoader({
   }, [accountId, ruleId]);
 
   const save = async (r: AutomationRule) => {
+    // Close ONLY on success. `finally` closed the modal either way, so a failed
+    // save looked exactly like a successful one and threw the user's edits away
+    // with no way to recover them. Save failures use their own state so the
+    // editor stays mounted with the user's edits intact — a load failure has
+    // nothing to preserve and still replaces the editor outright.
     try {
       if (r.id) await updateRule(r.id, r);
-    } finally {
       onClose();
+    } catch (e) {
+      setSaveErr((e as Error).message || "Couldn't save the rule.");
     }
   };
 
@@ -188,7 +195,14 @@ export function RuleEditorModalLoader({
     );
   }
   if (!rule) return null; // brief load; the editor Modal appears once resolved
-  return <RuleEditor rule={rule} onSave={save} onCancel={onClose} />;
+  return (
+    <RuleEditor
+      rule={rule}
+      onSave={save}
+      onCancel={onClose}
+      saveError={saveErr}
+    />
+  );
 }
 
 // ── Rules tab ───────────────────────────────────────────────────────────────
@@ -576,10 +590,14 @@ function RuleEditor({
   rule,
   onSave,
   onCancel,
+  saveError,
 }: {
   rule: AutomationRule;
   onSave: (r: AutomationRule) => void;
   onCancel: () => void;
+  /** Surfaced in-place so a failed save keeps the editor (and the user's
+   *  unsaved edits) on screen instead of silently discarding them. */
+  saveError?: string | null;
 }) {
   const [draft, setDraft] = useState<AutomationRule>(rule);
   const set = (patch: Partial<AutomationRule>) =>
@@ -652,6 +670,11 @@ function RuleEditor({
         </>
       }
     >
+      {saveError && (
+        <div className="mb-3 px-3 py-2 rounded-lg bg-destructive/10 text-xs text-destructive">
+          {saveError}
+        </div>
+      )}
       {/* Rule name */}
       <div className="space-y-1.5">
         <label className="text-xs font-medium text-foreground">Rule name</label>

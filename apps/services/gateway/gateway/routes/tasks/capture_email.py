@@ -1196,16 +1196,21 @@ async def _llm_detect_commitment(
 
 
 async def _tag_thread_task_category(
-    db: Any, account_id: str, thread_id: str,
+    db: Any, account_id: str, thread_id: str, user_email: str = "",
 ) -> None:
     """Append the "Task" category label to the newest message in the thread so
-    the email app's Rapid Inbox surfaces the thread under its "Task" chip. Idem-
-    potent (array_append only if absent) and orthogonal to the mutually-exclusive
-    conversation-status label (Reply/Awaiting/Done) — the two axes coexist."""
+    the email app surfaces the thread under its "Task" chip. Idempotent
+    (array_append only if absent) and orthogonal to the mutually-exclusive
+    conversation-status label (Reply/Awaiting/Done) — the two axes coexist.
+
+    The label is ALSO pushed to the provider, best-effort. That is not cosmetic:
+    providers that round-trip labels are authoritative on re-sync (see
+    EmailMessage.categories_authoritative), so a category written only locally
+    would be erased the next time this message syncs."""
     if not thread_id:
         return
     target = (await db.execute(text(
-        "SELECT id FROM email_messages "
+        "SELECT id, provider_message_id FROM email_messages "
         "WHERE account_id = :aid AND thread_id = :tid "
         "AND LOWER(COALESCE(folder, '')) NOT IN ('drafts', 'draft') "
         "ORDER BY received_at DESC NULLS LAST LIMIT 1"
@@ -1218,6 +1223,21 @@ async def _tag_thread_task_category(
         "ELSE array_append(categories, 'Task') END, "
         "updated_at = now() WHERE id = :id"
     ), {"id": str(target.id)})
+    if not (target.provider_message_id and user_email):
+        return
+    try:
+        from gateway.routes.email.core import (  # noqa: PLC0415
+            _persist_rotated_creds,
+            _provider_for_account,
+        )
+        provider, store, _ = await _provider_for_account(
+            db, account_id, user_email)
+        if await provider.authenticate():
+            await provider.set_labels(
+                target.provider_message_id, add=["Task"], remove=[])
+            await _persist_rotated_creds(db, store, account_id, provider)
+    except Exception:  # noqa: BLE001 — labelling must never fail the capture
+        pass
 
 
 @router.post("/capture/from-reply/detect",
@@ -1294,7 +1314,7 @@ async def create_commitment_from_reply(
 ):
     """Confirm the commitment popup: write the (possibly edited) task, link its
     origin back to the thread, mark the origin as a commitment, and tag the
-    thread with the "Task" category so Rapid Inbox surfaces it. Idempotent per
+    thread with the "Task" category so the mailbox surfaces it. Idempotent per
     thread — a second confirm on the same thread returns the existing task."""
     uid = _uid(user)
     db = await _get_db()
@@ -1328,7 +1348,8 @@ async def create_commitment_from_reply(
             "coalesce(origin, '{}'::jsonb), '{commitment}', 'true'::jsonb) "
             "WHERE id = :id"
         ), {"id": item_id})
-        await _tag_thread_task_category(db, req.account_id, req.thread_id)
+        await _tag_thread_task_category(
+            db, req.account_id, req.thread_id, uid)
         await db.commit()
 
         row = (await db.execute(

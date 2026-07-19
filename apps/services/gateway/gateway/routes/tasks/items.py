@@ -672,8 +672,9 @@ async def _status_for_stage(
     own ClickUp project whose mapping equals `stage`, so a board drag into a
     local stage writes a concrete upstream status. Returns None when the task's
     project has no status mapped to that stage (→ caller keeps the move local).
-    When several of the project's statuses map to the stage, the first in the
-    project's own order wins (stable + predictable)."""
+    When several of the project's statuses map to the stage, the LOWEST by
+    ClickUp orderindex wins — the task enters the stage at its earliest status
+    (list_statuses_for_task is orderindex-sorted; see _list_statuses_raw)."""
     try:
         statuses = await provider.list_statuses_for_task(provider_task_id)
     except Exception:

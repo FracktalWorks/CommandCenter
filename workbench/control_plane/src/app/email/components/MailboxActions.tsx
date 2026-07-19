@@ -15,9 +15,12 @@ import { resyncAccount } from "../lib/api";
  */
 export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null }) {
   const { updateEmail, triggerSync, selectedAccountId, syncStatus } = useEmailStore();
-  const syncing = selectedAccountId
-    ? syncStatus[selectedAccountId] === "syncing"
-    : false;
+  const status = selectedAccountId ? syncStatus[selectedAccountId] : undefined;
+  // "processing" = new mail is in and the server is still applying rules/labels
+  // and auto-archiving in the background (H1); keep the button busy, but change
+  // the hint so the user knows labels are still landing.
+  const processing = status === "processing";
+  const syncing = status === "syncing" || processing;
 
   // ── Mailbox settings menu (gear) ──
   const [showSettings, setShowSettings] = useState(false);
@@ -49,7 +52,11 @@ export function MailboxActions({ selectedEmail }: { selectedEmail: Email | null 
         onClick={() => selectedAccountId && triggerSync(selectedAccountId)}
         disabled={!selectedAccountId || syncing}
         className="p-1.5 rounded text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-40"
-        title="Refresh — sync new mail, drafts & changes from the server"
+        title={
+          processing
+            ? "Processing new mail — applying rules, labels & auto-archive…"
+            : "Refresh — sync new mail, drafts & changes from the server"
+        }
       >
         <RefreshCw size={15} className={syncing ? "animate-spin" : ""} />
       </button>

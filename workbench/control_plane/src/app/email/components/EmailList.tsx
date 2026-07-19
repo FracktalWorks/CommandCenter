@@ -95,8 +95,11 @@ export function EmailList({
     runTestOnMessage, testRunningIds,
   } = useEmailStore();
   const { isMobile } = useViewMode();
+  // Treat the post-sync "processing" window (background rules/labels pipeline)
+  // as busy too, so the pull-to-refresh spinner keeps turning until it settles.
   const syncing = selectedAccountId
-    ? syncStatus[selectedAccountId] === "syncing"
+    ? syncStatus[selectedAccountId] === "syncing" ||
+      syncStatus[selectedAccountId] === "processing"
     : false;
   const [ctx, setCtx] = useState<CtxState | null>(null);
 

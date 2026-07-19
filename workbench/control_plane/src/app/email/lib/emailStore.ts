@@ -221,7 +221,11 @@ interface EmailState {
   backfillToken: Record<string, string | null>;
   /** Per-folder flag: the provider has no older mail left to fetch. */
   backfillExhausted: Record<string, boolean>;
-  syncStatus: Record<string, "idle" | "syncing" | "error">;
+  /** Per-account sync state. "syncing" = the sync request is in flight;
+   *  "processing" = mail is persisted and the server is running the rules /
+   *  categorize / Reply-Zero / auto-archive pipeline as a background task
+   *  (H1 Option C), which the UI catches up to via delayed refetches. */
+  syncStatus: Record<string, "idle" | "syncing" | "error" | "processing">;
   /** Accounts whose live provider calls returned 401/403 (stale OAuth), keyed
    *  by account id → error message. Drives the in-app reconnect banner
    *  immediately, without waiting for the next sync to set sync_status. */
@@ -419,6 +423,13 @@ let _sendTimer: ReturnType<typeof setTimeout> | undefined;
 /** Cooperative stop flag for the Assistant "Test/Run on all" sweep. Kept at
  *  module scope so it survives TestTab unmounting (run continues in the store). */
 let _stopTestRun = false;
+/** Post-manual-sync catch-up timers, per account. A manual sync responds as soon
+ *  as new mail is persisted; the server then runs the rules / categorize /
+ *  Reply-Zero / auto-archive pipeline as a background task (H1 Option C). These
+ *  delayed refetches pull in the labels/categories it applies (and drop
+ *  auto-archived mail) without waiting for the 20s background poll. Module-scoped
+ *  so they survive component unmounts / account switches. */
+const _postSyncTimers: Record<string, ReturnType<typeof setTimeout>[]> = {};
 /** How long the user has to undo a send. */
 const UNDO_SEND_MS = 5000;
 
@@ -1296,6 +1307,9 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   },
 
   triggerSync: async (accountId: string) => {
+    // Cancel any catch-up refetches still pending from a previous sync.
+    (_postSyncTimers[accountId] || []).forEach(clearTimeout);
+    _postSyncTimers[accountId] = [];
     set({ syncStatus: { ...get().syncStatus, [accountId]: "syncing" } });
     // Demo: no backend to sync against — settle straight back to idle.
     if (DEMO) {
@@ -1304,9 +1318,34 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
     try {
       await api.triggerSync(accountId);
-      set({ syncStatus: { ...get().syncStatus, [accountId]: "idle" } });
+      // New mail is now persisted, but the server runs the rules / categorize /
+      // Reply-Zero / auto-archive pipeline as a background task that finishes
+      // just AFTER this response (H1 Option C). Show what we have immediately,
+      // flip to "processing", then refetch a couple of times so the
+      // labels/categories it applies (and any auto-archived mail) appear without
+      // a manual refresh or waiting for the 20s background poll.
+      set({ syncStatus: { ...get().syncStatus, [accountId]: "processing" } });
       get().fetchEmails();
       get().fetchAccounts();
+
+      const stillProcessing = () =>
+        get().syncStatus[accountId] === "processing";
+      // softRefresh re-runs the CURRENT folder/search view (page 1) and merges
+      // any new labels; fetchFolders picks up counts shifted by auto-archive.
+      const catchUp = () => {
+        if (!stillProcessing()) return;
+        void get().softRefresh();
+        void get().fetchFolders();
+      };
+      const t1 = setTimeout(catchUp, 2500);
+      const t2 = setTimeout(() => {
+        catchUp();
+        if (stillProcessing()) {
+          set({ syncStatus: { ...get().syncStatus, [accountId]: "idle" } });
+        }
+        _postSyncTimers[accountId] = [];
+      }, 6000);
+      _postSyncTimers[accountId] = [t1, t2];
     } catch (err: any) {
       set({
         syncStatus: { ...get().syncStatus, [accountId]: "error" },

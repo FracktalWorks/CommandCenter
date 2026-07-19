@@ -25,7 +25,12 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-acb_dev_change_me}
       POSTGRES_DB: ${POSTGRES_DB:-acb}
     ports:
-      - "5432:5432"
+      # Bind to loopback ONLY. Docker's `-p` publishing inserts iptables DOCKER
+      # rules that bypass UFW, so a bare "5432:5432" exposed Postgres to the
+      # internet despite the firewall. The host app connects over 127.0.0.1 and
+      # in-compose services (e.g. Langfuse) use the compose network, so loopback
+      # is sufficient. Override POSTGRES_BIND to expose it deliberately.
+      - "${POSTGRES_BIND:-127.0.0.1}:5432:5432"
     volumes:
       - acb-postgres-data:/var/lib/postgresql/data
       - ./postgres/00_create_databases.sql:/docker-entrypoint-initdb.d/00_create_databases.sql:ro
@@ -48,7 +53,9 @@ services:
     <<: *restart
     profiles: ["core", "obs"]
     ports:
-      - "6379:6379"
+      # Loopback only — see the Postgres note above. Redis has no auth, so a
+      # public "6379:6379" was an open data store bypassing UFW via Docker.
+      - "${REDIS_BIND:-127.0.0.1}:6379:6379"
     volumes:
       - acb-redis-data:/data
     healthcheck:

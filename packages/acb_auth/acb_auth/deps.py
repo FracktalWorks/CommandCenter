@@ -59,6 +59,21 @@ def _get_internal_token() -> str:
     return tok
 
 
+def _trust_unverified_sso_headers() -> bool:
+    """Escape hatch: when true, X-User-Email is trusted even without a valid
+    internal Bearer token (the pre-2026-07 behaviour).
+
+    Default is FALSE. A bare X-User-Email (no Bearer) is spoofable by anyone who
+    can reach the gateway directly, so trusting it was a cross-account auth
+    bypass. Flip this to 1/true ONLY as a temporary rollback if a token MISMATCH
+    between the Next.js proxy and the gateway is turning legitimate proxied
+    traffic anonymous — the real fix is to align the two tokens.
+    """
+    return os.getenv(
+        "GATEWAY_TRUST_UNVERIFIED_SSO_HEADERS", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
+
+
 
 async def get_current_user(
     x_user_email: Annotated[str | None, Header(alias="X-User-Email")] = None,
@@ -106,12 +121,27 @@ async def get_current_user(
     if bearer_ok:
         return UserContext(email="system:internal", role=UserRole.AGENT)
 
-    # 2. SSO headers without Bearer (direct browser/dev access — no proxy).
+    # 2. SSO headers WITHOUT a valid Bearer token.
+    #    X-User-Email is only trustworthy when it arrives WITH the internal Bearer
+    #    token (branch 1a) — that proves it came from the Next.js proxy, which
+    #    authenticated the Google/NextAuth session. A bare X-User-Email is
+    #    spoofable by anyone who can reach the gateway directly (it is exposed via
+    #    Caddy), so trusting it was a full cross-account auth bypass. When an
+    #    internal token IS configured we refuse to authenticate such a caller.
+    #    When none is configured we preserve the old trust to avoid bricking an
+    #    unprovisioned/dev gateway (mirroring require_internal_auth's fail-open
+    #    contract); the escape hatch forces trust for a token-mismatch rollback.
+    if (
+        x_user_email
+        and _get_internal_token()
+        and not _trust_unverified_sso_headers()
+    ):
+        return UserContext(email=None, role=UserRole.EMPLOYEE)
+
     email = x_user_email
     if email:
-        # Domain enforcement: reject emails not from the allowed domain.
-        # This is a defence-in-depth check — the Next.js middleware and Google SSO
-        # should already have blocked non-fracktal.in users before this point.
+        # Domain enforcement (defence in depth) for the fail-open / escape-hatch
+        # paths that still trust the header.
         allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
         if not email.lower().endswith("@" + allowed_domain):
             # Treat as anonymous rather than raising — callers use require_role() to enforce.

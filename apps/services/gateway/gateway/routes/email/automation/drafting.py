@@ -22,12 +22,12 @@ from gateway.routes.email.core import (
     _fmt_addr_list,
     _get_db,
     _instantiate_provider,
+    _llm_json,
     _log,
     _persist_rotated_creds,
     _provider_for_account,
     _provider_for_message,
     _row_to_message,
-    _safe_json,
     email_memory_scope,
     router,
 )
@@ -293,7 +293,6 @@ async def _llm_extract_reply_memories(
     Returns [{content, kind, scope, topic}]; empty when nothing generalizable.
     """
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You learn how a user likes their email replies written by comparing "
             "the assistant's DRAFT with what the user actually SENT (the INCOMING "
@@ -313,14 +312,12 @@ async def _llm_extract_reply_memories(
             f"INCOMING:\n{incoming[:1500]}\n\nDRAFT:\n{draft[:2000]}\n\n"
             f"SENT:\n{sent[:2000]}"
         )
-        resp, _ = await acompletion_with_fallback(
-            model="tier-powerful",
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user}],
-            temperature=0, max_tokens=1000,
-            response_format={"type": "json_object"},
+        data, _content, _used = await _llm_json(
+            "tier-powerful",
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user}],
+            max_tokens=1000,
         )
-        data = _safe_json(resp.choices[0].message.content or "")
         items = data.get("memories") if isinstance(data, dict) else None
         out: list[dict[str, str]] = []
         for m in (items or [])[:3]:
@@ -811,7 +808,6 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
     Returns [{"agent": "agent-sales-assistant"|"task-manager", "question": "..."}], capped at 2.
     """
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         sys_prompt = (
             "You plan how to draft an email reply. Decide which internal specialist "
             "agents, if any, would provide context that materially improves the "
@@ -827,14 +823,12 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
             f"Body:\n{(email.get('body', '') or '')[:1500]}"
         )
         # A fast routing decision; JSON-forced so the plan is always parseable.
-        resp, _ = await acompletion_with_fallback(
-            model="tier-fast",
-            messages=[{"role": "system", "content": sys_prompt},
-                      {"role": "user", "content": user_prompt}],
-            temperature=0, max_tokens=500,
-            response_format={"type": "json_object"},
+        data, _content, _used = await _llm_json(
+            "tier-fast",
+            [{"role": "system", "content": sys_prompt},
+             {"role": "user", "content": user_prompt}],
+            max_tokens=500,
         )
-        data = _safe_json(resp.choices[0].message.content or "")
         consult = data.get("consult", []) if isinstance(data, dict) else []
         out = []
         for c in consult:

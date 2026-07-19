@@ -25,9 +25,9 @@ from gateway.routes.email.core import (
     _fmt_addr_list,
     _get_db,
     _instantiate_provider,
+    _llm_json,
     _log,
     _persist_rotated_creds,
-    _safe_json,
     router,
 )
 from pydantic import BaseModel
@@ -620,7 +620,6 @@ async def _llm_determine_thread_status(
     tier is attempted before falling back."""
     fallback = "AWAITING_REPLY" if user_sent_last else "FYI"
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
         fyi_state = "" if user_sent_last else "\n* FYI - No reply needed"
         fyi_opt = "" if user_sent_last else "FYI, "
         fyi_rules = "" if user_sent_last else (
@@ -684,13 +683,9 @@ async def _llm_determine_thread_status(
         # Try the configured tier, then escalate once. A wrong/empty answer here
         # always biases AWAITING, so a second stronger attempt is cheap insurance.
         for attempt_model in (model, _STATUS_MODEL_ESCALATION):
-            resp, _ = await acompletion_with_fallback(
-                model=attempt_model,
-                messages=messages,
-                temperature=0, max_tokens=500,
-                response_format={"type": "json_object"},
+            data, _content, _used = await _llm_json(
+                attempt_model, messages, max_tokens=500,
             )
-            data = _safe_json(resp.choices[0].message.content or "")
             st = ((data.get("status") if isinstance(data, dict) else "") or "")
             st = _canon_status_key(st)  # tolerate a legacy TO_REPLY/ACTIONED reply
             if st in allowed:
@@ -1623,12 +1618,27 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
             if not r.provider_message_id:
                 await mark()
                 continue
-            try:
+            # Apply the "Follow-up" tag on BOTH surfaces. Mirror it locally
+            # (email_messages.categories) so it shows as a chip/filter in the
+            # regular mailbox view at once — the reminder path used to write the
+            # provider only, so the tag stayed invisible in-app until the next
+            # sync pulled it back. Provider apply stays best-effort on top.
+            labeled_ok = False
+            if r.last_message_id:
+                with contextlib.suppress(Exception):
+                    await db.execute(text(
+                        "UPDATE email_messages SET categories = CASE "
+                        "WHEN :lbl = ANY(categories) THEN categories "
+                        "ELSE array_append(categories, :lbl) END, "
+                        "updated_at = now() WHERE id = :id"
+                    ), {"id": r.last_message_id, "lbl": _FOLLOW_UP_LABEL})
+                    labeled_ok = True
+            with contextlib.suppress(Exception):
                 await provider.set_labels(
-                    r.provider_message_id, add=["Follow-up"], remove=[])
+                    r.provider_message_id, add=[_FOLLOW_UP_LABEL], remove=[])
+                labeled_ok = True
+            if labeled_ok:
                 result["labeled"] += 1
-            except Exception:  # noqa: BLE001
-                pass
             if auto_draft and r.status == "AWAITING":
                 try:
                     to_list = r.to_addresses if isinstance(r.to_addresses, list) \

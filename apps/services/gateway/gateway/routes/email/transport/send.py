@@ -7,7 +7,12 @@ import json
 
 from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException
-from gateway.routes.email.core import _get_db, _persist_rotated_creds, router
+from gateway.routes.email.core import (
+    _get_db,
+    _instantiate_provider,
+    _persist_rotated_creds,
+    router,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -113,20 +118,7 @@ async def send_email(
         store = get_key_store()
         creds = json.loads(store.decrypt(row.credentials_encrypted))
 
-        if row.provider == "gmail":
-            from email_ingestion.providers.gmail import GmailProvider
-            provider = GmailProvider(creds)
-        elif row.provider == "microsoft":
-            from email_ingestion.providers.outlook import OutlookProvider
-            provider = OutlookProvider(creds)
-        elif row.provider == "imap":
-            from email_ingestion.providers.imap import IMAPProvider
-            provider = IMAPProvider(creds)
-        else:
-            raise HTTPException(
-                status_code=400,
-                detail=f"Send not supported for provider: {row.provider}"
-            )
+        provider = _instantiate_provider(row.provider, creds)
 
         # Authenticate and send
         if not await provider.authenticate():

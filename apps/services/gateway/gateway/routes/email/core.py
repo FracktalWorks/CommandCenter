@@ -106,18 +106,15 @@ async def _get_redis():
 def _instantiate_provider(provider_name: str, creds: dict[str, Any]):
     """Construct an email provider instance from its name + decrypted creds.
 
-    Raises HTTPException(400) for unknown providers so callers get a clean error.
+    Thin gateway adapter over ``email_ingestion.providers.build_provider`` (the
+    single name→class factory): translates the factory's ``ValueError`` into an
+    HTTPException(400) so route callers get a clean HTTP error.
     """
-    if provider_name == "gmail":
-        from email_ingestion.providers.gmail import GmailProvider
-        return GmailProvider(creds)
-    if provider_name == "microsoft":
-        from email_ingestion.providers.outlook import OutlookProvider
-        return OutlookProvider(creds)
-    if provider_name == "imap":
-        from email_ingestion.providers.imap import IMAPProvider
-        return IMAPProvider(creds)
-    raise HTTPException(status_code=400, detail=f"Unknown provider: {provider_name}")
+    from email_ingestion.providers.factory import build_provider
+    try:
+        return build_provider(provider_name, creds)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 async def _provider_for_message(db: Any, message_id: str, user_email: str):
@@ -373,6 +370,40 @@ def _safe_json(content: str) -> Any | None:
             except Exception:  # noqa: BLE001 — try the next opening bracket
                 continue
     return None
+
+
+async def _llm_json(
+    model: str,
+    messages: list[dict[str, Any]],
+    *,
+    max_tokens: int,
+    temperature: float = 0.0,
+) -> tuple[Any, str, str]:
+    """The single seam for the email package's "ask the LLM, get JSON" calls.
+
+    Runs a JSON-mode chat completion via ``acompletion_with_fallback`` — forcing
+    ``response_format={"type": "json_object"}`` (dropped automatically for models
+    that don't support it) — and parses the reply with :func:`_safe_json`.
+
+    Returns ``(data, content, used_model)``:
+    - ``data`` — the parsed JSON, or ``None`` when the reply wasn't valid JSON;
+    - ``content`` — the raw reply text (for logging an unparseable sample);
+    - ``used_model`` — the model the fallback chain actually used.
+
+    Errors are the caller's concern: each call site wraps this in its own
+    try/except with a fail-closed default, so this helper does not swallow
+    exceptions.
+    """
+    from acb_llm.context import acompletion_with_fallback
+    resp, used = await acompletion_with_fallback(
+        model=model,
+        messages=messages,
+        temperature=temperature,
+        max_tokens=max_tokens,
+        response_format={"type": "json_object"},
+    )
+    content = resp.choices[0].message.content or ""
+    return _safe_json(content), content, used
 
 
 def _fmt_addr_list(field: Any) -> str:

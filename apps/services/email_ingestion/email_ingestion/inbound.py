@@ -285,14 +285,14 @@ async def _persist_message(msg: EmailMessage) -> None:
                         cc_addresses, bcc_addresses, subject,
                         body_text, body_html, snippet,
                         has_attachments, is_read, is_starred, is_flagged,
-                        received_at, synced_at)
+                        unsubscribe_link, received_at, synced_at)
                        VALUES
                        (:id, :account_id, :provider_id, :thread_id,
                         :folder, :labels, :from_addr, :to_addrs,
                         :cc_addrs, :bcc_addrs, :subject,
                         :body_text, :body_html, :snippet,
                         :has_attachments, :is_read, :is_starred, :is_flagged,
-                        :received_at, now())
+                        :unsubscribe_link, :received_at, now())
                        ON CONFLICT (account_id, provider_message_id) DO NOTHING"""
                 ),
                 {
@@ -325,6 +325,7 @@ async def _persist_message(msg: EmailMessage) -> None:
                     "is_read": msg.is_read,
                     "is_starred": msg.is_starred,
                     "is_flagged": msg.is_flagged,
+                    "unsubscribe_link": getattr(msg, "unsubscribe_link", None),
                     "received_at": msg.received_at,
                 },
             )

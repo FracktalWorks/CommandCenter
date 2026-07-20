@@ -14,7 +14,8 @@ import {
   createKnowledge, deleteKnowledge, deleteLearnedPattern, deleteRulePattern,
   generateWritingStyle, getAssistantSettings, listColdSenders, listKnowledge,
   listLearnedPatterns, listRulePatterns, listRules, resetRules,
-  saveAssistantSettings, scanFollowUps, updateKnowledge, upsertColdSender,
+  reviewRulePatterns, saveAssistantSettings, scanFollowUps, updateKnowledge,
+  upsertColdSender,
 } from "../../../lib/api";
 import {
   AssistantSettings, ColdBlockerMode, ColdSender, DRAFT_CONFIDENCE_OPTIONS,
@@ -1331,9 +1332,17 @@ const _PATTERN_SOURCE_META: Record<string, { label: string; title: string }> = {
   USER: { label: "Manual", title: "Added manually" },
 };
 
+/** A pattern still waiting for a human verdict. Only auto-learned ('AI')
+ *  patterns can be in this state — anything the user authored is approved on
+ *  creation. Excludes are never gated: they only ever PREVENT a label. */
+function isPendingReview(p: LearnedRulePattern): boolean {
+  return !p.exclude && !p.approved_at && !p.rejected_at;
+}
+
 function LearnedPatternsList({ accountId }: { accountId: string | null }) {
   const [patterns, setPatterns] = useState<LearnedRulePattern[]>([]);
   const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(() => {
     if (!accountId) {
@@ -1358,6 +1367,19 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
     }
   };
 
+  const review = async (ids: string[] | undefined, approve: boolean) => {
+    if (!accountId) return;
+    setBusy(true);
+    try {
+      await reviewRulePatterns({ accountId, patternIds: ids, approve });
+      load();
+    } catch {
+      load();
+    } finally {
+      setBusy(false);
+    }
+  };
+
   if (loading) return <Spinner label="Loading learned patterns…" />;
   if (patterns.length === 0) {
     return (
@@ -1372,44 +1394,122 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
     );
   }
 
+  const pending = patterns.filter(isPendingReview);
+
   return (
-    <div className="space-y-1.5">
-      {patterns.map((p) => (
-        <div
-          key={p.id}
-          className="flex items-center gap-2 bg-card border border-border rounded-lg px-3 py-2"
-        >
-          <span
-            className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
-              p.exclude
-                ? "bg-red-500/15 text-red-400"
-                : "bg-emerald-500/15 text-emerald-400"
-            }`}
-          >
-            {p.exclude ? "Never match" : "Always match"}
-          </span>
-          {_PATTERN_SOURCE_META[p.source] && (
-            <span
-              title={_PATTERN_SOURCE_META[p.source].title}
-              className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
-            >
-              {_PATTERN_SOURCE_META[p.source].label}
-            </span>
-          )}
-          <div className="flex-1 min-w-0 text-xs text-foreground/80 truncate">
-            <span className="text-muted-foreground">From</span> {p.value}{" "}
-            <span className="text-muted-foreground">→</span>{" "}
-            <span className="text-foreground">{p.rule_name || "(deleted rule)"}</span>
-          </div>
+    <div className="space-y-3">
+      {/* The gate, stated. These patterns were inferred by the assistant from
+          its own agreement with itself, and each one is projected across every
+          matching message in the mailbox once the cleaner is allowed to use it —
+          so the cleaner waits for a human to confirm them. */}
+      {pending.length > 0 && (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-2">
+          <p className="text-[11px] text-amber-500">
+            <b>
+              {pending.length} pattern{pending.length === 1 ? "" : "s"} learned
+              by the assistant
+            </b>{" "}
+            {pending.length === 1 ? "is" : "are"} waiting for you. The Email
+            Cleaner won&apos;t apply {pending.length === 1 ? "it" : "them"}{" "}
+            across your mailbox until you confirm{" "}
+            {pending.length === 1 ? "it" : "they"}&apos;re right.
+          </p>
           <button
-            onClick={() => forget(p.id)}
-            title="Forget this"
-            className="text-muted-foreground hover:text-destructive flex-shrink-0"
+            onClick={() => review(undefined, true)}
+            disabled={busy}
+            className="text-[11px] px-2 py-1 rounded-md bg-amber-500/20 text-amber-500 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
           >
-            <X size={13} />
+            {busy ? "Approving…" : `Approve all ${pending.length}`}
           </button>
         </div>
-      ))}
+      )}
+      <div className="space-y-1.5">
+        {patterns.map((p) => {
+          const waiting = isPendingReview(p);
+          return (
+            <div
+              key={p.id}
+              className={`flex items-center gap-2 rounded-lg px-3 py-2 border ${
+                waiting
+                  ? "bg-amber-500/5 border-amber-500/30"
+                  : p.rejected_at
+                    ? "bg-card/50 border-border opacity-60"
+                    : "bg-card border-border"
+              }`}
+            >
+              <span
+                className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
+                  p.exclude
+                    ? "bg-red-500/15 text-red-400"
+                    : "bg-emerald-500/15 text-emerald-400"
+                }`}
+              >
+                {p.exclude ? "Never match" : "Always match"}
+              </span>
+              {_PATTERN_SOURCE_META[p.source] && (
+                <span
+                  title={_PATTERN_SOURCE_META[p.source].title}
+                  className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
+                >
+                  {_PATTERN_SOURCE_META[p.source].label}
+                </span>
+              )}
+              <div className="flex-1 min-w-0 text-xs text-foreground/80 truncate">
+                <span className="text-muted-foreground">
+                  {p.pattern_type === "SUBJECT" ? "Subject" : "From"}
+                </span>{" "}
+                {p.value} <span className="text-muted-foreground">→</span>{" "}
+                <span className="text-foreground">
+                  {p.rule_name || "(deleted rule)"}
+                </span>
+                {/* The number that makes review possible: without it, "is this
+                    pattern right?" cannot be answered from this screen. */}
+                {p.reach !== undefined && p.reach > 0 && (
+                  <span
+                    className="text-muted-foreground"
+                    title="Approximate — matched by sender/subject substring"
+                  >
+                    {" "}
+                    · about {p.reach.toLocaleString()} email
+                    {p.reach === 1 ? "" : "s"}
+                  </span>
+                )}
+                {p.rejected_at && (
+                  <span className="text-muted-foreground"> · rejected</span>
+                )}
+              </div>
+              {waiting ? (
+                <>
+                  <button
+                    onClick={() => review([p.id], true)}
+                    disabled={busy}
+                    title="Approve — let the cleaner use this"
+                    className="text-emerald-500 hover:text-emerald-400 flex-shrink-0 disabled:opacity-50"
+                  >
+                    <Check size={14} />
+                  </button>
+                  <button
+                    onClick={() => review([p.id], false)}
+                    disabled={busy}
+                    title="Reject — this pattern is wrong"
+                    className="text-muted-foreground hover:text-destructive flex-shrink-0 disabled:opacity-50"
+                  >
+                    <X size={14} />
+                  </button>
+                </>
+              ) : (
+                <button
+                  onClick={() => forget(p.id)}
+                  title="Forget this"
+                  className="text-muted-foreground hover:text-destructive flex-shrink-0"
+                >
+                  <Trash2 size={13} />
+                </button>
+              )}
+            </div>
+          );
+        })}
+      </div>
     </div>
   );
 }

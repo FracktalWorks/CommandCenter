@@ -9,7 +9,7 @@ There are only two honest ways to close that gap:
 
 1. **Project** what has already been decided onto the mail that looks the same.
    That is this module. It is deterministic, free and instant — no LLM, no new
-   opinion. Three sources of evidence, strongest first:
+   opinion. Four sources of evidence, strongest first:
 
    * a **learned pattern** (``email_rule_patterns``) already pins this sender or
      subject to a rule, and that rule labels with a cleanup category. These are
@@ -19,6 +19,12 @@ There are only two honest ways to close that gap:
      mail, consistently, with one cleanup category.
    * **domain consensus**: same, one level up, for a sender too new to have its
      own history (``billing@stripe.com`` inheriting from ``stripe.com``).
+   * **bulk shape**: properties of the message itself that need no history at
+     all — a ``List-Unsubscribe`` header, or an unattended local-part like
+     ``noreply@`` / ``alerts@``. This is the only step that can reach a sender
+     seen for the first time, which is most of a real backlog: measured on a
+     live mailbox, the first three steps could reach 265 of 4,391 uncategorized
+     messages, because they all require the sender to have been labelled before.
 
 2. **Classify** it, which is what the rule engine already does. This module never
    does that — when there is no evidence it reports the message as needing a
@@ -93,8 +99,121 @@ _PREVIEW_MAX = 2000
 _SWEEP_JOBS: dict[str, dict[str, Any]] = {}
 
 
+# ── Bulk shape ───────────────────────────────────────────────────────────────
+# Signals carried by the message itself, so they work on a sender seen for the
+# very first time — which the consensus steps above cannot do. Three of these
+# already existed in engine.py, but only as NEGATIVE gates: they could say "this
+# isn't a Reply" and were never allowed to say "this is a Notification".
+#
+# Local-part → category, evaluated in THIS order. Order decides mixed locals:
+# ``news-noreply@`` reads as a newsletter (Newsletter is checked before
+# Notification), which is what it is.
+_SHAPE_CATEGORY: tuple[tuple[str, frozenset[str]], ...] = (
+    ("Receipt", frozenset({
+        "receipt", "receipts", "invoice", "invoices", "billing", "payment",
+        "payments", "order", "orders", "statement", "statements",
+    })),
+    ("Newsletter", frozenset({
+        "newsletter", "newsletters", "news", "digest", "bulletin",
+        "update", "updates",
+    })),
+    ("Marketing", frozenset({
+        "marketing", "promo", "promos", "promotions", "offer", "offers",
+        "deals", "campaign", "campaigns",
+    })),
+    ("Notification", frozenset({
+        "noreply", "donotreply", "notification", "notifications", "notify",
+        "notif", "alert", "alerts", "mailer", "mailerdaemon", "bounce",
+        "bounces", "automated", "autoreply", "system", "postmaster", "robot",
+    })),
+)
+
+# Deliberately absent from every set above. A human very often reads and answers
+# these, and a wrong bulk label here is the expensive kind — the Cleaner offers
+# archive and unsubscribe on top of it. Observed live: ``support@fracktal.in``
+# is the user's own helpdesk with 231 messages, answered by people.
+_AMBIGUOUS_LOCALS = frozenset({
+    "info", "support", "contact", "hello", "hi", "team", "sales", "help",
+    "admin", "office", "enquiry", "enquiries", "inquiry", "service",
+    "services", "care", "desk", "mail", "email",
+})
+
+
 def _domain_of(email: str) -> str:
     return email.rsplit("@", 1)[-1].strip().lower() if "@" in (email or "") else ""
+
+
+def _local_tokens(sender: str) -> set[str]:
+    """Letter-only forms of the address local part, for prefix matching.
+
+    Returns the whole local part with separators removed PLUS each separated
+    token, so ``no-reply`` matches as ``noreply`` and ``news-noreply`` offers
+    both ``news`` and ``noreply``. Digits and punctuation are stripped, which is
+    what makes ``noreply2@`` and ``alerts_01@`` behave like their bare forms.
+    """
+    local = (sender or "").split("@", 1)[0].lower()
+    out = {"".join(ch for ch in local if ch.isalpha())}
+    for tok in local.replace("+", ".").replace("_", ".").replace("-", ".").split("."):
+        out.add("".join(ch for ch in tok if ch.isalpha()))
+    out.discard("")
+    return out
+
+
+# Tokens long and specific enough to be matched as a SUBSTRING of the local
+# part, not just as a whole token. ``customernotification@icici.bank.in`` and
+# ``hdfcbanksmartstatement@hdfcbank.net`` are unmistakably automated, and no
+# amount of separator-splitting reaches them because they have no separators.
+#
+# The bar is length plus specificity, because substring matching is how a
+# classifier starts labelling people: "news" appears inside the surname Newsom,
+# "order" inside recorder, "promo" inside promontory. Every entry here is ≥8
+# characters and has no common English or surname superstring.
+_SHAPE_SUBSTRINGS: tuple[tuple[str, str], ...] = (
+    ("notification", "Notification"),
+    ("notifications", "Notification"),
+    ("donotreply", "Notification"),
+    ("autoreply", "Notification"),
+    # "noreply" is NOT here: at 7 characters it sits under the bar, and bending
+    # the bar for one entry is how a rule like this stops meaning anything. It
+    # is still matched as a whole token and through separator-splitting, so
+    # noreply@ / no-reply@ / no_reply@ all resolve — only a run-together form
+    # like ordersnoreply@ is given up, which is rare and reachable by a rule.
+    ("newsletter", "Newsletter"),
+    ("statement", "Receipt"),
+    ("statements", "Receipt"),
+    ("promotions", "Marketing"),
+)
+
+
+def _shape_category(sender: str, has_unsubscribe: bool) -> tuple[str, str] | None:
+    """(category, reason) from the message's own shape, or None.
+
+    A ``List-Unsubscribe`` header outranks the local part, and is checked even
+    for an ambiguous local: RFC 8058 mail is bulk by definition, and it is how
+    ``info@somefirm.com`` — a name that could be anyone — is correctly read as a
+    newsletter blast. Transactional mail does not carry the header.
+
+    Newsletter is the landing category for a bare unsubscribe link rather than
+    Marketing: both are plausible, one is an accusation. If it is wrong the user
+    hits Fix, which writes a learned pattern, and step 1 of ``_decide`` then
+    outranks this forever after.
+    """
+    if has_unsubscribe:
+        return "Newsletter", "carries a List-Unsubscribe header"
+    tokens = _local_tokens(sender)
+    if not tokens or tokens & _AMBIGUOUS_LOCALS:
+        return None
+    for category, prefixes in _SHAPE_CATEGORY:
+        hit = tokens & prefixes
+        if hit:
+            return category, f"unattended sender ({sorted(hit)[0]}@)"
+    # Run-together locals with no separator to split on. Longest first, so
+    # "notifications" is reported rather than the "notification" inside it.
+    flat = max(tokens, key=len)
+    for needle, category in sorted(_SHAPE_SUBSTRINGS, key=lambda kv: -len(kv[0])):
+        if needle in flat:
+            return category, f"unattended sender ('{needle}' in address)"
+    return None
 
 
 def _consensus(
@@ -193,43 +312,77 @@ async def _internal_domains(db: Any, account_id: str) -> frozenset[str]:
     return frozenset(doms)
 
 
+# The ONE definition of "uncategorized cleanup material". Binds :aid, :labels
+# and :internal. Both the sweep (what gets worked on) and the overview badge
+# (what the user is told is outstanding) build on this, because a badge counting
+# mail the sweep will never touch is a to-do list that can never reach zero.
+#
+# "Uncategorized" means no cleanup category *and* no conversation label — a
+# thread already marked Reply/Awaiting is classified, it simply isn't cleanup
+# material, and re-sweeping it every run would be noise.
+#
+# OUTBOUND MAIL IS EXCLUDED. Cleanup categories describe inbound bulk mail — a
+# message you wrote is never a Newsletter or a Cold Email. Widening the sweep
+# from the inbox to the whole mailbox silently pulled the Sent folder into
+# scope, where a domain consensus on the user's own company domain would have
+# stamped a category across everything they ever sent.
+#
+# YOUR OWN ORGANISATION'S MAIL IS EXCLUDED, which is the bulk of a work mailbox:
+# 2,674 of 4,391 uncategorized messages on the live account were colleagues.
+# That mail is not miscategorized — its correct cleanup category is *none*, and
+# no classifier will ever make it a newsletter. Counting it as outstanding work
+# made the Cleaner's backlog permanently unclearable and had the sweep re-read
+# thousands of colleague emails every five minutes to conclude nothing.
+#
+# The carve-out is deliberate and narrow: internal mail carrying a
+# List-Unsubscribe header stays in scope, because an all-staff campaign blasted
+# through an ESP is exactly the internal mail worth cleaning. An internal
+# ``noreply@`` with no such header is NOT reachable here — it is left to the
+# rules run, which has no scope limit. That is the one thing this trades away.
+_CLEANUP_SCOPE = f"""
+    em.account_id = :aid AND {_NOT_DISPOSED}
+    AND LOWER(COALESCE(em.folder,'')) <> 'sent'
+    AND COALESCE(em.from_address->>'email','') <> ''
+    -- Belt and braces: self-addressed mail can sit outside Sent.
+    AND LOWER(em.from_address->>'email') NOT IN (
+          SELECT LOWER(email_address) FROM email_accounts WHERE id = :aid)
+    AND (split_part(LOWER(em.from_address->>'email'), '@', 2) <> ALL(:internal)
+         OR em.unsubscribe_link IS NOT NULL)
+    AND NOT EXISTS (
+          SELECT 1 FROM unnest(em.categories) AS c
+           WHERE LOWER(TRIM(c)) = ANY(:labels))
+"""
+
+
+def _cleanup_scope_params(
+    account_id: str, internal_domains: frozenset[str],
+) -> dict[str, Any]:
+    """Binds for :data:`_CLEANUP_SCOPE`. One helper so a caller cannot bind the
+    label vocabulary and forget the internal domains, which would silently widen
+    its scope back to every colleague."""
+    return {"aid": account_id, "labels": _KNOWN_LABELS_LOWER,
+            "internal": sorted(internal_domains)}
+
+
 async def _uncategorized_inbox(
     db: Any, account_id: str, limit: int, offset: int = 0,
+    internal_domains: frozenset[str] = frozenset(),
 ) -> list[Any]:
-    """One page of mail carrying NO label the rollup understands.
-
-    "Uncategorized" means no cleanup category *and* no conversation label — a
-    thread already marked Reply/Awaiting is classified, it simply isn't cleanup
-    material, and re-sweeping it every run would be noise.
+    """One page of mail in :data:`_CLEANUP_SCOPE`, newest first.
 
     ``offset`` exists because the sweep pages through the whole mailbox and
     messages it categorizes drop OUT of this result set. Rows left behind — the
     ones with no evidence — would otherwise be re-read forever, so the caller
     advances the offset past exactly those.
-
-    OUTBOUND MAIL IS EXCLUDED. Cleanup categories describe inbound bulk mail —
-    a message you wrote is never a Newsletter or a Cold Email. Widening this
-    sweep from the inbox to the whole mailbox silently pulled the Sent folder
-    into scope, where a domain consensus on the user's own company domain would
-    have stamped a category across everything they ever sent.
     """
     return (await db.execute(text(
         f"""SELECT em.id, em.provider_message_id, em.subject,
-                  em.from_address, em.received_at
+                  em.from_address, em.received_at, em.unsubscribe_link
              FROM email_messages em
-            WHERE em.account_id = :aid AND {_NOT_DISPOSED}
-              AND LOWER(COALESCE(em.folder,'')) <> 'sent'
-              AND COALESCE(em.from_address->>'email','') <> ''
-              -- Belt and braces: self-addressed mail can sit outside Sent.
-              AND LOWER(em.from_address->>'email') NOT IN (
-                    SELECT LOWER(email_address) FROM email_accounts
-                     WHERE id = :aid)
-              AND NOT EXISTS (
-                    SELECT 1 FROM unnest(em.categories) AS c
-                     WHERE LOWER(TRIM(c)) = ANY(:labels))
+            WHERE {_CLEANUP_SCOPE}
             ORDER BY em.received_at DESC
             LIMIT :limit OFFSET :offset"""
-    ), {"aid": account_id, "labels": _KNOWN_LABELS_LOWER,
+    ), {**_cleanup_scope_params(account_id, internal_domains),
         "limit": limit, "offset": offset})).fetchall()
 
 
@@ -279,7 +432,40 @@ def _decide(
                          _DOMAIN_MIN_LABELLED, _DOMAIN_MIN_DOMINANCE)
         if cat:
             return cat, f"domain history ({dom})"
+
+    # 4. No history anywhere — fall back to what the message itself declares.
+    #    LAST deliberately: every step above is evidence the user or the rules
+    #    produced, and none of their decisions changes because this exists. This
+    #    only reaches mail that was previously getting nothing at all.
+    shape = _shape_category(sender, bool(getattr(row, "unsubscribe_link", None)))
+    if shape and not _taught_otherwise(shape[0], email, patterns, rule_labels):
+        return shape
     return None
+
+
+def _taught_otherwise(
+    category: str,
+    email: dict[str, str],
+    patterns: dict[str, dict[str, list[tuple[str, str]]]],
+    rule_labels: dict[str, str],
+) -> bool:
+    """Has the user explicitly taught us this message is NOT ``category``?
+
+    Step 1 honours exclude patterns by skipping the rule; the shape step has no
+    rule to skip, so it has to ask separately. Without this, teaching "deals@ is
+    not Marketing" via Fix would be silently overridden by the local part being
+    ``deals@`` — the exclude would look like it had been ignored, which is the
+    difference between the cleaner learning and the cleaner nagging.
+
+    A guess must always yield to an instruction.
+    """
+    for rid, cat in rule_labels.items():
+        if cat != category:
+            continue
+        p = patterns.get(rid)
+        if p and any(_pattern_hit(pt, email) for pt in p["exclude"]):
+            return True
+    return False
 
 
 async def sweep_uncategorized(
@@ -339,7 +525,8 @@ async def sweep_uncategorized(
         offset = 0
         while summary["scanned"] < limit:
             page_size = min(_SWEEP_PAGE, limit - summary["scanned"])
-            rows = await _uncategorized_inbox(db, account_id, page_size, offset)
+            rows = await _uncategorized_inbox(db, account_id, page_size, offset,
+                                              internal_domains)
             if not rows:
                 summary["exhausted"] = True
                 break
@@ -610,33 +797,33 @@ async def uncategorized_overview(
     account_id: str = Query(...),
     user: UserContext = Depends(get_current_user),
 ):
-    """How much inbox mail carries no rule label, and who it's from.
+    """How much mail is outstanding cleanup material, and who it's from.
 
     Powers the Email Cleaner's "Uncategorized" tab: the count drives the badge,
     the sender breakdown tells the user whether one noisy sender is the problem.
+
+    Counts exactly :data:`_CLEANUP_SCOPE` — the same rows the sweep will work
+    on. It used to count every message with no known label anywhere in the
+    mailbox, including Sent and every colleague, so the badge showed 4,391 while
+    the sweep could only ever act on a fraction of it. A backlog number that
+    cannot reach zero teaches the user to ignore the badge.
     """
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
+        internal_domains = await _internal_domains(db, account_id)
+        params = _cleanup_scope_params(account_id, internal_domains)
         total = (await db.execute(text(
-            f"""SELECT COUNT(*) AS c FROM email_messages em
-                WHERE em.account_id = :aid AND {_NOT_DISPOSED}
-                  AND NOT EXISTS (
-                        SELECT 1 FROM unnest(em.categories) AS c
-                         WHERE LOWER(TRIM(c)) = ANY(:labels))"""
-        ), {"aid": account_id, "labels": _KNOWN_LABELS_LOWER})).fetchone()
+            f"SELECT COUNT(*) AS c FROM email_messages em WHERE {_CLEANUP_SCOPE}"
+        ), params)).fetchone()
         rows = (await db.execute(text(
             f"""SELECT LOWER(em.from_address->>'email') AS email,
                       MAX(em.from_address->>'name') AS name,
                       COUNT(*) AS n
                  FROM email_messages em
-                WHERE em.account_id = :aid AND {_NOT_DISPOSED}
-                  AND COALESCE(em.from_address->>'email','') <> ''
-                  AND NOT EXISTS (
-                        SELECT 1 FROM unnest(em.categories) AS c
-                         WHERE LOWER(TRIM(c)) = ANY(:labels))
+                WHERE {_CLEANUP_SCOPE}
                 GROUP BY 1 ORDER BY n DESC LIMIT 25"""
-        ), {"aid": account_id, "labels": _KNOWN_LABELS_LOWER})).fetchall()
+        ), params)).fetchall()
         return {
             "uncategorized": int(total.c) if total else 0,
             "top_senders": [

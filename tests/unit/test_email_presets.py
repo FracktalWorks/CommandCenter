@@ -148,14 +148,15 @@ async def test_reset_preserves_learned_patterns_across_the_reseed() -> None:
     saved = [
         SimpleNamespace(rule_name="Newsletter", pattern_type="FROM",
                         value="news@brand.com", exclude=False, source="FIX",
-                        reason="user fix"),
+                        reason="user fix", approved_at="2026-07-01",
+                        rejected_at=None),
         SimpleNamespace(rule_name="Receipt", pattern_type="SUBJECT",
                         value="your order", exclude=True, source="FIX",
-                        reason=None),
+                        reason=None, approved_at=None, rejected_at=None),
         # Belonged to a custom rule the reset removes — legitimately dropped.
         SimpleNamespace(rule_name="My Custom Rule", pattern_type="FROM",
                         value="x@y.com", exclude=False, source="FIX",
-                        reason=None),
+                        reason=None, approved_at=None, rejected_at=None),
     ]
     db = _db_with_provider("gmail", patterns=saved)
     user = SimpleNamespace(email="u@example.com")
@@ -178,3 +179,8 @@ async def test_reset_preserves_learned_patterns_across_the_reseed() -> None:
         ("new-Newsletter", "news@brand.com", False),
         ("new-Receipt", "your order", True),
     }
+    # Review state rides along. Re-approving is a decision the user already
+    # made; dropping it here would silently retire every confirmed pattern and
+    # take the Email Cleaner's strongest evidence down with it (migration 85).
+    by_val = {i["val"]: i for i in inserts}
+    assert by_val["news@brand.com"]["approved"] == "2026-07-01"

@@ -445,18 +445,42 @@ def _static_match(rule: dict[str, Any], email: dict[str, str]) -> bool | None:
 
 
 async def _load_rule_patterns(
-    db: Any, account_id: str,
+    db: Any, account_id: str, *, approved_includes_only: bool = False,
 ) -> dict[str, dict[str, list[tuple[str, str]]]]:
     """Learned classification patterns per rule (inbox-zero parity).
 
     Returns ``{rule_id: {"include": [(type, value), …], "exclude": […]}}``.
+    Rejected patterns are never returned to anyone — the user has said they are
+    wrong.
+
+    ``approved_includes_only`` drops INCLUDE patterns awaiting review, and is set
+    by the Email Cleaner. The asymmetry is deliberate, in two directions:
+
+    * Includes vs excludes. An include pattern ASSERTS a category; an exclude
+      only ever PREVENTS one. There is nothing to approve about "this sender is
+      not Marketing" — refusing to honour it until reviewed would make the
+      cleaner label mail the user had explicitly told it not to.
+
+    * Cleaner vs classifier. The classifier keeps using unreviewed patterns: its
+      alternative is an LLM call, so a pattern there saves money and any mistake
+      is one message the user can Fix. The cleaner's alternative is to leave mail
+      uncategorized, and it projects one pattern across every matching message in
+      the mailbox with destructive actions offered on top. The blast radius is
+      not comparable, so the bar isn't either.
+
     Best-effort: returns {} if the table doesn't exist yet (pre-migration)."""
+    sql = ("SELECT rule_id, pattern_type, value, exclude "
+           "FROM email_rule_patterns "
+           "WHERE account_id = :aid AND rejected_at IS NULL")
+    if approved_includes_only:
+        sql += " AND (exclude OR approved_at IS NOT NULL)"
     try:
-        rows = (await db.execute(text(
-            "SELECT rule_id, pattern_type, value, exclude "
-            "FROM email_rule_patterns WHERE account_id = :aid"
-        ), {"aid": account_id})).fetchall()
-    except Exception:  # noqa: BLE001
+        rows = (await db.execute(text(sql), {"aid": account_id})).fetchall()
+    except Exception as e:  # noqa: BLE001
+        # Silently returning {} here disables EVERY learned pattern at once, so
+        # a missing migration reads as "the user never taught us anything".
+        _log.warning("email.rule_patterns_load_failed",
+                     account_id=account_id, error=str(e)[:160])
         return {}
     out: dict[str, dict[str, list[tuple[str, str]]]] = {}
     for r in rows:

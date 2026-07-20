@@ -158,6 +158,16 @@ export interface LearnedRulePattern {
   source: string; // FIX | LABEL_ADDED | LABEL_REMOVED | AI | USER
   reason: string | null;
   created_at: string | null;
+  /** Roughly how many messages in the mailbox this pattern matches. A ceiling:
+   *  the server approximates _pattern_hit with a substring match, skipping the
+   *  generalised-subject and address-boundary refinements. */
+  reach?: number;
+  /** Review state. A pattern the user authored (Fix, a label changed in their
+   *  mail client, a hand-typed rule) is approved on creation; only auto-learned
+   *   'AI' patterns arrive unreviewed, and the Email Cleaner will not project
+   *  those until they are approved. */
+  approved_at?: string | null;
+  rejected_at?: string | null;
 }
 
 export type NewsletterStatus = "APPROVED" | "UNSUBSCRIBED" | "AUTO_ARCHIVED";

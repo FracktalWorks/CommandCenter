@@ -509,7 +509,13 @@ async def sweep_uncategorized(
     provider = None
     store = None
     try:
-        patterns = await _load_rule_patterns(db, account_id)
+        # Approved INCLUDE patterns only. A pattern is projected across every
+        # matching message in the mailbox, with archive/unsubscribe/delete
+        # offered on top of the result, so an unreviewed machine-inferred
+        # generalisation is not a safe thing to run at that scale. Excludes are
+        # unaffected — they only ever prevent a label. See _load_rule_patterns.
+        patterns = await _load_rule_patterns(
+            db, account_id, approved_includes_only=True)
         rule_labels = await _rule_label_by_id(db, account_id)
         # Tallies are read ONCE and held for the whole sweep. Refreshing them
         # per page would let the sweep's own projections become evidence for
@@ -1003,8 +1009,35 @@ async def uncategorized_overview(
                 WHERE {_CLEANUP_SCOPE}
                 GROUP BY 1 ORDER BY n DESC LIMIT 25"""
         ), params)).fetchall()
+        # Patterns waiting for review, and what approving them would reach. The
+        # cleaner's strongest evidence is a learned pattern, and it will not
+        # project an unreviewed one (see _load_rule_patterns) — so without this
+        # the cleaner would simply be quietly worse than it used to be, with
+        # nothing on screen explaining why or how to fix it.
+        pending = (await db.execute(text(
+            "SELECT COUNT(*) AS c FROM email_rule_patterns "
+            "WHERE account_id = :aid AND exclude = false "
+            "  AND approved_at IS NULL AND rejected_at IS NULL"
+        ), {"aid": account_id})).fetchone()
+        reach = (await db.execute(text(
+            f"""SELECT COUNT(DISTINCT em.id) AS c
+                  FROM email_messages em
+                  JOIN email_rule_patterns p
+                    ON p.account_id = em.account_id
+                   AND p.exclude = false
+                   AND p.approved_at IS NULL AND p.rejected_at IS NULL
+                   AND ((p.pattern_type = 'SUBJECT'
+                         AND LOWER(COALESCE(em.subject, ''))
+                             LIKE '%' || LOWER(p.value) || '%')
+                     OR (p.pattern_type <> 'SUBJECT'
+                         AND LOWER(COALESCE(em.from_address->>'email', ''))
+                             LIKE '%' || LOWER(p.value) || '%'))
+                 WHERE {_CLEANUP_SCOPE}"""
+        ), params)).fetchone()
         return {
             "uncategorized": int(total.c) if total else 0,
+            "pending_patterns": int(pending.c) if pending else 0,
+            "pending_pattern_reach": int(reach.c) if reach else 0,
             "top_senders": [
                 {"email": r.email, "name": r.name or "", "count": int(r.n)}
                 for r in rows

@@ -1253,6 +1253,26 @@ export async function deleteRulePattern(id: string): Promise<void> {
   await gatewayFetch(`/email/rules/patterns/${id}`, { method: "DELETE" });
 }
 
+/** Approve or reject learned patterns — the gate the Email Cleaner reads.
+ *
+ *  Omit `patternIds` to act on everything still awaiting review. Rejecting keeps
+ *  the row (with `rejected_at` set) rather than deleting it, so the auto-learner
+ *  cannot re-infer the same pattern from the same sender an hour later. */
+export async function reviewRulePatterns(params: {
+  accountId: string;
+  patternIds?: string[];
+  approve: boolean;
+}): Promise<{ updated: number; approved: boolean }> {
+  return gatewayFetch("/email/rules/patterns/review", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      pattern_ids: params.patternIds ?? null,
+      approve: params.approve,
+    }),
+  });
+}
+
 /** Process PAST inbox mail within a date range (inbox-zero "Process past
  *  emails"). Test = dry-run preview; Apply = execute. Results land in History. */
 export async function processPastEmails(params: {
@@ -1669,6 +1689,10 @@ export async function getUncategorizedOverview(
   accountId: string
 ): Promise<{
   uncategorized: number;
+  /** Learned patterns the cleaner will NOT project until they are reviewed. */
+  pending_patterns?: number;
+  /** Uncategorized mail those pending patterns would reach if approved. */
+  pending_pattern_reach?: number;
   top_senders: { email: string; name: string; count: number }[];
 }> {
   return gatewayFetch(

@@ -9,7 +9,8 @@ import {
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
   searchEmails, previewAutoCategorize, runAutoCategorize, getCleanupStatus,
-  restoreProviderLabels, backfillAndClean, CleanupSweepResult,
+  restoreProviderLabels, backfillAndClean, getUncategorizedOverview,
+  CleanupSweepResult,
 } from "../../lib/api";
 import { SenderStat, NewsletterStatus, SenderStatus, Email } from "../../lib/types";
 import { chipColors } from "../../lib/labelColors";
@@ -160,6 +161,11 @@ export function BulkUnsubscribeView({
   const [backfillOpen, setBackfillOpen] = useState(false);
   // Dry-run verdict for the uncategorized sweep: what it *would* do.
   const [preview, setPreview] = useState<CleanupSweepResult | null>(null);
+  // Learned patterns the cleaner is NOT allowed to project yet, and how much
+  // mail approving them would reach.
+  const [pending, setPending] = useState<{ n: number; reach: number } | null>(
+    null
+  );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
   // Which sender row is expanded to show its individual messages (drill-down).
@@ -228,8 +234,18 @@ export function BulkUnsubscribeView({
     let alive = true;
     void (async () => {
       try {
-        const r = await previewAutoCategorize(accountId);
-        if (alive) setPreview(r);
+        const [r, overview] = await Promise.all([
+          previewAutoCategorize(accountId),
+          getUncategorizedOverview(accountId).catch(() => null),
+        ]);
+        if (!alive) return;
+        setPreview(r);
+        if (overview?.pending_patterns) {
+          setPending({
+            n: overview.pending_patterns,
+            reach: overview.pending_pattern_reach ?? 0,
+          });
+        }
       } catch {
         /* the sweep is an offer, not a requirement — stay quiet on failure */
       }
@@ -876,6 +892,34 @@ export function BulkUnsubscribeView({
             )}
             Restore labels
           </button>
+        </div>
+      )}
+
+      {/* The cleaner's strongest evidence is a learned pattern, and it refuses
+          to project one the assistant taught ITSELF until a human confirms it —
+          a pattern is applied to every matching message in the mailbox, with
+          archive and delete offered on top of the result. Say so here: without
+          a number and a route to the decision, a gate just looks like the
+          cleaner having got worse. */}
+      {pending && (
+        <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-amber-500/10 flex-shrink-0">
+          <HelpCircle size={13} className="text-amber-500 flex-shrink-0" />
+          <span className="text-[11px] text-foreground">
+            <strong className="font-semibold">{pending.n}</strong>
+            {pending.n === 1
+              ? " pattern the assistant taught itself is waiting for your approval"
+              : " patterns the assistant taught itself are waiting for your approval"}
+            {pending.reach > 0 && (
+              <span className="text-muted-foreground">
+                {` · would categorize about ${pending.reach.toLocaleString()} more ${
+                  pending.reach === 1 ? "email" : "emails"
+                }`}
+              </span>
+            )}
+          </span>
+          <span className="ml-auto text-[11px] text-muted-foreground">
+            Review them in AI Settings → Learned patterns
+          </span>
         </div>
       )}
 

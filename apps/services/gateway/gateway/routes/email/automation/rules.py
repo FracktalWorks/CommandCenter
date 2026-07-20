@@ -340,7 +340,7 @@ async def reset_rules(
         # mints fresh UUIDs, so the name is the only stable join.
         saved = (await db.execute(text(
             """SELECT r.name AS rule_name, p.pattern_type, p.value, p.exclude,
-                      p.source, p.reason
+                      p.source, p.reason, p.approved_at, p.rejected_at
                  FROM email_rule_patterns p
                  JOIN email_rules r ON r.id = p.rule_id
                 WHERE p.account_id = :aid"""
@@ -365,14 +365,19 @@ async def reset_rules(
                 if not rid:
                     continue  # belonged to a custom rule the reset removed
                 await db.execute(text(
+                    # Carry the review state across. Resetting the RULES
+                    # must not silently un-approve patterns the user has
+                    # already confirmed — nor resurrect ones they rejected.
                     """INSERT INTO email_rule_patterns
                          (account_id, rule_id, pattern_type, value, exclude,
-                          source, reason)
-                       VALUES (:aid, :rid, :ptype, :val, :excl, :src, :reason)
+                          source, reason, approved_at, rejected_at)
+                       VALUES (:aid, :rid, :ptype, :val, :excl, :src, :reason,
+                               :approved, :rejected)
                        ON CONFLICT DO NOTHING"""
                 ), {"aid": account_id, "rid": rid, "ptype": s.pattern_type,
                     "val": s.value, "excl": s.exclude, "src": s.source,
-                    "reason": s.reason})
+                    "reason": s.reason, "approved": s.approved_at,
+                    "rejected": s.rejected_at})
                 restored += 1
         await db.commit()
         return {"installed": installed, "total_presets": len(_PRESET_RULES),
@@ -670,6 +675,15 @@ async def delete_rule(
         await db.close()
 
 
+# Sources that represent a deliberate human act, so the pattern needs no review:
+# the Fix flow, a label the user changed in their own mail client, and patterns
+# typed into a rule. Everything else ('AI') is the machine generalising from its
+# own output and lands in the review queue — see migration 85.
+_USER_AUTHORED_SOURCES = frozenset({
+    "FIX", "USER", "LABEL_ADDED", "LABEL_REMOVED",
+})
+
+
 async def _upsert_rule_pattern(
     db: Any, account_id: str, rule_id: str, value: str, exclude: bool,
     source: str, reason: str | None, message_id: str | None, thread_id: str | None,
@@ -717,23 +731,47 @@ async def _upsert_rule_pattern(
         val_l = value.strip().lower()
         if own and (own in val_l or val_l in own):
             return False
+    # (3) A pattern the user REJECTED must not come straight back. The auto-
+    #     learner fires on any sender with three consistent AI matches, which is
+    #     exactly the sender the user just rejected a pattern for — so without
+    #     this, rejecting is futile and the same wrong pattern reappears within
+    #     the hour. A deliberate user action (Fix, a label change, a hand-typed
+    #     rule) is allowed to overturn it; the machine re-inferring it is not.
+    user_authored = source in _USER_AUTHORED_SOURCES
+    if not user_authored:
+        rejected = (await db.execute(text(
+            "SELECT 1 FROM email_rule_patterns WHERE account_id = :aid "
+            "AND rule_id = :rid AND pattern_type = :ptype "
+            "AND lower(value) = lower(:val) AND rejected_at IS NOT NULL"
+        ), {"aid": account_id, "rid": rule_id, "ptype": ptype,
+            "val": value})).fetchone()
+        if rejected is not None:
+            return False
     # Drop the opposite disposition for this (rule, type, value) first.
     await db.execute(text(
         "DELETE FROM email_rule_patterns WHERE account_id = :aid AND rule_id = :rid "
         "AND pattern_type = :ptype AND lower(value) = lower(:val) AND exclude = :opp"
     ), {"aid": account_id, "rid": rule_id, "ptype": ptype, "val": value,
         "opp": not exclude})
+    # A pattern the user authored is approved by definition — Fix, a label
+    # changed in their own mail client, or a rule they typed IS the confirmation
+    # the review queue exists to collect. Only 'AI' arrives unreviewed.
     await db.execute(text(
         """INSERT INTO email_rule_patterns
              (account_id, rule_id, pattern_type, value, exclude, source, reason,
-              message_id, thread_id)
-           VALUES (:aid, :rid, :ptype, :val, :exc, :src, :reason, :mid, :tid)
+              message_id, thread_id, approved_at)
+           VALUES (:aid, :rid, :ptype, :val, :exc, :src, :reason, :mid, :tid,
+                   CASE WHEN :authored THEN now() ELSE NULL END)
            ON CONFLICT (account_id, rule_id, pattern_type, lower(value), exclude)
            DO UPDATE SET source = EXCLUDED.source, reason = EXCLUDED.reason,
-                         created_at = now()"""
+                         created_at = now(),
+                         approved_at = CASE WHEN :authored THEN now()
+                                       ELSE email_rule_patterns.approved_at END,
+                         rejected_at = CASE WHEN :authored THEN NULL
+                                       ELSE email_rule_patterns.rejected_at END"""
     ), {"aid": account_id, "rid": rule_id, "ptype": ptype, "val": value,
         "exc": exclude, "src": source, "reason": reason, "mid": message_id,
-        "tid": thread_id})
+        "tid": thread_id, "authored": user_authored})
 
 
 class RuleFeedbackRequest(BaseModel):
@@ -870,29 +908,105 @@ async def list_rule_patterns(
     account_id: str = Query(...),
     user: UserContext = Depends(get_current_user),
 ):
-    """List learned classification patterns (sender → rule include/exclude)."""
+    """List learned classification patterns (sender → rule include/exclude).
+
+    Each row carries its REACH: how many messages in the mailbox the pattern
+    matches. Without it this screen could not support review — it showed a
+    sender, a rule and a delete button, so "is this pattern right?" was
+    unanswerable from what was on the page, which is why 45 machine-inferred
+    patterns had accumulated on the live account without one being looked at.
+
+    Reach is an approximation of :func:`_pattern_hit` that Postgres can compute:
+    a FROM pattern counts mail whose sender contains the value, a SUBJECT pattern
+    counts mail whose subject contains it. It skips the generalised-subject and
+    address-boundary refinements, so it is a ceiling, not an exact count — the
+    UI presents it as "about". One nested-loop join over the mailbox, on an
+    explicitly-opened review screen.
+    """
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         try:
             rows = (await db.execute(text(
                 """SELECT p.id, p.rule_id, r.name AS rule_name, p.pattern_type,
-                          p.value, p.exclude, p.source, p.reason, p.created_at
+                          p.value, p.exclude, p.source, p.reason, p.created_at,
+                          p.approved_at, p.rejected_at,
+                          (SELECT COUNT(*) FROM email_messages m
+                            WHERE m.account_id = p.account_id
+                              AND ((p.pattern_type = 'SUBJECT'
+                                    AND LOWER(COALESCE(m.subject, ''))
+                                        LIKE '%' || LOWER(p.value) || '%')
+                                OR (p.pattern_type <> 'SUBJECT'
+                                    AND LOWER(COALESCE(
+                                          m.from_address->>'email', ''))
+                                        LIKE '%' || LOWER(p.value) || '%'))
+                          ) AS reach
                    FROM email_rule_patterns p
                    LEFT JOIN email_rules r ON p.rule_id = r.id
                    WHERE p.account_id = :aid
-                   ORDER BY p.created_at DESC"""
+                   ORDER BY p.approved_at NULLS FIRST, p.created_at DESC"""
             ), {"aid": account_id})).fetchall()
-        except Exception:  # noqa: BLE001 — table may not exist pre-migration
+        except Exception as e:  # noqa: BLE001 — table may not exist pre-migration
+            _log.warning("email.list_rule_patterns_failed",
+                         account_id=account_id, error=str(e)[:160])
             rows = []
         return {"patterns": [
             {"id": str(r.id), "rule_id": str(r.rule_id),
              "rule_name": r.rule_name, "pattern_type": r.pattern_type,
              "value": r.value, "exclude": bool(r.exclude), "source": r.source,
-             "reason": r.reason,
+             "reason": r.reason, "reach": int(r.reach or 0),
+             "approved_at": r.approved_at.isoformat() if r.approved_at else None,
+             "rejected_at": r.rejected_at.isoformat() if r.rejected_at else None,
              "created_at": r.created_at.isoformat() if r.created_at else None}
             for r in rows
         ]}
+    finally:
+        await db.close()
+
+
+class PatternReviewRequest(BaseModel):
+    account_id: str
+    # Omit to act on every pattern still awaiting review.
+    pattern_ids: list[str] | None = None
+    approve: bool = True
+
+
+@router.post("/rules/patterns/review")
+async def review_rule_patterns(
+    req: PatternReviewRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Approve or reject learned patterns — the gate the Email Cleaner reads.
+
+    Rejecting KEEPS the row, with ``rejected_at`` set. Deleting it would let the
+    auto-learner re-infer the same pattern from the same sender within the hour,
+    which makes rejection a gesture rather than a decision. ``_upsert_rule_pattern``
+    refuses to resurrect a rejected pattern unless the user themselves overturns
+    it via Fix or a label change.
+    """
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        params: dict[str, Any] = {"aid": req.account_id}
+        where = "account_id = :aid"
+        if req.pattern_ids is None:
+            # "Approve everything waiting" — deliberately does NOT re-approve or
+            # un-reject what has already been decided.
+            where += " AND approved_at IS NULL AND rejected_at IS NULL"
+        else:
+            if not req.pattern_ids:
+                return {"updated": 0, "approved": req.approve}
+            where += " AND id = ANY(:ids)"
+            params["ids"] = [str(p) for p in req.pattern_ids]
+        sets = ("approved_at = now(), rejected_at = NULL" if req.approve
+                else "rejected_at = now(), approved_at = NULL")
+        res = await db.execute(text(
+            f"UPDATE email_rule_patterns SET {sets} WHERE {where}"), params)
+        await db.commit()
+        updated = int(getattr(res, "rowcount", 0) or 0)
+        _log.info("email.rule_patterns_reviewed", account_id=req.account_id,
+                  approved=req.approve, updated=updated)
+        return {"updated": updated, "approved": req.approve}
     finally:
         await db.close()
 

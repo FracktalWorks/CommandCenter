@@ -239,7 +239,7 @@ async def test_sweep_pages_until_the_mailbox_runs_dry() -> None:
     seen: list[str] = []
     pages: list[tuple[int, int]] = []
 
-    async def fake_page(db, aid, limit, offset=0):
+    async def fake_page(db, aid, limit, offset=0, internal=frozenset()):
         pages.append((limit, offset))
         remaining = [m for m in msgs if m.id not in labelled]
         return remaining[offset:offset + limit]
@@ -284,7 +284,7 @@ async def test_sweep_honours_an_explicit_limit_and_says_it_stopped_short() -> No
 
     msgs = [_msg("stranger@nowhere.io", mid=f"m{i}") for i in range(20)]
 
-    async def fake_page(db, aid, limit, offset=0):
+    async def fake_page(db, aid, limit, offset=0, internal=frozenset()):
         return msgs[offset:offset + limit]
 
     class _DB:
@@ -316,7 +316,7 @@ async def test_dry_run_pages_by_the_full_window() -> None:
     msgs = [_msg("news@site.com", mid=f"m{i}") for i in range(4)]
     pages: list[int] = []
 
-    async def fake_page(db, aid, limit, offset=0):
+    async def fake_page(db, aid, limit, offset=0, internal=frozenset()):
         pages.append(offset)
         return msgs[offset:offset + limit]
 
@@ -351,8 +351,9 @@ def test_the_sweep_never_scans_outbound_mail() -> None:
     into scope. Combined with a domain consensus on the user's own company
     domain, that would have stamped a category across everything they ever sent.
     """
-    import inspect
-    src = inspect.getsource(c._uncategorized_inbox)
+    # Both conditions moved into _CLEANUP_SCOPE, the one definition the sweep
+    # and the Cleaner's badge now share.
+    src = c._CLEANUP_SCOPE
     assert "<> 'sent'" in src, "the sweep no longer excludes the Sent folder"
     assert "FROM email_accounts" in src, (
         "the sweep no longer excludes mail from the user's own address"

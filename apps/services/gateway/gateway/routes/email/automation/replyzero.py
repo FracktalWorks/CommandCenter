@@ -827,7 +827,12 @@ async def _reconcile_thread_labels(
     never lingers on the previous emails after the thread changes hands. Then
     ensure ``keep_label`` is present on the latest inbound message. Mirrors the
     change locally (email_messages.categories) and upstream (provider). Best-effort
-    per message; caller commits."""
+    per message; caller commits.
+
+    ``provider`` may be None — the local mirror is still corrected, the upstream
+    apply is simply skipped. Stated explicitly because callers without a
+    provider used to rely on ``None.set_labels`` raising into the best-effort
+    handler, which works by accident and reads like a bug."""
     rows = (await db.execute(text(
         """SELECT id, provider_message_id, categories, folder
            FROM email_messages
@@ -853,6 +858,8 @@ async def _reconcile_thread_labels(
             "  SELECT c FROM unnest(categories) AS c WHERE NOT (c = ANY(:rm))"
             "), updated_at = now() WHERE id = :id"
         ), {"id": r.id, "rm": to_remove})
+        if provider is None:
+            continue
         try:
             await provider.set_labels(
                 r.provider_message_id, add=[], remove=to_remove)
@@ -1188,6 +1195,15 @@ async def _maybe_classify_threads(account_id: str) -> None:
             _match_email_to_rule,
             email_dict_from_row,
         )
+        # Select threads that NEED WORK, not simply the newest ones.
+        #
+        # This used to take the 200 most recent threads from the last 30 days and
+        # skip the ones already classified. On a real mailbox those 200 are
+        # exactly the already-classified ones, so the backfill spun without
+        # reaching anything older — measured live: 295 of 3,487 threads (8.5%)
+        # had a status, and mail older than a month could never acquire one.
+        # Filtering in SQL means every cycle picks up 200 threads that actually
+        # need doing, and the backlog drains instead of standing still.
         rows = (await db.execute(text(
             """WITH latest AS (
                  SELECT DISTINCT ON (thread_id) thread_id, id, subject,
@@ -1195,10 +1211,22 @@ async def _maybe_classify_threads(account_id: str) -> None:
                         snippet, folder, received_at
                  FROM email_messages
                  WHERE account_id = :aid AND thread_id IS NOT NULL
-                   AND received_at > now() - interval '30 days'
                  ORDER BY thread_id, received_at DESC
                )
-               SELECT * FROM latest ORDER BY received_at DESC LIMIT 200"""
+               SELECT l.* FROM latest l
+                 LEFT JOIN email_thread_status s
+                        ON s.account_id = :aid AND s.thread_id = l.thread_id
+                WHERE s.thread_id IS NULL
+                   OR s.last_message_id::text <> l.id::text
+                   OR COALESCE(s.reason, '') LIKE '%· auto'
+                -- Inbox first. Those are the threads that might still need a
+                -- reply, so they must not queue behind a filed backlog that is
+                -- both larger and already dealt with — ordering by date alone
+                -- put 2,622 archived threads ahead of the 273 live ones.
+                ORDER BY CASE LOWER(COALESCE(l.folder, ''))
+                           WHEN 'inbox' THEN 0 WHEN 'sent' THEN 1 ELSE 2 END,
+                         l.received_at DESC
+                LIMIT 200"""
         ), {"aid": account_id})).fetchall()
         if not rows:
             return
@@ -1222,6 +1250,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
 
         gap_inbound = []
         sent_handled = 0
+        filed = 0
         for r in rows:
             prev = existing.get(r.thread_id)
             provisional = bool(prev) and prev[1].endswith("· auto")
@@ -1239,10 +1268,41 @@ async def _maybe_classify_threads(account_id: str) -> None:
                 # else: overflow — leave it for the next cycle, never guess.
             elif folder == "inbox":
                 gap_inbound.append(r)
+            else:
+                # Inbound-last, but the user already FILED it (archived, or moved
+                # to one of their own folders). Filing it is the answer: they
+                # dealt with it, so it is FYI and stays out of the Reply view.
+                #
+                # Deterministic on purpose. These are the bulk of an old mailbox
+                # — 2,622 of 3,191 unclassified threads on the live account — and
+                # spending a model call apiece to re-litigate mail the user has
+                # already put away is exactly the token waste this pipeline was
+                # asked to stop. preserve_done keeps an explicit Done intact.
+                await _upsert_thread_status(
+                    db, account_id, r.thread_id, "FYI", r.id, r.received_at,
+                    "Filed without a reply — treated as handled.",
+                    preserve_done=True)
+                filed += 1
         await db.commit()
 
         gap = gap_inbound[:_BACKFILL_INBOUND_CAP]  # cap engine work per cycle
         gap_attach = await _attachment_summaries(db, [r.id for r in gap])
+        # The provider is needed to collapse a thread's labels upstream as well
+        # as locally. Fetched once, and only when there is inbound work — an
+        # auth failure must not stop the deterministic passes above.
+        provider = store = None
+        if gap:
+            acc_row = (await db.execute(text(
+                "SELECT provider, credentials_encrypted FROM email_accounts "
+                "WHERE id = :id"
+            ), {"id": account_id})).fetchone()
+            if acc_row:
+                from acb_llm.key_store import get_key_store  # noqa: PLC0415
+                store = get_key_store()
+                creds = json.loads(store.decrypt(acc_row.credentials_encrypted))
+                provider = _instantiate_provider(acc_row.provider, creds)
+                if not await provider.authenticate():
+                    provider = None
         for r in gap:
             # extra_domains is a KEYWORD arg (positional lands it in self_name).
             email = email_dict_from_row(
@@ -1253,7 +1313,21 @@ async def _maybe_classify_threads(account_id: str) -> None:
             # when the match is a conversation.
             matches = await resolve_conversation_status_matches(
                 db, account_id, r, [match] if match else [])
-            await project_reply_status_from_matches(db, account_id, r, matches)
+            keep_label = await project_reply_status_from_matches(
+                db, account_id, r, matches)
+            # Collapse the thread to that ONE conversation label. This backfill
+            # wrote the status row but never reconciled the labels, so earlier
+            # messages kept whatever they were tagged with and a thread ended up
+            # wearing Reply AND Awaiting AND Done at once — 68 threads on the
+            # live account. The status row and the labels are two views of one
+            # decision; writing only the first is what let them disagree.
+            if keep_label:
+                await _reconcile_thread_labels(
+                    db, provider, account_id, r.thread_id, keep_label)
+            await db.commit()
+        if provider is not None and store is not None \
+                and provider.credentials_dirty():
+            await _persist_rotated_creds(db, store, account_id, provider)
             await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.classify_threads_failed",

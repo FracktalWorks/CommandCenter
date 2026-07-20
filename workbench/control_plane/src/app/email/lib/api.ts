@@ -1568,11 +1568,42 @@ export async function runAutoCategorize(
 export async function getCleanupStatus(
   accountId: string
 ): Promise<
-  Partial<CleanupSweepResult> & { status: string; applied?: number }
+  Partial<CleanupSweepResult> & {
+    status: string;
+    applied?: number;
+    /** Which half of a backfill run is in flight. Absent for a plain sweep. */
+    phase?: "downloading" | "cleaning" | "done" | "error";
+    /** Messages newly fetched from the provider during the download phase. */
+    synced?: number;
+    /** History stamped rules-processed so it never reaches the model-driven
+     *  rule run. This is what keeps a big backfill from costing anything. */
+    held_back?: number;
+  }
 > {
   return gatewayFetch(
     `/email/cleanup/status?account_id=${encodeURIComponent(accountId)}`
   );
+}
+
+/** Fetch older mail from the provider, then categorize it with NO model calls.
+ *
+ *  The deterministic counterpart of "Process past emails". The Cleaner can only
+ *  clean what has been synced, and the initial sync only ever reached back one
+ *  year — so on a real mailbox most mail has never been seen locally. Runs in
+ *  the background; poll `getCleanupStatus` for the two-phase progress.
+ *
+ *  `sinceDate` is YYYY-MM-DD; omit it to fetch the entire mailbox. */
+export async function backfillAndClean(
+  accountId: string,
+  sinceDate?: string
+): Promise<{ scheduled: boolean; since?: string | null; reason?: string }> {
+  return gatewayFetch("/email/cleanup/backfill", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: accountId,
+      since_date: sinceDate ?? null,
+    }),
+  });
 }
 
 /** Re-read every label from the provider back into `categories`.

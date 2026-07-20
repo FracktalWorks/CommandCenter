@@ -745,6 +745,156 @@ async def restore_labels(
     return await restore_provider_labels(req.account_id)
 
 
+class CleanupBackfillRequest(BaseModel):
+    account_id: str
+    # ISO date (YYYY-MM-DD) to fetch back to. None = the whole mailbox.
+    since_date: str | None = None
+
+
+async def _mark_history_rules_processed(
+    db: Any, account_id: str, before: datetime,
+) -> int:
+    """Stamp backfilled history as rules-processed, WITHOUT running the rules.
+
+    This is the whole reason a history backfill is safe to offer. The scheduled
+    rule run selects ``folder = 'inbox' AND rules_processed_at IS NULL``, 50 per
+    cycle, and classifies each one with a model. Tens of thousands of newly
+    downloaded messages all arrive with that column NULL, so a naive backfill
+    would silently queue tens of thousands of model calls — the exact opposite
+    of the point, which is to categorize old mail for free.
+
+    ``before`` is the oldest ``received_at`` the account held BEFORE the sync, so
+    this stamps only genuine history. Mail that arrived while the backfill ran is
+    newer than that floor and stays eligible for the rules, as it should be.
+
+    The deterministic sweep does not consult this column, so the backfilled mail
+    is still fully cleanable — just not by the model.
+    """
+    res = await db.execute(text(
+        "UPDATE email_messages SET rules_processed_at = now() "
+        " WHERE account_id = :aid AND rules_processed_at IS NULL "
+        "   AND received_at < :before"
+    ), {"aid": account_id, "before": before})
+    await db.commit()
+    return int(getattr(res, "rowcount", 0) or 0)
+
+
+async def _backfill_and_clean_job(
+    account_id: str, since: datetime | None, owner: str,
+) -> None:
+    """Download older mail, then categorize it deterministically.
+
+    Two phases behind one progress row, because to the user it is one action:
+
+    1. ``downloading`` — a deep provider sync from ``since`` (None = everything).
+       The first sync of an account only ever fetched 365 days
+       (``INITIAL_SYNC_DAYS``) and every sync after it is incremental, so on a
+       real mailbox most mail has simply never been seen locally. Measured on the
+       live account: 6,803 messages held against ~43,000 in the mailbox.
+    2. ``cleaning`` — the ordinary sweep over everything now present. No model
+       calls, so the cost of this phase does not grow with the backlog; and it
+       gets BETTER with history, because sender and domain consensus finally have
+       enough labelled mail to fire.
+
+    Between the two, the downloaded history is stamped rules-processed so it
+    never reaches the model-driven rule run.
+    """
+    started = datetime.now(timezone.utc)
+    _SWEEP_JOBS[account_id] = {
+        "owner": owner, "status": "running", "phase": "downloading",
+        "applied": 0, "scanned": 0, "synced": 0, "held_back": 0,
+        "started_at": started.isoformat(),
+    }
+    try:
+        db = await _get_db()
+        try:
+            row = (await db.execute(text(
+                "SELECT MIN(received_at) AS oldest, COUNT(*) AS n "
+                "FROM email_messages WHERE account_id = :aid"
+            ), {"aid": account_id})).fetchone()
+            oldest_before = getattr(row, "oldest", None)
+            count_before = int(getattr(row, "n", 0) or 0)
+        finally:
+            await db.close()
+
+        from email_ingestion.scheduler import _sync_account  # noqa: PLC0415
+        await _sync_account(account_id, deep=True, since=since)
+
+        db = await _get_db()
+        try:
+            after = (await db.execute(text(
+                "SELECT COUNT(*) AS n FROM email_messages WHERE account_id = :aid"
+            ), {"aid": account_id})).fetchone()
+            fetched = max(0, int(getattr(after, "n", 0) or 0) - count_before)
+            held_back = 0
+            if oldest_before is not None:
+                held_back = await _mark_history_rules_processed(
+                    db, account_id, oldest_before)
+        finally:
+            await db.close()
+
+        _SWEEP_JOBS[account_id] = {
+            **_SWEEP_JOBS.get(account_id, {}),
+            "phase": "cleaning", "synced": fetched, "held_back": held_back,
+        }
+        _log.info("email.cleanup_backfill_synced", account_id=account_id,
+                  fetched=fetched, held_back=held_back)
+
+        summary = await sweep_uncategorized(
+            account_id, _MAX_SWEEP, dry_run=False, owner=owner)
+        _SWEEP_JOBS[account_id] = {
+            **_SWEEP_JOBS.get(account_id, {}), **summary,
+            "owner": owner, "status": "done", "phase": "done",
+            "synced": fetched, "held_back": held_back,
+            "finished_at": datetime.now(timezone.utc).isoformat(),
+        }
+    except Exception as exc:  # noqa: BLE001
+        _SWEEP_JOBS[account_id] = {
+            **_SWEEP_JOBS.get(account_id, {}), "owner": owner,
+            "status": "error", "phase": "error", "error": str(exc)[:200],
+        }
+        _log.warning("email.cleanup_backfill_failed", account_id=account_id,
+                     error=str(exc)[:200])
+
+
+@router.post("/cleanup/backfill")
+async def cleanup_backfill(
+    req: CleanupBackfillRequest,
+    background: BackgroundTasks,
+    user: UserContext = Depends(get_current_user),
+):
+    """Fetch older mail from the provider, then clean it without a model.
+
+    The Email Cleaner can only clean what has been synced, and the initial sync
+    only ever reached back one year. This is the deterministic counterpart of
+    "Process past emails": same shape, but it spends no model calls — it fetches
+    history, holds it back from the model-driven rule run, and lets the sweep
+    project learned patterns and sender/domain history onto it.
+
+    Runs in the background; poll ``GET /email/cleanup/status``.
+    """
+    owner = user.email or "anonymous"
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, owner)
+    finally:
+        await db.close()
+
+    since = None
+    if req.since_date:
+        from gateway.routes.email.core import _parse_iso_date  # noqa: PLC0415
+        since = _parse_iso_date(req.since_date, end_of_day=False)
+
+    running = _SWEEP_JOBS.get(req.account_id)
+    if running and running.get("status") == "running":
+        # Two concurrent deep syncs on one mailbox would race the provider and
+        # each other's progress row; say so rather than silently start a second.
+        return {"scheduled": False, "reason": "already_running"}
+
+    background.add_task(_backfill_and_clean_job, req.account_id, since, owner)
+    return {"scheduled": True, "since": req.since_date}
+
+
 class CleanupSweepRequest(BaseModel):
     account_id: str
     # Max messages to SCAN. 0 (the default) means "the whole mailbox" — the

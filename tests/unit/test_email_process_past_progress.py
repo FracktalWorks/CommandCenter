@@ -143,7 +143,10 @@ async def test_handler_schedules_download_even_when_nothing_local() -> None:
     db.execute.return_value = result
     user = SimpleNamespace(email="u@example.com")
     bg = BackgroundTasks()
-    req = m.RuleProcessPastRequest(account_id="acc-1", is_test=False)
+    # A start date is now required — an open-ended range is every message ever
+    # received, at one AI call each (see _assert_span_within_cap).
+    req = m.RuleProcessPastRequest(
+        account_id="acc-1", is_test=False, start_date="2026-05-01")
     with patch.object(runner, "_get_db", AsyncMock(return_value=db)), \
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)

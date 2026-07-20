@@ -533,6 +533,12 @@ def _date_range_clause(
     The watermark is stamped only by runs that actually applied (live, with a
     working provider), so a dry run or a provider-auth failure leaves mail
     eligible rather than silently consuming it.
+
+    It deliberately does NOT check ``rules_held_back_at``. That column marks mail
+    "Clean older mail" downloaded and kept away from the AUTOMATIC per-cycle run
+    (migration 84); a deliberate, bounded, user-initiated run over a date range
+    is exactly the case the hold-back leaves room for. Adding the guard here
+    would make backfilled history permanently un-categorizable.
     """
     clause = "em.account_id = :aid AND LOWER(em.folder) = 'inbox'"
     params: dict[str, Any] = {"aid": account_id}

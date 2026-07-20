@@ -307,7 +307,8 @@ async def approve_execution(
         ), {"eid": exec_id, "acts": json.dumps(taken)})
         if row.message_id:
             await db.execute(text(
-                "UPDATE email_messages SET rules_processed_at = now() WHERE id=:mid"
+                "UPDATE email_messages SET rules_processed_at = now(), "
+                "rules_held_back_at = NULL WHERE id=:mid"
             ), {"mid": str(row.message_id)})
         await _persist_rotated_creds(db, store, str(row.account_id), provider)
         await db.commit()
@@ -618,6 +619,114 @@ class RuleProcessPastRequest(BaseModel):
     limit: int = 1000
 
 
+# Processing past mail is the ONE surface that spends a model call per message
+# on a range the user picks by hand, and the picker is a free date input. Since
+# "Clean older mail" can pull the whole mailbox into the local store, an
+# unbounded range here stopped meaning "a few thousand" and started meaning
+# "everything ever received".
+#
+#   "When processing past emails with AI, display a warning that extensive
+#    categorization can be costly; limit processing to a few months up to a
+#    year."                                                     — 2026-07-20
+#
+# Enforced HERE and not only in the dialog: the cap exists to bound spend, and a
+# cap that lives only in the client is not a bound. A year is the ceiling, not
+# the suggestion — the dialog's presets stop at 90 days.
+_PROCESS_PAST_MAX_SPAN_DAYS = 366
+
+
+def _assert_span_within_cap(
+    start: datetime | None, end: datetime | None,
+) -> int:
+    """Days covered by [start, end]; 400 if it exceeds the cap.
+
+    A missing ``start`` is not "a small range" — it is every message ever
+    received, which is the most expensive request the API accepts. It is
+    rejected with the same message as an over-wide one so the fix is the same:
+    pick a start date.
+    """
+    if start is None:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Pick a start date. Processing past emails is limited to "
+                   f"{_PROCESS_PAST_MAX_SPAN_DAYS} days per run because every "
+                   f"email in the range costs an AI call.")
+    span = ((end or datetime.now(timezone.utc)) - start).days + 1
+    if span > _PROCESS_PAST_MAX_SPAN_DAYS:
+        raise HTTPException(
+            status_code=400,
+            detail=f"That range covers {span} days. Processing past emails is "
+                   f"limited to {_PROCESS_PAST_MAX_SPAN_DAYS} days per run "
+                   f"because every email in the range costs an AI call — run "
+                   f"it a year at a time.")
+    return span
+
+
+@router.get("/rules/process-past/estimate")
+async def process_past_estimate(
+    account_id: str,
+    start_date: str | None = None,
+    end_date: str | None = None,
+    include_read: bool = True,
+    skip_processed: bool = True,
+    limit: int = 1000,
+    user: UserContext = Depends(get_current_user),
+):
+    """How many emails a Process-past run would send to the model, before it runs.
+
+    The dialog previously offered a free date picker and a Process button with no
+    number between them, so the only way to learn that a range covered 4,000
+    emails was to spend 4,000 AI calls finding out.
+
+    ``will_process`` is deliberately not ``eligible``: the job reads
+    ``LIMIT :limit`` rows, so a range wider than the limit is silently truncated
+    and the tracker then reports that truncated figure as the total — which reads
+    as "processed everything in the range" when it was "processed the oldest N".
+
+    Counts what is synced LOCALLY. The job downloads the range from the provider
+    first, so the real figure can be higher for a range that predates the initial
+    365-day sync; the dialog says so rather than presenting this as exact.
+    """
+    start_dt = _parse_iso_date(start_date, end_of_day=False)
+    end_dt = _parse_iso_date(end_date, end_of_day=True)
+    only_unread = not include_read
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+
+        async def _count(extra: str = "", unprocessed: bool = False) -> int:
+            clause, params = _date_range_clause(
+                account_id, start_dt, end_dt, only_unread, unprocessed)
+            row = (await db.execute(text(
+                f"SELECT COUNT(*) AS c FROM email_messages em "
+                f"WHERE {clause}{extra}"
+            ), params)).fetchone()
+            return int(row.c) if row else 0
+
+        in_range = await _count()
+        eligible = await _count(unprocessed=skip_processed) \
+            if skip_processed else in_range
+        # Mail "Clean older mail" downloaded and deliberately kept away from the
+        # model. It is eligible here — a deliberate, bounded, user-initiated run
+        # is exactly the case the hold-back leaves room for — but the user should
+        # know this range is mostly freshly-fetched history.
+        held_back = await _count(
+            extra=" AND em.rules_held_back_at IS NOT NULL", unprocessed=True)
+    finally:
+        await db.close()
+    capped = max(0, min(limit, 2000))
+    return {
+        "in_range": in_range,
+        "eligible": eligible,
+        "already_processed": max(0, in_range - eligible),
+        "held_back": held_back,
+        "will_process": min(eligible, capped),
+        "capped": eligible > capped,
+        "limit": capped,
+        "max_span_days": _PROCESS_PAST_MAX_SPAN_DAYS,
+    }
+
+
 @router.post("/rules/process-past")
 async def process_past_emails(
     req: RuleProcessPastRequest,
@@ -637,6 +746,7 @@ async def process_past_emails(
     """
     start_dt = _parse_iso_date(req.start_date, end_of_day=False)
     end_dt = _parse_iso_date(req.end_date, end_of_day=True)
+    _assert_span_within_cap(start_dt, end_dt)
     only_unread = not req.include_read
     db = await _get_db()
     try:
@@ -797,7 +907,8 @@ async def run_rules_on_message(
                 about, signature, acc.user_id, req.account_id,
             )
         await db.execute(text(
-            "UPDATE email_messages SET rules_processed_at = now() WHERE id = :id"
+            "UPDATE email_messages SET rules_processed_at = now(), "
+            "rules_held_back_at = NULL WHERE id = :id"
         ), {"id": str(row.id)})
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()
@@ -1126,8 +1237,8 @@ async def _process_past_emails_job(
             # that had no provider to act through (see the comment there).
             if not dry_run and provider is not None:
                 await db.execute(text(
-                    "UPDATE email_messages SET rules_processed_at = now() "
-                    "WHERE id = :id"
+                    "UPDATE email_messages SET rules_processed_at = now(), "
+                    "rules_held_back_at = NULL WHERE id = :id"
                 ), {"id": str(r.id)})
             await db.commit()
             # Remember the NEWEST in-range message per thread and what it
@@ -1175,6 +1286,7 @@ async def _run_rules_job(
                FROM email_messages em
                WHERE em.account_id = :aid AND LOWER(em.folder) = 'inbox'
                  AND em.rules_processed_at IS NULL
+                 AND em.rules_held_back_at IS NULL
                ORDER BY em.received_at DESC LIMIT :limit"""
         ), {"aid": account_id, "limit": limit})).fetchall()
         if not rows:
@@ -1304,8 +1416,8 @@ async def _run_rules_job(
             # processed, applied nothing, and they were never looked at again.
             if not dry_run and provider is not None:
                 await db.execute(text(
-                    "UPDATE email_messages SET rules_processed_at = now() "
-                    "WHERE id = :id"
+                    "UPDATE email_messages SET rules_processed_at = now(), "
+                    "rules_held_back_at = NULL WHERE id = :id"
                 ), {"id": str(r.id)})
             await db.commit()
 

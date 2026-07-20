@@ -12,10 +12,10 @@ import {
 } from "lucide-react";
 import {
   createEmailFolder, createRule, deleteRule, generateRules, installPresetRules,
-  listEmailArtifacts, listRules, processPastEmails, updateRule,
-  uploadEmailArtifacts,
+  listEmailArtifacts, listRules, processPastEmails, processPastEstimate,
+  updateRule, uploadEmailArtifacts,
 } from "../../../lib/api";
-import type { EmailArtifact } from "../../../lib/api";
+import type { EmailArtifact, ProcessPastEstimate } from "../../../lib/api";
 import {
   AutomationRule, RuleAction, RuleActionAttachment, RuleActionType,
 } from "../../../lib/types";
@@ -1291,13 +1291,32 @@ const PAST_PRESETS: { label: string; days: number }[] = [
   { label: "Last 7 days", days: 7 },
   { label: "Last 30 days", days: 30 },
   { label: "Last 90 days", days: 90 },
+  { label: "Last 6 months", days: 182 },
+  { label: "Last year", days: 365 },
 ];
+
+/** Mirrors _PROCESS_PAST_MAX_SPAN_DAYS in the gateway, which is the real bound —
+ *  this only stops the user reaching a range the API will refuse. */
+const PAST_MAX_SPAN_DAYS = 366;
+
+/** Above this, the run is worth pausing over rather than just counting. Set at
+ *  the point where a mistake costs real money instead of pennies. */
+const PAST_COSTLY_THRESHOLD = 500;
 
 /** ISO YYYY-MM-DD for `daysAgo` days before today (0 = today). */
 function isoDaysAgo(daysAgo: number): string {
   const d = new Date();
   d.setDate(d.getDate() - daysAgo);
   return d.toISOString().slice(0, 10);
+}
+
+/** Days covered by [start, end] inclusive; 0 when either is unset. */
+function spanDays(start: string, end: string): number {
+  if (!start || !end) return 0;
+  const a = Date.parse(start);
+  const b = Date.parse(end);
+  if (Number.isNaN(a) || Number.isNaN(b)) return 0;
+  return Math.floor((b - a) / 86_400_000) + 1;
 }
 
 function ProcessPastEmailsDialog({
@@ -1324,6 +1343,48 @@ function ProcessPastEmailsDialog({
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [estimate, setEstimate] = useState<ProcessPastEstimate | null>(null);
+  const [estimating, setEstimating] = useState(false);
+
+  const span = spanDays(start, end);
+  const tooWide = span > PAST_MAX_SPAN_DAYS;
+  // Keep the picker itself inside the cap, so an over-wide range is normally
+  // unreachable rather than merely rejected after the fact.
+  const minStart = end
+    ? new Date(Date.parse(end) - (PAST_MAX_SPAN_DAYS - 1) * 86_400_000)
+        .toISOString()
+        .slice(0, 10)
+    : undefined;
+
+  // Fetch the count for the current range. This dialog used to offer a free date
+  // picker and a Process button with nothing between them, so the only way to
+  // find out a range covered 4,000 emails was to spend 4,000 AI calls learning
+  // it. Skipped entirely when the range is already over the cap — the API would
+  // refuse it, and the refusal is the more useful message.
+  useEffect(() => {
+    if (!accountId || !start || tooWide) {
+      setEstimate(null);
+      return;
+    }
+    let live = true;
+    setEstimating(true);
+    const t = setTimeout(() => {
+      processPastEstimate({
+        accountId,
+        startDate: start,
+        endDate: end || undefined,
+        includeRead,
+        skipProcessed,
+      })
+        .then((e) => live && setEstimate(e))
+        .catch(() => live && setEstimate(null))
+        .finally(() => live && setEstimating(false));
+    }, 300);
+    return () => {
+      live = false;
+      clearTimeout(t);
+    };
+  }, [accountId, start, end, includeRead, skipProcessed, tooWide]);
 
   const run = async () => {
     setBusy(true);
@@ -1363,11 +1424,15 @@ function ProcessPastEmailsDialog({
       footer={
         <button
           onClick={run}
-          disabled={busy}
+          disabled={busy || tooWide || !start}
           className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-emerald-600 text-white text-xs font-medium hover:bg-emerald-700 transition-colors disabled:opacity-50"
         >
           {busy ? <Loader2 className="animate-spin" size={13} /> : <Play size={13} />}
-          Process emails
+          {estimate && estimate.will_process > 0
+            ? `Process ${estimate.will_process.toLocaleString()} email${
+                estimate.will_process === 1 ? "" : "s"
+              }`
+            : "Process emails"}
         </button>
       }
     >
@@ -1390,6 +1455,7 @@ function ProcessPastEmailsDialog({
           <input
             type="date"
             value={start}
+            min={minStart}
             max={end || undefined}
             onChange={(e) => setStart(e.target.value)}
             className={INPUT_CLS}
@@ -1405,6 +1471,66 @@ function ProcessPastEmailsDialog({
           />
         </Field>
       </div>
+      {/* The number, before the button — not after the bill. Every email in the
+          range is one classification call, and until this existed the only way
+          to discover a range held 4,000 of them was to spend 4,000 calls. */}
+      {tooWide ? (
+        <p className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2.5 py-2">
+          That range covers {span.toLocaleString()} days. Processing past emails
+          is capped at one year per run, because every email in the range costs
+          an AI call. Narrow the range — or run it a year at a time.
+        </p>
+      ) : estimating ? (
+        <p className="text-[11px] text-muted-foreground px-2.5 py-2">
+          Counting emails in this range…
+        </p>
+      ) : estimate ? (
+        <div
+          className={`text-[11px] rounded-md px-2.5 py-2 space-y-1 ${
+            estimate.will_process >= PAST_COSTLY_THRESHOLD
+              ? "text-amber-500 bg-amber-500/10"
+              : "text-muted-foreground bg-secondary/50"
+          }`}
+        >
+          {estimate.eligible === 0 ? (
+            <p>
+              {estimate.already_processed > 0
+                ? `All ${estimate.already_processed.toLocaleString()} emails in this range have already been processed. Nothing to do.`
+                : "No emails found in this range yet — the run will fetch it from your mailbox first."}
+            </p>
+          ) : (
+            <p>
+              <strong className="font-medium">
+                {estimate.will_process.toLocaleString()}{" "}
+                {estimate.will_process === 1 ? "email" : "emails"}
+              </strong>{" "}
+              will be sent to the AI — one classification call each
+              {estimate.will_process >= PAST_COSTLY_THRESHOLD
+                ? ". Large runs cost real money; a narrower range costs less and teaches the assistant just as much."
+                : "."}
+            </p>
+          )}
+          {estimate.capped && (
+            <p>
+              {estimate.eligible.toLocaleString()} are eligible, but one run
+              covers at most {estimate.limit.toLocaleString()} — the oldest
+              first. Run it again to continue.
+            </p>
+          )}
+          {estimate.held_back > 0 && (
+            <p>
+              {estimate.held_back.toLocaleString()} of these were fetched by
+              Clean older mail and have never been seen by the AI.
+            </p>
+          )}
+          {estimate.already_processed > 0 && estimate.eligible > 0 && (
+            <p>
+              {estimate.already_processed.toLocaleString()} more in this range
+              are already processed and will be skipped.
+            </p>
+          )}
+        </div>
+      ) : null}
       <div className="flex items-center justify-between">
         <LabeledToggle
           label="Unread only"

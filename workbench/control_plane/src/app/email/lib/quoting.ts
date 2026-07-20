@@ -105,7 +105,12 @@ export function splitQuotedText(text: string): { main: string; quoted: string | 
   if (!text) return { main: text, quoted: null };
   const lines = text.split("\n");
   let idx = -1;
-  for (let i = 1; i < lines.length; i++) {
+  // Scanned from line 0, NOT line 1. If the first line is already inside a quote
+  // the whole body is one (a bare forward), and the `idx < 1` guard below then
+  // returns it whole. Starting at 1 skipped that check, so such a body was cut
+  // at its SECOND line: the first quoted line became "new content" — handed to
+  // the AI drafter as the user's text, and shown uncollapsed in the viewer.
+  for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (TEXT_BOUNDARY.some((re) => re.test(line))) {
       // "From:" alone is a weak signal — only treat it as a quote boundary when

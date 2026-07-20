@@ -325,7 +325,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
           />
           <SettingCard
             title="Learned patterns"
-            description="Senders the assistant learned to match (or skip) for a rule, from your Fix corrections."
+            description="Senders pinned to a rule — some you taught via Fix, most learned by the assistant itself. A pattern skips the AI entirely, so the Email Cleaner only uses the ones you have confirmed."
             right={<EditBtn onClick={() => setDialog("patterns")} label="Manage" />}
           />
           <SettingCard
@@ -593,7 +593,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
       {dialog === "patterns" && (
         <Modal
           title="Learned patterns"
-          description="Senders the assistant learned to match (or skip) for a rule, from your Fix corrections."
+          description="Senders pinned to a rule — some you taught via Fix, most learned by the assistant itself. A pattern skips the AI entirely, so the Email Cleaner only uses the ones you have confirmed."
           onClose={() => setDialog(null)}
         >
           <LearnedPatternsList accountId={accountId} />
@@ -1404,15 +1404,20 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
           so the cleaner waits for a human to confirm them. */}
       {pending.length > 0 && (
         <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-2">
+          {/* Built from explicit strings, not JSX text split across source
+              lines. A sentence assembled out of word fragments around
+              {expressions} depends on JSX whitespace collapsing for its spacing,
+              which is invisible in review and shipped "arewaiting" to the user.
+              This reads as the sentence it renders. */}
           <p className="text-[11px] text-amber-500">
             <b>
-              {pending.length} pattern{pending.length === 1 ? "" : "s"} learned
-              by the assistant
-            </b>{" "}
-            {pending.length === 1 ? "is" : "are"} waiting for you. The Email
-            Cleaner won&apos;t apply {pending.length === 1 ? "it" : "them"}{" "}
-            across your mailbox until you confirm{" "}
-            {pending.length === 1 ? "it" : "they"}&apos;re right.
+              {pending.length === 1
+                ? "1 pattern learned by the assistant"
+                : `${pending.length} patterns learned by the assistant`}
+            </b>
+            {pending.length === 1
+              ? " is waiting for you. The Email Cleaner won't apply it across your mailbox until you confirm it's right."
+              : " are waiting for you. The Email Cleaner won't apply them across your mailbox until you confirm they're right."}
           </p>
           <button
             onClick={() => review(undefined, true)}
@@ -1427,9 +1432,14 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
         {patterns.map((p) => {
           const waiting = isPendingReview(p);
           return (
+            /* Two rows, not one. A sender address plus a rule name plus a reach
+               count does not fit one line in a dialog, and `truncate` cut the
+               address mid-word — leaving the one thing you need to judge the
+               pattern (who it is) unreadable. Chips and actions share the top
+               row; the pattern itself gets the full width below and wraps. */
             <div
               key={p.id}
-              className={`flex items-center gap-2 rounded-lg px-3 py-2 border ${
+              className={`rounded-lg px-3 py-2 border ${
                 waiting
                   ? "bg-amber-500/5 border-amber-500/30"
                   : p.rejected_at
@@ -1437,75 +1447,82 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
                     : "bg-card border-border"
               }`}
             >
-              <span
-                className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
-                  p.exclude
-                    ? "bg-red-500/15 text-red-400"
-                    : "bg-emerald-500/15 text-emerald-400"
-                }`}
-              >
-                {p.exclude ? "Never match" : "Always match"}
-              </span>
-              {_PATTERN_SOURCE_META[p.source] && (
+              <div className="flex items-center gap-2">
                 <span
-                  title={_PATTERN_SOURCE_META[p.source].title}
-                  className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
+                  className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
+                    p.exclude
+                      ? "bg-red-500/15 text-red-400"
+                      : "bg-emerald-500/15 text-emerald-400"
+                  }`}
                 >
-                  {_PATTERN_SOURCE_META[p.source].label}
+                  {p.exclude ? "Never match" : "Always match"}
                 </span>
-              )}
-              <div className="flex-1 min-w-0 text-xs text-foreground/80 truncate">
-                <span className="text-muted-foreground">
-                  {p.pattern_type === "SUBJECT" ? "Subject" : "From"}
-                </span>{" "}
-                {p.value} <span className="text-muted-foreground">→</span>{" "}
-                <span className="text-foreground">
-                  {p.rule_name || "(deleted rule)"}
-                </span>
+                {_PATTERN_SOURCE_META[p.source] && (
+                  <span
+                    title={_PATTERN_SOURCE_META[p.source].title}
+                    className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
+                  >
+                    {_PATTERN_SOURCE_META[p.source].label}
+                  </span>
+                )}
                 {/* The number that makes review possible: without it, "is this
                     pattern right?" cannot be answered from this screen. */}
                 {p.reach !== undefined && p.reach > 0 && (
                   <span
-                    className="text-muted-foreground"
-                    title="Approximate — matched by sender/subject substring"
+                    className="text-[10px] text-muted-foreground whitespace-nowrap"
+                    title="Approximate — matched by sender/subject substring, excluding Trash and Junk"
                   >
-                    {" "}
-                    · about {p.reach.toLocaleString()} email
-                    {p.reach === 1 ? "" : "s"}
+                    {p.reach === 1
+                      ? "about 1 email"
+                      : `about ${p.reach.toLocaleString()} emails`}
                   </span>
                 )}
                 {p.rejected_at && (
-                  <span className="text-muted-foreground"> · rejected</span>
+                  <span className="text-[10px] text-muted-foreground">
+                    rejected
+                  </span>
                 )}
+                <span className="ml-auto flex items-center gap-2">
+                  {waiting ? (
+                    <>
+                      <button
+                        onClick={() => review([p.id], true)}
+                        disabled={busy}
+                        title="Approve — let the cleaner use this"
+                        className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
+                      >
+                        <Check size={14} />
+                      </button>
+                      <button
+                        onClick={() => review([p.id], false)}
+                        disabled={busy}
+                        title="Reject — this pattern is wrong"
+                        className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+                      >
+                        <X size={14} />
+                      </button>
+                    </>
+                  ) : (
+                    <button
+                      onClick={() => forget(p.id)}
+                      title="Forget this"
+                      className="text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 size={13} />
+                    </button>
+                  )}
+                </span>
               </div>
-              {waiting ? (
-                <>
-                  <button
-                    onClick={() => review([p.id], true)}
-                    disabled={busy}
-                    title="Approve — let the cleaner use this"
-                    className="text-emerald-500 hover:text-emerald-400 flex-shrink-0 disabled:opacity-50"
-                  >
-                    <Check size={14} />
-                  </button>
-                  <button
-                    onClick={() => review([p.id], false)}
-                    disabled={busy}
-                    title="Reject — this pattern is wrong"
-                    className="text-muted-foreground hover:text-destructive flex-shrink-0 disabled:opacity-50"
-                  >
-                    <X size={14} />
-                  </button>
-                </>
-              ) : (
-                <button
-                  onClick={() => forget(p.id)}
-                  title="Forget this"
-                  className="text-muted-foreground hover:text-destructive flex-shrink-0"
-                >
-                  <Trash2 size={13} />
-                </button>
-              )}
+              <div className="mt-1 text-xs text-foreground/80 break-words">
+                <span className="text-muted-foreground">
+                  {p.pattern_type === "SUBJECT" ? "Subject" : "From"}{" "}
+                </span>
+                <span className="break-all">{p.value}</span>
+                <span className="text-muted-foreground"> → </span>
+                <span className="text-foreground">
+                  {p.rule_name || "(deleted rule)"}
+                </span>
+              </div>
             </div>
           );
         })}

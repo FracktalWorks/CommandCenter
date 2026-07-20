@@ -11,11 +11,18 @@ Signature injection lives here, at send time, rather than in the drafter: the
 AI drafter returns the reply body only, and the signature is appended once here.
 That avoids a doubled signature and keeps raw HTML tags out of the plain-text
 compose box.
+
+The signature goes directly under the NEW text, ABOVE any quoted trailing
+thread. The composer sends one ``body_text`` containing both (new text + "\\n\\n"
++ quote), so appending to the end of it put the signature underneath the whole
+quoted conversation on every signed reply — see :mod:`.quoting` for the split.
 """
 from __future__ import annotations
 
 import html as _html
 import re
+
+from gateway.routes.email.quoting import split_quoted_html, split_quoted_text
 
 # A value that contains an HTML tag is treated as HTML; otherwise it's plain
 # text the user typed and we escape + linebreak it.
@@ -66,11 +73,17 @@ def build_signed_bodies(
 ) -> tuple[str, str | None]:
     """Append the signature to a message in both representations.
 
+    The signature is inserted directly under the NEW text and ABOVE any quoted
+    trailing thread, which is where every mail client puts it. A reply arrives
+    here as ONE ``body_text`` holding both parts, so a plain append pushed the
+    signature below the entire quoted conversation.
+
     Returns ``(body_text, body_html)``:
-      * ``body_text`` — the body plus the plain-text signature (deduped: skipped
-        if that text is already present, e.g. an older draft that still has it).
+      * ``body_text`` — new text + plain-text signature + the quote (deduped:
+        the whole insert is skipped if the signature text is already present,
+        e.g. an older draft that still carries it).
       * ``body_html`` — the caller's HTML (or the plain body rendered to HTML)
-        followed by the signature HTML block.
+        with the signature HTML block in the same position.
 
     With no signature set, returns the inputs unchanged — ``body_html`` stays
     ``None`` so a plain-text-only send is preserved exactly as before.
@@ -81,14 +94,30 @@ def build_signed_bodies(
 
     sig_text = signature_text(sig)
     sig_html = signature_html(sig)
+    body_text = body_text or ""
 
-    out_text = body_text or ""
-    if sig_text and sig_text not in out_text:
-        out_text = f"{out_text.rstrip()}\n\n{sig_text}" if out_text.strip() else sig_text
+    # Already signed (a re-signed draft): leave the text alone AND skip the HTML
+    # block, so re-sending a stored draft can't end up with two signatures.
+    if sig_text and sig_text in body_text:
+        return body_text, (
+            body_html if (body_html and body_html.strip())
+            else _text_to_html(body_text)
+        )
 
-    base_html = (
-        body_html if (body_html and body_html.strip())
-        else _text_to_html(body_text or "")
+    main_text, quoted_text = split_quoted_text(body_text)
+    out_text = (
+        f"{main_text.rstrip()}\n\n{sig_text}" if main_text.strip() else sig_text
     )
-    out_html = f"{base_html}<br><br>{sig_html}"
+    if quoted_text:
+        out_text = f"{out_text}\n\n{quoted_text}"
+
+    if body_html and body_html.strip():
+        main_html, quoted_html = split_quoted_html(body_html)
+        out_html = f"{main_html}<br><br>{sig_html}{quoted_html}"
+    else:
+        # Derived from the plain body — render the two halves separately so the
+        # signature keeps its place above the quote here too.
+        out_html = f"{_text_to_html(main_text)}<br><br>{sig_html}"
+        if quoted_text:
+            out_html += f"<br><br>{_text_to_html(quoted_text)}"
     return out_text, out_html

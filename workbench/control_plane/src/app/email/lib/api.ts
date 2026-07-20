@@ -1261,7 +1261,16 @@ export async function processPastEmails(params: {
   endDate?: string; // YYYY-MM-DD, inclusive
   isTest: boolean;
   includeRead?: boolean; // false = only process unread mail in the range
-}): Promise<{ scheduled: boolean; count: number; dry_run: boolean }> {
+  /** Write drafts while backfilling. Defaults to FALSE — a backfill files old
+   *  mail; drafting replies to months-old threads costs a model call each and
+   *  is almost never wanted. Must be asked for explicitly. */
+  draftReplies?: boolean;
+}): Promise<{
+  scheduled: boolean;
+  count: number;
+  dry_run: boolean;
+  draft_replies?: boolean;
+}> {
   return gatewayFetch("/email/rules/process-past", {
     method: "POST",
     body: JSON.stringify({
@@ -1270,6 +1279,7 @@ export async function processPastEmails(params: {
       end_date: params.endDate ?? null,
       is_test: params.isTest,
       include_read: params.includeRead ?? true,
+      draft_replies: params.draftReplies ?? false,
     }),
   });
 }

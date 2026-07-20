@@ -22,7 +22,7 @@ interface BulkUnsubscribeViewProps {
   onArchived?: () => void;
 }
 
-/** Age presets for the "Quick clean" sweep (archive read mail older than N). */
+/** Age presets for the "Archive old mail" sweep (archive read mail older than N). */
 const AGE_OPTIONS = [
   { label: "7d", days: 7 },
   { label: "30d", days: 30 },
@@ -128,7 +128,7 @@ export function BulkUnsubscribeView({
   const [filter, setFilter] = useState("");
   // Category filter (derived from per-message rule labels). "all" = every sender.
   const [categoryTab, setCategoryTab] = useState<string>("all");
-  // "Quick clean" age sweep (folded in from the old Archiver).
+  // "Archive old mail" age sweep (folded in from the old Archiver).
   const [olderThan, setOlderThan] = useState(30);
   const [onlyRead, setOnlyRead] = useState(true);
   // Show every sender by default so nothing is hidden — the category chips and
@@ -611,9 +611,11 @@ export function BulkUnsubscribeView({
     }
   };
 
-  // "Quick clean": archive inbox mail older than N days (optionally read-only),
-  // across all senders — a non-sender-specific sweep to hit inbox zero fast.
-  const quickClean = async () => {
+  // "Archive old mail": archive INBOX mail older than N days (optionally
+  // read-only), across all senders — a non-sender-specific sweep to hit inbox
+  // zero fast. Named here exactly as the button reads, so nobody quotes an
+  // internal name at the user as if it were something they could find.
+  const archiveOldMail = async () => {
     if (!accountId) return;
     const ageLabel =
       AGE_OPTIONS.find((o) => o.days === olderThan)?.label ?? `${olderThan}d`;
@@ -1226,7 +1228,7 @@ export function BulkUnsubscribeView({
           </div>
         )}
       </div>
-      {/* Quick clean — age-based bulk archive across ALL senders. Pinned to the
+      {/* Archive old mail — age-based bulk archive across ALL senders. Pinned to the
           bottom: it's a standalone sweep, independent of the sender list above. */}
       <div className="flex-shrink-0 flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-t border-border bg-card/40">
         <Clock size={12} className="text-primary flex-shrink-0" />
@@ -1258,7 +1260,7 @@ export function BulkUnsubscribeView({
           Only read
         </label>
         <button
-          onClick={quickClean}
+          onClick={archiveOldMail}
           disabled={busy === "__sweep__"}
           title="Archive old inbox mail in one sweep (all senders)"
           className="flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50 ml-auto"

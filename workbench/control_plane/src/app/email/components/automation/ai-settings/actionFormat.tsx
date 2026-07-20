@@ -2,7 +2,7 @@
 
 // Action tables + formatting helpers shared across the Assistant tabs (Rules
 // list, Rule editor, Test/History result popovers, Add-rule examples). Extracted
-// from AssistantView.tsx so the same action → {label, icon, color, text} mapping
+// from AISettingsView.tsx so the same action → {label, icon, color, text} mapping
 // is defined ONCE and every surface renders actions identically.
 
 import {

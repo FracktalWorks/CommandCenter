@@ -3,7 +3,7 @@
 // The Assistant "Advanced Settings" tab and all of its sub-dialogs (writing
 // style, personal instructions, signature, reset rules, follow-ups, digest,
 // knowledge base, learned preferences/patterns, cold senders, org domains).
-// Extracted from AssistantView.tsx.
+// Extracted from AISettingsView.tsx.
 
 import { useCallback, useEffect, useState } from "react";
 import {

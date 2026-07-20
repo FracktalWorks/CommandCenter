@@ -5,7 +5,7 @@ import {
   MessageSquare,
 } from "lucide-react";
 import { AutomationFeature } from "../../lib/types";
-import { AssistantView } from "./AssistantView";
+import { AISettingsView } from "./AISettingsView";
 import { DigestView } from "./DigestView";
 import { BulkUnsubscribeView } from "./BulkUnsubscribeView";
 import { AnalyticsView } from "./AnalyticsView";
@@ -29,7 +29,7 @@ const META: Record<
     subtitle: "Conversational AI assistant",
     icon: MessageSquare,
   },
-  assistant: {
+  "ai-settings": {
     title: "AI Settings",
     subtitle: "Rules, testing & history",
     icon: Sparkles,
@@ -87,8 +87,8 @@ export function AutomationView({
 
       {/* Body */}
       <div className="flex-1 min-h-0">
-        {feature === "assistant" && (
-          <AssistantView accountId={accountId} selectedEmailId={selectedEmailId} />
+        {feature === "ai-settings" && (
+          <AISettingsView accountId={accountId} selectedEmailId={selectedEmailId} />
         )}
         {feature === "digest" && <DigestView accountId={accountId} />}
         {feature === "unsubscribe" && (

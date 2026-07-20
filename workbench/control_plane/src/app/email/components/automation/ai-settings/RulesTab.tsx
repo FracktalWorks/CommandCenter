@@ -2,7 +2,7 @@
 
 // The Assistant "Rules" tab: the rule list, the full rule editor (conditions +
 // actions), the action-config sub-editors, and the Rules-tab dialogs (Add rule,
-// Process past emails, artifact picker). Extracted from AssistantView.tsx.
+// Process past emails, artifact picker). Extracted from AISettingsView.tsx.
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
@@ -1312,6 +1312,10 @@ function ProcessPastEmailsDialog({
   const [start, setStart] = useState(isoDaysAgo(7));
   const [end, setEnd] = useState(isoDaysAgo(0));
   const [includeRead, setIncludeRead] = useState(true); // true = all mail, false = unread only
+  // OFF by default: a backfill is for filing old mail, not answering it. Every
+  // draft action spends a call on the drafting model, on threads that usually
+  // ended months ago — so this is opt-in, per run, and never remembered.
+  const [draftReplies, setDraftReplies] = useState(false);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1330,6 +1334,7 @@ function ProcessPastEmailsDialog({
         endDate: end || undefined,
         isTest: false,
         includeRead,
+        draftReplies,
       });
       // Always hand off to the live progress banner: the job downloads the range
       // from the provider first, so there's no meaningful up-front count to gate
@@ -1402,11 +1407,36 @@ function ProcessPastEmailsDialog({
           onChange={setIncludeRead}
         />
       </div>
+      <div className="flex items-center justify-between">
+        <LabeledToggle
+          label="Categorize only"
+          labelRight="Also draft replies"
+          enabled={draftReplies}
+          onChange={setDraftReplies}
+        />
+      </div>
       <p className="text-[11px] text-muted-foreground">
-        Runs the matched actions (labels, drafts, archive…) on{" "}
+        Runs the matched actions on{" "}
         {includeRead ? "every email" : "unread mail"} in the range. A progress
         bar appears above the tabs while it runs, and applied actions stream into
         the History tab.
+      </p>
+      {/* Say what drafting costs BEFORE it's switched on, not after the drafts
+          appear. Old threads are usually finished conversations, so the default
+          files them and leaves them alone. */}
+      <p
+        className={`text-[11px] rounded-md px-2.5 py-2 ${
+          draftReplies
+            ? "text-amber-500 bg-amber-500/10"
+            : "text-muted-foreground bg-secondary/50"
+        }`}
+      >
+        {draftReplies
+          ? "Draft replies will be written for matching mail — one AI call per " +
+            "email, on conversations that may have ended long ago. Labels, " +
+            "folders and archiving still apply either way."
+          : "Labels, folders and archiving only — no drafts will be written, " +
+            "and no AI calls spent replying to old threads."}
       </p>
       {result && (
         <div className="text-xs text-emerald-400 bg-emerald-500/10 rounded-md px-2.5 py-2">

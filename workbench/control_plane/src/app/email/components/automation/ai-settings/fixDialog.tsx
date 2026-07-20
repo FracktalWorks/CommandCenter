@@ -3,7 +3,7 @@
 // The "Fix / Improve Rules" flow — a per-email correction dialog shared by the
 // Test and History tabs. For an existing rule / "None" it persists a learned
 // classification pattern (and re-runs the email); for "New rule" it hands the
-// correction to the AI chat. Extracted from AssistantView.tsx.
+// correction to the AI chat. Extracted from AISettingsView.tsx.
 
 import { useEffect, useState } from "react";
 import { Check, Loader2, MessageCircle } from "lucide-react";

@@ -548,6 +548,7 @@ def _past_job_tick(
 
 def _past_job_finish(
     account_id: str, *, token: int | None = None, error: str | None = None,
+    drafts_skipped: int = 0,
 ) -> None:
     job = _PAST_JOBS.get(account_id)
     if not job:
@@ -556,7 +557,30 @@ def _past_job_finish(
         return  # a newer run replaced this one — leave it running
     job["status"] = "error" if error else "done"
     job["error"] = error
+    # Report suppressed drafting, so a run that deliberately skipped it doesn't
+    # read as one where the rules simply ran in full.
+    job["drafts_skipped"] = drafts_skipped
     job["finished_at"] = _now_iso()
+
+
+# Rule actions that WRITE A DRAFT — the expensive, and on old mail usually
+# unwanted, half of a rule. Each one calls the drafting model per message.
+DRAFTING_ACTIONS = ("REPLY", "DRAFT_EMAIL", "FORWARD")
+
+
+def _without_drafting(match: dict[str, Any]) -> tuple[dict[str, Any], bool]:
+    """A copy of ``match`` with its drafting actions removed.
+
+    Returns ``(match, stripped)``. The rule's other actions — label, archive,
+    folder, mark-read — still run, because filing old mail is the point of a
+    backfill; writing replies to it is not.
+    """
+    rule = match.get("rule") or {}
+    actions = rule.get("actions") or []
+    kept = [a for a in actions if a.get("type") not in DRAFTING_ACTIONS]
+    if len(kept) == len(actions):
+        return match, False
+    return {**match, "rule": {**rule, "actions": kept}}, True
 
 
 class RuleProcessPastRequest(BaseModel):
@@ -565,6 +589,15 @@ class RuleProcessPastRequest(BaseModel):
     end_date: str | None = None    # ISO date (YYYY-MM-DD), inclusive
     is_test: bool = False          # True = dry-run preview; False = apply for real
     include_read: bool = True      # False = only process unread mail in the range
+    # Write drafts while backfilling. OFF BY DEFAULT, unlike a live run.
+    #
+    # A backfill walks months of already-resolved mail, and every draft action
+    # spends a call on the drafting model. Defaulting this on meant pointing the
+    # date picker at 90 days silently generated (and paid for) replies to
+    # conversations that ended long ago, which the user then had to delete by
+    # hand. Categorizing old mail is the point of a backfill; replying to it is
+    # a separate, deliberate choice — so it has to be asked for.
+    draft_replies: bool = False
     limit: int = 1000
 
 
@@ -580,6 +613,10 @@ async def process_past_emails(
     every inbox email whose received_at falls in [start_date, end_date]. Test
     mode logs a PENDING preview; Apply mode executes the matched actions. Poll
     GET /email/rules/history for results.
+
+    Drafting is OFF unless ``draft_replies`` is set — see the field comment on
+    RuleProcessPastRequest. Filing old mail is the point; replying to it costs a
+    model call per message on conversations that have usually long since ended.
     """
     start_dt = _parse_iso_date(req.start_date, end_of_day=False)
     end_dt = _parse_iso_date(req.end_date, end_of_day=True)
@@ -609,9 +646,10 @@ async def process_past_emails(
     background.add_task(
         _process_past_emails_job, req.account_id, start_dt, end_dt,
         min(req.limit, 2000), not req.is_test, user.email or "anonymous",
-        only_unread, token,
+        only_unread, token, req.draft_replies,
     )
-    return {"scheduled": True, "count": count, "dry_run": req.is_test}
+    return {"scheduled": True, "count": count, "dry_run": req.is_test,
+            "draft_replies": req.draft_replies}
 
 
 @router.get("/rules/process-past/status")
@@ -849,7 +887,7 @@ async def _apply_and_log_match(
 async def _process_past_emails_job(
     account_id: str, start: datetime | None, end: datetime | None,
     limit: int, dry_run: bool, user_email: str, only_unread: bool = False,
-    job_token: int | None = None,
+    job_token: int | None = None, draft_replies: bool = False,
 ) -> None:
     """Background worker: reprocess PAST inbox mail in a date range (inbox-zero
     'Process past emails'). Reprocesses regardless of rules_processed_at, oldest
@@ -922,6 +960,11 @@ async def _process_past_emails_job(
                 if not await provider.authenticate():
                     provider = None
 
+        # How many messages had a drafting action suppressed — surfaced on the
+        # job tracker so the UI can say what was skipped rather than let the run
+        # look like the rules ran in full.
+        drafts_skipped = 0
+
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
                 else json.loads(r.from_address or "{}")
@@ -936,6 +979,13 @@ async def _process_past_emails_job(
             apply = (not dry_run) and provider is not None
             if matches:
                 for match in matches:
+                    # Strip drafting unless the run explicitly asked for it, so a
+                    # 90-day backfill files old mail without spending a drafting
+                    # call per message on threads that ended months ago.
+                    if not draft_replies:
+                        match, stripped = _without_drafting(match)
+                        if stripped:
+                            drafts_skipped += 1
                     await _apply_and_log_match(
                         db, provider, r, frm, email, match, apply,
                         about, signature, account_user, account_id,
@@ -965,7 +1015,8 @@ async def _process_past_emails_job(
                 applied=1 if matches else 0,
                 skipped=0 if matches else 1,
             )
-        _past_job_finish(account_id, token=job_token)
+        _past_job_finish(account_id, token=job_token,
+                         drafts_skipped=drafts_skipped)
     except Exception as e:  # noqa: BLE001 — record failure for the UI, don't crash the worker
         _log.warning("email.process_past_failed", account_id=account_id, error=str(e)[:200])
         _past_job_finish(account_id, token=job_token, error=str(e))

@@ -120,13 +120,13 @@ async def test_label_casing_and_whitespace_do_not_defeat_the_rollup() -> None:
     assert m.automation.senders.canonical_cleanup_category("Reply") is None
 
 
-async def test_reply_active_sender_projects_personal() -> None:
+async def test_reply_active_sender_projects_conversation() -> None:
     db = _FakeDB([_srow("colleague@x.com")],
                  tally=[_trow("colleague@x.com", "reply", 3)])
     p1, p2 = _run(db)
     with p1, p2:
         await m._categorize_senders_job("acc-1", 25)
-    assert db.inserts[0]["cat"] == "Personal"
+    assert db.inserts[0]["cat"] == "Conversation"
     assert db.inserts[0]["src"] == "rule"
 
 

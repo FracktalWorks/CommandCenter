@@ -17,6 +17,7 @@ from gateway.routes.email.automation.identity import sender_scope
 from gateway.routes.email.core import (
     CLEANUP_CATEGORIES,
     CONVERSATION_LABELS_LOWER,
+    CONVERSATION_SENDER_CATEGORY,
     KNOWN_LABELS_LOWER,
     _account_scope,
     _assert_account_owner,
@@ -924,13 +925,13 @@ async def unsubscribe_sender(
 
 EMAIL_CATEGORIES = [
     "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
-    "Cold Email", "Personal", "Support", "Unknown",
+    "Cold Email", CONVERSATION_SENDER_CATEGORY, "Support", "Unknown",
 ]
 
 # The label vocabulary now lives in core, because the inbox's Uncategorized chip
 # and the Email Cleaner's Uncategorized tab must agree on what "categorized"
 # means. A sender's category is rolled up from these — the Email Cleaner
-# PROJECTS the rules, it never re-classifies. Personal is inferred from
+# PROJECTS the rules, it never re-classifies. Conversation is inferred from
 # conversation activity; Support/Unknown are vocabulary-only (no producer).
 _CLEANUP_CATEGORIES = list(CLEANUP_CATEGORIES)
 _CLEANUP_BY_LOWER = {c.lower(): c for c in _CLEANUP_CATEGORIES}
@@ -982,9 +983,15 @@ def _rule_category(label_counts: dict[str, int]) -> str | None:
 
     ``label_counts`` maps a lowercased rule label → how many of the sender's
     messages carry it. Returns the dominant cleanup category when the rules have
-    labelled enough of the sender's mail, else "Personal" when they're a
-    reply-active correspondent, else None (the sender simply stays
-    uncategorized — there is no second classifier to fall back to)."""
+    labelled enough of the sender's mail, else "Conversation" when there's an
+    ongoing exchange with them, else None (the sender simply stays uncategorized
+    — there is no second classifier to fall back to).
+
+    "Conversation" requires ``top_n == 0``: not merely more conversation than
+    cleanup, but NO cleanup label at all. A newsletter someone once replied to
+    stays a Newsletter. Note this is what separates it from Cold Email, which is
+    also one human writing to another — the difference is that a reply came
+    back."""
     cleanup = {proper: label_counts.get(low, 0)
                for low, proper in _CLEANUP_BY_LOWER.items()}
     top_cat, top_n = max(cleanup.items(), key=lambda kv: kv[1], default=(None, 0))
@@ -992,7 +999,7 @@ def _rule_category(label_counts: dict[str, int]) -> str | None:
         return top_cat
     conv_n = sum(label_counts.get(low, 0) for low in _CONVERSATION_LOWER)
     if conv_n >= _MIN_RULE_MESSAGES and top_n == 0:
-        return "Personal"
+        return CONVERSATION_SENDER_CATEGORY
     return None
 
 
@@ -1020,7 +1027,7 @@ async def _categorize_senders_job(account_id: str, limit: int) -> None:
 
     This is a PROJECTION, not a classifier. A sender's category is rolled up
     from the rule engine's per-message labels (``email_messages.categories``) —
-    the dominant cleanup category, or Personal for a reply-active correspondent.
+    the dominant cleanup category, or Conversation for an ongoing exchange.
     There is no second opinion: a sender the rules haven't labelled stays
     uncategorized until they do, and the Email Cleaner lists it either way.
 

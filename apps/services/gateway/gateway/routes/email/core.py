@@ -323,6 +323,26 @@ KNOWN_LABELS_LOWER: list[str] = (
     [c.lower() for c in CLEANUP_CATEGORIES] + sorted(CONVERSATION_LABELS_LOWER)
 )
 
+# SENDER-level category for someone there is an ongoing exchange with: several
+# of their messages carry conversation labels and none was ever filed as bulk
+# mail. Unlike the cleanup categories this is never written onto a message and
+# never syncs to the provider — it is derived per sender (senders._rule_category)
+# and shown only in the Email Cleaner.
+#
+# Was "Personal" until 2026-07-20. The word implied private-life mail; every
+# sender it matched was in fact a work colleague or client, and it collided
+# with Cold Email — also a person writing one-to-one, just a stranger. The
+# distinguishing signal is the ongoing conversation, so the name says that.
+CONVERSATION_SENDER_CATEGORY = "Conversation"
+# Sender categories that mark a human correspondent, so mail from them ranks
+# higher in "important emails". Bound as a query parameter — defined ONCE here
+# because the producer (senders) and the consumer (messages) are in different
+# modules and a rename that reached only one of them would silently drop the
+# boost rather than fail.
+HUMAN_SENDER_CATEGORIES_LOWER: list[str] = [
+    CONVERSATION_SENDER_CATEGORY.lower(), "support",
+]
+
 # "Uncategorized" = carries none of the labels above. NOT "has no labels at
 # all": a user's own hand-made label doesn't make a message categorized as far
 # as the rules are concerned, and treating it as such would hide exactly the

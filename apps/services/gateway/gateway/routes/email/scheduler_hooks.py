@@ -83,10 +83,16 @@ async def process_new_mail(account_id: str) -> None:
     except Exception as exc:  # noqa: BLE001
         _log.warning("sync.auto_run_failed", account_id=account_id, error=str(exc)[:200])
     try:
-        # Bounded per cycle: this writes a label to the provider per message, and
-        # the backlog drains a bit on every sync rather than stalling one tick.
-        await sweep_uncategorized(account_id, 100, dry_run=False,
-                                  owner="scheduler")
+        # Bounded per cycle by LABELS WRITTEN, not rows read. Each label is a
+        # provider round-trip; reading a page is one indexed query.
+        #
+        # This used to cap the SCAN at 100. The sweep is ordered newest-first
+        # and restarts at offset 0 every cycle, so a block of no-evidence mail
+        # at the top was re-read forever and nothing behind it was ever reached
+        # — production logged "scanned: 100, applied: 0, no_evidence: 100" every
+        # five minutes with 575 older messages waiting behind the wall.
+        await sweep_uncategorized(account_id, 5000, dry_run=False,
+                                  owner="scheduler", max_apply=100)
     except Exception as exc:  # noqa: BLE001
         _log.warning("sync.cleanup_sweep_failed", account_id=account_id,
                      error=str(exc)[:200])

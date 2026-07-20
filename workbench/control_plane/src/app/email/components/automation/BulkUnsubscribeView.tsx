@@ -797,18 +797,23 @@ export function BulkUnsubscribeView({
         <div className="flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-b border-border bg-primary/5 flex-shrink-0">
           <Sparkles size={13} className="text-primary flex-shrink-0" />
           <span className="text-[11px] text-foreground">
-            {/* "at least" when the preview only sampled: the real run covers
+            {/* Built as explicit strings rather than JSX text nodes. Word
+                fragments split across source lines around {expressions} depend
+                on JSX whitespace collapsing for their spacing, which is easy to
+                get wrong and invisible in review — this reads as the sentence
+                it renders.
+
+                "At least" when the preview only sampled: the real run covers
                 the whole mailbox, so promising an exact number the sample
                 produced would undersell it and read as a miscount afterwards. */}
             {preview.sampled ? "At least " : ""}
-            <strong className="font-semibold">{preview.categorized}</strong>{" "}
-            uncategorized email
-            {preview.categorized === 1 ? "" : "s"} match patterns you&apos;ve
-            already taught the assistant
+            <strong className="font-semibold">{preview.categorized}</strong>
+            {preview.categorized === 1
+              ? " uncategorized email matches patterns you've already taught the assistant"
+              : " uncategorized emails match patterns you've already taught the assistant"}
             {preview.no_evidence > 0 && (
               <span className="text-muted-foreground">
-                {" "}
-                · {preview.no_evidence} need the rules to run
+                {` · ${preview.no_evidence} need the rules to run`}
               </span>
             )}
           </span>

@@ -14,11 +14,11 @@ from gateway.routes import email as m
 # ── Settings model carries the new drafting fields ──────────────────────────
 
 def test_settings_defaults_include_drafting_fields() -> None:
-    # draft_replies starts OFF: it adds DRAFT_EMAIL to the Reply rule, so every
-    # Reply-classified email would cost a drafting-model call before anyone
-    # decided it was worth answering. See test_email_auto_draft_defaults.py.
+    # ON: this is LIVE drafting (DRAFT_EMAIL on the Reply rule), and a draft on
+    # mail that just arrived is the feature. The backfill is the one that
+    # defaults off. See test_email_auto_draft_defaults.py.
     s = m.AssistantSettingsModel(account_id="acc-1")
-    assert s.draft_replies is False
+    assert s.draft_replies is True
     assert s.personal_instructions is None
     assert s.writing_style is None
 

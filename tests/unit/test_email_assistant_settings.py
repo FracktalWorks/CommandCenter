@@ -48,12 +48,16 @@ def test_settings_roundtrip_preserves_overrides() -> None:
 
 
 def test_inbox_zero_parity_field_defaults() -> None:
-    """The migration-29 settings default to inbox-zero's out-of-box behavior."""
+    """The migration-29 settings default to inbox-zero's out-of-box behavior —
+    with one deliberate divergence: ``follow_up_auto_draft`` starts OFF. Every
+    draft is a call on the drafting model, and the follow-up scan releases a
+    whole window's backlog on its first working run, so it has to be a switch
+    the user turns on. Pinned properly in test_email_auto_draft_defaults.py."""
     s = AssistantSettingsModel(account_id="acc-1")
     assert s.draft_confidence == "ALL_EMAILS"
     assert s.follow_up_awaiting_days == 0
     assert s.follow_up_needs_reply_days == 0
-    assert s.follow_up_auto_draft is True
+    assert s.follow_up_auto_draft is False
     assert s.digest_categories == []
     assert s.digest_day_of_week == 1
     assert s.digest_time_of_day == "09:00"

@@ -144,13 +144,23 @@ class AssistantSettingsModel(BaseModel):
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
     personal_instructions: str | None = None
     writing_style: str | None = None
-    draft_replies: bool = True
+    # Auto-drafting defaults OFF, everywhere. Every draft is a call on the
+    # drafting model (tier-powerful), written before anyone has decided the
+    # email is worth answering — so it must be a switch the user turns ON, never
+    # one they discover already running. Mirrors the backfill's opt-in
+    # (RuleProcessPastRequest.draft_replies). Adds/removes DRAFT_EMAIL on the
+    # Reply rule via sync_draft_reply_action.
+    draft_replies: bool = False
     follow_up_days: int = 0  # legacy alias for follow_up_awaiting_days
     # inbox-zero parity (migration 29)
     draft_confidence: str = "ALL_EMAILS"  # ALL_EMAILS | STANDARD | HIGH_CONFIDENCE
     follow_up_awaiting_days: int = 0  # remind when THEY haven't replied after N days
     follow_up_needs_reply_days: int = 0  # remind when I haven't replied after N days
-    follow_up_auto_draft: bool = True
+    # OFF by default for the same reason — and with a sharper edge: the scan had
+    # been dead since it shipped (fixed in #84), so the first working run on a
+    # long-configured account releases a nudge for every thread in the window at
+    # once. Defaulting this ON meant that backlog would arrive as AI drafts.
+    follow_up_auto_draft: bool = False
     digest_categories: list[str] = Field(default_factory=list)
     digest_day_of_week: int = 1  # 0=Sun … 6=Sat (used when WEEKLY)
     digest_time_of_day: str = "09:00"  # HH:MM, account-local
@@ -220,9 +230,13 @@ async def get_assistant_settings(
             "writing_style": (
                 getattr(row, "writing_style", None) if row else ""
             ) or "",
+            # Missing row / NULL column → OFF. This fallback IS the default for
+            # every account that has never opened AI Settings, so it must agree
+            # with AssistantSettingsModel.draft_replies or the toggle would read
+            # ON while nothing had ever enabled it.
             "draft_replies": (
                 bool(row.draft_replies) if row and row.draft_replies is not None
-                else True
+                else False
             ),
             "follow_up_days": awaiting,  # legacy alias
             "draft_confidence": (
@@ -235,7 +249,7 @@ async def get_assistant_settings(
             "follow_up_auto_draft": (
                 bool(row.follow_up_auto_draft)
                 if row and getattr(row, "follow_up_auto_draft", None) is not None
-                else True
+                else False
             ),
             "digest_categories": (
                 list(getattr(row, "digest_categories", None) or []) if row else []

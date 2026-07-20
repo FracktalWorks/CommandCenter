@@ -31,6 +31,7 @@ from gateway.routes.email.core import (
     email_memory_scope,
     router,
 )
+from gateway.routes.email.quoting import split_quoted_text
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -579,6 +580,12 @@ async def _llm_draft_reply(
             "a blank line, then the message in clear, short paragraphs. No "
             "subject line, and NEVER narrate what you are doing (no \"here is a "
             "draft you can use\" or apologies).\n"
+            "- Output ONLY the new reply text. NEVER quote the earlier "
+            "conversation back: no quote header (\"On <date>, X wrote:\"), no "
+            "\">\"-prefixed lines, no \"From:/Sent:/To:\" header block, no "
+            "\"----- Original Message -----\". The mail client attaches the "
+            "original thread underneath on its own — anything you quote is a "
+            "duplicate, and it pushes the signature below the thread.\n"
             "- You are the account owner writing the reply; you are NOT the "
             "sender. Greet and address the RECIPIENT (the sender of the email "
             "below) — never greet or address the account owner by name.\n"
@@ -856,15 +863,28 @@ _PLACEHOLDER_LINE_RE = re.compile(
 
 
 def _clean_draft_body(body: str) -> str:
-    """Strip placeholder-only lines (e.g. "[Your Name]") from a drafted reply so
-    they never reach the user's mailbox. The configured signature is appended
-    separately by the caller."""
+    """Strip placeholder-only lines (e.g. "[Your Name]") and any quoted trailing
+    conversation from a drafted reply, so neither reaches the user's mailbox. The
+    configured signature is appended separately by the caller.
+
+    Both drafters are told not to quote the thread, but the reply drafter is
+    handed the thread as ``From: <sender> · <ISO timestamp>`` context and a model
+    will sometimes reformat that into a quote block and paste it under its reply.
+    That is always wrong here: the client keeps the real quote separate and
+    reattaches it, so a model-authored one is a duplicate — and it also drags the
+    signature below the thread at send time. ``split_quoted_text`` returns the
+    body untouched unless it can find a boundary with real content above it."""
     kept = [
         ln for ln in (body or "").splitlines()
         if not _PLACEHOLDER_LINE_RE.match(ln)
     ]
     # Collapse the trailing blank run left behind by a removed placeholder.
-    return "\n".join(kept).strip()
+    cleaned = "\n".join(kept).strip()
+    main, quoted = split_quoted_text(cleaned)
+    if quoted:
+        _log.info("email.draft_quote_stripped", chars=len(quoted))
+        return main.strip()
+    return cleaned
 
 
 async def _draft_via_maf_agent(

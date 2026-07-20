@@ -1316,6 +1316,11 @@ function ProcessPastEmailsDialog({
   // draft action spends a call on the drafting model, on threads that usually
   // ended months ago — so this is opt-in, per run, and never remembered.
   const [draftReplies, setDraftReplies] = useState(false);
+  // ON by default: the picker is a RANGE, not a cursor, so re-running it — or
+  // nudging "last 7 days" out to 30 — otherwise re-classifies everything it
+  // already did, at one AI call each, to rewrite labels those emails already
+  // have. Turn it off deliberately to re-apply after changing a rule.
+  const [skipProcessed, setSkipProcessed] = useState(true);
   const [busy, setBusy] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -1335,6 +1340,7 @@ function ProcessPastEmailsDialog({
         isTest: false,
         includeRead,
         draftReplies,
+        skipProcessed,
       });
       // Always hand off to the live progress banner: the job downloads the range
       // from the provider first, so there's no meaningful up-front count to gate
@@ -1415,12 +1421,30 @@ function ProcessPastEmailsDialog({
           onChange={setDraftReplies}
         />
       </div>
+      <div className="flex items-center justify-between">
+        <LabeledToggle
+          label="Skip already processed"
+          labelRight="Reprocess everything"
+          enabled={!skipProcessed}
+          onChange={(v) => setSkipProcessed(!v)}
+        />
+      </div>
       <p className="text-[11px] text-muted-foreground">
         Runs the matched actions on{" "}
-        {includeRead ? "every email" : "unread mail"} in the range. A progress
-        bar appears above the tabs while it runs, and applied actions stream into
-        the History tab.
+        {includeRead ? "every email" : "unread mail"} in the range
+        {skipProcessed
+          ? " that the rules haven't already been run over"
+          : ", including mail the rules have already processed"}
+        . A progress bar appears above the tabs while it runs, and applied
+        actions stream into the History tab.
       </p>
+      {!skipProcessed && (
+        <p className="text-[11px] text-amber-500 bg-amber-500/10 rounded-md px-2.5 py-2">
+          Every email in the range will be classified again — one AI call each,
+          mostly to reapply labels they already carry. Worth it after changing a
+          rule; wasteful otherwise.
+        </p>
+      )}
       {/* Say what drafting costs BEFORE it's switched on, not after the drafts
           appear. Old threads are usually finished conversations, so the default
           files them and leaves them alone. */}

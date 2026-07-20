@@ -485,7 +485,7 @@ def _now_iso() -> str:
 
 def _past_job_start(
     account_id: str, owner: str, total: int, dry_run: bool,
-    *, downloading: bool = False,
+    *, downloading: bool = False, already_processed: int = 0,
 ) -> int:
     """Seed the tracker for a new run; returns a token the background job passes
     back so a superseded (older) run can't mutate the newer entry.
@@ -506,6 +506,10 @@ def _past_job_start(
         "processed": 0,
         "applied": 0,
         "skipped": 0,
+        # Excluded up front as already-processed — NOT part of `total`, and not
+        # a failure. Kept distinct from `skipped` (in range, processed, matched
+        # no rule) so the UI can tell "already done" from "nothing applied".
+        "already_processed": already_processed,
         "dry_run": dry_run,
         "started_at": _now_iso(),
         "finished_at": None if running else _now_iso(),
@@ -516,16 +520,23 @@ def _past_job_start(
 
 def _past_job_begin_processing(
     account_id: str, *, token: int | None = None, total: int,
+    already_processed: int | None = None,
 ) -> None:
     """Leave the 'downloading' phase and record the real in-range total once the
     upstream backfill has landed, so the UI's 'N of M' reflects everything that
-    will actually be processed (not the pre-download local count)."""
+    will actually be processed (not the pre-download local count).
+
+    ``already_processed`` is re-measured here for the same reason: the endpoint's
+    figure predates the download, so mail that arrived (or was first synced)
+    during it isn't reflected in it."""
     job = _PAST_JOBS.get(account_id)
     if not job:
         return
     if token is not None and job.get("token") != token:
         return
     job["total"] = total
+    if already_processed is not None:
+        job["already_processed"] = already_processed
     job["phase"] = "processing"
     if total <= 0:
         job["status"] = "done"
@@ -598,6 +609,12 @@ class RuleProcessPastRequest(BaseModel):
     # hand. Categorizing old mail is the point of a backfill; replying to it is
     # a separate, deliberate choice — so it has to be asked for.
     draft_replies: bool = False
+    # Skip mail the rules have already run over (rules_processed_at IS NULL).
+    # The date picker is a RANGE, not a cursor, so re-running it — or widening
+    # it by a week — re-covers everything already done. Each of those messages
+    # costs a classification call and rewrites a label it already has. Default
+    # ON; turn it off to deliberately re-apply after changing a rule.
+    skip_processed: bool = True
     limit: int = 1000
 
 
@@ -628,12 +645,24 @@ async def process_past_emails(
         # the caller. The job downloads the range from upstream first, so the real
         # total is recomputed there (the picker can reach past what's been synced).
         clause, params = _date_range_clause(
-            req.account_id, start_dt, end_dt, only_unread)
+            req.account_id, start_dt, end_dt, only_unread, req.skip_processed)
         n = (await db.execute(text(
             f"SELECT COUNT(*) AS c FROM email_messages em "
             f"WHERE {clause}"
         ), params)).fetchone()
         count = int(n.c) if n else 0
+        # Count what the skip excluded, so a run that finds nothing can say
+        # "already done" instead of "no emails found in that range" — otherwise
+        # the correct behaviour reads as the feature being broken.
+        already_processed = 0
+        if req.skip_processed:
+            all_clause, all_params = _date_range_clause(
+                req.account_id, start_dt, end_dt, only_unread)
+            n_all = (await db.execute(text(
+                f"SELECT COUNT(*) AS c FROM email_messages em "
+                f"WHERE {all_clause}"
+            ), all_params)).fetchone()
+            already_processed = max(0, (int(n_all.c) if n_all else 0) - count)
     finally:
         await db.close()
     # Always schedule: the job first downloads [start, end] from the provider so a
@@ -642,14 +671,16 @@ async def process_past_emails(
     # (there's no meaningful synchronous count to gate on before the backfill).
     token = _past_job_start(
         req.account_id, user.email or "anonymous", count, req.is_test,
-        downloading=True)
+        downloading=True, already_processed=already_processed)
     background.add_task(
         _process_past_emails_job, req.account_id, start_dt, end_dt,
         min(req.limit, 2000), not req.is_test, user.email or "anonymous",
-        only_unread, token, req.draft_replies,
+        only_unread, token, req.draft_replies, req.skip_processed,
     )
     return {"scheduled": True, "count": count, "dry_run": req.is_test,
-            "draft_replies": req.draft_replies}
+            "draft_replies": req.draft_replies,
+            "skip_processed": req.skip_processed,
+            "already_processed": already_processed}
 
 
 @router.get("/rules/process-past/status")
@@ -949,10 +980,17 @@ async def _process_past_emails_job(
     account_id: str, start: datetime | None, end: datetime | None,
     limit: int, dry_run: bool, user_email: str, only_unread: bool = False,
     job_token: int | None = None, draft_replies: bool = False,
+    skip_processed: bool = True,
 ) -> None:
-    """Background worker: reprocess PAST inbox mail in a date range (inbox-zero
-    'Process past emails'). Reprocesses regardless of rules_processed_at, oldest
-    email first so rules/learning build up chronologically.
+    """Background worker: process PAST inbox mail in a date range (inbox-zero
+    'Process past emails'), oldest email first so rules/learning build up
+    chronologically.
+
+    By default this touches only mail the rules have never run over. The date
+    picker is a range rather than a cursor, so re-running it — or widening it —
+    otherwise re-covers everything already done, at one classification call per
+    message, to rewrite labels those messages already carry. Pass
+    ``skip_processed=False`` to deliberately re-apply after changing a rule.
 
     Updates the in-memory progress tracker (_PAST_JOBS) per email so the UI's
     'Processing N of M…' indicator advances live and History can auto-refresh."""
@@ -976,7 +1014,8 @@ async def _process_past_emails_job(
     db = None
     try:
         db = await _get_db()
-        clause, params = _date_range_clause(account_id, start, end, only_unread)
+        clause, params = _date_range_clause(
+            account_id, start, end, only_unread, skip_processed)
         params["limit"] = limit
         rows = (await db.execute(text(
             f"""SELECT em.id, em.provider_message_id, em.thread_id, em.subject,
@@ -988,8 +1027,22 @@ async def _process_past_emails_job(
         ), params)).fetchall()
         # The backfill may have pulled in mail the pre-schedule count didn't see —
         # record the real total and switch the tracker to per-email progress.
-        _past_job_begin_processing(account_id, token=job_token, total=len(rows))
+        done_before = 0
+        if skip_processed:
+            seen_clause, seen_params = _date_range_clause(
+                account_id, start, end, only_unread)
+            seen_clause += " AND em.rules_processed_at IS NOT NULL"
+            seen = (await db.execute(text(
+                f"SELECT COUNT(*) AS c FROM email_messages em "
+                f"WHERE {seen_clause}"
+            ), seen_params)).fetchone()
+            done_before = int(seen.c) if seen else 0
+        _past_job_begin_processing(account_id, token=job_token, total=len(rows),
+                                   already_processed=done_before)
         if not rows:
+            # Not an error, and not "no emails found": when done_before > 0 the
+            # range was simply already covered. The tracker carries the number so
+            # the UI can say which of the two it was.
             _past_job_finish(account_id, token=job_token)
             return
 

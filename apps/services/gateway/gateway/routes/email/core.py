@@ -500,9 +500,20 @@ def _parse_iso_date(s: str | None, end_of_day: bool) -> datetime | None:
 
 def _date_range_clause(
     account_id: str, start: datetime | None, end: datetime | None,
-    only_unread: bool = False,
+    only_unread: bool = False, unprocessed_only: bool = False,
 ) -> tuple[str, dict[str, Any]]:
-    """SQL WHERE clause (+ params) for inbox mail in a received_at date range."""
+    """SQL WHERE clause (+ params) for inbox mail in a received_at date range.
+
+    ``unprocessed_only`` restricts to mail the rules have never run over
+    (``rules_processed_at IS NULL``). Overlapping backfills are the normal case —
+    the date picker is a range, not a cursor, so widening it re-covers everything
+    already done. Each of those messages costs a classification call and rewrites
+    a label it already has, so skipping them is both cheaper and quieter.
+
+    The watermark is stamped only by runs that actually applied (live, with a
+    working provider), so a dry run or a provider-auth failure leaves mail
+    eligible rather than silently consuming it.
+    """
     clause = "em.account_id = :aid AND LOWER(em.folder) = 'inbox'"
     params: dict[str, Any] = {"aid": account_id}
     if start is not None:
@@ -513,6 +524,8 @@ def _date_range_clause(
         params["end"] = end
     if only_unread:
         clause += " AND em.is_read = false"
+    if unprocessed_only:
+        clause += " AND em.rules_processed_at IS NULL"
     return clause, params
 
 

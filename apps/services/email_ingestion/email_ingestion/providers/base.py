@@ -427,6 +427,14 @@ class BaseEmailProvider(ABC):
         """
         return None
 
+    # True only where fetch_label_assignments below is really implemented.
+    # Callers MUST branch on this rather than on an empty result: "{}" from a
+    # provider that cannot read labels back is indistinguishable from "{}"
+    # meaning the mailbox genuinely has no labels, and reporting the second
+    # when the first is true tells the user their labels are gone when they are
+    # sitting right there upstream.
+    SUPPORTS_LABEL_READBACK: bool = False
+
     async def fetch_label_assignments(
         self, max_pages: int = 20,
     ) -> dict[str, list[str]]:
@@ -440,7 +448,8 @@ class BaseEmailProvider(ABC):
         Exists to repair local state: labels live upstream, and a mailbox whose
         stored ``categories`` were lost (see EmailMessage.categories_
         authoritative) can be restored from this in seconds instead of forcing a
-        full deep re-sync. Default {} for providers with no label concept.
+        full deep re-sync. Default {} for providers with no label concept —
+        guard with ``SUPPORTS_LABEL_READBACK`` before believing that empty.
         """
         return {}
 

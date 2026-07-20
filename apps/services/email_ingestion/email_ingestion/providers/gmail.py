@@ -138,6 +138,9 @@ GMAIL_SCOPES = ["https://mail.google.com/"]
 class GmailProvider(BaseEmailProvider):
     """Gmail API email provider."""
 
+    # Gmail can list message ids per label, so labels really can be read back.
+    SUPPORTS_LABEL_READBACK = True
+
     def __init__(self, credentials: dict[str, Any]):
         super().__init__(credentials)
         self._access_token: str | None = credentials.get("access_token")

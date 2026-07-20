@@ -751,30 +751,43 @@ class CleanupBackfillRequest(BaseModel):
     since_date: str | None = None
 
 
-async def _mark_history_rules_processed(
-    db: Any, account_id: str, before: datetime,
+async def _mark_history_held_back(
+    db: Any, account_id: str, job_started: datetime,
 ) -> int:
-    """Stamp backfilled history as rules-processed, WITHOUT running the rules.
+    """Hold backfilled history back from the model, WITHOUT running the rules.
 
     This is the whole reason a history backfill is safe to offer. The scheduled
-    rule run selects ``folder = 'inbox' AND rules_processed_at IS NULL``, 50 per
-    cycle, and classifies each one with a model. Tens of thousands of newly
-    downloaded messages all arrive with that column NULL, so a naive backfill
-    would silently queue tens of thousands of model calls — the exact opposite
-    of the point, which is to categorize old mail for free.
+    rule run classifies uncategorized inbox mail 50 messages per cycle, one model
+    call each. Tens of thousands of newly downloaded messages all arrive
+    unprocessed, so a naive backfill would silently queue tens of thousands of
+    model calls — the exact opposite of the point, which is to categorize old
+    mail for free.
 
-    ``before`` is the oldest ``received_at`` the account held BEFORE the sync, so
-    this stamps only genuine history. Mail that arrived while the backfill ran is
-    newer than that floor and stays eligible for the rules, as it should be.
+    THE FLOOR IS THE JOB, NOT THE MAILBOX. The first version of this used
+    ``MIN(received_at)`` over the account as the floor, on the theory that
+    anything older than the oldest message held must be newly downloaded. One
+    stray old message defeats that entirely: on the live account MIN was
+    2019-06-28 — a single item in Trash — so the stamp would have matched almost
+    nothing and the whole guarantee would have been inert.
 
-    The deterministic sweep does not consult this column, so the backfilled mail
-    is still fully cleanable — just not by the model.
+    ``created_at`` is the row's insert time (never in the upsert's DO UPDATE SET,
+    so a re-sync preserves it), which identifies exactly the rows this backfill
+    inserted. Pairing it with ``received_at < job_started`` keeps genuinely NEW
+    mail eligible: a message that arrives mid-backfill is inserted during the job
+    but was received after it began, so it is not history and is not held back.
+
+    Held back is NOT the same as processed — see migration 84. The rules never
+    saw these messages, so "Process past emails" can still reach them on request;
+    only the automatic, unbounded, per-cycle run is kept off them. The
+    deterministic sweep ignores the column entirely, so the mail stays fully
+    cleanable — just not by the model.
     """
     res = await db.execute(text(
-        "UPDATE email_messages SET rules_processed_at = now() "
-        " WHERE account_id = :aid AND rules_processed_at IS NULL "
-        "   AND received_at < :before"
-    ), {"aid": account_id, "before": before})
+        "UPDATE email_messages SET rules_held_back_at = now() "
+        " WHERE account_id = :aid "
+        "   AND rules_processed_at IS NULL AND rules_held_back_at IS NULL "
+        "   AND created_at >= :started AND received_at < :started"
+    ), {"aid": account_id, "started": job_started})
     await db.commit()
     return int(getattr(res, "rowcount", 0) or 0)
 
@@ -796,8 +809,9 @@ async def _backfill_and_clean_job(
        gets BETTER with history, because sender and domain consensus finally have
        enough labelled mail to fire.
 
-    Between the two, the downloaded history is stamped rules-processed so it
-    never reaches the model-driven rule run.
+    Between the two, the downloaded history is held back from the model-driven
+    rule run — without being marked rules-processed, so a deliberate "Process
+    past emails" run can still reach it (migration 84).
     """
     started = datetime.now(timezone.utc)
     _SWEEP_JOBS[account_id] = {
@@ -809,10 +823,8 @@ async def _backfill_and_clean_job(
         db = await _get_db()
         try:
             row = (await db.execute(text(
-                "SELECT MIN(received_at) AS oldest, COUNT(*) AS n "
-                "FROM email_messages WHERE account_id = :aid"
+                "SELECT COUNT(*) AS n FROM email_messages WHERE account_id = :aid"
             ), {"aid": account_id})).fetchone()
-            oldest_before = getattr(row, "oldest", None)
             count_before = int(getattr(row, "n", 0) or 0)
         finally:
             await db.close()
@@ -826,10 +838,7 @@ async def _backfill_and_clean_job(
                 "SELECT COUNT(*) AS n FROM email_messages WHERE account_id = :aid"
             ), {"aid": account_id})).fetchone()
             fetched = max(0, int(getattr(after, "n", 0) or 0) - count_before)
-            held_back = 0
-            if oldest_before is not None:
-                held_back = await _mark_history_rules_processed(
-                    db, account_id, oldest_before)
+            held_back = await _mark_history_held_back(db, account_id, started)
         finally:
             await db.close()
 

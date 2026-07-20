@@ -1293,6 +1293,48 @@ export async function processPastEmails(params: {
   });
 }
 
+/** What a Process-past run over a range would cost, before running it. */
+export type ProcessPastEstimate = {
+  /** Everything in the range, whether or not the rules have seen it. */
+  in_range: number;
+  /** What this run would actually consider. */
+  eligible: number;
+  already_processed: number;
+  /** Of `eligible`, mail "Clean older mail" fetched and deliberately kept away
+   *  from the model. Still eligible here — a bounded, user-initiated run is the
+   *  case the hold-back leaves room for — but worth saying out loud. */
+  held_back: number;
+  /** What the run will really send to the AI: `eligible` clamped to the row
+   *  limit. Not the same number, which is the whole point of returning both. */
+  will_process: number;
+  /** True when `eligible` exceeds the limit, so the run covers only part of the
+   *  range. Without this the tracker reports the truncated figure as the total
+   *  and a partial run reads as a complete one. */
+  capped: boolean;
+  limit: number;
+  max_span_days: number;
+};
+
+/** Ask what a Process-past run would send to the AI, before starting it. */
+export async function processPastEstimate(params: {
+  accountId: string;
+  startDate?: string;
+  endDate?: string;
+  includeRead?: boolean;
+  skipProcessed?: boolean;
+}): Promise<ProcessPastEstimate> {
+  const q = new URLSearchParams({
+    account_id: params.accountId,
+    include_read: String(params.includeRead ?? true),
+    skip_processed: String(params.skipProcessed ?? true),
+  });
+  if (params.startDate) q.set("start_date", params.startDate);
+  if (params.endDate) q.set("end_date", params.endDate);
+  return gatewayFetch<ProcessPastEstimate>(
+    `/email/rules/process-past/estimate?${q.toString()}`
+  );
+}
+
 /** Live progress for the most recent "Process past emails" run on an account.
  *  `idle` = nothing has run; `running` = job in flight; `done`/`error` = finished. */
 export type ProcessPastStatus = {

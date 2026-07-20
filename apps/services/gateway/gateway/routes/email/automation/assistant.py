@@ -144,13 +144,17 @@ class AssistantSettingsModel(BaseModel):
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
     personal_instructions: str | None = None
     writing_style: str | None = None
-    # Auto-drafting defaults OFF, everywhere. Every draft is a call on the
-    # drafting model (tier-powerful), written before anyone has decided the
-    # email is worth answering — so it must be a switch the user turns ON, never
-    # one they discover already running. Mirrors the backfill's opt-in
-    # (RuleProcessPastRequest.draft_replies). Adds/removes DRAFT_EMAIL on the
-    # Reply rule via sync_draft_reply_action.
-    draft_replies: bool = False
+    # LIVE drafting defaults ON (adds DRAFT_EMAIL to the Reply rule via
+    # sync_draft_reply_action). A draft on a conversation that just arrived is
+    # the feature: it is waiting when the user opens the mail.
+    #
+    # Deliberately NOT symmetric with the backfill, which defaults OFF
+    # (RuleProcessPastRequest.draft_replies). The distinction is the age of the
+    # thread, not the act of drafting — a draft on a months-old conversation is
+    # spend on something that already ended, and a backfill can produce hundreds
+    # in one run. User directive, 2026-07-20: "this should only apply when I am
+    # processing past emails ... the regular rules apply as is for new mails".
+    draft_replies: bool = True
     follow_up_days: int = 0  # legacy alias for follow_up_awaiting_days
     # inbox-zero parity (migration 29)
     draft_confidence: str = "ALL_EMAILS"  # ALL_EMAILS | STANDARD | HIGH_CONFIDENCE
@@ -230,13 +234,13 @@ async def get_assistant_settings(
             "writing_style": (
                 getattr(row, "writing_style", None) if row else ""
             ) or "",
-            # Missing row / NULL column → OFF. This fallback IS the default for
-            # every account that has never opened AI Settings, so it must agree
-            # with AssistantSettingsModel.draft_replies or the toggle would read
-            # ON while nothing had ever enabled it.
+            # This fallback IS the default for every account that has never
+            # opened AI Settings, so it must agree with
+            # AssistantSettingsModel.draft_replies (ON) — a mismatch would show
+            # the toggle in a state nothing had actually applied.
             "draft_replies": (
                 bool(row.draft_replies) if row and row.draft_replies is not None
-                else False
+                else True
             ),
             "follow_up_days": awaiting,  # legacy alias
             "draft_confidence": (

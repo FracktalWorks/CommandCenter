@@ -114,10 +114,17 @@ def register_email_post_sync_hooks() -> None:
     so importing this module during app import can't create a cycle.
     """
     from gateway.routes.email.automation.replyzero import (
+        _maybe_classify_threads,
         _maybe_send_follow_up_reminders,
     )
     from gateway.routes.email.digest import _maybe_send_digest
     from gateway.routes.email.transport.sync import _ensure_subscription
+
+    async def _classify_threads(account_id: str) -> None:
+        # Registered separately from process_new_mail so it runs EVERY cycle.
+        # It drains a backlog of unclassified threads, so gating it on new mail
+        # arriving left a quiet mailbox permanently behind.
+        await _maybe_classify_threads(account_id)
 
     async def _follow_up(account_id: str) -> None:
         # Follow-up reminders return a small stats dict; the scheduler runs it
@@ -126,6 +133,7 @@ def register_email_post_sync_hooks() -> None:
 
     register_post_sync_hooks(
         on_new_mail=process_new_mail,
+        classify_threads=_classify_threads,
         send_digest=_maybe_send_digest,
         send_follow_up_reminders=_follow_up,
         ensure_subscription=_ensure_subscription,

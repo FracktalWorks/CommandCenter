@@ -15,6 +15,10 @@ _SCHEDULER = REPO / "apps/services/email_ingestion/email_ingestion/scheduler.py"
 
 _HOOK_NAMES = (
     "on_new_mail",
+    # Runs every cycle, NOT only when new mail arrived: Reply Zero classification
+    # works through a backlog, so gating it on new mail left a quiet mailbox
+    # permanently behind (295 of 3,487 threads classified on a live account).
+    "classify_threads",
     "send_digest",
     "send_follow_up_reminders",
     "ensure_subscription",

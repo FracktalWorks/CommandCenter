@@ -40,6 +40,7 @@ from gateway.routes.email.automation.engine import (
     _load_rule_patterns,
     _pattern_hit,
 )
+from gateway.routes.email.automation.identity import resolve_org_domains
 from gateway.routes.email.automation.senders import (
     _KNOWN_LABELS_LOWER,
     _NOT_DISPOSED,
@@ -170,6 +171,28 @@ async def _label_tallies(
     return by_sender, by_domain
 
 
+async def _internal_domains(db: Any, account_id: str) -> frozenset[str]:
+    """The account's own domain plus any configured org domains.
+
+    Same list ``sender_scope`` treats as internal, so "is this person a
+    colleague?" has one answer across the automation package.
+    """
+    doms: set[str] = set()
+    try:
+        row = (await db.execute(text(
+            "SELECT email_address FROM email_accounts WHERE id = :aid"
+        ), {"aid": account_id})).fetchone()
+        if row and getattr(row, "email_address", None):
+            d = _domain_of(row.email_address)
+            if d:
+                doms.add(d)
+        doms |= set(await resolve_org_domains(db, account_id))
+    except Exception as exc:  # noqa: BLE001 — degrade to no internal domains
+        _log.warning("email.internal_domains_failed", account_id=account_id,
+                     error=str(exc)[:160])
+    return frozenset(doms)
+
+
 async def _uncategorized_inbox(
     db: Any, account_id: str, limit: int, offset: int = 0,
 ) -> list[Any]:
@@ -183,13 +206,24 @@ async def _uncategorized_inbox(
     messages it categorizes drop OUT of this result set. Rows left behind — the
     ones with no evidence — would otherwise be re-read forever, so the caller
     advances the offset past exactly those.
+
+    OUTBOUND MAIL IS EXCLUDED. Cleanup categories describe inbound bulk mail —
+    a message you wrote is never a Newsletter or a Cold Email. Widening this
+    sweep from the inbox to the whole mailbox silently pulled the Sent folder
+    into scope, where a domain consensus on the user's own company domain would
+    have stamped a category across everything they ever sent.
     """
     return (await db.execute(text(
         f"""SELECT em.id, em.provider_message_id, em.subject,
                   em.from_address, em.received_at
              FROM email_messages em
             WHERE em.account_id = :aid AND {_NOT_DISPOSED}
+              AND LOWER(COALESCE(em.folder,'')) <> 'sent'
               AND COALESCE(em.from_address->>'email','') <> ''
+              -- Belt and braces: self-addressed mail can sit outside Sent.
+              AND LOWER(em.from_address->>'email') NOT IN (
+                    SELECT LOWER(email_address) FROM email_accounts
+                     WHERE id = :aid)
               AND NOT EXISTS (
                     SELECT 1 FROM unnest(em.categories) AS c
                      WHERE LOWER(TRIM(c)) = ANY(:labels))
@@ -205,6 +239,7 @@ def _decide(
     rule_labels: dict[str, str],
     by_sender: dict[str, dict[str, int]],
     by_domain: dict[str, dict[str, int]],
+    internal_domains: frozenset[str] = frozenset(),
 ) -> tuple[str, str] | None:
     """(category, reason) for one uncategorized message, or None for no evidence."""
     frm = row.from_address if isinstance(row.from_address, dict) else {}
@@ -230,9 +265,16 @@ def _decide(
     if cat:
         return cat, "sender history"
 
-    # 3. Fall back to the sending domain (never a shared free-mail host).
+    # 3. Fall back to the sending domain — never a shared host, and never the
+    #    user's OWN domain. Your employer's domain is a shared domain: every
+    #    colleague sends from it, so "same domain" implies nothing about the
+    #    sender. Observed live on a real mailbox: a dozen automated @company
+    #    alerts labelled Notification sat six messages short of forming a
+    #    consensus that would have stamped Notification across thousands of
+    #    internal colleague emails. Sender-level evidence (step 2) still
+    #    applies to a specific internal address — only the blanket is refused.
     dom = _domain_of(sender)
-    if dom and dom not in _SHARED_DOMAINS:
+    if dom and dom not in _SHARED_DOMAINS and dom not in internal_domains:
         cat = _consensus(by_domain.get(dom, {}),
                          _DOMAIN_MIN_LABELLED, _DOMAIN_MIN_DOMINANCE)
         if cat:
@@ -272,6 +314,8 @@ async def sweep_uncategorized(
         # applied across the mailbox. Evidence stays what the user and the rules
         # decided, never what this run decided.
         by_sender, by_domain = await _label_tallies(db, account_id)
+        # Your own company domain is a shared domain — see _decide step 3.
+        internal_domains = await _internal_domains(db, account_id)
 
         if not dry_run:
             acc = (await db.execute(text(
@@ -305,7 +349,8 @@ async def sweep_uncategorized(
             # and the preview and the apply must agree on the same verdicts.
             decisions: list[tuple[Any, str, str]] = []
             for r in rows:
-                verdict = _decide(r, patterns, rule_labels, by_sender, by_domain)
+                verdict = _decide(r, patterns, rule_labels, by_sender,
+                                  by_domain, internal_domains)
                 if verdict is None:
                     summary["no_evidence"] += 1
                     continue
@@ -426,6 +471,15 @@ async def restore_provider_labels(account_id: str) -> dict[str, Any]:
         store = get_key_store()
         creds = json.loads(store.decrypt(acc.credentials_encrypted))
         provider = _instantiate_provider(acc.provider, creds)
+        # Say so BEFORE authenticating: on a provider that can't list messages
+        # per label, an empty result is indistinguishable from "your mailbox
+        # has no labels". Reporting the latter tells a user with thousands of
+        # labelled messages that they have none — the opposite of the truth
+        # this repair path exists to restore.
+        if not getattr(provider, "SUPPORTS_LABEL_READBACK", False):
+            out["error"] = "unsupported"
+            out["provider"] = acc.provider
+            return out
         if not await provider.authenticate():
             out["error"] = "auth-failed"
             return out

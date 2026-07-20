@@ -92,6 +92,34 @@ def test_domain_history_covers_a_brand_new_subaddress() -> None:
     assert verdict == ("Receipt", "domain history (stripe.com)")
 
 
+def test_your_own_company_domain_never_forms_a_consensus() -> None:
+    """Your own domain is a shared domain — every colleague sends from it.
+
+    Found live: a dozen automated @company alerts labelled Notification sat six
+    messages short of a domain consensus that would have stamped Notification
+    across thousands of internal colleague emails. Same failure mode as
+    gmail.com, except it lands on the people you actually work with.
+    """
+    verdict = c._decide(
+        _msg("colleague@fracktal.in"), {}, {}, {},
+        {"fracktal.in": {"Notification": 40}},
+        internal_domains=frozenset({"fracktal.in"}),
+    )
+    assert verdict is None
+
+
+def test_sender_level_evidence_survives_the_internal_domain_block() -> None:
+    """Only the domain BLANKET is removed. A specific internal address the rules
+    have labelled consistently is still real evidence about that address."""
+    verdict = c._decide(
+        _msg("alerts@fracktal.in"), {}, {},
+        {"alerts@fracktal.in": {"Notification": 9}},
+        {"fracktal.in": {"Notification": 40}},
+        internal_domains=frozenset({"fracktal.in"}),
+    )
+    assert verdict == ("Notification", "sender history")
+
+
 def test_shared_free_mail_domains_never_form_a_consensus() -> None:
     """Every personal contact shares gmail.com. Inheriting one newsletter's
     category across that domain would bulk-label the user's actual humans."""
@@ -313,6 +341,71 @@ async def test_dry_run_pages_by_the_full_window() -> None:
     assert res["scanned"] == 4
     assert res["categorized"] == 4
     assert res["exhausted"] is True
+
+
+def test_the_sweep_never_scans_outbound_mail() -> None:
+    """Cleanup categories describe INBOUND bulk mail — a message you wrote is
+    never a Newsletter.
+
+    Widening this sweep from the inbox to the whole mailbox silently pulled Sent
+    into scope. Combined with a domain consensus on the user's own company
+    domain, that would have stamped a category across everything they ever sent.
+    """
+    import inspect
+    src = inspect.getsource(c._uncategorized_inbox)
+    assert "<> 'sent'" in src, "the sweep no longer excludes the Sent folder"
+    assert "FROM email_accounts" in src, (
+        "the sweep no longer excludes mail from the user's own address"
+    )
+
+
+async def test_restore_says_unsupported_rather_than_no_labels() -> None:
+    """On a provider that can't list messages per label, an empty result is
+    indistinguishable from "your mailbox has no labels".
+
+    Reporting the latter told a real Outlook user with 1,909 labelled messages
+    that they had none — the exact opposite of the truth this path restores.
+    """
+    from types import SimpleNamespace
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            if "SELECT provider, credentials_encrypted" in str(clause):
+                return MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(
+                    provider="microsoft", credentials_encrypted="x")))
+            raise AssertionError("must not touch messages on an unsupported provider")
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    # A provider WITHOUT the capability flag — i.e. everything but Gmail.
+    provider = MagicMock()
+    provider.SUPPORTS_LABEL_READBACK = False
+    provider.authenticate = AsyncMock(
+        side_effect=AssertionError("must not even authenticate"))
+
+    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch("acb_llm.key_store.get_key_store",
+                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
+                      return_value="{}")))):
+        res = await c.restore_provider_labels("acc-1")
+
+    assert res["error"] == "unsupported"
+    assert res["provider"] == "microsoft"
+    assert res["updated"] == 0
+
+
+def test_only_gmail_claims_label_readback() -> None:
+    from email_ingestion.providers.base import BaseEmailProvider
+    from email_ingestion.providers.gmail import GmailProvider
+    from email_ingestion.providers.outlook import OutlookProvider
+
+    assert BaseEmailProvider.SUPPORTS_LABEL_READBACK is False
+    assert GmailProvider.SUPPORTS_LABEL_READBACK is True
+    # Outlook inherits the default — Graph has no "list messages by category".
+    assert OutlookProvider.SUPPORTS_LABEL_READBACK is False
 
 
 async def test_restore_reports_auth_failure_instead_of_wiping() -> None:

@@ -579,7 +579,15 @@ export function BulkUnsubscribeView({
     setError(null);
     try {
       const r = await restoreProviderLabels(accountId);
-      if (r.error) {
+      if (r.error === "unsupported") {
+        // Outlook/IMAP can't list messages per label, so there's nothing to
+        // read back. Say that plainly instead of implying the labels are gone.
+        setError(
+          "Reading labels back isn't supported for this mail provider — only " +
+            "Gmail can list messages by label. Your categories here come from " +
+            "your rules; run them to fill in anything missing."
+        );
+      } else if (r.error) {
         setError(`Couldn't read labels from your mail provider: ${r.error}`);
       } else if (r.updated > 0) {
         setNotice(

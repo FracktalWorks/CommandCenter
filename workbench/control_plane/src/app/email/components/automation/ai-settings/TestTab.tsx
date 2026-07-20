@@ -3,7 +3,7 @@
 // The Assistant "Test" tab: run rules against real inbox emails in Test (preview)
 // or Apply mode, one-at-a-time or "on all", with per-email result pills + Fix.
 // The bulk-run sweep state lives in the email store so it survives unmount.
-// Extracted from AssistantView.tsx.
+// Extracted from AISettingsView.tsx.
 
 import { useCallback, useEffect, useState } from "react";
 import { ArrowDown, Loader2, Play, RefreshCcw, Sparkles, Square } from "lucide-react";

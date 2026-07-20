@@ -2,7 +2,7 @@
 
 // Small presentational primitives + the shared rule-result pill, used across the
 // Assistant tabs (Rules / Test / History / Settings). Extracted from
-// AssistantView.tsx so a Spinner / Empty / Field / result-pill looks identical
+// AISettingsView.tsx so a Spinner / Empty / Field / result-pill looks identical
 // everywhere and there is a single place to change them.
 
 import { AlertTriangle, Eye, Loader2, Pencil, PenLine } from "lucide-react";

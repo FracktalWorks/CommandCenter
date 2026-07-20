@@ -3,7 +3,7 @@
 // The Assistant "History" tab: a log of what the rules engine did — actions it
 // applied and the emails where nothing matched — grouped by day, filterable by
 // rule, with per-row result pill + Fix. Can live-poll while a "Process past
-// emails" job runs. Extracted from AssistantView.tsx.
+// emails" job runs. Extracted from AISettingsView.tsx.
 
 import { useCallback, useEffect, useState } from "react";
 import { Loader2 } from "lucide-react";

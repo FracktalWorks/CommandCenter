@@ -118,7 +118,11 @@ async def test_handler_seeds_tracker_and_schedules_when_mail_exists() -> None:
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)
 
-    assert res == {"scheduled": True, "count": 4, "dry_run": False}
+    # draft_replies echoes back so the caller can confirm what it just started —
+    # and it is FALSE unless asked for, because a backfill files old mail rather
+    # than answering it (one drafting call per message otherwise).
+    assert res == {"scheduled": True, "count": 4, "dry_run": False,
+                   "draft_replies": False}
     assert len(bg.tasks) == 1                       # background job scheduled
     job = runner._PAST_JOBS["acc-1"]
     assert job["status"] == "running" and job["total"] == 4
@@ -140,7 +144,8 @@ async def test_handler_schedules_download_even_when_nothing_local() -> None:
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)
 
-    assert res == {"scheduled": True, "count": 0, "dry_run": False}
+    assert res == {"scheduled": True, "count": 0, "dry_run": False,
+                   "draft_replies": False}
     assert len(bg.tasks) == 1                        # scheduled to download first
     job = runner._PAST_JOBS["acc-1"]
     assert job["status"] == "running"

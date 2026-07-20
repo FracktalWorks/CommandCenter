@@ -7,12 +7,12 @@ import {
 } from "lucide-react";
 import { getProcessPastStatus } from "../../lib/api";
 import type { ProcessPastStatus } from "../../lib/api";
-import { TestTab } from "./assistant/TestTab";
-import { HistoryTab } from "./assistant/HistoryTab";
-import { SettingsTab } from "./assistant/SettingsTab";
-import { RulesTab, RuleEditorModalLoader } from "./assistant/RulesTab";
+import { TestTab } from "./ai-settings/TestTab";
+import { HistoryTab } from "./ai-settings/HistoryTab";
+import { SettingsTab } from "./ai-settings/SettingsTab";
+import { RulesTab, RuleEditorModalLoader } from "./ai-settings/RulesTab";
 
-interface AssistantViewProps {
+interface AISettingsViewProps {
   accountId: string | null;
   selectedEmailId: string | null;
 }
@@ -150,7 +150,7 @@ function PastJobBanner({
   );
 }
 
-export function AssistantView({ accountId }: AssistantViewProps) {
+export function AISettingsView({ accountId }: AISettingsViewProps) {
   const [tab, setTab] = useState<Tab>("rules");
   // When the user picks "See history" from a rule's ⋯ menu, jump to the History
   // tab pre-filtered to that rule.

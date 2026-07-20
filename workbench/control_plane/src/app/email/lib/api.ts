@@ -1265,11 +1265,19 @@ export async function processPastEmails(params: {
    *  mail; drafting replies to months-old threads costs a model call each and
    *  is almost never wanted. Must be asked for explicitly. */
   draftReplies?: boolean;
+  /** Skip mail the rules have already run over. Defaults to TRUE — the date
+   *  picker is a range, not a cursor, so re-running or widening it otherwise
+   *  re-covers everything already done at a classification call per message. */
+  skipProcessed?: boolean;
 }): Promise<{
   scheduled: boolean;
   count: number;
   dry_run: boolean;
   draft_replies?: boolean;
+  skip_processed?: boolean;
+  /** Excluded up front as already-processed. Distinguishes "already done" from
+   *  "no emails found in that range" when `count` is 0. */
+  already_processed?: number;
 }> {
   return gatewayFetch("/email/rules/process-past", {
     method: "POST",
@@ -1280,6 +1288,7 @@ export async function processPastEmails(params: {
       is_test: params.isTest,
       include_read: params.includeRead ?? true,
       draft_replies: params.draftReplies ?? false,
+      skip_processed: params.skipProcessed ?? true,
     }),
   });
 }
@@ -1295,6 +1304,9 @@ export type ProcessPastStatus = {
   processed?: number;
   applied?: number;
   skipped?: number;
+  /** Excluded before the run as already-processed — NOT counted in `total`, and
+   *  distinct from `skipped` (processed this run, matched no rule). */
+  already_processed?: number;
   dry_run?: boolean;
   started_at?: string | null;
   finished_at?: string | null;

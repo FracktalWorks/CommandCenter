@@ -95,9 +95,20 @@ function PastJobBanner({
   const total = job.total ?? 0;
   const processed = job.processed ?? 0;
   const matched = job.applied ?? 0;
+  // Excluded up front because the rules had already run over them — NOT part of
+  // `total`. Without this the correct outcome of a repeat run ("Processed 0
+  // emails") is indistinguishable from the feature failing to find anything.
+  const alreadyDone = job.already_processed ?? 0;
   const pct =
     total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 100;
   const verb = job.dry_run ? "would match a rule" : "matched a rule";
+  const doneText =
+    total === 0 && alreadyDone > 0
+      ? `Nothing new to process — ${alreadyDone} email${
+          alreadyDone === 1 ? " was" : "s were"
+        } already done.`
+      : `Processed ${total} email${total === 1 ? "" : "s"} — ${matched} ${verb}.` +
+        (alreadyDone > 0 ? ` ${alreadyDone} already done, skipped.` : "");
 
   return (
     <div className="border-b border-border bg-secondary/30 flex-shrink-0">
@@ -117,7 +128,7 @@ function PastJobBanner({
                 : `Processing past emails — ${processed} of ${total}…`
               : job.status === "error"
                 ? `Processing failed: ${job.error || "unknown error"}`
-                : `Processed ${total} email${total === 1 ? "" : "s"} — ${matched} ${verb}.`}
+                : doneText}
           </span>
           <button
             onClick={onViewHistory}

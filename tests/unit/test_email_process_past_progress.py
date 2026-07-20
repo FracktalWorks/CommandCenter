@@ -118,11 +118,15 @@ async def test_handler_seeds_tracker_and_schedules_when_mail_exists() -> None:
             patch.object(runner, "_assert_account_owner", AsyncMock()):
         res = await m.process_past_emails(req, background=bg, user=user)
 
-    # draft_replies echoes back so the caller can confirm what it just started —
-    # and it is FALSE unless asked for, because a backfill files old mail rather
-    # than answering it (one drafting call per message otherwise).
+    # Both switches echo back so the caller can confirm what it just started.
+    # draft_replies is FALSE unless asked for (a backfill files old mail rather
+    # than answering it, one drafting call per message otherwise), and
+    # skip_processed is TRUE so a repeat run doesn't re-classify what it already
+    # did. already_processed is 0 here: the mock returns the same count for the
+    # filtered and unfiltered queries, so nothing was excluded.
     assert res == {"scheduled": True, "count": 4, "dry_run": False,
-                   "draft_replies": False}
+                   "draft_replies": False, "skip_processed": True,
+                   "already_processed": 0}
     assert len(bg.tasks) == 1                       # background job scheduled
     job = runner._PAST_JOBS["acc-1"]
     assert job["status"] == "running" and job["total"] == 4
@@ -145,7 +149,8 @@ async def test_handler_schedules_download_even_when_nothing_local() -> None:
         res = await m.process_past_emails(req, background=bg, user=user)
 
     assert res == {"scheduled": True, "count": 0, "dry_run": False,
-                   "draft_replies": False}
+                   "draft_replies": False, "skip_processed": True,
+                   "already_processed": 0}
     assert len(bg.tasks) == 1                        # scheduled to download first
     job = runner._PAST_JOBS["acc-1"]
     assert job["status"] == "running"

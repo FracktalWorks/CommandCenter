@@ -9,7 +9,7 @@ import {
 import {
   listSenders, upsertNewsletter, unsubscribeSender, bulkAction,
   searchEmails, previewAutoCategorize, runAutoCategorize, getCleanupStatus,
-  restoreProviderLabels, CleanupSweepResult,
+  restoreProviderLabels, backfillAndClean, CleanupSweepResult,
 } from "../../lib/api";
 import { SenderStat, NewsletterStatus, SenderStatus, Email } from "../../lib/types";
 import { chipColors } from "../../lib/labelColors";
@@ -20,6 +20,26 @@ interface BulkUnsubscribeViewProps {
   accountId: string | null;
   /** Called after a bulk archive/cleanup so the parent can refresh the inbox. */
   onArchived?: () => void;
+}
+
+/** How far back "Clean older mail" fetches before sweeping. The Cleaner can
+ *  only clean what has been synced, and the FIRST sync of an account fetches
+ *  365 days while every sync after it is incremental — so on a real mailbox
+ *  most mail has never been seen locally (measured: 6,803 held of ~43,000).
+ *  `years: 0` means the entire mailbox. */
+const BACKFILL_OPTIONS = [
+  { label: "2 years", years: 2 },
+  { label: "3 years", years: 3 },
+  { label: "5 years", years: 5 },
+  { label: "Everything", years: 0 },
+];
+
+/** YYYY-MM-DD `n` years ago, or undefined for "no floor" (whole mailbox). */
+function isoYearsAgo(years: number): string | undefined {
+  if (!years) return undefined;
+  const d = new Date();
+  d.setFullYear(d.getFullYear() - years);
+  return d.toISOString().slice(0, 10);
 }
 
 /** Age presets for the "Archive old mail" sweep (archive read mail older than N). */
@@ -136,6 +156,8 @@ export function BulkUnsubscribeView({
   // most notification/marketing senders, the reported problem.)
   const [statusTab, setStatusTab] = useState<StatusTab>("all");
   const [categorizing, setCategorizing] = useState(false);
+  // Depth picker for "Clean older mail" — open only while choosing.
+  const [backfillOpen, setBackfillOpen] = useState(false);
   // Dry-run verdict for the uncategorized sweep: what it *would* do.
   const [preview, setPreview] = useState<CleanupSweepResult | null>(null);
   const [selected, setSelected] = useState<Set<string>>(new Set());
@@ -564,6 +586,70 @@ export function BulkUnsubscribeView({
       onArchived?.();
     } catch (e) {
       setError((e as Error).message || "Auto-categorize failed");
+    } finally {
+      setCategorizing(false);
+    }
+  };
+
+  // Fetch older mail, then clean it — the deterministic counterpart of AI
+  // Settings' "Process past emails". Two phases behind one progress line,
+  // because to the user it is one action: download, then categorize.
+  //
+  // Spends NO model calls, which is the entire point: the sweep projects
+  // learned patterns and sender/domain history, and the downloaded history is
+  // held back from the model-driven rule run server-side.
+  const cleanOlderMail = async (years: number) => {
+    if (!accountId || categorizing) return;
+    setCategorizing(true);
+    setError(null);
+    setBackfillOpen(false);
+    try {
+      const res = await backfillAndClean(accountId, isoYearsAgo(years));
+      if (!res.scheduled) {
+        setError(
+          res.reason === "already_running"
+            ? "A cleanup is already running on this mailbox — let it finish first."
+            : "Couldn't start the cleanup."
+        );
+        return;
+      }
+      setNotice("Fetching older mail from your mailbox…");
+      // Downloading years of mail is minutes, not seconds, so the phase has to
+      // be visible — silence on a long job reads as "stuck", and the user
+      // presses the button again.
+      for (let i = 0; i < POLL_MAX; i++) {
+        await new Promise((r) => setTimeout(r, 2000));
+        const st = await getCleanupStatus(accountId);
+        if (st.status === "error") {
+          setError(`Cleanup failed: ${st.error ?? "unknown error"}`);
+          break;
+        }
+        if (st.status === "done") {
+          const fetched = st.synced ?? 0;
+          const n = st.categorized ?? st.applied ?? 0;
+          setNotice(
+            `Fetched ${fetched} older email${fetched === 1 ? "" : "s"} and ` +
+              `categorized ${n} of them — no AI calls used.`
+          );
+          break;
+        }
+        if (st.phase === "downloading") {
+          setNotice("Fetching older mail from your mailbox…");
+        } else if (st.phase === "cleaning") {
+          setNotice(
+            `Fetched ${st.synced ?? 0} older emails. Categorizing… ` +
+              `${st.applied ?? 0} labelled, ${st.scanned ?? 0} scanned.`
+          );
+        }
+        if (i === POLL_MAX - 1) {
+          setNotice("Still running — the list will catch up on refresh.");
+        }
+      }
+      setPreview(null);
+      load();
+      onArchived?.();
+    } catch (e) {
+      setError((e as Error).message || "Couldn't clean older mail");
     } finally {
       setCategorizing(false);
     }
@@ -1245,6 +1331,60 @@ export function BulkUnsubscribeView({
               </div>
             )}
           </div>
+        )}
+      </div>
+      {/* Clean older mail. The Cleaner can only clean what has been synced, and
+          the first sync of an account fetches one year while every sync after
+          it is incremental — so most of a real mailbox has never been seen
+          locally. This fetches it, then categorizes it with NO model calls:
+          learned patterns, sender and domain history, and bulk shape. The
+          fetched history is held back from the AI rule run server-side, which
+          is what keeps a 40,000-message backfill from costing anything. */}
+      <div className="flex-shrink-0 flex items-center flex-wrap gap-2 px-3 sm:px-5 py-2 border-t border-border bg-card/40">
+        <Sparkles size={12} className="text-primary flex-shrink-0" />
+        <span className="text-[11px] text-muted-foreground">
+          Only mail synced to Command Center can be cleaned — fetch and
+          categorize older mail, without using AI
+        </span>
+        {backfillOpen ? (
+          <div className="flex items-center gap-0.5 bg-secondary rounded-md p-0.5 ml-auto">
+            {BACKFILL_OPTIONS.map((o) => (
+              <button
+                key={o.years}
+                onClick={() => cleanOlderMail(o.years)}
+                disabled={categorizing}
+                title={
+                  o.years
+                    ? `Fetch the last ${o.label} of mail, then categorize it`
+                    : "Fetch your entire mailbox, then categorize it"
+                }
+                className="px-2 py-0.5 rounded text-[11px] text-muted-foreground hover:text-foreground hover:bg-background transition-colors disabled:opacity-50"
+              >
+                {o.label}
+              </button>
+            ))}
+            <button
+              onClick={() => setBackfillOpen(false)}
+              className="px-1.5 py-0.5 text-muted-foreground hover:text-foreground"
+              title="Cancel"
+            >
+              <X size={11} />
+            </button>
+          </div>
+        ) : (
+          <button
+            onClick={() => setBackfillOpen(true)}
+            disabled={categorizing}
+            title="Download older mail from your mailbox and categorize it — no AI calls"
+            className="ml-auto flex items-center gap-1.5 px-2.5 py-1 rounded-md bg-primary text-primary-foreground text-[11px] font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
+          >
+            {categorizing ? (
+              <Loader2 className="animate-spin" size={12} />
+            ) : (
+              <Clock size={12} />
+            )}
+            Clean older mail
+          </button>
         )}
       </div>
       {/* Archive old mail — age-based bulk archive across ALL senders. Pinned to the

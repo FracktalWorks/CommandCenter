@@ -884,6 +884,67 @@ async def _apply_and_log_match(
         "msrc": match.get("source"), "aerr": json.dumps(action_errors)})
 
 
+async def _project_thread_status_for_backfill(
+    db: Any, provider: Any, account_id: str,
+    latest_by_thread: dict[str, tuple[Any, list[dict[str, Any]]]],
+) -> None:
+    """Record Reply Zero status + collapse labels for threads a backfill touched.
+
+    The backfill applied per-message labels but never wrote a thread status or
+    cleared the superseded conversation labels, so a thread it walked could end
+    up carrying Reply AND Awaiting AND Done while Reply Zero showed nothing for
+    it at all — the status row and the labels being two views of one decision,
+    with only the second written.
+
+    Two deliberate restraints:
+
+    * **Only threads whose newest message was actually in range.** If newer mail
+      exists outside the date window, the newest message we saw is NOT the
+      thread's newest, and projecting from it would move the thread backwards.
+      Those are left for the periodic classifier, which always reads the true
+      latest message.
+    * **No AI.** This projects the rule the engine already matched
+      (``project_reply_status_from_matches`` picks the highest-priority
+      conversation rule deterministically). Re-determining each thread from its
+      full text would be one model call per thread across a whole mailbox, on
+      conversations that are usually long finished. The periodic classifier
+      spends that budget where it pays — threads still sitting in the inbox.
+    """
+    from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+        _reconcile_thread_labels,
+        project_reply_status_from_matches,
+    )
+    tids = list(latest_by_thread)
+    # Threads with mail newer than what this run saw — skip them.
+    stale = {
+        str(row.thread_id)
+        for row in (await db.execute(text(
+            """SELECT em.thread_id, MAX(em.received_at) AS newest
+                 FROM email_messages em
+                WHERE em.account_id = :aid AND em.thread_id = ANY(:tids)
+                GROUP BY em.thread_id"""
+        ), {"aid": account_id, "tids": tids})).fetchall()
+        if (seen := latest_by_thread.get(str(row.thread_id)))
+        and getattr(seen[0], "received_at", None) is not None
+        and row.newest is not None
+        and row.newest > seen[0].received_at
+    }
+    for tid, (row, matches) in latest_by_thread.items():
+        if tid in stale:
+            continue
+        try:
+            keep_label = await project_reply_status_from_matches(
+                db, account_id, row, matches)
+            if keep_label:
+                await _reconcile_thread_labels(
+                    db, provider, account_id, tid, keep_label)
+            await db.commit()
+        except Exception as exc:  # noqa: BLE001 — one thread must not abort the rest
+            _log.warning("email.past_project_status_failed",
+                         account_id=account_id, thread_id=tid,
+                         error=str(exc)[:160])
+
+
 async def _process_past_emails_job(
     account_id: str, start: datetime | None, end: datetime | None,
     limit: int, dry_run: bool, user_email: str, only_unread: bool = False,
@@ -964,6 +1025,13 @@ async def _process_past_emails_job(
         # job tracker so the UI can say what was skipped rather than let the run
         # look like the rules ran in full.
         drafts_skipped = 0
+        # Newest in-range message per thread + what it matched, for the Reply
+        # Zero projection after the loop. This job cannot project inline the way
+        # the live runner does: the live runner reads newest-first and takes the
+        # first message per thread, while this one reads OLDEST-first, so
+        # projecting inline would let a thread's oldest message decide its
+        # status — the exact thing the live runner's ordering exists to prevent.
+        latest_by_thread: dict[str, tuple[Any, list[dict[str, Any]]]] = {}
 
         for r in rows:
             frm = r.from_address if isinstance(r.from_address, dict) \
@@ -1009,12 +1077,22 @@ async def _process_past_emails_job(
                     "WHERE id = :id"
                 ), {"id": str(r.id)})
             await db.commit()
+            # Remember the NEWEST in-range message per thread and what it
+            # matched. Rows are oldest-first (deliberately, so learning builds
+            # chronologically), so the last write per thread is its newest.
+            if r.thread_id:
+                latest_by_thread[r.thread_id] = (r, matches)
             _past_job_tick(
                 account_id,
                 token=job_token,
                 applied=1 if matches else 0,
                 skipped=0 if matches else 1,
             )
+
+        if not dry_run and latest_by_thread:
+            await _project_thread_status_for_backfill(
+                db, provider, account_id, latest_by_thread)
+
         _past_job_finish(account_id, token=job_token,
                          drafts_skipped=drafts_skipped)
     except Exception as e:  # noqa: BLE001 — record failure for the UI, don't crash the worker

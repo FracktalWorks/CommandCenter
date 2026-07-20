@@ -264,6 +264,11 @@ def _backfill_db(latest, existing):
         _result(fetchone=SimpleNamespace(email_address="me@x.com")),
         _result(fetchone=None),  # resolve_org_domains (none configured)
         _result(fetchall=[]),    # _attachment_summaries for inbound-gap rows
+        # Provider lookup for the label reconcile. None → no provider, so the
+        # reconcile corrects the local mirror only. These tests are about which
+        # STATUS gets recorded; the label collapse has its own coverage in
+        # test_email_thread_status_parity.py.
+        _result(fetchone=None),
     ]
     return db
 
@@ -298,7 +303,8 @@ async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
             patch.object(_rz, "_upsert_thread_status",
                          AsyncMock(side_effect=rec)), \
             patch.object(_eng, "_match_email_to_rule",
-                         AsyncMock(return_value=to_reply_match)):
+                         AsyncMock(return_value=to_reply_match)), \
+            patch.object(_rz, "_reconcile_thread_labels", AsyncMock()):
         await m._maybe_classify_threads("acc-1")
 
     # Sent-last thread → outbound-reply handling (AI status + label swap), the
@@ -426,7 +432,9 @@ async def test_backfill_marks_fyi_when_no_conversation_rule_matches() -> None:
             patch.object(_rz, "_upsert_thread_status",
                          AsyncMock(side_effect=rec)), \
             patch.object(_eng, "_match_email_to_rule",
-                         AsyncMock(return_value=None)):  # nothing matched → FYI
+                         AsyncMock(return_value=None)), \
+            patch.object(_rz, "_reconcile_thread_labels", AsyncMock()):
+        # nothing matched → FYI
         await m._maybe_classify_threads("acc-1")
     assert dict(recorded)["t3"] == "FYI"
 

@@ -470,6 +470,7 @@ def _taught_otherwise(
 
 async def sweep_uncategorized(
     account_id: str, limit: int, *, dry_run: bool, owner: str = "",
+    max_apply: int | None = None,
 ) -> dict[str, Any]:
     """Project existing categorization onto uncategorized mail.
 
@@ -477,6 +478,18 @@ async def sweep_uncategorized(
     ``limit`` messages scanned. It does NOT stop after one page: a cleaner that
     quietly handles the first N and reports success is worse than one that
     refuses, because the user stops looking.
+
+    ``max_apply`` bounds LABELS WRITTEN, not rows read, and is what the
+    per-cycle scheduler run should use. Reading a page is a single indexed
+    query; writing a label is a provider round-trip, so they are not remotely
+    the same cost and must not share one budget.
+
+    Bounding the scan instead is a trap, because this query is ordered newest
+    first and every run restarts at offset 0. A block of no-evidence mail at the
+    top is therefore re-read on every cycle and nothing behind it is ever
+    reached. Observed in production: ``scanned: 100, applied: 0,
+    no_evidence: 100`` repeating every five minutes with 575 older messages
+    waiting behind the wall.
 
     Returns a summary: how many were matched, the per-category breakdown, and
     how many carry no evidence at all (those need an actual rules run — see
@@ -487,6 +500,10 @@ async def sweep_uncategorized(
         "scanned": 0, "categorized": 0, "no_evidence": 0,
         "by_category": {}, "by_reason": {}, "dry_run": dry_run,
         "exhausted": False,
+        # True when the run stopped because it hit max_apply, i.e. there is more
+        # to do and the next cycle will pick it up. Distinct from `exhausted`,
+        # which means the mailbox actually ran dry.
+        "apply_capped": False,
     }
     db = await _get_db()
     provider = None
@@ -524,6 +541,9 @@ async def sweep_uncategorized(
         applied = 0
         offset = 0
         while summary["scanned"] < limit:
+            if max_apply is not None and applied >= max_apply:
+                summary["apply_capped"] = True
+                break
             page_size = min(_SWEEP_PAGE, limit - summary["scanned"])
             rows = await _uncategorized_inbox(db, account_id, page_size, offset,
                                               internal_domains)

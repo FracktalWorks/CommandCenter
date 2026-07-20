@@ -32,6 +32,13 @@ class PostSyncHooks:
     # is processed identically however it arrived.
     on_new_mail: PostSyncHook | None = None
     # Run every cycle (each is internally time-gated):
+    #
+    # Reply Zero classification is deliberately NOT part of on_new_mail alone.
+    # It has a BACKLOG to work through — threads that predate the rules, or that
+    # a capped earlier cycle didn't reach — and gating it on new mail arriving
+    # means a quiet mailbox never catches up. It is cheap when there is nothing
+    # to do: one indexed query returning no rows.
+    classify_threads: PostSyncHook | None = None
     send_digest: PostSyncHook | None = None
     send_follow_up_reminders: PostSyncHook | None = None
     # Subscription/watch upkeep:

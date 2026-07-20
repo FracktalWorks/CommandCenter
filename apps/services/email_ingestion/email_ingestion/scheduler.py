@@ -378,6 +378,19 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                         "sync.process_new_mail_failed account_id=%s error=%s",
                         account_id, str(exc),
                     )
+            # Reply Zero classification runs EVERY cycle, not only when new mail
+            # landed. It works a backlog — threads older than the rules, or ones
+            # a capped earlier cycle didn't reach — so gating it on new mail left
+            # a quiet mailbox permanently behind. Measured on a live account:
+            # 295 of 3,487 threads had a status. Cheap when idle: the selection
+            # query returns no rows and the hook does nothing.
+            try:
+                await run_hook(hooks.classify_threads, account_id)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning(
+                    "sync.classify_threads_failed account_id=%s error=%s",
+                    account_id, str(exc),
+                )
             # Send a scheduled digest if one is due (opt-in per account).
             try:
                 await run_hook(hooks.send_digest, account_id)

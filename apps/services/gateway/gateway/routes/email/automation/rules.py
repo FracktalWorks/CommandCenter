@@ -9,6 +9,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
+from gateway.routes.email.automation.senders import DISPOSED_FOLDERS
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
@@ -928,11 +929,18 @@ async def list_rule_patterns(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         try:
             rows = (await db.execute(text(
-                """SELECT p.id, p.rule_id, r.name AS rule_name, p.pattern_type,
+                f"""SELECT p.id, p.rule_id, r.name AS rule_name, p.pattern_type,
                           p.value, p.exclude, p.source, p.reason, p.created_at,
                           p.approved_at, p.rejected_at,
                           (SELECT COUNT(*) FROM email_messages m
                             WHERE m.account_id = p.account_id
+                              -- Trash/Junk/Drafts are not reach. The live
+                              -- account had a Newsletter pattern whose entire
+                              -- 46-message "reach" was mail the user had
+                              -- deleted — a number that argues FOR approving a
+                              -- pattern using the user's own rejection of it.
+                              AND LOWER(COALESCE(m.folder, ''))
+                                  NOT IN {DISPOSED_FOLDERS}
                               AND ((p.pattern_type = 'SUBJECT'
                                     AND LOWER(COALESCE(m.subject, ''))
                                         LIKE '%' || LOWER(p.value) || '%')

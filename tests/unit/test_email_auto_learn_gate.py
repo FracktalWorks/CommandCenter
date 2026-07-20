@@ -1,0 +1,156 @@
+"""What may become a learned pattern.
+
+Auto-learning is the only path that writes a pattern with no human in the loop,
+and a pattern short-circuits the classifier and drives the Email Cleaner. The
+gate claimed "at least 3 consistent matches, and no other rule ever matched this
+sender". Audited against the live account's 45 patterns, it enforced neither.
+
+Everything below is a defect found in that audit, with the live evidence:
+
+* **Dry runs taught.** The filter excluded SKIPPED/REJECTED but not PENDING —
+  which is exactly what a *preview* writes. ``arvind@exinous.com`` → Calendar was
+  learned from 7 log rows covering ONE message, five of them previews. A dry run
+  is documented as changing nothing.
+
+* **It counted log rows, not messages.** ``COUNT(*)`` over a table that gets a
+  row per rule per run. ``donotreply@gst.gov.in``: 10 rows, 1 message.
+  ``ar.zstoreind@zohocorp.com``: 9 rows, 1 message. Re-running a backfill over
+  the same mail manufactured its own evidence.
+
+* **The "no other rule" invariant was unenforceable.** ``multi_rule_execution``
+  is ON, so one message legitimately matches several rules, and the apply loop
+  calls this once per match — the first rule's check reads a log that does not
+  yet contain its siblings. ``Info@yourstory.com`` was pinned to Marketing though
+  every one of its messages matches Marketing + Newsletter or Marketing + Cold
+  Email; the pattern then narrows the classifier to the single pinned rule.
+
+* **People were pinned to cleanup categories.** ``midhun.vm@…`` → Calendar while
+  carrying Awaiting Reply and Done; ``debesh@metafora.sg`` → Receipt while
+  carrying Awaiting Reply. Both send documents *and* ask questions.
+"""
+from __future__ import annotations
+
+import inspect
+from types import SimpleNamespace
+from unittest.mock import AsyncMock, MagicMock
+
+from gateway.routes.email.automation import runner as m
+
+_ACC = "acc-learn"
+_RULE = "rule-newsletter"
+
+
+def _db_counting(rows: list[tuple[str, int]]) -> AsyncMock:
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[
+        SimpleNamespace(rule_id=rid, n=n) for rid, n in rows]))
+    return db
+
+
+async def _gate_sql() -> str:
+    db = _db_counting([])
+    await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
+    return str(db.execute.call_args[0][0])
+
+
+# ── what counts as evidence ─────────────────────────────────────────────────
+
+
+async def test_a_dry_run_never_teaches() -> None:
+    """PENDING is what a preview logs. "Test this rule" must not durably change
+    how the mailbox is classified — that is the entire contract of a dry run."""
+    sql = await _gate_sql()
+    assert "status = 'APPLIED'" in sql, (
+        "the gate must require APPLIED specifically; 'NOT IN (SKIPPED, "
+        "REJECTED)' let PENDING previews count as evidence"
+    )
+
+
+async def test_the_same_message_cannot_vote_twice() -> None:
+    """One message produces a row per rule per run, so COUNT(*) let a single
+    email clear a bar that reads "3 consistent matches"."""
+    sql = await _gate_sql()
+    assert "COUNT(DISTINCT message_id)" in sql
+
+
+async def test_rows_with_no_message_are_not_evidence() -> None:
+    """616 APPLIED rows on the live account carry a NULL message_id. Nothing
+    can corroborate them, and NULL would collapse to one DISTINCT bucket."""
+    sql = await _gate_sql()
+    assert "message_id IS NOT NULL" in sql
+
+
+async def test_three_distinct_messages_still_learn() -> None:
+    """The tightening must not turn auto-learning off — it should keep firing on
+    genuine repeat evidence (the current match is the +1)."""
+    db = _db_counting([(_RULE, 2)])
+    assert await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
+
+
+async def test_two_distinct_messages_do_not() -> None:
+    db = _db_counting([(_RULE, 1)])
+    assert not await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
+
+
+async def test_another_rule_in_the_history_still_blocks() -> None:
+    db = _db_counting([(_RULE, 5), ("rule-marketing", 1)])
+    assert not await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
+
+
+# ── ambiguity ───────────────────────────────────────────────────────────────
+
+
+def test_an_ambiguous_message_teaches_nothing() -> None:
+    """The multi-rule fix. Pinning a sender to one rule only means something if
+    the classification was unambiguous — and the apply loop cannot see its own
+    siblings' log rows, so the "no other rule" check can't catch this itself."""
+    src = inspect.getsource(m._apply_and_log_match)
+    assert "sole_match and match.get(\"source\") == \"ai\"" in src
+
+
+def test_every_caller_reports_whether_the_match_was_sole() -> None:
+    """A default of True is right for a single-match caller but wrong for a
+    multi-rule loop, so the loops must pass it explicitly."""
+    src = inspect.getsource(m)
+    assert src.count("sole_match=len(matches) == 1") == 3, (
+        "a call site that stopped passing sole_match silently re-enables "
+        "learning from ambiguous multi-rule classifications"
+    )
+
+
+# ── people are not senders of a category ────────────────────────────────────
+
+
+async def test_a_sender_you_converse_with_is_never_pinned() -> None:
+    """Reply / Awaiting Reply / Done / FYI are assigned per-THREAD from the whole
+    conversation, so their presence proves a real exchange with this address.
+    Pin such a person to Receipt and their next question is filed as a receipt."""
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(
+        fetchone=MagicMock(return_value=SimpleNamespace()))
+    assert await m._sender_is_a_correspondent(db, _ACC, "a@b.com")
+    sql = str(db.execute.call_args[0][0])
+    assert "Awaiting Reply" in sql and "Done" in sql and "FYI" in sql
+
+
+async def test_a_machine_sender_is_still_pinnable() -> None:
+    """The guard must not block the case auto-learning exists for: a noreply
+    address with no conversation history."""
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(
+        fetchone=MagicMock(return_value=None))
+    assert not await m._sender_is_a_correspondent(db, _ACC, "noreply@x.com")
+
+
+async def test_an_unreadable_history_refuses_to_pin() -> None:
+    """Fail CLOSED. Not knowing whether someone is a correspondent is not the
+    same as knowing they aren't, and the cost of the two mistakes differs."""
+    db = AsyncMock()
+    db.execute.side_effect = RuntimeError("boom")
+    assert await m._sender_is_a_correspondent(db, _ACC, "a@b.com")
+
+
+def test_the_correspondent_check_runs_before_the_pattern_is_written() -> None:
+    src = inspect.getsource(m._apply_and_log_match)
+    assert src.index("_sender_is_a_correspondent") < src.index(
+        "_upsert_rule_pattern")

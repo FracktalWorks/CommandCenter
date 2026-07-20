@@ -905,6 +905,7 @@ async def run_rules_on_message(
             await _apply_and_log_match(
                 db, provider, row, frm, email, m, True,
                 about, signature, acc.user_id, req.account_id,
+                sole_match=len(matches) == 1,
             )
         await db.execute(text(
             "UPDATE email_messages SET rules_processed_at = now(), "
@@ -936,26 +937,77 @@ async def run_rules_on_message(
 _AUTO_LEARN_MIN_CONSISTENT = 3
 
 
+async def _sender_is_a_correspondent(
+    db: Any, account_id: str, sender: str,
+) -> bool:
+    """Has the user ever actually CONVERSED with this sender?
+
+    A cleanup category (Newsletter / Receipt / Calendar / Notification) is only
+    a safe thing to pin to a sender when the sender is a machine. Pin one to a
+    person and their next genuine request is filed as a receipt.
+
+    Conversation-status labels are the evidence: Reply / Awaiting Reply / Done /
+    FYI are assigned per-thread from the whole conversation, so their presence
+    means this address has been in a real exchange. Found on the live account:
+    ``midhun.vm@…`` pinned to Calendar while carrying Awaiting Reply AND Done,
+    and ``debesh@metafora.sg`` pinned to Receipt while carrying Awaiting Reply —
+    both people who send documents *and* ask questions.
+    """
+    try:
+        row = (await db.execute(text(
+            """SELECT 1 FROM email_messages m
+                WHERE m.account_id = :aid
+                  AND LOWER(m.from_address->>'email') = :sender
+                  AND m.categories && ARRAY['Reply', 'Awaiting Reply',
+                                            'Done', 'FYI']
+                LIMIT 1"""
+        ), {"aid": account_id, "sender": sender})).fetchone()
+    except Exception:  # noqa: BLE001
+        return True  # unknown → refuse to pin; the safe direction
+    return row is not None
+
+
 async def _sender_consistent_for_rule(
     db: Any, account_id: str, sender: str, rule_id: str,
 ) -> bool:
     """Whether to auto-learn a sender→rule classification pattern yet.
 
     inbox-zero's analyze-sender-pattern only commits a learned pattern once a
-    sender's mail has CONSISTENTLY matched one rule. We mirror that: require at
-    least ``_AUTO_LEARN_MIN_CONSISTENT`` matches (counting the current one) and
-    no *other* rule ever matched this sender — so a single early misclassification
-    can't entrench itself. The current match isn't logged yet, hence the +1."""
+    sender's mail has CONSISTENTLY matched one rule. We mirror that: require
+    ``_AUTO_LEARN_MIN_CONSISTENT`` DISTINCT messages (counting the current one)
+    and no *other* rule ever matched this sender.
+
+    Three things this counted that are not evidence, all found live:
+
+    * **Dry runs.** The filter excluded SKIPPED/REJECTED but not PENDING, which
+      is what a *preview* logs. Pressing "Test" three times on one email taught
+      a permanent pattern — ``arvind@exinous.com`` → Calendar was learned from 7
+      log rows covering ONE message, 5 of them previews. A dry run is documented
+      as changing nothing; it must not teach.
+
+    * **The same message, repeatedly.** ``COUNT(*)`` over a log that gets a row
+      per rule per run. ``donotreply@gst.gov.in`` had 10 rows for 1 message. The
+      bar reads "3 consistent matches" and meant "3 log lines", so re-running a
+      backfill over the same mail manufactured its own evidence.
+
+    * **Rows with no message at all.** 616 APPLIED rows carry a NULL message_id.
+      They cannot be corroborated, so they no longer count toward the bar.
+
+    Requires APPLIED specifically rather than "not SKIPPED": a status this code
+    has never seen should not be assumed to be evidence.
+    """
     sender = (sender or "").strip().lower()
     if not sender:
         return False
     try:
         rows = (await db.execute(text(
-            """SELECT rule_id, COUNT(*) AS n FROM email_executed_rules
-               WHERE account_id = :aid AND rule_id IS NOT NULL
-                 AND status NOT IN ('SKIPPED', 'REJECTED')
-                 AND LOWER(COALESCE(from_address, '')) LIKE :pat
-               GROUP BY rule_id"""
+            """SELECT rule_id, COUNT(DISTINCT message_id) AS n
+                 FROM email_executed_rules
+                WHERE account_id = :aid AND rule_id IS NOT NULL
+                  AND message_id IS NOT NULL
+                  AND status = 'APPLIED'
+                  AND LOWER(COALESCE(from_address, '')) LIKE :pat
+                GROUP BY rule_id"""
         ), {"aid": account_id, "pat": f"%{sender}%"})).fetchall()
     except Exception:  # noqa: BLE001
         return False
@@ -968,7 +1020,7 @@ async def _sender_consistent_for_rule(
 async def _apply_and_log_match(
     db: Any, provider: Any, r: Any, frm: dict[str, Any], email: dict[str, str],
     match: dict[str, Any], apply: bool, about: str, signature: str,
-    account_user: str, account_id: str,
+    account_user: str, account_id: str, *, sole_match: bool = True,
 ) -> None:
     """Apply one matched rule's actions (or compute a dry-run preview) and log an
     email_executed_rules row. Shared by the auto-run and process-past jobs so
@@ -996,8 +1048,22 @@ async def _apply_and_log_match(
         # from the full thread and overrides any learned pattern. Sender→rule only
         # makes sense for the stable cleanup categories (Newsletter/Receipt/etc.).
         sender = (frm.get("email") or "").strip()
-        if (match.get("source") == "ai" and sender and rule.get("id")
+        # `sole_match` is the multi-rule guard. With multi_rule_execution on
+        # (it is, on the live account) one message legitimately matches several
+        # rules, and _apply_and_log_match is called once per match IN A LOOP —
+        # so the first rule's consistency check reads a log that does not yet
+        # contain its own siblings, and the "no other rule ever matched this
+        # sender" invariant is unenforceable. Live result: Info@yourstory.com
+        # was pinned to Marketing although every one of its messages matches
+        # Marketing + Newsletter or Marketing + Cold Email, and the pattern then
+        # short-circuits the classifier down to the single pinned rule.
+        #
+        # Pinning a sender only means anything when the classification was
+        # unambiguous, so an ambiguous message teaches nothing.
+        if (sole_match and match.get("source") == "ai" and sender
+                and rule.get("id")
                 and not _is_conversation_status_rule(rule)
+                and not await _sender_is_a_correspondent(db, account_id, sender)
                 and await _sender_consistent_for_rule(
                     db, account_id, sender, str(rule["id"]))):
             try:
@@ -1221,6 +1287,7 @@ async def _process_past_emails_job(
                     await _apply_and_log_match(
                         db, provider, r, frm, email, match, apply,
                         about, signature, account_user, account_id,
+                        sole_match=len(matches) == 1,
                     )
             elif not dry_run:
                 await db.execute(text(
@@ -1368,6 +1435,7 @@ async def _run_rules_job(
                     await _apply_and_log_match(
                         db, provider, r, frm, email, match, apply,
                         about, signature, account_user, account_id,
+                        sole_match=len(matches) == 1,
                     )
             elif not dry_run:
                 # No rule matched — log a SKIPPED row so History shows a

@@ -9,6 +9,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
 from gateway.routes.email.core import (
+    HUMAN_SENDER_CATEGORIES_LOWER,
     KNOWN_LABELS_LOWER,
     MAX_BODY_HTML_BYTES,
     MAX_BODY_TEXT_BYTES,
@@ -359,9 +360,10 @@ async def priority_inbox(
 
     Ranks recent INBOX threads (latest message each) by a blend of signals:
     Reply Zero NEEDS_REPLY, unread, provider importance=high, starred, and a
-    Personal/Support sender. Bulk/automated senders (Newsletter / Marketing /
-    Cold Email / Notification) are excluded so the list stays high-signal. Returns
-    one row per thread with the reason it ranked, newest-first within score."""
+    human sender (Conversation / Support — HUMAN_SENDER_CATEGORIES_LOWER).
+    Bulk/automated senders (Newsletter / Marketing / Cold Email / Notification)
+    are excluded so the list stays high-signal. Returns one row per thread with
+    the reason it ranked, newest-first within score."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
@@ -391,13 +393,17 @@ async def priority_inbox(
                  + (CASE LOWER(COALESCE(importance, 'normal'))
                         WHEN 'high' THEN 30 ELSE 0 END)
                  + (CASE WHEN is_starred THEN 20 ELSE 0 END)
-                 + (CASE WHEN LOWER(COALESCE(sender_category, '')) IN
-                        ('personal', 'support') THEN 15 ELSE 0 END)
+                 -- Bound, not inlined: the value is produced in senders.py and
+                 -- consumed here, so a rename that reached only one side would
+                 -- silently drop the boost instead of failing.
+                 + (CASE WHEN LOWER(COALESCE(sender_category, ''))
+                         = ANY(:human_cats) THEN 15 ELSE 0 END)
                ) AS score
                FROM latest
                ORDER BY score DESC, received_at DESC
                LIMIT :limit"""
-        ), {"aid": account_id, "days": days, "limit": limit})).fetchall()
+        ), {"aid": account_id, "days": days, "limit": limit,
+            "human_cats": HUMAN_SENDER_CATEGORIES_LOWER})).fetchall()
 
         out = []
         for r in rows:
@@ -412,7 +418,7 @@ async def priority_inbox(
                 reasons.append("high importance")
             if r.is_starred:
                 reasons.append("starred")
-            if (r.sender_category or "").lower() in ("personal", "support"):
+            if (r.sender_category or "").lower() in HUMAN_SENDER_CATEGORIES_LOWER:
                 reasons.append(f"{r.sender_category.lower()} sender")
             out.append({
                 "message_id": str(r.id), "thread_id": r.thread_id,

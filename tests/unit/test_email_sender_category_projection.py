@@ -18,10 +18,12 @@ def test_below_threshold_defers_to_fallback() -> None:
     assert _rule_category({"marketing": 2}) is None
 
 
-def test_reply_active_sender_projects_personal() -> None:
-    # No cleanup labels, but the rules put this thread through Reply Zero → human.
+def test_reply_active_sender_projects_conversation() -> None:
+    # No cleanup labels, but the rules put this thread through Reply Zero, so
+    # there is an exchange here. Note a Cold Email is also a human writing
+    # one-to-one — what separates them is that a reply came back.
     counts = {"reply": 2, "awaiting reply": 1}
-    assert _rule_category(counts) == "Personal"
+    assert _rule_category(counts) == "Conversation"
 
 
 def test_cleanup_wins_over_conversation_when_dominant() -> None:

@@ -102,10 +102,13 @@ export interface DigestData {
   markdown: string;
 }
 
-/** Sender categories assigned by the LLM categorizer (mirrors the backend). */
+/** Sender categories (mirrors EMAIL_CATEGORIES in senders.py). The first six
+ *  are rolled up from the rule engine's per-message labels. "Conversation" is
+ *  derived instead — an ongoing exchange with that sender, never written onto a
+ *  message — and Support/Unknown are vocabulary only, with no producer. */
 export const EMAIL_CATEGORIES = [
   "Newsletter", "Marketing", "Receipt", "Calendar", "Notification",
-  "Cold Email", "Personal", "Support", "Unknown",
+  "Cold Email", "Conversation", "Support", "Unknown",
 ] as const;
 
 export type ColdBlockerMode = "OFF" | "LABEL" | "ARCHIVE";

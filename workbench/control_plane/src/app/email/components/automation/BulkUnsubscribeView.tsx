@@ -1081,13 +1081,27 @@ export function BulkUnsubscribeView({
                       )}
                       {/* Category chips — the rule-labelled cleanup categories on
                           this sender's mail (never a provisional guess), coloured
-                          with the same scheme as chips app-wide. */}
+                          with the same scheme as chips app-wide.
+
+                          "Conversation" is the exception: it is a SENDER-level
+                          rollup, not a label on any email, so it gets its own
+                          tooltip. The old one claimed "from your rules — same
+                          categorization as the rest of the app", which was false
+                          on both counts for that chip and left it looking like a
+                          category nobody could find anywhere else. */}
                       {(s.categories || []).slice(0, 2).map((cat) => {
                         const c = chipColors(cat, labelColors);
+                        const fromRules = (CATEGORY_TABS as readonly string[]).includes(cat);
                         return (
                           <span
                             key={cat}
-                            title="From your rules — same categorization as the rest of the app"
+                            title={
+                              fromRules
+                                ? "From your rules — same categorization as the rest of the app"
+                                : "You exchange mail with this sender. Derived from " +
+                                  "reply activity — not a label on any email, and not " +
+                                  "synced to your mailbox."
+                            }
                             style={{ backgroundColor: c.bg, color: c.text }}
                             className="text-[9px] px-1.5 py-0.5 rounded-full font-medium"
                           >

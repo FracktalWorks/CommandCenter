@@ -1593,6 +1593,16 @@ async def scan_follow_ups(
     return await _maybe_send_follow_up_reminders(req.account_id)
 
 
+# How stale a thread may be and still be worth chasing. The reminder answers
+# "you're still waiting on this" — useful about last week, noise about last
+# autumn. Without a ceiling, the first run after this job was repaired would
+# have chased threads back to October 2025 and, with auto-draft on, written an
+# AI nudge for each. Threads past the ceiling are simply left alone; if one
+# comes back to life, _upsert_thread_status re-arms follow_up_reminded_at and it
+# becomes eligible again on its own merits.
+_FOLLOW_UP_MAX_AGE_DAYS = 30
+
+
 def _business_days_cutoff(days: float) -> datetime:
     """UTC timestamp ``days`` business days before now (weekends skipped) — the
     follow-up window inbox-zero uses so a Friday email isn't chased on Sunday.
@@ -1647,6 +1657,19 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
         cutoff_aw = _business_days_cutoff(awaiting_days) if awaiting_days > 0 else None
         cutoff_nd = _business_days_cutoff(needs_days) if needs_days > 0 else None
 
+        # A bare ``:param IS NOT NULL`` gives asyncpg no type to infer from, so
+        # this whole statement raised AmbiguousParameterError on EVERY sync —
+        # caught by the handler below, logged as a warning nobody reads, and the
+        # follow-up feature was silently dead in production for its entire life.
+        # The NULL guards were redundant anyway: ``last_message_at < NULL`` is
+        # NULL, which is not TRUE, so an unconfigured window already excludes its
+        # own branch. The explicit casts keep the types unambiguous by
+        # construction rather than by inference.
+        #
+        # ``:floor`` is a staleness ceiling — see _FOLLOW_UP_MAX_AGE_DAYS. A
+        # nudge about last week is useful; one about last autumn is noise, and
+        # the only reason such threads are queued at all is that this job has
+        # been broken long enough for them to pile up.
         rows = (await db.execute(text(
             """SELECT ts.thread_id, ts.status, ts.last_message_id,
                       em.provider_message_id, em.subject, em.from_address,
@@ -1655,14 +1678,18 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                LEFT JOIN email_messages em ON ts.last_message_id = em.id
                WHERE ts.account_id = :aid
                  AND ts.follow_up_reminded_at IS NULL
+                 AND ts.last_message_at > CAST(:floor AS timestamptz)
                  AND (
-                   (ts.status = 'AWAITING' AND :caw IS NOT NULL
-                    AND ts.last_message_at < :caw)
-                   OR (ts.status = 'NEEDS_REPLY' AND :cnd IS NOT NULL
-                    AND ts.last_message_at < :cnd)
+                   (ts.status = 'AWAITING'
+                    AND ts.last_message_at < CAST(:caw AS timestamptz))
+                   OR (ts.status = 'NEEDS_REPLY'
+                    AND ts.last_message_at < CAST(:cnd AS timestamptz))
                  )
+               ORDER BY ts.last_message_at DESC
                LIMIT 50"""
-        ), {"aid": account_id, "caw": cutoff_aw, "cnd": cutoff_nd})).fetchall()
+        ), {"aid": account_id, "caw": cutoff_aw, "cnd": cutoff_nd,
+            "floor": datetime.now(timezone.utc)
+            - timedelta(days=_FOLLOW_UP_MAX_AGE_DAYS)})).fetchall()
         if not rows:
             return result
 

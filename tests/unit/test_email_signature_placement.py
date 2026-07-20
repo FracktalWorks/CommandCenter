@@ -22,7 +22,9 @@ Two independent defects produced that, and each is covered here:
 from __future__ import annotations
 
 import inspect
+from pathlib import Path
 
+from gateway.routes.email import quoting as qt
 from gateway.routes.email.automation import drafting as dr
 from gateway.routes.email.quoting import split_quoted_html, split_quoted_text
 from gateway.routes.email.signature import build_signed_bodies
@@ -167,3 +169,37 @@ def test_cleaning_leaves_an_honest_draft_alone() -> None:
 def test_cleaning_still_removes_placeholder_lines() -> None:
     """The original job of _clean_draft_body must survive the addition."""
     assert "[Your Name]" not in dr._clean_draft_body(f"{_REPLY}\n\n[Your Name]")
+
+
+# ── parity with the client splitter ─────────────────────────────────────────
+# quoting.py and quoting.ts must agree on where a quote starts: the client
+# splits the compose box, the server splits at send time, and a disagreement
+# means the signature is placed relative to a boundary the user never saw.
+# There is no JS unit-test runner in CI (pr-check is Python only), so these
+# read the TypeScript source directly — the only enforcement available.
+
+_QUOTING_TS = (
+    Path(__file__).resolve().parents[2]
+    / "workbench/control_plane/src/app/email/lib/quoting.ts"
+).read_text(encoding="utf-8")
+
+
+def test_the_client_splitter_also_scans_from_line_zero() -> None:
+    """The flaw this port surfaced. Starting at line 1 skips the "is the whole
+    body a quote?" check, so a bare forward is cut at its SECOND line: the first
+    quoted line becomes "new content" — fed to the AI drafter as the user's own
+    text, and left uncollapsed in the viewer."""
+    assert "for (let i = 0; i < lines.length; i++)" in _QUOTING_TS, (
+        "splitQuotedText no longer scans from line 0 — a body that is entirely "
+        "a quote will be split mid-quote again"
+    )
+
+
+def test_both_splitters_recognise_the_same_markers() -> None:
+    """Drift here is silent: each side keeps working, on different boundaries."""
+    for fragment in (r"^>", r"\bwrote:", "Original Message", "Forwarded message",
+                     r"^_{5,}", r"^From:"):
+        assert fragment in _QUOTING_TS, f"marker missing from quoting.ts: {fragment}"
+        assert any(fragment in rx.pattern for rx in qt._TEXT_BOUNDARY), (
+            f"marker missing from quoting.py: {fragment}"
+        )

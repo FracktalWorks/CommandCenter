@@ -208,6 +208,22 @@ async def list_senders(
                     derived = [sc]
             return derived
 
+        def _category_counts_for(email: str) -> dict[str, int]:
+            """How many of this sender's messages carry each cleanup category.
+
+            A sender legitimately belongs to several categories at once — a
+            colleague sends both Calendar invites and Notifications — and the
+            list already shows them under every one. But the row's headline
+            count was the sender's WHOLE volume regardless of which category tab
+            was open, so under "Notification" a person with 69 messages read as
+            69 notifications when only 7 were. Same class of defect as the
+            Analytics range selector: a number displayed under a filter that it
+            does not respect.
+            """
+            return {_CLEANUP_BY_LOWER[low]: n
+                    for low, n in label_counts.get(email, {}).items()
+                    if n and low in _CLEANUP_BY_LOWER}
+
         def _labelled_count(email: str) -> int:
             """How many of this sender's messages carry ANY known rule label.
 
@@ -245,6 +261,9 @@ async def list_senders(
                     # guess to flag — category_source is always trustworthy here.
                     "category": (_categories_for(r.email) or [None])[0],
                     "categories": _categories_for(r.email),
+                    # Per-category volume, so a row under an open category tab
+                    # can report ITS count instead of the sender's total.
+                    "category_counts": _category_counts_for(r.email),
                     "category_source": "rule",
                     # Messages the rules have labelled (any label, cleanup or
                     # conversation). 0 ⇒ this sender's mail was never classified,

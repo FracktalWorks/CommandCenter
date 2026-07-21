@@ -1118,6 +1118,14 @@ export function BulkUnsubscribeView({
               // Older payloads have no in_folder — fall back to count so the
               // number never renders as 0 against a populated row.
               const inInbox = s.in_folder ?? s.count;
+              // With a category tab open, the row is answering a narrower
+              // question — "how much of this sender is Notification?" — and
+              // must not answer it with the sender's whole volume. null means
+              // no category is active, or the server predates category_counts.
+              const inCategory =
+                categoryTab === "all" || categoryTab === UNCATEGORIZED
+                  ? null
+                  : (s.category_counts?.[categoryTab] ?? null);
               const isMailto = (s.unsubscribe_link || "").toLowerCase().startsWith("mailto:");
               const blocked =
                 s.status === "UNSUBSCRIBED" || s.status === "AUTO_ARCHIVED";
@@ -1224,7 +1232,15 @@ export function BulkUnsubscribeView({
                           categorization as the rest of the app", which was false
                           on both counts for that chip and left it looking like a
                           category nobody could find anywhere else. */}
-                      {(s.categories || []).slice(0, 2).map((cat) => {
+                      {/* Only two chips fit, and they are ordered by volume — so
+                          filtering to a sender's third-busiest category showed a
+                          row with no chip for the category you filtered by. Pull
+                          the active one to the front. */}
+                      {[...(s.categories || [])]
+                        .sort((a, b) =>
+                          a === categoryTab ? -1 : b === categoryTab ? 1 : 0)
+                        .slice(0, 2)
+                        .map((cat) => {
                         const c = chipColors(cat, labelColors);
                         const fromRules = (CATEGORY_TABS as readonly string[]).includes(cat);
                         return (
@@ -1254,16 +1270,22 @@ export function BulkUnsubscribeView({
                     <div
                       className="text-right leading-none"
                       title={
-                        inInbox > 0
-                          ? `${s.count} emails in your mailbox · ${inInbox} still in the inbox`
-                          : `${s.count} emails in your mailbox — none left in the inbox`
+                        inCategory !== null
+                          ? `${inCategory} of this sender's ${s.count} emails are ${categoryTab}`
+                          : inInbox > 0
+                            ? `${s.count} emails in your mailbox · ${inInbox} still in the inbox`
+                            : `${s.count} emails in your mailbox — none left in the inbox`
                       }
                     >
                       <div className="text-xs font-semibold text-foreground tabular-nums">
-                        {s.count}
+                        {inCategory ?? s.count}
                       </div>
                       <div className="text-[8px] text-muted-foreground mt-0.5">
-                        {inInbox > 0 ? `${inInbox} in inbox` : "emails"}
+                        {inCategory !== null
+                          ? `of ${s.count}`
+                          : inInbox > 0
+                            ? `${inInbox} in inbox`
+                            : "emails"}
                       </div>
                     </div>
                     <ReadRing value={s.read_rate} />
@@ -1354,6 +1376,7 @@ export function BulkUnsubscribeView({
                   <SenderMessages
                     accountId={accountId}
                     email={s.email}
+                    category={categoryTab}
                     labelColors={labelColors}
                   />
                 )}
@@ -1484,22 +1507,47 @@ export function BulkUnsubscribeView({
  *  exactly which emails are affected (blocked / auto-archived / …) and act on
  *  them one at a time. Fetched on demand via the search endpoint (from: sender)
  *  across all folders. */
+/** The drill-down under a sender row.
+ *
+ *  Scoped to the OPEN CATEGORY, not just the sender. A person legitimately
+ *  belongs to several categories at once, and the list above already shows them
+ *  under every one — but this list used to fetch the sender's 25 most recent
+ *  messages regardless of the tab. So opening "Notification" on a colleague
+ *  showed their Awaiting Reply, Done and FYI mail too, and the drill-down
+ *  silently contradicted the filter that produced it. */
 function SenderMessages({
   accountId,
   email,
+  category,
   labelColors,
 }: {
   accountId: string;
   email: string;
+  /** The active category tab: a category name, "all", or the uncategorized
+   *  pseudo-category. */
+  category: string;
   labelColors: Record<string, string | null>;
 }) {
   const [msgs, setMsgs] = useState<Email[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
+  const scoped = category !== "all";
 
   useEffect(() => {
     let alive = true;
-    searchEmails({ accountId, fromAddr: email, folder: "all", pageSize: 25 })
+    searchEmails({
+      accountId,
+      fromAddr: email,
+      folder: "all",
+      pageSize: 25,
+      // "Uncategorized" is the ABSENCE of a label, not a label — it has its own
+      // server-side predicate and would match nothing as a label name.
+      ...(category === UNCATEGORIZED
+        ? { uncategorized: true }
+        : scoped
+          ? { labels: [category] }
+          : {}),
+    })
       .then((r) => {
         if (alive) setMsgs(r.emails);
       })
@@ -1509,7 +1557,7 @@ function SenderMessages({
     return () => {
       alive = false;
     };
-  }, [accountId, email]);
+  }, [accountId, email, category, scoped]);
 
   const act = async (id: string, action: "archive" | "trash") => {
     setBusyId(id);
@@ -1536,12 +1584,23 @@ function SenderMessages({
   if (msgs.length === 0) {
     return (
       <div className="px-10 py-2 text-[11px] text-muted-foreground">
-        No messages found for this sender.
+        {scoped
+          ? `No ${category === UNCATEGORIZED ? "uncategorized" : category} messages from this sender.`
+          : "No messages found for this sender."}
       </div>
     );
   }
   return (
     <div className="pl-10 pr-3 sm:pr-5 pb-2 divide-y divide-border/60">
+      {/* Say what this list is showing. Without it a scoped drill-down looks
+          like the sender's whole history and the missing mail reads as a bug. */}
+      {scoped && (
+        <div className="py-1.5 text-[10px] text-muted-foreground">
+          {category === UNCATEGORIZED
+            ? "Showing only this sender's uncategorized mail."
+            : `Showing only this sender's ${category} mail.`}
+        </div>
+      )}
       {msgs.map((m) => (
         <div key={m.id} className="flex items-center gap-2 py-1.5">
           {!m.isRead && (

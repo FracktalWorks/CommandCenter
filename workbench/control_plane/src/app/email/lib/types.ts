@@ -257,8 +257,14 @@ export interface SenderStat {
    *  per-message categories (never a provisional guess). null = uncategorized. */
   category?: string | null;
   /** All distinct cleanup categories present on this sender's mail — powers the
-   *  category filter tabs in the Email Cleaner. */
+   *  category filter tabs in the Email Cleaner. A sender legitimately appears
+   *  under several: a colleague sends both Calendar invites and Notifications. */
   categories?: string[];
+  /** How many of this sender's messages carry each cleanup category. With a
+   *  category tab open, the row must report THIS number rather than `count` —
+   *  otherwise a person with 69 messages of which 7 are notifications reads as
+   *  69 notifications. */
+  category_counts?: Record<string, number>;
   /** Provenance of `category`. Always 'rule'/'user' now (provisional 'inferred'
    *  guesses were removed); retained for forward-compat. */
   category_source?: string | null;

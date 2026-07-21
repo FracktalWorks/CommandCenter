@@ -93,6 +93,17 @@ def test_a_retry_that_fails_again_stays_failed() -> None:
     assert 'status = "FAILED" if (errors and not taken) else "APPLIED"' in src
 
 
+def test_a_retry_never_resurrects_deleted_mail() -> None:
+    """The commonest cause of these failures is the provider racing us, and the
+    commonest form of that is the user deleting or junking the message — 92 of
+    the 138 live failures ended in trash. Replaying a MOVE_FOLDER against one
+    would lift it back OUT of the bin into a category folder. A repair must
+    never be able to undo a deletion."""
+    src = inspect.getsource(m.retry_failed_executions)
+    assert "'trash', 'junk', 'spam', 'drafts', 'draft'" in src
+    assert "LOWER(COALESCE(em.folder, '')) NOT IN" in src
+
+
 async def test_nothing_to_retry_is_not_an_error() -> None:
     """The common case once the backlog is cleared: report zero, touch no
     provider, and do not raise."""

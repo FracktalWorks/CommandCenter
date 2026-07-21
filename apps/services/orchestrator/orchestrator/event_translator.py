@@ -64,6 +64,12 @@ class ToolCallStreamState:
     seen: set[str] = field(default_factory=set)
     last_id: str | None = None
     counter: int = 0
+    # Name of the most recently STARTED tool call. A turn that ends on a
+    # blocking HITL tool (ask_questions / ask_user / request_confirmation)
+    # legitimately has no closing text — the question card IS the output — so
+    # the caller needs the name, not just the count, to tell "waiting for the
+    # user" apart from "the answer went missing".
+    last_name: str | None = None
 
 
 @dataclass
@@ -138,6 +144,7 @@ def function_call_events(
     state.seen.add(cid)
     state.last_id = cid
     name = getattr(content, "name", "") or "tool"
+    state.last_name = name
     out: list[dict[str, Any]] = [{
         "type": "TOOL_CALL_START",
         "toolCallId": cid, "toolCallName": name, "args": delta,

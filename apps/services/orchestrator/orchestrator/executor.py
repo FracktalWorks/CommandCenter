@@ -37,6 +37,7 @@ from typing import Any, AsyncIterator
 
 from acb_audit import AuditEvent, record
 from acb_common import get_logger, get_settings
+from acb_skills.ask_tools import is_hitl_blocking_tool as _is_hitl_blocking_tool
 from acb_skills.integrations import build_integrations
 from acb_skills.loader import AgentLoadError, load_agent
 
@@ -2578,6 +2579,11 @@ async def run_agent_stream(
                 # stream path (core_loop_unification Phase 2).
                 _t15_state = _TranslationState(run_id)
                 _todo_tracker = _TodoTracker()
+                # Last tool STARTED on this run. A turn that ends on a blocking
+                # HITL tool has no closing text by design — the question card is
+                # the output — so the no-text handler needs the name to tell
+                # "waiting for the user" apart from "the answer went missing".
+                _t15_last_tool: str = ""
 
                 # ── Tier-1.5 translator hooks ─────────────────────────────
                 # The Copilot path's extras live here, NOT in divergent
@@ -2734,6 +2740,7 @@ async def run_agent_stream(
                 async def _run_copilot_attempt(
                     _eff: str, _agent_sess: Any
                 ) -> AsyncIterator[str]:  # type: ignore[return]
+                    nonlocal _t15_last_tool
                     async with agent:
                         _run_opts_inner: dict[str, Any] = {}
                         if _is_byok and _byok_provider:
@@ -2760,6 +2767,16 @@ async def run_agent_stream(
                             for _ev in _translate_update(
                                 _update, _t15_state, _t15_hooks,
                             ):
+                                # Remember the last tool STARTED. Read off the
+                                # emitted events rather than the translator's
+                                # own state so every path counts — a native SDK
+                                # tool (ask_user) and a platform tool reach the
+                                # stream through different translator branches,
+                                # and only the emitted event is common to both.
+                                if _ev.get("type") == "TOOL_CALL_START":
+                                    _t15_last_tool = str(
+                                        _ev.get("toolCallName") or ""
+                                    )
                                 yield _sse(_ev)
 
                         # ── Save Copilot session ID before context exits ──
@@ -2892,8 +2909,12 @@ async def run_agent_stream(
                                     history_chars=len(_rendered),
                                 )
                         # Reset streaming state for a clean second attempt.
+                        # _t15_last_tool resets with it: a tool name left over
+                        # from the discarded attempt must not decide how THIS
+                        # attempt is allowed to end.
                         _t15_state = _TranslationState(run_id)
                         _todo_tracker = _TodoTracker()
+                        _t15_last_tool = ""
                         # continue → next iteration of retry loop
 
                 # ── Drain any late-arriving artifact events + reset queue ─
@@ -2935,15 +2956,25 @@ async def run_agent_stream(
                     #     nothing (content filter / provider error).  That is a
                     #     real failure worth surfacing as an error.
                     _tool_activity = bool(_t15_state.fc.seen)
-                    _log.warning(
+                    _awaiting_user = (
+                        _tool_activity
+                        and _is_hitl_blocking_tool(_t15_last_tool)
+                    )
+                    # Not a warning when the agent is simply waiting on the
+                    # user — that is normal interactive flow, and logging it as
+                    # a problem buries the real ones.
+                    (_log.info if _awaiting_user else _log.warning)(
                         "executor.copilot_no_text",
                         agent=agent_name,
                         run_id=run_id,
                         tool_activity=_tool_activity,
                         tools=len(_t15_state.fc.seen),
+                        last_tool=_t15_last_tool or None,
+                        awaiting_user=_awaiting_user,
                     )
                     _nt_events, _nt_finish = _copilot_no_text_end(
                         run_id=run_id, tool_activity=_tool_activity,
+                        last_tool=_t15_last_tool,
                     )
                     for _ev in _nt_events:
                         yield _sse(_ev)
@@ -4177,33 +4208,46 @@ def _build_event_message(
 # ---------------------------------------------------------------------------
 
 # The fallback message shown when a tool-using run ends without a final
-# written answer (the model was truncated before its closing summary).
+# written answer.
+#
+# It deliberately does NOT name a cause. The first version asserted "the
+# response hit its output length limit", which was a guess dressed as a
+# diagnosis: all this code actually knows is that no text arrived. The very
+# first time it fired in production the real reason was something else
+# entirely (the agent had asked a question and was waiting) — so it told the
+# user their answer had been truncated, and to say "continue", when the right
+# move was to answer the question. Describe the observation, not a theory.
 _NO_TEXT_TRUNCATED_MSG = (
-    "I finished the steps above, but my final summary was cut off before it "
-    "could be written — the response hit its output length limit. The work "
-    "itself is captured in the steps above. Say “continue” and I'll "
+    "I finished the steps above, but didn't get my closing summary written. "
+    "The work itself is captured in the steps above. Say “continue” and I'll "
     "pick up where I left off and write the summary."
 )
 
 
 def _copilot_no_text_end(
-    *, run_id: str, tool_activity: bool,
+    *, run_id: str, tool_activity: bool, last_tool: str = "",
 ) -> tuple[list[dict[str, Any]], bool]:
     """Decide how a Copilot run that produced no assistant text should end.
 
-    A run can finish the stream with ``text_started == False`` for two very
+    A run can finish the stream with ``text_started == False`` for three very
     different reasons, and they must not be conflated:
 
-    * ``tool_activity`` — the agent DID real tool work but never wrote its
-      closing answer.  The overwhelmingly common cause is an output-token
-      (``max_tokens``) truncation part-way through the turn: a reasoning model
-      spends its budget on reasoning + a large tool argument and gets cut off
-      (the final tool call's JSON arrives malformed).  The tool cards are
-      already folded and persisted, so dead-ending on a hard error would wipe
-      real work from the UI.  Return a synthesised closing message and
-      ``finish=True`` so the caller falls through to ``RUN_FINISHED`` — the
-      run records as ``completed`` and the user can say "continue" to have the
-      agent resume the stored session and finish its summary.
+    * The last tool PARKED the turn awaiting a human (``ask_questions`` /
+      ``ask_user`` / ``request_confirmation``).  There is no closing text
+      because none is due: the question or confirmation card IS the output,
+      and those tools explicitly require the agent to stop and wait.  Finish
+      silently — emitting anything here talks over the card and, worse, tells
+      the user their answer was cut off when the agent is simply waiting for
+      them.  This is the common case in an interactive chat, so it is checked
+      FIRST.
+
+    * ``tool_activity`` with a normal last tool — the agent did real work but
+      never wrote its closing answer (an output-token truncation mid-turn is
+      one cause, not the only one).  The tool cards are already folded and
+      persisted, so dead-ending on a hard error would wipe real work from the
+      UI.  Return a synthesised closing message and ``finish=True`` so the
+      caller falls through to ``RUN_FINISHED`` — the run records as
+      ``completed`` and the user can say "continue" to resume.
 
     * not ``tool_activity`` — the model genuinely returned nothing (content
       filter / provider error).  Return a ``RUN_ERROR`` and ``finish=False``
@@ -4213,6 +4257,9 @@ def _copilot_no_text_end(
     payloads to emit and ``finish`` indicates whether the caller should
     continue to its shared ``RUN_FINISHED`` (True) or hard-stop now (False).
     """
+    if tool_activity and _is_hitl_blocking_tool(last_tool):
+        # Waiting on the user — nothing to say, and nothing wrong.
+        return ([], True)
     if tool_activity:
         fb_id = uuid.uuid4().hex
         return (

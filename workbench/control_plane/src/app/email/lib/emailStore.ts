@@ -56,14 +56,23 @@ function toCanonical(name: string): string {
   return CANONICAL_ALIASES[name.trim().toLowerCase()] ?? name.trim().toLowerCase();
 }
 
-/** The pseudo-folder spanning every folder except junk and trash. Not a real
- *  provider folder — the backend turns it into a "folder NOT IN (junk, trash)"
- *  scope (core.folder_scope), and it doubles as the search bar's "All" scope. */
+/** The pseudo-folder spanning every folder of mail that ARRIVED. Not a real
+ *  provider folder — the backend turns it into a "folder NOT IN (...)" scope
+ *  (core.folder_scope). Note it is NOT the search bar's "All folders" scope:
+ *  that one also spans sent mail, because searching is a hunt for a message
+ *  rather than a view of the inbox. See core.FOLDER_ALL_SEARCH_EXCLUDES. */
 export const FOLDER_ALL = "all";
 
 /** Folders `all` deliberately leaves out — must mirror the backend's
- *  FOLDER_ALL_EXCLUDES so the All view and the All search scope agree. */
-const FOLDER_ALL_EXCLUDES = new Set(["junk", "trash"]);
+ *  FOLDER_ALL_EXCLUDES, since this set both filters the list and derives the
+ *  sidebar's All count (withAllCount); a copy that drifted would print a badge
+ *  the list underneath it could not account for.
+ *
+ *  Sent is here because All answers "what came in?" — folding the user's own
+ *  outgoing mail into it doubles every conversation. Replies stay visible in
+ *  the thread view, which ignores the folder filter, and Sent has its own
+ *  sidebar entry. "spam" canonicalises to "junk" above, so it needs no entry. */
+const FOLDER_ALL_EXCLUDES = new Set(["junk", "trash", "sent"]);
 
 /**
  * The pseudo-folders: sidebar entries that are VIEWS, not real provider folders.
@@ -161,10 +170,11 @@ function mergeFolders(
 /**
  * Give the All pseudo-folder a count, since no provider reports one for it.
  *
- * Sums every real folder it spans — junk/trash are excluded by definition, and
- * "starred" is a flag over mail that already lives in another folder, so
- * counting it would double-count. Each message lives in exactly one folder, so
- * the sum is the message total.
+ * Sums every real folder it spans — junk/trash/sent are excluded by definition
+ * (FOLDER_ALL_EXCLUDES, the same set that filters the list), and "starred" is a
+ * flag over mail that already lives in another folder, so counting it would
+ * double-count. Each message lives in exactly one folder, so the sum is the
+ * total of what All actually shows.
  */
 function withAllCount(folders: EmailFolder[]): EmailFolder[] {
   const total = folders.reduce(

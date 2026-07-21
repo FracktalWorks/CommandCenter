@@ -66,6 +66,8 @@ async def _run(db: AsyncMock, taken: list[str], errors: list[dict],
                       AsyncMock(return_value=False)), \
          patch.object(m, "_sender_consistent_for_rule",
                       AsyncMock(return_value=True)), \
+         patch.object(m, "_ai_confirms_sender_pattern",
+                      AsyncMock(return_value=True)), \
          patch.object(m, "_upsert_rule_pattern", AsyncMock()) as upsert:
         await m._apply_and_log_match(
             db, object(), _row(), {"email": "n@x.com"}, {}, _MATCH, apply,

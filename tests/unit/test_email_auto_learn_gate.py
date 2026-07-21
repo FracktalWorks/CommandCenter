@@ -32,7 +32,7 @@ from __future__ import annotations
 
 import inspect
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email.automation import runner as m
 
@@ -80,20 +80,24 @@ async def test_rows_with_no_message_are_not_evidence() -> None:
     assert "message_id IS NOT NULL" in sql
 
 
-async def test_three_distinct_messages_still_learn() -> None:
-    """The tightening must not turn auto-learning off — it should keep firing on
-    genuine repeat evidence (the current match is the +1)."""
-    db = _db_counting([(_RULE, 2)])
+async def test_five_distinct_messages_still_learn() -> None:
+    """The tightening must not turn auto-learning off — it should keep firing
+    on genuine repeat evidence (the current match is the +1).
+
+    Raised from three to five. Three is a short enough streak that a
+    classifier confidently wrong about one sender reaches it easily, and the
+    count was the ONLY bar until the AI verdict was added beside it."""
+    db = _db_counting([(_RULE, 4)])
     assert await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
 
 
-async def test_two_distinct_messages_do_not() -> None:
-    db = _db_counting([(_RULE, 1)])
+async def test_four_distinct_messages_do_not() -> None:
+    db = _db_counting([(_RULE, 3)])
     assert not await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
 
 
 async def test_another_rule_in_the_history_still_blocks() -> None:
-    db = _db_counting([(_RULE, 5), ("rule-marketing", 1)])
+    db = _db_counting([(_RULE, 9), ("rule-marketing", 1)])
     assert not await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
 
 
@@ -154,3 +158,85 @@ def test_the_correspondent_check_runs_before_the_pattern_is_written() -> None:
     src = inspect.getsource(m._apply_and_log_match)
     assert src.index("_sender_is_a_correspondent") < src.index(
         "_upsert_rule_pattern")
+
+
+# ── what may be auto-learned at all ─────────────────────────────────────────
+
+
+def test_only_bulk_categories_are_auto_learnable() -> None:
+    """A FROM pattern asserts something about the SENDER'S IDENTITY — that this
+    address only ever sends one kind of thing. True of a newsletter list, a
+    marketing blast, a cold-outreach account: the mail is defined by who sent it.
+
+    Not true of Receipt, Calendar or Notification, which describe what a message
+    IS and routinely arrive from people you also converse with. A colleague
+    sends an invite on Monday and a question on Tuesday; pinned to Calendar, the
+    question is filed as a calendar item. Two of the patterns purged from the
+    live account were exactly that.
+    """
+    for name in ("Newsletter", "Marketing", "Cold Email", "cold email"):
+        assert m._is_auto_learnable_rule({"name": name}), name
+    for name in ("Receipt", "Calendar", "Notification", "Reply", "FYI"):
+        assert not m._is_auto_learnable_rule({"name": name}), name
+
+
+def test_the_scope_check_runs_in_the_learn_gate() -> None:
+    src = inspect.getsource(m._apply_and_log_match)
+    assert "_is_auto_learnable_rule(rule)" in src
+
+
+# ── the second opinion ──────────────────────────────────────────────────────
+
+
+async def test_a_streak_alone_no_longer_creates_a_pattern() -> None:
+    """Counting agreements measures CONSISTENCY, not correctness — a classifier
+    confidently wrong about one sender is wrong the same way five times, and the
+    streak was the entire bar. Upstream's threshold is only a floor before
+    asking this; ours had no such step."""
+    src = inspect.getsource(m._apply_and_log_match)
+    assert "_ai_confirms_sender_pattern" in src
+    assert src.index("_sender_consistent_for_rule") < src.index(
+        "_ai_confirms_sender_pattern"), (
+        "the cheap local checks must gate the one that costs a model call"
+    )
+
+
+async def test_the_verdict_needs_an_explicit_yes() -> None:
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[
+        SimpleNamespace(subject=f"s{i}", snippet="x") for i in range(6)]))
+    rule = {"name": "Newsletter", "instructions": "newsletters"}
+    with patch.object(m, "_llm_json",
+                      AsyncMock(return_value=({"always": True}, "", ""))):
+        assert await m._ai_confirms_sender_pattern(db, _ACC, "n@x.com", rule)
+    with patch.object(m, "_llm_json",
+                      AsyncMock(return_value=({"always": False}, "", ""))):
+        assert not await m._ai_confirms_sender_pattern(db, _ACC, "n@x.com", rule)
+
+
+async def test_an_unusable_verdict_teaches_nothing() -> None:
+    """Fails CLOSED at every step. Not learning costs nothing; a wrong pin is
+    silent, permanent and short-circuits the classifier that would have caught
+    it."""
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[
+        SimpleNamespace(subject=f"s{i}", snippet="x") for i in range(6)]))
+    rule = {"name": "Newsletter"}
+    for bad in (({}, "", ""), ({"always": "yes"}, "", ""), (None, "", "")):
+        with patch.object(m, "_llm_json", AsyncMock(return_value=bad)):
+            assert not await m._ai_confirms_sender_pattern(
+                db, _ACC, "n@x.com", rule)
+    with patch.object(m, "_llm_json", AsyncMock(side_effect=RuntimeError("no"))):
+        assert not await m._ai_confirms_sender_pattern(db, _ACC, "n@x.com", rule)
+
+
+async def test_too_few_samples_is_not_asked_about() -> None:
+    """Nothing to generalise from, and a model asked to judge two emails will
+    happily say yes."""
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[
+        SimpleNamespace(subject="s", snippet="x")]))
+    with patch.object(m, "_llm_json", AsyncMock()) as llm:
+        assert not await m._ai_confirms_sender_pattern(
+            db, _ACC, "n@x.com", {"name": "Newsletter"})
+        llm.assert_not_called()

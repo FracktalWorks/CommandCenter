@@ -1027,13 +1027,33 @@ async def _apply_and_log_match(
     multi-rule execution behaves identically in both."""
     rule = match["rule"]
     action_errors: list[dict[str, str]] = []
+    pmid = r.provider_message_id
     if apply:
+        # Outlook RE-KEYS a message when it moves: /move returns a new id and
+        # the old one 404s. `r` was fetched once, BEFORE the per-match loop, so
+        # with multi_rule_execution on (it is, on the live account) the second
+        # rule called Graph with the id the first rule's move had just
+        # invalidated. _apply_rule_actions already persists the new id, so
+        # re-reading it here is enough — and it also picks up a re-key done by
+        # anything else since the row was read.
+        #
+        # Live evidence: 138 rule applications in 30 days 404'd, 46 of them a
+        # sibling rule acting after a successful MOVE_FOLDER in the same run.
+        pmid = (await db.execute(text(
+            "SELECT provider_message_id FROM email_messages WHERE id = :id"
+        ), {"id": str(r.id)})).scalar() or pmid
         actions_taken = await _apply_rule_actions(
-            db, provider, str(r.id), r.provider_message_id,
+            db, provider, str(r.id), pmid,
             rule["actions"], email, about, signature, account_user,
             account_id=account_id, errors_out=action_errors,
         )
-        status = "APPLIED"
+        # A row that changed NOTHING must not claim it did. APPLIED is what the
+        # auto-learn gate counts as evidence and what Analytics counts as work
+        # done, so logging a total failure as APPLIED both overstated the
+        # assistant and let a rule that never touched the mailbox teach a
+        # permanent sender pattern. Partial success stays APPLIED — the errors
+        # ride along in action_errors.
+        status = "FAILED" if (action_errors and not actions_taken) else "APPLIED"
         # inbox-zero parity: when the AI (not a static/learned-pattern rule)
         # picks a rule, cache the sender→rule as a learned FROM pattern so future
         # mail from that sender short-circuits the LLM. Consistency-gated like
@@ -1060,7 +1080,13 @@ async def _apply_and_log_match(
         #
         # Pinning a sender only means anything when the classification was
         # unambiguous, so an ambiguous message teaches nothing.
-        if (sole_match and match.get("source") == "ai" and sender
+        #
+        # A rule whose every action failed taught a pattern anyway, because the
+        # gate only ever asked whether a rule MATCHED. Three 404s against a
+        # message Outlook had already re-keyed were three votes for pinning that
+        # sender forever, off a mailbox that was never touched.
+        if (status == "APPLIED"
+                and sole_match and match.get("source") == "ai" and sender
                 and rule.get("id")
                 and not _is_conversation_status_rule(rule)
                 and not await _sender_is_a_correspondent(db, account_id, sender)
@@ -1086,7 +1112,9 @@ async def _apply_and_log_match(
                    :status, true, :acts, :reason, :msrc,
                    CAST(:aerr AS JSONB))"""
     ), {"aid": account_id, "rid": rule["id"], "rname": rule["name"],
-        "mid": str(r.id), "pmid": r.provider_message_id, "tid": r.thread_id,
+        # The id we actually CALLED, not the one the row was read with — when
+        # they differ, the row was re-keyed mid-run and the log should say so.
+        "mid": str(r.id), "pmid": pmid, "tid": r.thread_id,
         "subj": r.subject or "", "frm": frm.get("email", ""), "status": status,
         "acts": json.dumps(actions_taken), "reason": match["reason"],
         "msrc": match.get("source"), "aerr": json.dumps(action_errors)})

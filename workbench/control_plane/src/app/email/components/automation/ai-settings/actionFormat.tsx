@@ -170,6 +170,11 @@ export function statusMeta(status?: string): { label: string; cls: string } | nu
       return { label: "No match", cls: "bg-red-500/15 text-red-400" };
     case "PENDING":
       return { label: "Preview", cls: "bg-amber-500/15 text-amber-400" };
+    case "FAILED":
+      // The rule matched and every one of its actions was refused by the mail
+      // server, so the mailbox is unchanged. Distinct from "No match", which
+      // means the assistant correctly decided to do nothing.
+      return { label: "Didn't apply", cls: "bg-rose-500/15 text-rose-400" };
     case "UNDONE":
       return { label: "Undone", cls: "bg-slate-500/15 text-slate-400" };
     case "ERROR":

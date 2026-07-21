@@ -1335,6 +1335,27 @@ export type ProcessPastEstimate = {
   max_span_days: number;
 };
 
+/** Re-apply rule runs the mail server refused.
+ *
+ *  A repair, not a re-run: it replays the rule already chosen, so it costs no
+ *  model calls, cannot change a decision, and never drafts or sends. Rows that
+ *  fail again stay FAILED — a message Outlook has since deleted is beyond
+ *  repair and must not be quietly marked done. */
+export async function retryFailedRuleActions(
+  accountId: string,
+  limit = 200
+): Promise<{
+  considered: number;
+  repaired: number;
+  still_failing: number;
+  skipped_actions: string[];
+}> {
+  return gatewayFetch("/email/rules/history/retry-failed", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, limit }),
+  });
+}
+
 /** Ask what a Process-past run would send to the AI, before starting it. */
 export async function processPastEstimate(params: {
   accountId: string;

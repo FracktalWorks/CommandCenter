@@ -483,7 +483,18 @@ async def start_background_sync() -> dict[str, int]:
                            WHERE sync_enabled = true"""
                     )
                 )
-                accounts = [(row.id, row.sync_interval_secs) for row in result.fetchall()]
+                # str(), not row.id. asyncpg hands back a UUID OBJECT, and this
+                # value is the `account_id: str` threaded through the entire
+                # new-mail pipeline — sync, rules, drafting, memory scoping.
+                # Anything that merely puts it in a SQL parameter works fine, so
+                # the wrong type stayed invisible until something did string
+                # work with it: the reply drafter raised
+                # "'asyncpg.pgproto.pgproto.UUID' object has no attribute
+                # 'strip'" and silently produced no draft, while the LABEL
+                # action on the same rule succeeded. Every other entry point
+                # (routes, webhook) already passes a real str.
+                accounts = [(str(row.id), row.sync_interval_secs)
+                            for row in result.fetchall()]
         finally:
             await engine.dispose()
 

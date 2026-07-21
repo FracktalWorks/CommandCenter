@@ -369,12 +369,33 @@ async def _categories(db: Any, scope: str, params: dict[str, Any],
                       win: str, prev_win: str) -> list[dict]:
     """What KIND of mail arrived, and whether that mix is shifting.
 
-    Sourced from the same ``categories`` array the rules engine writes, so this
-    panel doubles as a read-out on classification coverage: a large
-    ``uncategorized`` count means the backfill has not caught up.
+    Doubles as a read-out on classification coverage — but ONLY if
+    "uncategorized" means it. An empty ``categories`` array does not:
+    conversation mail is classified per-THREAD into ``email_thread_status``, and
+    the per-message array stays empty by design.
+
+    Measured after this panel first shipped: it reported 142 uncategorized
+    arrivals in 30 days and advised running a backfill. 125 of them were inbox
+    mail the rules HAD processed, every one carrying a thread status — Done,
+    Awaiting, FYI, Needs-reply. Nothing was behind; the panel was counting
+    correctly-classified conversations as unclassified work and telling the user
+    to spend model calls re-doing it.
+
+    So a message with no categories falls back to its thread's status, and
+    "(uncategorized)" now means what it says: no cleanup category AND no
+    conversation status — mail nothing has ever looked at.
     """
+    # The thread table stores the status ENUM (NEEDS_REPLY / AWAITING), while a
+    # message label carries the display name ("Reply" / "Awaiting Reply"). Left
+    # unmapped the chart grew two rows for the same thing — "Done 41" directly
+    # above "DONE 69". Mirrors _THREAD_STATUS_MAP in replyzero.py; if a status
+    # is added there and not here it simply shows under its raw name rather
+    # than silently merging into the wrong bucket.
+    status_label = ("CASE ts.status WHEN 'NEEDS_REPLY' THEN 'Reply' "
+                    "WHEN 'AWAITING' THEN 'Awaiting Reply' "
+                    "WHEN 'DONE' THEN 'Done' ELSE ts.status END")
     rows = (await db.execute(text(
-        f"""SELECT COALESCE(cat, '(uncategorized)') AS category,
+        f"""SELECT COALESCE(cat, {status_label}, '(uncategorized)') AS category,
                    COUNT(*) FILTER (WHERE {win}) AS count,
                    COUNT(*) FILTER (WHERE {prev_win}) AS prev_count
               FROM email_messages m
@@ -382,6 +403,11 @@ async def _categories(db: Any, scope: str, params: dict[str, Any],
                 CASE WHEN COALESCE(array_length(m.categories, 1), 0) = 0
                      THEN ARRAY[NULL]::text[] ELSE m.categories END) AS cat
                 ON true
+              -- Consulted ONLY when the message itself carries no category, so
+              -- a labelled message is never also counted under its thread.
+              LEFT JOIN email_thread_status ts
+                ON cat IS NULL AND ts.account_id = m.account_id
+               AND ts.thread_id = m.thread_id
              WHERE {scope} AND ({win} OR {prev_win}) AND {_INBOUND}
              GROUP BY 1 HAVING COUNT(*) FILTER (WHERE {win}) > 0
              ORDER BY 2 DESC LIMIT 14"""

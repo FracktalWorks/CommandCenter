@@ -41,6 +41,7 @@ from gateway.routes.email.core import (
     _log,
     _parse_iso_date,
     _persist_rotated_creds,
+    _provider_for_account,
     router,
 )
 from pydantic import BaseModel
@@ -253,6 +254,138 @@ async def rules_history(
         }
     finally:
         await db.close()
+
+
+# Actions a retry will never perform, however the original rule was configured.
+# A retry re-runs a decision the assistant ALREADY made, possibly weeks ago; the
+# label and the move are idempotent and safe to repeat, but sending or drafting
+# a reply to a stale conversation is neither, and doing it unattended as part of
+# a bulk repair is exactly the kind of outward-facing surprise the user cannot
+# undo. If a reply was genuinely wanted, it can be drafted from the message.
+_RETRY_SKIPPED_ACTIONS = frozenset({"REPLY", "DRAFT_EMAIL", "FORWARD",
+                                    "SEND_EMAIL", "CALL_WEBHOOK"})
+
+
+async def retry_failed_executions(
+    account_id: str, *, limit: int = 200, user_email: str | None = None,
+) -> dict[str, Any]:
+    """Re-apply rule runs whose every action the mail server refused.
+
+    Deterministic repair, NOT re-classification: it replays the rule the
+    assistant already chose, so it costs no model calls and cannot change any
+    decision. The only thing that differs from the original run is the message
+    id — Outlook re-keys a message when it moves, which is what stranded these
+    in the first place, so each one is re-read immediately before acting.
+
+    Safe to run repeatedly: LABEL and MOVE_FOLDER are idempotent, and a row that
+    succeeds is flipped to APPLIED so it is not retried again.
+    """
+    db = await _get_db()
+    try:
+        owner = user_email
+        if owner is None:
+            owner = (await db.execute(text(
+                "SELECT user_id FROM email_accounts WHERE id = :aid"
+            ), {"aid": account_id})).scalar()
+        if not owner:
+            raise HTTPException(status_code=404, detail="Account not found")
+
+        rows = (await db.execute(text(
+            """SELECT er.id, er.rule_id, er.rule_name, er.message_id,
+                      em.provider_message_id, em.thread_id, em.subject,
+                      em.body_text, em.from_address
+                 FROM email_executed_rules er
+                 JOIN email_messages em ON em.id = er.message_id
+                WHERE er.account_id = :aid AND er.status = 'FAILED'
+                  AND er.rule_id IS NOT NULL
+                ORDER BY er.created_at DESC
+                LIMIT :limit"""
+        ), {"aid": account_id, "limit": limit})).fetchall()
+        if not rows:
+            return {"considered": 0, "repaired": 0, "still_failing": 0,
+                    "skipped_actions": []}
+
+        provider, store, _owner_email = await _provider_for_account(
+            db, account_id, owner)
+        if not await provider.authenticate():
+            raise HTTPException(status_code=502, detail="Provider auth failed")
+        about, signature = await _load_assistant_about(db, account_id)
+
+        # One lookup per distinct rule rather than per row: a batch repair is
+        # usually a handful of rules across many messages.
+        actions_by_rule: dict[str, list[dict[str, Any]]] = {}
+        for rid in {str(r.rule_id) for r in rows}:
+            act_rows = (await db.execute(text(
+                """SELECT type, label, subject, content, to_address, cc_address,
+                          bcc_address, url FROM email_actions
+                    WHERE rule_id = :rid"""
+            ), {"rid": rid})).fetchall()
+            actions_by_rule[rid] = [dict(a._mapping) for a in act_rows]
+
+        repaired = 0
+        still_failing = 0
+        skipped: set[str] = set()
+        for r in rows:
+            actions = [a for a in actions_by_rule.get(str(r.rule_id), [])
+                       if a.get("type") not in _RETRY_SKIPPED_ACTIONS]
+            skipped.update(
+                a["type"] for a in actions_by_rule.get(str(r.rule_id), [])
+                if a.get("type") in _RETRY_SKIPPED_ACTIONS)
+            if not actions:
+                continue
+            frm = r.from_address if isinstance(r.from_address, dict) \
+                else json.loads(r.from_address or "{}")
+            email = {"subject": r.subject or "", "from": frm.get("email", ""),
+                     "body": r.body_text or "", "thread_id": r.thread_id or ""}
+            errors: list[dict[str, str]] = []
+            taken = await _apply_rule_actions(
+                db, provider, str(r.message_id), r.provider_message_id,
+                actions, email, about, signature, owner,
+                account_id=account_id, errors_out=errors,
+            )
+            status = "FAILED" if (errors and not taken) else "APPLIED"
+            if status == "APPLIED":
+                repaired += 1
+            else:
+                still_failing += 1
+            await db.execute(text(
+                "UPDATE email_executed_rules SET status = :st, "
+                "actions_taken = :acts, action_errors = CAST(:aerr AS JSONB) "
+                "WHERE id = :eid"
+            ), {"eid": str(r.id), "st": status, "acts": json.dumps(taken),
+                "aerr": json.dumps(errors)})
+
+        await _persist_rotated_creds(db, store, account_id, provider)
+        await db.commit()
+        _log.info("email.retry_failed_done", account_id=account_id,
+                  considered=len(rows), repaired=repaired,
+                  still_failing=still_failing)
+        return {"considered": len(rows), "repaired": repaired,
+                "still_failing": still_failing,
+                "skipped_actions": sorted(skipped)}
+    finally:
+        await db.close()
+
+
+class RetryFailedRequest(BaseModel):
+    account_id: str
+    limit: int = 200
+
+
+@router.post("/rules/history/retry-failed")
+async def retry_failed(
+    req: RetryFailedRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Repair rule runs the mail server refused. Never drafts or sends."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    return await retry_failed_executions(
+        req.account_id, limit=max(1, min(req.limit, 1000)),
+        user_email=user.email or "anonymous")
 
 
 @router.post("/rules/history/{exec_id}/approve")

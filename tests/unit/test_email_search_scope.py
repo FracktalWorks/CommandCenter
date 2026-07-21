@@ -57,16 +57,18 @@ async def test_scope_all_excludes_junk_and_trash():
     assert "folder" not in params  # no equality predicate for a real folder
 
 
-async def test_searching_all_folders_still_finds_your_own_sent_mail():
-    """Browsing All hides sent mail; SEARCHING All must not.
+async def test_searching_all_folders_still_finds_your_own_mail():
+    """Browsing All hides the user's own mail; SEARCHING All must not.
 
     "What did I tell them?" is one of the commonest reasons to search, and a
     scope the UI labels "All folders" that quietly skipped the user's own
-    replies would fail the query it exists to serve. This is the one place the
-    two meanings of "all" are allowed to diverge, so it is pinned explicitly —
-    otherwise someone later "restores consistency" and breaks search."""
+    replies would fail the query it exists to serve. Drafts are the same case:
+    half-written text is a poor thing to browse but a fine thing to go looking
+    for. This is the one place the two meanings of "all" are allowed to
+    diverge, so it is pinned explicitly — otherwise someone later "restores
+    consistency" and breaks search."""
     _resp, _sql, params = await _run_search(q="invoice", folder="all")
-    assert "sent" not in params["folder_excludes"]
+    assert not {"sent", "drafts"} & set(params["folder_excludes"])
 
 
 async def test_scope_real_folder_matches_case_insensitively():
@@ -246,16 +248,17 @@ async def _run_messages_list(folder: str) -> tuple[str, dict]:
     return " ".join(s for s, _ in captured), params
 
 
-async def test_browsing_all_hides_the_users_own_sent_mail():
-    """All answers "what came in?".
+async def test_browsing_all_hides_the_users_own_mail():
+    """All answers "what came in?" — and the user's own mail never came in.
 
-    Sent mail used to fall into it — 442 messages on the live account — so every
+    Sent used to fall into it (442 messages on the live account), so every
     conversation appeared twice and the list read as an activity log rather than
-    an inbox. Excluding it costs nothing in reach: Sent has its own sidebar
-    entry, and the thread view ignores the folder filter entirely, so opening a
-    conversation still shows both sides of it."""
+    an inbox; drafts are unfinished text with no counterparty, which belongs in
+    a composer rather than a reading list. Excluding both costs nothing in
+    reach: each has its own sidebar entry, and the thread view ignores the
+    folder filter entirely, so opening a conversation still shows both sides."""
     _sql, params = await _run_messages_list(folder="all")
-    assert "sent" in params["folder_excludes"]
+    assert {"sent", "drafts"} <= set(params["folder_excludes"])
 
 
 async def test_messages_list_all_folder_matches_search_all_scope():
@@ -271,10 +274,12 @@ async def test_messages_list_all_folder_matches_search_all_scope():
     thrown_away = {"junk", "trash"}
     assert thrown_away <= set(browse["folder_excludes"])
     assert thrown_away <= set(search["folder_excludes"])
-    # Sent is the ONLY sanctioned difference. If a third folder ever diverges,
-    # one of the two surfaces has drifted rather than been designed.
+    # The user's OWN mail — sent and drafts — is the only sanctioned difference:
+    # neither ever arrived, so neither belongs in a view of what came in, but
+    # both are legitimate things to go looking for. If any other folder ever
+    # diverges, one of the two surfaces has drifted rather than been designed.
     assert (set(browse["folder_excludes"]) ^ set(search["folder_excludes"])
-            == {"sent"})
+            == {"sent", "drafts"})
 
 
 async def test_facet_chips_count_the_same_mail_the_list_shows():

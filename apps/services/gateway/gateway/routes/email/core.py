@@ -298,18 +298,21 @@ FOLDER_ALL = "all"
 # What "everything" deliberately leaves out when BROWSING.
 #
 # Junk and trash are mail the user has already thrown away — sweeping them into
-# an unscoped view would bury real mail under spam. Sent is excluded for a
-# different reason: All is a view of mail that ARRIVED, and interleaving the
-# user's own outgoing mail into it doubles every conversation and makes the list
-# read as a log rather than an inbox. (It was 442 of the live account's
-# messages.) A reply is still visible where it belongs — the thread view ignores
-# the folder filter entirely, so opening a conversation shows both sides.
+# an unscoped view would bury real mail under spam. Sent and drafts are excluded
+# for a different reason: All is a view of mail that ARRIVED, and neither of them
+# ever did. Sent doubles every conversation and makes the list read as a log
+# rather than an inbox (442 of the live account's messages); a draft is unfinished
+# text with no counterparty, and it belongs in a composer rather than a reading
+# list. A reply is still visible where it belongs — the thread view ignores the
+# folder filter entirely, so opening a conversation shows both sides.
 #
-# All three stay reachable by selecting the folder explicitly. There is no
+# All four stay reachable by selecting the folder explicitly. There is no
 # "spam" entry because there is no such folder to exclude: providers/base.py
 # canonicalises spam → junk on ingestion, for Gmail as well as Outlook, so junk
 # already covers it. Listing it would be dead weight that reads as coverage.
-FOLDER_ALL_EXCLUDES = ("junk", "trash", "sent")
+# "draft" needs no entry either, for the same reason — it canonicalises to
+# "drafts".
+FOLDER_ALL_EXCLUDES = ("junk", "trash", "sent", "drafts")
 
 # What "All folders" leaves out when SEARCHING — deliberately NOT the same set.
 #
@@ -317,7 +320,9 @@ FOLDER_ALL_EXCLUDES = ("junk", "trash", "sent")
 # message?", and "what did I tell them?" is one of the commonest reasons to
 # search at all. A scope labelled "All folders" that silently skipped the user's
 # own sent mail would be a worse defect than the one excluding it from the list
-# fixes. Junk/trash stay out of both: search offers them as explicit scopes.
+# fixes. The same holds for drafts: half-written text is a poor thing to browse
+# but a perfectly good thing to go looking for. Junk/trash stay out of both —
+# search offers them as explicit scopes.
 FOLDER_ALL_SEARCH_EXCLUDES = ("junk", "trash")
 
 

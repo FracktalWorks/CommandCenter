@@ -68,11 +68,13 @@ export const FOLDER_ALL = "all";
  *  sidebar's All count (withAllCount); a copy that drifted would print a badge
  *  the list underneath it could not account for.
  *
- *  Sent is here because All answers "what came in?" — folding the user's own
- *  outgoing mail into it doubles every conversation. Replies stay visible in
- *  the thread view, which ignores the folder filter, and Sent has its own
- *  sidebar entry. "spam" canonicalises to "junk" above, so it needs no entry. */
-const FOLDER_ALL_EXCLUDES = new Set(["junk", "trash", "sent"]);
+ *  Sent and drafts are here because All answers "what came in?" and neither of
+ *  them ever did — folding sent mail in doubles every conversation, and a draft
+ *  is unfinished text that belongs in a composer, not a reading list. Replies
+ *  stay visible in the thread view, which ignores the folder filter, and both
+ *  have their own sidebar entries. "spam" and "draft" canonicalise to "junk"
+ *  and "drafts" above, so neither needs an entry. */
+const FOLDER_ALL_EXCLUDES = new Set(["junk", "trash", "sent", "drafts"]);
 
 /**
  * The pseudo-folders: sidebar entries that are VIEWS, not real provider folders.
@@ -170,7 +172,7 @@ function mergeFolders(
 /**
  * Give the All pseudo-folder a count, since no provider reports one for it.
  *
- * Sums every real folder it spans — junk/trash/sent are excluded by definition
+ * Sums every real folder it spans — junk/trash/sent/drafts are excluded by def.
  * (FOLDER_ALL_EXCLUDES, the same set that filters the list), and "starred" is a
  * flag over mail that already lives in another folder, so counting it would
  * double-count. Each message lives in exactly one folder, so the sum is the

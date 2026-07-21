@@ -34,6 +34,28 @@ from __future__ import annotations
 
 import json as _json
 
+# Tools that PARK the turn waiting on a human. When a run's last tool is one of
+# these, the turn ending with no closing assistant text is CORRECT, not a
+# failure: the card these render IS the output, and (as the module docstring
+# says) "the agent MUST stop after calling this tool".
+#
+# Anything reasoning about "the agent produced no text" must consult this set
+# first, or it will report a normal question as a truncated answer — and tell
+# the user to say "continue" when the right move is to answer the question.
+#
+# ``ask_user`` is the GitHub Copilot SDK's NATIVE elicitation tool (not defined
+# in this module); it is listed because it parks the turn identically.
+HITL_BLOCKING_TOOLS: frozenset[str] = frozenset({
+    "ask_questions",
+    "ask_user",
+    "request_confirmation",
+})
+
+
+def is_hitl_blocking_tool(name: str) -> bool:
+    """True if *name* is a tool that parks the turn awaiting user input."""
+    return (name or "").strip().lower() in HITL_BLOCKING_TOOLS
+
 
 async def ask_questions(questions: str) -> str:
     """Ask the user one or more clarifying questions before proceeding.

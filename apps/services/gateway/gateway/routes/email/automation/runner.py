@@ -298,6 +298,16 @@ async def retry_failed_executions(
                  JOIN email_messages em ON em.id = er.message_id
                 WHERE er.account_id = :aid AND er.status = 'FAILED'
                   AND er.rule_id IS NOT NULL
+                  -- NEVER repair mail the user has since thrown away. Most of
+                  -- these failures are the provider racing us, and by far the
+                  -- commonest way that happens is the message being deleted or
+                  -- junked — 92 of the 138 live failures ended in trash. A
+                  -- MOVE_FOLDER replayed against one of those would lift it
+                  -- back OUT of the bin into a category folder, resurrecting
+                  -- mail the user deleted. A repair must never be able to do
+                  -- that.
+                  AND LOWER(COALESCE(em.folder, '')) NOT IN
+                      ('trash', 'junk', 'spam', 'drafts', 'draft')
                 ORDER BY er.created_at DESC
                 LIMIT :limit"""
         ), {"aid": account_id, "limit": limit})).fetchall()

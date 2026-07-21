@@ -63,6 +63,11 @@ function FixDialog({
   // sets the thread status instead (a sender pin there is wrong + overridden).
   // Uncheck "from <sender>" to fix just this email without learning the sender.
   const [useSender, setUseSender] = useState(true);
+  // Pinning is opt-in. A pin skips the classifier for one sender, so making it
+  // the default meant a correction never improved the AI — it removed the
+  // sender from the AI's reach and left the same misunderstanding in place for
+  // everyone else.
+  const [pinSender, setPinSender] = useState(false);
   const [useSubject, setUseSubject] = useState(false);
   const [subjectKw, setSubjectKw] = useState("");
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
@@ -106,6 +111,11 @@ function FixDialog({
         expected: expected === "none" ? "none" : expected.id,
         matchedRuleIds: matchedIds,
         explanation,
+        // The explanation IS the lesson. It goes into the classifier's prompt
+        // for this rule, so the same judgement improves for every sender rather
+        // than only for the one being corrected.
+        guidance: explanation.trim() || undefined,
+        pinSender,
         messageId: messageId || undefined,
         subjectKeyword: subjectVal || undefined,
       });
@@ -282,15 +292,35 @@ function FixDialog({
               expected === "new"
                 ? "Describe the rule you want for emails like this…"
                 : expected === "none"
-                  ? "Explain why this email shouldn't have matched…"
-                  : `Explain why this should match "${expectedLabel}"…`
+                  ? "What should the assistant learn? e.g. \u201cMail from our own domain is never a cold email.\u201d"
+                  : `What should the assistant learn? e.g. \u201cVendor product digests belong in ${expectedLabel}.\u201d`
             }
             className={`${INPUT_CLS} resize-none`}
           />
+          {expected !== "new" && expected !== "none" && (
+            <label className="flex items-start gap-2 text-xs text-foreground cursor-pointer rounded-lg border border-border p-2.5">
+              <input
+                type="checkbox"
+                checked={pinSender}
+                onChange={() => setPinSender((v) => !v)}
+                className="accent-primary mt-0.5"
+              />
+              <span className="min-w-0">
+                <span className="block">
+                  Always file mail from this sender here
+                </span>
+                <span className="block text-[10px] text-muted-foreground leading-snug">
+                  Skips the AI entirely for this one sender — instant and free,
+                  but it stops adapting, so it suits newsletters and bulk mail
+                  rather than people.
+                </span>
+              </span>
+            </label>
+          )}
           {expected !== "new" && (
             <details className="rounded-lg border border-border p-2.5">
               <summary className="text-[11px] font-medium text-foreground cursor-pointer select-none">
-                Fine-tune what&apos;s learned (sender / subject)
+                Fine-tune what&apos;s pinned (sender / subject)
               </summary>
               <div className="space-y-2 mt-2">
                 <label className="flex items-center gap-2 text-xs text-foreground cursor-pointer">
@@ -328,7 +358,9 @@ function FixDialog({
           <p className="text-[10px] text-muted-foreground">
             {willChat
               ? "The assistant will refine your rules from your explanation."
-              : "We'll remember this instantly for matching emails."}
+              : pinSender
+                ? "Teaches the AI, and pins this sender so their mail skips it."
+                : "Teaches the AI — it will apply this to every sender, not just this one."}
           </p>
           {error && (
             <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">

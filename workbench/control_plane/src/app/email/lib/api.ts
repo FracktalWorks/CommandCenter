@@ -4,6 +4,7 @@ import {
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, KnowledgeEntry,
   LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
+  RuleGuidance,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -1215,6 +1216,13 @@ export async function submitRuleFeedback(params: {
   threadId?: string;
   /** Optional subject keyword to learn alongside (or instead of) the sender. */
   subjectKeyword?: string;
+  /** What the correction should TEACH the classifier — goes into the prompt, so
+   *  it changes how the model reasons about every sender, not just this one. */
+  guidance?: string;
+  /** Also pin this sender to the rule, skipping the classifier for them. OFF by
+   *  default: a correction should improve the AI, not carve one sender out of
+   *  its reach and leave the same misunderstanding everywhere else. */
+  pinSender?: boolean;
 }): Promise<{
   created: boolean;
   action?: string;
@@ -1235,8 +1243,46 @@ export async function submitRuleFeedback(params: {
       message_id: params.messageId ?? null,
       thread_id: params.threadId ?? null,
       subject_keyword: params.subjectKeyword || null,
+      guidance: params.guidance || null,
+      pin_sender: params.pinSender ?? false,
     }),
   });
+}
+
+/** Corrections that teach the classifier — the "improves the AI" half. */
+export async function listRuleGuidance(
+  accountId: string,
+): Promise<RuleGuidance[]> {
+  const res = await gatewayFetch<{ guidance: RuleGuidance[] }>(
+    `/email/rules/guidance?account_id=${encodeURIComponent(accountId)}`,
+  );
+  return res.guidance ?? [];
+}
+
+export async function addRuleGuidance(params: {
+  accountId: string;
+  guidance: string;
+  ruleId?: string | null;
+}): Promise<{ ok: boolean }> {
+  return gatewayFetch("/email/rules/guidance", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      guidance: params.guidance,
+      rule_id: params.ruleId ?? null,
+    }),
+  });
+}
+
+export async function deleteRuleGuidance(
+  id: string,
+  accountId: string,
+): Promise<void> {
+  await gatewayFetch(
+    `/email/rules/guidance/${encodeURIComponent(id)}` +
+      `?account_id=${encodeURIComponent(accountId)}`,
+    { method: "DELETE" },
+  );
 }
 
 /** List learned classification patterns (sender → rule include/exclude). */

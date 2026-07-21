@@ -14,13 +14,14 @@ import {
   createKnowledge, deleteKnowledge, deleteLearnedPattern, deleteRulePattern,
   generateWritingStyle, getAssistantSettings, listColdSenders, listKnowledge,
   listLearnedPatterns, listRulePatterns, listRules, resetRules,
+  listRuleGuidance, deleteRuleGuidance,
   reviewRulePatterns, saveAssistantSettings, scanFollowUps, updateKnowledge,
   upsertColdSender,
 } from "../../../lib/api";
 import {
   AssistantSettings, ColdBlockerMode, ColdSender, DRAFT_CONFIDENCE_OPTIONS,
   DraftConfidence, KnowledgeEntry, LLMConfigResponse, LearnedPattern,
-  LearnedRulePattern, WEEKDAYS,
+  LearnedRulePattern, RuleGuidance, WEEKDAYS,
 } from "../../../lib/types";
 import { SignatureEditor } from "../../SignatureEditor";
 import { Modal, SectionHeader, SettingCard, Toggle } from "../ui";
@@ -1341,6 +1342,7 @@ function isPendingReview(p: LearnedRulePattern): boolean {
 
 function LearnedPatternsList({ accountId }: { accountId: string | null }) {
   const [patterns, setPatterns] = useState<LearnedRulePattern[]>([]);
+  const [guidance, setGuidance] = useState<RuleGuidance[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
 
@@ -1350,9 +1352,14 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
       return;
     }
     setLoading(true);
-    listRulePatterns(accountId)
-      .then(setPatterns)
-      .catch(() => setPatterns([]))
+    Promise.all([
+      listRulePatterns(accountId).catch(() => [] as LearnedRulePattern[]),
+      listRuleGuidance(accountId).catch(() => [] as RuleGuidance[]),
+    ])
+      .then(([p, g]) => {
+        setPatterns(p);
+        setGuidance(g);
+      })
       .finally(() => setLoading(false));
   }, [accountId]);
 
@@ -1362,6 +1369,16 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
     setPatterns((prev) => prev.filter((p) => p.id !== id));
     try {
       await deleteRulePattern(id);
+    } catch {
+      load();
+    }
+  };
+
+  const forgetGuidance = async (id: string) => {
+    if (!accountId) return;
+    setGuidance((prev) => prev.filter((g) => g.id !== id));
+    try {
+      await deleteRuleGuidance(id, accountId);
     } catch {
       load();
     }
@@ -1381,14 +1398,14 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
   };
 
   if (loading) return <Spinner label="Loading learned patterns…" />;
-  if (patterns.length === 0) {
+  if (patterns.length === 0 && guidance.length === 0) {
     return (
       <div className="text-center text-xs text-muted-foreground py-6 space-y-1">
-        <p>No learned patterns yet.</p>
+        <p>Nothing learned yet.</p>
         <p className="text-[11px]">
-          Use the <b>Fix</b> button on a History or Test result to teach the
-          assistant which rule a sender should (or shouldn&apos;t) match — it
-          shows up here and is applied automatically next time.
+          Use the <b>Fix</b> button on a History or Test result to correct a
+          classification. By default that teaches the AI, so it gets the same
+          judgement right for every sender — not just the one you corrected.
         </p>
       </div>
     );
@@ -1397,7 +1414,65 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
   const pending = patterns.filter(isPendingReview);
 
   return (
-    <div className="space-y-3">
+    <div className="space-y-5">
+      {/* Two sections, because these are two different things and conflating
+          them is what made the screen unreadable: one CHANGES the AI's
+          judgement, the other REPLACES it. A user deciding whether to keep an
+          entry needs to know which. */}
+      <section>
+        <SectionExplainer
+          title="Teaching the AI"
+          detail={
+            "Corrections that go into the classifier's prompt. These change how " +
+            "it reasons about every sender — they cost a model call, and they " +
+            "generalise."
+          }
+        />
+        {guidance.length === 0 ? (
+          <p className="text-[11px] text-muted-foreground px-1 py-2">
+            No corrections yet. Pressing <b>Fix</b> on a misclassified email
+            adds one here.
+          </p>
+        ) : (
+          <div className="space-y-1.5">
+            {guidance.map((g) => (
+              <div
+                key={g.id}
+                className="rounded-lg border border-border bg-card px-2.5 py-2"
+              >
+                <div className="flex items-center gap-2">
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-sky-500/15 text-sky-400 flex-shrink-0">
+                    {g.rule_name || "All rules"}
+                  </span>
+                  <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-secondary text-muted-foreground flex-shrink-0">
+                    {g.source === "FIX" ? "From a Fix" : "Added by you"}
+                  </span>
+                  <button
+                    onClick={() => forgetGuidance(g.id)}
+                    title="Withdraw this correction"
+                    className="ml-auto p-1 rounded-md text-muted-foreground hover:text-destructive hover:bg-destructive/10 transition-colors flex-shrink-0"
+                  >
+                    <Trash2 size={12} />
+                  </button>
+                </div>
+                <p className="mt-1 text-xs text-foreground/90 break-words">
+                  {g.guidance}
+                </p>
+              </div>
+            ))}
+          </div>
+        )}
+      </section>
+
+      <section className="space-y-3">
+        <SectionExplainer
+          title="Skipping the AI"
+          detail={
+            "Senders pinned to a rule. Their mail is filed without the model " +
+            "ever seeing it — free and instant, but it only ever applies to " +
+            "that one sender, and a wrong pin is silent."
+          }
+        />
       {/* The gate, stated. These patterns were inferred by the assistant from
           its own agreement with itself, and each one is projected across every
           matching message in the mailbox once the cleaner is allowed to use it —
@@ -1526,7 +1601,25 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
             </div>
           );
         })}
-      </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+/** A section heading that says what the section IS FOR. Without it the two
+ *  halves look like the same list split arbitrarily, and the distinction that
+ *  matters — improve the AI vs replace it — is invisible. */
+function SectionExplainer({
+  title, detail,
+}: {
+  title: string;
+  detail: string;
+}) {
+  return (
+    <div className="mb-2">
+      <h4 className="text-xs font-semibold text-foreground">{title}</h4>
+      <p className="text-[11px] text-muted-foreground leading-snug">{detail}</p>
     </div>
   );
 }

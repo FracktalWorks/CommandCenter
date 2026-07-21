@@ -63,7 +63,7 @@ async def test_fix_to_conversation_rule_sets_status_not_pattern() -> None:
     rules = [_rule("r-toreply", "Reply"), _rule("r-news", "Newsletter")]
     req = m.RuleFeedbackRequest(
         account_id="acc-1", sender="jo@x.com", expected="r-toreply",
-        matched_rule_ids=["r-news"], message_id="m1")
+        matched_rule_ids=["r-news"], message_id="m1", pin_sender=True)
     resp, upserts, status_calls = await _run_feedback(req, rules=rules)
 
     # The conversation correction set the thread status directly…
@@ -76,18 +76,50 @@ async def test_fix_to_conversation_rule_sets_status_not_pattern() -> None:
     assert resp["status_correction"]["ok"] is True
 
 
-async def test_fix_to_cleanup_rule_learns_from_pattern() -> None:
+async def test_fix_pins_the_sender_only_when_asked() -> None:
+    """A pattern SKIPS the classifier for one sender. Writing one on every Fix
+    meant a correction never made the model better at anything — it carved the
+    sender out of the AI's reach and left the same misunderstanding in place for
+    everyone else. Pinning is now an explicit opt-in."""
     rules = [_rule("r-news", "Newsletter"), _rule("r-receipt", "Receipt")]
     req = m.RuleFeedbackRequest(
         account_id="acc-1", sender="news@brand.com", expected="r-news",
-        matched_rule_ids=["r-receipt"], message_id="m1")
+        matched_rule_ids=["r-receipt"], message_id="m1", pin_sender=True)
     resp, upserts, status_calls = await _run_feedback(req, rules=rules)
 
-    # Cleanup rule → learn a FROM include pattern (no thread-status correction).
     assert status_calls == []
     assert ("r-news", "news@brand.com", False) in upserts
     assert ("r-receipt", "news@brand.com", True) in upserts
     assert resp["status_correction"] is None
+    assert resp["created"] is True
+
+
+async def test_fix_writes_no_pattern_by_default() -> None:
+    """The default now teaches instead of bypassing. Includes AND excludes are
+    both gated: an exclude is still a hard-coded rule about one sender."""
+    rules = [_rule("r-news", "Newsletter"), _rule("r-receipt", "Receipt")]
+    req = m.RuleFeedbackRequest(
+        account_id="acc-1", sender="news@brand.com", expected="r-news",
+        matched_rule_ids=["r-receipt"], message_id="m1")
+    _resp, upserts, _status = await _run_feedback(req, rules=rules)
+
+    assert upserts == [], (
+        "Fix wrote a sender pin without being asked to — the behaviour this "
+        "change exists to remove"
+    )
+
+
+async def test_guidance_alone_counts_as_a_correction() -> None:
+    """Otherwise the UI reports "nothing was learned" for the case that is now
+    the DEFAULT, and the user repeats the correction forever."""
+    rules = [_rule("r-news", "Newsletter")]
+    req = m.RuleFeedbackRequest(
+        account_id="acc-1", sender="news@brand.com", expected="r-news",
+        message_id="m1",
+        guidance="Vendor product digests are Newsletter, not Cold Email.")
+    resp, upserts, _status = await _run_feedback(req, rules=rules)
+
+    assert upserts == []
     assert resp["created"] is True
 
 

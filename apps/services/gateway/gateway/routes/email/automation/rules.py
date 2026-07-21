@@ -775,6 +775,107 @@ async def _upsert_rule_pattern(
         "tid": thread_id, "authored": user_authored})
 
 
+async def _upsert_rule_guidance(
+    db: Any, account_id: str, rule_id: str | None, guidance: str,
+    source: str = "FIX", message_id: str | None = None,
+    thread_id: str | None = None,
+) -> None:
+    """Record a correction that teaches the classifier.
+
+    Idempotent on the text: repeating a correction should not stack duplicates
+    into every future prompt, so a re-teach refreshes the existing row instead.
+    """
+    await db.execute(text(
+        """INSERT INTO email_rule_guidance
+             (account_id, rule_id, guidance, source, message_id, thread_id)
+           VALUES (:aid, :rid, :g, :src, :mid, :tid)
+           ON CONFLICT (account_id,
+                        COALESCE(rule_id,
+                                 '00000000-0000-0000-0000-000000000000'::uuid),
+                        LOWER(TRIM(guidance)))
+           DO UPDATE SET active = true, updated_at = now(),
+                         source = EXCLUDED.source"""
+    ), {"aid": account_id, "rid": rule_id, "g": guidance.strip()[:1000],
+        "src": source, "mid": message_id, "tid": thread_id})
+
+
+class RuleGuidanceRequest(BaseModel):
+    account_id: str
+    guidance: str
+    rule_id: str | None = None
+
+
+@router.get("/rules/guidance")
+async def list_rule_guidance(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Corrections that teach the classifier — the "improves the AI" half of the
+    Learned Patterns screen."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        rows = (await db.execute(text(
+            """SELECT g.id, g.rule_id, r.name AS rule_name, g.guidance,
+                      g.source, g.thread_id, g.created_at
+                 FROM email_rule_guidance g
+                 LEFT JOIN email_rules r ON r.id = g.rule_id
+                WHERE g.account_id = :aid AND g.active
+                ORDER BY g.created_at DESC"""
+        ), {"aid": account_id})).fetchall()
+        return {"guidance": [
+            {"id": str(r.id),
+             "rule_id": str(r.rule_id) if r.rule_id else None,
+             "rule_name": r.rule_name,
+             "guidance": r.guidance, "source": r.source,
+             "thread_id": r.thread_id,
+             "created_at": r.created_at.isoformat() if r.created_at else None}
+            for r in rows]}
+    finally:
+        await db.close()
+
+
+@router.post("/rules/guidance")
+async def add_rule_guidance(
+    req: RuleGuidanceRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Write a correction by hand, without going through a specific email."""
+    text_ = (req.guidance or "").strip()
+    if not text_:
+        raise HTTPException(status_code=400, detail="Guidance cannot be empty")
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        await _upsert_rule_guidance(
+            db, req.account_id, req.rule_id, text_, "USER")
+        await db.commit()
+        return {"ok": True}
+    finally:
+        await db.close()
+
+
+@router.delete("/rules/guidance/{gid}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_rule_guidance(
+    gid: str,
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Withdraw a correction. Deleted outright rather than deactivated — unlike a
+    rejected PATTERN, nothing re-infers guidance, so there is no verdict to
+    remember and a leftover row would just be clutter the user cannot see."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        await db.execute(text(
+            "DELETE FROM email_rule_guidance "
+            " WHERE id = :gid AND account_id = :aid"
+        ), {"gid": gid, "aid": account_id})
+        await db.commit()
+    finally:
+        await db.close()
+
+
 class RuleFeedbackRequest(BaseModel):
     account_id: str
     sender: str                       # sender email — the FROM pattern value
@@ -786,6 +887,15 @@ class RuleFeedbackRequest(BaseModel):
     # Optional SUBJECT keyword to learn alongside (or instead of) the sender —
     # inbox-zero's GroupItem supports both SENDER and SUBJECT signals.
     subject_keyword: str | None = None
+    # What the correction should TEACH. Free text that goes into the classifier
+    # prompt for `expected`, so the model reasons differently about every sender
+    # — not just this one.
+    guidance: str | None = None
+    # Whether to ALSO pin this sender to the rule, skipping the classifier for
+    # them entirely. Defaults OFF: a correction should make the AI better, not
+    # carve one sender out of its reach and leave the same misunderstanding in
+    # place everywhere else.
+    pin_sender: bool = False
 
 
 @router.post("/rules/feedback")
@@ -849,6 +959,13 @@ async def rule_feedback(
             nothing — the user sees a success toast, changes nothing, and repeats
             the same correction forever.
             """
+            # Pattern writes are OPT-IN now. A pattern skips the classifier for
+            # one sender; correcting a mistake should instead change how the
+            # model reasons, or the same misunderstanding survives untouched for
+            # every other sender. Gated here because this is the single choke
+            # point for both include and exclude writes in the Fix flow.
+            if not req.pin_sender:
+                return False
             saved = False
             for ptype, val in signals:
                 if await _upsert_rule_pattern(
@@ -894,8 +1011,20 @@ async def rule_feedback(
                     if await _teach(rid, True):
                         learned.append({"rule_id": rid, "exclude": True})
 
+        # The half that teaches rather than bypasses. Attached to the rule the
+        # user says is correct; account-wide when they are only saying what this
+        # ISN'T, since there is no one rule to hang it on.
+        taught = (req.guidance or "").strip()
+        if taught:
+            target = None if req.expected in ("none", "new") else req.expected
+            await _upsert_rule_guidance(
+                db, req.account_id, target, taught, "FIX",
+                req.message_id, req.thread_id)
+
         await db.commit()
-        created = bool(learned or (status_correction and status_correction.get("ok")))
+        created = bool(
+            learned or taught
+            or (status_correction and status_correction.get("ok")))
         return {"created": created, "learned": learned, "sender": sender,
                 "subject_keyword": subject_kw or None,
                 "signals": [t for t, _ in signals],

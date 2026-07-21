@@ -43,6 +43,38 @@ async function buildGatewayHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
+// Most email endpoints answer in well under a second, so a tight 30s abort keeps
+// a genuinely hung upstream from pinning a Next connection. But the AI drafting /
+// agent endpoints legitimately run long: "Draft with AI" on an empty reply body
+// orchestrates memory retrieval + a routing LLM call + a specialist agent (up to
+// ~18s) + a tier-powerful generation, which routinely passes 30s. Aborting those
+// at 30s surfaced to the user as a "502 gateway error" with no draft produced.
+// Give the known LLM/agent-backed POST endpoints the same generous budget the GET
+// handler already uses for large downloads (120s); everything else stays at 30s.
+const AI_SLOW_TIMEOUT_MS = 120_000;
+const DEFAULT_POST_TIMEOUT_MS = 30_000;
+const AI_SLOW_POST_PATHS = new Set([
+  "compose-assist",
+  "draft-reply",
+  "ai/chat",
+  "ai/quick-action",
+  "rules/generate",
+  "rules/test",
+  "rules/test/recent",
+  "rules/run-message",
+  "rules/patterns/review",
+  "assistant/writing-style/generate",
+  "messages/summaries",
+  "senders/categorize",
+  "follow-ups/scan",
+]);
+
+function postTimeoutMs(path: string[]): number {
+  return AI_SLOW_POST_PATHS.has(path.join("/"))
+    ? AI_SLOW_TIMEOUT_MS
+    : DEFAULT_POST_TIMEOUT_MS;
+}
+
 function buildUpstreamUrl(path: string[], req: NextRequest): string {
   // Path-traversal guard: this [...path] catch-all must only ever hit the
   // gateway's /email/* surface. A segment of ".." (or one Next decodes to it
@@ -126,7 +158,7 @@ export async function POST(
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
-      signal: AbortSignal.timeout(30_000),
+      signal: AbortSignal.timeout(postTimeoutMs(path)),
     });
     const resBody = await res.json().catch(() => ({}));
     return NextResponse.json(resBody, { status: res.status });

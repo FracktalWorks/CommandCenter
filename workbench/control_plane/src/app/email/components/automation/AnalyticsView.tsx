@@ -17,9 +17,9 @@
 import { useEffect, useMemo, useState } from "react";
 import {
   ArrowDownRight, ArrowUpRight, BarChart3, Clock, Inbox, Loader2, MailMinus,
-  Sparkles, TriangleAlert, Users, Minus, ArrowRight, CheckCheck,
+  Sparkles, TriangleAlert, Users, Minus, ArrowRight, CheckCheck, RotateCcw,
 } from "lucide-react";
-import { getAnalyticsOverview } from "../../lib/api";
+import { getAnalyticsOverview, retryFailedRuleActions } from "../../lib/api";
 import { AnalyticsOverview, AutomationFeature, NoisySender } from "../../lib/types";
 
 interface AnalyticsViewProps {
@@ -137,7 +137,11 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
             <Volume data={data} days={days} />
             <NeverReplied data={data} days={days} onNavigate={onNavigate} />
             <Arrivals data={data} />
-            <Assistant data={data} onNavigate={onNavigate} />
+            <Assistant
+              data={data}
+              accountId={accountId}
+              onNavigate={onNavigate}
+            />
           </>
         )}
       </div>
@@ -673,9 +677,10 @@ function Arrivals({ data }: { data: AnalyticsOverview }) {
 /* ── Section 6 · assistant ────────────────────────────────────────────────── */
 
 function Assistant({
-  data, onNavigate,
+  data, accountId, onNavigate,
 }: {
   data: AnalyticsOverview;
+  accountId: string | null;
   onNavigate?: (f: AutomationFeature) => void;
 }) {
   const rs = data.rule_stats;
@@ -760,10 +765,15 @@ function Assistant({
               value={t.failed_actions.toLocaleString()}
               detail={
                 t.failed_actions > 0
-                  ? "logged as done, but the mail server refused"
+                  ? "the rule matched, but the mail server refused the change"
                   : "every action reached the mail server"
               }
               alarming={t.failed_actions > 0}
+              action={
+                t.failed_actions > 0 && accountId ? (
+                  <RetryFailed accountId={accountId} />
+                ) : null
+              }
             />
             <TrustRow
               term="Patterns awaiting review"
@@ -783,12 +793,13 @@ function Assistant({
 }
 
 function TrustRow({
-  term, value, detail, alarming,
+  term, value, detail, alarming, action,
 }: {
   term: string;
   value: string;
   detail: string;
   alarming?: boolean;
+  action?: React.ReactNode;
 }) {
   return (
     <div>
@@ -802,6 +813,52 @@ function TrustRow({
         </dd>
       </div>
       <p className="text-[10px] text-muted-foreground leading-snug">{detail}</p>
+      {action}
+    </div>
+  );
+}
+
+/** Re-apply the refused actions. Deliberately states what it will NOT do:
+ *  "retry" on a mail assistant could plausibly mean re-sending something, and a
+ *  button whose blast radius is ambiguous does not get pressed. */
+function RetryFailed({ accountId }: { accountId: string }) {
+  const [busy, setBusy] = useState(false);
+  const [result, setResult] = useState<string | null>(null);
+
+  const run = async () => {
+    setBusy(true);
+    setResult(null);
+    try {
+      const r = await retryFailedRuleActions(accountId);
+      setResult(
+        r.repaired === 0 && r.still_failing === 0
+          ? "Nothing left to repair."
+          : `Repaired ${r.repaired}.` +
+            (r.still_failing > 0
+              ? ` ${r.still_failing} could not be — those messages are gone from the mailbox.`
+              : "")
+      );
+    } catch (e) {
+      setResult((e as Error).message || "Retry failed");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={run}
+        disabled={busy}
+        title="Re-applies the label and folder move only — never drafts, sends or forwards"
+        className="flex items-center gap-1 text-[10px] text-primary hover:underline disabled:opacity-60 disabled:cursor-default focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring rounded"
+      >
+        {busy ? <Loader2 className="animate-spin" size={10} /> : <RotateCcw size={10} />}
+        {busy ? "Re-applying…" : "Re-apply them (no drafts or sends)"}
+      </button>
+      {result && (
+        <p className="mt-1 text-[10px] text-muted-foreground">{result}</p>
+      )}
     </div>
   );
 }

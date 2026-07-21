@@ -114,15 +114,26 @@ export function RuleResultPill({
   actionErrors?: { type: string; error: string }[] | null;
   draftPreview?: string | null;
 }) {
+  // A rule that matched but whose every action the mail server refused is not a
+  // success, and showing it in the same green as a real one is how 138 no-op
+  // runs stayed invisible for a month. It is not "No match" either — the
+  // assistant decided correctly and the mailbox simply never received it.
+  const failed = (status || "").toUpperCase() === "FAILED";
   const pill = (
     <span
       className={`inline-flex items-center gap-1 text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
-        matched
-          ? "bg-emerald-500/15 text-emerald-400"
-          : "bg-red-500/15 text-red-400"
+        failed
+          ? "bg-rose-500/15 text-rose-400"
+          : matched
+            ? "bg-emerald-500/15 text-emerald-400"
+            : "bg-red-500/15 text-red-400"
       }`}
     >
-      {matched ? ruleName || "Matched" : "No match found"}
+      {failed
+        ? `${ruleName || "Matched"} · didn't apply`
+        : matched
+          ? ruleName || "Matched"
+          : "No match found"}
       <Eye size={11} className="opacity-70" />
     </span>
   );

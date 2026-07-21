@@ -55,10 +55,14 @@ export function HistoryTab({
 
   if (loading) return <Spinner label="Loading history…" />;
 
-  // History is a LOG of what the assistant did — actions it applied and the
-  // emails where nothing matched (inbox-zero has no approval queue).
+  // History is a LOG of what the assistant did — actions it applied, the emails
+  // where nothing matched (inbox-zero has no approval queue), and the ones where
+  // it tried and the mail server refused. FAILED has to be here: it was
+  // introduced precisely because those runs used to be logged as APPLIED, and
+  // filtering it out now would hide them a second way.
   const log = history.filter(
     (h) => h.status === "APPLIED" || h.status === "SKIPPED"
+      || h.status === "FAILED"
   );
   const ruleNames = Array.from(
     new Set(log.map((h) => h.rule_name).filter((n): n is string => !!n))

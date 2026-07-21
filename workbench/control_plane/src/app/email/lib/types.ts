@@ -205,6 +205,24 @@ export interface AnalyticsOverview {
 
 // ── Senders (bulk archive / unsubscribe) ────────────────────────────────────
 
+/** A correction that teaches the CLASSIFIER, rather than bypassing it.
+ *
+ *  The counterpart to LearnedRulePattern. A pattern REPLACES the model's
+ *  judgment for one sender; guidance CHANGES it for everyone — so a correction
+ *  about "vendor product digests are Newsletter" generalises to every vendor
+ *  instead of exempting the one that was wrong. Stored apart so the Learned
+ *  Patterns screen can separate "improves the AI" from "replaces the AI". */
+export interface RuleGuidance {
+  id: string;
+  /** null = applies to the whole classification prompt, not one rule. */
+  rule_id: string | null;
+  rule_name: string | null;
+  guidance: string;
+  source: string; // FIX | USER
+  thread_id: string | null;
+  created_at: string | null;
+}
+
 /** A learned classification pattern (sender → rule include/exclude) — the real
  *  "Learned Patterns", taught by the Fix flow / label corrections. */
 export interface LearnedRulePattern {

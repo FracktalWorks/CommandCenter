@@ -198,6 +198,67 @@ async def _fetch_classification_hints(
     return ", ".join(f"{r.rule_name} (x{r.n})" for r in rows if r.rule_name)
 
 
+async def _load_rule_guidance(db: Any, account_id: str) -> dict[str, list[str]]:
+    """User corrections that teach the CLASSIFIER, keyed by rule id.
+
+    The counterpart to ``_load_rule_patterns``. A pattern REPLACES the model's
+    judgment for one sender; guidance CHANGES it for everyone — so a correction
+    about "vendor product digests are Newsletter, not Cold Email" generalises to
+    every vendor rather than exempting the one that was wrong.
+
+    The empty-string key holds account-wide guidance (``rule_id IS NULL``) that
+    belongs to no single rule.
+
+    Best-effort: a failure here must degrade classification to "no corrections
+    applied", never break it. Returning silently would hide that, so it logs.
+    """
+    try:
+        rows = (await db.execute(text(
+            """SELECT rule_id, guidance FROM email_rule_guidance
+                WHERE account_id = :aid AND active
+                ORDER BY created_at"""
+        ), {"aid": account_id})).fetchall()
+    except Exception as exc:  # table optional / never fatal
+        _log.warning("email.rule_guidance_load_failed",
+                     account_id=account_id, error=str(exc)[:160])
+        return {}
+    out: dict[str, list[str]] = {}
+    for r in rows:
+        key = str(r.rule_id) if r.rule_id else ""
+        text_ = (r.guidance or "").strip()
+        if text_:
+            out.setdefault(key, []).append(text_)
+    return out
+
+
+def _rule_lines(rules: list[dict[str, Any]],
+                guidance: dict[str, list[str]] | None = None) -> str:
+    """The numbered rule list for the classifier prompt.
+
+    A rule's own instructions come first, then the user's corrections for it.
+    They are labelled as corrections rather than merged into the description
+    because that is what they are — the model should weigh "the user has told me
+    this specific thing before" differently from the rule's generic blurb.
+    """
+    g = guidance or {}
+    lines = []
+    for i, r in enumerate(rules):
+        line = f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
+        for note in g.get(str(r.get("id")), []):
+            line += f"\n   - correction from the user: {note}"
+        lines.append(line)
+    return "\n".join(lines)
+
+
+def _global_guidance_block(guidance: dict[str, list[str]] | None) -> str:
+    notes = (guidance or {}).get("", [])
+    if not notes:
+        return ""
+    body = "\n".join(f"- {n}" for n in notes)
+    return ("\n\nCORRECTIONS THE USER HAS MADE BEFORE (these override your "
+            f"default reading):\n{body}")
+
+
 def _hint_block(hints: str) -> str:
     """Render the advisory classification-history hint for the prompt."""
     if not hints:
@@ -212,6 +273,7 @@ def _hint_block(hints: str) -> str:
 async def _llm_pick_rule(
     email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
     *, model: str = "tier-fast",
+    guidance: dict[str, list[str]] | None = None,
 ) -> dict[str, Any] | None:
     """Ask the LLM which instruction-based rule matches the email.
 
@@ -225,10 +287,7 @@ async def _llm_pick_rule(
     if not rules:
         return None
     try:
-        rule_lines = "\n".join(
-            f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
-            for i, r in enumerate(rules)
-        )
+        rule_lines = _rule_lines(rules, guidance)
         sys_prompt = (
             "You are an email classifier helping the user manage their inbox. "
             "Given an email and a numbered list of rules, choose the single "
@@ -237,7 +296,8 @@ async def _llm_pick_rule(
             'match>, "reason": "<short why>"}.'
         )
         user_prompt = (
-            f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
+            f"{_email_block(email)}\n\nRULES\n{rule_lines}"
+            f"{_global_guidance_block(guidance)}{_hint_block(hints)}"
         )
         # Force structured output so the reply is parseable JSON, not prose we
         # have to scrape (the #1 cause of silent "no match"); _llm_json drops
@@ -267,6 +327,7 @@ async def _llm_pick_rule(
 async def _llm_pick_rules(
     email: dict[str, str], rules: list[dict[str, Any]], hints: str = "",
     *, model: str = "tier-fast",
+    guidance: dict[str, list[str]] | None = None,
 ) -> list[dict[str, Any]]:
     """Multi-rule selection (inbox-zero parity): ask the LLM for ALL instruction
     rules that apply to the email, not just the single best.
@@ -280,10 +341,7 @@ async def _llm_pick_rules(
     if not rules:
         return []
     try:
-        rule_lines = "\n".join(
-            f"{i}. {r['name']}: {r.get('instructions') or '(no description)'}"
-            for i, r in enumerate(rules)
-        )
+        rule_lines = _rule_lines(rules, guidance)
         sys_prompt = (
             "You are an email classifier helping the user manage their inbox. "
             "Given an email and a numbered list of rules, choose EVERY rule that "
@@ -296,7 +354,8 @@ async def _llm_pick_rules(
             "if none apply."
         )
         user_prompt = (
-            f"{_email_block(email)}\n\nRULES\n{rule_lines}{_hint_block(hints)}"
+            f"{_email_block(email)}\n\nRULES\n{rule_lines}"
+            f"{_global_guidance_block(guidance)}{_hint_block(hints)}"
         )
         # Force structured output (see _llm_pick_rule); a generous budget so a
         # multi-rule object with several reasons isn't truncated mid-JSON.
@@ -645,6 +704,10 @@ async def _match_email_to_rule(
         if _patterns_included_rule(rule, patterns, email):
             return {"rule": rule, "reason": "Matched a learned pattern.",
                     "source": "pattern"}
+    # Corrections that teach the model rather than bypass it. Loaded AFTER the
+    # pattern short-circuit on purpose: a pinned sender never reaches the LLM,
+    # so building its prompt context would be wasted work.
+    guidance = await _load_rule_guidance(db, account_id)
 
     instruction_rules: list[dict[str, Any]] = []
     for rule in rules:
@@ -666,7 +729,8 @@ async def _match_email_to_rule(
         hints = await _fetch_classification_hints(db, account_id, email.get("from", ""))
         models = await _account_models(db, account_id)
         pick = await _llm_pick_rule(
-            email, instruction_rules, hints=hints, model=models["rule"])
+            email, instruction_rules, hints=hints, model=models["rule"],
+            guidance=guidance)
         if pick:
             return {"rule": instruction_rules[pick["index"]],
                     "reason": pick["reason"] or "Matched by AI.", "source": "ai"}
@@ -695,6 +759,7 @@ async def _match_email_to_rules_multi(
 
     patterns = await _load_rule_patterns(db, account_id)
     excluded = _patterns_excluded_rules(patterns, email)
+    guidance = await _load_rule_guidance(db, account_id)
 
     matches: list[dict[str, Any]] = []
     seen: set[str] = set()
@@ -733,6 +798,7 @@ async def _match_email_to_rules_multi(
         models = await _account_models(db, account_id)
         for pick in await _llm_pick_rules(
             email, instruction_rules, hints=hints, model=models["rule"],
+            guidance=guidance,
         ):
             _add(instruction_rules[pick["index"]],
                  pick["reason"] or "Matched by AI.", "ai",

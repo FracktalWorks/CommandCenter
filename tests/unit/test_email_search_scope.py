@@ -57,6 +57,20 @@ async def test_scope_all_excludes_junk_and_trash():
     assert "folder" not in params  # no equality predicate for a real folder
 
 
+async def test_searching_all_folders_still_finds_your_own_mail():
+    """Browsing All hides the user's own mail; SEARCHING All must not.
+
+    "What did I tell them?" is one of the commonest reasons to search, and a
+    scope the UI labels "All folders" that quietly skipped the user's own
+    replies would fail the query it exists to serve. Drafts are the same case:
+    half-written text is a poor thing to browse but a fine thing to go looking
+    for. This is the one place the two meanings of "all" are allowed to
+    diverge, so it is pinned explicitly — otherwise someone later "restores
+    consistency" and breaks search."""
+    _resp, _sql, params = await _run_search(q="invoice", folder="all")
+    assert not {"sent", "drafts"} & set(params["folder_excludes"])
+
+
 async def test_scope_real_folder_matches_case_insensitively():
     _resp, sql, params = await _run_search(q="invoice", folder="inbox")
     assert "LOWER(em.folder) = LOWER(:folder)" in sql
@@ -203,13 +217,11 @@ async def test_state_filters_compose_with_scope_and_pills():
     assert params["from_addr"] == "%acme%"
 
 
-# ── The All view and the All scope agree ──────────────────────────────────────
+# ── The All view and the All scope differ, on purpose ─────────────────────────
 
 
-async def test_messages_list_all_folder_matches_search_all_scope():
-    """The sidebar's All view (`/email/messages`) and the search bar's All scope
-    (`/email/search`) must resolve to the SAME set of mail — both go through
-    core.folder_scope, so "all" can't come to mean two different things."""
+async def _run_messages_list(folder: str) -> tuple[str, dict]:
+    """Drive the sidebar's message list and return its SQL + bound params."""
     captured: list[tuple[str, dict]] = []
 
     async def fake_execute(stmt, params=None):
@@ -223,19 +235,83 @@ async def test_messages_list_all_folder_matches_search_all_scope():
     db.execute.side_effect = fake_execute
     with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
         await m.list_messages(
-            account_id="acc-1", folder="all", label=None, query=None,
+            account_id="acc-1", folder=folder, label=None, query=None,
             thread_id=None, received_after=None, received_before=None,
             is_read=None, is_starred=None, has_attachments=None,
             importance=None, from_email=None, sender_category=None,
             sort="newest", page=1, page_size=50,
             user=SimpleNamespace(email="u@example.com"),
         )
-    sql = " ".join(s for s, _ in captured)
     params: dict = {}
     for _s, p in captured:
         params.update(p)
+    return " ".join(s for s, _ in captured), params
+
+
+async def test_browsing_all_hides_the_users_own_mail():
+    """All answers "what came in?" — and the user's own mail never came in.
+
+    Sent used to fall into it (442 messages on the live account), so every
+    conversation appeared twice and the list read as an activity log rather than
+    an inbox; drafts are unfinished text with no counterparty, which belongs in
+    a composer rather than a reading list. Excluding both costs nothing in
+    reach: each has its own sidebar entry, and the thread view ignores the
+    folder filter entirely, so opening a conversation still shows both sides."""
+    _sql, params = await _run_messages_list(folder="all")
+    assert {"sent", "drafts"} <= set(params["folder_excludes"])
+
+
+async def test_messages_list_all_folder_matches_search_all_scope():
+    """The sidebar's All view (`/email/messages`) and the search bar's All scope
+    (`/email/search`) resolve through the one core.folder_scope, and agree on
+    everything the user has THROWN AWAY. They diverge on sent mail alone, which
+    is asserted separately above and below — this test guards the shared part,
+    so junk/trash can't come to mean two different things."""
+    sql, browse = await _run_messages_list(folder="all")
+    _resp, _ssql, search = await _run_search(q="invoice", folder="all")
+
     assert "LOWER(em.folder) <> ALL(:folder_excludes)" in sql
-    assert params["folder_excludes"] == ["junk", "trash"]
+    thrown_away = {"junk", "trash"}
+    assert thrown_away <= set(browse["folder_excludes"])
+    assert thrown_away <= set(search["folder_excludes"])
+    # The user's OWN mail — sent and drafts — is the only sanctioned difference:
+    # neither ever arrived, so neither belongs in a view of what came in, but
+    # both are legitimate things to go looking for. If any other folder ever
+    # diverges, one of the two surfaces has drifted rather than been designed.
+    assert (set(browse["folder_excludes"]) ^ set(search["folder_excludes"])
+            == {"sent", "drafts"})
+
+
+async def test_facet_chips_count_the_same_mail_the_list_shows():
+    """The chip row sits directly above the list and claims to count it.
+
+    Facets are the third caller of folder_scope, and the one most likely to be
+    missed: it takes the same `folder` argument, so if it had picked up search's
+    wider meaning the All view would offer a "Receipt 12" chip whose mail the
+    list beneath it never shows — the windowed-caption-over-unwindowed-query
+    defect, one surface further along."""
+    captured: list[tuple[str, dict]] = []
+
+    async def fake_execute(stmt, params=None):
+        captured.append((str(stmt), params or {}))
+        r = MagicMock()
+        r.fetchall.return_value = []
+        r.fetchone.return_value = None
+        return r
+
+    db = AsyncMock()
+    db.execute.side_effect = fake_execute
+    with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
+        await m.transport.messages.message_facets(
+            account_id="acc-1", folder="all",
+            user=SimpleNamespace(email="u@example.com"),
+        )
+    params: dict = {}
+    for _s, p in captured:
+        params.update(p)
+
+    _sql, browse = await _run_messages_list(folder="all")
+    assert set(params["folder_excludes"]) == set(browse["folder_excludes"])
 
 
 # ── Frontend ⟷ backend constant parity ────────────────────────────────────────

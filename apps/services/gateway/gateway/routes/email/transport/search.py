@@ -202,7 +202,11 @@ async def search_messages(
             where.append(
                 f"{_FTS_VECTOR} @@ websearch_to_tsquery('english', :q)")
 
-        folder_sql = folder_scope(folder, params)
+        # Search is the one place "all" spans sent mail too: the browse view
+        # excludes it (All shows what arrived), but "what did I tell them?" is
+        # a routine search, and a scope labelled "All folders" that skipped the
+        # user's own replies would quietly fail the query it exists to serve.
+        folder_sql = folder_scope(folder, params, include_sent=True)
         if folder_sql:
             where.append(folder_sql)
         _tag_filters(where, params, label, labels)

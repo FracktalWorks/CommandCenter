@@ -289,15 +289,41 @@ def _account_scope(account_id: str | None, params: dict[str, Any]) -> str:
     return frag
 
 
-# The scope sentinel meaning "every folder except junk and trash". ONE constant
-# behind both the sidebar's All folder and the search bar's "All folders" scope,
-# so "all" cannot come to mean two different sets of mail in two places.
+# The scope sentinel behind both the sidebar's All folder and the search bar's
+# "All folders" scope. The sentinel is shared; the SET it resolves to is not —
+# see the two constants below, and folder_scope's `include_sent`. That split is
+# deliberate and is the one place "all" is allowed to mean two things.
 FOLDER_ALL = "all"
 
-# What "everything" deliberately leaves out. Junk and trash are mail the user has
-# already thrown away — sweeping them into an unscoped view would bury real mail
-# under spam. They stay reachable by selecting them explicitly.
-FOLDER_ALL_EXCLUDES = ("junk", "trash")
+# What "everything" deliberately leaves out when BROWSING.
+#
+# Junk and trash are mail the user has already thrown away — sweeping them into
+# an unscoped view would bury real mail under spam. Sent and drafts are excluded
+# for a different reason: All is a view of mail that ARRIVED, and neither of them
+# ever did. Sent doubles every conversation and makes the list read as a log
+# rather than an inbox (442 of the live account's messages); a draft is unfinished
+# text with no counterparty, and it belongs in a composer rather than a reading
+# list. A reply is still visible where it belongs — the thread view ignores the
+# folder filter entirely, so opening a conversation shows both sides.
+#
+# All four stay reachable by selecting the folder explicitly. There is no
+# "spam" entry because there is no such folder to exclude: providers/base.py
+# canonicalises spam → junk on ingestion, for Gmail as well as Outlook, so junk
+# already covers it. Listing it would be dead weight that reads as coverage.
+# "draft" needs no entry either, for the same reason — it canonicalises to
+# "drafts".
+FOLDER_ALL_EXCLUDES = ("junk", "trash", "sent", "drafts")
+
+# What "All folders" leaves out when SEARCHING — deliberately NOT the same set.
+#
+# Browsing All answers "what came in?"; searching All answers "where is that
+# message?", and "what did I tell them?" is one of the commonest reasons to
+# search at all. A scope labelled "All folders" that silently skipped the user's
+# own sent mail would be a worse defect than the one excluding it from the list
+# fixes. The same holds for drafts: half-written text is a poor thing to browse
+# but a perfectly good thing to go looking for. Junk/trash stay out of both —
+# search offers them as explicit scopes.
+FOLDER_ALL_SEARCH_EXCLUDES = ("junk", "trash")
 
 
 # ── Label vocabulary ────────────────────────────────────────────────────────
@@ -353,12 +379,25 @@ UNCATEGORIZED_SQL = (
 )
 
 
-def folder_scope(folder: str | None, params: dict[str, Any]) -> str | None:
+def folder_scope(
+    folder: str | None,
+    params: dict[str, Any],
+    *,
+    include_sent: bool = False,
+) -> str | None:
     """SQL scoping `em` to a folder, or None when the scope spans every folder.
 
     Handles the two pseudo-folders the UI offers alongside real ones:
-      • ``all``     — every folder except junk/trash (the All view + search scope)
+      • ``all``     — every folder except junk/trash/spam, and (unless
+                      ``include_sent``) the user's own sent mail
       • ``starred`` — a flag, not a stored folder
+
+    ``include_sent`` is for SEARCH, the one caller that means "look everywhere":
+    browsing All is a view of what arrived, searching All is a hunt for a
+    message, and the user's own replies are a legitimate target of the second.
+    Callers that render a folder listing — the message list and its facet chips
+    — must leave it False, or the chip counts would describe a different set of
+    mail than the list under them.
 
     Adds :folder / :folder_excludes to `params` as needed.
     """
@@ -366,7 +405,8 @@ def folder_scope(folder: str | None, params: dict[str, Any]) -> str | None:
     if not key:
         return None
     if key == FOLDER_ALL:
-        params["folder_excludes"] = list(FOLDER_ALL_EXCLUDES)
+        params["folder_excludes"] = list(
+            FOLDER_ALL_SEARCH_EXCLUDES if include_sent else FOLDER_ALL_EXCLUDES)
         return "LOWER(em.folder) <> ALL(:folder_excludes)"
     if key == "starred":
         return "em.is_starred = true"

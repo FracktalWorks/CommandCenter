@@ -93,9 +93,17 @@ def _tag_filters(
     tags = [t for t in ([label] if label else []) + (labels or []) if t and t.strip()]
     for i, tag in enumerate(tags):
         key = f"tag_{i}"
-        where.append(f"(:{key} = ANY(COALESCE(em.labels, '{{}}'))"
-                     f" OR :{key} = ANY(COALESCE(em.categories, '{{}}')))")
-        params[key] = tag.strip()
+        # Case- and whitespace-insensitive. The rule engine stores the rule's
+        # label VERBATIM, so an exact `= ANY(...)` silently returned nothing
+        # whenever a rule's name differed by case or a stray space — the same
+        # trap the Email Cleaner's own tally already had to fix, which is why
+        # this is normalised in both places rather than trusted at one.
+        where.append(
+            f"(EXISTS (SELECT 1 FROM unnest(COALESCE(em.labels, '{{}}')) AS l"
+            f" WHERE LOWER(TRIM(l)) = :{key})"
+            f" OR EXISTS (SELECT 1 FROM unnest(COALESCE(em.categories, '{{}}'))"
+            f" AS c WHERE LOWER(TRIM(c)) = :{key}))")
+        params[key] = tag.strip().lower()
 
 
 def _address_filters(

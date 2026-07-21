@@ -135,17 +135,20 @@ async def test_tag_pills_and_together_over_labels_or_categories():
     # labels live in labels. Both are searchable the same way, and stacked pills
     # narrow (AND), which is how a row of filter chips reads.
     _resp, sql, params = await _run_search(q=None, labels=["Reply", "Done"])
-    assert ":tag_0 = ANY(COALESCE(em.labels, '{}'))" in sql
-    assert ":tag_0 = ANY(COALESCE(em.categories, '{}'))" in sql
-    assert ":tag_1 = ANY(COALESCE(em.labels, '{}'))" in sql
-    assert params["tag_0"] == "Reply"
-    assert params["tag_1"] == "Done"
+    # Each pill matches a user label OR a rule-engine category, normalised on
+    # both sides: the rule engine stores a rule's name VERBATIM, so an exact
+    # comparison dropped any label differing by case or a stray space.
+    assert "LOWER(TRIM(l)) = :tag_0" in sql
+    assert "LOWER(TRIM(c)) = :tag_0" in sql
+    assert "LOWER(TRIM(l)) = :tag_1" in sql
+    assert params["tag_0"] == "reply"
+    assert params["tag_1"] == "done"
 
 
 async def test_legacy_single_label_still_applies_alongside_pills():
     _resp, _sql, params = await _run_search(q=None, label="Work", labels=["Reply"])
-    assert params["tag_0"] == "Work"   # legacy single label first
-    assert params["tag_1"] == "Reply"
+    assert params["tag_0"] == "work"   # legacy single label first
+    assert params["tag_1"] == "reply"
 
 
 async def test_blank_tags_are_ignored():
@@ -196,7 +199,7 @@ async def test_state_filters_compose_with_scope_and_pills():
     assert isinstance(params["received_after"], datetime)
     # …and the scope + pills are still applied alongside them.
     assert params["folder_excludes"] == ["junk", "trash"]
-    assert params["tag_0"] == "Receipt"
+    assert params["tag_0"] == "receipt"
     assert params["from_addr"] == "%acme%"
 
 

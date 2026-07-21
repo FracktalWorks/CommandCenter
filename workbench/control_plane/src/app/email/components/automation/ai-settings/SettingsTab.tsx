@@ -326,7 +326,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
           />
           <SettingCard
             title="Learned patterns"
-            description="Senders pinned to a rule — some you taught via Fix, most learned by the assistant itself. A pattern skips the AI entirely, so the Email Cleaner only uses the ones you have confirmed."
+            description="Everything the assistant has picked up from your corrections: the lessons that sharpen its judgement on every sender, and the senders pinned to a rule that bypass it altogether."
             right={<EditBtn onClick={() => setDialog("patterns")} label="Manage" />}
           />
           <SettingCard
@@ -594,7 +594,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
       {dialog === "patterns" && (
         <Modal
           title="Learned patterns"
-          description="Senders pinned to a rule — some you taught via Fix, most learned by the assistant itself. A pattern skips the AI entirely, so the Email Cleaner only uses the ones you have confirmed."
+          description="Everything the assistant has picked up from your corrections: the lessons that sharpen its judgement on every sender, and the senders pinned to a rule that bypass it altogether."
           onClose={() => setDialog(null)}
         >
           <LearnedPatternsList accountId={accountId} />
@@ -1411,7 +1411,14 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
     );
   }
 
-  const pending = patterns.filter(isPendingReview);
+  // Three groups, because a pattern is in one of three genuinely different
+  // states — not two. Approved and rejected are the states the user set; the
+  // third is the one the ASSISTANT created and nobody has ruled on yet, which
+  // is the whole reason this screen exists.
+  const needsReview = patterns.filter(isPendingReview);
+  const rejected = patterns.filter((p) => !!p.rejected_at);
+  const active = patterns.filter(
+    (p) => !p.rejected_at && !isPendingReview(p));
 
   return (
     <div className="space-y-5">
@@ -1473,136 +1480,240 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
             "that one sender, and a wrong pin is silent."
           }
         />
-      {/* The gate, stated. These patterns were inferred by the assistant from
-          its own agreement with itself, and each one is projected across every
-          matching message in the mailbox once the cleaner is allowed to use it —
-          so the cleaner waits for a human to confirm them. */}
-      {pending.length > 0 && (
-        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2.5 space-y-2">
-          {/* Built from explicit strings, not JSX text split across source
-              lines. A sentence assembled out of word fragments around
-              {expressions} depends on JSX whitespace collapsing for its spacing,
-              which is invisible in review and shipped "arewaiting" to the user.
-              This reads as the sentence it renders. */}
-          <p className="text-[11px] text-amber-500">
-            <b>
-              {pending.length === 1
-                ? "1 pattern learned by the assistant"
-                : `${pending.length} patterns learned by the assistant`}
-            </b>
-            {pending.length === 1
-              ? " is waiting for you. The Email Cleaner won't apply it across your mailbox until you confirm it's right."
-              : " are waiting for you. The Email Cleaner won't apply them across your mailbox until you confirm they're right."}
-          </p>
-          <button
-            onClick={() => review(undefined, true)}
-            disabled={busy}
-            className="text-[11px] px-2 py-1 rounded-md bg-amber-500/20 text-amber-500 hover:bg-amber-500/30 transition-colors disabled:opacity-50"
+
+        {/* Needs review first: these were inferred by the assistant from its own
+            agreement with itself, and they are the only ones that need a human.
+            The explanation lives in the group header rather than a separate
+            banner above the list — one amber box saying the same thing twice was
+            most of what made this screen noisy. */}
+        {needsReview.length > 0 && (
+          <PatternGroup
+            title="Needs your review"
+            count={needsReview.length}
+            tone="review"
+            detail={
+              "The assistant inferred these. They already affect how new mail " +
+              "is classified, but the Email Cleaner won't project one across " +
+              "your whole mailbox until you confirm it."
+            }
+            action={
+              <button
+                onClick={() => review(undefined, true)}
+                disabled={busy}
+                className="text-[11px] px-2 py-1 rounded-md bg-amber-500/20 text-amber-500 hover:bg-amber-500/30 transition-colors disabled:opacity-50 whitespace-nowrap"
+              >
+                {busy ? "Approving…" : `Approve all ${needsReview.length}`}
+              </button>
+            }
           >
-            {busy ? "Approving…" : `Approve all ${pending.length}`}
-          </button>
-        </div>
-      )}
-      <div className="space-y-1.5">
-        {patterns.map((p) => {
-          const waiting = isPendingReview(p);
-          return (
-            /* Two rows, not one. A sender address plus a rule name plus a reach
-               count does not fit one line in a dialog, and `truncate` cut the
-               address mid-word — leaving the one thing you need to judge the
-               pattern (who it is) unreadable. Chips and actions share the top
-               row; the pattern itself gets the full width below and wraps. */
-            <div
-              key={p.id}
-              className={`rounded-lg px-3 py-2 border ${
-                waiting
-                  ? "bg-amber-500/5 border-amber-500/30"
-                  : p.rejected_at
-                    ? "bg-card/50 border-border opacity-60"
-                    : "bg-card border-border"
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <span
-                  className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
-                    p.exclude
-                      ? "bg-red-500/15 text-red-400"
-                      : "bg-emerald-500/15 text-emerald-400"
-                  }`}
-                >
-                  {p.exclude ? "Never match" : "Always match"}
-                </span>
-                {_PATTERN_SOURCE_META[p.source] && (
-                  <span
-                    title={_PATTERN_SOURCE_META[p.source].title}
-                    className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
-                  >
-                    {_PATTERN_SOURCE_META[p.source].label}
-                  </span>
-                )}
-                {/* The number that makes review possible: without it, "is this
-                    pattern right?" cannot be answered from this screen. */}
-                {p.reach !== undefined && p.reach > 0 && (
-                  <span
-                    className="text-[10px] text-muted-foreground whitespace-nowrap"
-                    title="Approximate — matched by sender/subject substring, excluding Trash and Junk"
-                  >
-                    {p.reach === 1
-                      ? "about 1 email"
-                      : `about ${p.reach.toLocaleString()} emails`}
-                  </span>
-                )}
-                {p.rejected_at && (
-                  <span className="text-[10px] text-muted-foreground">
-                    rejected
-                  </span>
-                )}
-                <span className="ml-auto flex items-center gap-2">
-                  {waiting ? (
-                    <>
-                      <button
-                        onClick={() => review([p.id], true)}
-                        disabled={busy}
-                        title="Approve — let the cleaner use this"
-                        className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
-                      >
-                        <Check size={14} />
-                      </button>
-                      <button
-                        onClick={() => review([p.id], false)}
-                        disabled={busy}
-                        title="Reject — this pattern is wrong"
-                        className="text-muted-foreground hover:text-destructive disabled:opacity-50"
-                      >
-                        <X size={14} />
-                      </button>
-                    </>
-                  ) : (
-                    <button
-                      onClick={() => forget(p.id)}
-                      title="Forget this"
-                      className="text-muted-foreground hover:text-destructive"
-                    >
-                      <Trash2 size={13} />
-                    </button>
-                  )}
-                </span>
-              </div>
-              <div className="mt-1 text-xs text-foreground/80 break-words">
-                <span className="text-muted-foreground">
-                  {p.pattern_type === "SUBJECT" ? "Subject" : "From"}{" "}
-                </span>
-                <span className="break-all">{p.value}</span>
-                <span className="text-muted-foreground"> → </span>
-                <span className="text-foreground">
-                  {p.rule_name || "(deleted rule)"}
-                </span>
-              </div>
+            {needsReview.map((p) => (
+              <PatternRow
+                key={p.id}
+                p={p}
+                tone="review"
+                busy={busy}
+                onApprove={() => review([p.id], true)}
+                onReject={() => review([p.id], false)}
+              />
+            ))}
+          </PatternGroup>
+        )}
+
+        {active.length > 0 && (
+          <PatternGroup
+            title="In force"
+            count={active.length}
+            tone="active"
+            detail={
+              "Applied to every matching message, by both the classifier and " +
+              "the Email Cleaner."
+            }
+          >
+            {active.map((p) => (
+              <PatternRow
+                key={p.id}
+                p={p}
+                tone="active"
+                busy={busy}
+                onForget={() => forget(p.id)}
+              />
+            ))}
+          </PatternGroup>
+        )}
+
+        {/* Collapsed. A rejected pattern is a RECORD, not a thing to act on —
+            the engine never returns it to anyone. Left expanded it padded the
+            list with rows the user had already dismissed, which is exactly the
+            noise this cleanup is removing. Kept visible-on-demand because
+            "why isn't this sender being filed?" is answered here. */}
+        {rejected.length > 0 && (
+          <details className="rounded-lg border border-border/60 bg-card/30">
+            <summary className="cursor-pointer select-none px-3 py-2 text-[11px] text-muted-foreground hover:text-foreground transition-colors">
+              {rejected.length === 1
+                ? "1 rejected pattern"
+                : `${rejected.length} rejected patterns`}
+              <span className="text-muted-foreground/70">
+                {" — never applied. Kept so you can see what was ruled out."}
+              </span>
+            </summary>
+            <div className="px-2 pb-2 space-y-1.5">
+              {rejected.map((p) => (
+                <PatternRow
+                  key={p.id}
+                  p={p}
+                  tone="rejected"
+                  busy={busy}
+                  onForget={() => forget(p.id)}
+                />
+              ))}
             </div>
-          );
-        })}
-        </div>
+          </details>
+        )}
       </section>
+    </div>
+  );
+}
+
+/** A labelled group of patterns, with the count in the heading.
+
+ *  The count belongs in the header and not in a badge somewhere else: the
+ *  question this screen answers is "how many has the assistant decided on its
+ *  own that I haven't checked?", and that number should be readable without
+ *  counting rows. */
+function PatternGroup({
+  title, count, detail, tone, action, children,
+}: {
+  title: string;
+  count: number;
+  detail: string;
+  tone: "review" | "active";
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex items-start gap-2">
+        <div className="min-w-0 flex-1">
+          <h5
+            className={`text-[11px] font-semibold ${
+              tone === "review" ? "text-amber-500" : "text-foreground"
+            }`}
+          >
+            {`${title} · ${count}`}
+          </h5>
+          <p className="text-[10px] text-muted-foreground leading-snug">
+            {detail}
+          </p>
+        </div>
+        {action}
+      </div>
+      {children}
+    </div>
+  );
+}
+
+/** One pattern. Two rows, not one: a sender address plus a rule name plus a
+ *  reach count does not fit one line in a dialog, and `truncate` cut the address
+ *  mid-word — leaving the one thing you need to judge the pattern (who it is)
+ *  unreadable. Chips and actions share the top row; the pattern itself gets the
+ *  full width below and wraps. */
+function PatternRow({
+  p, tone, busy, onApprove, onReject, onForget,
+}: {
+  p: LearnedRulePattern;
+  tone: "review" | "active" | "rejected";
+  busy: boolean;
+  onApprove?: () => void;
+  onReject?: () => void;
+  onForget?: () => void;
+}) {
+  return (
+    <div
+      className={`rounded-lg px-3 py-2 border ${
+        tone === "review"
+          ? "bg-amber-500/5 border-amber-500/30"
+          : tone === "rejected"
+            ? "bg-transparent border-border/60 opacity-70"
+            : "bg-card border-border"
+      }`}
+    >
+      <div className="flex items-center gap-2">
+        {/* Drained of colour once rejected. A green "Always match" on a pattern
+            the engine never returns to anyone asserts a live effect that isn't
+            there — the group header says these are dead, and the row must not
+            contradict it. */}
+        <span
+          className={`text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap ${
+            tone === "rejected"
+              ? "bg-muted text-muted-foreground line-through"
+              : p.exclude
+                ? "bg-red-500/15 text-red-400"
+                : "bg-emerald-500/15 text-emerald-400"
+          }`}
+        >
+          {p.exclude ? "Never match" : "Always match"}
+        </span>
+        {_PATTERN_SOURCE_META[p.source] && (
+          <span
+            title={_PATTERN_SOURCE_META[p.source].title}
+            className="text-[10px] px-1.5 py-0.5 rounded-md whitespace-nowrap bg-muted text-muted-foreground"
+          >
+            {_PATTERN_SOURCE_META[p.source].label}
+          </span>
+        )}
+        {/* The number that makes review possible: without it, "is this pattern
+            right?" cannot be answered from this screen. */}
+        {p.reach !== undefined && p.reach > 0 && (
+          <span
+            className="text-[10px] text-muted-foreground whitespace-nowrap"
+            title="Approximate — matched by sender/subject substring, excluding Trash and Junk"
+          >
+            {p.reach === 1
+              ? "about 1 email"
+              : `about ${p.reach.toLocaleString()} emails`}
+          </span>
+        )}
+        <span className="ml-auto flex items-center gap-2">
+          {tone === "review" ? (
+            <>
+              <button
+                onClick={onApprove}
+                disabled={busy}
+                title="Approve — let the cleaner use this"
+                className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
+              >
+                <Check size={14} />
+              </button>
+              <button
+                onClick={onReject}
+                disabled={busy}
+                title="Reject — this pattern is wrong"
+                className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+              >
+                <X size={14} />
+              </button>
+            </>
+          ) : (
+            <button
+              onClick={onForget}
+              title="Forget this"
+              className="text-muted-foreground hover:text-destructive"
+            >
+              <Trash2 size={13} />
+            </button>
+          )}
+        </span>
+      </div>
+      <div className="mt-1 text-xs text-foreground/80 break-words">
+        <span className="text-muted-foreground">
+          {p.pattern_type === "SUBJECT" ? "Subject" : "From"}{" "}
+        </span>
+        <span className="break-all">{p.value}</span>
+        <span className="text-muted-foreground"> → </span>
+        <span className="text-foreground">
+          {p.rule_name || "(deleted rule)"}
+        </span>
+      </div>
     </div>
   );
 }

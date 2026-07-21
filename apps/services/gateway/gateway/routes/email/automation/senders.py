@@ -1,5 +1,9 @@
-"""Automation · senders & triage — analytics, sender list, newsletters, bulk
-actions, auto-archive, sender categorization, and cold-email blocking."""
+"""Automation · senders & triage — sender list, newsletters, bulk actions,
+auto-archive, sender categorization, and cold-email blocking.
+
+``/analytics/overview`` used to live here; it now has its own module,
+``automation/analytics.py``, which imports ``DISPOSED_FOLDERS`` from here so
+"how noisy is this sender" counts the same mail on both screens."""
 
 from __future__ import annotations
 
@@ -31,131 +35,6 @@ from gateway.routes.email.core import (
 )
 from pydantic import BaseModel
 from sqlalchemy import text
-
-
-@router.get("/analytics/overview")
-async def analytics_overview(
-    account_id: str | None = Query(None),
-    days: int = Query(30, ge=1, le=365),
-    user: UserContext = Depends(get_current_user),
-):
-    """Inbox analytics: totals, read-rate, volume-over-time, top senders, folders."""
-    db = await _get_db()
-    try:
-        params: dict[str, Any] = {"uid": user.email or "anonymous", "days": days}
-        scope = _account_scope(account_id, params)
-
-        totals = (await db.execute(text(
-            f"""SELECT
-                  COUNT(*) AS total,
-                  COUNT(*) FILTER (WHERE is_read = false) AS unread,
-                  COUNT(*) FILTER (WHERE LOWER(folder) = 'sent') AS sent,
-                  COUNT(*) FILTER (WHERE LOWER(folder) = 'archive') AS archived,
-                  COUNT(*) FILTER (WHERE is_starred) AS starred,
-                  COUNT(*) FILTER (WHERE has_attachments) AS with_attachments
-                FROM email_messages em WHERE {scope}"""
-        ), params)).fetchone()
-
-        total = totals.total or 0
-        read = total - (totals.unread or 0)
-        read_rate = round(read / total, 4) if total else 0.0
-
-        volume_rows = (await db.execute(text(
-            f"""SELECT to_char(date_trunc('day', received_at), 'YYYY-MM-DD') AS day,
-                       COUNT(*) FILTER (WHERE LOWER(folder) <> 'sent') AS received,
-                       COUNT(*) FILTER (WHERE LOWER(folder) = 'sent') AS sent
-                FROM email_messages em
-                WHERE {scope} AND received_at >= now() - make_interval(days => :days)
-                GROUP BY day ORDER BY day"""
-        ), params)).fetchall()
-
-        # "Top senders" = who emails YOU, so exclude the user's own addresses
-        # (else the whole 'sent' folder, all from-self, makes the user their own
-        # #1 sender / "most unread from yourself") and received mail only.
-        sender_rows = (await db.execute(text(
-            f"""SELECT from_address->>'email' AS email,
-                       MAX(from_address->>'name') AS name,
-                       COUNT(*) AS count,
-                       COUNT(*) FILTER (WHERE is_read = false) AS unread
-                FROM email_messages em
-                WHERE {scope} AND COALESCE(from_address->>'email','') <> ''
-                  AND LOWER(folder) <> 'sent'
-                  AND LOWER(from_address->>'email') NOT IN (
-                    SELECT LOWER(email_address) FROM email_accounts
-                    WHERE user_id = :uid)
-                GROUP BY email ORDER BY count DESC LIMIT 12"""
-        ), params)).fetchall()
-
-        folder_rows = (await db.execute(text(
-            f"""SELECT LOWER(folder) AS folder, COUNT(*) AS count
-                FROM email_messages em WHERE {scope}
-                GROUP BY LOWER(folder) ORDER BY count DESC"""
-        ), params)).fetchall()
-
-        # Assistant automation stats (inbox-zero "Assistant processed emails" +
-        # email-actions breakdown), from the executed-rules log. Best-effort.
-        rule_scope = ("er.account_id IN (SELECT id FROM email_accounts "
-                      "WHERE user_id = :uid)")
-        if account_id:
-            rule_scope += " AND er.account_id = :aid"
-        rule_rows: list[Any] = []
-        action_rows: list[Any] = []
-        try:
-            rule_rows = (await db.execute(text(
-                f"""SELECT COALESCE(er.rule_name, '(no match)') AS rule_name,
-                           COUNT(*) AS count
-                    FROM email_executed_rules er
-                    WHERE {rule_scope} AND er.status = 'APPLIED'
-                      AND er.created_at >= now() - make_interval(days => :days)
-                    GROUP BY er.rule_name ORDER BY count DESC LIMIT 10"""
-            ), params)).fetchall()
-            action_rows = (await db.execute(text(
-                f"""SELECT act AS action, COUNT(*) AS count
-                    FROM email_executed_rules er,
-                         LATERAL jsonb_array_elements_text(er.actions_taken) AS act
-                    WHERE {rule_scope} AND er.status = 'APPLIED'
-                      AND er.created_at >= now() - make_interval(days => :days)
-                    GROUP BY act ORDER BY count DESC"""
-            ), params)).fetchall()
-        except Exception:  # noqa: BLE001 — log table optional / empty
-            rule_rows, action_rows = [], []
-        processed_total = sum(r.count for r in rule_rows)
-
-        return {
-            "totals": {
-                "total": total,
-                "unread": totals.unread or 0,
-                "sent": totals.sent or 0,
-                "archived": totals.archived or 0,
-                "starred": totals.starred or 0,
-                "with_attachments": totals.with_attachments or 0,
-                "read_rate": read_rate,
-            },
-            "volume": [
-                {"day": r.day, "received": r.received or 0, "sent": r.sent or 0}
-                for r in volume_rows
-            ],
-            "top_senders": [
-                {"email": r.email, "name": r.name or "", "count": r.count,
-                 "unread": r.unread or 0}
-                for r in sender_rows
-            ],
-            "by_folder": [
-                {"folder": r.folder, "count": r.count} for r in folder_rows
-            ],
-            "rule_stats": {
-                "processed": processed_total,
-                "by_rule": [
-                    {"rule_name": r.rule_name, "count": r.count}
-                    for r in rule_rows
-                ],
-            },
-            "action_stats": [
-                {"action": r.action, "count": r.count} for r in action_rows
-            ],
-        }
-    finally:
-        await db.close()
 
 
 # Folders whose mail is already disposed of (or was never received). The Email

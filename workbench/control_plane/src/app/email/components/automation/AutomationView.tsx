@@ -16,6 +16,10 @@ interface AutomationViewProps {
   selectedEmailId: string | null;
   onClose: () => void;
   onArchived?: () => void;
+  /** Switch to a sibling automation surface without going back to the inbox.
+   *  Analytics reports problems whose fix lives on another screen; making the
+   *  user retrace their steps through the sidebar is how a finding gets lost. */
+  onNavigate?: (feature: AutomationFeature) => void;
 }
 
 const META: Record<
@@ -57,6 +61,7 @@ export function AutomationView({
   selectedEmailId,
   onClose,
   onArchived,
+  onNavigate,
 }: AutomationViewProps) {
   const meta = META[feature];
   const Icon = meta.icon;
@@ -94,7 +99,9 @@ export function AutomationView({
         {feature === "unsubscribe" && (
           <BulkUnsubscribeView accountId={accountId} onArchived={onArchived} />
         )}
-        {feature === "analytics" && <AnalyticsView accountId={accountId} />}
+        {feature === "analytics" && (
+          <AnalyticsView accountId={accountId} onNavigate={onNavigate} />
+        )}
       </div>
     </div>
   );

@@ -122,23 +122,82 @@ export interface ColdSender {
 
 // ── Analytics ──────────────────────────────────────────────────────────────
 
+/** One age band of the reply backlog. Labels come from the server so the two
+ *  sides always bucket identically. */
+export interface BacklogBucket {
+  label: string;
+  count: number;
+}
+
+export interface BacklogSide {
+  threads: number;
+  oldest_days: number | null;
+  buckets: BacklogBucket[];
+}
+
+/** A sender whose mail you have never once replied to, in this window. */
+export interface NoisySender {
+  email: string;
+  name: string;
+  messages: number;
+  unread: number;
+  read: number;
+  /** This sender's rate annualised — what silencing them is worth going forward. */
+  projected_yearly: number;
+  has_unsubscribe: boolean;
+  last_seen: string | null;
+}
+
 export interface AnalyticsOverview {
-  totals: {
-    total: number;
-    unread: number;
+  range: { days: number };
+  /** Mail in and out over the window, each with the preceding window for trend. */
+  flow: {
+    received: number;
+    received_prev: number;
     sent: number;
-    archived: number;
-    starred: number;
-    with_attachments: number;
-    read_rate: number;
+    sent_prev: number;
+    unread: number;
+    auto_handled: number;
+    auto_handled_rate: number;
+  };
+  /** Per-THREAD response behaviour. `median_hours` is null when nothing in the
+   *  window was replied to at all — which is not the same as "instant". */
+  responsiveness: {
+    inbound_threads: number;
+    replied_threads: number;
+    unreplied_threads: number;
+    reply_rate: number;
+    reply_rate_prev: number;
+    median_hours: number | null;
+    p90_hours: number | null;
+    median_hours_prev: number | null;
+  };
+  /** Standing state, NOT windowed — label it "right now" in the UI, never with
+   *  the range selector's caption. */
+  backlog: {
+    needs_reply: BacklogSide;
+    awaiting: BacklogSide;
+    /** How much of the mailbox Reply Zero has classified. Without this the two
+     *  counts above are unreadable — a small backlog may just be a blind one. */
+    coverage: { total: number; classified: number; rate: number };
   };
   volume: { day: string; received: number; sent: number }[];
-  top_senders: { email: string; name: string; count: number; unread: number }[];
-  by_folder: { folder: string; count: number }[];
-  /** Assistant automation: emails processed + by-rule breakdown (inbox-zero). */
+  categories: { category: string; count: number; prev_count: number }[];
+  noisy_senders: NoisySender[];
+  /** Assistant automation: emails handled, by-rule breakdown, and whether it
+   *  can be trusted to keep doing it. */
   rule_stats?: {
     processed: number;
     by_rule: { rule_name: string; count: number }[];
+    trust: {
+      decided: number;
+      rejected: number;
+      rejection_rate: number;
+      /** Actions logged as applied whose provider call actually failed. */
+      failed_actions: number;
+      /** Learned patterns queued for review. Inert until approved. */
+      unreviewed_patterns: number;
+    };
   };
   /** Breakdown of actions the assistant took (LABEL/ARCHIVE/…). */
   action_stats?: { action: string; count: number }[];

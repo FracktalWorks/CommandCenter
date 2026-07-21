@@ -699,6 +699,7 @@ export default function EmailPage() {
             selectedEmailId={selectedEmailId}
             onClose={() => setAutomationFeature(null)}
             onArchived={fetchEmails}
+            onNavigate={setAutomationFeature}
           />
         </div>
       ) : (

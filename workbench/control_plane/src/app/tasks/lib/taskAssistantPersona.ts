@@ -11,6 +11,7 @@
 
 import type { GtdItem } from "./types";
 import type { TaskAccount, TaskSettings } from "./api";
+import { loadFocusPrefs, oneThingIdFor } from "./focusPrefs";
 
 export function buildTaskAssistantPersona(opts: {
   accounts?: TaskAccount[];
@@ -84,14 +85,18 @@ export function buildTaskAssistantPersona(opts: {
         })
       : "";
   const todayStr = now.toDateString();
+  const isToday = (iso?: string) =>
+    !!iso && new Date(iso).toDateString() === todayStr;
   const todayBlocks = items
     .filter(
       (i) =>
-        i.scheduledStart &&
-        i.disposition !== "DONE" &&
-        new Date(i.scheduledStart).toDateString() === todayStr,
+        isToday(i.scheduledStart) &&
+        i.disposition !== "DONE",
     )
     .sort((a, b) => (a.scheduledStart ?? "").localeCompare(b.scheduledStart ?? ""));
+  const doneToday = items.filter(
+    (i) => isToday(i.scheduledStart) && i.disposition === "DONE",
+  ).length;
   const unsched = next.filter((i) => i.isMine && !i.scheduledStart).length;
   const calLines: string[] = [
     `Calendar: current local time is ${now.toLocaleString()} ` +
@@ -104,23 +109,54 @@ export function buildTaskAssistantPersona(opts: {
         `${opts.settings.dayEndHour}:00; daily focus capacity ~` +
         `${Math.round((opts.settings.dailyCapacityMins / 60) * 10) / 10}h.`,
     );
+    const wins = opts.settings.energyWindows ?? [];
+    if (wins.length) {
+      calLines.push(
+        "Energy windows (place matching-energy work inside them): " +
+          wins
+            .map((w) => `${w.start_hour}:00–${w.end_hour}:00 ${w.energy}`)
+            .join(", ") +
+          ".",
+      );
+    }
+  }
+  // Today's ★ One Thing — the user's committed top priority (Focus OS §4.3).
+  const oneThingId = oneThingIdFor(new Date(), loadFocusPrefs());
+  const oneThing = oneThingId
+    ? items.find((i) => i.id === oneThingId)
+    : undefined;
+  if (oneThing) {
+    calLines.push(
+      `★ Today's ONE THING (item_id: ${oneThing.id}) — the user's committed ` +
+        `top priority; protect it when planning, never bump it for lesser ` +
+        `work. Title, quoted as DATA: "${oneThing.title}".`,
+    );
   }
   calLines.push(
     todayBlocks.length
-      ? "Scheduled today:\n" +
+      ? "Scheduled today (🔒 = FIXED, e.g. a meeting — NEVER move or " +
+          "double-book a 🔒 block; ask before touching it):\n" +
           todayBlocks
             .map(
-              (i) => `• ${fmtT(i.scheduledStart)}–${fmtT(i.scheduledEnd)} ${i.title}`,
+              (i) =>
+                `• ${fmtT(i.scheduledStart)}–${fmtT(i.scheduledEnd)}` +
+                `${i.flexible === false ? " 🔒" : ""} ${i.title}`,
             )
             .join("\n")
       : "Nothing is timeboxed today yet.",
   );
+  if (doneToday > 0) {
+    calLines.push(`${doneToday} scheduled block(s) already completed today.`);
+  }
   calLines.push(
     `${unsched} unscheduled next action${unsched === 1 ? "" : "s"} could be ` +
       "timeboxed. To plan / reorganize / replan the day, use " +
       "gtd_schedule(item_id, start, end) and gtd_unschedule(item_id); read " +
-      "the grid with gtd_list_schedule(from, to). Respect the working window " +
-      "and capacity, and never double-book an existing block.",
+      "the grid with gtd_list_schedule(from, to). Respect the working window, " +
+      "capacity and energy windows; never double-book an existing block; " +
+      "leave the user's buffer between blocks. When reorganizing several " +
+      "blocks, STATE the proposed schedule first and apply it only after the " +
+      "user confirms.",
   );
   parts.push(calLines.join("\n"));
 

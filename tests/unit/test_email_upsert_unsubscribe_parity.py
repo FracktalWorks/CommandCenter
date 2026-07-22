@@ -27,13 +27,25 @@ REPO = Path(__file__).resolve().parents[2]
 _HELPER = REPO / "apps/services/email_ingestion/email_ingestion/persist.py"
 
 # The received-message ingest paths, and the token proving each routes through
-# the shared helper instead of hand-rolling the upsert.
+# the shared helper instead of hand-rolling the upsert. transport/sync.py is
+# deliberately ABSENT: since the 2.1 sync-core collapse the manual route
+# delegates to the scheduler core and is no longer an ingest path at all
+# (test_sync_route_is_not_an_ingest_path pins that).
 _INGEST_PATHS = {
-    "apps/services/gateway/gateway/routes/email/transport/sync.py": "upsert_message(",
     "apps/services/email_ingestion/email_ingestion/scheduler.py": "upsert_message(",
     "apps/services/email_ingestion/email_ingestion/inbound.py": "upsert_message(",
     "apps/services/gateway/gateway/routes/email/core.py": "upsert_message(",
 }
+
+
+def test_sync_route_is_not_an_ingest_path():
+    """After the 2.1 collapse the manual-sync route delegates to the scheduler
+    core; it must neither call the upsert helper nor own a message INSERT —
+    either one means an inline sync body has crept back in."""
+    src = (REPO / "apps/services/gateway/gateway/routes/email/transport/"
+                  "sync.py").read_text(encoding="utf-8")
+    assert "upsert_message(" not in src
+    assert "INSERT INTO email_messages" not in src
 
 
 def test_shared_helper_persists_unsubscribe_link():

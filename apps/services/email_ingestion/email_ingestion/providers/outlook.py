@@ -8,6 +8,7 @@ API reference: https://learn.microsoft.com/en-us/graph/api/resources/mail-api-ov
 
 from __future__ import annotations
 
+import asyncio
 from datetime import datetime
 from typing import Any
 
@@ -26,6 +27,12 @@ from .base import (
 
 
 GRAPH_API_BASE = "https://graph.microsoft.com/v1.0"
+
+# Cap on how long we'll honour a Graph 429 ``Retry-After`` before giving up on
+# the retry. Graph throttles bulk labelling; a short, bounded wait lets the apply
+# succeed instead of the caller eating the 429 and logging a phantom failure —
+# but we never block a whole sync cycle on one throttled message.
+_MAX_RETRY_AFTER_SECS = 30.0
 
 # Canonical keys that mean "system folder" (used to classify by display name on
 # personal/consumer accounts, which omit wellKnownName — see below).
@@ -91,6 +98,12 @@ class OutlookProvider(BaseEmailProvider):
         self._tenant_id: str = credentials.get("tenant_id", "common")
         self._http: httpx.AsyncClient | None = None
         self._creds_dirty = False
+        # Lower-cased master-category names, fetched once per provider instance.
+        # A sweep or rule run applies labels to many messages through the SAME
+        # instance; without this every apply re-GET the whole master list just to
+        # check existence, so this turns the 3-Graph-call apply into 2. None =
+        # not yet fetched; a set (possibly empty for MSA/403) = fetched.
+        self._master_categories: set[str] | None = None
 
     def credentials_dirty(self) -> bool:
         return self._creds_dirty
@@ -115,6 +128,49 @@ class OutlookProvider(BaseEmailProvider):
                 timeout=30.0,
             )
         return self._http
+
+    async def _graph_send(
+        self, method: str, url: str, **kwargs: Any,
+    ) -> httpx.Response:
+        """One Graph request that honours a single 429 ``Retry-After`` backoff.
+
+        Graph throttles the label-apply loop under bulk categorisation. Without
+        this, a 429 surfaces as a failed apply — a phantom "FAILED" audit row for
+        a message the mailbox would have accepted a second later. Wait out one
+        Retry-After (bounded) and retry once; anything past that the caller
+        handles as before.
+        """
+        client = await self._get_client()
+        for attempt in (0, 1):
+            resp = await client.request(method, url, **kwargs)
+            if resp.status_code == 429 and attempt == 0:
+                try:
+                    delay = float(resp.headers.get("Retry-After", "1") or 1)
+                except ValueError:
+                    delay = 1.0
+                await asyncio.sleep(min(max(delay, 0.0), _MAX_RETRY_AFTER_SECS))
+                continue
+            return resp
+        return resp
+
+    async def _master_category_names(self) -> set[str]:
+        """Lower-cased master-category names for this account, fetched once and
+        cached on the instance. Personal/MSA accounts 403 on the endpoint; that
+        (and any other failure) caches an empty set so we don't re-GET per apply.
+        """
+        if self._master_categories is not None:
+            return self._master_categories
+        client = await self._get_client()
+        try:
+            resp = await client.get("/me/outlook/masterCategories")
+            resp.raise_for_status()
+            self._master_categories = {
+                (c.get("displayName") or "").lower()
+                for c in resp.json().get("value", [])
+            }
+        except Exception:  # noqa: BLE001 — 403 (MSA) or transient: treat as none
+            self._master_categories = set()
+        return self._master_categories
 
     async def _refresh_access_token(self) -> None:
         """Refresh the OAuth access token."""
@@ -766,23 +822,21 @@ class OutlookProvider(BaseEmailProvider):
 
     async def _ensure_categories(self, names: list[str]) -> None:
         """Create any missing Outlook master categories so an applied category is
-        a real, coloured category (matches Gmail's label-on-apply behaviour)."""
+        a real, coloured category (matches Gmail's label-on-apply behaviour).
+
+        Uses the per-instance cache: when every requested category already
+        exists (the common case once the mailbox is warm) this makes NO Graph
+        call at all — the saving that turns the 3-call apply into 2."""
+        names = [n for n in names if n]
         if not names:
             return
+        existing = await self._master_category_names()
+        missing = [n for n in names if n.lower() not in existing]
+        if not missing:
+            return  # all present — no Graph round-trip
         client = await self._get_client()
-        try:
-            resp = await client.get("/me/outlook/masterCategories")
-            resp.raise_for_status()
-            existing = {
-                (c.get("displayName") or "").lower()
-                for c in resp.json().get("value", [])
-            }
-        except Exception:  # noqa: BLE001
-            existing = set()
         from .label_colors import preset_for_name
-        for name in names:
-            if not name or name.lower() in existing:
-                continue
+        for name in missing:
             # Stable colour from the name so the same category is consistent.
             color = preset_for_name(name)
             try:
@@ -790,7 +844,7 @@ class OutlookProvider(BaseEmailProvider):
                     "/me/outlook/masterCategories",
                     json={"displayName": name, "color": color},
                 )
-                existing.add(name.lower())
+                existing.add(name.lower())  # keep the cache current
             except Exception:  # noqa: BLE001
                 pass  # best-effort — applying the category still works
 
@@ -828,6 +882,10 @@ class OutlookProvider(BaseEmailProvider):
                 "/me/outlook/masterCategories",
                 json={"displayName": name, "color": color},
             )
+            # Keep the per-instance cache consistent so a following apply doesn't
+            # try to re-create the category it just made.
+            if self._master_categories is not None:
+                self._master_categories.add(name.lower())
 
     async def set_labels(
         self,
@@ -840,9 +898,8 @@ class OutlookProvider(BaseEmailProvider):
         Missing categories are first created in the account's master category
         list so they show up as real, coloured Outlook categories."""
         await self._ensure_categories(add or [])
-        client = await self._get_client()
-        resp = await client.get(
-            f"/me/messages/{provider_message_id}",
+        resp = await self._graph_send(
+            "GET", f"/me/messages/{provider_message_id}",
             params={"$select": "categories"},
         )
         resp.raise_for_status()
@@ -853,8 +910,8 @@ class OutlookProvider(BaseEmailProvider):
         for name in remove or []:
             if name in current:
                 current.remove(name)
-        patch = await client.patch(
-            f"/me/messages/{provider_message_id}",
+        patch = await self._graph_send(
+            "PATCH", f"/me/messages/{provider_message_id}",
             json={"categories": current},
         )
         patch.raise_for_status()

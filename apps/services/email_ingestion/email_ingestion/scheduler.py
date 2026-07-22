@@ -34,6 +34,14 @@ from email_ingestion.reconcile import reconcile_full_snapshot
 # /backfill endpoint.
 INITIAL_SYNC_DAYS = 365
 
+# Ceiling for the failure backoff. When an account's sync keeps failing (a
+# revoked token, an account the user disconnected upstream), polling it every
+# ``sync_interval_secs`` (300s) just burns a failing auth handshake and a Graph
+# call twelve times an hour, forever. Back off exponentially from the normal
+# interval up to this cap (~1h), and reset to the interval the moment a sync
+# succeeds again.
+_MAX_SYNC_BACKOFF_SECS = 3600
+
 logger = logging.getLogger(__name__)
 
 # -- Singleton state ----------------------------------------------------------
@@ -77,6 +85,34 @@ def _connect_timeout() -> int:
         return get_settings().db_connect_timeout
     except Exception:
         return 10
+
+
+def _next_backoff(current: int, interval: int, *, failed: bool) -> int:
+    """The next sleep length for a sync loop.
+
+    On success returns 0 — the caller sleeps the normal ``interval``. On failure
+    doubles from the interval each consecutive time (``interval*2`` → ``*4`` → …)
+    capped at ``_MAX_SYNC_BACKOFF_SECS``, so a persistently failing account is
+    polled ever less often instead of every interval forever.
+    """
+    if not failed:
+        return 0
+    return min(current * 2 if current else interval * 2, _MAX_SYNC_BACKOFF_SECS)
+
+
+async def _close_orphaned_syncs(db: Any) -> None:
+    """Close sync-log rows (and account statuses) left mid-flight by a process
+    that crashed or restarted during a sync. Nothing completes them once that
+    process is gone, so they linger 'running'/'syncing' forever and lie to any
+    "is a sync in progress?" check. A fresh scheduler owns every sync now, so any
+    pre-existing in-flight row is by definition orphaned."""
+    await db.execute(text(
+        "UPDATE email_sync_log SET status = 'error', "
+        "error_message = 'interrupted by scheduler restart', "
+        "completed_at = now() WHERE status = 'running'"))
+    await db.execute(text(
+        "UPDATE email_accounts SET sync_status = 'idle', "
+        "updated_at = now() WHERE sync_status = 'syncing'"))
 
 
 # -- Core sync logic (shared with manual /email/sync endpoint) ---------------
@@ -360,9 +396,15 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
         "sync.loop_started account_id=%s interval=%s",
         account_id, interval_secs,
     )
+    backoff_secs = 0  # 0 = healthy, sleep the normal interval; >0 = failing
     while True:
+        sync_failed = False
         try:
             result = await _sync_account(account_id)
+            # _sync_account returns {"error": ...} on a handled failure (auth,
+            # provider) rather than raising, so a bad sync is a dict with an
+            # "error" key — not an exception. Treat both as failure for backoff.
+            sync_failed = (not isinstance(result, dict)) or ("error" in result)
             new_mail = isinstance(result, dict) and result.get("synced", 0)
             # Process new mail through the shared pipeline — auto-run rules,
             # categorize senders, classify threads (Reply Zero), auto-archive.
@@ -417,6 +459,7 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
                     account_id, str(exc),
                 )
         except Exception as exc:
+            sync_failed = True
             logger.warning(
                 "sync.loop_iteration_failed account_id=%s error=%s",
                 account_id, str(exc),
@@ -430,7 +473,15 @@ async def _account_sync_loop(account_id: str, interval_secs: int) -> None:
         except Exception:
             pass
 
-        await asyncio.sleep(interval_secs)
+        # Exponential backoff on failure (double each time, capped ~1h); reset
+        # to the normal interval the moment a sync succeeds. Stops a revoked
+        # account from being hammered every interval forever.
+        backoff_secs = _next_backoff(
+            backoff_secs, interval_secs, failed=sync_failed)
+        if backoff_secs:
+            logger.info("sync.backoff account_id=%s next_in=%s",
+                        account_id, backoff_secs)
+        await asyncio.sleep(backoff_secs or interval_secs)
 
 
 async def _get_account_sync_interval(account_id: str) -> int | None:
@@ -476,6 +527,9 @@ async def start_background_sync() -> dict[str, int]:
 
         try:
             async with session_factory() as db:
+                await _close_orphaned_syncs(db)
+                await db.commit()
+
                 result = await db.execute(
                     text(
                         """SELECT id, sync_interval_secs

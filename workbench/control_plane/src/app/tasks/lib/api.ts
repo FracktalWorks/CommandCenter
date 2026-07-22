@@ -492,6 +492,16 @@ export async function apiPatchItem(
   );
 }
 
+/** The ordered ClickUp statuses of a synced task's OWN list — the stage-picker
+ *  options for the detail panel, so a task shows just its project's pipeline,
+ *  not the whole-workspace union. Empty for a LOCAL / not-yet-pushed task. */
+export async function apiItemStageOptions(id: string): Promise<string[]> {
+  const r = await gatewayFetch<Raw>(`/items/${id}/stage-options`);
+  return Array.isArray(r.statuses)
+    ? (r.statuses as unknown[]).map(String)
+    : [];
+}
+
 /** Items to render on the calendar grid for the window [fromIso, toIso):
  *  scheduled time-blocks + deadline items. See calendar_timeboxing.md. */
 export async function apiCalendarRange(

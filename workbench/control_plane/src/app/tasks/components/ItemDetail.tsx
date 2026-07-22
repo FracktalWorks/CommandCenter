@@ -35,6 +35,7 @@ import {
   originEmailHref,
   DISPOSITION_LABEL,
   durationLabel,
+  formatStatus,
   initials,
   isOverdue,
   relativeTime,
@@ -42,6 +43,7 @@ import {
 import { Disposition, Energy, GtdItem, Person } from "../lib/types";
 import {
   apiItemDetail,
+  apiItemStageOptions,
   type ProviderTaskDetail,
   type TaskComment,
   type TaskSubtask,
@@ -190,6 +192,22 @@ export function TaskDetail({
   // The full owner set (falls back to the single assignee for older rows / mock).
   const assigneeList: Person[] =
     item.assignees ?? (item.assignee ? [item.assignee] : []);
+
+  // A synced task's stage options are THIS task's own list statuses (a project
+  // usually uses only a few of the workspace's many). Loaded on open; until then
+  // (or if unresolved) we fall back to the account-wide set so the picker still
+  // works. Keyed by item.id at the call site → remounts per task, so no reset.
+  const [taskStages, setTaskStages] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (backend !== "live" || !isSynced || item.syncState === "pending") return;
+    let live = true;
+    apiItemStageOptions(item.id)
+      .then((s) => { if (live) setTaskStages(s); })
+      .catch(() => { /* keep the fallback */ });
+    return () => { live = false; };
+  }, [item.id, isSynced, item.syncState, backend]);
+  const syncedStageOptions =
+    taskStages && taskStages.length ? taskStages : stageOptions;
 
   const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
 
@@ -383,14 +401,17 @@ export function TaskDetail({
                 column). Local tasks always show one now, so their stage is
                 visible/changeable here too, not just on the board. */}
             {isSynced ? (
-              stageOptions.length > 0 && (
+              syncedStageOptions.length > 0 && (
                 <MetaEdit label="Stage" icon={CircleDot}
-                  display={item.providerStatus ? <span>{item.providerStatus}</span> : null}
+                  display={item.providerStatus
+                    ? <span>{formatStatus(item.providerStatus)}</span>
+                    : null}
                 >
                   {(close) => (
                     <ChipMenu
-                      options={stageOptions}
+                      options={syncedStageOptions}
                       active={item.providerStatus}
+                      format={formatStatus}
                       onPick={(v) => { updateItem(item.id, { providerStatus: v ?? "" }); close(); }}
                     />
                   )}
@@ -898,7 +919,7 @@ function SubtaskRow({ s }: { s: TaskSubtask }) {
       </span>
       {s.status && (
         <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          {s.status}
+          {formatStatus(s.status)}
         </span>
       )}
       {s.assignees[0] && <Avatar name={s.assignees[0].name} />}
@@ -1120,6 +1141,7 @@ function ChipMenu({
   mono,
   capitalize,
   allowClear,
+  format,
   onPick,
 }: {
   options: string[];
@@ -1127,6 +1149,9 @@ function ChipMenu({
   mono?: boolean;
   capitalize?: boolean;
   allowClear?: boolean;
+  /** display transform for the chip label; the raw option is still the value
+   *  passed to onPick (so e.g. a title-cased status keeps its raw value). */
+  format?: (o: string) => React.ReactNode;
   onPick: (v: string | null) => void;
 }) {
   return (
@@ -1144,7 +1169,7 @@ function ChipMenu({
               : "border-border text-muted-foreground hover:bg-secondary",
           ].join(" ")}
         >
-          {o}
+          {format ? format(o) : o}
         </button>
       ))}
       {allowClear && active && (

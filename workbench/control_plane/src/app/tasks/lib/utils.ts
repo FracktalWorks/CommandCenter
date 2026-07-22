@@ -101,6 +101,16 @@ export function durationLabel(mins?: number): string {
   return m ? `${h}h ${m}m` : `${h}h`;
 }
 
+/** ClickUp's API returns status names lower-cased ("to do", "in progress");
+ *  its UI shows them title-cased. Present them the way the tool does — capitalize
+ *  each word's first letter, leaving the rest untouched (so an already-cased or
+ *  ALL-CAPS acronym is preserved). Display only; the raw value is kept for
+ *  matching and back-sync. */
+export function formatStatus(status?: string): string {
+  if (!status) return "";
+  return status.replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
 /** Quick snooze/defer targets for the tickler, relative to now. */
 export function snoozeOptions(nowMs = Date.now()): { label: string; iso: string }[] {
   const at = (d: Date, h = 9) => {

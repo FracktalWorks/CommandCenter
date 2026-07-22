@@ -7,6 +7,7 @@ import {
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
 import { fetchStatusCatalog, type TaskSettings, type StatusCatalog } from "../lib/api";
+import { formatStatus } from "../lib/utils";
 import {
   COLUMNS,
   DEFAULT_VISIBLE,
@@ -521,7 +522,7 @@ function StatusMappingEditor({
             className="flex items-center gap-2 rounded-lg border border-border px-2.5 py-1.5"
           >
             <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
-              {entry.status}
+              {formatStatus(entry.status)}
               {isGuess && (
                 <span className="ml-1.5 text-[10px] italic text-muted-foreground">
                   (guessed)

@@ -1540,3 +1540,36 @@ async def item_detail(
             return {**empty, "error": "Could not load live detail"}
     finally:
         await db.close()
+
+
+@router.get("/items/{item_id}/stage-options")
+async def item_stage_options(
+    item_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """The ordered ClickUp statuses of THIS task's OWN list — the stage-picker
+    options for the detail panel. A synced task's list may use only a few of the
+    workspace's many statuses, so the picker shows just those (its project's
+    real pipeline), not the whole-workspace union that the settings mapping
+    needs. Empty for a LOCAL / not-yet-pushed task (the picker falls back)."""
+    uid = _uid(user)
+    db = await _get_db()
+    try:
+        row = await _fetch_item(db, item_id, uid)
+        if row.source == "LOCAL" or not row.provider_task_id \
+                or not row.account_id:
+            return {"statuses": []}
+        account = await _assert_account_owner(db, str(row.account_id), uid)
+        creds = json.loads(_key_store().decrypt(account.credentials_encrypted))
+        provider = build_provider(
+        account.provider, creds, account.workspace_id, str(account.id))
+        try:
+            statuses = await provider.list_statuses_for_task(
+                str(row.provider_task_id))
+            return {"statuses": [str(s) for s in statuses if s]}
+        except Exception as exc:  # provider hiccup — picker falls back
+            _log.warning("tasks.stage_options.failed",
+                         item_id=item_id[:12], error=str(exc)[:160])
+            return {"statuses": []}
+    finally:
+        await db.close()

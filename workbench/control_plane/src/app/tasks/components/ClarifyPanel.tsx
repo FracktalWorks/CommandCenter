@@ -41,7 +41,7 @@ import { apiClarifyPropose, apiSuggestTitle } from "../lib/api";
 import type { ConnectedProvider } from "../lib/mockData";
 import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
 import type { TaskAccount } from "../lib/api";
-import { durationLabel, initials, originEmailHref, snoozeOptions } from "../lib/utils";
+import { durationLabel, formatStatus, initials, originEmailHref, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 
@@ -1465,7 +1465,7 @@ function DuplicateBanner({
         {(dup.projectName || dup.providerStatus) && (
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 pl-5 text-[10.5px] text-muted-foreground">
             {dup.projectName && <span>{dup.projectName}</span>}
-            {dup.providerStatus && <span>· {dup.providerStatus}</span>}
+            {dup.providerStatus && <span>· {formatStatus(dup.providerStatus)}</span>}
           </div>
         )}
       </div>

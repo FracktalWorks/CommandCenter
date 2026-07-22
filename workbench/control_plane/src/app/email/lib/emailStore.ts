@@ -280,6 +280,11 @@ interface EmailState {
     replyToBody?: string;
     quote?: string;
     replyToMessageId?: string;
+    // The LOCAL message id being replied to, so the popped-out composer's
+    // "Draft with AI" can load the same reply context the inline reply had
+    // (the classifier keys _build_reply_context off email_messages.id, not the
+    // provider id). Without it the pop-out drafted context-blind.
+    messageId?: string;
     // Carried so an undo-send reopen restores the full message, not a lossy
     // subset. Without these the composer reset Cc/attachments/artifacts to
     // empty on open and the user silently lost them.
@@ -344,7 +349,7 @@ interface EmailState {
   setSearchFilters: (filters: SearchFilter[]) => void;
   /** Drop the text AND the pills, returning to the plain folder list. */
   clearSearch: () => void;
-  openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string }) => void;
+  openCompose: (defaults?: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string; messageId?: string }) => void;
   closeCompose: () => void;
   hydrateEmail: (email: Email) => void;
   /** "Captured to Tasks" toast state (email → GTD inbox). */

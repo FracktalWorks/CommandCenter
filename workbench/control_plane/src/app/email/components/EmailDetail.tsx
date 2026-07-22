@@ -602,6 +602,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
       quote: replyQuote,        // the collapsed trailing chain
       replyToMessageId:
         replyMode === "forward" ? undefined : replyTarget.providerMessageId,
+      // Local id so the popped-out "Draft with AI" keeps the reply context
+      // (a forward isn't a reply, so no context to carry).
+      messageId: replyMode === "forward" ? undefined : replyTarget.id,
     });
     setReplyMode(null);
   };

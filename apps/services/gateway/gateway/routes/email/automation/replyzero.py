@@ -2006,10 +2006,24 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                         else json.loads(r.to_addresses or "[]")
                     to = (to_list[0].get("email") if to_list else "") or ""
                     if to:
+                        # Hydrate the FULL body of our own last message before
+                        # drafting the nudge — a header-only Outlook row otherwise
+                        # hands the drafter a ~200-char snippet cut off mid-
+                        # sentence (the last surviving snippet-bug path; every
+                        # other drafting entry point already hydrates).
+                        from gateway.routes.email.core import (  # noqa: PLC0415
+                            hydrate_message_body,
+                        )
+                        hb = ""
+                        if r.last_message_id:
+                            with contextlib.suppress(Exception):
+                                hb = await hydrate_message_body(
+                                    db, str(r.last_message_id), acc.user_id)
                         email = {
                             "subject": r.subject or "",
                             "from": to,  # nudging the recipient of our last msg
-                            "body": r.body_text or r.snippet or "",
+                            "body": (hb or "").strip()
+                            or r.body_text or r.snippet or "",
                             "thread_id": r.thread_id or "",
                         }
                         body = await _agent_draft_reply(

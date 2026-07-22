@@ -126,7 +126,10 @@ async def _fetch_sender_reply_examples(
         return ""
     parts: list[str] = []
     for r in rows:
-        body = (r.body_text or r.snippet or "").strip()
+        # Strip the quoted chain: a sent example is meant to show the owner's OWN
+        # tone, not the correspondent's prose the reply quoted underneath.
+        body = split_quoted_text((r.body_text or r.snippet or "").strip())[0]
+        body = body.strip()
         if body:
             parts.append(body[:800])
     return "\n\n---\n\n".join(parts)
@@ -366,6 +369,12 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
     (best-effort)."""
     if not thread_id or not (sent_text or "").strip():
         return
+    # The composer sends new-text + the quoted chain concatenated. The stored AI
+    # draft is the new text only, so comparing the two verbatim NEVER matched —
+    # every send looked "edited" and fired a wasted extraction — and the quoted
+    # correspondent prose leaked into the learned preferences. Strip the quote so
+    # both the unchanged-check and the extraction see only what the user wrote.
+    sent_text = split_quoted_text(sent_text)[0]
     db = await _get_db()
     try:
         row = (await db.execute(text(

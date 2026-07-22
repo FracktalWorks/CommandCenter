@@ -49,6 +49,28 @@ async def test_learn_skips_llm_when_unchanged() -> None:
     llm.assert_not_awaited()
 
 
+async def test_learn_skips_llm_when_only_quote_was_appended() -> None:
+    # The composer sends the drafted body + the quoted chain concatenated. That
+    # is NOT an edit — stripping the quote must make it equal the stored draft so
+    # no extraction fires (and the correspondent's quoted prose never leaks into
+    # learned preferences).
+    draft_row = SimpleNamespace(draft_text="Hi Alice,\n\nSounds good — Friday works.")
+    res = MagicMock()
+    res.fetchone.return_value = draft_row
+    db = AsyncMock()
+    db.execute.return_value = res
+    llm = AsyncMock()
+    sent = (
+        "Hi Alice,\n\nSounds good — Friday works.\n\n"
+        "On Mon, 21 Jul 2026, Alice <alice@acme.com> wrote:\n"
+        "> Are you free Friday to review the quote?\n"
+    )
+    with patch.object(m.automation.drafting, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(m.automation.drafting, "_llm_extract_reply_memories", llm):
+        await m._learn_from_sent("acc-1", "t1", sent)
+    llm.assert_not_awaited()
+
+
 async def test_learn_noop_when_no_stored_draft() -> None:
     res = MagicMock()
     res.fetchone.return_value = None

@@ -131,7 +131,7 @@ _ATTACHMENT_INSERT = """INSERT INTO email_attachments
         WHERE account_id = :account_id AND provider_message_id = :provider_id),
        :filename, :mime_type, :size_bytes, :provider_attachment_id
      )
-     ON CONFLICT DO NOTHING"""
+     ON CONFLICT (message_id, provider_attachment_id) DO NOTHING"""
 
 
 def _message_params(account_id: str, msg: Any) -> dict[str, Any]:

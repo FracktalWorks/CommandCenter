@@ -28,7 +28,6 @@ import {
   Maximize2,
   Archive,
   ArchiveRestore,
-  RotateCcw,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
@@ -55,6 +54,7 @@ import { AiTaskActions } from "./AiTaskActions";
 import { DelegateDialog } from "./DelegateDialog";
 import { WeightToggles, PriorityBadge, SuggestionBadge } from "./PriorityControls";
 import { isUntagged } from "../lib/priority";
+import { useCardActions } from "../lib/useCardActions";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -167,10 +167,10 @@ export function TaskDetail({
   // person until the destination dialog resolves.
   const [delegateTo, setDelegateTo] = useState<Person | null>(null);
   // After reassigning/unassigning a task that's currently in MY Next Actions,
-  // offer to drop it from my list (is_mine=false) — it stays on ClickUp.
+  // offer to drop it from my list (is_mine=false) — it stays on ClickUp. This
+  // component is keyed by item.id at every call site, so it remounts per task
+  // and the offer resets to false on its own (no reset effect needed).
   const [offerDropFromNext, setOfferDropFromNext] = useState(false);
-  // Reset that offer when switching to a different task.
-  useEffect(() => { setOfferDropFromNext(false); }, [item.id]);
 
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
@@ -183,6 +183,10 @@ export function TaskDetail({
   // Delegate/assignee options + stage options for a synced task.
   const memberPeople: Person[] = account?.members?.length ? account.members : people;
   const stageOptions: string[] = account?.statuses ?? [];
+  // The local Kanban stage (the workflow-stage axis of My Next Actions). Used to
+  // show/change a LOCAL task's stage in the detail — synced tasks show their raw
+  // ClickUp status instead (below). setStage handles done/reopen like the card.
+  const stageActions = useCardActions(item);
 
   const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
 
@@ -193,44 +197,10 @@ export function TaskDetail({
         {/* focused → the modal's × occupies the top-right corner; keep the
             archive/delete actions clear of it */}
         <div className={`mb-2 flex flex-wrap items-center gap-2 ${focused ? "pr-9" : ""}`}>
+          {/* Status is changed through the status chip (disposition) and the
+              Stage card below — not a standalone Done button, which read as
+              "this task is complete" even when it wasn't. */}
           <StatusPicker item={item} onPick={(d) => quickDispose(item.id, d)} />
-          {/* One-click complete — the primary action. StatusPicker can still set
-              DONE among the other states, but a task shouldn't need a dropdown to
-              be finished. Toggles to Reopen once done. Hidden for REFERENCE. */}
-          {item.disposition !== "REFERENCE" && (
-            <button
-              type="button"
-              onClick={() =>
-                quickDispose(
-                  item.id,
-                  item.disposition === "DONE" ? "NEXT" : "DONE",
-                )
-              }
-              title={
-                item.disposition === "DONE"
-                  ? "Reopen this task"
-                  : "Mark this task done"
-              }
-              className={[
-                "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium",
-                item.disposition === "DONE"
-                  ? "bg-secondary text-muted-foreground hover:text-foreground"
-                  : "bg-success text-white hover:opacity-90",
-              ].join(" ")}
-            >
-              {item.disposition === "DONE" ? (
-                <>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Reopen
-                </>
-              ) : (
-                <>
-                  <Check className="h-3.5 w-3.5" />
-                  Done
-                </>
-              )}
-            </button>
-          )}
           <SourceBadge source={item.source} provider={item.provider} />
           {isSynced && item.providerUrl && (
             <a
@@ -405,19 +375,38 @@ export function TaskDetail({
               )}
             </MetaEdit>
 
-            {/* Stage (synced only) */}
-            {isSynced && stageOptions.length > 0 && (
-              <MetaEdit label="Stage" icon={CircleDot}
-                display={item.providerStatus ? <span>{item.providerStatus}</span> : null}
-              >
-                {(close) => (
-                  <ChipMenu
-                    options={stageOptions}
-                    active={item.providerStatus}
-                    onPick={(v) => { updateItem(item.id, { providerStatus: v ?? "" }); close(); }}
-                  />
-                )}
-              </MetaEdit>
+            {/* Stage — for a SYNCED task the raw ClickUp status (back-syncs on
+                change); for a LOCAL task the workflow stage (the My Next Actions
+                column). Local tasks always show one now, so their stage is
+                visible/changeable here too, not just on the board. */}
+            {isSynced ? (
+              stageOptions.length > 0 && (
+                <MetaEdit label="Stage" icon={CircleDot}
+                  display={item.providerStatus ? <span>{item.providerStatus}</span> : null}
+                >
+                  {(close) => (
+                    <ChipMenu
+                      options={stageOptions}
+                      active={item.providerStatus}
+                      onPick={(v) => { updateItem(item.id, { providerStatus: v ?? "" }); close(); }}
+                    />
+                  )}
+                </MetaEdit>
+              )
+            ) : (
+              stageActions.stages.length > 0 && (
+                <MetaEdit label="Stage" icon={CircleDot}
+                  display={<span>{stageActions.currentStage}</span>}
+                >
+                  {(close) => (
+                    <ChipMenu
+                      options={stageActions.stages}
+                      active={stageActions.currentStage}
+                      onPick={(v) => { if (v) stageActions.setStage(v); close(); }}
+                    />
+                  )}
+                </MetaEdit>
+              )
             )}
 
             {/* Assignee */}
@@ -1042,7 +1031,10 @@ function EditableText({
   );
 }
 
-/** A metadata cell that flips to an inline editor on click. */
+/** A metadata cell that flips to an inline editor on click. When closed the
+ *  WHOLE card is the click target (label, value, and the empty space around
+ *  them) — not just a thin strip under the label — so it's an easy, obvious hit
+ *  area. Opening reveals the editor with an × to dismiss. */
 function MetaEdit({
   label,
   icon: Icon,
@@ -1055,35 +1047,45 @@ function MetaEdit({
   children: (close: () => void) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={`Edit ${label}`}
+        className="tech-transition group min-w-0 rounded-md border border-border bg-card px-3 py-2 text-left hover:border-primary/40 hover:bg-secondary/30"
+      >
+        <div className="flex items-center justify-between">
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <Icon className="h-3 w-3" />
+            {label}
+          </span>
+          <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" />
+        </div>
+        <div className="mt-0.5 text-sm text-foreground">
+          {display ?? <span className="text-muted-foreground/60">—</span>}
+        </div>
+      </button>
+    );
+  }
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card px-3 py-2">
+    <div className="min-w-0 rounded-md border border-primary/40 bg-card px-3 py-2">
       <div className="flex items-center justify-between">
-        <div className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
           <Icon className="h-3 w-3" />
           {label}
-        </div>
-        {!open && (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:text-primary"
-            aria-label={`Edit ${label}`}
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-        )}
-      </div>
-      {open ? (
-        <div className="mt-1.5">{children(() => setOpen(false))}</div>
-      ) : (
+        </span>
         <button
           type="button"
-          onClick={() => setOpen(true)}
-          className="mt-0.5 block w-full text-left text-sm text-foreground"
+          onClick={() => setOpen(false)}
+          className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
+          aria-label={`Close ${label} editor`}
         >
-          {display ?? <span className="text-muted-foreground/60">—</span>}
+          <X className="h-3 w-3" />
         </button>
-      )}
+      </div>
+      <div className="mt-1.5">{children(() => setOpen(false))}</div>
     </div>
   );
 }

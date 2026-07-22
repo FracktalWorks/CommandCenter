@@ -241,6 +241,40 @@ export function stageForProviderStatus(
   return map[normStatus(providerStatus)] ?? "";
 }
 
+// Name heuristics for guessing which stage a raw ClickUp status belongs to —
+// a mirror of the gateway's `guess_stage_for_status` (settings.py) so an
+// UNMAPPED ClickUp status still lands in the right column here, identically to
+// the guess the settings mapping table shows. First match wins in this order
+// (so "in review" hits IN PROCESS, not WAITING). Each entry is a canonical
+// stage name + the substrings that imply it; a heuristic for a stage the user
+// doesn't have is skipped, and anything unmatched falls back to the first stage.
+const STAGE_HEURISTICS: [string, string[]][] = [
+  ["DONE", ["done", "complete", "closed", "resolved", "shipped", "cancel"]],
+  ["WAITING FOR", ["waiting", "blocked", "on hold", "hold", "paused", "pending", "stuck"]],
+  ["IN PROCESS", ["progress", "process", "doing", "review", "testing", "qa", "active", "wip", "started"]],
+  ["TODO", ["todo", "to do", "to-do", "backlog", "open", "new", "icebox", "later", "someday", "planned", "queue"]],
+];
+
+/** Guess which of the user's `stages` a raw ClickUp status name belongs to, by
+ *  substring heuristics — the client twin of the gateway's guess so an unmapped
+ *  ClickUp status resolves to a sensible column instead of dumping into the
+ *  first one. Only guesses stages the user actually has (matched by upper-cased
+ *  name); falls back to the first stage when nothing matches, so a task is
+ *  never lost. */
+export function guessStageForStatus(
+  status: string | undefined,
+  stages: string[],
+): string {
+  const low = (status ?? "").trim().toLowerCase();
+  const have = new Map(stages.map((s) => [s.trim().toUpperCase(), s]));
+  for (const [canonical, needles] of STAGE_HEURISTICS) {
+    if (have.has(canonical) && needles.some((n) => low.includes(n))) {
+      return have.get(canonical)!;
+    }
+  }
+  return stages[0] ?? "";
+}
+
 /** The stage column a task belongs in on the Next-Actions board. A LOCAL task
  *  keys off its `workflowStage`; a SYNCED task off its ClickUp `providerStatus`
  *  translated through `statusStageMap`. A synced task that also has a local
@@ -265,12 +299,16 @@ export function statusColumnForItem(
   if (item.source === "LOCAL") {
     return known(item.workflowStage) || firstStage;
   }
-  // Synced: a local stage override wins (a drag that stayed local); else map the
-  // ClickUp status through the user's status→stage map.
+  // Synced: a local stage override wins (a drag that stayed local); then the
+  // user's explicit status→stage map; then the status matched directly against
+  // the axis (the per-project view, whose axis IS the raw ClickUp statuses);
+  // and finally the name heuristic, so an UNMAPPED status still lands in a
+  // sensible stage on the global board instead of dumping into the first one.
   return (
     known(item.workflowStage) ||
     known(stageForProviderStatus(item.providerStatus, statusStageMap)) ||
-    firstStage
+    known(item.providerStatus) ||
+    guessStageForStatus(item.providerStatus, stages)
   );
 }
 

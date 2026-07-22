@@ -26,9 +26,9 @@ from gateway.routes.email.core import (
     _log,
     _persist_rotated_creds,
     _provider_for_account,
-    _provider_for_message,
     _row_to_message,
     email_memory_scope,
+    provider_session,
     router,
 )
 from gateway.routes.email.quoting import split_quoted_text
@@ -1440,32 +1440,33 @@ async def draft_reply_smart(
         created = False
         if req.create_draft:
             try:
-                provider, pmid, account_id, store = await _provider_for_message(
-                    db, req.message_id, user.email or "anonymous"
-                )
-                if await provider.authenticate():
-                    re_subject = (
-                        email["subject"]
-                        if email["subject"].lower().startswith("re:")
-                        else f"Re: {email['subject']}"
-                    )
-                    provider_id = await provider.create_draft(
-                        to=[email["from"]],
-                        subject=re_subject,
-                        body_text=draft,
-                        reply_to_message_id=pmid,
-                        thread_id=email["thread_id"] or None,
-                    )
-                    # Mirror locally so it shows in Drafts + in-thread at once.
-                    await _upsert_local_draft(
-                        db, account_id, provider_id,
-                        thread_id=email["thread_id"] or None,
-                        owner_email=user.email or "", to_email=email["from"],
-                        subject=re_subject, body=draft,
-                    )
-                    await _persist_rotated_creds(db, store, account_id, provider)
+                async with provider_session(
+                    db, user.email or "anonymous",
+                    message_id=req.message_id, require_auth=False,
+                ) as sess:
+                    if sess.authed:
+                        re_subject = (
+                            email["subject"]
+                            if email["subject"].lower().startswith("re:")
+                            else f"Re: {email['subject']}"
+                        )
+                        provider_id = await sess.provider.create_draft(
+                            to=[email["from"]],
+                            subject=re_subject,
+                            body_text=draft,
+                            reply_to_message_id=sess.provider_message_id,
+                            thread_id=email["thread_id"] or None,
+                        )
+                        # Mirror locally so it shows in Drafts + in-thread at once.
+                        await _upsert_local_draft(
+                            db, sess.account_id, provider_id,
+                            thread_id=email["thread_id"] or None,
+                            owner_email=user.email or "", to_email=email["from"],
+                            subject=re_subject, body=draft,
+                        )
+                        created = True
+                if created:
                     await db.commit()
-                    created = True
             except Exception as exc:  # noqa: BLE001
                 _log.warning("email.draft_reply_create_failed", error=str(exc)[:160])
 
@@ -1887,27 +1888,29 @@ async def save_draft(
             raise HTTPException(status_code=404, detail="Message not found")
         frm = row.from_address if isinstance(row.from_address, dict) \
             else json.loads(row.from_address or "{}")
-        provider, pmid, account_id, store = await _provider_for_message(
-            db, req.message_id, user.email or "anonymous"
-        )
-        if not await provider.authenticate():
-            return {"created": False, "reason": "auth failed"}
-        subject = row.subject or ""
-        re_subject = subject if subject.lower().startswith("re:") else f"Re: {subject}"
-        to_email = frm.get("email", "")
-        provider_id = await provider.create_draft(
-            to=[to_email],
-            subject=re_subject,
-            body_text=req.body,
-            reply_to_message_id=pmid,
-            thread_id=row.thread_id or None,
-        )
-        local_id = await _upsert_local_draft(
-            db, req.account_id, provider_id, thread_id=row.thread_id,
-            owner_email="", to_email=to_email,
-            subject=re_subject, body=req.body,
-        )
-        await _persist_rotated_creds(db, store, account_id, provider)
+        async with provider_session(
+            db, user.email or "anonymous",
+            message_id=req.message_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                return {"created": False, "reason": "auth failed"}
+            subject = row.subject or ""
+            re_subject = (
+                subject if subject.lower().startswith("re:") else f"Re: {subject}"
+            )
+            to_email = frm.get("email", "")
+            provider_id = await sess.provider.create_draft(
+                to=[to_email],
+                subject=re_subject,
+                body_text=req.body,
+                reply_to_message_id=sess.provider_message_id,
+                thread_id=row.thread_id or None,
+            )
+            local_id = await _upsert_local_draft(
+                db, req.account_id, provider_id, thread_id=row.thread_id,
+                owner_email="", to_email=to_email,
+                subject=re_subject, body=req.body,
+            )
         await db.commit()
         return {"created": True, "id": local_id}
     finally:

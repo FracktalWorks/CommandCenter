@@ -7,11 +7,15 @@ unchanged.
 from __future__ import annotations
 
 from gateway.routes.email.automation import (
+    actions,
     analytics,
     assistant,
+    chat,
     cleanup,
     drafting,
     engine,
+    followups,
+    learning,
     replyzero,
     rules,
     runner,
@@ -20,8 +24,8 @@ from gateway.routes.email.automation import (
 
 # `analytics` imports from `senders`, so it is flattened after it — the loop
 # order decides which module wins a name collision.
-for _mod in (assistant, drafting, engine, replyzero, rules, runner, senders,
-             cleanup, analytics):
+for _mod in (assistant, drafting, engine, replyzero, chat, followups,
+             actions, learning, rules, runner, senders, cleanup, analytics):
     for _k, _v in vars(_mod).items():
         if not _k.startswith("__"):
             globals()[_k] = _v

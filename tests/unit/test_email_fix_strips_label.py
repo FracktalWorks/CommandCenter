@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from gateway.routes.email.automation import runner
+from gateway.routes.email.automation import actions
 
 
 class _Result:
@@ -51,7 +52,7 @@ def _provider() -> AsyncMock:
 async def _run(db, **kw):
     prov = _provider()
     with patch.object(
-        runner, "_provider_for_message",
+        actions, "_provider_for_message",
         AsyncMock(return_value=(prov, "pmid-1", "acc", None)),
     ):
         out = await runner.correct_applied_labels(
@@ -99,7 +100,7 @@ async def test_provider_auth_failure_still_updates_local_mirror() -> None:
     prov = _provider()
     prov.authenticate.return_value = False
     with patch.object(
-        runner, "_provider_for_message",
+        actions, "_provider_for_message",
         AsyncMock(return_value=(prov, "pmid-1", "acc", None)),
     ):
         out = await runner.correct_applied_labels(

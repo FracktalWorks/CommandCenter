@@ -20,7 +20,7 @@ from __future__ import annotations
 import inspect
 import re
 
-from gateway.routes.email.automation import replyzero as rz
+from gateway.routes.email.automation import followups as rz
 
 _SRC_RAW = inspect.getsource(rz._maybe_send_follow_up_reminders)
 # Comments are stripped before the SQL-shape checks below: the code carries a

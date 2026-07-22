@@ -32,7 +32,7 @@ async def _run_list(label):
             received_after=None, received_before=None, is_read=None,
             is_starred=None, has_attachments=None, importance=None,
             from_email=None, sender_category=None, sort="newest",
-            page=1, page_size=50, user=user,
+            collapse=False, page=1, page_size=50, user=user,
         )
     return resp, captured
 
@@ -72,7 +72,8 @@ async def _run_list_full(**kw):
         account_id="acc-1", folder="inbox", label=None, query=None,
         thread_id=None, received_after=None, received_before=None, is_read=None,
         is_starred=None, has_attachments=None, importance=None, from_email=None,
-        sender_category=None, sort="newest", page=1, page_size=50, user=user,
+        sender_category=None, sort="newest", collapse=False,
+        page=1, page_size=50, user=user,
     )
     args.update(kw)
     with patch.object(m.transport.messages, "_get_db", AsyncMock(return_value=db)):
@@ -214,7 +215,7 @@ async def _run_thread_list(*, thread_id, msg_row, att_rows):
             thread_id=thread_id, received_after=None, received_before=None,
             is_read=None, is_starred=None, has_attachments=None, importance=None,
             from_email=None, sender_category=None, sort="oldest",
-            page=1, page_size=50, user=user,
+            collapse=False, page=1, page_size=50, user=user,
         )
     return resp, captured
 

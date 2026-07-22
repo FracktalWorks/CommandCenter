@@ -149,6 +149,7 @@ async def list_messages(
     from_email: str | None = Query(None),       # substring match on sender address
     sender_category: str | None = Query(None),  # email_senders category
     sort: str = Query("newest"),                # newest | oldest | importance
+    collapse: bool = Query(False),              # one row per conversation
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
@@ -162,6 +163,13 @@ async def list_messages(
     sender address, sender category) + ``sort`` let the assistant answer inbox-wide
     questions ("sales emails in the last month", "important unread mail") without
     pulling the whole inbox. ``query`` is a full-text match over subject/body/from.
+
+    ``collapse`` returns one row per conversation — the newest message in the
+    current view represents its thread, and ``total`` counts conversations, not
+    messages. This is the mailbox browse's default (the human list reads at thread
+    level, matching the one-classification-per-conversation invariant); the
+    assistant's inbox-query tools leave it off so their counts stay per-message.
+    Ignored when ``thread_id`` is set (the conversation view wants every message).
     """
     db = await _get_db()
     try:
@@ -257,51 +265,74 @@ async def list_messages(
             params["sender_category"] = sender_category
 
         where_sql = " AND ".join(where_clauses)
+        # Collapse to one row per conversation for the mailbox browse, but never
+        # inside a thread load (that view wants every message). A NULL thread_id
+        # is its own conversation — key on the message id so those aren't merged.
+        do_collapse = collapse and not thread_id
+        conv_key = "COALESCE(em.thread_id, em.id::text)"
 
         # Ordering: conversation view is chronological; otherwise honour ``sort``.
+        # The collapsed path orders the OUTER query over the per-thread picks, so
+        # its expression uses the bare column names the subquery exposes.
         if thread_id or sort == "oldest":
-            order_sql = "em.received_at ASC"
+            order_sql, order_plain = "em.received_at ASC", "received_at ASC"
         elif sort == "importance":
             # Most-important first: high → normal → low, then unread, then recent.
-            order_sql = (
-                "CASE LOWER(COALESCE(em.importance, 'normal')) "
-                "WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, "
-                "em.is_read ASC, em.received_at DESC")
+            imp = ("CASE LOWER(COALESCE({p}importance, 'normal')) "
+                   "WHEN 'high' THEN 0 WHEN 'normal' THEN 1 ELSE 2 END, "
+                   "{p}is_read ASC, {p}received_at DESC")
+            order_sql = imp.format(p="em.")
+            order_plain = imp.format(p="")
         else:
-            order_sql = "em.received_at DESC"
+            order_sql, order_plain = "em.received_at DESC", "received_at DESC"
 
-        # Count total
-        count_result = await db.execute(
-            text(
-                f"""SELECT COUNT(*)
-                    FROM email_messages em
-                    JOIN email_accounts ea ON em.account_id = ea.id
-                    WHERE {where_sql}"""
-            ),
-            params,
+        # Count total — conversations when collapsing, else messages.
+        count_sql = (
+            f"""SELECT COUNT(DISTINCT {conv_key})
+                FROM email_messages em
+                JOIN email_accounts ea ON em.account_id = ea.id
+                WHERE {where_sql}"""
+            if do_collapse else
+            f"""SELECT COUNT(*)
+                FROM email_messages em
+                JOIN email_accounts ea ON em.account_id = ea.id
+                WHERE {where_sql}"""
         )
+        count_result = await db.execute(text(count_sql), params)
         total = count_result.scalar() or 0
 
-        # Fetch page
-        result = await db.execute(
-            text(
-                f"""SELECT em.id, em.provider_message_id, em.thread_id,
-                          em.account_id, em.folder, em.labels,
-                          em.from_address, em.to_addresses,
-                          em.cc_addresses, em.bcc_addresses,
-                          em.subject, em.body_text, em.body_html,
-                          em.snippet, em.has_attachments,
-                          em.is_read, em.is_starred, em.is_flagged,
-                          em.importance, em.categories,
-                          em.received_at, em.synced_at
-                   FROM email_messages em
-                   JOIN email_accounts ea ON em.account_id = ea.id
-                   WHERE {where_sql}
-                   ORDER BY {order_sql}
-                   LIMIT :limit OFFSET :offset"""
-            ),
-            params,
-        )
+        _COLS = """em.id, em.provider_message_id, em.thread_id,
+                   em.account_id, em.folder, em.labels,
+                   em.from_address, em.to_addresses,
+                   em.cc_addresses, em.bcc_addresses,
+                   em.subject, em.body_text, em.body_html,
+                   em.snippet, em.has_attachments,
+                   em.is_read, em.is_starred, em.is_flagged,
+                   em.importance, em.categories,
+                   em.received_at, em.synced_at"""
+        if do_collapse:
+            # DISTINCT ON keeps the newest message per conversation IN THIS VIEW
+            # (so a thread appears represented by its latest matching message);
+            # the outer query then paginates/orders those representatives.
+            page_sql = (
+                f"""SELECT * FROM (
+                        SELECT DISTINCT ON ({conv_key}) {_COLS}
+                        FROM email_messages em
+                        JOIN email_accounts ea ON em.account_id = ea.id
+                        WHERE {where_sql}
+                        ORDER BY {conv_key}, em.received_at DESC
+                    ) conv
+                    ORDER BY {order_plain}
+                    LIMIT :limit OFFSET :offset""")
+        else:
+            page_sql = (
+                f"""SELECT {_COLS}
+                    FROM email_messages em
+                    JOIN email_accounts ea ON em.account_id = ea.id
+                    WHERE {where_sql}
+                    ORDER BY {order_sql}
+                    LIMIT :limit OFFSET :offset""")
+        result = await db.execute(text(page_sql), params)
         rows = result.fetchall()
 
         messages = [_row_to_message(row) for row in rows]

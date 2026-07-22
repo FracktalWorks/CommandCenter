@@ -122,6 +122,9 @@ def map_pulled_task(task: dict[str, Any], my_provider_id: str) -> dict[str, Any]
         "disposition": disposition,
         "is_mine": mine,
         "assignee": assignee,
+        # The FULL owner set (ClickUp allows several) — kept so a shared task
+        # shows every owner, not just the display one.
+        "assignees": assignees,
         "completed_at_ms": task.get("closed_at_ms") if closed else None,
         # A monitored task: record who we're waiting on (drives gtd_waiting).
         "waiting_on": assignee if disposition == "WAITING" else None,
@@ -139,11 +142,11 @@ _UPSERT_SQL = text("""
     INSERT INTO gtd_items
         (id, user_id, source, account_id, provider_task_id, provider_url,
          title, description, disposition, project_id, provider_status,
-         assignee, is_mine, due_at, completed_at, sync_state, synced_at)
+         assignee, assignees, is_mine, due_at, completed_at, sync_state, synced_at)
     VALUES
         (:id, :uid, 'SYNCED', :aid, :tid, :url,
          :title, :descr, :disp, :pid, :status,
-         :assignee, :mine, :due, :completed, 'synced', now())
+         :assignee, :assignees, :mine, :due, :completed, 'synced', now())
     ON CONFLICT (account_id, provider_task_id) WHERE source <> 'LOCAL'
     DO UPDATE SET
         title           = EXCLUDED.title,
@@ -151,6 +154,7 @@ _UPSERT_SQL = text("""
         provider_url    = coalesce(EXCLUDED.provider_url, gtd_items.provider_url),
         provider_status = EXCLUDED.provider_status,
         assignee        = EXCLUDED.assignee,
+        assignees       = EXCLUDED.assignees,
         is_mine         = EXCLUDED.is_mine,
         due_at          = EXCLUDED.due_at,
         completed_at    = EXCLUDED.completed_at,
@@ -197,11 +201,22 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
 
     # Keep the member cache honest on every sync: someone removed in the
     # tool must drop out of the delegate picker, not linger until the next
-    # full schema refresh.
+    # full schema refresh. Same pass folds in any status names seen on the
+    # pulled tasks that the schema didn't already carry — ground truth for
+    # list-level statuses (e.g. a "Done" a list defines but the space doesn't),
+    # so they reach the status-mapping settings and the stage picker.
     try:
         members = await provider.list_members(account.workspace_id)
         cache = _parse_jsonb(account.schema_cache) or {}
         cache["members"] = members
+        statuses = [s for s in cache.get("statuses") or [] if isinstance(s, str)]
+        have = {s.lower() for s in statuses}
+        for t in tasks:
+            name = (t.get("status") or "").strip()
+            if name and name.lower() not in have:
+                statuses.append(name)
+                have.add(name.lower())
+        cache["statuses"] = statuses
         await db.execute(
             text("""UPDATE task_accounts
                     SET schema_cache = :cache WHERE id = :id"""),
@@ -276,6 +291,7 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
             "status": task.get("status"),
             "assignee": json.dumps(mapped["assignee"])
             if mapped["assignee"] else None,
+            "assignees": json.dumps(mapped.get("assignees") or []),
             "mine": mapped["is_mine"],
             "due": _dt(task.get("due_at_ms")),
             "completed": _dt(mapped["completed_at_ms"]),

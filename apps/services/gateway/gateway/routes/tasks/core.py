@@ -78,7 +78,10 @@ class GtdItemModel(BaseModel):
     defer_until: str | None = None
     sync_state: str = "local"
     provider_status: str | None = None
+    # `assignee` is the PRIMARY/display owner; `assignees` is the full set. They
+    # stay in step (assignee = assignees[0]) so single-owner readers are unchanged.
     assignee: PersonModel | None = None
+    assignees: list[PersonModel] = []
     is_mine: bool = True
     workflow_stage: str | None = None   # local Kanban stage (see gtd_settings)
     sort_key: float | None = None       # manual (drag) rank within a group/column
@@ -206,6 +209,19 @@ def _person(val: Any) -> PersonModel | None:
     return None
 
 
+def _person_list(val: Any) -> list[PersonModel]:
+    """A JSONB array of person dicts → [PersonModel]. Skips blanks. Order (hence
+    the primary/display owner at [0]) is preserved."""
+    data = _parse_jsonb(val)
+    out: list[PersonModel] = []
+    if isinstance(data, list):
+        for entry in data:
+            p = _person(entry)
+            if p:
+                out.append(p)
+    return out
+
+
 def _iso(val: Any) -> str | None:
     return val.isoformat() if val is not None else None
 
@@ -236,6 +252,12 @@ def _row_to_item(row: Any) -> GtdItemModel:
         sync_state=row.sync_state or "local",
         provider_status=row.provider_status,
         assignee=_person(row.assignee),
+        # Full owner set; fall back to the single `assignee` for rows written
+        # before the column existed / before their first re-sync.
+        assignees=(
+            _person_list(getattr(row, "assignees", None))
+            or ([p] if (p := _person(row.assignee)) else [])
+        ),
         is_mine=bool(row.is_mine),
         workflow_stage=getattr(row, "workflow_stage", None),
         sort_key=getattr(row, "sort_key", None),

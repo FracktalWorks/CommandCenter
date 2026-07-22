@@ -146,8 +146,10 @@ export interface GtdItem {
   /** who I'm waiting on (WAITING disposition) */
   waitingOn?: Person;
   delegatedAt?: string;
-  /** assignee/owner in the connected PM tool */
+  /** primary/display assignee (= assignees[0]); kept for single-owner readers */
   assignee?: Person;
+  /** the full owner set — a task can have several assignees (e.g. in ClickUp) */
+  assignees?: Person[];
   /** the item's stage/status in the connected PM tool (e.g. "Backlog", "To-do") */
   providerStatus?: string;
   /** the task's stage on the local Kanban board (configured in settings) */

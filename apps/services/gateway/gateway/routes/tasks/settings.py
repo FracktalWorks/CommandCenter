@@ -375,6 +375,19 @@ async def status_catalog(user: UserContext = Depends(get_current_user)):
                     continue
                 key = s.strip().lower()
                 seen.setdefault(key, s.strip())
+        # Also fold in every status that a mirrored task actually carries — the
+        # ground truth. A list-level status (e.g. a "Done" distinct from the
+        # space "Closed") shows up here even if the cached schema hasn't caught
+        # it yet, so the user can map it without waiting for a schema refresh.
+        status_rows = (await db.execute(text(
+            """SELECT DISTINCT provider_status FROM gtd_items
+                WHERE user_id = :uid AND source <> 'LOCAL'
+                  AND provider_status IS NOT NULL AND provider_status <> ''"""),
+            {"uid": uid})).fetchall()
+        for r in status_rows:
+            s = (r.provider_status or "").strip()
+            if s:
+                seen.setdefault(s.lower(), s)
         stages = settings.workflow_stages
         smap = settings.status_stage_map
         entries: list[StatusCatalogEntry] = []

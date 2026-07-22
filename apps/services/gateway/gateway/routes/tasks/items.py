@@ -119,6 +119,10 @@ class ItemPatch(BaseModel):
     sort_key: float | None = None        # manual (drag) rank within a group/column
     assignee: PersonModel | None = None   # a PersonModel to set; sentinel below to clear
     clear_assignee: bool = False          # explicit unassign (assignee=None is "unchanged")
+    # The FULL owner set. None = unchanged; [] = clear everyone; a list replaces
+    # the set. Takes precedence over the single-assignee fields when provided,
+    # and keeps the primary `assignee` column (assignees[0]) in step.
+    assignees: list[PersonModel] | None = None
     # Personal "My Next Actions" membership (My Next Actions = NEXT & is_mine).
     # A LOCAL overlay only — never back-synced to the connected tool.
     is_mine: bool | None = None
@@ -590,11 +594,23 @@ def _build_item_update(
         if val is not None:
             sets.append(f"{col} = :{key}")
             params[key] = _parse_ts(val)
-    if patch.clear_assignee:
+    # Multiple assignees (the full set) takes precedence and keeps the primary
+    # `assignee` column (assignees[0]) in step, so single-owner readers still
+    # work. Falls back to the legacy single-assignee / clear path otherwise.
+    if patch.assignees is not None:
+        people = [p.model_dump() for p in patch.assignees]
+        sets.append("assignees = :assignees")
+        params["assignees"] = json.dumps(people)
+        sets.append("assignee = :assignee")
+        params["assignee"] = json.dumps(people[0]) if people else None
+    elif patch.clear_assignee:
         sets.append("assignee = NULL")
+        sets.append("assignees = '[]'::jsonb")
     elif patch.assignee is not None:
         sets.append("assignee = :assignee")
         params["assignee"] = json.dumps(patch.assignee.model_dump())
+        sets.append("assignees = :assignees")
+        params["assignees"] = json.dumps([patch.assignee.model_dump()])
     # Personal "My Next Actions" membership — a LOCAL overlay (My Next Actions =
     # NEXT & is_mine). Lets the user drop a task they've handed off/unassigned
     # from their own list without deleting it upstream; never back-synced.
@@ -715,8 +731,25 @@ async def _build_upstream_payload(
         payload["due_at_ms"] = int(due.timestamp() * 1000) if due else None
     if marks_done:
         payload["mark_done"] = True
+    # Assignee back-sync. The multi-assignee path sends the full new/prev id
+    # SETS so ClickUp gets the exact add/rem delta; the legacy single path stays
+    # for older callers. prev ids come from the row's stored `assignees` (or the
+    # single `assignee` for rows not yet re-synced).
     prev = _parse_jsonb(before.assignee) or {}
-    if patch.clear_assignee:
+    if patch.assignees is not None:
+        prev_list = _parse_jsonb(getattr(before, "assignees", None)) or []
+        prev_ids = [
+            str(p.get("provider_user_id")) for p in prev_list
+            if isinstance(p, dict) and p.get("provider_user_id")
+        ]
+        if not prev_ids and prev.get("provider_user_id"):
+            prev_ids = [str(prev["provider_user_id"])]
+        payload["assignee_ids"] = [
+            str(p.provider_user_id) for p in patch.assignees
+            if p.provider_user_id
+        ]
+        payload["prev_assignee_ids"] = prev_ids
+    elif patch.clear_assignee:
         payload["clear_assignee"] = True
         payload["prev_assignee_id"] = prev.get("provider_user_id")
     elif patch.assignee is not None:
@@ -741,7 +774,7 @@ async def _push_patch_upstream(
     marks_done = patch.disposition == "DONE"
     writable = any(v is not None for v in (
         patch.title, patch.notes, patch.provider_status, patch.due_at,
-        patch.workflow_stage,
+        patch.workflow_stage, patch.assignees,
     )) or patch.assignee is not None or patch.clear_assignee or marks_done
     if not writable:
         return

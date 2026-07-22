@@ -20,6 +20,7 @@ from gateway.routes.email.automation.identity import (
     sender_scope,
 )
 from gateway.routes.email.core import (
+    CLEANUP_CATEGORIES,
     _assert_account_owner,
     _attachment_summaries,
     _fmt_addr_list,
@@ -606,7 +607,7 @@ def _clip_thread_for_prompt(thread_text: str, limit: int = _THREAD_PROMPT_BUDGET
 
 async def _llm_determine_thread_status(
     thread_text: str, user_email: str, about: str, *, user_sent_last: bool = True,
-    model: str = _STATUS_MODEL,
+    model: str = _STATUS_MODEL, corrections: str = "",
 ) -> tuple[str, bool]:
     """Determine an email thread's status from the user's perspective — a faithful
     port of inbox-zero's aiDetermineThreadStatus.
@@ -663,7 +664,12 @@ async def _llm_determine_thread_status(
             "acted, so the ball is then in the OTHER party's court. If "
             "SOMEONE ELSE promised something → AWAITING_REPLY; if the USER "
             "promised a future reply/deliverable → REPLY."
-            f"{last_rule}\n\n"
+            f"{last_rule}"
+            # The user's own corrections outrank the generic criteria — that is
+            # what a correction IS. Same contract as the classifier prompt
+            # (engine._global_guidance_block), so a lesson taught via Fix
+            # steers conversation-status calls too, not only cleanup picks.
+            f"{corrections}\n\n"
             'Respond with ONLY a JSON object: {"status": "<one of REPLY, '
             f'AWAITING_REPLY, {fyi_opt}DONE>", "rationale": "<one line>"}}.'
         )
@@ -767,27 +773,185 @@ async def _conversation_rule_for_status(
     return None
 
 
+async def _thread_is_conversation(
+    db: Any, account_id: str, thread_id: str,
+) -> bool:
+    """Is this thread a CONVERSATION — mail between people — as opposed to a
+    stream of bulk mail that happens to share a thread id?
+
+    Decided from thread STATE, not from what the latest message looks like.
+    That distinction is the whole bug this exists to fix: a supplier sending an
+    invoice copy into a live RFQ thread LOOKS like a receipt in isolation, and
+    classifying it per-message ripped one bubble out of the middle of a
+    conversation (live account, 2026-07-21).
+
+    Two signals, cheapest first, no model calls:
+      1. The thread already has a status row — it has been judged
+         conversational before, and that judgement outlives any one message.
+      2. Real back-and-forth: ≥2 messages and OUR side (the owner or their org
+         domains) has participated. A newsletter blast never trips this; a
+         colleague thread or a vendor exchange does.
+    """
+    st = (await db.execute(text(
+        """SELECT 1 FROM email_thread_status
+            WHERE account_id = :aid AND thread_id = :tid"""
+    ), {"aid": account_id, "tid": thread_id})).fetchone()
+    if st is not None:
+        return True
+    acc = (await db.execute(text(
+        "SELECT email_address FROM email_accounts WHERE id = :id"
+    ), {"id": account_id})).fetchone()
+    self_email = ((acc.email_address if acc else "") or "").strip().lower()
+    doms = {d.lower() for d in await resolve_org_domains(db, account_id)}
+    if "@" in self_email:
+        doms.add(self_email.split("@", 1)[1])
+    if not doms:
+        return False
+    row = (await db.execute(text(
+        """SELECT COUNT(*) AS n,
+                  BOOL_OR(LOWER(COALESCE(folder, '')) = 'sent'
+                          OR split_part(LOWER(COALESCE(
+                                 from_address->>'email', '')), '@', 2)
+                             = ANY(:doms)) AS ours
+           FROM email_messages
+           WHERE account_id = :aid AND thread_id = :tid"""
+    ), {"aid": account_id, "tid": thread_id, "doms": sorted(doms)})).fetchone()
+    return bool(row and (row.n or 0) >= 2 and row.ours)
+
+
+async def _status_corrections_block(db: Any, account_id: str) -> str:
+    """The user's taught corrections, rendered for the status determiner.
+
+    Account-wide guidance plus anything attached to the conversation rules
+    (Reply / Awaiting / FYI / Done). Cleanup-rule guidance is left out — "Zoho
+    digests are Newsletter" has nothing to tell a determiner choosing between
+    REPLY and DONE, and prompt space spent on it is pure noise. Best-effort:
+    guidance failing to load must never block a status call."""
+    try:
+        from gateway.routes.email.automation.engine import (
+            _load_rule_guidance,
+        )
+        g = await _load_rule_guidance(db, account_id)
+        if not g:
+            return ""
+        notes = list(g.get("", []))
+        conv_ids = set()
+        if any(k for k in g if k):
+            from gateway.routes.email.automation.rules import (
+                _load_rules,
+            )
+            for r in await _load_rules(db, account_id):
+                key = _match_conversation_key({"rule": r})
+                if key:
+                    conv_ids.add(str(r.get("id")))
+                    for n in g.get(str(r.get("id")), []):
+                        notes.append(f"[{r.get('name')}] {n}")
+        if not notes:
+            return ""
+        body = "\n".join(f"- {n}" for n in notes)
+        return ("\n\nCORRECTIONS THE USER HAS MADE BEFORE (these override "
+                f"your default reading):\n{body}")
+    except Exception as exc:
+        _log.warning("email.status_corrections_failed",
+                     account_id=account_id, error=str(exc)[:160])
+        return ""
+
+
+async def _restore_conversation_messages(
+    db: Any, provider: Any, account_id: str, thread_id: str,
+) -> None:
+    """Bring back messages OUR OWN cleanup rules moved out of a conversation.
+
+    Scope is deliberately narrow — this undoes exactly one thing: an APPLIED
+    MOVE_FOLDER by one of the account's rules, where the message still sits in
+    that rule's destination folder. If the user has since re-filed the message
+    anywhere else, their move wins and it is left alone. Trash/junk/drafts are
+    never touched (leaving a bin is a different decision than leaving a folder),
+    and with no provider nothing moves — a local-only "move" would just be
+    re-broken by the next sync. Idempotent: restored mail is in the inbox and
+    never selected again. Best-effort per message; caller commits."""
+    if provider is None:
+        return
+    rows = (await db.execute(text(
+        """SELECT em.id, em.provider_message_id,
+                  LOWER(COALESCE(em.folder, '')) AS folder,
+                  ARRAY(SELECT ea.label FROM email_executed_rules er
+                         JOIN email_actions ea ON ea.rule_id = er.rule_id
+                          AND ea.type = 'MOVE_FOLDER'
+                        WHERE er.message_id = em.id
+                          AND er.status = 'APPLIED'
+                          AND er.actions_taken @> '"MOVE_FOLDER"'
+                          AND ea.label IS NOT NULL) AS move_labels
+           FROM email_messages em
+           WHERE em.account_id = :aid AND em.thread_id = :tid
+             AND LOWER(COALESCE(em.folder, '')) NOT IN
+                 ('inbox', 'sent', 'drafts', 'trash', 'junk')"""
+    ), {"aid": account_id, "tid": thread_id})).fetchall()
+    if not rows:
+        return
+    from email_ingestion.providers.base import canonical_folder
+    for r in rows:
+        dests = {canonical_folder((lbl or "").strip())
+                 for lbl in (r.move_labels or []) if (lbl or "").strip()}
+        if r.folder not in dests:
+            continue  # not our doing (or the user re-filed it) — leave it
+        try:
+            new_pid = await provider.move_to_folder(
+                r.provider_message_id, "inbox")
+            # Outlook re-keys on move — persist the new id or every later
+            # action on this message 404s (the #100 lesson).
+            await db.execute(text(
+                """UPDATE email_messages
+                      SET folder = 'inbox', updated_at = now(),
+                          provider_message_id =
+                              COALESCE(:pid, provider_message_id)
+                    WHERE id = :id"""
+            ), {"id": r.id, "pid": new_pid or None})
+            _log.info("email.conversation_message_restored",
+                      account_id=account_id, thread_id=thread_id,
+                      message_id=str(r.id), from_folder=r.folder)
+        except Exception as exc:  # one message must not abort the rest
+            _log.warning("email.conversation_restore_failed",
+                         account_id=account_id, message_id=str(r.id),
+                         error=str(exc)[:160])
+
+
 async def resolve_conversation_status_matches(
     db: Any, account_id: str, message_row: Any,
     matches: list[dict[str, Any]] | None,
+    *, provider: Any = None,
 ) -> list[dict[str, Any]] | None:
-    """inbox-zero ``determineConversationStatus`` parity for INBOUND mail.
+    """A conversation has ONE classification, re-evaluated on every new message.
 
-    The per-message engine match decides only whether the email is a conversation
-    (it picked one of the conversation-status rules). When it did, re-determine the
-    status from the FULL thread (via ``build_thread_context`` — the same context
-    the other triggers use, with ``user_sent_last`` taken from the real last
-    message, so a thread your side already replied to can resolve to DONE) and
-    replace the conversation match with the rule for the determined status — so the
-    RIGHT rule's actions run (e.g. an Done thread doesn't auto-draft a reply)
-    and the right label is applied. Non-conversation matches pass through
-    unchanged. On any failure (or no enabled rule for the determined status)
-    returns the input unchanged, so classification degrades to the per-message
-    pick."""
-    if not matches or not any(_match_conversation_key(m) for m in matches):
-        return matches
+    inbox-zero ``determineConversationStatus`` parity for INBOUND mail — but the
+    trigger is the THREAD's state, not the latest message's looks. The old gate
+    ran only when the per-message match picked a conversation rule, which is
+    exactly backwards: the messages that most need thread context are the ones
+    that DON'T look conversational in isolation. A supplier's invoice copy
+    inside a live RFQ thread matched Receipt and was moved out of the
+    conversation (live account, 2026-07-21); a bare "ok noted" matched nothing
+    and left the thread status stale forever.
+
+    So: if a conversation rule matched, OR the thread is already known to be a
+    conversation (``_thread_is_conversation``), the status is re-determined over
+    the FULL thread — the new message is new EVIDENCE about the conversation,
+    not a new thing to classify — and the determined rule becomes the single
+    match whose actions run. Non-conversation matches are returned flagged
+    ``suppressed``: they are logged (History must explain why Receipt didn't
+    fire) but never applied, because applying them is what splintered one
+    conversation into Done + Receipt + FYI chips. Messages our own rules moved
+    out are brought back (``_restore_conversation_messages``).
+
+    Bulk mail — no back-and-forth, no status row, no conversation match — is
+    untouched: per-message classification stands, and no model call is spent.
+    On any failure (or no enabled rule for the determined status) returns the
+    input unchanged, so classification degrades to the per-message pick."""
+    matches = matches or []
     thread_id = getattr(message_row, "thread_id", None)
     if not thread_id:
+        return matches
+    if not any(_match_conversation_key(m) for m in matches) \
+            and not await _thread_is_conversation(db, account_id, thread_id):
         return matches
     try:
         about, _sig = await _load_assistant_about(db, account_id)
@@ -801,14 +965,21 @@ async def resolve_conversation_status_matches(
             return matches
         status, _confident = await _llm_determine_thread_status(
             ctx.thread_text, acc_email, about,
-            user_sent_last=ctx.our_side_last)
+            user_sent_last=ctx.our_side_last,
+            corrections=await _status_corrections_block(db, account_id))
         target = await _conversation_rule_for_status(db, account_id, status)
         if not target:
             return matches
-        non_conv = [m for m in matches if not _match_conversation_key(m)]
         determined = {"rule": target, "reason": f"Thread status: {status}",
                       "source": "thread_status", "is_primary": True}
-        return [determined, *non_conv]
+        # The losing matches ride along FLAGGED, not live. The runner logs them
+        # as SKIPPED so History answers "why wasn't this filed as a Receipt?",
+        # but their actions never run — running them is what moved one bubble
+        # of a conversation into the Receipt folder while the thread said Done.
+        suppressed = [{**m, "suppressed": "conversation"}
+                      for m in matches if not _match_conversation_key(m)]
+        await _restore_conversation_messages(db, provider, account_id, thread_id)
+        return [determined, *suppressed]
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.resolve_conversation_status_failed",
                      account_id=account_id, error=str(exc)[:160])
@@ -845,6 +1016,15 @@ async def _reconcile_thread_labels(
              if lab != keep_label}
     if keep_label != "Awaiting Reply":  # follow-up only applies while awaiting
         stale.add(_FOLLOW_UP_LABEL)
+    if keep_label in _CONVERSATION_LABELS:
+        # A conversation has ONE classification: its status. Cleanup chips
+        # (Receipt / Marketing / …) stamped on individual messages before the
+        # thread was recognised as a conversation are the "Done + Receipt + FYI
+        # on one thread" bug, message by message — shed them here, where the
+        # thread's labels are already being made mutually exclusive. Engine
+        # labels only: the user's own hand-made labels live in `labels`, not
+        # `categories`, so they are never touched.
+        stale.update(CLEANUP_CATEGORIES)
     for r in rows:
         to_remove = [c for c in list(r.categories or []) if c in stale]
         if not to_remove:
@@ -992,7 +1172,8 @@ async def recompute_thread_status(
         return None
     status, confident = await _llm_determine_thread_status(
         ctx.thread_text, acc_email, about,
-        user_sent_last=ctx.our_side_last, model=model)
+        user_sent_last=ctx.our_side_last, model=model,
+        corrections=await _status_corrections_block(db, account_id))
     rz_status, label = _THREAD_STATUS_MAP.get(
         _canon_status_key(status), ("AWAITING", "Awaiting Reply"))
     prefix = _TRIGGER_REASON.get(trigger, trigger.capitalize())
@@ -1312,7 +1493,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
             # Full-thread status determination (same parity as the live runner)
             # when the match is a conversation.
             matches = await resolve_conversation_status_matches(
-                db, account_id, r, [match] if match else [])
+                db, account_id, r, [match] if match else [], provider=provider)
             keep_label = await project_reply_status_from_matches(
                 db, account_id, r, matches)
             # Collapse the thread to that ONE conversation label. This backfill

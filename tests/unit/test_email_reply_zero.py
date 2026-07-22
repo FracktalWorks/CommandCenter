@@ -193,13 +193,24 @@ async def test_project_status_respects_system_type_over_name() -> None:
 
 # ── Full-thread conversation-status determination (inbox-zero parity) ────────
 
-async def test_resolve_passthrough_for_non_conversation() -> None:
+async def test_resolve_passthrough_for_bulk_threads() -> None:
+    """Bulk mail keeps per-message classification, and spends no model call.
+
+    The resolver may PEEK at thread state (that peek is how it now catches
+    conversations the per-message match missed — the whole 2026-07-22 fix),
+    but for a thread with no status row and no back-and-forth it must return
+    the matches untouched and never reach the LLM."""
     db = AsyncMock()
     row = SimpleNamespace(thread_id="t1")
     matches = [{"rule": {"name": "Newsletter"}, "reason": "x"}]
-    out = await _rz.resolve_conversation_status_matches(db, "acc", row, matches)
+    llm = AsyncMock()
+    with patch.object(_rz, "_thread_is_conversation",
+                      AsyncMock(return_value=False)), \
+            patch.object(_rz, "_llm_determine_thread_status", llm):
+        out = await _rz.resolve_conversation_status_matches(
+            db, "acc", row, matches)
     assert out == matches
-    db.execute.assert_not_called()  # no thread fetch / LLM for non-conversation
+    llm.assert_not_called()
 
 
 async def test_resolve_uses_full_thread_status_over_per_message_pick() -> None:
@@ -299,7 +310,8 @@ async def test_backfill_handles_outbound_reply_and_engine_for_inbound() -> None:
                          AsyncMock(return_value=("", ""))), \
             patch.object(_rz, "_mark_thread_replied", mark), \
             patch.object(_rz, "resolve_conversation_status_matches",
-                         AsyncMock(side_effect=lambda _d, _a, _r, ms: ms)), \
+                         AsyncMock(side_effect=lambda _d, _a, _r, ms,
+                                   **_kw: ms)), \
             patch.object(_rz, "_upsert_thread_status",
                          AsyncMock(side_effect=rec)), \
             patch.object(_eng, "_match_email_to_rule",
@@ -433,8 +445,12 @@ async def test_backfill_marks_fyi_when_no_conversation_rule_matches() -> None:
                          AsyncMock(side_effect=rec)), \
             patch.object(_eng, "_match_email_to_rule",
                          AsyncMock(return_value=None)), \
+            patch.object(_rz, "_thread_is_conversation",
+                         AsyncMock(return_value=False)), \
             patch.object(_rz, "_reconcile_thread_labels", AsyncMock()):
-        # nothing matched → FYI
+        # Nothing matched, and the thread is not a conversation (the gate is
+        # patched False — a single noreply@ message IS the bulk case, and the
+        # gate has its own tests) → recorded as FYI.
         await m._maybe_classify_threads("acc-1")
     assert dict(recorded)["t3"] == "FYI"
 

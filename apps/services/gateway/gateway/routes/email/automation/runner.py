@@ -1265,6 +1265,27 @@ async def _apply_and_log_match(
     email_executed_rules row. Shared by the auto-run and process-past jobs so
     multi-rule execution behaves identically in both."""
     rule = match["rule"]
+    if match.get("suppressed"):
+        # Single thread classification: this rule DID match the message in
+        # isolation, but the thread's classification won. Log it — History must
+        # be able to answer "why wasn't this filed as a Receipt?" — and stop.
+        # Guarded HERE, at the one choke point every apply path goes through,
+        # so no future caller can accidentally run a suppressed match's
+        # actions; the same shape as the pattern-write gate in rules._teach.
+        await db.execute(text(
+            """INSERT INTO email_executed_rules
+                 (account_id, rule_id, rule_name, message_id,
+                  provider_message_id, thread_id, subject, from_address,
+                  status, automated, actions_taken, reason)
+               VALUES (:aid, :rid, :rname, :mid, :pmid, :tid, :subj, :frm,
+                       'SKIPPED', true, '[]', :reason)"""
+        ), {"aid": account_id, "rid": rule.get("id"),
+            "rname": rule.get("name"), "mid": str(r.id),
+            "pmid": r.provider_message_id, "tid": r.thread_id,
+            "subj": r.subject or "", "frm": frm.get("email", ""),
+            "reason": ("Suppressed: part of a conversation — the thread's "
+                       "status is the classification.")})
+        return
     action_errors: list[dict[str, str]] = []
     pmid = r.provider_message_id
     if apply:
@@ -1693,16 +1714,21 @@ async def _run_rules_job(
             else:
                 m = await _match_email_to_rule(db, account_id, email)
                 matches = [m] if m else []
-            # Reply Zero (inbox-zero determineConversationStatus parity): when the
-            # match is a conversation, re-determine the status from the FULL thread
-            # and apply the determined status rule's actions (so an Done thread
-            # doesn't auto-draft). Live runs only — skip the dry-run preview.
-            if matches and not dry_run:
+            # Thread-unit classification (inbox-zero determineConversationStatus
+            # parity, widened): a conversation has ONE classification, and every
+            # new message re-evaluates it with the full thread as context. The
+            # resolver — not the per-message match — decides whether this thread
+            # is a conversation, so it runs even when nothing matched: a bare
+            # "ok noted" that matches no rule must still refresh the thread's
+            # status rather than leave it stale. For bulk mail it returns the
+            # per-message matches untouched without spending a model call.
+            # Live runs only — the dry-run preview stays per-message and cheap.
+            if not dry_run:
                 from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
                     resolve_conversation_status_matches,
                 )
                 matches = await resolve_conversation_status_matches(
-                    db, account_id, r, matches)
+                    db, account_id, r, matches, provider=provider)
             if matches:
                 apply = (not dry_run) and provider is not None
                 for match in matches:

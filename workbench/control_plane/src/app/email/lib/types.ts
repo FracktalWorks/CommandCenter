@@ -99,6 +99,10 @@ export interface DigestData {
   };
   by_category: { category: string; count: number }[];
   top_senders: { name: string; email: string; count: number }[];
+  /** Oldest threads still awaiting the user's reply (Reply-Zero backlog, aged). */
+  backlog?: { subject: string; age_days: number }[];
+  /** Open commitments (tasks captured from a sent reply) due soon or overdue. */
+  commitments?: { title: string; due: string; overdue: boolean }[];
   markdown: string;
 }
 

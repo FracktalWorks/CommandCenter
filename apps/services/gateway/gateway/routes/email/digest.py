@@ -104,17 +104,80 @@ async def _digest_needs_reply(db: Any, account_id: str) -> int:
     ), {"aid": account_id})).scalar() or 0
 
 
+async def _digest_backlog_aging(
+    db: Any, account_id: str, limit: int = 5,
+) -> list[dict[str, Any]]:
+    """The oldest threads still awaiting the user's reply — the Reply Zero
+    backlog, aged. A daily brief's job isn't "N new emails"; it's "these are the
+    ones going stale". Reads the SAME email_thread_status the classifier owns."""
+    rows = (await db.execute(text(
+        """SELECT ts.thread_id, em.subject,
+                  GREATEST(0, EXTRACT(DAY FROM now() - ts.last_message_at))::int
+                    AS age_days
+           FROM email_thread_status ts
+           LEFT JOIN email_messages em ON ts.last_message_id = em.id
+           WHERE ts.account_id = :aid AND ts.status = 'NEEDS_REPLY'
+             AND ts.last_message_at IS NOT NULL
+           ORDER BY ts.last_message_at ASC
+           LIMIT :lim"""
+    ), {"aid": account_id, "lim": limit})).fetchall()
+    return [{"subject": (r.subject or "(no subject)"), "age_days": r.age_days}
+            for r in rows]
+
+
+async def _digest_commitments(
+    db: Any, account_id: str, horizon_days: int = 3, limit: int = 8,
+) -> list[dict[str, Any]]:
+    """Open commitments (GTD tasks captured from a sent reply on this account)
+    that are due within the horizon or already overdue — the "loops I promised
+    to close" half of the brief. Linked via gtd_items.origin.thread/account_id
+    (see tasks/email_link.py). Best-effort: the tasks feature may be absent, and
+    a digest must never fail because of it."""
+    try:
+        rows = (await db.execute(text(
+            """SELECT gi.title,
+                      to_char(gi.due_at, 'Mon DD') AS due_label,
+                      (gi.due_at < now()) AS overdue
+               FROM gtd_items gi
+               JOIN email_accounts ea ON ea.id = :aid
+               WHERE gi.user_id = ea.user_id
+                 AND gi.origin->>'account_id' = :aid
+                 AND gi.disposition NOT IN ('DONE', 'TRASH')
+                 AND gi.due_at IS NOT NULL
+                 AND gi.due_at <= now()
+                     + make_interval(days => :horizon)
+               ORDER BY gi.due_at ASC
+               LIMIT :lim"""
+        ), {"aid": account_id, "horizon": horizon_days, "lim": limit})).fetchall()
+    except Exception:  # noqa: BLE001
+        return []
+    return [{"title": (r.title or "(untitled)"), "due": r.due_label,
+             "overdue": bool(r.overdue)} for r in rows]
+
+
 def _digest_is_empty(digest: dict) -> bool:
-    """A digest with no new mail AND nothing awaiting a reply is noise — the
-    scheduler suppresses it rather than mailing an empty summary every morning."""
+    """A digest with no new mail, nothing awaiting a reply, no aging backlog AND
+    no commitments due is noise — the scheduler suppresses it rather than mailing
+    an empty summary every morning."""
     t = digest["totals"]
     return (t["inbox"] == 0 and t["needs_reply"] == 0
-            and not digest["by_category"] and not digest["top_senders"])
+            and not digest["by_category"] and not digest["top_senders"]
+            and not digest.get("backlog") and not digest.get("commitments"))
+
+
+def _age_phrase(days: int) -> str:
+    """"today" / "yesterday" / "N days" — a brief reads better than a bare int."""
+    if days <= 0:
+        return "today"
+    if days == 1:
+        return "yesterday"
+    return f"{days} days"
 
 
 def _render_digest_markdown(
     period: str, totals: dict, needs: int,
     by_category: list[dict], top_senders: list[dict],
+    backlog: list[dict] | None = None, commitments: list[dict] | None = None,
 ) -> str:
     lines = [
         f"# Inbox digest — last {period}",
@@ -122,9 +185,17 @@ def _render_digest_markdown(
         f"**{totals['inbox']}** new in inbox · **{totals['unread']}** unread · "
         f"**{needs}** threads awaiting your reply · "
         f"**{totals['attachments']}** with attachments",
-        "",
-        "## By category",
     ]
+    if commitments:
+        lines += ["", "## Commitments due"]
+        lines += [
+            f"- {c['title']} — {'overdue' if c['overdue'] else 'due'} {c['due']}"
+            for c in commitments]
+    if backlog:
+        lines += ["", "## Awaiting your reply (oldest first)"]
+        lines += [f"- {b['subject']} — waiting {_age_phrase(b['age_days'])}"
+                  for b in backlog]
+    lines += ["", "## By category"]
     lines += [f"- **{c['category']}**: {c['count']}"
               for c in by_category] or ["- (none)"]
     lines += ["", "## Top senders"]
@@ -142,6 +213,7 @@ def _esc(s: Any) -> str:
 def _render_digest_html(
     period: str, totals: dict, needs: int,
     by_category: list[dict], top_senders: list[dict],
+    backlog: list[dict] | None = None, commitments: list[dict] | None = None,
 ) -> str:
     """A simple, self-contained HTML body so the emailed digest renders as more
     than a wall of Markdown asterisks in a mail client."""
@@ -151,9 +223,27 @@ def _render_digest_html(
         lis = "".join(f"<li>{it}</li>" for it in items)
         return f"<ul style='margin:4px 0 12px;padding-left:20px'>{lis}</ul>"
 
+    def _h3(title: str) -> str:
+        return ("<h3 style='margin:0 0 4px;font-size:13px;text-transform:"
+                f"uppercase;color:#666'>{title}</h3>")
+
     cats = _ul([f"<b>{_esc(c['category'])}</b>: {c['count']}"
                 for c in by_category])
     senders = _ul([f"{_esc(s['name'])} — {s['count']}" for s in top_senders])
+    # The two action sections lead, above the summary counts — a brief opens
+    # with what needs doing, not with a tally.
+    action = ""
+    if commitments:
+        items = [
+            (f"{_esc(c['title'])} — "
+             f"<span style='color:{'#c0392b' if c['overdue'] else '#666'}'>"
+             f"{'overdue' if c['overdue'] else 'due'} {_esc(c['due'])}</span>")
+            for c in commitments]
+        action += _h3("Commitments due") + _ul(items)
+    if backlog:
+        items = [f"{_esc(b['subject'])} — <span style='color:#666'>waiting "
+                 f"{_esc(_age_phrase(b['age_days']))}</span>" for b in backlog]
+        action += _h3("Awaiting your reply") + _ul(items)
     return (
         "<div style='font-family:-apple-system,Segoe UI,Roboto,sans-serif;"
         "max-width:560px;color:#1a1a1a'>"
@@ -163,10 +253,9 @@ def _render_digest_html(
         f"<b>{totals['unread']}</b> unread &middot; "
         f"<b>{needs}</b> awaiting your reply &middot; "
         f"<b>{totals['attachments']}</b> with attachments</p>"
-        "<h3 style='margin:0 0 4px;font-size:13px;text-transform:uppercase;"
-        f"color:#666'>By category</h3>{cats}"
-        "<h3 style='margin:0 0 4px;font-size:13px;text-transform:uppercase;"
-        f"color:#666'>Top senders</h3>{senders}"
+        f"{action}"
+        f"{_h3('By category')}{cats}"
+        f"{_h3('Top senders')}{senders}"
         "</div>"
     )
 
@@ -206,6 +295,11 @@ async def _generate_digest(
     top_senders = await _digest_top_senders(db, params)
     needs = await _digest_needs_reply(db, account_id)
     totals["needs_reply"] = needs
+    # The two "act on this" sections that turn a summary into a daily brief:
+    # what's going stale (aging Reply-Zero backlog) and what I promised to do
+    # (commitments due). Independent of the digest's category window.
+    backlog = await _digest_backlog_aging(db, account_id)
+    commitments = await _digest_commitments(db, account_id)
 
     period = ("day" if period_days <= 1
               else ("week" if period_days <= 7 else f"{period_days} days"))
@@ -214,10 +308,14 @@ async def _generate_digest(
         "totals": totals,
         "by_category": by_category,
         "top_senders": top_senders,
+        "backlog": backlog,
+        "commitments": commitments,
         "markdown": _render_digest_markdown(
-            period, totals, needs, by_category, top_senders),
+            period, totals, needs, by_category, top_senders,
+            backlog, commitments),
         "html": _render_digest_html(
-            period, totals, needs, by_category, top_senders),
+            period, totals, needs, by_category, top_senders,
+            backlog, commitments),
     }
 
 

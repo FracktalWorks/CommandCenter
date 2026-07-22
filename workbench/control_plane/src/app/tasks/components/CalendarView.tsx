@@ -36,6 +36,7 @@ import {
   Star,
   Sun,
   Moon,
+  ExternalLink,
 } from "lucide-react";
 import {
   apiPlanDay,
@@ -62,6 +63,7 @@ import {
 } from "../lib/scheduling";
 import { FocusMode } from "./FocusMode";
 import { StartupRitual } from "./StartupRitual";
+import { ContextMenu, type CtxItem } from "./ContextMenu";
 import {
   dayKey,
   loadFocusPrefs,
@@ -182,6 +184,9 @@ export function CalendarView() {
   const items = useTaskStore((s) => s.items);
   const projects = useTaskStore((s) => s.projects);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const applySchedule = useTaskStore((s) => s.applySchedule);
+  const openSchedule = useTaskStore((s) => s.openSchedule);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const openFocus = useTaskStore((s) => s.openFocus);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadDone = useTaskStore((s) => s.loadDone);
@@ -304,24 +309,43 @@ export function CalendarView() {
     };
   }, [items, anchor]);
 
+  // Every scheduling mutation goes through applySchedule so it lands in the
+  // undo toast — a mis-drag or stray unschedule is always one tap from safe.
   const schedule = (item: GtdItem, day: Date, at?: Date) => {
     const mins = item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
     const start =
       at ?? firstFreeSlot(blocksForDay(items, day), day, mins, dayStart, dayEnd);
     const end = new Date(start.getTime() + mins * 60000);
-    updateItem(item.id, {
-      scheduledStart: start.toISOString(),
-      scheduledEnd: end.toISOString(),
-    });
+    applySchedule("Scheduled", [
+      {
+        id: item.id,
+        patch: {
+          scheduledStart: start.toISOString(),
+          scheduledEnd: end.toISOString(),
+        },
+      },
+    ]);
   };
   const unschedule = (item: GtdItem) =>
-    updateItem(item.id, { scheduledStart: "", scheduledEnd: "" });
+    applySchedule("Removed from calendar", [
+      { id: item.id, patch: { scheduledStart: "", scheduledEnd: "" } },
+    ]);
   // Move/resize a block to an exact start+end (drag-drop + resize commit here).
-  const reschedule = (id: string, start: Date, end: Date) =>
-    updateItem(id, {
-      scheduledStart: start.toISOString(),
-      scheduledEnd: end.toISOString(),
-    });
+  const reschedule = (
+    id: string,
+    start: Date,
+    end: Date,
+    label = "Moved block",
+  ) =>
+    applySchedule(label, [
+      {
+        id,
+        patch: {
+          scheduledStart: start.toISOString(),
+          scheduledEnd: end.toISOString(),
+        },
+      },
+    ]);
 
   // Focus timer: stamp when you actually START a block (clears any prior end so
   // it re-times cleanly). Actual work-time = actualEnd − actualStart.
@@ -425,9 +449,13 @@ export function CalendarView() {
         capacity_mins: capacityTarget,
         buffer_mins: settings.bufferMins ?? 0,
       });
-      for (const b of res.blocks) {
-        updateItem(b.itemId, { scheduledStart: b.start, scheduledEnd: b.end });
-      }
+      applySchedule(
+        `Rolled ${res.blocks.length} block${res.blocks.length === 1 ? "" : "s"} into today`,
+        res.blocks.map((b) => ({
+          id: b.itemId,
+          patch: { scheduledStart: b.start, scheduledEnd: b.end },
+        })),
+      );
     } catch {
       /* best-effort */
     } finally {
@@ -677,6 +705,8 @@ export function CalendarView() {
               onSetFlexible={(item, flexible) =>
                 updateItem(item.id, { flexible })
               }
+              onReschedulePopup={openSchedule}
+              onDelete={(id) => requestDelete([id])}
             />
           )}
         </div>
@@ -1676,7 +1706,7 @@ function PlanDayPanel({
   onClose: () => void;
 }) {
   const isReplan = mode === "replan";
-  const updateItem = useTaskStore((s) => s.updateItem);
+  const applySchedule = useTaskStore((s) => s.applySchedule);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [plan, setPlan] = useState<DayPlanResult | null>(null);
@@ -1726,9 +1756,13 @@ function PlanDayPanel({
 
   const apply = () => {
     if (!plan) return;
-    for (const b of plan.blocks) {
-      updateItem(b.itemId, { scheduledStart: b.start, scheduledEnd: b.end });
-    }
+    applySchedule(
+      `Planned ${plan.blocks.length} block${plan.blocks.length === 1 ? "" : "s"}`,
+      plan.blocks.map((b) => ({
+        id: b.itemId,
+        patch: { scheduledStart: b.start, scheduledEnd: b.end },
+      })),
+    );
     onClose();
   };
 
@@ -2102,6 +2136,8 @@ function TimeGrid({
   reschedule,
   onPickSlot,
   onSetFlexible,
+  onReschedulePopup,
+  onDelete,
 }: {
   days: Date[];
   items: GtdItem[];
@@ -2118,11 +2154,15 @@ function TimeGrid({
   onOpen: (id: string) => void;
   onUnschedule: (item: GtdItem) => void;
   onComplete: (item: GtdItem) => void;
-  reschedule: (id: string, start: Date, end: Date) => void;
+  reschedule: (id: string, start: Date, end: Date, label?: string) => void;
   /** Tap an empty grid slot → schedule a task at that snapped time. */
   onPickSlot: (day: Date, at: Date) => void;
   /** Pin (false) / unpin (true) a block so the auto-mover skips / includes it. */
   onSetFlexible: (item: GtdItem, flexible: boolean) => void;
+  /** "Reschedule…" → the global Schedule popup (date/time picker + Unschedule). */
+  onReschedulePopup: (id: string) => void;
+  /** "Delete task…" → the store's confirm-first delete flow. */
+  onDelete: (id: string) => void;
 }) {
   const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
   const gridHeight = hours.length * HOUR_PX;
@@ -2130,6 +2170,32 @@ function TimeGrid({
   const [resizing, setResizing] = useState<{ id: string; endMs: number } | null>(null);
   const resizingRef = useRef(false); // suppress the native block-drag while resizing
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  // Block context menu — right-click on desktop, LONG-PRESS on touch (the
+  // hover micro-buttons don't exist on a phone, so this menu IS the mobile
+  // path to unschedule / pin / star / focus / reschedule / delete).
+  const [ctx, setCtx] = useState<{
+    x: number;
+    y: number;
+    item: GtdItem;
+    day: Date;
+  } | null>(null);
+  const lpTimer = useRef<number | null>(null);
+  const lpFired = useRef(false);
+  const startLongPress = (e: React.PointerEvent, item: GtdItem, day: Date) => {
+    if (e.pointerType === "mouse") return; // mouse has real right-click
+    const { clientX, clientY } = e;
+    lpFired.current = false;
+    lpTimer.current = window.setTimeout(() => {
+      lpFired.current = true;
+      setCtx({ x: clientX, y: clientY, item, day });
+    }, 450);
+  };
+  const cancelLongPress = () => {
+    if (lpTimer.current != null) {
+      clearTimeout(lpTimer.current);
+      lpTimer.current = null;
+    }
+  };
 
   // Drop a dragged task/block onto `day` at the cursor's Y → snapped start+end.
   const handleDrop = (e: React.DragEvent, day: Date) => {
@@ -2192,7 +2258,12 @@ function TimeGrid({
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      reschedule(b.item.id, new Date(startMs), new Date(clampEnd(ev.clientY)));
+      reschedule(
+        b.item.id,
+        new Date(startMs),
+        new Date(clampEnd(ev.clientY)),
+        "Resized block",
+      );
       resizingRef.current = false;
       setResizing(null);
     };
@@ -2211,6 +2282,7 @@ function TimeGrid({
             return (
               <div
                 key={d.toISOString()}
+                style={{ minWidth: 96 }}
                 className="flex-1 border-l border-border px-2 py-1.5 text-center"
               >
                 <div className="text-[10px] font-medium uppercase text-muted-foreground">
@@ -2281,7 +2353,12 @@ function TimeGrid({
                 "relative flex-1 cursor-pointer border-l border-border",
                 dragOverKey === dayKey ? "bg-primary/5" : "",
               ].join(" ")}
-              style={{ height: gridHeight }}
+              // Week view on a phone: 7 columns keep a readable minimum width
+              // and the grid scrolls horizontally instead of crushing blocks.
+              style={{
+                height: gridHeight,
+                minWidth: days.length > 1 ? 96 : undefined,
+              }}
             >
               {/* hour lines */}
               {hours.map((h) => (
@@ -2401,6 +2478,24 @@ function TimeGrid({
                     draggable
                     onDragStart={(e) => onBlockDragStart(e, b)}
                     onClick={(e) => e.stopPropagation()}
+                    onClickCapture={(e) => {
+                      // a long-press already opened the menu — swallow the
+                      // click that follows so it doesn't also open the task
+                      if (lpFired.current) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        lpFired.current = false;
+                      }
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setCtx({ x: e.clientX, y: e.clientY, item: b.item, day });
+                    }}
+                    onPointerDown={(e) => startLongPress(e, b.item, day)}
+                    onPointerMove={cancelLongPress}
+                    onPointerUp={cancelLongPress}
+                    onPointerCancel={cancelLongPress}
                     style={{
                       top: Math.max(0, top),
                       height,
@@ -2611,6 +2706,93 @@ function TimeGrid({
           );
         })}
       </div>
+
+      {/* block context menu (right-click / long-press) */}
+      {ctx &&
+        (() => {
+          const it = ctx.item;
+          const isDone = it.disposition === "DONE";
+          const isFixed = it.flexible === false;
+          const isOT = it.id === oneThingId;
+          const today = sameDay(ctx.day, now);
+          const menu: CtxItem[] = [
+            {
+              kind: "item",
+              label: "Open task",
+              icon: ExternalLink,
+              onSelect: () => onOpen(it.id),
+            },
+            ...(!isDone
+              ? [
+                  {
+                    kind: "item",
+                    label: "Focus on this",
+                    icon: Play,
+                    onSelect: () => onFocusMode(it),
+                  } as CtxItem,
+                ]
+              : []),
+            {
+              kind: "item",
+              label: isDone ? "Mark not done" : "Mark done",
+              icon: Check,
+              onSelect: () => onComplete(it),
+            },
+            { kind: "sep" },
+            ...(!isDone && today
+              ? [
+                  {
+                    kind: "item",
+                    label: isOT ? "Unset One Thing" : "Make it the One Thing",
+                    icon: Star,
+                    checked: isOT,
+                    onSelect: () => onToggleOneThing(it.id),
+                  } as CtxItem,
+                ]
+              : []),
+            ...(!isDone
+              ? [
+                  {
+                    kind: "item",
+                    label: isFixed
+                      ? "Make flexible (auto-moves)"
+                      : "Pin as fixed (won't move)",
+                    icon: isFixed ? Unlock : Lock,
+                    checked: isFixed,
+                    onSelect: () => onSetFlexible(it, isFixed),
+                  } as CtxItem,
+                ]
+              : []),
+            { kind: "sep" },
+            {
+              kind: "item",
+              label: "Reschedule…",
+              icon: CalendarClock,
+              onSelect: () => onReschedulePopup(it.id),
+            },
+            {
+              kind: "item",
+              label: "Remove from calendar",
+              icon: X,
+              onSelect: () => onUnschedule(it),
+            },
+            {
+              kind: "item",
+              label: "Delete task…",
+              icon: Trash2,
+              danger: true,
+              onSelect: () => onDelete(it.id),
+            },
+          ];
+          return (
+            <ContextMenu
+              x={ctx.x}
+              y={ctx.y}
+              items={menu}
+              onClose={() => setCtx(null)}
+            />
+          );
+        })()}
     </div>
   );
 }

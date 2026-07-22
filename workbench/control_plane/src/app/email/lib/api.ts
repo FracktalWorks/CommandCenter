@@ -523,6 +523,9 @@ export interface ListEmailsParams {
    *  the always-on categorizer that also powers the Email Cleaner. */
   senderCategory?: string;
   query?: string;
+  /** Collapse to one row per conversation (default true for the mailbox browse —
+   *  the human list reads at thread level). Pass false for a per-message list. */
+  collapse?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -543,6 +546,9 @@ export async function listEmails(
   if (params.label) searchParams.set("label", params.label);
   if (params.senderCategory) searchParams.set("sender_category", params.senderCategory);
   if (params.query) searchParams.set("query", params.query);
+  // Default to conversation-collapsed rows for the browse; callers that need a
+  // per-message list (none in the app today) can pass collapse:false.
+  if (params.collapse !== false) searchParams.set("collapse", "true");
   if (params.page) searchParams.set("page", String(params.page));
   if (params.pageSize) searchParams.set("page_size", String(params.pageSize));
 

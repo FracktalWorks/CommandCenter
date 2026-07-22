@@ -1953,21 +1953,30 @@ async def _apply_rule_actions(
     for a in actions:
         t = a.get("type")
         try:
+            # PROVIDER FIRST, then mirror locally — the same order apply_label
+            # uses, and the opposite of what these branches used to do. A rule
+            # action that the mail server refuses (Outlook re-keyed or deleted
+            # the message, a 404, throttling) must leave NO local change: the
+            # old order stamped folder='trash'/'archive' locally, the provider
+            # call then raised into errors_out, and the fabricated folder was
+            # committed anyway — analytics read it as truth, and a failed TRASH
+            # even excluded itself from its own repair. With provider-first, a
+            # raised call skips the local UPDATE below and the row is untouched.
             if t == "ARCHIVE":
-                await db.execute(text("UPDATE email_messages SET folder='archive', updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.move_to_folder(provider_msg_id, "archive")
+                await db.execute(text("UPDATE email_messages SET folder='archive', updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "TRASH":
-                await db.execute(text("UPDATE email_messages SET folder='trash', updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.trash_message(provider_msg_id)
+                await db.execute(text("UPDATE email_messages SET folder='trash', updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "MARK_SPAM":
-                await db.execute(text("UPDATE email_messages SET folder='junk', updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.move_to_folder(provider_msg_id, "junk")
+                await db.execute(text("UPDATE email_messages SET folder='junk', updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "MARK_READ":
-                await db.execute(text("UPDATE email_messages SET is_read=true, updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.apply_flags(provider_msg_id, is_read=True)
+                await db.execute(text("UPDATE email_messages SET is_read=true, updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "STAR":
-                await db.execute(text("UPDATE email_messages SET is_starred=true, updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.apply_flags(provider_msg_id, is_starred=True)
+                await db.execute(text("UPDATE email_messages SET is_starred=true, updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "MOVE_FOLDER" and a.get("label"):
                 # Store the canonical (lowercased) key locally, but hand the
                 # ORIGINAL-CASE name to the provider so a created folder reads
@@ -1975,8 +1984,10 @@ async def _apply_rule_actions(
                 from email_ingestion.providers.base import canonical_folder  # noqa: PLC0415
                 dest = a["label"].strip()
                 canon = canonical_folder(dest)
-                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": canon})
+                # Provider first: if the move raises, the local folder is NOT
+                # rewritten to a destination the message never reached.
                 new_pid = await provider.move_to_folder(provider_msg_id, dest)
+                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": canon})
                 if new_pid:
                     # Outlook /move re-keys the message — keep follow-up actions valid.
                     await db.execute(text("UPDATE email_messages SET provider_message_id=:pid WHERE id=:id"), {"id": message_id, "pid": new_pid})

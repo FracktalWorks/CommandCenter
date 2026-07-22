@@ -1,8 +1,26 @@
 # Single-Agent Chat Bug Audit — 2026-07
 
 **Status:** audit complete · P0 fixes landed 2026-07-22 (T1, C2, C1/CX1 —
-see §4; regression tests in `tests/unit/test_run_agent_stream_e2e.py` and
-`tests/unit/test_v1_context_fit.py`) · **Date:** 2026-07-22 · **Requested by:** Vijay
+regression tests in `tests/unit/test_run_agent_stream_e2e.py` and
+`tests/unit/test_v1_context_fit.py`) · P1 fixes landed 2026-07-22 (R2
+control-bus applied-acks + truthful cancel, R3 `wait_user_future` heartbeat
+via `touch_active`, R1 MAXLEN 10k→50k env-tunable + head-trim warning, C3
+tool-in-flight stall grace — tests in `tests/unit/test_control_ack.py`,
+`tests/unit/test_hitl_heartbeat.py`, `tests/unit/test_hitl_stall_suppression.py`)
+· **Date:** 2026-07-22 · **Requested by:** Vijay
+
+**Landed-fix notes (P1):** `dispatch_control` now requires the owning
+worker's applied-ack (`cc:ctrl-ack:*`) and never reports success from the
+ACTIVE flag; `cancel_run` returns False when the owner is unreachable (still
+tears down so the UI recovers). HITL parks wait in 60s slices and refresh
+the ACTIVE flag between slices. Residual R1 work (persist-from-process fold
+instead of Redis replay) stays queued — the fold now warns
+`chat_fold.head_trimmed` when a trimmed head is detected. New finding logged
+during P0 test work: Copilot **session restore/save is gated on the registry
+runtime label** (`executor.py:1972`, `:2796`) while Tier-1.5 entry is by
+capability — a Copilot-built agent registered `"maf"` never resumes its
+session and re-injects history every turn (continuity + token cost; more
+ammunition for the §runtime-label cleanup in the framework review).
 **Scope:** single-agent chat on both engines — native MAF (Tier 1) and Copilot SDK (Tier 1.5) —
 hunting context-management failures, premature termination (runs / tools / output), and
 BYOK/LiteLLM context-limit handling. Companion to

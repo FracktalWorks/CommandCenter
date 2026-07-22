@@ -365,6 +365,47 @@ def resolve_user_input(
     return True
 
 
+async def wait_user_future(
+    fut: "asyncio.Future[dict[str, Any]]",
+    timeout: float,
+    thread_id: str | None = None,
+    slice_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Await a parked HITL future, heartbeating the relay while waiting.
+
+    A parked question pushes no events, so the ``cc:active`` flag's TTL
+    (refreshed only by ``push_event``) lapsed during long waits — live
+    subscribers terminated and reconnect reported the still-parked run as
+    finished, clearing the question card (audit R3). Waiting in 60s slices
+    and touching the flag between them keeps the run visibly alive for the
+    whole HITL budget. Raises ``asyncio.TimeoutError`` when *timeout*
+    elapses, like the ``asyncio.wait_for`` it replaces; the future itself is
+    left to the caller to clean up.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    tid = thread_id or resolve_relay_thread_id() or ""
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        try:
+            # Shield: a slice timeout must not cancel the shared future —
+            # the next slice keeps waiting on it.
+            return await asyncio.wait_for(
+                asyncio.shield(fut), timeout=min(slice_seconds, remaining)
+            )
+        except asyncio.TimeoutError:
+            if fut.done():
+                return fut.result()
+            if tid:
+                try:
+                    from orchestrator.stream_relay import touch_active  # noqa: PLC0415
+                    await touch_active(tid)
+                except Exception:  # noqa: BLE001 — heartbeat is best-effort
+                    pass
+
+
 def _make_user_input_handler(thread_id: str) -> Any:
     """Build an ``on_user_input_request`` handler bound to *thread_id*.
 
@@ -410,8 +451,8 @@ def _make_user_input_handler(thread_id: str) -> Any:
         await _push_sse_to_stream(thread_id, line)
 
         try:
-            result = await asyncio.wait_for(
-                fut, timeout=_USER_INPUT_TIMEOUT
+            result = await wait_user_future(
+                fut, _USER_INPUT_TIMEOUT, thread_id=thread_id
             )
         except (asyncio.TimeoutError, asyncio.CancelledError):
             result = {"answer": "", "wasFreeform": True}

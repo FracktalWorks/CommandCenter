@@ -194,9 +194,10 @@ async def ask_questions(questions: str) -> str:
         })
 
         try:
-            _result = await _asyncio.wait_for(
-                _fut, timeout=3600,
-            )
+            # Heartbeating wait (audit R3): touches the relay ACTIVE flag
+            # between 60s slices so a long park doesn't lapse the stream.
+            from orchestrator.executor import wait_user_future  # noqa: PLC0415
+            _result = await wait_user_future(_fut, 3600)
         except _asyncio.TimeoutError:
             _pending_user_input.pop(_request_id, None)
             return "User did not respond in time."
@@ -250,9 +251,10 @@ async def ask_questions(questions: str) -> str:
                 # ── B1: blocking bridge ──────────────────────────
                 import asyncio as _asyncio
                 try:
-                    _result = await _asyncio.wait_for(
-                        _fut, timeout=3600,
+                    from orchestrator.executor import (  # noqa: PLC0415
+                        wait_user_future,
                     )
+                    _result = await wait_user_future(_fut, 3600)
                 except _asyncio.TimeoutError:
                     return "User did not respond in time."
                 _answer = str(
@@ -301,9 +303,10 @@ async def ask_questions(questions: str) -> str:
             await _push_sse_to_stream(_tid, _line)
 
             try:
-                _result = await _asyncio.wait_for(
-                    _fut, timeout=3600,
+                from orchestrator.executor import (  # noqa: PLC0415
+                    wait_user_future,
                 )
+                _result = await wait_user_future(_fut, 3600, thread_id=_tid)
             except _asyncio.TimeoutError:
                 _pending_user_input.pop(_request_id, None)
                 return "User did not respond in time."
@@ -385,7 +388,8 @@ async def request_confirmation(
     async def _block_on(_fut, _rid, _pending) -> bool:
         import asyncio as _asyncio
         try:
-            _result = await _asyncio.wait_for(_fut, timeout=3600)
+            from orchestrator.executor import wait_user_future  # noqa: PLC0415
+            _result = await wait_user_future(_fut, 3600)
         except _asyncio.TimeoutError:
             return False
         finally:

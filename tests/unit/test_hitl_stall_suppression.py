@@ -48,3 +48,25 @@ async def test_tier2_shim_exempts_hitl_tools_from_per_tool_timeout():
     src = inspect.getsource(executor)
     for name in ("ask_questions", "ask_user", "request_confirmation"):
         assert f'"{name}"' in src, f"{name} missing from per-tool timeout exemption"
+
+
+# ── Tool-in-flight grace (audit C3) ─────────────────────────────────────────
+# A long silent tool (multi-minute shell build/test) emits no events until it
+# completes; the flat 300s fuse killed it with a misleading "CLI subprocess
+# may have crashed". The stall branch now grants the native watchdog's
+# tool_open budget while any tool is in flight.
+
+
+def test_tool_stall_budget_exceeds_bare_fuse():
+    assert copilot_agent._TOOL_STALL_TIMEOUT > copilot_agent._STREAM_STALL_TIMEOUT
+
+
+def test_stall_branch_grants_tool_in_flight_grace():
+    import inspect
+    src = inspect.getsource(copilot_agent.CommandCenterCopilotAgent._stream_updates)
+    assert "_tools_in_flight" in src, "stall loop must know about running tools"
+    assert "_TOOL_STALL_TIMEOUT" in src
+    # The counter must be maintained on BOTH tool event families (built-in
+    # TOOL_EXECUTION_* and injected EXTERNAL_TOOL_*), start and completion.
+    assert src.count("_tools_in_flight.add(") >= 2
+    assert src.count("_tools_in_flight.discard(") >= 2

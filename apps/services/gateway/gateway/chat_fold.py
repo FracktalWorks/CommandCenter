@@ -406,6 +406,20 @@ async def persist_final_assistant_message(
         events = await replay_events(
             thread_id, since_id="0-0", count=10_000, drain=True,
         )
+        # Head-trim visibility (audit R1): the stream is MAXLEN-capped, and
+        # Redis trims the OLDEST entries — so a very long turn can lose its
+        # head (RUN_STARTED + the start of the answer) before this replay
+        # runs, and the persisted row silently starts mid-answer. Make that
+        # loss observable instead of silent.
+        if events and not any(
+            e.get("type") == "RUN_STARTED" for e in events[:5]
+        ):
+            _log.warning(
+                "chat_fold.head_trimmed",
+                thread_id=thread_id[:12],
+                first_event=str(events[0].get("type"))[:32],
+                total_events=len(events),
+            )
         folded = fold_run_events(events)
 
         # Durable per-run observability trace (E2): record the run row from the

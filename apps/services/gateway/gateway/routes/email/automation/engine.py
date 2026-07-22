@@ -23,6 +23,17 @@ from gateway.routes.email.core import (
 from sqlalchemy import text
 
 
+class LLMUnavailable(Exception):
+    """The classifier LLM could not be reached to evaluate an email.
+
+    Raised (not swallowed to None) so a caller that stamps the
+    ``rules_processed_at`` watermark can tell "the model said no rule fits"
+    apart from "the model was down". The first is a real classification and the
+    message is done; the second must leave the message unstamped so the next
+    cycle retries it — otherwise one bad LLM window marks a whole batch
+    processed forever and the mail is never looked at again."""
+
+
 def _addr_emails(field: Any) -> set[str]:
     """Lowercased email set from a JSONB ``[{name,email}]`` list (str-tolerant)."""
     try:
@@ -281,8 +292,9 @@ async def _llm_pick_rule(
     context window (acompletion_with_fallback handles keys + fitting) and forces
     JSON output so the reply is always parseable.
 
-    Returns {"index": int, "reason": str} (index into `rules`) or None.
-    Fails closed (returns None) when the LLM is unavailable.
+    Returns {"index": int, "reason": str} (index into `rules`) or None for a
+    genuine "no rule fits". Raises LLMUnavailable when the model call itself
+    fails, so the caller does NOT mistake an outage for a no-match.
     """
     if not rules:
         return None
@@ -320,8 +332,10 @@ async def _llm_pick_rule(
                          model=_used, sample=content[:200])
         return None
     except Exception as exc:  # noqa: BLE001
+        # The call failed (gateway/network/timeout) — NOT a no-match. Signal it
+        # so the watermark isn't burned on mail the classifier never saw.
         _log.warning("email.llm_pick_rule_failed", error=str(exc)[:200])
-        return None
+        raise LLMUnavailable(str(exc)[:200]) from exc
 
 
 async def _llm_pick_rules(
@@ -335,8 +349,9 @@ async def _llm_pick_rules(
     Like :func:`_llm_pick_rule`, runs on the account's rule-evaluation ``model``
     with the prompt fitted to its context window and JSON output forced.
 
-    Returns a list of {"index": int, "reason": str} (indexes into `rules`).
-    Fails closed (returns []) when the LLM is unavailable.
+    Returns a list of {"index": int, "reason": str} (indexes into `rules`) — an
+    empty list for a genuine "none apply". Raises LLMUnavailable when the model
+    call itself fails, so the caller doesn't mistake an outage for "no matches".
     """
     if not rules:
         return []
@@ -384,8 +399,9 @@ async def _llm_pick_rules(
                          model=_used, sample=content[:200])
         return out
     except Exception as exc:  # noqa: BLE001
+        # The call failed — NOT "no rules apply". Signal it (see _llm_pick_rule).
         _log.warning("email.llm_pick_rules_failed", error=str(exc)[:200])
-        return []
+        raise LLMUnavailable(str(exc)[:200]) from exc
 
 
 # ── Conversation-status (Reply Zero) pre-filter ───────────────────────────────

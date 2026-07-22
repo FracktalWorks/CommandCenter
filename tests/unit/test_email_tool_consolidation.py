@@ -257,7 +257,10 @@ async def test_resolve_execution_decisions(calls) -> None:
 
 # ── digest ───────────────────────────────────────────────────────────────────
 
-async def test_digest_preview_is_formatted_not_json(calls) -> None:
+async def test_digest_preview_is_formatted_not_json(calls, monkeypatch) -> None:
+    async def yes(**kw):
+        return True
+    monkeypatch.setattr("acb_skills.ask_tools.request_confirmation", yes)
     out = await agents.digest("acc", period="day")
     assert calls["get"][-1][0] == "/email/digest"
     assert "To reply" in out and "{" not in out  # readable bullets, not raw JSON
@@ -266,15 +269,40 @@ async def test_digest_preview_is_formatted_not_json(calls) -> None:
     assert "sent" in sent
 
 
+async def test_digest_send_is_gated_and_fails_closed(calls, monkeypatch) -> None:
+    """send=True emails the mailbox — a confirmation card the user must approve.
+    With no interactive stream (non-interactive default deny) it must NOT send."""
+    async def no(**kw):
+        return False
+    monkeypatch.setattr("acb_skills.ask_tools.request_confirmation", no)
+    out = await agents.digest("acc", send=True)
+    assert "Cancelled" in out
+    assert not any(c[0] == "/email/digest/send" for c in calls["post"])
+
+
 # ── sync_account ─────────────────────────────────────────────────────────────
 
-async def test_sync_account_incremental_vs_full(calls) -> None:
+async def test_sync_account_incremental_vs_full(calls, monkeypatch) -> None:
+    async def yes(**kw):
+        return True
+    monkeypatch.setattr("acb_skills.ask_tools.request_confirmation", yes)
     await agents.sync_account("acc")
     assert calls["post"][-1][0] == "/email/sync"
     await agents.sync_account("acc", full=True)
     assert "resync" in calls["post"][-1][0]
     await agents.sync_account("acc", purge=True)
     assert "purge=true" in calls["post"][-1][0]
+
+
+async def test_sync_purge_is_gated_and_fails_closed(calls, monkeypatch) -> None:
+    """purge deletes local mail first — confirm, fail-closed. A declined (or
+    non-interactive) confirmation must not purge or resync."""
+    async def no(**kw):
+        return False
+    monkeypatch.setattr("acb_skills.ask_tools.request_confirmation", no)
+    out = await agents.sync_account("acc", purge=True)
+    assert "Cancelled" in out
+    assert not any("resync" in c[0] for c in calls["post"])
 
 
 # ── save_knowledge ───────────────────────────────────────────────────────────

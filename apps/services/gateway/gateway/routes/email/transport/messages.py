@@ -205,13 +205,20 @@ async def list_messages(
             where_clauses.append(UNCATEGORIZED_SQL)
             params["known_labels"] = KNOWN_LABELS_LOWER
         if query:
+            # websearch_to_tsquery, matching transport/search.py: bare words are
+            # AND-ed, but "OR" and quoted phrases are honoured. plainto_tsquery
+            # (the old call here) AND-s EVERYTHING, so the agent's find_urgent
+            # ("urgent OR deadline OR ASAP OR action required") could only match
+            # a message containing every one of those words — i.e. never. The
+            # vector below is byte-identical to search._FTS_VECTOR and the GIN
+            # index (72_email_search_fts.sql); keep the three in lock-step.
             where_clauses.append(
                 """to_tsvector('english',
                    coalesce(em.subject,'') || ' ' ||
                    coalesce(em.body_text,'') || ' ' ||
                    coalesce(em.from_address->>'name','') || ' ' ||
                    coalesce(em.from_address->>'email',''))
-                   @@ plainto_tsquery('english', :query)"""
+                   @@ websearch_to_tsquery('english', :query)"""
             )
             params["query"] = query
         # Date range (received_at).

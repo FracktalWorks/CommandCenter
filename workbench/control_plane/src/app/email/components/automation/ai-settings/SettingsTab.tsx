@@ -1025,7 +1025,7 @@ function DigestDialog({
           </select>
         </Field>
       )}
-      <Field label="At">
+      <Field label="At (UTC)">
         <input
           type="time"
           value={draft.digest_time_of_day}

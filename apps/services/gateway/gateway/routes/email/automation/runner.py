@@ -23,6 +23,7 @@ from gateway.routes.email.automation.drafting import (
     _upsert_local_draft,
 )
 from gateway.routes.email.automation.engine import (
+    LLMUnavailable,
     _email_payload_from_id,
     _is_conversation_status_rule,
     _llm_json,
@@ -83,7 +84,13 @@ async def test_rules(
         else:
             email = {"subject": req.subject or "", "from": req.from_email or "",
                      "body": req.body or "", "to": ""}
-        match = await _match_email_to_rule(db, req.account_id, email)
+        try:
+            match = await _match_email_to_rule(db, req.account_id, email)
+        except LLMUnavailable:
+            return {"matched": False, "rule": None,
+                    "reason": "The AI classifier is temporarily unavailable — "
+                              "try again in a moment.",
+                    "actions": []}
         if not match:
             return {"matched": False, "rule": None, "reason": "No rule matched.",
                     "actions": []}
@@ -133,7 +140,10 @@ async def test_rules_recent(
             email = email_dict_from_row(
                 r, self_email, about, extra_domains=org_domains,
                 attachments=attach.get(str(r.id), ""))
-            match = await _match_email_to_rule(db, req.account_id, email)
+            try:
+                match = await _match_email_to_rule(db, req.account_id, email)
+            except LLMUnavailable:
+                match = None  # preview only — a transient outage, not a verdict
             results.append({
                 "email_id": str(r.id),
                 "subject": r.subject or "(no subject)",
@@ -991,7 +1001,15 @@ async def run_rules_on_message(
         email = email_dict_from_row(
             row, await _account_self_email(db, req.account_id), about,
             extra_domains=org_domains, attachments=attach)
-        match = await _match_email_to_rule(db, req.account_id, email)
+        try:
+            match = await _match_email_to_rule(db, req.account_id, email)
+        except LLMUnavailable:
+            # Classifier down — don't log SKIPPED or stamp the watermark (that
+            # would consume the message unseen). Report it so the user retries.
+            return {"matched": False, "applied": False, "rule": None,
+                    "reason": "The AI classifier is temporarily unavailable — "
+                              "try again in a moment.",
+                    "actions": [], "unavailable": True}
 
         if req.is_test:
             if not match:
@@ -1041,8 +1059,13 @@ async def run_rules_on_message(
         ), {"aid": req.account_id})).fetchone()
         multi_rule = bool(mr_row and getattr(mr_row, "multi_rule_execution", None))
         if multi_rule:
-            matches = await _match_email_to_rules_multi(db, req.account_id, email) \
-                or [match]
+            try:
+                matches = await _match_email_to_rules_multi(
+                    db, req.account_id, email) or [match]
+            except LLMUnavailable:
+                # Already have the primary single match; apply just that rather
+                # than failing the whole apply on a second classifier call.
+                matches = [match]
         else:
             matches = [match]
         for m in matches:
@@ -1564,11 +1587,21 @@ async def _process_past_emails_job(
             email = email_dict_from_row(
                 r, self_email, about, extra_domains=org_domains,
                 attachments=attach.get(str(r.id), ""))
-            if multi_rule:
-                matches = await _match_email_to_rules_multi(db, account_id, email)
-            else:
-                m = await _match_email_to_rule(db, account_id, email)
-                matches = [m] if m else []
+            try:
+                if multi_rule:
+                    matches = await _match_email_to_rules_multi(
+                        db, account_id, email)
+                else:
+                    m = await _match_email_to_rule(db, account_id, email)
+                    matches = [m] if m else []
+            except LLMUnavailable as exc:
+                # Classifier down — don't stamp the watermark on mail it never
+                # evaluated (see _run_rules_job). The backfill can be re-run; the
+                # message stays rules_processed_at IS NULL and is picked up again.
+                _log.warning("email.process_past_classify_unavailable_skip",
+                             account_id=account_id, message_id=str(r.id),
+                             error=str(exc)[:160])
+                continue
             apply = (not dry_run) and provider is not None
             if matches:
                 for match in matches:
@@ -1709,11 +1742,21 @@ async def _run_rules_job(
                 attachments=attach.get(str(r.id), ""))
             # Multi-rule execution (inbox-zero parity): when on, every matching
             # rule applies; otherwise just the single best match.
-            if multi_rule:
-                matches = await _match_email_to_rules_multi(db, account_id, email)
-            else:
-                m = await _match_email_to_rule(db, account_id, email)
-                matches = [m] if m else []
+            try:
+                if multi_rule:
+                    matches = await _match_email_to_rules_multi(
+                        db, account_id, email)
+                else:
+                    m = await _match_email_to_rule(db, account_id, email)
+                    matches = [m] if m else []
+            except LLMUnavailable as exc:
+                # The classifier was down — this is NOT "no rule matched". Leave
+                # the message unstamped (skip the watermark below) so the next
+                # cycle retries it, instead of burning it as processed forever.
+                _log.warning("email.classify_unavailable_skip",
+                             account_id=account_id, message_id=str(r.id),
+                             error=str(exc)[:160])
+                continue
             # Thread-unit classification (inbox-zero determineConversationStatus
             # parity, widened): a conversation has ONE classification, and every
             # new message re-evaluates it with the full thread as context. The
@@ -1953,21 +1996,30 @@ async def _apply_rule_actions(
     for a in actions:
         t = a.get("type")
         try:
+            # PROVIDER FIRST, then mirror locally — the same order apply_label
+            # uses, and the opposite of what these branches used to do. A rule
+            # action that the mail server refuses (Outlook re-keyed or deleted
+            # the message, a 404, throttling) must leave NO local change: the
+            # old order stamped folder='trash'/'archive' locally, the provider
+            # call then raised into errors_out, and the fabricated folder was
+            # committed anyway — analytics read it as truth, and a failed TRASH
+            # even excluded itself from its own repair. With provider-first, a
+            # raised call skips the local UPDATE below and the row is untouched.
             if t == "ARCHIVE":
-                await db.execute(text("UPDATE email_messages SET folder='archive', updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.move_to_folder(provider_msg_id, "archive")
+                await db.execute(text("UPDATE email_messages SET folder='archive', updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "TRASH":
-                await db.execute(text("UPDATE email_messages SET folder='trash', updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.trash_message(provider_msg_id)
+                await db.execute(text("UPDATE email_messages SET folder='trash', updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "MARK_SPAM":
-                await db.execute(text("UPDATE email_messages SET folder='junk', updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.move_to_folder(provider_msg_id, "junk")
+                await db.execute(text("UPDATE email_messages SET folder='junk', updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "MARK_READ":
-                await db.execute(text("UPDATE email_messages SET is_read=true, updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.apply_flags(provider_msg_id, is_read=True)
+                await db.execute(text("UPDATE email_messages SET is_read=true, updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "STAR":
-                await db.execute(text("UPDATE email_messages SET is_starred=true, updated_at=now() WHERE id=:id"), {"id": message_id})
                 await provider.apply_flags(provider_msg_id, is_starred=True)
+                await db.execute(text("UPDATE email_messages SET is_starred=true, updated_at=now() WHERE id=:id"), {"id": message_id})
             elif t == "MOVE_FOLDER" and a.get("label"):
                 # Store the canonical (lowercased) key locally, but hand the
                 # ORIGINAL-CASE name to the provider so a created folder reads
@@ -1975,8 +2027,10 @@ async def _apply_rule_actions(
                 from email_ingestion.providers.base import canonical_folder  # noqa: PLC0415
                 dest = a["label"].strip()
                 canon = canonical_folder(dest)
-                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": canon})
+                # Provider first: if the move raises, the local folder is NOT
+                # rewritten to a destination the message never reached.
                 new_pid = await provider.move_to_folder(provider_msg_id, dest)
+                await db.execute(text("UPDATE email_messages SET folder=:f, updated_at=now() WHERE id=:id"), {"id": message_id, "f": canon})
                 if new_pid:
                     # Outlook /move re-keys the message — keep follow-up actions valid.
                     await db.execute(text("UPDATE email_messages SET provider_message_id=:pid WHERE id=:id"), {"id": message_id, "pid": new_pid})

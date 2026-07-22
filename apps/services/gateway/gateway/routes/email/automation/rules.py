@@ -773,6 +773,12 @@ async def _upsert_rule_pattern(
     ), {"aid": account_id, "rid": rule_id, "ptype": ptype, "val": value,
         "exc": exclude, "src": source, "reason": reason, "mid": message_id,
         "tid": thread_id, "authored": user_authored})
+    # The write landed. Every guard above returns False; this is the one path
+    # that actually stored a pattern, so it is the one path that returns True.
+    # Without this the success path fell off the end as None, and the Fix flow
+    # (which honours the return value since #105) told the user "Nothing was
+    # saved" while the pattern sat committed in the table.
+    return True
 
 
 async def _upsert_rule_guidance(

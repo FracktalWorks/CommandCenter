@@ -148,3 +148,33 @@ async def test_wrapped_decline_canonicalizes_to_bare_sentinel(monkeypatch) -> No
         _EMAIL, about="", signature="— Vijay", model="tier-powerful",
     )
     assert body.strip() == m.DRAFT_NO_DRAFT_SENTINEL
+
+
+# ── LLM-failure fallback: automation must NOT auto-file boilerplate ──────────
+# When the model is unavailable, an automation path (rule DRAFT_EMAIL action /
+# follow-up nudge) must yield the sentinel so the caller skips — never a generic
+# "I'll get back to you" draft filed into the mailbox and fed to edit-learning.
+# The interactive compose box, by contrast, wants a human-editable starting point.
+
+async def test_llm_failure_yields_sentinel_on_automation_path(monkeypatch) -> None:
+    async def boom(*, model, messages, **kw):
+        raise RuntimeError("gateway down")
+
+    _patch(monkeypatch, boom)
+    body = await m._llm_draft_reply(
+        _EMAIL, about="", signature="— Vijay", model="tier-powerful",
+    )  # interactive_fallback defaults False → automation-safe
+    assert body.strip() == m.DRAFT_NO_DRAFT_SENTINEL
+
+
+async def test_llm_failure_yields_template_on_interactive_path(monkeypatch) -> None:
+    async def boom(*, model, messages, **kw):
+        raise RuntimeError("gateway down")
+
+    _patch(monkeypatch, boom)
+    body = await m._llm_draft_reply(
+        _EMAIL, about="", signature="— Vijay", model="tier-powerful",
+        interactive_fallback=True,
+    )
+    assert not _is_no_draft(body)
+    assert "get back to you" in body.lower()

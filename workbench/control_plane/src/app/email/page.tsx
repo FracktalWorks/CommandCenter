@@ -1049,9 +1049,12 @@ export default function EmailPage() {
         }}
         defaultTo={composeDefaults?.to}
         defaultSubject={composeDefaults?.subject}
+        defaultCc={composeDefaults?.cc}
         replyToBody={composeDefaults?.replyToBody}
         quote={composeDefaults?.quote}
         replyToMessageId={composeDefaults?.replyToMessageId}
+        initialAttachments={composeDefaults?.attachments}
+        initialArtifacts={composeDefaults?.artifacts}
       />
 
       {/* Add Account Modal */}

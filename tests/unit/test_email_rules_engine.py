@@ -100,3 +100,26 @@ async def test_multiple_actions_all_applied_in_order() -> None:
         [{"type": "MARK_READ"}, {"type": "ARCHIVE"}], _EMAIL,
     )
     assert done == ["MARK_READ", "ARCHIVE"]
+
+
+async def test_a_refused_provider_call_leaves_no_local_folder_change() -> None:
+    """Provider-first ordering: if the mail server refuses a TRASH (Outlook
+    re-keyed or deleted the message), the local folder must NOT be rewritten to
+    'trash'. The old order committed a phantom folder that analytics read as
+    truth and that made a failed TRASH exclude itself from its own repair."""
+    db, provider = AsyncMock(), AsyncMock()
+    provider.trash_message.side_effect = RuntimeError("404 — message re-keyed")
+    errors: list[dict] = []
+    done = await m._apply_rule_actions(
+        db, provider, "mid", "pmid", [{"type": "TRASH"}], _EMAIL,
+        errors_out=errors,
+    )
+    # The action failed: not reported as done, and surfaced in errors_out.
+    assert done == []
+    assert errors and errors[0]["type"] == "TRASH"
+    # No UPDATE ... folder='trash' was executed — the provider call raised first.
+    folder_writes = [
+        c for c in db.execute.call_args_list
+        if "folder='trash'" in str(c[0][0])
+    ]
+    assert folder_writes == [], "a refused TRASH still wrote a phantom folder"

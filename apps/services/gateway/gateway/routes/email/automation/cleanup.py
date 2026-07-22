@@ -511,7 +511,7 @@ async def sweep_uncategorized(
     actually ran dry, so the caller never implies "done" when it means "stopped".
     """
     summary: dict[str, Any] = {
-        "scanned": 0, "categorized": 0, "no_evidence": 0,
+        "scanned": 0, "categorized": 0, "no_evidence": 0, "failed": 0,
         "by_category": {}, "by_reason": {}, "dry_run": dry_run,
         "exhausted": False,
         # True when the run stopped because it hit max_apply, i.e. there is more
@@ -545,15 +545,24 @@ async def sweep_uncategorized(
                 "SELECT provider, credentials_encrypted FROM email_accounts "
                 "WHERE id = :id"
             ), {"id": account_id})).fetchone()
-            if acc:
-                import json  # noqa: PLC0415
+            if not acc:
+                summary["error"] = "account not found"
+                return summary
+            import json  # noqa: PLC0415
 
-                from acb_llm.key_store import get_key_store  # noqa: PLC0415
-                store = get_key_store()
-                creds = json.loads(store.decrypt(acc.credentials_encrypted))
-                provider = _instantiate_provider(acc.provider, creds)
-                if not await provider.authenticate():
-                    provider = None
+            from acb_llm.key_store import get_key_store  # noqa: PLC0415
+            store = get_key_store()
+            creds = json.loads(store.decrypt(acc.credentials_encrypted))
+            provider = _instantiate_provider(acc.provider, creds)
+            if not await provider.authenticate():
+                # ABORT — do NOT continue with provider=None. A local-only label
+                # is logged APPLIED but Outlook (categories-authoritative) wipes
+                # it on the next sync, so the message re-enters scope and the
+                # sweep re-applies it every cycle, minting APPLIED audit rows
+                # that never reached the mailbox. Fail loudly instead.
+                summary["error"] = "provider authentication failed"
+                provider = None
+                return summary
 
         from gateway.routes.email.automation.runner import (  # noqa: PLC0415
             apply_label,
@@ -616,6 +625,11 @@ async def sweep_uncategorized(
                         _sweep_tick(account_id, applied, summary["scanned"])
                     except Exception as exc:  # noqa: BLE001 — one bad message
                         # must not abort the sweep; the rest still gets cleaned.
+                        # But it must be COUNTED: `by_category` was incremented at
+                        # decision time, `categorized` counts only successful
+                        # applies, so without `failed` the two silently disagree
+                        # (a throttled run reports a fraction of what it decided).
+                        summary["failed"] += 1
                         _log.warning("email.cleanup_apply_failed",
                                      account_id=account_id,
                                      message_id=str(r.id), error=str(exc)[:160])
@@ -658,9 +672,13 @@ async def _sweep_job(account_id: str, limit: int, owner: str) -> None:
     try:
         summary = await sweep_uncategorized(
             account_id, limit, dry_run=False, owner=owner)
+        # sweep_uncategorized swallows its own exceptions into summary["error"]
+        # and returns normally, so a run that died on page 1 must NOT be stamped
+        # "done" here — the UI would show "Categorized N emails" for a failed run.
+        status = "error" if summary.get("error") else "done"
         _SWEEP_JOBS[account_id] = {
             **_SWEEP_JOBS.get(account_id, {}), **summary,
-            "owner": owner, "status": "done",
+            "owner": owner, "status": status,
             "finished_at": datetime.now(timezone.utc).isoformat(),
         }
     except Exception as exc:  # noqa: BLE001

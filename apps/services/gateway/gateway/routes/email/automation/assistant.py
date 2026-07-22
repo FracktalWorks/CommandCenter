@@ -15,6 +15,7 @@ from gateway.routes.email.core import (
     email_memory_scope,
     router,
 )
+from gateway.routes.email.quoting import split_quoted_text
 from pydantic import BaseModel, Field
 from sqlalchemy import text
 
@@ -558,9 +559,14 @@ async def generate_writing_style(
                WHERE account_id = :aid AND LOWER(folder) = 'sent'
                ORDER BY received_at DESC LIMIT 25"""
         ), {"aid": account_id})).fetchall()
+        # Strip the quoted chain from each sent message: the style guide must
+        # describe the OWNER's voice, not the correspondents' prose quoted
+        # beneath every reply (which would otherwise dominate the samples).
         samples = [
-            (r.body_text or "").strip()[:1200]
-            for r in rows if (r.body_text or "").strip()
+            s for s in (
+                split_quoted_text((r.body_text or "").strip())[0].strip()[:1200]
+                for r in rows
+            ) if s
         ][:15]
         if not samples:
             raise HTTPException(

@@ -32,6 +32,19 @@ except ImportError:  # older platform without the annotations registry
 
 _log = get_logger("agent.email_assistant")
 
+
+async def _confirm_destructive(title: str, detail: str, context: str = "") -> bool:
+    """Fail-closed HITL gate for a destructive or outward-facing tool.
+
+    Returns True only when the user explicitly approves. Declining — OR running
+    with no interactive stream to deliver the card — returns False, so an
+    automated/headless caller can never silently trash mail, unsubscribe, purge
+    a mailbox, or email a digest. Mirrors the confirm-before-send pattern the two
+    send_* tools already use (HH-2)."""
+    from acb_skills.ask_tools import request_confirmation  # noqa: PLC0415
+    return await request_confirmation(title=title, detail=detail, context=context)
+
+
 _INSTRUCTIONS_FILE = Path(__file__).parent / "instructions.md"
 INSTRUCTIONS = (
     _INSTRUCTIONS_FILE.read_text(encoding="utf-8")
@@ -604,6 +617,7 @@ async def present_email_groups(groups_json: str) -> str:
 
 # ── Inbox action tools ───────────────────────────────────────────────────────
 
+@_annotate_risk(destructive=True)
 async def manage_inbox(
     action: str,
     message_ids: list[str],
@@ -658,6 +672,15 @@ async def manage_inbox(
         failed = len(message_ids) - n
         note = f" ({failed} failed)" if failed else ""
         return f"Updated labels on {n} message(s){note}: {' '.join(bits)}."
+    # Trashing is the one destructive branch here (archive/read/star are
+    # reversible in a click). Confirm it, fail-closed.
+    if action == "trash":
+        n = len(message_ids)
+        if not await _confirm_destructive(
+            title=f"Move {n} message{'s' if n != 1 else ''} to Trash?",
+            detail="They leave the inbox and go to the Trash folder.",
+        ):
+            return "Cancelled — nothing was moved to Trash."
     body: dict[str, Any] = {"action": action, "message_ids": message_ids}
     if account_id:
         body["account_id"] = account_id
@@ -1131,6 +1154,7 @@ async def generate_writing_style(account_id: str) -> str:
     return "Could not derive a writing style yet (no sent mail to analyze)."
 
 
+@_annotate_risk(destructive=True)
 async def install_default_rules(account_id: str, reset: bool = False) -> str:
     """Install the recommended default rule set: To Reply, FYI, Newsletter,
     Marketing, Calendar, Receipt, Notification, Cold Email.
@@ -1139,6 +1163,12 @@ async def install_default_rules(account_id: str, reset: bool = False) -> str:
     has. ``reset=true`` first DELETES all existing rules and reinstalls the
     defaults fresh — destructive, so always confirm with the user first."""
     if reset:
+        if not await _confirm_destructive(
+            title="Delete all rules and reinstall the defaults?",
+            detail="Every existing rule (including ones you customised) is "
+                   "deleted first, then the default set is installed fresh.",
+        ):
+            return "Cancelled — your rules were left unchanged."
         res = await _post(f"/email/rules/reset?account_id={account_id}", {})
         installed = res.get("installed", [])
         return (
@@ -1383,6 +1413,7 @@ async def delete_knowledge(account_id: str, knowledge_id: str) -> str:
 
 # ── Unsubscribe / cold senders ───────────────────────────────────────────────
 
+@_annotate_risk(destructive=True, open_world=True)
 async def unsubscribe_sender(
     account_id: str,
     email: str,
@@ -1396,6 +1427,14 @@ async def unsubscribe_sender(
     If there's no usable link or the request fails, the sender is blocked
     instead (future mail auto-archived via a provider filter). Use after
     suggest_unsubscribes once the user confirms."""
+    # Outward-facing: it fires a real one-click request or SENDS an unsubscribe
+    # email, and archives existing mail. Confirm, fail-closed.
+    if not await _confirm_destructive(
+        title=f"Unsubscribe from {email}?",
+        detail="Sends a real unsubscribe request (or blocks the sender) and "
+               "archives their existing mail.",
+    ):
+        return f"Cancelled — still subscribed to {email}."
     res = await _post("/email/unsubscribe", {
         "account_id": account_id,
         "email": email,
@@ -1570,12 +1609,18 @@ def _fmt_digest_sections(sections: Any) -> str:
     return "\n".join(lines)
 
 
+@_annotate_risk(destructive=True, open_world=True)
 async def digest(account_id: str, period: str = "day", send: bool = False) -> str:
     """Preview OR send the inbox digest for ``period`` ('day' | 'week').
 
     ``send=false`` (default) previews the digest — counts and highlights per
     section. ``send=true`` emails it to the account now. Confirm before sending."""
     if send:
+        if not await _confirm_destructive(
+            title="Email the digest now?",
+            detail=f"Sends the {period} inbox digest to your own mailbox.",
+        ):
+            return "Cancelled — the digest was not sent."
         res = await _post(
             "/email/digest/send", {"account_id": account_id, "period": period}
         )
@@ -1590,6 +1635,7 @@ async def digest(account_id: str, period: str = "day", send: bool = False) -> st
 
 # ── Account sync ─────────────────────────────────────────────────────────────
 
+@_annotate_risk(destructive=True)
 async def sync_account(
     account_id: str, full: bool = False, purge: bool = False
 ) -> str:
@@ -1599,6 +1645,13 @@ async def sync_account(
     COMPLETE re-sync; add ``purge=true`` to delete local mail first (for
     stale/corrupt local data — confirm purge with the user). ``purge`` implies a
     full re-sync."""
+    if purge and not await _confirm_destructive(
+        title="Purge and re-download this mailbox?",
+        detail="Deletes all locally-stored mail for the account first, then "
+               "re-fetches it from the provider. Use only for stale/corrupt "
+               "local data.",
+    ):
+        return "Cancelled — nothing was purged."
     if full or purge:
         res = await _post(
             f"/email/accounts/{account_id}/resync?purge="

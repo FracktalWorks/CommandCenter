@@ -193,8 +193,12 @@ export interface AnalyticsOverview {
       decided: number;
       rejected: number;
       rejection_rate: number;
-      /** Actions logged as applied whose provider call actually failed. */
-      failed_actions: number;
+      /** Failed rule runs the Repair button can replay (message still present,
+       *  a rule to re-apply). Matches retry_failed_executions exactly. A level,
+       *  not windowed. */
+      repairable: number;
+      /** Failed rule runs no replay can fix — the message was moved or deleted. */
+      permanent_failures: number;
       /** Learned patterns queued for review. Inert until approved. */
       unreviewed_patterns: number;
     };
@@ -469,7 +473,8 @@ export interface AssistantSettings {
   digest_categories: string[];
   /** 0=Sun … 6=Sat — used when digest_frequency is WEEKLY. */
   digest_day_of_week: number;
-  /** HH:MM (24h, account-local) the digest is sent. */
+  /** HH:MM (24h, UTC) the digest is sent. The backend treats this as UTC; there
+   *  is no per-account timezone yet, so the UI labels it UTC to stay honest. */
   digest_time_of_day: string;
   /** Email the digest to the account address. */
   digest_send_to_email: boolean;

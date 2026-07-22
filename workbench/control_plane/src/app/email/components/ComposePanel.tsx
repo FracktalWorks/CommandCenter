@@ -27,12 +27,18 @@ interface ComposePanelProps {
   }) => Promise<void>;
   defaultTo?: string;
   defaultSubject?: string;
+  /** Seeds the Cc field (e.g. restored on an undo-send reopen). */
+  defaultCc?: string;
   /** Seeds the editable body (e.g. text carried over from a popped-out reply). */
   replyToBody?: string;
   /** The quoted trailing chain — shown collapsed below the box, reattached on
    *  send, and kept OUT of the editable body so AI/edits never touch it. */
   quote?: string;
   replyToMessageId?: string;
+  /** Seed attachments/artifacts (e.g. restored on an undo-send reopen) so the
+   *  user doesn't silently lose what they'd attached before undoing. */
+  initialAttachments?: SendAttachment[];
+  initialArtifacts?: ArtifactAttachmentRef[];
 }
 
 export function ComposePanel({
@@ -42,12 +48,15 @@ export function ComposePanel({
   onSend,
   defaultTo = "",
   defaultSubject = "",
+  defaultCc = "",
   replyToBody,
   quote,
   replyToMessageId,
+  initialAttachments,
+  initialArtifacts,
 }: ComposePanelProps) {
   const [to, setTo] = useState(defaultTo);
-  const [cc, setCc] = useState("");
+  const [cc, setCc] = useState(defaultCc);
   const [subject, setSubject] = useState(defaultSubject);
   const [body, setBody] = useState(replyToBody || "");
   const [sending, setSending] = useState(false);
@@ -71,14 +80,16 @@ export function ComposePanel({
   useEffect(() => {
     if (!open) return;
     setTo(defaultTo);
-    setCc("");
+    setCc(defaultCc);
     setSubject(defaultSubject);
     setBody(replyToBody || "");
     draftIdRef.current = null;
     dirty.current = false;
     setDraftStatus("idle");
-    setAttachments([]);
-    setArtifacts([]);
+    // Restore any carried attachments/artifacts (undo-send reopen); a fresh
+    // compose passes none, so this stays empty as before.
+    setAttachments(initialAttachments ?? []);
+    setArtifacts(initialArtifacts ?? []);
     setAiOpen(false);
     setAiInstruction("");
     // eslint-disable-next-line react-hooks/exhaustive-deps

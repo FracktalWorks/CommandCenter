@@ -1659,6 +1659,10 @@ export interface CleanupSweepResult {
   scanned: number;
   categorized: number;
   no_evidence: number;
+  /** Rows the sweep decided but whose provider label write failed (e.g. Graph
+   *  throttling) — counted so `categorized` and the decided total can't silently
+   *  disagree. */
+  failed?: number;
   by_category: Record<string, number>;
   by_reason: Record<string, number>;
   dry_run: boolean;

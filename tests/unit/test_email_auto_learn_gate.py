@@ -35,6 +35,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes.email.automation import runner as m
+from gateway.routes.email.automation import learning as lg
 
 _ACC = "acc-learn"
 _RULE = "rule-newsletter"
@@ -211,10 +212,10 @@ async def test_the_verdict_needs_an_explicit_yes() -> None:
     db.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[
         SimpleNamespace(subject=f"s{i}", snippet="x") for i in range(6)]))
     rule = {"name": "Newsletter", "instructions": "newsletters"}
-    with patch.object(m, "_llm_json",
+    with patch.object(lg, "_llm_json",
                       AsyncMock(return_value=({"always": True}, "", ""))):
         assert await m._ai_confirms_sender_pattern(db, _ACC, "n@x.com", rule)
-    with patch.object(m, "_llm_json",
+    with patch.object(lg, "_llm_json",
                       AsyncMock(return_value=({"always": False}, "", ""))):
         assert not await m._ai_confirms_sender_pattern(db, _ACC, "n@x.com", rule)
 
@@ -228,10 +229,10 @@ async def test_an_unusable_verdict_teaches_nothing() -> None:
         SimpleNamespace(subject=f"s{i}", snippet="x") for i in range(6)]))
     rule = {"name": "Newsletter"}
     for bad in (({}, "", ""), ({"always": "yes"}, "", ""), (None, "", "")):
-        with patch.object(m, "_llm_json", AsyncMock(return_value=bad)):
+        with patch.object(lg, "_llm_json", AsyncMock(return_value=bad)):
             assert not await m._ai_confirms_sender_pattern(
                 db, _ACC, "n@x.com", rule)
-    with patch.object(m, "_llm_json", AsyncMock(side_effect=RuntimeError("no"))):
+    with patch.object(lg, "_llm_json", AsyncMock(side_effect=RuntimeError("no"))):
         assert not await m._ai_confirms_sender_pattern(db, _ACC, "n@x.com", rule)
 
 
@@ -241,7 +242,7 @@ async def test_too_few_samples_is_not_asked_about() -> None:
     db = AsyncMock()
     db.execute.return_value = MagicMock(fetchall=MagicMock(return_value=[
         SimpleNamespace(subject="s", snippet="x")]))
-    with patch.object(m, "_llm_json", AsyncMock()) as llm:
+    with patch.object(lg, "_llm_json", AsyncMock()) as llm:
         assert not await m._ai_confirms_sender_pattern(
             db, _ACC, "n@x.com", {"name": "Newsletter"})
         llm.assert_not_called()

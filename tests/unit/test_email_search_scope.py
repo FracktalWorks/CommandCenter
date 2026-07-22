@@ -32,7 +32,8 @@ async def _run_search(**kw):
         q=None, account_id="acc-1", folder=None, label=None, labels=None,
         from_addr=None, to_addr=None, received_after=None, received_before=None,
         is_read=None, is_starred=None, has_attachments=None,
-        sender_category=None, hybrid=False, page=1, page_size=50,
+        sender_category=None, importance=None, hybrid=False,
+        page=1, page_size=50,
         user=SimpleNamespace(email="u@example.com"),
     )
     args.update(kw)
@@ -215,6 +216,20 @@ async def test_state_filters_compose_with_scope_and_pills():
     assert params["folder_excludes"] == ["junk", "trash"]
     assert params["tag_0"] == "receipt"
     assert params["from_addr"] == "%acme%"
+
+
+async def test_importance_filter_matches_case_insensitively():
+    # The importance pill ("High"/"Normal"/"Low") filters provider importance;
+    # stored casing varies ('High' vs 'high'), so the predicate lowercases both.
+    _resp, sql, params = await _run_search(q=None, importance="High")
+    assert "LOWER(em.importance) = LOWER(:importance)" in sql
+    assert params["importance"] == "High"
+
+
+async def test_no_importance_pill_means_no_importance_predicate():
+    _resp, sql, params = await _run_search(q="hi")
+    assert "em.importance) = LOWER(:importance)" not in sql
+    assert "importance" not in params
 
 
 # ── The All view and the All scope differ, on purpose ─────────────────────────

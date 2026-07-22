@@ -150,6 +150,11 @@ def _state_filters(
                      "AND LOWER(se.email) = LOWER(em.from_address->>'email') "
                      "AND LOWER(se.category) = LOWER(:sender_category))")
         params["sender_category"] = flags["sender_category"]
+    if flags.get("importance"):
+        # Provider importance ('high'/'normal'/'low') — "show me what senders
+        # flagged important". Case-insensitive so a stored 'High' still matches.
+        where.append("LOWER(em.importance) = LOWER(:importance)")
+        params["importance"] = flags["importance"]
 
 
 @router.get("/search")
@@ -174,6 +179,8 @@ async def search_messages(
     is_starred: bool | None = Query(None),
     has_attachments: bool | None = Query(None),
     sender_category: str | None = Query(None),
+    importance: str | None = Query(
+        None, description="Provider importance: high | normal | low"),
     hybrid: bool = Query(
         False, description="Blend semantic (vector) similarity into the ranking"),
     page: int = Query(1, ge=1),
@@ -223,6 +230,7 @@ async def search_messages(
             "is_starred": is_starred,
             "has_attachments": has_attachments,
             "sender_category": sender_category,
+            "importance": importance,
         })
 
         where_sql = " AND ".join(where)

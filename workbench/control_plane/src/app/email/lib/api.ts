@@ -607,6 +607,8 @@ export interface SearchEmailsParams {
   hasAttachments?: boolean;
   receivedAfter?: string;
   receivedBefore?: string;
+  /** Provider importance: "high" | "normal" | "low". */
+  importance?: string;
   /** Ask for semantic (vector) re-ranking. The server honours it only when
    *  semantic search is enabled + embeddings exist; otherwise it returns pure
    *  lexical results and `hybrid: false`. */
@@ -647,6 +649,7 @@ export async function searchEmails(
   if (params.uncategorized) sp.set("uncategorized", "true");
   if (params.receivedAfter) sp.set("received_after", params.receivedAfter);
   if (params.receivedBefore) sp.set("received_before", params.receivedBefore);
+  if (params.importance) sp.set("importance", params.importance);
   if (params.hybrid) sp.set("hybrid", "true");
   if (params.page) sp.set("page", String(params.page));
   if (params.pageSize) sp.set("page_size", String(params.pageSize));

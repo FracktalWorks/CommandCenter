@@ -149,8 +149,10 @@ export function visibleColumns(
   return COLUMNS.filter((c) => vis[c.key]);
 }
 
-/** The CSS grid-template-columns for a row: Name (flexible) + each visible
- *  column's fixed track. Kept in one place so the header and the rows align. */
+/** The CSS grid-template-columns for a row: Name (flexible, with a floor so the
+ *  title never collapses to nothing when many columns are shown on a narrow
+ *  window) + each visible column's fixed track. Kept in one place so the header
+ *  and the rows align. */
 export function gridTemplate(cols: ColumnDef[]): string {
-  return ["minmax(0, 1fr)", ...cols.map((c) => c.width)].join(" ");
+  return ["minmax(140px, 1fr)", ...cols.map((c) => c.width)].join(" ");
 }

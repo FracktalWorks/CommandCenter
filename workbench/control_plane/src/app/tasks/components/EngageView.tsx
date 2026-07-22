@@ -4,7 +4,8 @@ import { useMemo, useState } from "react";
 import { Battery, BatteryLow, BatteryMedium, Clock, Tag, Zap } from "lucide-react";
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { Energy } from "../lib/types";
-import { priorityRank } from "../lib/priority";
+import { priorityRank, type PriorityCell } from "../lib/priority";
+import { CELL_ICON } from "../lib/priorityIcons";
 import { groupItems } from "../lib/ordering";
 import { TaskCard } from "./TaskCard";
 
@@ -165,10 +166,14 @@ export function EngageView() {
         </div>
       ) : (
         <div className="flex-1 overflow-y-auto">
-          {groups.map((g) => (
+          {groups.map((g) => {
+            const GroupIcon = CELL_ICON[g.key as PriorityCell];
+            return (
             <section key={g.key}>
               <div className="sticky top-0 z-10 flex items-center gap-2 border-b border-border bg-card/95 px-3 py-1.5 backdrop-blur">
-                {g.emoji && <span aria-hidden>{g.emoji}</span>}
+                {GroupIcon && (
+                  <GroupIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                )}
                 <span className="truncate text-[11px] font-semibold uppercase tracking-wide text-foreground">
                   {g.label}
                 </span>
@@ -180,7 +185,8 @@ export function EngageView() {
                 <TaskCard key={item.id} item={item} variant="row" />
               ))}
             </section>
-          ))}
+            );
+          })}
         </div>
       )}
     </div>

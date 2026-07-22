@@ -10,6 +10,7 @@ import {
   Rows3,
   ChevronDown,
   Check,
+  type LucideIcon,
 } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
@@ -28,6 +29,8 @@ import {
   priorityCell,
   type PriorityCell,
 } from "../lib/priority";
+import { CELL_ICON } from "../lib/priorityIcons";
+import { contextAccent } from "../lib/contextColors";
 
 // The unified filter + sort + group bar (Jira/Linear-style). One row:
 //   [Search]  [Filter ▾ (N)] [chips…]        [Group by ▾]  [Sort ▾ ⇅]
@@ -99,6 +102,8 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
       .map(([value, count]) => ({
         value,
         label: value === NO_CONTEXT_FACET ? "No @context" : value,
+        // The context's own colour dot — same vocabulary as the card chip.
+        dot: value === NO_CONTEXT_FACET ? undefined : contextAccent(value).dot,
         count,
       }));
   }, [items]);
@@ -112,7 +117,7 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
     return CELLS_IN_ORDER.filter((c) => counts.has(c)).map((c) => ({
       value: c as string,
       label: CELL_META[c].label,
-      emoji: CELL_META[c].emoji,
+      icon: CELL_ICON[c],
       count: counts.get(c)!,
     }));
   }, [items]);
@@ -277,6 +282,10 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
 interface FacetOption {
   value: string;
   label: string;
+  /** lucide icon (priority) — takes precedence over a dot/emoji marker. */
+  icon?: LucideIcon;
+  /** a solid colour dot marker (context), e.g. "bg-sky-500". */
+  dot?: string;
   emoji?: string;
   count: number;
 }
@@ -363,7 +372,13 @@ function FilterMenu({
                     >
                       {on && <Check className="h-3 w-3" />}
                     </span>
-                    {o.emoji && <span aria-hidden>{o.emoji}</span>}
+                    {o.icon ? (
+                      <o.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
+                    ) : o.dot ? (
+                      <span className={`h-2 w-2 shrink-0 rounded-full ${o.dot}`} aria-hidden />
+                    ) : o.emoji ? (
+                      <span aria-hidden>{o.emoji}</span>
+                    ) : null}
                     <span className="min-w-0 flex-1 truncate text-foreground">{o.label}</span>
                     <span className="shrink-0 text-[10px] text-muted-foreground">{o.count}</span>
                   </button>
@@ -379,27 +394,38 @@ function FilterMenu({
 
 // ── Active-facet chips ───────────────────────────────────────────────────────
 
+interface FacetChip {
+  key: "contexts" | "priorities" | "energies";
+  value: string;
+  label: string;
+  /** priority chips carry their lucide icon; context chips their colour. */
+  icon?: LucideIcon;
+  dot?: string;
+}
+
 function FacetChips({
   filters,
   priorityMeta,
   onRemove,
 }: {
   filters: TaskFilters;
-  priorityMeta: { value: string; label: string; emoji?: string }[];
+  priorityMeta: { value: string; label: string; icon?: LucideIcon }[];
   onRemove: (key: "contexts" | "priorities" | "energies", value: string) => void;
 }) {
-  const chips: { key: "contexts" | "priorities" | "energies"; value: string; label: string }[] = [
+  const chips: FacetChip[] = [
     ...filters.contexts.map((v) => ({
       key: "contexts" as const,
       value: v,
       label: v === NO_CONTEXT_FACET ? "No @context" : v,
+      dot: v === NO_CONTEXT_FACET ? undefined : contextAccent(v).dot,
     })),
     ...filters.priorities.map((v) => {
       const meta = priorityMeta.find((p) => p.value === v);
       return {
         key: "priorities" as const,
         value: v,
-        label: meta ? `${meta.emoji ?? ""} ${meta.label}`.trim() : v,
+        label: meta ? meta.label : v,
+        icon: meta?.icon,
       };
     }),
     ...filters.energies.map((v) => ({
@@ -419,6 +445,11 @@ function FacetChips({
           key={`${c.key}:${c.value}`}
           className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 py-0.5 pl-2 pr-1 text-[11px] font-medium text-primary"
         >
+          {c.icon ? (
+            <c.icon className="h-3 w-3 shrink-0" aria-hidden />
+          ) : c.dot ? (
+            <span className={`h-2 w-2 shrink-0 rounded-full ${c.dot}`} aria-hidden />
+          ) : null}
           <span className="truncate max-w-[140px]">{c.label}</span>
           <button
             type="button"

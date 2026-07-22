@@ -11,7 +11,6 @@ import {
   ListTree,
   GripVertical,
   Check,
-  ChevronDown,
   CalendarClock,
   Trash2,
 } from "lucide-react";
@@ -19,8 +18,10 @@ import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { useCardActions } from "../lib/useCardActions";
 import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
+import { contextAccent } from "../lib/contextColors";
 import { SourceBadge } from "./SourceBadge";
 import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
+import { StatusPill } from "./StatusPill";
 import { ContextMenu, type CtxItem } from "./ContextMenu";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
@@ -39,6 +40,7 @@ export function TaskCard({
   variant = "board",
   draggable = false,
   showPriority = false,
+  showStage = true,
   selectMode = false,
   selected = false,
   onToggleSelected,
@@ -52,6 +54,12 @@ export function TaskCard({
   /** Show the matrix-cell badge (the Priority view / ranked list). Off
    *  elsewhere so a card carries at most the one relevant priority signal. */
   showPriority?: boolean;
+  /** Show the status/stage pill on the card. On surfaces that ALREADY convey
+   *  the stage structurally — the Kanban columns, the status-grouped list
+   *  headers — it's redundant, so those pass `false`. Everywhere the stage
+   *  isn't otherwise visible (Engage, Priority, a lens-grouped list, the flat
+   *  lists) it stays on so the status lives on the card itself. */
+  showStage?: boolean;
   /** Multi-select mode (board): show a checkbox and toggle selection on click
    *  instead of opening the focus modal. Drag is suppressed by the parent. */
   selectMode?: boolean;
@@ -122,7 +130,12 @@ export function TaskCard({
   const meta = (
     <>
       {item.context && (
-        <span className="inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary/90">
+        <span
+          className={[
+            "inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px]",
+            contextAccent(item.context).chip,
+          ].join(" ")}
+        >
           {item.context}
         </span>
       )}
@@ -213,7 +226,7 @@ export function TaskCard({
           className="tech-transition group flex w-full cursor-pointer flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
         >
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            <StagePill actions={actions} />
+            {showStage && <StatusPill item={item} />}
             <span className="min-w-0 flex-1 truncate text-sm text-foreground">
               {item.title}
             </span>
@@ -281,7 +294,7 @@ export function TaskCard({
           )
         )}
         <div className="flex items-start gap-2 pr-4">
-          {!selectMode && <StagePill actions={actions} />}
+          {!selectMode && showStage && <StatusPill item={item} />}
           <p className="text-[13px] font-medium leading-snug text-foreground">
             {item.title}
           </p>
@@ -315,82 +328,6 @@ export function TaskCard({
       </div>
       {contextMenu}
     </>
-  );
-}
-
-/** Stage dot colour: the last stage (Done) is green, the first is muted, the
- *  middle stages read as active. */
-function stageDot(stage: string, stages: string[]): string {
-  if (stages.length && stage === stages[stages.length - 1]) return "bg-success";
-  return stages.indexOf(stage) <= 0 ? "bg-muted-foreground/40" : "bg-primary";
-}
-
-// The card's STAGE SELECTOR — replaces the old one-click Done button. Shows the
-// task's current Next-Actions stage and, on click, a small stage list; picking
-// the last stage marks it done (see useCardActions). Works for local tasks
-// (which had no card-level stage control) and reflects synced tasks' mapped
-// stage. stopPropagation so it never opens the card.
-function StagePill({
-  actions,
-}: {
-  actions: ReturnType<typeof useCardActions>;
-}) {
-  const { stages, currentStage, setStage, isDone } = actions;
-  const [open, setOpen] = useState(false);
-  return (
-    <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="Change stage"
-        aria-label={`Stage: ${currentStage}. Click to change.`}
-        className={[
-          "tech-transition inline-flex items-center gap-1 rounded-full border px-1.5 py-0.5 text-[10px] font-medium",
-          isDone
-            ? "border-success/50 bg-success/10 text-success"
-            : "border-border text-muted-foreground hover:border-primary/40 hover:text-foreground",
-        ].join(" ")}
-      >
-        {isDone ? (
-          <Check className="h-2.5 w-2.5" strokeWidth={3} />
-        ) : (
-          <span
-            className={`h-1.5 w-1.5 rounded-full ${stageDot(currentStage, stages)}`}
-          />
-        )}
-        <span className="max-w-[74px] truncate">{currentStage}</span>
-        <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-      </button>
-      {open && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute left-0 top-full z-50 mt-1 min-w-[150px] overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-xl">
-            {stages.map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => {
-                  setStage(s);
-                  setOpen(false);
-                }}
-                className="tech-transition flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-foreground hover:bg-secondary"
-              >
-                <span
-                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${stageDot(s, stages)}`}
-                />
-                <span className="min-w-0 flex-1 truncate">{s}</span>
-                {s === currentStage && (
-                  <Check className="h-3 w-3 shrink-0 text-primary" />
-                )}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
   );
 }
 

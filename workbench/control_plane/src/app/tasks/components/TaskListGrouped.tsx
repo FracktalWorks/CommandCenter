@@ -20,6 +20,7 @@ import {
   type TaskGroup,
 } from "../lib/ordering";
 import { stageAccent } from "../lib/stageColors";
+import { groupIcon } from "../lib/priorityIcons";
 import {
   readColumnVisibility,
   subscribeColumns,
@@ -29,6 +30,7 @@ import {
   type ColumnDef,
 } from "../lib/columns";
 import { ColumnHeader, ColumnCell } from "./ListColumns";
+import { StatusPill } from "./StatusPill";
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
@@ -219,6 +221,9 @@ export function TaskListGrouped({
         // neutral header + its own emoji (the accent is a stage concept).
         const accent = stageAccent(g.label || g.key, gi, total);
         const emoji = (g as { emoji?: string }).emoji;
+        // A lens grouping by priority/mode gets the matching lucide icon; other
+        // lenses (energy/context) fall back to their emoji marker if any.
+        const LensIcon = isLens ? groupIcon(groupBy, g.key) : null;
         const isDone = statusGrouped && gi === total - 1;
         // Highlight the whole group while a card hovers anywhere over it, so a
         // cross-stage move reads clearly even before hitting a precise gap.
@@ -248,6 +253,8 @@ export function TaskListGrouped({
                   />
                   {statusGrouped ? (
                     <span className={`h-2 w-2 shrink-0 rounded-full ${accent.dot}`} />
+                  ) : LensIcon ? (
+                    <LensIcon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" aria-hidden />
                   ) : emoji ? (
                     <span aria-hidden className="shrink-0 text-xs">{emoji}</span>
                   ) : null}
@@ -287,6 +294,10 @@ export function TaskListGrouped({
                     onToggleSelected={() => toggleSelected(item.id)}
                     columns={cols}
                     grid={grid}
+                    // The status pill on the card is redundant when the list is
+                    // grouped by status (the section header IS the stage); it's
+                    // useful only on a lens grouping, where status isn't shown.
+                    showStage={isLens}
                     isDropTarget={dropAt === `${g.key}:${idx}`}
                     onDragStart={() => setDragId(item.id)}
                     onDragEnd={() => {
@@ -342,6 +353,7 @@ function DraggableRow({
   onToggleSelected,
   columns,
   grid,
+  showStage,
   isDropTarget,
   onDragStart,
   onDragEnd,
@@ -357,6 +369,8 @@ function DraggableRow({
   columns: ColumnDef[];
   /** grid-template-columns matching the header (only used when columns set). */
   grid: string;
+  /** Show the card's status pill (off when the list is grouped by status). */
+  showStage: boolean;
   isDropTarget: boolean;
   onDragStart: () => void;
   onDragEnd: () => void;
@@ -441,12 +455,12 @@ function DraggableRow({
             aria-pressed={selected}
           >
             <div className="pointer-events-none">
-              <RowContent item={item} columns={columns} grid={grid} />
+              <RowContent item={item} columns={columns} grid={grid} showStage={showStage} />
             </div>
           </button>
         ) : (
           <div className="min-w-0 flex-1">
-            <RowContent item={item} columns={columns} grid={grid} />
+            <RowContent item={item} columns={columns} grid={grid} showStage={showStage} />
           </div>
         )}
       </div>
@@ -463,21 +477,23 @@ function RowContent({
   item,
   columns,
   grid,
+  showStage,
 }: {
   item: GtdItem;
   columns: ColumnDef[];
   grid: string;
+  showStage: boolean;
 }) {
   const urgentWindowHours = useTaskStore((s) => s.settings.urgentWindowHours);
   const openFocus = useTaskStore((s) => s.openFocus);
   if (columns.length === 0) {
-    return <TaskCard item={item} variant="row" />;
+    return <TaskCard item={item} variant="row" showStage={showStage} />;
   }
   return (
     <>
       {/* Mobile: the stacked card (title + wrapping pills) — clickable itself. */}
       <div className="sm:hidden">
-        <TaskCard item={item} variant="row" />
+        <TaskCard item={item} variant="row" showStage={showStage} />
       </div>
       {/* Desktop: aligned columns matching the header grid. The row opens the
           focus modal on click (Enter/Space too) — same affordance as the card,
@@ -496,8 +512,15 @@ function RowContent({
         className="tech-transition hidden cursor-pointer items-center gap-2 py-2.5 pr-3.5 hover:bg-secondary/40 sm:grid"
         style={{ gridTemplateColumns: grid }}
       >
-        <span className="min-w-0 truncate text-sm text-foreground">
-          {item.title}
+        {/* Name cell. When the list is grouped by a lens the section header no
+            longer carries the stage, so the status pill rides in front of the
+            title (right where the eye associates it with the task) instead of
+            eating a fixed column and crushing the name. */}
+        <span className="flex min-w-0 items-center gap-2">
+          {showStage && <StatusPill item={item} />}
+          <span className="min-w-0 truncate text-sm text-foreground">
+            {item.title}
+          </span>
         </span>
         {columns.map((c) => (
           <ColumnCell

@@ -66,6 +66,10 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [days, setDays] = useState(30);
+  // Bumped by "Try again" to force a refetch. setDays(d => d) is a no-op — React
+  // bails on an unchanged value, so the effect never re-ran and the button did
+  // nothing after an error.
+  const [refresh, setRefresh] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -78,7 +82,7 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
     return () => {
       cancelled = true;
     };
-  }, [accountId, days]);
+  }, [accountId, days, refresh]);
 
   const rangeBar = (
     <div className="flex items-center gap-1 bg-secondary rounded-lg p-0.5 flex-shrink-0">
@@ -106,7 +110,7 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
         <TriangleAlert size={20} className="text-destructive" />
         <p className="text-sm text-foreground">{error}</p>
         <button
-          onClick={() => setDays((d) => d)}
+          onClick={() => setRefresh((n) => n + 1)}
           className="text-xs text-primary hover:underline"
         >
           Try again
@@ -761,16 +765,19 @@ function Assistant({
               alarming={t.rejection_rate > 0.1}
             />
             <TrustRow
-              term="Actions that failed"
-              value={t.failed_actions.toLocaleString()}
+              term="Actions to repair"
+              value={t.repairable.toLocaleString()}
               detail={
-                t.failed_actions > 0
-                  ? "the rule matched, but the mail server refused the change"
-                  : "every action reached the mail server"
+                t.repairable > 0
+                  ? "the rule matched, but the mail server refused — retryable"
+                  : t.permanent_failures > 0
+                    ? `${t.permanent_failures.toLocaleString()} failed for good ` +
+                      `(the message was moved or deleted)`
+                    : "every action reached the mail server"
               }
-              alarming={t.failed_actions > 0}
+              alarming={t.repairable > 0}
               action={
-                t.failed_actions > 0 && accountId ? (
+                t.repairable > 0 && accountId ? (
                   <RetryFailed accountId={accountId} />
                 ) : null
               }

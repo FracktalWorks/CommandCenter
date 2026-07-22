@@ -193,8 +193,12 @@ export interface AnalyticsOverview {
       decided: number;
       rejected: number;
       rejection_rate: number;
-      /** Actions logged as applied whose provider call actually failed. */
-      failed_actions: number;
+      /** Failed rule runs the Repair button can replay (message still present,
+       *  a rule to re-apply). Matches retry_failed_executions exactly. A level,
+       *  not windowed. */
+      repairable: number;
+      /** Failed rule runs no replay can fix — the message was moved or deleted. */
+      permanent_failures: number;
       /** Learned patterns queued for review. Inert until approved. */
       unreviewed_patterns: number;
     };

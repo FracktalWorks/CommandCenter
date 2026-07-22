@@ -57,7 +57,7 @@ _ANY_ROW = SimpleNamespace(
     received=0, received_prev=0, sent=0, sent_prev=0, unread=0,
     inbound=0, replied=0, median_h=None, p90_h=None,
     inbound_prev=0, replied_prev=0, median_h_prev=None,
-    total=0, classified=0, decided=0, rejected=0, failed=0,
+    total=0, classified=0, decided=0, rejected=0, repairable=0, permanent=0,
 )
 
 # The three queries allowed to ignore the range selector, and why. Anything else
@@ -67,6 +67,7 @@ _UNWINDOWED_BY_DESIGN = (
     "email_thread_status ts",   # the backlog: a level, not a flow
     "COUNT(ts.thread_id)",      # Reply Zero coverage: all-time by definition
     "email_rule_patterns p",    # the review queue: a level, not a flow
+    "er.status = 'FAILED'",     # the repair queue: a level, not a flow
 )
 
 
@@ -258,7 +259,7 @@ async def test_a_dry_run_is_not_work_done() -> None:
     explicitly did not do would overstate the assistant on the one screen meant
     to measure it."""
     db = _db(rows=[], scalar=0,
-             row=SimpleNamespace(decided=0, rejected=0, failed=0))
+             row=SimpleNamespace(decided=0, rejected=0, repairable=0, permanent=0))
     await a._automation(db, dict(_PARAMS), None)
     assert "er.status = 'APPLIED'" in _all_sql(db)
 
@@ -267,7 +268,7 @@ async def test_handled_counts_emails_not_rule_hits() -> None:
     """One message touched by three rules is ONE email the user did not have to
     handle. Summing the per-rule breakdown would report it as three."""
     db = _db(rows=[], scalar=7,
-             row=SimpleNamespace(decided=0, rejected=0, failed=0))
+             row=SimpleNamespace(decided=0, rejected=0, repairable=0, permanent=0))
     _stats, _actions, handled = await a._automation(db, dict(_PARAMS), None)
     assert handled == 7
     assert "COUNT(DISTINCT er.message_id)" in _all_sql(db)
@@ -278,29 +279,42 @@ async def test_ignoring_a_proposal_is_not_accepting_it() -> None:
     PENDING rows as acceptances would make the assistant look better the longer
     the user left its suggestions alone."""
     db = _db(rows=[], scalar=0,
-             row=SimpleNamespace(decided=10, rejected=2, failed=0))
+             row=SimpleNamespace(decided=10, rejected=2,
+                                 repairable=0, permanent=0))
     out = await a._automation_trust(db, dict(_PARAMS), "er.account_id = :aid")
     assert out["rejection_rate"] == 0.2
     sql = _all_sql(db)
     assert "IN ('APPLIED', 'REJECTED')" in sql
 
 
-async def test_failed_provider_calls_are_surfaced() -> None:
-    """A row logged APPLIED whose Graph call 404'd changed nothing in the actual
-    mailbox. On the live account 283 rule applications in one month were in this
-    state, invisible."""
+async def test_failed_actions_split_into_repairable_and_permanent() -> None:
+    """A failed rule run is a repair QUEUE — a level, not a windowed flow. It is
+    split into what the Repair button can replay (message present, a rule to
+    re-run) and what no replay can fix (message moved/deleted), because the old
+    single windowed count routinely showed a number with 'nothing to repair'
+    behind it while genuinely repairable rows outside the window were invisible."""
     db = _db(rows=[], scalar=0,
-             row=SimpleNamespace(decided=100, rejected=0, failed=192))
+             row=SimpleNamespace(decided=100, rejected=0,
+                                 repairable=7, permanent=92))
     out = await a._automation_trust(db, dict(_PARAMS), "er.account_id = :aid")
-    assert out["failed_actions"] == 192
-    assert "action_errors" in _all_sql(db)
+    assert out["repairable"] == 7
+    assert out["permanent_failures"] == 92
+    assert "failed_actions" not in out
+    sql = _all_sql(db)
+    assert "status = 'FAILED'" in sql
+    # repairable mirrors retry_failed_executions: not disposed, message present.
+    assert "('trash', 'junk', 'spam', 'drafts', 'draft')" in sql
+    # the failure count is a level — unwindowed (no :days on that query).
+    fail_sql = [str(c[0][0]) for c in db.execute.call_args_list
+                if "status = 'FAILED'" in str(c[0][0])][0]
+    assert ":days" not in fail_sql
 
 
 async def test_the_unreviewed_queue_counts_only_what_review_can_clear() -> None:
     """Excludes are never gated on approval — an exclude only ever PREVENTS a
     label. Counting them would invent a backlog with no button to clear it."""
     db = _db(rows=[], scalar=21,
-             row=SimpleNamespace(decided=0, rejected=0, failed=0))
+             row=SimpleNamespace(decided=0, rejected=0, repairable=0, permanent=0))
     out = await a._automation_trust(db, dict(_PARAMS), "er.account_id = :aid")
     assert out["unreviewed_patterns"] == 21
     assert "NOT p.exclude" in _all_sql(db)
@@ -310,7 +324,7 @@ async def test_the_queue_is_not_windowed() -> None:
     """A pattern learned four months ago and never looked at is the whole reason
     to show this number."""
     db = _db(rows=[], scalar=0,
-             row=SimpleNamespace(decided=0, rejected=0, failed=0))
+             row=SimpleNamespace(decided=0, rejected=0, repairable=0, permanent=0))
     await a._automation_trust(db, dict(_PARAMS), "er.account_id = :aid")
     pattern_sql = str(db.execute.call_args_list[-1][0][0])
     assert "email_rule_patterns" in pattern_sql

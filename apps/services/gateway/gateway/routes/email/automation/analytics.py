@@ -483,13 +483,13 @@ async def _automation(db: Any, params: dict[str, Any],
 
 _EMPTY_TRUST: dict[str, Any] = {
     "decided": 0, "rejected": 0, "rejection_rate": 0.0,
-    "failed_actions": 0, "unreviewed_patterns": 0,
+    "repairable": 0, "permanent_failures": 0, "unreviewed_patterns": 0,
 }
 
 
 async def _automation_trust(db: Any, params: dict[str, Any],
                             scope: str) -> dict[str, Any]:
-    """Three numbers that say whether the assistant is worth leaving switched on.
+    """Numbers that say whether the assistant is worth leaving switched on.
 
     ``rejection_rate`` is over APPLIED + REJECTED only. PENDING rows are
     previews awaiting a verdict, and counting an undecided row as an acceptance
@@ -499,12 +499,35 @@ async def _automation_trust(db: Any, params: dict[str, Any],
         f"""SELECT
               COUNT(*) FILTER (WHERE er.status IN ('APPLIED', 'REJECTED'))
                 AS decided,
-              COUNT(*) FILTER (WHERE er.status = 'REJECTED') AS rejected,
-              COUNT(*) FILTER (WHERE jsonb_array_length(
-                COALESCE(er.action_errors, '[]'::jsonb)) > 0) AS failed
+              COUNT(*) FILTER (WHERE er.status = 'REJECTED') AS rejected
             FROM email_executed_rules er
            WHERE {scope}
              AND er.created_at >= now() - make_interval(days => :days)"""
+    ), params)).fetchone()
+
+    # Failed actions are a REPAIR QUEUE — a level, not a windowed flow — so they
+    # are counted unwindowed, like the pattern queue below. Split into what the
+    # Repair button can actually act on and what it can't, because the two used
+    # to be conflated: the old single "failed_actions" was windowed and counted
+    # ANY errored row regardless of status, so a nonzero count routinely produced
+    # "nothing to repair" (all of it APPLIED-partial or trashed) while genuinely
+    # repairable rows older than the window were invisible. `repairable` mirrors
+    # retry_failed_executions EXACTLY (status=FAILED, a rule to replay, and the
+    # message neither deleted nor in trash/junk/spam/drafts); `permanent_failures`
+    # is everything else that failed — the message is gone and no replay can help.
+    fail = (await db.execute(text(
+        f"""SELECT
+              COUNT(*) FILTER (WHERE er.status = 'FAILED'
+                AND er.rule_id IS NOT NULL AND em.id IS NOT NULL
+                AND LOWER(COALESCE(em.folder, '')) NOT IN
+                    ('trash', 'junk', 'spam', 'drafts', 'draft')) AS repairable,
+              COUNT(*) FILTER (WHERE er.status = 'FAILED' AND NOT (
+                er.rule_id IS NOT NULL AND em.id IS NOT NULL
+                AND LOWER(COALESCE(em.folder, '')) NOT IN
+                    ('trash', 'junk', 'spam', 'drafts', 'draft'))) AS permanent
+            FROM email_executed_rules er
+            LEFT JOIN email_messages em ON em.id = er.message_id
+           WHERE {scope}"""
     ), params)).fetchone()
 
     # Not windowed: a queue is a level. A pattern learned four months ago and
@@ -526,6 +549,7 @@ async def _automation_trust(db: Any, params: dict[str, Any],
         "rejected": row.rejected or 0,
         "rejection_rate": (
             round((row.rejected or 0) / decided, 4) if decided else 0.0),
-        "failed_actions": row.failed or 0,
+        "repairable": (fail.repairable or 0) if fail else 0,
+        "permanent_failures": (fail.permanent or 0) if fail else 0,
         "unreviewed_patterns": pending,
     }

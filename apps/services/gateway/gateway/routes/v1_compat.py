@@ -88,6 +88,103 @@ def _clamp_max_tokens(requested: int, model: str) -> int:
     )
     return limits.max_output
 
+
+# ── Context-window guard ──────────────────────────────────────────────────
+# Safety margin between what we count and what the provider counts (tokenizer
+# divergence, per-message envelopes), and the smallest completion reservation
+# worth keeping once the prompt is under pressure.
+_CONTEXT_FIT_SAFETY_TOKENS: int = 512
+_CONTEXT_FIT_MIN_OUTPUT: int = 1024
+
+
+def _fit_context_window(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    model: str,
+    max_tokens: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep ``prompt + completion`` inside ``model``'s context window.
+
+    This route is the choke point for ALL agent traffic — including Copilot-SDK
+    sessions, whose backend compaction is disabled for BYOK models
+    (orchestrator/_copilot_session.py) and whose session-accumulated history
+    therefore arrives here unbounded. Nothing upstream fits that prompt, so
+    without this guard a long chat session eventually reaches the provider as a
+    hard 4xx ("context length exceeded") mid-conversation.
+
+    No-op when the request already fits (the overwhelming majority). Otherwise
+    recover in escalating steps — a trimmed request that works beats a faithful
+    one the provider rejects:
+      1. shrink ``max_tokens`` so prompt + completion fits (never below
+         ``_CONTEXT_FIT_MIN_OUTPUT``);
+      2. still over → drop oldest non-system messages, dropping any tool
+         results orphaned by an evicted assistant turn;
+      3. still over → char-trim the longest remaining message
+         (``fit_messages_to_context``).
+    """
+    try:
+        from acb_llm.context import (context_window_for, count_message_tokens,
+                                     fit_messages_to_context)
+        window = context_window_for(model)
+        if window <= 0:
+            return messages, max_tokens
+        # Tool schemas ride in the same input window; count them roughly.
+        tools_tokens = (len(json.dumps(tools, default=str)) // 4) if tools else 0
+        prompt_tokens = count_message_tokens(messages, model) + tools_tokens
+        if prompt_tokens + max_tokens + _CONTEXT_FIT_SAFETY_TOKENS <= window:
+            return messages, max_tokens
+
+        # 1. Shrink the output reservation before touching the prompt.
+        room = window - prompt_tokens - _CONTEXT_FIT_SAFETY_TOKENS
+        if room >= _CONTEXT_FIT_MIN_OUTPUT:
+            _log.warning(
+                "v1.context_fit_output_shrunk", model=model, window=window,
+                prompt_tokens=prompt_tokens, requested=max_tokens,
+                shrunk_to=room,
+            )
+            return messages, min(max_tokens, room)
+
+        # 2. Evict oldest non-system turns until the floor reservation fits.
+        out = [dict(m) for m in messages]
+        budget = window - _CONTEXT_FIT_MIN_OUTPUT - _CONTEXT_FIT_SAFETY_TOKENS
+        dropped = 0
+        while count_message_tokens(out, model) + tools_tokens > budget:
+            idx = next(
+                (i for i, m in enumerate(out[:-1])
+                 if m.get("role") not in ("system", "developer")),
+                None,
+            )
+            if idx is None:
+                break  # only system + the current turn left
+            del out[idx]
+            dropped += 1
+            # A tool result whose assistant tool_call was just evicted is an
+            # orphan some providers reject — evict it with its turn.
+            while idx < len(out) - 1 and out[idx].get("role") == "tool":
+                del out[idx]
+                dropped += 1
+
+        # 3. Last resort: char-trim the longest remaining message.
+        out, _trimmed = fit_messages_to_context(
+            out, model,
+            max_output_tokens=_CONTEXT_FIT_MIN_OUTPUT,
+            safety_margin=_CONTEXT_FIT_SAFETY_TOKENS,
+        )
+        final_prompt = count_message_tokens(out, model) + tools_tokens
+        _log.warning(
+            "v1.context_fit_messages_evicted", model=model, window=window,
+            dropped=dropped, trimmed=bool(_trimmed),
+            final_prompt_tokens=final_prompt,
+        )
+        return out, min(max_tokens, max(
+            _CONTEXT_FIT_MIN_OUTPUT,
+            window - final_prompt - _CONTEXT_FIT_SAFETY_TOKENS,
+        ))
+    except Exception:  # noqa: BLE001 — the guard must never break a working call
+        _log.warning("v1.context_fit_failed", model=model, exc_info=True)
+        return messages, max_tokens
+
+
 # Mount at /v1 (OpenAI standard) and also at root for SDKs that omit the prefix.
 router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
 router_root = APIRouter(tags=["openai-compat"])
@@ -299,6 +396,12 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
 
     # Sanitize messages for providers with strict validation (e.g. DeepSeek).
     messages = _sanitize_messages_for_provider(messages, provider or model)
+
+    # Context-window guard (single-agent chat audit C1/CX1): fit prompt +
+    # completion into the model's window BEFORE cache annotation, so an
+    # unbounded Copilot-session history degrades gracefully (shrunk output /
+    # evicted oldest turns) instead of a provider 4xx mid-conversation.
+    messages, max_tokens = _fit_context_window(messages, tools, model, max_tokens)
 
     # Provider-aware prompt caching (specs/llm_caching_memory.md Phase 2/3).
     # This is THE choke point every agent runtime (native-MAF

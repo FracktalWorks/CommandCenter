@@ -350,3 +350,174 @@ def test_hitl_handler_emits_prompt_parks_then_returns_answer(monkeypatch):
     assert frame["value"]["question"] == "Pick one?"
     assert frame["value"]["choices"] == ["a", "b"]
     assert frame["value"]["allowFreeform"] is False
+
+
+# ── Loop detection: identical repeated tool calls must trip CLEANLY ─────────
+# Regression for the loop-trip crash: `_next_task` is already None when the
+# loop-detected branch runs, so an unconditional `.cancel()` raised
+# AttributeError — the user saw the real "loop detected" RUN_ERROR followed by
+# a bogus "'NoneType' object has no attribute 'cancel'" RUN_ERROR, and the
+# stream closed without a clean terminal event.
+
+
+def _loop_updates(n: int) -> list[Any]:
+    ups: list[Any] = []
+    for i in range(n):
+        cid = f"call_{i}"
+        ups.append(_update([_fc("poll_status", "{}", cid)]))
+        ups.append(_update([_fr(cid, "pending")], role="tool"))
+    return ups
+
+
+def test_loop_trip_emits_single_clean_run_error(monkeypatch):
+    monkeypatch.setenv("TOOL_LOOP_MAX_REPEATS", "3")
+    events = _drive_native(monkeypatch, _loop_updates(3))
+    errors = [e for e in events if e.get("type") == "RUN_ERROR"]
+    assert len(errors) == 1, f"expected exactly one RUN_ERROR, got {errors}"
+    assert "loop detected" in errors[0]["message"]
+    assert "NoneType" not in errors[0]["message"]
+    # The loop RUN_ERROR is the terminal event — no RUN_FINISHED may follow
+    # and contradict it (the client would render the run as successful).
+    assert not [e for e in events if e.get("type") == "RUN_FINISHED"]
+
+
+def test_below_loop_threshold_finishes_normally(monkeypatch):
+    monkeypatch.setenv("TOOL_LOOP_MAX_REPEATS", "3")
+    events = _drive_native(
+        monkeypatch, _loop_updates(2) + [_update([_text("done")])],
+    )
+    assert not [e for e in events if e.get("type") == "RUN_ERROR"]
+    assert events[-1]["type"] == "RUN_FINISHED"
+
+
+# ── Tier 1.5: stale-session retry must not replay an emitting turn ──────────
+# Regression for the duplicated-turn bug: the stale-session classifier's broad
+# substring match ("session" + "error") also caught MID-STREAM provider/session
+# failures, and the retry re-ran the whole turn with fresh message ids — the
+# user saw all partial output twice. A genuine stale resume fails inside the
+# SDK's session setup BEFORE any event is emitted, so the emitted-output guard
+# distinguishes the two.
+
+
+class _CopilotShapedAgent:
+    """Copilot-SDK-shaped agent (non-None ``_default_options`` → Tier 1.5).
+
+    Scripted per attempt: each entry is ``(updates_to_yield, exception|None)``;
+    the last entry repeats if the executor retries more times than scripted.
+    """
+
+    def __init__(
+        self, script: list[tuple[list[Any], Exception | None]],
+    ) -> None:
+        self.name = "test-agent"
+        self.tools: list[Any] = []
+        self._default_options: dict[str, Any] = {"model": "tier-balanced"}
+        self._script = list(script)
+        self.attempts = 0
+
+    def get_session(self, _sid: str) -> Any:
+        return object()
+
+    def run(self, *_a: Any, **_k: Any) -> Any:
+        updates, exc = self._script[min(self.attempts, len(self._script) - 1)]
+        self.attempts += 1
+        return self._replay(updates, exc)
+
+    async def _replay(
+        self, updates: list[Any], exc: Exception | None,
+    ) -> Any:
+        for u in updates:
+            yield u
+        if exc is not None:
+            raise exc
+
+    async def __aenter__(self) -> "_CopilotShapedAgent":
+        return self
+
+    async def __aexit__(self, *_a: Any) -> bool:
+        return False
+
+
+def _drive_copilot(
+    monkeypatch,
+    script: list[tuple[list[Any], Exception | None]],
+    thread_id: str,
+) -> tuple[list[dict[str, Any]], "_CopilotShapedAgent"]:
+    agent = _CopilotShapedAgent(script)
+
+    class _Loaded(_LoadedStub):
+        def build_agents(self_inner) -> list[Any]:  # noqa: N805
+            return [agent]
+
+    class _Ctx:
+        def __enter__(self) -> _LoadedStub:
+            return _Loaded("")
+
+        def __exit__(self, *_a: Any) -> bool:
+            return False
+
+    monkeypatch.setattr(executor, "load_agent", lambda *a, **k: _Ctx())
+    monkeypatch.setattr(executor, "build_integrations", lambda *a, **k: ({}, {}))
+    # Register the agent as runtime "github-copilot": session restore
+    # (executor.py:1972) is gated on the registry label, and without it the
+    # stale-resume classifier is never eligible (no stored session id).
+    import gateway.routes.agent as _agent_routes
+    monkeypatch.setattr(_agent_routes, "_load_dynamic_agents", lambda: [
+        {"name": "test-agent-unregistered", "agent_runtime": "github-copilot",
+         "repo_name": None, "local_path": None},
+    ])
+    # A stored session id is what makes the stale-resume classifier eligible.
+    executor._copilot_session_store[thread_id] = "sess-stale-1"
+
+    async def _collect() -> list[str]:
+        out: list[str] = []
+        async for line in executor.run_agent_stream(
+            "test-agent-unregistered", {"message": "hi"}, thread_id=thread_id,
+        ):
+            out.append(line)
+        return out
+
+    try:
+        return _parse_frames(asyncio.run(_collect())), agent
+    finally:
+        executor._copilot_session_store.pop(thread_id, None)
+
+
+def test_midstream_session_error_does_not_replay_turn(monkeypatch):
+    events, agent = _drive_copilot(
+        monkeypatch,
+        [
+            ([_update([_text("partial answer")])],
+             RuntimeError("GitHub Copilot session error: upstream 400")),
+            ([_update([_text("partial answer")])], None),
+        ],
+        thread_id="t-c2-dup",
+    )
+    assert agent.attempts == 1, "mid-stream error must not trigger a retry"
+    text = "".join(
+        e.get("delta", "") for e in events
+        if e.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+    assert text.count("partial answer") == 1, f"duplicated output: {text!r}"
+    errors = [e for e in events if e.get("type") == "RUN_ERROR"]
+    assert len(errors) == 1
+    assert "session error" in errors[0]["message"]
+
+
+def test_stale_session_before_emission_still_retries(monkeypatch):
+    events, agent = _drive_copilot(
+        monkeypatch,
+        [
+            ([], RuntimeError(
+                "Failed to create GitHub Copilot session: CLI process died")),
+            ([_update([_text("recovered answer")])], None),
+        ],
+        thread_id="t-c2-stale",
+    )
+    assert agent.attempts == 2, "pre-emission stale resume must retry"
+    text = "".join(
+        e.get("delta", "") for e in events
+        if e.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+    assert "recovered answer" in text
+    assert not [e for e in events if e.get("type") == "RUN_ERROR"]

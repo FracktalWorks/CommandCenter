@@ -1,6 +1,8 @@
 # Single-Agent Chat Bug Audit — 2026-07
 
-**Status:** audit complete · **Date:** 2026-07-22 · **Requested by:** Vijay
+**Status:** audit complete · P0 fixes landed 2026-07-22 (T1, C2, C1/CX1 —
+see §4; regression tests in `tests/unit/test_run_agent_stream_e2e.py` and
+`tests/unit/test_v1_context_fit.py`) · **Date:** 2026-07-22 · **Requested by:** Vijay
 **Scope:** single-agent chat on both engines — native MAF (Tier 1) and Copilot SDK (Tier 1.5) —
 hunting context-management failures, premature termination (runs / tools / output), and
 BYOK/LiteLLM context-limit handling. Companion to

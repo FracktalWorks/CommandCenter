@@ -2326,7 +2326,14 @@ async def run_agent_stream(
                                         f"{_loop_max} times (loop detected)."
                                     ),
                                 })
-                                _next_task.cancel()
+                                # _next_task is None here in the normal flow
+                                # (reset after .result() above); it is only a
+                                # live task if the trip path ever moves before
+                                # the reset. Guard it — an unconditional
+                                # .cancel() crashed the loop-trip path with
+                                # AttributeError and skipped the aclose().
+                                if _next_task is not None:
+                                    _next_task.cancel()
                                 with contextlib.suppress(Exception):
                                     await _agen.aclose()
                                 break
@@ -2359,7 +2366,10 @@ async def run_agent_stream(
                                 "(possible stall)."
                             ),
                         })
-                    else:
+                    elif not _loop_tripped:
+                        # A loop trip already emitted its terminal RUN_ERROR
+                        # inline — don't follow it with a RUN_FINISHED that
+                        # would make the client render the run as successful.
                         yield _sse({
                             "type": "RUN_FINISHED", "runId": run_id,
                             "threadId": thread_id,
@@ -2820,6 +2830,13 @@ async def run_agent_stream(
                 #   cleared stale session + history injected as context.
                 for _attempt in range(2):
                     _ag_sess: Any = None
+                    # Nothing streamed to the user yet in THIS attempt. A
+                    # genuine stale-session resume fails inside the SDK's
+                    # session setup BEFORE any event is emitted; once output
+                    # has streamed, a "session error" is a mid-run failure
+                    # (provider 4xx, CLI death) and retrying would re-run the
+                    # whole turn and duplicate everything already rendered.
+                    _attempt_emitted = False
                     if _copilot_session_id and not _session_retry_attempted:
                         try:
                             _ag_sess = agent.get_session(_copilot_session_id)
@@ -2827,6 +2844,7 @@ async def run_agent_stream(
                             pass
                     try:
                         async for _line in _run_copilot_attempt(_effective_msg, _ag_sess):
+                            _attempt_emitted = True
                             yield _line
                             # ── Drain artifact events (write_artifact pushes
                             # artifact_created CUSTOM events here) ──────────
@@ -2850,6 +2868,14 @@ async def run_agent_stream(
                         _is_resume_err = (
                             not _session_retry_attempted
                             and bool(_copilot_session_id)
+                            # Emitted-output guard: only a failure BEFORE any
+                            # event streamed can be a stale resume. Without
+                            # this, a mid-stream provider/session error (the
+                            # broad substring match below catches any
+                            # "GitHub Copilot session error: …") re-ran the
+                            # turn with fresh message ids and the user saw
+                            # the entire partial output duplicated.
+                            and not _attempt_emitted
                             and (
                                 "Failed to create GitHub Copilot session" in str(_exc)
                                 or "resume_session" in str(_exc).lower()

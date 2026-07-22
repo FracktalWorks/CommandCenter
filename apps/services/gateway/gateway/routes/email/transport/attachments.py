@@ -5,7 +5,6 @@ from __future__ import annotations
 import asyncio
 import io
 import ipaddress
-import json
 import socket
 from urllib.parse import urljoin, urlparse
 
@@ -17,8 +16,8 @@ from gateway.routes.email.core import (
     ATTACHMENT_CACHE_TTL_SECS,
     _get_db,
     _get_redis,
-    _instantiate_provider,
     _log,
+    provider_session,
     router,
 )
 from sqlalchemy import text
@@ -145,7 +144,7 @@ async def download_attachment(
             text(
                 """SELECT ea.id, ea.filename, ea.mime_type, ea.size_bytes,
                           ea.provider_attachment_id, ea.storage_path,
-                          em.provider_message_id, p.provider, p.credentials_encrypted
+                          em.provider_message_id, em.account_id
                    FROM email_attachments ea
                    JOIN email_messages em ON ea.message_id = em.id
                    JOIN email_accounts p ON em.account_id = p.id
@@ -187,17 +186,17 @@ async def download_attachment(
             except Exception:
                 redis = None  # fall through to provider fetch
 
-        # Decrypt credentials
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-
-        # Instantiate provider
-        provider = _instantiate_provider(row.provider, creds)
-
-        content = await provider.get_attachment(
-            row.provider_message_id, row.provider_attachment_id
-        )
+        # Fetch through the ONE provider dance. This path used to instantiate
+        # the provider raw — never authenticating (an expired access token just
+        # 401'd) and never persisting a rotated refresh token (silently dropped,
+        # so the NEXT request re-authed from a stale token).
+        async with provider_session(
+            db, user.email or "anonymous", account_id=str(row.account_id),
+        ) as sess:
+            content = await sess.provider.get_attachment(
+                row.provider_message_id, row.provider_attachment_id
+            )
+        await db.commit()  # land the rotated-cred persist staged by the session
 
         # ── Store in Redis cache ──
         if redis and content:

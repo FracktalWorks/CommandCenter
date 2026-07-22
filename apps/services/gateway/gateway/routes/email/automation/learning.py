@@ -140,7 +140,15 @@ async def _sender_is_a_correspondent(
                                             'Done', 'FYI']
                 LIMIT 1"""
         ), {"aid": account_id, "sender": sender})).fetchone()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # Roll back so the aborted transaction can't poison the caller's next
+        # statement (the apply loop INSERTs the audit row on this same session).
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _log.warning("email.auto_learn_correspondent_probe_failed",
+                     account_id=account_id, error=str(exc)[:160])
         return True  # unknown → refuse to pin; the safe direction
     return row is not None
 
@@ -194,7 +202,14 @@ async def _sender_consistent_for_rule(
                   AND LOWER(COALESCE(from_address, '')) = :sender
                 GROUP BY rule_id"""
         ), {"aid": account_id, "sender": sender})).fetchall()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # Same rollback discipline as above: never leave the session aborted.
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _log.warning("email.auto_learn_consistency_probe_failed",
+                     account_id=account_id, error=str(exc)[:160])
         return False
     by_rule = {str(row.rule_id): int(row.n) for row in rows}
     if any(rid != str(rule_id) and n > 0 for rid, n in by_rule.items()):

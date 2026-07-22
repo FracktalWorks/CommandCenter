@@ -1,0 +1,357 @@
+<meta charset="utf-8">
+<title>Calendar → Focus OS — UI mockups</title>
+<style>
+  /* Control-plane dark tokens (globals.css) + gold = leverage */
+  :root{
+    --bg:hsl(220 13% 8%); --card:hsl(220 13% 10%); --card2:hsl(220 13% 12%);
+    --sec:hsl(220 13% 14%); --border:hsl(220 13% 16%); --border2:hsl(220 13% 22%);
+    --fg:hsl(210 40% 98%); --mut:hsl(215 20% 65%); --mut2:hsl(215 15% 45%);
+    --pri:hsl(198 89% 50%); --pri-d:hsl(198 89% 14%);
+    --ok:hsl(142 76% 47%); --warn:hsl(47 96% 53%); --bad:hsl(0 63% 60%);
+    --gold:hsl(43 85% 55%); --gold-d:hsl(43 60% 14%);
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--fg);font:13px/1.45 -apple-system,'Segoe UI',Inter,Roboto,sans-serif;padding:32px 20px 80px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin-bottom:4px}
+  .sub{color:var(--mut);margin-bottom:36px;max-width:760px}
+  .mock{margin-bottom:56px}
+  .mock h2{font-size:15px;color:var(--pri);margin-bottom:2px}
+  .mock .note{color:var(--mut);font-size:12px;margin-bottom:14px;max-width:780px}
+  .frame{background:var(--card);border:1px solid var(--border2);border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+  .row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+  .ann{flex:1;min-width:230px;color:var(--mut);font-size:12px}
+  .ann li{margin-bottom:8px;list-style:none;padding-left:22px;position:relative}
+  .ann b{color:var(--fg)}
+  .ann .n{position:absolute;left:0;top:0;width:15px;height:15px;border-radius:50%;background:var(--pri);color:var(--bg);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .tag{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--pri);color:var(--bg);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;z-index:9;box-shadow:0 0 0 3px hsl(198 89% 50% / .25)}
+  .pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:600}
+  .meter{height:5px;border-radius:99px;background:var(--sec);overflow:hidden}
+  .meter i{display:block;height:100%;border-radius:99px}
+  .chk{width:13px;height:13px;border-radius:50%;border:1.4px solid var(--mut2);display:inline-block;flex:none}
+  .chk.on{background:var(--ok);border-color:var(--ok);position:relative}
+  .chk.on:after{content:"✓";position:absolute;inset:0;color:var(--bg);font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;background:var(--pri);color:var(--bg)}
+  .btn.ghost{background:var(--sec);color:var(--mut)}
+  kbd{border:1px solid var(--border2);border-radius:4px;padding:0 4px;font-size:9px;color:var(--mut)}
+</style>
+<div class="wrap">
+  <h1>Calendar → Focus OS</h1>
+  <p class="sub">UI mockups for the redesign brainstorm (<code>calendar_focus_os.md</code>).
+  One calendar, three modes — <b style="color:var(--fg)">Plan · Do · Review</b>. Gold = leveraged (80/20),
+  cyan = primary/now, green = done, dashed = breaks &amp; rituals.</p>
+
+  <!-- ════════ MOCK 1 · PLAN MODE ════════ -->
+  <div class="mock">
+    <h2>1 · Plan mode — the day grid, upgraded</h2>
+    <p class="note">The existing grid plus the leverage lens, batch &amp; break blocks, rituals, the One Thing, and a gap affordance. Rail header gains a leverage meter beside capacity.</p>
+    <div class="row">
+      <div class="frame" style="width:820px;position:relative;flex:none">
+        <!-- toolbar -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border)">
+          <div style="display:flex;background:var(--sec);border-radius:9px;padding:2px">
+            <span style="background:var(--card);border-radius:7px;padding:3px 12px;font-weight:700;font-size:11.5px;box-shadow:0 1px 3px rgba(0,0,0,.4)">Plan</span>
+            <span style="padding:3px 12px;color:var(--mut);font-size:11.5px">Do</span>
+            <span style="padding:3px 12px;color:var(--mut);font-size:11.5px">Review</span>
+          </div>
+          <b style="font-size:13px">Wednesday, July 22</b>
+          <span class="pill" style="background:var(--gold-d);color:var(--gold);margin-left:auto">★ One Thing: Onboarding flow v2</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">✦ Plan my day</span>
+        </div>
+        <!-- meters -->
+        <div class="tag" style="right:186px;top:56px">2</div>
+        <div style="display:flex;gap:22px;padding:8px 14px;border-bottom:1px solid var(--border);font-size:10.5px;color:var(--mut)">
+          <div style="flex:1">Focus booked · <b style="color:var(--fg)">4.5h / 6h</b>
+            <div class="meter" style="margin-top:4px"><i style="width:75%;background:var(--pri)"></i></div></div>
+          <div style="flex:1">Leveraged (80/20) · <b style="color:var(--gold)">2.5h · 56%</b>
+            <div class="meter" style="margin-top:4px"><i style="width:56%;background:var(--gold)"></i></div></div>
+          <div style="flex:1">Outcomes advanced today · <b style="color:var(--fg)">3</b>
+            <div style="margin-top:3px;color:var(--mut2)">Ship v2 · Q3 hiring · Investor update</div></div>
+        </div>
+        <div style="display:flex">
+          <!-- grid -->
+          <div style="flex:1;position:relative;border-right:1px solid var(--border);padding:6px 0 14px">
+            <!-- hour rows -->
+            <div style="position:relative">
+              <!-- rows generated visually -->
+              <div style="display:grid;grid-template-columns:46px 1fr">
+                <div style="color:var(--mut2);font-size:9.5px;text-align:right;padding-right:8px">
+                  <div style="height:44px">8 am</div><div style="height:44px">9 am</div><div style="height:44px">10 am</div>
+                  <div style="height:44px">11 am</div><div style="height:44px">12 pm</div><div style="height:44px">1 pm</div>
+                  <div style="height:44px">2 pm</div><div style="height:44px">3 pm</div><div style="height:44px">4 pm</div>
+                  <div style="height:44px">5 pm</div>
+                </div>
+                <div style="position:relative;border-left:1px solid var(--border)">
+                  <div style="position:absolute;inset:0;background:repeating-linear-gradient(to bottom,transparent 0 43px,var(--border) 43px 44px)"></div>
+                  <!-- energy band -->
+                  <div style="position:absolute;left:0;right:0;top:44px;height:132px;background:hsl(142 76% 47% / .05)"></div>
+                  <!-- ritual: startup -->
+                  <div class="tag" style="left:-7px;top:6px">1</div>
+                  <div style="position:absolute;left:6px;right:6px;top:2px;height:38px;border:1.4px dashed var(--border2);border-radius:8px;padding:4px 9px;color:var(--mut)">
+                    <b style="color:var(--fg);font-size:11px">☀ Startup ritual</b> <span style="font-size:10px">— breathe · review · commit</span>
+                    <span style="float:right;font-size:9.5px;color:var(--ok)">streak 12 🔥</span>
+                  </div>
+                  <!-- ONE THING gold block -->
+                  <div class="tag" style="left:-7px;top:56px">3</div>
+                  <div style="position:absolute;left:6px;right:6px;top:46px;height:106px;background:linear-gradient(90deg,var(--gold-d),hsl(43 60% 11%));border:1px solid hsl(43 85% 55% / .5);border-left:3.5px solid var(--gold);border-radius:8px;padding:6px 10px;box-shadow:0 0 14px hsl(43 85% 55% / .12)">
+                    <div style="display:flex;gap:7px;align-items:center"><span class="chk"></span>
+                      <b style="font-size:12px">★ Draft onboarding flow v2</b>
+                      <span class="pill" style="background:hsl(43 85% 55% / .15);color:var(--gold);margin-left:auto">leveraged</span></div>
+                    <div style="font-size:10px;color:var(--mut);margin:3px 0 0 20px">9:00–11:00 · deep work · high energy</div>
+                    <div style="font-size:10px;color:var(--gold);margin:2px 0 0 20px">→ outcome: Ship v2 onboarding</div>
+                    <div style="margin:6px 0 0 20px"><span class="pill" style="background:var(--pri);color:var(--bg)">▶ Focus</span>
+                      <span style="font-size:9.5px;color:var(--mut2);margin-left:6px">2 × 50/10 pomodoro</span></div>
+                  </div>
+                  <!-- break bead -->
+                  <div class="tag" style="left:-7px;top:158px">4</div>
+                  <div style="position:absolute;left:6px;right:6px;top:154px;height:16px;border:1.2px dashed hsl(142 76% 47% / .45);border-radius:99px;display:flex;align-items:center;padding:0 10px;font-size:9.5px;color:var(--ok)">⟳ break · 10m walk</div>
+                  <!-- meeting fixed -->
+                  <div style="position:absolute;left:6px;right:6px;top:174px;height:40px;background:var(--sec);border:1px solid var(--border2);border-left:3px solid var(--mut2);border-radius:8px;padding:4px 10px">
+                    <b style="font-size:11px">Design sync 🔒</b><span style="font-size:9.5px;color:var(--mut);margin-left:8px">11:30–12:15 · fixed · Google Cal</span>
+                  </div>
+                  <!-- lunch protected -->
+                  <div style="position:absolute;left:6px;right:6px;top:220px;height:34px;border:1.2px dashed var(--border2);border-radius:8px;display:flex;align-items:center;padding:0 10px;font-size:10px;color:var(--mut)">🍜 Lunch — protected, the planner won't book here</div>
+                  <!-- GAP affordance -->
+                  <div class="tag" style="left:-7px;top:266px">5</div>
+                  <div style="position:absolute;left:6px;right:6px;top:260px;height:32px;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:10.5px;color:var(--pri);background:hsl(198 89% 50% / .05);border:1px dashed hsl(198 89% 50% / .35)">✚ 45 min free — fill with quick wins?</div>
+                  <!-- batch block -->
+                  <div class="tag" style="left:-7px;top:302px">6</div>
+                  <div style="position:absolute;left:6px;right:6px;top:296px;height:64px;background:var(--pri-d);border:1px solid hsl(198 89% 50% / .4);border-radius:8px;padding:5px 10px">
+                    <b style="font-size:11.5px">📞 Batch: @calls ×4</b><span style="font-size:9.5px;color:var(--mut);margin-left:8px">2:00–2:45 · low energy slot</span>
+                    <div style="display:flex;gap:10px;margin-top:5px;font-size:9.5px;color:var(--mut)">
+                      <span><span class="chk on"></span> Dentist</span><span><span class="chk on"></span> Vendor quote</span>
+                      <span><span class="chk"></span> Bank</span><span><span class="chk"></span> Recruiter</span>
+                      <span style="margin-left:auto;color:var(--pri)">2/4</span></div>
+                  </div>
+                  <!-- done block -->
+                  <div style="position:absolute;left:6px;right:6px;top:366px;height:34px;background:hsl(142 76% 47% / .08);border:1px solid hsl(142 76% 47% / .35);border-radius:8px;padding:4px 10px;display:flex;align-items:center;gap:7px">
+                    <span class="chk on"></span><s style="color:var(--mut);font-size:11px">Review PR #146</s>
+                    <span style="margin-left:auto;font-size:9.5px;color:var(--ok)">−10m vs plan</span></div>
+                  <!-- flexible block -->
+                  <div style="position:absolute;left:6px;right:6px;top:404px;height:44px;background:var(--pri-d);border:1px solid hsl(198 89% 50% / .3);border-radius:8px;padding:5px 10px">
+                    <b style="font-size:11px">Investor update draft</b><span style="font-size:9.5px;color:var(--mut);margin-left:8px">3:45–4:45 · flexible ↝ reflows if you slip</span>
+                    <div style="font-size:10px;color:var(--gold);margin-top:2px">→ outcome: Investor update</div></div>
+                  <!-- ritual shutdown -->
+                  <div class="tag" style="left:-7px;top:458px">7</div>
+                  <div style="position:absolute;left:6px;right:6px;top:454px;height:34px;border:1.4px dashed var(--border2);border-radius:8px;padding:5px 10px;color:var(--mut)">
+                    <b style="color:var(--fg);font-size:11px">🌙 Shutdown</b> <span style="font-size:10px">— review · seed tomorrow · close the day</span></div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <!-- rail -->
+          <div style="width:212px;flex:none;padding:10px;font-size:11px">
+            <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px">UNSCHEDULED · 6</div>
+            <div class="tag" style="right:8px;top:118px">8</div>
+            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;margin-bottom:7px">
+              <b>Q3 hiring plan</b><div style="color:var(--mut);font-size:9.5px;margin-top:2px">3h est · high energy</div>
+              <div style="margin-top:5px"><span class="pill" style="background:var(--pri-d);color:var(--pri)">⚡ Split into 2 sessions?</span></div>
+            </div>
+            <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;margin-bottom:7px">
+              <b>Reply to Maya re: pricing</b><div style="color:var(--mut);font-size:9.5px;margin-top:2px">15m · ⚑ due tomorrow</div>
+            </div>
+            <div style="border:1px dashed hsl(198 89% 50% / .4);border-radius:8px;padding:7px 9px;margin-bottom:7px;color:var(--pri)">
+              📞 Batch 4 @calls → one 45m block
+            </div>
+            <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin:10px 0 6px">2-MINUTE PILE · 5</div>
+            <div style="color:var(--mut);font-size:10px">Feeds the Gap Filler — never scheduled individually.</div>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Ritual blocks</b> (dashed) — Startup &amp; Shutdown are recurring, skippable, streaked. Habits get a home on the grid.</li>
+        <li><span class="n">2</span><b>Leverage meter</b> beside capacity: % of booked focus that is leveraged/important (80/20 made visible), plus outcomes advanced.</li>
+        <li><span class="n">3</span><b>The One Thing</b> — gold, protected, placed in the first peak-energy window. ▶ Focus enters Do mode.</li>
+        <li><span class="n">4</span><b>Breaks are blocks</b>, not buffers — packer inserts one after ≥90 focus min; typed (walk/breathe/stretch).</li>
+        <li><span class="n">5</span><b>Gap affordance</b> — free time invites action instead of sitting empty (opens the Gap Filler, mock 3).</li>
+        <li><span class="n">6</span><b>Batch block</b> — n same-context micro-tasks as one block with an inline checklist; plays as a rapid-fire queue in Focus Mode.</li>
+        <li><span class="n">7</span><b>Shutdown</b> ends the day explicitly — review + seed tomorrow (mock 5).</li>
+        <li><span class="n">8</span><b>Breakdown nudge</b> — oversized tasks offer an AI split before they hit the grid.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 2 · FOCUS MODE ════════ -->
+  <div class="mock">
+    <h2>2 · Do mode — the Focus room (the differentiator)</h2>
+    <p class="note">Full-screen. The current block, its outcome, a Pomodoro/flow timer — and nothing else. The calendar collapses to a one-line "next up" ribbon.</p>
+    <div class="row">
+      <div class="frame" style="width:640px;flex:none;position:relative;background:radial-gradient(ellipse at 50% 30%,hsl(220 13% 11%),hsl(220 13% 7%));text-align:center;padding:34px 30px 22px">
+        <div class="tag" style="left:14px;top:14px">1</div>
+        <div style="font-size:10.5px;color:var(--gold);letter-spacing:.05em">→ OUTCOME · SHIP V2 ONBOARDING</div>
+        <div style="font-size:19px;font-weight:700;margin-top:6px">★ Draft onboarding flow v2</div>
+        <div style="font-size:11px;color:var(--mut);margin-top:3px">next action: wireframe the 3-step signup in Figma</div>
+        <!-- ring -->
+        <div class="tag" style="left:calc(50% - 96px);top:120px">2</div>
+        <div style="width:168px;height:168px;border-radius:50%;margin:22px auto 0;background:conic-gradient(var(--pri) 0 62%,var(--sec) 62% 100%);display:flex;align-items:center;justify-content:center">
+          <div style="width:148px;height:148px;border-radius:50%;background:hsl(220 13% 9%);display:flex;flex-direction:column;align-items:center;justify-content:center">
+            <div style="font-size:30px;font-weight:800;font-variant-numeric:tabular-nums">31:12</div>
+            <div style="font-size:9.5px;color:var(--mut)">pomodoro 1 of 2 · 50/10</div>
+            <div style="display:flex;gap:5px;margin-top:6px">
+              <span style="width:7px;height:7px;border-radius:50%;background:var(--pri)"></span>
+              <span style="width:7px;height:7px;border-radius:50%;background:var(--sec);border:1px solid var(--border2)"></span>
+            </div>
+          </div>
+        </div>
+        <!-- subtasks -->
+        <div class="tag" style="left:170px;top:322px">3</div>
+        <div style="max-width:330px;margin:20px auto 0;text-align:left;font-size:11.5px">
+          <div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span class="chk on"></span><s style="color:var(--mut)">Audit current drop-off points</s></div>
+          <div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span class="chk"></span>Wireframe 3-step signup</div>
+          <div style="display:flex;gap:8px;align-items:center;padding:4px 0"><span class="chk"></span>Write empty-state copy</div>
+        </div>
+        <!-- controls -->
+        <div class="tag" style="left:calc(50% - 150px);top:412px">4</div>
+        <div style="display:flex;gap:10px;justify-content:center;margin-top:20px">
+          <span class="btn ghost">⏸ Pause</span>
+          <span class="btn" style="background:var(--ok)">✓ Done early</span>
+          <span class="btn ghost">＋15 min <i style="font-style:normal;font-size:9px;color:var(--mut2)">(day reflows)</i></span>
+          <span class="btn ghost">⇄ Switch</span>
+        </div>
+        <div class="tag" style="left:14px;top:478px">5</div>
+        <div style="margin-top:22px;border-top:1px solid var(--border);padding-top:10px;font-size:10.5px;color:var(--mut);display:flex;justify-content:space-between">
+          <span>break in <b style="color:var(--ok)">31m</b> · 10m walk</span>
+          <span>next · <b style="color:var(--fg)">Design sync</b> 11:30</span>
+          <span><kbd>esc</kbd> back to grid</span>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Outcome first</b> — why this block matters sits above what it is. Busywork never gets this line; the absence is a signal too.</li>
+        <li><span class="n">2</span><b>Pomodoro or Flow</b> — cycles with dots, or a count-up flow timer for deep work; either way actuals feed learned estimates.</li>
+        <li><span class="n">3</span><b>Subtasks tick off in place</b> — no leaving the room. A batch block plays here as a rapid-fire queue.</li>
+        <li><span class="n">4</span><b>Guilt-free +15</b> — overrunning shifts the flexible rest-of-day automatically. "Done early" is celebrated and logged.</li>
+        <li><span class="n">5</span><b>Peripheral vision, one line</b> — next break, next block. Enough context to stay calm, not enough to distract.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 3 · GAP FILLER ════════ -->
+  <div class="mock">
+    <h2>3 · Gap Filler — "you have 22 minutes"</h2>
+    <p class="note">Tap a free gap (or the Now bar when idle). Two-minute tasks first, then short next actions matched to current energy — Engage's logic, surfaced where free time actually appears.</p>
+    <div class="row">
+      <div class="frame" style="width:330px;flex:none;padding:14px">
+        <b style="font-size:13px">22 min until Design sync</b>
+        <div style="color:var(--mut);font-size:10.5px;margin:2px 0 10px">energy right now: <span class="pill" style="background:var(--sec);color:var(--fg)">🔋 medium</span></div>
+        <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:5px">⚡ 2-MINUTE PILE — CLEAR 3</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11px;margin-bottom:4px">Approve Sam's expense</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11px;margin-bottom:4px">Confirm Friday demo slot</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11px;margin-bottom:10px">Renew domain</div>
+        <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:5px">FITS IN 22 MIN</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11px;margin-bottom:4px">Reply to Maya re: pricing <span style="float:right;color:var(--warn);font-size:9.5px">15m · due tmrw</span></div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:8px;padding:7px 9px;font-size:11px;margin-bottom:12px">Skim churn dashboard <span style="float:right;color:var(--mut2);font-size:9.5px">20m</span></div>
+        <span class="btn" style="width:100%;justify-content:center">▶ Start the pile · straight into Focus</span>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span>The 2-minute pile is <b>never scheduled individually</b> — it exists to be cleared in gaps like this.</li>
+        <li><span class="n">2</span>One tap schedules the choice <b>now</b> and drops into Focus Mode — zero planning ceremony for small wins.</li>
+        <li><span class="n">3</span>Matching reuses Engage's energy/time/context filters — one prioritization brain everywhere.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 4 · STARTUP RITUAL ════════ -->
+  <div class="mock">
+    <h2>4 · Startup ritual — 5 guided minutes</h2>
+    <p class="note">Auto-offered at day start. Three steps: settle, see the truth, commit. Ends with the AI plan applied.</p>
+    <div class="row">
+      <div class="frame" style="width:460px;flex:none;padding:18px">
+        <div style="display:flex;gap:6px;margin-bottom:14px;font-size:10px;color:var(--mut)">
+          <span class="pill" style="background:var(--pri);color:var(--bg)">1 · Breathe</span>
+          <span class="pill" style="background:var(--sec)">2 · Review</span>
+          <span class="pill" style="background:var(--sec)">3 · Commit</span>
+          <span style="margin-left:auto;color:var(--ok)">streak 12 🔥</span>
+        </div>
+        <div style="text-align:center;padding:10px 0 16px">
+          <div style="width:110px;height:110px;border-radius:50%;margin:0 auto;border:2px solid hsl(198 89% 50% / .4);display:flex;align-items:center;justify-content:center;box-shadow:0 0 30px hsl(198 89% 50% / .12) inset">
+            <div><div style="font-size:20px;font-weight:700">0:47</div><div style="font-size:9.5px;color:var(--mut)">breathe in…</div></div>
+          </div>
+          <div style="font-size:10.5px;color:var(--mut);margin-top:10px">One minute. Optional — <span style="color:var(--pri)">skip</span> is always one tap.</div>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:12px;font-size:11px;color:var(--mut)">
+          <b style="color:var(--fg)">Up next in Review:</b> 2 carry-forwards from yesterday · Thursday is slammed (7.5h) — planner suggests pulling deck prep into today · then pick your ★ One Thing.
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Meditation gets a doorway</b>, not a demand — 1 minute by default, always skippable, streak kept either way.</li>
+        <li><span class="n">2</span>Review step reframes yesterday's leftovers as <b>carry-forwards</b> and shows look-ahead risk before you commit.</li>
+        <li><span class="n">3</span>Commit = pick the One Thing, accept the plan. The whole ritual targets <b>5 minutes</b> — AI does the heavy lifting.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 5 · SHUTDOWN ════════ -->
+  <div class="mock">
+    <h2>5 · Shutdown — review, seed tomorrow, close the day</h2>
+    <p class="note">Extends the existing end-of-day review with the leverage ratio and a tomorrow-seed step; ends in an explicit "day closed" state.</p>
+    <div class="row">
+      <div class="frame" style="width:460px;flex:none;padding:18px">
+        <b style="font-size:14px">🌙 Day review — Wed, Jul 22</b>
+        <div style="display:flex;gap:8px;margin:12px 0">
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--ok)">5</div><div style="font-size:9.5px;color:var(--mut)">done · 4.2h</div></div>
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--gold)">61%</div><div style="font-size:9.5px;color:var(--mut)">leveraged ▲ wk avg 48%</div></div>
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px;text-align:center"><div style="font-size:17px;font-weight:800">2</div><div style="font-size:9.5px;color:var(--mut)">carry forward</div></div>
+        </div>
+        <div style="background:var(--gold-d);border:1px solid hsl(43 85% 55% / .35);border-radius:9px;padding:8px 10px;font-size:11px;margin-bottom:10px">★ One Thing <b style="color:var(--ok)">done</b> — onboarding v2 drafted. That was the day.</div>
+        <div style="font-size:10.5px;color:var(--mut);margin-bottom:10px">Estimates: you ran <b style="color:var(--warn)">+12%</b> over across 4 timed blocks — tomorrow's plan is padded. Breaks taken: 2 of 3.</div>
+        <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:5px">SEED TOMORROW · PICK UP TO 3</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px">
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">✓ Q3 hiring plan (s1)</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">✓ Deck prep (pulled fwd)</span>
+          <span class="pill" style="background:var(--sec);color:var(--mut)">Bank call</span>
+        </div>
+        <span class="btn" style="width:100%;justify-content:center">Close the day 🌙</span>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Leverage ratio + trend</b> — the 80/20 scoreboard; done-hours alone can flatter a busy, pointless day.</li>
+        <li><span class="n">2</span><b>One-Thing verdict</b> — if it's done, the day was a win regardless of the rest. Kind by design.</li>
+        <li><span class="n">3</span><b>Seed tomorrow</b> — 3 picks pre-load the morning plan; the startup ritual then takes 5 minutes, not 20.</li>
+        <li><span class="n">4</span><b>"Close the day"</b> — an explicit end-state releases the open-loop tension (and stops evening doom-planning).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 6 · MOBILE TIMELINE ════════ -->
+  <div class="mock">
+    <h2>6 · Mobile — Today as a timeline, not a grid</h2>
+    <p class="note">On phones the day defaults to an execution-first agenda journey; the hour grid stays one toggle away.</p>
+    <div class="row">
+      <div class="frame" style="width:280px;flex:none;border-radius:26px;padding:16px 14px">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+          <b style="font-size:13px">Today</b>
+          <span style="font-size:9.5px;color:var(--mut)">grid ⌗ · <b style="color:var(--gold)">56% ★</b></span>
+        </div>
+        <div style="position:relative;padding-left:18px">
+          <div style="position:absolute;left:5px;top:0;bottom:0;width:2px;background:var(--border)"></div>
+          <div style="position:relative;margin-bottom:8px"><span style="position:absolute;left:-17px;top:4px" class="chk on"></span>
+            <div style="font-size:11px;color:var(--mut)"><s>Startup ritual</s> <span style="font-size:9px">8:00</span></div></div>
+          <div style="position:relative;margin-bottom:8px"><span style="position:absolute;left:-17px;top:4px" class="chk on"></span>
+            <div style="font-size:11px;color:var(--mut)"><s>★ Onboarding v2 — session 1</s> <span style="font-size:9px;color:var(--ok)">−10m</span></div></div>
+          <!-- NOW -->
+          <div style="position:relative;margin:10px 0"><span style="position:absolute;left:-20px;top:14px;width:9px;height:9px;border-radius:50%;background:var(--pri);box-shadow:0 0 0 4px hsl(198 89% 50% / .2)"></span>
+            <div style="background:var(--pri-d);border:1px solid hsl(198 89% 50% / .5);border-radius:11px;padding:9px 11px">
+              <div style="font-size:9px;color:var(--pri);font-weight:700;letter-spacing:.06em">NOW · 31:12 LEFT</div>
+              <b style="font-size:12px">📞 Batch: @calls ×4</b>
+              <div style="font-size:9.5px;color:var(--mut);margin-top:2px">2 of 4 done</div>
+              <div style="margin-top:6px;display:flex;gap:6px">
+                <span class="pill" style="background:var(--pri);color:var(--bg)">▶ Focus</span>
+                <span class="pill" style="background:var(--sec);color:var(--ok)">✓ done</span>
+              </div>
+            </div></div>
+          <div style="position:relative;margin-bottom:8px"><span style="position:absolute;left:-19px;top:3px;font-size:9px;color:var(--ok)">⟳</span>
+            <div style="font-size:10px;color:var(--ok)">break · 10m walk · 2:45</div></div>
+          <div style="position:relative;margin-bottom:8px"><span style="position:absolute;left:-17px;top:4px" class="chk"></span>
+            <div style="font-size:11.5px">Investor update draft <span style="font-size:9px;color:var(--mut)">3:45</span>
+            <div style="font-size:9px;color:var(--gold)">→ Investor update</div></div></div>
+          <div style="position:relative"><span style="position:absolute;left:-19px;top:3px;font-size:9px;color:var(--mut2)">🌙</span>
+            <div style="font-size:10.5px;color:var(--mut)">Shutdown · 5:30</div></div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span>Done scrolls up, future scrolls down, <b>now is a card</b> with the live timer — the phone is an execution device, not a planning one.</li>
+        <li><span class="n">2</span>Breaks and rituals render as beads — the day's <i>rhythm</i> is visible at a glance.</li>
+        <li><span class="n">3</span>The header keeps the leverage score; the grid (and drag-scheduling) stays one toggle away.</li>
+      </ul>
+    </div>
+  </div>
+</div>

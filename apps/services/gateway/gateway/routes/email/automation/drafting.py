@@ -209,6 +209,58 @@ async def _fetch_sent_fewshot(
     return "\n\n---\n\n".join(parts)
 
 
+# Phrases that mark an email as ASKING about timing — cheap heuristic so we only
+# pull the calendar (and spend prompt budget on it) when a reply might need to
+# talk scheduling. Word-ish substrings on the lowercased subject+body.
+_SCHEDULING_CUES = (
+    "meeting", "schedule", "reschedule", "availability", "available",
+    "calendar", "appointment", "when are you", "what time", "free on",
+    "work for you", "works for you", "set up a time", "set up a call",
+    "book a", "find a time", "catch up", "hop on a call", "jump on a call",
+    "zoom", "google meet", "ms teams", "let's meet", "let us meet",
+    "your availability", "propose a time", "pick a time", "grab time",
+)
+
+
+def _asks_about_scheduling(subject: str | None, body: str | None) -> bool:
+    """True when the incoming message reads like it's asking about timing, so the
+    drafter should have the calendar in view. Deliberately a keyword heuristic:
+    an LLM check per draft would cost a call for a signal this cheap to spot."""
+    hay = f"{subject or ''} {body or ''}".lower()
+    return any(cue in hay for cue in _SCHEDULING_CUES)
+
+
+async def _fetch_calendar_context(
+    db: Any, account_id: str, *, days: int = 10, limit: int = 15,
+) -> str:
+    """The owner's upcoming hard-date commitments (next ``days``), so a reply
+    about timing can offer slots that don't clash and never double-books. Reads
+    the internal calendar — gtd_items with a due_at + is_hard_date, the same
+    "shows on the Calendar" predicate the tasks app uses — for the account's
+    user. Best-effort: the tasks feature may be absent; a draft must not fail on
+    it. Empty string when nothing is scheduled in the window."""
+    try:
+        rows = (await db.execute(text(
+            """SELECT to_char(gi.due_at, 'Dy Mon DD, HH24:MI') AS whn,
+                      gi.title
+               FROM gtd_items gi
+               JOIN email_accounts ea ON ea.id = :aid
+               WHERE gi.user_id = ea.user_id
+                 AND gi.is_hard_date = true AND gi.due_at IS NOT NULL
+                 AND gi.disposition NOT IN ('DONE', 'TRASH')
+                 AND gi.due_at >= now()
+                 AND gi.due_at <= now() + make_interval(days => :days)
+               ORDER BY gi.due_at ASC
+               LIMIT :lim"""
+        ), {"aid": account_id, "days": days, "lim": limit})).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.calendar_context_failed", error=str(exc)[:160])
+        return ""
+    if not rows:
+        return ""
+    return "\n".join(f"- {r.whn} — {(r.title or '(untitled)')}" for r in rows)
+
+
 async def _fetch_reply_memories(
     db: Any, account_id: str, email: dict[str, str], *, limit: int = 6,
 ) -> str:
@@ -730,6 +782,14 @@ async def _llm_draft_reply(
             "this voice, phrasing and length; do NOT reuse their specific "
             f"facts:\n{voice[:2500]}\n\n" if voice else ""
         )
+        # Calendar — present only when the incoming mail asked about timing.
+        cal = (email.get("calendar") or "").strip()
+        calendar_block = (
+            "Your calendar for the days ahead (local time). If the sender is "
+            "asking about timing, offer times that do NOT clash with these and "
+            "never double-book; if they proposed a time that clashes, say so and "
+            f"suggest an alternative:\n{cal}\n\n" if cal else ""
+        )
         memories = (email.get("reply_memories") or "").strip()
         memories_block = (
             "Learned reply memories relevant to this sender/topic (advisory — "
@@ -769,6 +829,7 @@ async def _llm_draft_reply(
             f"{memories_block}"
             f"{examples_block}"
             f"{voice_block}"
+            f"{calendar_block}"
             f"{thread_block}"
             "Latest message — reply to THIS, taking the thread above into "
             f"account:\n{(email.get('body', '') or '')[:_DRAFT_BODY_MAX_CHARS]}\n"
@@ -1322,6 +1383,11 @@ async def _build_reply_context(
     email["sent_examples"] = await _fetch_sent_fewshot(
         db, account_id, row.subject, email["body"],
         exclude_thread_id=row.thread_id or "")
+    # Calendar context — ONLY when the message is asking about timing, so an
+    # ordinary reply doesn't carry the user's schedule for no reason.
+    email["calendar"] = (
+        await _fetch_calendar_context(db, account_id)
+        if _asks_about_scheduling(row.subject, email["body"]) else "")
     return email
 
 

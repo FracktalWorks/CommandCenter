@@ -2199,6 +2199,23 @@ async def run_agent_stream(
                 _native_input = _compose_maf_run_input(
                     agent_name, run_id, event_payload, integrations,
                 )
+                # Context-pressure notice (audit CX6): eviction was silent —
+                # a long conversation just degraded as oldest turns dropped.
+                # Surface one unobtrusive progress line so the user knows.
+                try:
+                    from acb_llm.context import last_fit_stats  # noqa: PLC0415
+                    _fit = last_fit_stats.get() or {}
+                    if _fit.get("dropped_turns"):
+                        yield _sse({
+                            "type": "PROGRESS_UPDATE",
+                            "message": (
+                                "Long conversation: the oldest "
+                                f"{_fit['dropped_turns']} turn(s) no longer "
+                                "fit the model's context and were left out."
+                            ),
+                        })
+                except Exception:  # noqa: BLE001
+                    pass
                 _nq: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 _nq_token = _active_run_queue.set(_nq)
                 _n_emitted = False

@@ -13,7 +13,9 @@ rescue budget in `fit_messages_to_context`, and the session-continuity gates
 now key on capability not the registry label — tests in
 `tests/unit/test_v1_truncation_notice.py`,
 `tests/unit/test_context_trim_protections.py`,
-`test_run_agent_stream_e2e.py::test_mislabeled_copilot_agent_still_resumes_session`)
+`test_run_agent_stream_e2e.py::test_mislabeled_copilot_agent_still_resumes_session`;
+CX6 context-pressure notice: `acb_llm.context.last_fit_stats` → one Tier-1
+PROGRESS_UPDATE line when history turns were evicted)
 · **Date:** 2026-07-22 · **Requested by:** Vijay
 
 **Landed-fix notes (P1):** `dispatch_control` now requires the owning

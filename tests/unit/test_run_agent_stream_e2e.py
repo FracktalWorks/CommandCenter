@@ -548,3 +548,62 @@ def test_mislabeled_copilot_agent_still_resumes_session(monkeypatch):
     )
     assert "hello again" in text
     assert not [e for e in events if e.get("type") == "RUN_ERROR"]
+
+
+def test_context_pressure_surfaces_a_progress_line(monkeypatch):
+    """CX6: silent history eviction now emits one PROGRESS_UPDATE notice."""
+    import acb_llm.context as _ctx
+
+    monkeypatch.setattr(_ctx, "context_window_for", lambda _m: 2000)
+    monkeypatch.setattr(
+        _ctx, "count_message_tokens",
+        lambda msgs, _m: sum(
+            len(str(m.get("content") or "")) // 4 + 8 for m in msgs
+        ),
+    )
+
+    class _Loaded(_LoadedStub):
+        def build_agents(self_inner) -> list[Any]:  # noqa: N805
+            return [_NativeStreamingAgent([_update([_text("short answer")])])]
+
+    class _Ctx:
+        def __enter__(self) -> _LoadedStub:
+            return _Loaded("")
+
+        def __exit__(self, *_a: Any) -> bool:
+            return False
+
+    monkeypatch.setattr(executor, "load_agent", lambda *a, **k: _Ctx())
+    monkeypatch.setattr(executor, "build_integrations", lambda *a, **k: ({}, {}))
+
+    history = [
+        {"role": "user" if i % 2 == 0 else "assistant",
+         "content": f"turn {i}: " + "x" * 2000}
+        for i in range(12)
+    ]
+
+    async def _collect() -> list[str]:
+        out: list[str] = []
+        async for line in executor.run_agent_stream(
+            "test-agent-unregistered",
+            {"message": "current question", "messages": history},
+        ):
+            out.append(line)
+        return out
+
+    events = _parse_frames(asyncio.run(_collect()))
+    notices = [
+        e for e in events
+        if e.get("type") == "PROGRESS_UPDATE"
+        and "no longer fit" in str(e.get("message"))
+    ]
+    assert notices, "evicting history must surface a context-pressure notice"
+
+
+def test_no_pressure_notice_when_history_fits(monkeypatch):
+    events = _drive_native(monkeypatch, [_update([_text("hi there")])])
+    assert not [
+        e for e in events
+        if e.get("type") == "PROGRESS_UPDATE"
+        and "no longer fit" in str(e.get("message"))
+    ]

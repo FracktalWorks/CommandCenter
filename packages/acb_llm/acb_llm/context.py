@@ -23,12 +23,22 @@ from __future__ import annotations
 
 import sys
 from collections.abc import Callable
+from contextvars import ContextVar
 from typing import Any
 
 from acb_common import get_logger
 
 from acb_llm.message_compress import compress_message_content
 from acb_llm.model_limits import get_limits
+
+# Stats from the most recent assemble_run_context() call in THIS async
+# context (audit CX6). Eviction was entirely silent to the user — quality
+# just degraded as oldest turns dropped. The executor reads this right after
+# composing a run's input and surfaces a progress line when turns were
+# dropped, without changing the assembler's return contract.
+last_fit_stats: ContextVar[dict[str, Any] | None] = ContextVar(
+    "acb_llm_last_fit_stats", default=None,
+)
 
 _log = get_logger("acb_llm.context")
 
@@ -390,6 +400,10 @@ def assemble_run_context(
         if current_message.strip() else None
     )
 
+    # Reset per-call so a caller can never read a PREVIOUS run's pressure
+    # stats from this async context (both exits below overwrite as needed).
+    last_fit_stats.set({"dropped_turns": 0, "char_truncated": False})
+
     if not model:
         # No window to fit to — return the full assembly (count cap only).
         out = messages + hist_turns
@@ -418,6 +432,7 @@ def assemble_run_context(
     fitted, truncated = fit_messages_to_context(
         assembled, model, max_output_tokens=max_output_tokens,
     )
+    last_fit_stats.set({"dropped_turns": dropped, "char_truncated": truncated})
     if truncated or dropped:
         _log.info(
             "acb_llm.run_context_fitted",

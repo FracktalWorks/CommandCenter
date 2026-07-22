@@ -181,17 +181,22 @@ export function ComposePanel({
     const ccArr = cc ? cc.split(",").map((s) => s.trim()).filter(Boolean) : [];
     const hasAttachments = attachments.length > 0 || artifacts.length > 0;
     try {
-      // Native draft-send when auto-save produced a draft and there are no
-      // attachments — Cc now rides ON the provider draft, so only attachment
-      // content (which the draft write-path can't upload yet) still sends fresh.
-      if (draftIdRef.current && !hasAttachments) {
+      // Native draft-send whenever there's a draft OR attachments: Cc/Bcc AND
+      // attachment content now ride ON the provider draft, so the draft write-
+      // path (create/update with attachments) → native send handles everything.
+      // A fresh message with no attachments still sends directly.
+      if (draftIdRef.current || hasAttachments) {
         const saved = await saveDraft({
           accountId,
-          draftId: draftIdRef.current,
+          draftId: draftIdRef.current ?? undefined,
+          replyToMessageId: draftIdRef.current
+            ? undefined : (replyToMessageId || undefined),
           to: toArr,
           cc: ccArr,
           subject,
           body: combinedBody(),
+          attachments: attachments.length ? attachments : undefined,
+          artifacts: artifacts.length ? artifacts : undefined,
         });
         await sendDraft(accountId, saved.id);
         onClose();

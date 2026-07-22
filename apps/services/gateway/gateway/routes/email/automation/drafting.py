@@ -32,8 +32,37 @@ from gateway.routes.email.core import (
     router,
 )
 from gateway.routes.email.quoting import split_quoted_text
+from gateway.routes.email.transport.send import (
+    ArtifactAttachment,
+    SendAttachment,
+    load_artifact_attachments,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
+
+
+def _resolve_draft_attachments(
+    attachments: list[SendAttachment] | None,
+    artifacts: list[ArtifactAttachment] | None,
+) -> list[dict[str, Any]]:
+    """Resolve base64 uploads + workspace artifact refs to the provider's
+    ``[{filename, content, mime_type}]`` shape — the same resolution the /send
+    path does, so a draft can carry attachments exactly like a direct send."""
+    import base64 as _b64  # noqa: PLC0415
+    out: list[dict[str, Any]] = []
+    for a in attachments or []:
+        try:
+            out.append({
+                "filename": a.filename,
+                "mime_type": a.mime_type,
+                "content": _b64.b64decode(a.content_b64),
+            })
+        except Exception as exc:  # noqa: BLE001
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid attachment encoding: {exc}") from exc
+    out.extend(load_artifact_attachments(artifacts))
+    return out
 
 
 def _normalize_text(s: str) -> str:
@@ -1397,6 +1426,7 @@ async def _upsert_local_draft(
     thread_id: str | None, owner_email: str, to_email: str,
     subject: str, body: str,
     cc: list[str] | None = None, bcc: list[str] | None = None,
+    has_attachments: bool = False,
 ) -> str:
     """Persist a just-created/updated provider draft into ``email_messages`` so it
     shows in the Drafts folder and in-thread immediately — without waiting for the
@@ -1411,11 +1441,12 @@ async def _upsert_local_draft(
              (id, account_id, provider_message_id, thread_id, folder,
               from_address, to_addresses, cc_addresses, bcc_addresses,
               subject, body_text, snippet,
-              is_read, is_starred, is_flagged, received_at, synced_at)
+              is_read, is_starred, is_flagged, has_attachments,
+              received_at, synced_at)
            VALUES (:id, :aid, :pmid, :tid, 'drafts',
               :from_addr, :to_addrs, :cc_addrs, :bcc_addrs,
               :subject, :body, :snippet,
-              true, false, false, now(), now())
+              true, false, false, :has_att, now(), now())
            ON CONFLICT (account_id, provider_message_id) DO UPDATE SET
              thread_id = COALESCE(EXCLUDED.thread_id, email_messages.thread_id),
              to_addresses = EXCLUDED.to_addresses,
@@ -1424,6 +1455,10 @@ async def _upsert_local_draft(
              subject = EXCLUDED.subject,
              body_text = EXCLUDED.body_text,
              snippet = EXCLUDED.snippet,
+             -- Sticky-true: a later attachment-less auto-save must not clear a
+             -- draft's attachments flag once the pre-send save has set it.
+             has_attachments =
+               email_messages.has_attachments OR EXCLUDED.has_attachments,
              folder = 'drafts',
              updated_at = now()
            RETURNING id"""
@@ -1438,7 +1473,7 @@ async def _upsert_local_draft(
         "bcc_addrs": json.dumps(
             [{"name": "", "email": a} for a in (bcc or []) if a]),
         "subject": subject or "", "body": body or "",
-        "snippet": (body or "")[:200],
+        "snippet": (body or "")[:200], "has_att": has_attachments,
     })
     rid = res.fetchone()
     return str(rid.id) if rid else ""
@@ -1469,6 +1504,11 @@ class DraftUpsertRequest(BaseModel):
     bcc: list[str] = []
     subject: str = ""
     body: str = ""
+    # Files to attach to the draft: base64 uploads + workspace artifact refs
+    # (same shapes the /send path accepts). The composer sends these only on the
+    # explicit pre-send save, so update_draft adds them exactly once.
+    attachments: list[SendAttachment] = []
+    artifacts: list[ArtifactAttachment] = []
 
 
 @router.put("/drafts")
@@ -1496,6 +1536,7 @@ async def upsert_draft(
         cc = [c for c in (req.cc or []) if c]
         bcc = [b for b in (req.bcc or []) if b]
         subject = req.subject or ""
+        atts = _resolve_draft_attachments(req.attachments, req.artifacts)
         thread_id: str | None = None
 
         if req.draft_id:
@@ -1513,13 +1554,14 @@ async def upsert_draft(
                     drow.provider_message_id, to=to or None,
                     subject=subject or None, body_text=req.body,
                     thread_id=thread_id or None,
-                    cc=cc, bcc=bcc,
+                    cc=cc, bcc=bcc, attachments=atts or None,
                 )
             except NotImplementedError:
                 # No in-place update primitive → make a fresh draft, drop the old.
                 provider_id = await provider.create_draft(
                     to=to, subject=subject, body_text=req.body,
                     thread_id=thread_id or None, cc=cc, bcc=bcc,
+                    attachments=atts or None,
                 )
                 try:
                     await provider.trash_message(drow.provider_message_id)
@@ -1549,16 +1591,19 @@ async def upsert_draft(
                 to=to, subject=subject, body_text=req.body,
                 reply_to_message_id=rrow.provider_message_id,
                 thread_id=thread_id or None, cc=cc, bcc=bcc,
+                attachments=atts or None,
             )
         else:
             provider_id = await provider.create_draft(
                 to=to, subject=subject, body_text=req.body, cc=cc, bcc=bcc,
+                attachments=atts or None,
             )
 
         local_id = await _upsert_local_draft(
             db, req.account_id, provider_id, thread_id=thread_id,
             owner_email=owner_email, to_email=(to[0] if to else ""),
             subject=subject, body=req.body, cc=cc, bcc=bcc,
+            has_attachments=bool(atts),
         )
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()

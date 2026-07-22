@@ -528,23 +528,24 @@ export function EmailDetail({ email }: EmailDetailProps) {
     const isForward = replyMode === "forward";
     const target = replyTargetRef.current ?? email;
     try {
-      // Native draft-send now carries Cc/Bcc too (stored on the provider draft),
-      // so only attachments/artifacts still force a full send — the draft
-      // write-path can't upload attachment content yet. The auto-saved draft, if
-      // any, is discarded in the full-send branch so it doesn't linger.
-      if (
-        draftIdRef.current &&
-        replyAttachments.length === 0 && replyArtifacts.length === 0
-      ) {
+      // Native draft-send now carries Cc/Bcc AND attachments (all stored on the
+      // provider draft), so whenever there's a draft OR attachments we save the
+      // draft with everything and send it natively (Drafts → Sent, no duplicate,
+      // reply stays threaded). A plain reply with no draft/attachments still
+      // sends fresh.
+      const hasAtt = replyAttachments.length > 0 || replyArtifacts.length > 0;
+      if (draftIdRef.current || hasAtt) {
         const saved = await saveDraft({
           accountId: selectedAccountId,
-          draftId: draftIdRef.current,
+          draftId: draftIdRef.current ?? undefined,
           replyToMessageId: isForward ? undefined : target.id,
           to: toArr,
           cc: ccArr,
           bcc: bccArr,
           subject: replySubject(),
           body: composedReply(replyBody),
+          attachments: replyAttachments.length ? replyAttachments : undefined,
+          artifacts: replyArtifacts.length ? replyArtifacts : undefined,
         });
         await sendDraft(selectedAccountId, saved.id);
       } else {
@@ -556,13 +557,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
           subject: replySubject(),
           bodyText: composedReply(replyBody),
           replyToMessageId: isForward ? undefined : target.providerMessageId,
-          attachments: replyAttachments.length ? replyAttachments : undefined,
-          artifacts: replyArtifacts.length ? replyArtifacts : undefined,
         });
-        if (draftIdRef.current) {
-          // Drop the lingering auto-saved draft now the message has been sent.
-          void deleteEmail(draftIdRef.current);
-        }
       }
     } catch (e: any) {
       setSendErr(e?.message || "Failed to send");

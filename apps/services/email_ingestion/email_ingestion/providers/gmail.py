@@ -457,16 +457,34 @@ class GmailProvider(BaseEmailProvider):
         thread_id: str | None = None,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """Replace a Gmail draft's content in place (drafts.update). Returns the
         (unchanged) draft id so the editor keeps tracking the same draft.
 
         When ``body_html`` is given the draft is written as HTML (so a signed
-        HTML body survives the update); otherwise it stays plain text."""
-        if body_html:
-            msg = MIMEText(body_html, "html")
+        HTML body survives the update); otherwise it stays plain text. When
+        ``attachments`` are supplied the draft is rebuilt as a MIME multipart so
+        the files ride along (Gmail replaces the whole draft on update)."""
+        body_part = MIMEText(
+            body_html or body_text or "", "html" if body_html else "plain")
+        if attachments:
+            from email.mime.multipart import MIMEMultipart  # noqa: PLC0415
+            from email.mime.base import MIMEBase  # noqa: PLC0415
+            from email import encoders  # noqa: PLC0415
+            msg: Any = MIMEMultipart()
+            msg.attach(body_part)
+            for att in attachments:
+                part = MIMEBase("application", "octet-stream")
+                part.set_payload(att.get("content") or b"")
+                encoders.encode_base64(part)
+                part.add_header(
+                    "Content-Disposition",
+                    f'attachment; filename="{att.get("filename", "attachment")}"',
+                )
+                msg.attach(part)
         else:
-            msg = MIMEText(body_text or "", "plain")
+            msg = body_part
         if to is not None:
             msg["To"] = ", ".join(to)
         if cc is not None:

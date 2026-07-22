@@ -506,12 +506,18 @@ class BaseEmailProvider(ABC):
         thread_id: str | None = None,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """Update an existing draft in place; return the (possibly new) draft id.
 
         ``thread_id`` (when the provider needs it, e.g. Gmail) keeps the draft
         attached to its conversation across the update — omitting it would strip
         the draft's threading. Providers that thread implicitly ignore it.
+
+        ``attachments`` (optional, same ``{"filename", "content", "mime_type"}``
+        shape as ``create_draft``): files to add to the draft. Callers pass these
+        only once, at the explicit pre-send save — the debounced auto-save omits
+        them — so providers may add them unconditionally without duplicating.
 
         Default raises NotImplementedError so callers can fall back to creating a
         fresh draft on providers without an update primitive.

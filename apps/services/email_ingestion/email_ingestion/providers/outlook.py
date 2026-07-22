@@ -554,6 +554,7 @@ class OutlookProvider(BaseEmailProvider):
         thread_id: str | None = None,
         cc: list[str] | None = None,
         bcc: list[str] | None = None,
+        attachments: list[dict[str, Any]] | None = None,
     ) -> str:
         """Update an existing Outlook draft in place (PATCH /me/messages/{id}).
 
@@ -563,6 +564,10 @@ class OutlookProvider(BaseEmailProvider):
 
         ``thread_id`` is ignored: a Graph reply-draft (createReply) keeps its
         conversation across a PATCH, so threading needs no re-assertion.
+
+        ``attachments`` are POSTed to the draft's attachments collection (the same
+        endpoint ``create_draft`` uses). Callers supply them once, at the pre-send
+        save, so this doesn't re-upload on every keystroke auto-save.
         """
         client = await self._get_client()
         patch: dict[str, Any] = {}
@@ -582,6 +587,7 @@ class OutlookProvider(BaseEmailProvider):
         if patch:
             resp = await client.patch(f"/me/messages/{draft_id}", json=patch)
             resp.raise_for_status()
+        await self._attach_files(client, draft_id, attachments)
         return draft_id
 
     async def send_draft(self, draft_id: str) -> str | None:

@@ -76,6 +76,8 @@ export function TaskCard({
     : undefined;
   const overdue = isOverdue(item, MOCK_NOW);
   const atts = item.attachments?.length ?? 0;
+  // Owners beyond the primary (shown as a "+N" on the avatar).
+  const extraAssignees = Math.max(0, (item.assignees?.length ?? 0) - 1);
 
   // Shared actions (schedule / stage / done / eliminate) power both the inline
   // controls and the right-click menu, so they never drift.
@@ -240,7 +242,9 @@ export function TaskCard({
               </span>
             )}
             <ScheduleButton onClick={actions.schedule} />
-            {item.assignee && <Avatar name={item.assignee.name} />}
+            {item.assignee && (
+              <AvatarStack primary={item.assignee} extra={extraAssignees} />
+            )}
             <SourceBadge source={item.source} provider={item.provider} size="xs" />
           </div>
         </div>
@@ -317,9 +321,11 @@ export function TaskCard({
             <ScheduleButton onClick={actions.schedule} />
             {item.assignee && (
               <span className="inline-flex items-center gap-1 text-[10px] text-muted-foreground">
-                <Avatar name={item.assignee.name} />
+                <AvatarStack primary={item.assignee} extra={extraAssignees} />
                 <span className="max-w-[90px] truncate">
-                  {item.assignee.name}
+                  {extraAssignees > 0
+                    ? `${item.assignee.name} +${extraAssignees}`
+                    : item.assignee.name}
                 </span>
               </span>
             )}
@@ -354,6 +360,21 @@ function Avatar({ name }: { name: string }) {
   return (
     <span className="flex h-4 w-4 items-center justify-center rounded-full bg-primary/15 text-[8px] font-bold text-primary">
       {initials(name)}
+    </span>
+  );
+}
+
+/** The primary owner's avatar with a small "+N" when a task has more than one
+ *  assignee, so a shared task reads as shared at a glance. */
+function AvatarStack({ primary, extra }: { primary: { name: string }; extra: number }) {
+  return (
+    <span className="inline-flex items-center">
+      <Avatar name={primary.name} />
+      {extra > 0 && (
+        <span className="-ml-1 flex h-4 items-center justify-center rounded-full bg-secondary px-1 text-[8px] font-bold text-muted-foreground ring-1 ring-card">
+          +{extra}
+        </span>
+      )}
     </span>
   );
 }

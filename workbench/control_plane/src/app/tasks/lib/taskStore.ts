@@ -169,6 +169,9 @@ export interface ItemMetaPatch {
   workflowStage?: string;     // the local Kanban stage (board move)
   sortKey?: number;           // manual (drag) rank within a group/column
   assignee?: Person | null;   // null → unassign
+  /** the full owner set — [] unassigns everyone; takes precedence over assignee
+   *  and keeps the primary `assignee` (= assignees[0]) in step. */
+  assignees?: Person[] | null;
   /** personal "My Next Actions" membership (My Next Actions = NEXT & isMine).
    *  false drops a handed-off/unassigned task from my list without deleting it
    *  on ClickUp; a LOCAL overlay only — never back-synced. */
@@ -1596,10 +1599,22 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               ]
               ? "DONE"
               : i.disposition,
+          // The full owner set takes precedence and keeps the primary in step;
+          // else the single-assignee patch; else unchanged.
+          assignees:
+            patch.assignees !== undefined
+              ? patch.assignees ?? []
+              : patch.assignee !== undefined
+                ? patch.assignee
+                  ? [patch.assignee]
+                  : []
+                : i.assignees,
           assignee:
-            patch.assignee !== undefined
-              ? patch.assignee ?? undefined
-              : i.assignee,
+            patch.assignees !== undefined
+              ? patch.assignees?.[0] ?? undefined
+              : patch.assignee !== undefined
+                ? patch.assignee ?? undefined
+                : i.assignee,
           isMine: patch.isMine !== undefined ? patch.isMine : i.isMine,
           important:
             patch.important !== undefined ? patch.important : i.important,
@@ -1635,7 +1650,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.workflowStage !== undefined)
         body.workflow_stage = patch.workflowStage;
       if (patch.sortKey !== undefined) body.sort_key = patch.sortKey;
-      if (patch.assignee !== undefined) {
+      if (patch.assignees !== undefined) {
+        // The full set (may be []) — the backend keeps `assignee` in step.
+        body.assignees = (patch.assignees ?? []).map((p) => ({
+          name: p.name,
+          email: p.email,
+          provider_user_id: p.providerUserId,
+        }));
+      } else if (patch.assignee !== undefined) {
         if (patch.assignee === null) body.clear_assignee = true;
         else
           body.assignee = {

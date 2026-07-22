@@ -187,6 +187,9 @@ export function TaskDetail({
   // show/change a LOCAL task's stage in the detail — synced tasks show their raw
   // ClickUp status instead (below). setStage handles done/reopen like the card.
   const stageActions = useCardActions(item);
+  // The full owner set (falls back to the single assignee for older rows / mock).
+  const assigneeList: Person[] =
+    item.assignees ?? (item.assignee ? [item.assignee] : []);
 
   const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
 
@@ -409,42 +412,63 @@ export function TaskDetail({
               )
             )}
 
-            {/* Assignee */}
-            <MetaEdit label="Assignee" icon={UserRound}
-              display={item.assignee
-                ? <span className="inline-flex items-center gap-1.5">
-                    <Avatar name={item.assignee.name} />
-                    {item.assignee.name}
-                  </span>
-                : null}
-            >
-              {(close) => (
-                <PersonMenu
-                  people={memberPeople}
-                  active={item.assignee ?? null}
-                  onPick={(p) => {
-                    // A LOCAL task assigned to a teammate must become a ClickUp
-                    // task (they can't see a private local one) → open the
-                    // destination picker. Un-assigning (p=null) or an already-
-                    // synced task just patches (back-syncs the assignee delta).
-                    if (p && !isSynced) {
-                      setDelegateTo(p);
-                    } else {
-                      updateItem(item.id, { assignee: p });
-                      // Handed to someone else (or unassigned) a task that's in
-                      // MY Next Actions → offer to drop it from my list.
-                      const changedOwner =
-                        (p?.providerUserId ?? p?.name ?? null) !==
-                        (item.assignee?.providerUserId ?? item.assignee?.name ?? null);
-                      if (changedOwner && item.disposition === "NEXT" && item.isMine) {
-                        setOfferDropFromNext(true);
+            {/* Assignee(s). A SYNCED task supports MULTIPLE owners (ClickUp
+                allows several) — a multi-select toggle list. A LOCAL task keeps
+                the single-owner flow: assigning a teammate must first create a
+                ClickUp task (they can't see a private local one), so it routes
+                through the destination picker. */}
+            {isSynced ? (
+              <MetaEdit label="Assignees" icon={UserRound}
+                display={assigneeList.length
+                  ? <AssigneeStack people={assigneeList} />
+                  : null}
+              >
+                {() => (
+                  <MultiPersonMenu
+                    people={memberPeople}
+                    active={assigneeList}
+                    onToggle={(p) => {
+                      const on = assigneeList.some((a) => samePerson(a, p));
+                      const next = on
+                        ? assigneeList.filter((a) => !samePerson(a, p))
+                        : [...assigneeList, p];
+                      updateItem(item.id, { assignees: next });
+                    }}
+                    onClear={() => updateItem(item.id, { assignees: [] })}
+                  />
+                )}
+              </MetaEdit>
+            ) : (
+              <MetaEdit label="Assignee" icon={UserRound}
+                display={item.assignee
+                  ? <span className="inline-flex items-center gap-1.5">
+                      <Avatar name={item.assignee.name} />
+                      {item.assignee.name}
+                    </span>
+                  : null}
+              >
+                {(close) => (
+                  <PersonMenu
+                    people={memberPeople}
+                    active={item.assignee ?? null}
+                    onPick={(p) => {
+                      // A LOCAL task assigned to a teammate must become a ClickUp
+                      // task (they can't see a private local one) → open the
+                      // destination picker. Un-assigning (p=null) just patches.
+                      if (p) {
+                        setDelegateTo(p);
+                      } else {
+                        updateItem(item.id, { assignee: p });
+                        if (item.disposition === "NEXT" && item.isMine) {
+                          setOfferDropFromNext(true);
+                        }
                       }
-                    }
-                    close();
-                  }}
-                />
-              )}
-            </MetaEdit>
+                      close();
+                    }}
+                  />
+                )}
+              </MetaEdit>
+            )}
 
             {/* Project (read-only link for now — re-file happens via clarify) */}
             {project && (
@@ -1132,6 +1156,89 @@ function ChipMenu({
           Clear
         </button>
       )}
+    </div>
+  );
+}
+
+/** Same person across the members list and the assignee set — by provider id
+ *  when both have one, else by name. */
+function samePerson(a: Person, b: Person): boolean {
+  if (a.providerUserId && b.providerUserId)
+    return a.providerUserId === b.providerUserId;
+  return a.name === b.name;
+}
+
+/** Overlapping avatars + a label ("Name" for one, "N people" for several). */
+function AssigneeStack({ people }: { people: Person[] }) {
+  const shown = people.slice(0, 3);
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="flex -space-x-1.5">
+        {shown.map((p, i) => (
+          <span key={p.providerUserId || p.name || i} className="ring-1 ring-card rounded-full">
+            <Avatar name={p.name} />
+          </span>
+        ))}
+        {people.length > shown.length && (
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-secondary text-[8px] font-bold text-muted-foreground ring-1 ring-card">
+            +{people.length - shown.length}
+          </span>
+        )}
+      </span>
+      <span className="truncate">
+        {people.length === 1 ? people[0].name : `${people.length} people`}
+      </span>
+    </span>
+  );
+}
+
+/** Multi-select owner picker — each person toggles in/out of the set; the menu
+ *  stays open so several can be chosen before dismissing. "Unassigned" clears. */
+function MultiPersonMenu({
+  people,
+  active,
+  onToggle,
+  onClear,
+}: {
+  people: Person[];
+  active: Person[];
+  onToggle: (p: Person) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        onClick={onClear}
+        className={[
+          "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+          active.length === 0
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-border text-muted-foreground hover:bg-secondary",
+        ].join(" ")}
+      >
+        Unassigned
+      </button>
+      {people.map((p) => {
+        const on = active.some((a) => samePerson(a, p));
+        return (
+          <button
+            key={p.providerUserId || p.name}
+            type="button"
+            onClick={() => onToggle(p)}
+            aria-pressed={on}
+            className={[
+              "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]",
+              on
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border text-muted-foreground hover:bg-secondary",
+            ].join(" ")}
+          >
+            {on ? <Check className="h-3 w-3 shrink-0" /> : <Avatar name={p.name} />}
+            {p.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

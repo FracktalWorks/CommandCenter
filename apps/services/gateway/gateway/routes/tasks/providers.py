@@ -353,7 +353,20 @@ class ClickUpProvider(BaseTaskProvider):
                 })
 
         projects: list[dict[str, Any]] = []
+        # Case-insensitive dedup, first spelling wins. Aggregated from BOTH the
+        # space workflow AND every list's own statuses: ClickUp lists frequently
+        # override the space defaults (e.g. add a "Done" distinct from the space
+        # "Closed"), and a list-only status would otherwise never reach the
+        # status-mapping settings or a synced task's stage picker — leaving the
+        # user unable to set it. List objects from /space/{id}/list and the
+        # folder payload already carry their `statuses`, so this needs no extra
+        # API calls.
         statuses: list[str] = []
+        def _add_statuses(raw: Any) -> None:
+            for st in raw or []:
+                name = ((st or {}).get("status") or "").strip()
+                if name and name.lower() not in (s.lower() for s in statuses):
+                    statuses.append(name)
         # Structured hierarchy for the picker accordion: mirrors ClickUp's
         # navigation exactly (space → folder → list).
         hierarchy: list[dict[str, Any]] = []
@@ -361,10 +374,7 @@ class ClickUpProvider(BaseTaskProvider):
             f"/team/{workspace_id}/space", {"archived": "false"}
         )).get("spaces") or []
         for space in spaces:
-            for st in space.get("statuses") or []:
-                name = (st.get("status") or "").strip()
-                if name and name.lower() not in (s.lower() for s in statuses):
-                    statuses.append(name)
+            _add_statuses(space.get("statuses"))
             sid, sname = str(space.get("id") or ""), space.get("name", "")
             space_node: dict[str, Any] = {
                 "id": sid, "name": sname, "folders": [], "lists": [],
@@ -376,6 +386,7 @@ class ClickUpProvider(BaseTaskProvider):
                 f"/space/{sid}/folder", {"archived": "false"}
             )).get("folders") or []
             for lst in folderless:
+                _add_statuses(lst.get("statuses"))
                 entry = {"id": str(lst["id"]), "name": lst.get("name", ""),
                          "space": sname, "space_id": sid,
                          "folder_id": None, "folder_name": None}
@@ -388,6 +399,7 @@ class ClickUpProvider(BaseTaskProvider):
                     "id": fid, "name": fname, "lists": [],
                 }
                 for lst in folder.get("lists") or []:
+                    _add_statuses(lst.get("statuses"))
                     entry = {
                         "id": str(lst["id"]), "name": lst.get("name", ""),
                         "space": f"{sname} / {fname}", "space_id": sid,
@@ -474,7 +486,16 @@ class ClickUpProvider(BaseTaskProvider):
             else:
                 body["due_date"] = None  # explicit clear
         # Assignees are a delta on ClickUp: {add: [...], rem: [...]}.
-        if payload.get("clear_assignee") and payload.get("prev_assignee_id"):
+        if "assignee_ids" in payload:
+            # Multi-assignee: diff the new set against the previous set.
+            with contextlib.suppress(TypeError, ValueError):
+                new_ids = {int(i) for i in payload.get("assignee_ids") or []}
+                prev_ids = {int(i) for i in payload.get("prev_assignee_ids") or []}
+                add = sorted(new_ids - prev_ids)
+                rem = sorted(prev_ids - new_ids)
+                if add or rem:
+                    body["assignees"] = {"add": add, "rem": rem}
+        elif payload.get("clear_assignee") and payload.get("prev_assignee_id"):
             with contextlib.suppress(TypeError, ValueError):
                 body["assignees"] = {"rem": [int(payload["prev_assignee_id"])]}
         elif payload.get("assignee_id"):

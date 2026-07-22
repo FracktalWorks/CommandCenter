@@ -163,9 +163,11 @@ export function ItemList() {
   return (
     <div className="flex h-full flex-col">
       <header className="border-b border-border bg-card px-4 py-3">
-        <div className="flex items-center gap-2">
-          <Icon className="h-4 w-4 text-primary" />
-          <h1 className="text-base font-bold text-foreground">
+        {/* flex-wrap: on narrow (mobile) widths the controls drop to their own
+            row instead of crushing the title into a two-line break. */}
+        <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5">
+          <Icon className="h-4 w-4 shrink-0 text-primary" />
+          <h1 className="whitespace-nowrap text-base font-bold text-foreground">
             {meta.title}
             {context && (
               <span className="ml-2 font-mono text-sm font-normal text-primary/80">

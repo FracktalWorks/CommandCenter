@@ -542,10 +542,8 @@ async def approve_execution(
             "WHERE id=:eid"
         ), {"eid": exec_id, "acts": json.dumps(taken)})
         if row.message_id:
-            await db.execute(text(
-                "UPDATE email_messages SET rules_processed_at = now(), "
-                "rules_held_back_at = NULL WHERE id=:mid"
-            ), {"mid": str(row.message_id)})
+            await _stamp_processed_watermark(
+                db, row.message_id, provider=provider)
         await _persist_rotated_creds(db, store, str(row.account_id), provider)
         await db.commit()
         return {"ok": True, "status": "APPLIED", "actions": taken}
@@ -1218,16 +1216,15 @@ async def run_rules_on_message(
             # Already have the primary single match; apply just that rather than
             # failing the whole apply on a second classifier call.
             matches = [match]
-        for m in matches:
-            await _apply_and_log_match(
-                db, provider, row, frm, email, m, True,
-                about, signature, acc.user_id, req.account_id,
-                sole_match=len(matches) == 1,
-            )
-        await db.execute(text(
-            "UPDATE email_messages SET rules_processed_at = now(), "
-            "rules_held_back_at = NULL WHERE id = :id"
-        ), {"id": str(row.id)})
+        # An apply (never a dry-run) with a guaranteed fallback match, so
+        # log_no_match is off — this path always has something to apply.
+        await _apply_matches(
+            db, provider, row, frm, email, matches,
+            apply=True, dry_run=False, about=about, signature=signature,
+            account_user=acc.user_id, account_id=req.account_id,
+            log_no_match=False,
+        )
+        await _stamp_processed_watermark(db, row.id, provider=provider)
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()
         # Return the row's POST-apply category + folder so the caller can refresh
@@ -1560,6 +1557,76 @@ async def _apply_and_log_match(
         "msrc": match.get("source"), "aerr": json.dumps(action_errors)})
 
 
+async def _apply_matches(
+    db: Any, provider: Any, r: Any, frm: dict[str, Any], email: dict[str, str],
+    matches: list[dict[str, Any]], *, apply: bool, dry_run: bool,
+    about: str, signature: str, account_user: str, account_id: str,
+    log_no_match: bool = True, cold_blocker: str | None = None,
+) -> None:
+    """Apply already-classified ``matches`` and log to ``email_executed_rules``
+    — the match→apply tail shared by the live runner (``_run_rules_job``), the
+    single-message re-run (``run_rules_on_message``), and process-past.
+
+    Each match runs through ``_apply_and_log_match`` (``apply=False`` → dry-run
+    preview only). When NOTHING matched, log one SKIPPED "No rule matched" row
+    (unless ``log_no_match`` is False, e.g. the re-run always has a fallback
+    match) and, if a ``cold_blocker`` policy is set and the run can act, let the
+    cold-email blocker look.
+
+    Deliberately does NOT stamp the processed watermark: some callers project
+    Reply Zero status BETWEEN the apply and the stamp, so the watermark must stay
+    last (a message is "processed" only once everything that reads it has run).
+    Call ``_stamp_processed_watermark`` at the call site after that work.
+    """
+    if matches:
+        for match in matches:
+            await _apply_and_log_match(
+                db, provider, r, frm, email, match, apply,
+                about, signature, account_user, account_id,
+                sole_match=len(matches) == 1,
+            )
+        return
+    if dry_run or not log_no_match:
+        return
+    # No rule matched — log a SKIPPED row so History shows a "No match found"
+    # entry, then (live runs only) let the cold-email blocker look.
+    await db.execute(text(
+        """INSERT INTO email_executed_rules
+             (account_id, rule_id, rule_name, message_id,
+              provider_message_id, thread_id, subject, from_address,
+              status, automated, actions_taken, reason)
+           VALUES (:aid, NULL, NULL, :mid, :pmid, :tid, :subj, :frm,
+                   'SKIPPED', true, '[]', 'No rule matched this email.')"""
+    ), {"aid": account_id, "mid": str(r.id),
+        "pmid": r.provider_message_id, "tid": r.thread_id,
+        "subj": r.subject or "", "frm": frm.get("email", "")})
+    if cold_blocker is not None and cold_blocker != "OFF" and provider is not None:
+        await _maybe_block_cold(
+            db, provider, account_id, str(r.id),
+            r.provider_message_id, email, cold_blocker,
+        )
+
+
+async def _stamp_processed_watermark(
+    db: Any, message_id: Any, *, provider: Any, dry_run: bool = False,
+) -> None:
+    """Mark a message rules-processed — the guarded write every apply path shares.
+
+    Stamps ONLY when the run could actually act (not a dry-run, and a provider
+    was present). ``rules_processed_at`` is permanent — ``/rules/run`` selects
+    ``rules_processed_at IS NULL`` — so stamping a message the run couldn't touch
+    burns it forever. That is exactly what an expired refresh token used to do:
+    one scheduler tick with a failed ``authenticate()`` marked 50 emails
+    processed, applied nothing, and they were never looked at again.
+    """
+    if dry_run or provider is None:
+        return
+    await db.execute(text(
+        "UPDATE email_messages SET rules_processed_at = now(), "
+        "rules_held_back_at = NULL WHERE id = :id"
+    ), {"id": str(message_id)})
+
+
 async def _project_thread_status_for_backfill(
     db: Any, provider: Any, account_id: str,
     latest_by_thread: dict[str, tuple[Any, list[dict[str, Any]]]],
@@ -1753,38 +1820,25 @@ async def _process_past_emails_job(
                              error=str(exc)[:160])
                 continue
             apply = (not dry_run) and provider is not None
-            if matches:
+            # Strip drafting unless the run explicitly asked for it, so a 90-day
+            # backfill files old mail without spending a drafting call per
+            # message on threads that ended months ago. Done as a pre-pass so the
+            # apply loop itself is the shared _apply_matches.
+            if matches and not draft_replies:
+                stripped_matches = []
                 for match in matches:
-                    # Strip drafting unless the run explicitly asked for it, so a
-                    # 90-day backfill files old mail without spending a drafting
-                    # call per message on threads that ended months ago.
-                    if not draft_replies:
-                        match, stripped = _without_drafting(match)
-                        if stripped:
-                            drafts_skipped += 1
-                    await _apply_and_log_match(
-                        db, provider, r, frm, email, match, apply,
-                        about, signature, account_user, account_id,
-                        sole_match=len(matches) == 1,
-                    )
-            elif not dry_run:
-                await db.execute(text(
-                    """INSERT INTO email_executed_rules
-                         (account_id, rule_id, rule_name, message_id,
-                          provider_message_id, thread_id, subject, from_address,
-                          status, automated, actions_taken, reason)
-                       VALUES (:aid, NULL, NULL, :mid, :pmid, :tid, :subj, :frm,
-                               'SKIPPED', true, '[]', 'No rule matched this email.')"""
-                ), {"aid": account_id, "mid": str(r.id),
-                    "pmid": r.provider_message_id, "tid": r.thread_id,
-                    "subj": r.subject or "", "frm": frm.get("email", "")})
-            # Same rule as _run_rules_job: never burn the watermark on a run
-            # that had no provider to act through (see the comment there).
-            if not dry_run and provider is not None:
-                await db.execute(text(
-                    "UPDATE email_messages SET rules_processed_at = now(), "
-                    "rules_held_back_at = NULL WHERE id = :id"
-                ), {"id": str(r.id)})
+                    match, stripped = _without_drafting(match)
+                    if stripped:
+                        drafts_skipped += 1
+                    stripped_matches.append(match)
+                matches = stripped_matches
+            await _apply_matches(
+                db, provider, r, frm, email, matches,
+                apply=apply, dry_run=dry_run, about=about, signature=signature,
+                account_user=account_user, account_id=account_id,
+            )
+            await _stamp_processed_watermark(
+                db, r.id, provider=provider, dry_run=dry_run)
             await db.commit()
             # Remember the NEWEST in-range message per thread and what it
             # matched. Rows are oldest-first (deliberately, so learning builds
@@ -1909,32 +1963,13 @@ async def _run_rules_job(
                              account_id=account_id, message_id=str(r.id),
                              error=str(exc)[:160])
                 continue
-            if matches:
-                apply = (not dry_run) and provider is not None
-                for match in matches:
-                    await _apply_and_log_match(
-                        db, provider, r, frm, email, match, apply,
-                        about, signature, account_user, account_id,
-                        sole_match=len(matches) == 1,
-                    )
-            elif not dry_run:
-                # No rule matched — log a SKIPPED row so History shows a
-                # "No match found" entry, then let the cold-email blocker look.
-                await db.execute(text(
-                    """INSERT INTO email_executed_rules
-                         (account_id, rule_id, rule_name, message_id,
-                          provider_message_id, thread_id, subject, from_address,
-                          status, automated, actions_taken, reason)
-                       VALUES (:aid, NULL, NULL, :mid, :pmid, :tid, :subj, :frm,
-                               'SKIPPED', true, '[]', 'No rule matched this email.')"""
-                ), {"aid": account_id, "mid": str(r.id),
-                    "pmid": r.provider_message_id, "tid": r.thread_id,
-                    "subj": r.subject or "", "frm": frm.get("email", "")})
-                if provider is not None and cold_blocker != "OFF":
-                    await _maybe_block_cold(
-                        db, provider, account_id, str(r.id),
-                        r.provider_message_id, email, cold_blocker,
-                    )
+            apply = (not dry_run) and provider is not None
+            await _apply_matches(
+                db, provider, r, frm, email, matches,
+                apply=apply, dry_run=dry_run, about=about, signature=signature,
+                account_user=account_user, account_id=account_id,
+                cold_blocker=cold_blocker,
+            )
             # Reply Zero: project this thread's status from the matched rule
             # (latest message per thread only). Read-only of the mailbox — runs
             # even when the provider failed to authenticate.
@@ -1956,17 +1991,10 @@ async def _run_rules_job(
                 except Exception as exc:  # noqa: BLE001
                     _log.warning("email.project_reply_status_failed",
                                  account_id=account_id, error=str(exc)[:160])
-            # Stamp the watermark ONLY when the run could actually act. The
-            # watermark is permanent — /rules/run selects `rules_processed_at IS
-            # NULL` — so stamping a message we couldn't apply anything to burns
-            # it forever. That is what an expired refresh token used to do: one
-            # scheduler tick with a failed authenticate() marked 50 emails
-            # processed, applied nothing, and they were never looked at again.
-            if not dry_run and provider is not None:
-                await db.execute(text(
-                    "UPDATE email_messages SET rules_processed_at = now(), "
-                    "rules_held_back_at = NULL WHERE id = :id"
-                ), {"id": str(r.id)})
+            # Stamp the watermark LAST — after Reply Zero projection — and only
+            # when the run could actually act (guarded inside the helper).
+            await _stamp_processed_watermark(
+                db, r.id, provider=provider, dry_run=dry_run)
             await db.commit()
 
         if not dry_run and provider is None:

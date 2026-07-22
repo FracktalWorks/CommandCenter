@@ -71,16 +71,22 @@ def test_reprocessing_is_still_reachable() -> None:
 
 def test_the_watermark_is_not_stamped_on_a_dry_run() -> None:
     """Otherwise a preview would silently consume the mail it previewed, and the
-    real run that followed would find nothing to do."""
-    src = inspect.getsource(r._process_past_emails_job)
-    stamp = src.index("SET rules_processed_at = now()")
-    guard = src.rindex("if not dry_run and provider is not None:", 0, stamp)
-    # The guard is the statement immediately governing the stamp.
+    real run that followed would find nothing to do. The stamp now lives in the
+    shared ``_stamp_processed_watermark`` (2.2), guarded there once; process-past
+    must route through it and pass ``dry_run`` so the guard actually applies."""
+    stamp_src = inspect.getsource(r._stamp_processed_watermark)
+    # The guard governs the stamp inside the one shared helper.
+    stamp = stamp_src.index("SET rules_processed_at = now()")
+    guard = stamp_src.rindex("if dry_run or provider is None:", 0, stamp)
     assert stamp - guard < 400, (
         "the rules_processed_at stamp is no longer guarded by "
-        "'not dry_run and provider is not None' — a preview or a run with no "
-        "provider would burn the watermark"
+        "'dry_run or provider is None' — a preview or a run with no provider "
+        "would burn the watermark"
     )
+    # …and process-past routes through it with dry_run threaded in.
+    job_src = inspect.getsource(r._process_past_emails_job)
+    assert "_stamp_processed_watermark(" in job_src
+    assert "dry_run=dry_run" in job_src
 
 
 # ── the run explains itself ─────────────────────────────────────────────────

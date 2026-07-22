@@ -11,7 +11,6 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_settings
-from email_ingestion.persist import upsert_message
 from fastapi import BackgroundTasks, Depends, HTTPException, Query, Request
 from fastapi.responses import PlainTextResponse
 from gateway.routes.email.core import (
@@ -23,9 +22,6 @@ from gateway.routes.email.core import (
 )
 from pydantic import BaseModel
 from sqlalchemy import text
-
-# Deep initial-sync history window (days); keep in step with the scheduler.
-INITIAL_SYNC_DAYS = 365
 
 
 async def _build_label_rule_map(
@@ -199,277 +195,59 @@ async def trigger_sync(
 ):
     """Trigger a manual email sync for an account.
 
-    Calls the email provider's incremental sync and persists new/updated
-    messages to the email_messages table.  Deleted messages are moved to
-    TRASH folder locally.
+    Thin wrapper over the ONE sync core — ``email_ingestion.scheduler.
+    _sync_account``, the same code the background scheduler and the Graph
+    webhook run — so the manual path can never drift from it again. The old
+    inline copy of fetch → persist → reconcile → watermark is exactly how the
+    manual path lost rotated refresh tokens and wiped the Outlook sync cursor
+    (review §3.2). Ownership is checked HERE (the core is user-blind);
+    sync-status/sync-log bookkeeping, immediate cred rotation, cursor COALESCE,
+    the deep-vs-incremental heuristic and label-change capture (the
+    ``learn_label_changes`` hook) all live in the core.
     """
     db = await _get_db()
     try:
-        result = await db.execute(
-            text(
-                """SELECT id, provider, credentials_encrypted, last_history_id,
-                          initial_sync_done
-                   FROM email_accounts
-                   WHERE id = :id AND user_id = :user_id"""
-            ),
-            {"id": req.account_id, "user_id": user.email or "anonymous"},
-        )
-        row = result.fetchone()
-        if not row:
+        own = (await db.execute(text(
+            "SELECT id FROM email_accounts WHERE id = :id AND user_id = :uid"
+        ), {"id": req.account_id, "uid": user.email or "anonymous"})).fetchone()
+        if not own:
             raise HTTPException(status_code=404, detail="Account not found")
-
-        # Update sync status to 'syncing'
-        await db.execute(
-            text(
-                """UPDATE email_accounts
-                   SET sync_status = 'syncing', updated_at = now()
-                   WHERE id = :id"""
-            ),
-            {"id": req.account_id},
-        )
-        await db.commit()
-
-        # Create sync log entry
-        sync_log_result = await db.execute(
-            text(
-                """INSERT INTO email_sync_log (account_id, started_at, status)
-                   VALUES (:id, now(), 'running')
-                   RETURNING id"""
-            ),
-            {"id": req.account_id},
-        )
-        sync_log_id = sync_log_result.fetchone().id
-        await db.commit()
-
-        # Decrypt credentials
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-
-        # Instantiate provider
-        provider = _instantiate_provider(row.provider, creds)
-
-        try:
-            if not await provider.authenticate():
-                raise HTTPException(status_code=401, detail="Auth failed")
-
-            # Persist a rotated refresh token IMMEDIATELY after auth — Microsoft
-            # rotates it on refresh, and if any sync step below fails before the
-            # end-of-sync persist, the new token would be lost and the account
-            # would need a manual reconnect. The scheduler path (_sync_account)
-            # already does this; the manual path used to persist only at the end,
-            # which is exactly the refresh-token-loss this closes.
-            if provider.credentials_dirty():
-                await db.execute(text(
-                    """UPDATE email_accounts
-                       SET credentials_encrypted = :creds, updated_at = now()
-                       WHERE id = :id"""
-                ), {"id": req.account_id,
-                    "creds": store.encrypt(
-                        json.dumps(provider.export_credentials()))})
-                await db.commit()
-
-            # Deep 1-year backfill on first sync (or when forced via ?full);
-            # otherwise a cheap shallow/incremental sync.
-            deep = req.full or not bool(getattr(row, "initial_sync_done", False))
-            since = (
-                datetime.now(timezone.utc) - timedelta(days=INITIAL_SYNC_DAYS)
-                if deep else None
-            )
-            sync_result = await provider.sync_messages(
-                history_id=row.last_history_id,
-                max_results=100,
-                deep=deep,
-                since=since,
-            )
-
-            # Persist fetched messages to email_messages.
-            # Learn classification patterns from manual label changes — only on
-            # incremental syncs (a deep/full sync replays history and would
-            # mislearn). Empty map (no rules) disables the per-message diff.
-            label_rule_map, conv_rule_keys = (
-                await _build_label_rule_map(db, req.account_id)
-                if not deep else ({}, {})
-            )
-            # thread_id → conversation-status key for reply labels the user added
-            # in their client this sync; applied after the loop (see below).
-            status_corrections: dict[str, str] = {}
-            persisted_count = 0
-            skipped_count = 0
-            for msg in sync_result.messages:
-                if msg.subject == "[DELETED]":
-                    # Message was deleted on provider — move to TRASH locally
-                    await db.execute(
-                        text(
-                            """UPDATE email_messages
-                               SET folder = 'TRASH', updated_at = now()
-                               WHERE account_id = :account_id
-                                 AND provider_message_id = :provider_id"""
-                        ),
-                        {
-                            "account_id": req.account_id,
-                            "provider_id": msg.provider_message_id,
-                        },
-                    )
-                    persisted_count += 1
-                else:
-                    # Capture categories before the upsert so we can learn from
-                    # manual label changes made in the user's email client.
-                    old_categories = None
-                    if label_rule_map:
-                        ocr = (await db.execute(text(
-                            "SELECT categories FROM email_messages WHERE "
-                            "account_id = :aid AND provider_message_id = :pid"
-                        ), {"aid": req.account_id,
-                            "pid": msg.provider_message_id})).fetchone()
-                        old_categories = (
-                            list(ocr.categories or []) if ocr else None)
-                    # ONE shared ingest upsert (message + attachments);
-                    # see email_ingestion.persist.upsert_message.
-                    await upsert_message(db, req.account_id, msg)
-                    persisted_count += 1
-
-                    # Learn from manual label add/remove (existing rows only —
-                    # a new message has no prior categories to diff against).
-                    if old_categories is not None:
-                        await _learn_from_label_changes(
-                            db, req.account_id, msg, old_categories,
-                            getattr(msg, "categories", []) or [], label_rule_map,
-                            conv_rule_keys, status_corrections)
-
-            await db.commit()
-
-            # Apply reply-status corrections the label learner queued (a user who
-            # manually added "Reply"/"Awaiting"/… in their client) — after the
-            # persistence commit, not nested in the per-message loop.
-            await _apply_label_status_corrections(
-                req.account_id, status_corrections)
-
-            # Reconcile provider-side deletions on a full snapshot (Outlook).
-            try:
-                from email_ingestion.reconcile import reconcile_full_snapshot
-                removed = await reconcile_full_snapshot(
-                    db, req.account_id, sync_result
-                )
-                if removed:
-                    await db.commit()
-                    _log.info("email.sync_reconciled", account_id=req.account_id,
-                              removed=removed)
-            except Exception as exc:  # noqa: BLE001
-                _log.warning("email.sync_reconcile_failed",
-                             account_id=req.account_id, error=str(exc)[:160])
-
-            # Persist refreshed OAuth tokens (access/refresh) if the provider
-            # rotated them during this sync, so the next sync doesn't reuse a
-            # stale token.
-            if provider.credentials_dirty():
-                await db.execute(
-                    text(
-                        """UPDATE email_accounts
-                           SET credentials_encrypted = :creds, updated_at = now()
-                           WHERE id = :id"""
-                    ),
-                    {
-                        "id": req.account_id,
-                        "creds": store.encrypt(
-                            json.dumps(provider.export_credentials())
-                        ),
-                    },
-                )
-
-            # Update account sync state. Mark the one-time deep sync done so
-            # subsequent polls stay shallow.
-            await db.execute(
-                text(
-                    """UPDATE email_accounts
-                       SET sync_status = 'idle',
-                           last_synced_at = now(),
-                           last_history_id = COALESCE(
-                               :history_id, last_history_id),
-                           sync_error = NULL,
-                           initial_sync_done = initial_sync_done OR :deep,
-                           updated_at = now()
-                       WHERE id = :id"""
-                ),
-                {
-                    "id": req.account_id,
-                    "history_id": sync_result.new_history_id,
-                    "deep": deep,
-                },
-            )
-
-            # Mark sync log as success
-            await db.execute(
-                text(
-                    """UPDATE email_sync_log
-                       SET status = 'success',
-                           completed_at = now(),
-                           messages_synced = :synced,
-                           messages_skipped = :skipped,
-                           provider_history_id = :history_id
-                       WHERE id = :log_id"""
-                ),
-                {
-                    "log_id": sync_log_id,
-                    "synced": persisted_count,
-                    "skipped": skipped_count,
-                    "history_id": sync_result.new_history_id,
-                },
-            )
-            await db.commit()
-
-            # Process newly-synced mail through the shared pipeline (auto-run
-            # rules → categorize → classify threads → auto-archive) AFTER the
-            # response is sent, so the manual sync stays fast but new mail still
-            # gets rules/labels/archive applied and its Reply-Zero status
-            # recomputed — the SAME pipeline the scheduler + Graph webhook run
-            # (H1). Previously a UI-triggered sync only re-classified thread
-            # status inline, so new mail showed up unlabeled/un-archived until the
-            # next background poll (up to sync_interval_secs later) — that gap.
-            if persisted_count:
-                from gateway.routes.email.scheduler_hooks import process_new_mail
-                background.add_task(process_new_mail, req.account_id)
-
-            return {
-                "ok": True,
-                "messages_synced": persisted_count,
-                "messages_skipped": skipped_count,
-            }
-        except Exception as e:
-            # Update account to error state
-            await db.execute(
-                text(
-                    """UPDATE email_accounts
-                       SET sync_status = 'error',
-                           sync_error = :error,
-                           updated_at = now()
-                       WHERE id = :id"""
-                ),
-                {"id": req.account_id, "error": str(e)},
-            )
-            # Mark sync log as error
-            await db.execute(
-                text(
-                    """UPDATE email_sync_log
-                       SET status = 'error',
-                           completed_at = now(),
-                           error_message = :error
-                       WHERE id = :log_id"""
-                ),
-                {"log_id": sync_log_id, "error": str(e)},
-            )
-            await db.commit()
-            raise HTTPException(
-                status_code=500,
-                detail=f"Sync failed: {e}"
-            )
     finally:
         await db.close()
+    return await _run_manual_sync(req.account_id, background, full=req.full)
+
+
+async def _run_manual_sync(
+    account_id: str, background: BackgroundTasks, *, full: bool,
+) -> dict[str, Any]:
+    """Run one manual sync through the shared core and shape the API response.
+
+    ``full=True`` forces the deep (~1-year, all-folder) backfill; ``False``
+    keeps the core's own heuristic (deep on first sync, shallow after). New
+    mail is handed to the shared new-mail pipeline AFTER the response, exactly
+    like the scheduler and webhook paths (H1). A core-reported failure (auth,
+    provider, DB) surfaces as the same 500 the old inline body raised; the core
+    has already stamped sync_status='error' and the sync-log row itself.
+    """
+    from email_ingestion.scheduler import _sync_account  # noqa: PLC0415
+
+    res = await _sync_account(account_id, deep=True if full else None)
+    if not isinstance(res, dict) or res.get("error"):
+        err = res.get("error") if isinstance(res, dict) else "unknown"
+        raise HTTPException(status_code=500, detail=f"Sync failed: {err}")
+    synced = int(res.get("synced") or 0)
+    if synced:
+        from gateway.routes.email.scheduler_hooks import (  # noqa: PLC0415
+            process_new_mail,
+        )
+        background.add_task(process_new_mail, account_id)
+    return {"ok": True, "messages_synced": synced, "messages_skipped": 0}
 
 
 @router.post("/accounts/{account_id}/resync")
 async def resync_account(
     account_id: str,
+    background: BackgroundTasks,
     purge: bool = Query(False),
     user: UserContext = Depends(get_current_user),
 ):
@@ -504,13 +282,17 @@ async def resync_account(
         await db.commit()
     finally:
         await db.close()
-    # Re-fetch from the provider via the standard sync path, forcing the DEEP
-    # (≈1-year, all-folder) backfill — ``full=True`` overrides the
-    # ``initial_sync_done`` gate so an already-initialised account actually pulls
-    # its older mail instead of just the newest shallow page.
-    result = await trigger_sync(SyncRequest(account_id=account_id, full=True), user)
-    synced = result.get("messages_synced") if isinstance(result, dict) else None
-    return {"resynced": True, "purged": purge, "messages_synced": synced}
+    # Re-fetch through the shared core, forcing the DEEP (≈1-year, all-folder)
+    # backfill — ``full=True`` overrides the ``initial_sync_done`` gate so an
+    # already-initialised account actually pulls its older mail instead of just
+    # the newest shallow page. (This used to call the trigger_sync ROUTE
+    # directly with the wrong positional args — ``user`` landed in the
+    # ``background`` slot and ``user`` stayed an unresolved Depends — so every
+    # direct resync crashed with a 500 before reaching the provider. Calling
+    # the shared helper instead of a route handler is the structural fix.)
+    result = await _run_manual_sync(account_id, background, full=True)
+    return {"resynced": True, "purged": purge,
+            "messages_synced": result.get("messages_synced")}
 
 
 async def _webhook_sync(account_id: str) -> None:

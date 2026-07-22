@@ -45,32 +45,43 @@ async def test_conversation_rule_is_never_pinned_by_name() -> None:
     # system_type NULL → recognized by name fallback ("Reply" → REPLY).
     db = _FakeDB(SimpleNamespace(name="Reply", system_type=None),
                  SimpleNamespace(email_address="me@fracktal.in"))
-    await _upsert(db, "acc-1", "rule-reply", "souradeep@iisc.ac.in", False,
-                  "LABEL_ADDED", "why", None, None, pattern_type="FROM")
+    stored = await _upsert(db, "acc-1", "rule-reply", "souradeep@iisc.ac.in",
+                           False, "LABEL_ADDED", "why", None, None,
+                           pattern_type="FROM")
     assert db.inserted is False
+    assert stored is False
 
 
 async def test_conversation_rule_is_never_pinned_by_system_type() -> None:
     db = _FakeDB(SimpleNamespace(name="Custom", system_type="AWAITING_REPLY"),
                  SimpleNamespace(email_address="me@fracktal.in"))
-    await _upsert(db, "acc-1", "rule-x", "someone@x.com", True,
-                  "LABEL_REMOVED", "why", None, None, pattern_type="FROM")
+    stored = await _upsert(db, "acc-1", "rule-x", "someone@x.com", True,
+                           "LABEL_REMOVED", "why", None, None,
+                           pattern_type="FROM")
     assert db.inserted is False
+    assert stored is False
 
 
 async def test_own_address_is_never_pinned() -> None:
     # A non-conversation rule, but the value IS the mailbox's own address.
     db = _FakeDB(SimpleNamespace(name="Newsletter", system_type=None),
                  SimpleNamespace(email_address="vjvarada@fracktal.in"))
-    await _upsert(db, "acc-1", "rule-news", "vjvarada@fracktal.in", False,
-                  "LABEL_ADDED", "why", None, None, pattern_type="FROM")
+    stored = await _upsert(db, "acc-1", "rule-news", "vjvarada@fracktal.in",
+                           False, "LABEL_ADDED", "why", None, None,
+                           pattern_type="FROM")
     assert db.inserted is False
+    assert stored is False
 
 
 async def test_normal_cleanup_pattern_is_written() -> None:
     # External sender + a sender-stable cleanup rule → the pattern is persisted.
+    # The return value matters as much as the write: the Fix flow honours it to
+    # decide whether to tell the user the correction was learned. A success path
+    # that stored the row but returned None (the #105 regression) is a lie the
+    # UI relays verbatim — so assert BOTH the write and the True return.
     db = _FakeDB(SimpleNamespace(name="Newsletter", system_type=None),
                  SimpleNamespace(email_address="me@fracktal.in"))
-    await _upsert(db, "acc-1", "rule-news", "digest@substack.com", False,
-                  "AI", "why", None, None, pattern_type="FROM")
+    stored = await _upsert(db, "acc-1", "rule-news", "digest@substack.com",
+                           False, "AI", "why", None, None, pattern_type="FROM")
     assert db.inserted is True
+    assert stored is True

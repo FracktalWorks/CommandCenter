@@ -12,6 +12,7 @@ import {
 } from "../lib/searchFilters";
 import { chipColors } from "../lib/labelColors";
 import { folderLabel } from "../lib/utils";
+import { EMAIL_CATEGORIES } from "../lib/types";
 
 /**
  * SearchBar — the email app's search surface, centred in the top bar.
@@ -275,6 +276,8 @@ function FilterMenu({
 }) {
   const [tagQuery, setTagQuery] = useState("");
   const has = (f: SearchFilter) => filters.some((x) => filterKey(x) === filterKey(f));
+  const last = (kind: SearchFilter["kind"]) =>
+    [...filters].reverse().find((f) => f.kind === kind)?.value ?? "";
 
   const shown = useMemo(() => {
     const q = tagQuery.trim().toLowerCase();
@@ -323,6 +326,70 @@ function FilterMenu({
         <div className="px-2 pb-2 space-y-1">
           <AddrInput label="From" onAdd={(v) => onAdd({ kind: "from", value: v })} />
           <AddrInput label="To" onAdd={(v) => onAdd({ kind: "to", value: v })} />
+        </div>
+      </div>
+
+      {/* Date range — the backend already filters on received_after/before; these
+          date inputs are the discoverable half (typing `after:2026-07-01` does
+          the same). A bare date is inclusive of the whole day (see toSearchParams). */}
+      <div className="border-t border-border pt-1">
+        <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+          Date
+        </div>
+        <div className="px-2 pb-2 space-y-1">
+          <DateInput label="After" value={last("after")}
+            onAdd={(v) => onAdd({ kind: "after", value: v })} />
+          <DateInput label="Before" value={last("before")}
+            onAdd={(v) => onAdd({ kind: "before", value: v })} />
+        </div>
+      </div>
+
+      {/* Sender category (email_senders.category) + provider importance. */}
+      <div className="border-t border-border pt-1">
+        <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+          Sender category
+        </div>
+        <div className="flex flex-wrap gap-1 px-2 pb-2">
+          {EMAIL_CATEGORIES.map((cat) => {
+            const f: SearchFilter = { kind: "sendercat", value: cat };
+            return (
+              <button
+                key={cat}
+                onClick={() => onAdd(f)}
+                className={`rounded-full px-2 py-0.5 text-[11px] border transition-colors ${
+                  has(f)
+                    ? "bg-primary/15 text-primary border-primary/30"
+                    : "border-border text-foreground/70 hover:text-foreground hover:bg-secondary"
+                }`}
+              >
+                {cat}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className="border-t border-border pt-1">
+        <div className="px-3 py-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+          Importance
+        </div>
+        <div className="flex flex-wrap gap-1 px-2 pb-2">
+          {["High", "Normal", "Low"].map((level) => {
+            const f: SearchFilter = { kind: "importance", value: level };
+            return (
+              <button
+                key={level}
+                onClick={() => onAdd(f)}
+                className={`rounded-full px-2 py-0.5 text-[11px] border transition-colors ${
+                  has(f)
+                    ? "bg-primary/15 text-primary border-primary/30"
+                    : "border-border text-foreground/70 hover:text-foreground hover:bg-secondary"
+                }`}
+              >
+                {level}
+              </button>
+            );
+          })}
         </div>
       </div>
 
@@ -382,6 +449,33 @@ function FilterMenu({
           Done
         </button>
       </div>
+    </div>
+  );
+}
+
+/** Small labelled date input: picking a date adds an After/Before pill at once
+ *  (a native date picker has no "submit", so we commit on change). */
+function DateInput({
+  label,
+  value,
+  onAdd,
+}: {
+  label: string;
+  value: string;
+  onAdd: (value: string) => void;
+}) {
+  return (
+    <div className="flex items-center gap-1.5 bg-secondary rounded px-2 py-1">
+      <span className="text-[10px] text-muted-foreground w-10 flex-shrink-0">{label}</span>
+      <input
+        type="date"
+        value={value}
+        onChange={(e) => {
+          const v = e.target.value.trim();
+          if (v) onAdd(v);
+        }}
+        className="flex-1 min-w-0 bg-transparent outline-none text-[11px] text-foreground [color-scheme:light] dark:[color-scheme:dark]"
+      />
     </div>
   );
 }

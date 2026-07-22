@@ -24,7 +24,16 @@ export type SearchFilterKind =
   /** Mail carrying none of the rule-engine labels. The complement of every tag
    *  pill, and the same definition the Email Cleaner's Uncategorized tab uses
    *  (core.UNCATEGORIZED_SQL) — one meaning of "uncategorized" per mailbox. */
-  | "uncategorized";
+  | "uncategorized"
+  /** Received on/after a date (value: "YYYY-MM-DD"). */
+  | "after"
+  /** Received on/before a date (value: "YYYY-MM-DD"). */
+  | "before"
+  /** The SENDER's assigned category (email_senders.category), e.g. "Newsletter"
+   *  — distinct from a `tag` pill, which matches a label on the message. */
+  | "sendercat"
+  /** Provider importance (value: "high" | "normal" | "low"). */
+  | "importance";
 
 export interface SearchFilter {
   kind: SearchFilterKind;
@@ -55,7 +64,9 @@ const EXCLUSIVE_PAIRS: [SearchFilterKind, SearchFilterKind][] = [
  * applied), adding a second replaces the first. Tags are NOT singleton — they
  * stack and AND together.
  */
-const SINGLETON_KINDS = new Set<SearchFilterKind>(["from", "to"]);
+const SINGLETON_KINDS = new Set<SearchFilterKind>([
+  "from", "to", "after", "before", "sendercat", "importance",
+]);
 
 /** `prefix:` → the pill it produces. Value-taking prefixes. */
 const VALUE_PREFIXES: Record<string, SearchFilterKind> = {
@@ -64,6 +75,9 @@ const VALUE_PREFIXES: Record<string, SearchFilterKind> = {
   tag: "tag",
   label: "tag",
   category: "tag",
+  after: "after",
+  before: "before",
+  importance: "importance",
 };
 
 /** Whole tokens that map to a flag pill, e.g. `is:unread`. */
@@ -86,6 +100,10 @@ const PILL_LABELS: Record<SearchFilterKind, string> = {
   starred: "Starred",
   attachments: "Has attachment",
   uncategorized: "Uncategorized",
+  after: "After",
+  before: "Before",
+  sendercat: "Category",
+  importance: "Importance",
 };
 
 /** Human text for a chip: "From: Fracktal Finance", "Unread". */
@@ -183,6 +201,10 @@ export function toSearchParams(
   | "isStarred"
   | "hasAttachments"
   | "uncategorized"
+  | "senderCategory"
+  | "importance"
+  | "receivedAfter"
+  | "receivedBefore"
 > {
   const labels = filters.filter((f) => f.kind === "tag").map((f) => f.value);
   // Multiple from:/to: pills would AND into nothing (one sender can't be two
@@ -191,6 +213,8 @@ export function toSearchParams(
     [...filters].reverse().find((f) => f.kind === kind)?.value;
   const has = (kind: SearchFilterKind) => filters.some((f) => f.kind === kind);
 
+  const after = last("after");
+  const before = last("before");
   return {
     labels: labels.length ? labels : undefined,
     fromAddr: last("from"),
@@ -199,6 +223,13 @@ export function toSearchParams(
     isStarred: has("starred") ? true : undefined,
     hasAttachments: has("attachments") ? true : undefined,
     uncategorized: has("uncategorized") ? true : undefined,
+    senderCategory: last("sendercat"),
+    importance: last("importance"),
+    // A bare date means the whole day: "after 2026-07-01" starts at its
+    // midnight, "before 2026-07-31" runs to the END of that day (not its
+    // midnight, which would exclude everything that arrived on it).
+    receivedAfter: after || undefined,
+    receivedBefore: before ? `${before}T23:59:59` : undefined,
   };
 }
 

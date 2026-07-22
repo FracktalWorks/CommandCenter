@@ -1853,30 +1853,35 @@ function PlanDayPanel({
           </button>
         </div>
 
-        <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter") void run(note);
-            }}
-            placeholder="How's your energy? e.g. “low energy, lots of meetings”"
-            className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-          />
-          <button
-            type="button"
-            onClick={() => void run(note)}
-            disabled={loading}
-            className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-          >
-            {loading ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <Wand2 className="h-3.5 w-3.5" />
-            )}
-            Re-plan
-          </button>
-        </div>
+        {/* The energy note steers the LLM ranking — which only runs in "plan"
+            mode. Replan/rollover are deterministic repacks server-side, so
+            showing the input there would be a lie (the note is ignored). */}
+        {!isReplan && (
+          <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
+            <input
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void run(note);
+              }}
+              placeholder="How's your energy? e.g. “low energy, lots of meetings”"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+            />
+            <button
+              type="button"
+              onClick={() => void run(note)}
+              disabled={loading}
+              className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="h-3.5 w-3.5" />
+              )}
+              Re-plan
+            </button>
+          </div>
+        )}
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {error ? (

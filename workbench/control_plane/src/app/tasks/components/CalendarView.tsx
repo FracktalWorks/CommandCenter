@@ -311,12 +311,33 @@ export function CalendarView() {
 
   // Every scheduling mutation goes through applySchedule so it lands in the
   // undo toast — a mis-drag or stray unschedule is always one tap from safe.
-  const schedule = (item: GtdItem, day: Date, at?: Date) => {
-    const mins = item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
+  // Without `at`, the task lands in the day's FIRST FREE SLOT (from now, when
+  // the day is today). An already-scheduled item keeps its block length and
+  // its own old block never counts as "busy".
+  const schedule = (item: GtdItem, day: Date, at?: Date, label = "Scheduled") => {
+    const blockMins =
+      item.scheduledStart && item.scheduledEnd
+        ? Math.max(
+            SNAP_MINS,
+            Math.round(
+              (new Date(item.scheduledEnd).getTime() -
+                new Date(item.scheduledStart).getTime()) /
+                60000,
+            ),
+          )
+        : undefined;
+    const mins = blockMins ?? item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
     const start =
-      at ?? firstFreeSlot(blocksForDay(items, day), day, mins, dayStart, dayEnd);
+      at ??
+      firstFreeSlot(
+        blocksForDay(items, day).filter((b) => b.item.id !== item.id),
+        day,
+        mins,
+        dayStart,
+        dayEnd,
+      );
     const end = new Date(start.getTime() + mins * 60000);
-    applySchedule("Scheduled", [
+    applySchedule(label, [
       {
         id: item.id,
         patch: {
@@ -326,6 +347,10 @@ export function CalendarView() {
       },
     ]);
   };
+  // "Move to next free slot" — the one-gesture fix for an overdue block (and
+  // the menu's home for the old Timebox-into-first-slot behavior).
+  const moveToNextFree = (item: GtdItem) =>
+    schedule(item, startOfDay(new Date()), undefined, "Moved to next free slot");
   const unschedule = (item: GtdItem) =>
     applySchedule("Removed from calendar", [
       { id: item.id, patch: { scheduledStart: "", scheduledEnd: "" } },
@@ -722,6 +747,7 @@ export function CalendarView() {
                 updateItem(item.id, { flexible })
               }
               onReschedulePopup={openSchedule}
+              onMoveToFree={moveToNextFree}
               onDelete={(id) => requestDelete([id])}
             />
           )}
@@ -742,6 +768,11 @@ export function CalendarView() {
             doneStats={doneStats}
             onPlan={() => setPlanMode("plan")}
             onOpen={openFocus}
+            onTimebox={(t) =>
+              schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)
+            }
+            onReschedulePopup={openSchedule}
+            onDelete={(id) => requestDelete([id])}
           />
         )}
       </div>
@@ -2149,6 +2180,7 @@ function TimeGrid({
   onPickSlot,
   onSetFlexible,
   onReschedulePopup,
+  onMoveToFree,
   onDelete,
 }: {
   days: Date[];
@@ -2173,6 +2205,9 @@ function TimeGrid({
   onSetFlexible: (item: GtdItem, flexible: boolean) => void;
   /** "Reschedule…" → the global Schedule popup (date/time picker + Unschedule). */
   onReschedulePopup: (id: string) => void;
+  /** "Move to next free slot" — re-timebox into today's first opening (the
+   *  one-gesture fix for an overdue block). */
+  onMoveToFree: (item: GtdItem) => void;
   /** "Delete task…" → the store's confirm-first delete flow. */
   onDelete: (id: string) => void;
 }) {
@@ -2799,6 +2834,16 @@ function TimeGrid({
                 ]
               : []),
             { kind: "sep" },
+            ...(!isDone
+              ? [
+                  {
+                    kind: "item",
+                    label: "Move to next free slot",
+                    icon: CalendarPlus,
+                    onSelect: () => onMoveToFree(it),
+                  } as CtxItem,
+                ]
+              : []),
             {
               kind: "item",
               label: "Reschedule…",
@@ -2937,6 +2982,9 @@ function UnscheduledRail({
   doneStats,
   onPlan,
   onOpen,
+  onTimebox,
+  onReschedulePopup,
+  onDelete,
 }: {
   tasks: GtdItem[];
   capacityMins: number;
@@ -2952,8 +3000,18 @@ function UnscheduledRail({
   doneStats: { count: number; mins: number };
   onPlan: () => void;
   onOpen: (id: string) => void;
+  /** context menu: timebox into the first free slot (no dragging needed). */
+  onTimebox: (t: GtdItem) => void;
+  /** context menu: exact date/time via the global Schedule popup. */
+  onReschedulePopup: (id: string) => void;
+  /** context menu: confirm-first delete flow. */
+  onDelete: (id: string) => void;
 }) {
   const over = capacityMins > capacityTarget;
+  // Right-click menu on a card (the rail is desktop-only, so no long-press).
+  const [ctx, setCtx] = useState<{ x: number; y: number; item: GtdItem } | null>(
+    null,
+  );
   const leveragePct =
     capacityMins > 0 ? Math.round((leveragedMins / capacityMins) * 100) : 0;
   // ONE list: ★ One Thing first, then approaching deadlines (soonest first),
@@ -3027,9 +3085,13 @@ function UnscheduledRail({
                 key={t.id}
                 draggable
                 // Same grammar as a calendar block: CLICK opens the task card,
-                // CLICK-AND-HOLD drags it onto the grid at the slot you want.
-                // (A completed drag never emits the click.)
+                // CLICK-AND-HOLD drags it onto the grid at the slot you want,
+                // RIGHT-CLICK for everything else (incl. first-free-slot).
                 onClick={() => onOpen(t.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setCtx({ x: e.clientX, y: e.clientY, item: t });
+                }}
                 onDragStart={(e) => {
                   e.dataTransfer.setData(
                     DRAG_TYPE,
@@ -3141,6 +3203,54 @@ function UnscheduledRail({
           Plan my day
         </button>
       </div>
+
+      {/* card context menu */}
+      {ctx && (
+        <ContextMenu
+          x={ctx.x}
+          y={ctx.y}
+          items={[
+            {
+              kind: "item",
+              label: "Open task",
+              icon: ExternalLink,
+              onSelect: () => onOpen(ctx.item.id),
+            },
+            {
+              kind: "item",
+              label: "Timebox → first free slot",
+              icon: CalendarPlus,
+              onSelect: () => onTimebox(ctx.item),
+            },
+            { kind: "sep" },
+            {
+              kind: "item",
+              label:
+                ctx.item.id === oneThingId
+                  ? "Unset One Thing"
+                  : "Make it the One Thing",
+              icon: Star,
+              checked: ctx.item.id === oneThingId,
+              onSelect: () => onToggleOneThing(ctx.item.id),
+            },
+            { kind: "sep" },
+            {
+              kind: "item",
+              label: "Schedule…",
+              icon: CalendarClock,
+              onSelect: () => onReschedulePopup(ctx.item.id),
+            },
+            {
+              kind: "item",
+              label: "Delete task…",
+              icon: Trash2,
+              danger: true,
+              onSelect: () => onDelete(ctx.item.id),
+            },
+          ]}
+          onClose={() => setCtx(null)}
+        />
+      )}
     </aside>
   );
 }

@@ -54,11 +54,34 @@ def _db(seq):
 
 
 async def test_a_statused_thread_is_a_conversation_no_more_queries() -> None:
-    """The status row is a judgement already made; it outlives any one message.
-    This is the cheapest exit, so it must not go on to count messages."""
+    """A NEEDS_REPLY/AWAITING/DONE row is a judgement already made; it outlives
+    any one message. This is the cheapest exit, so it must not go on to count
+    messages."""
     db = _db([_result(fetchone=(1,))])
     assert await _rz._thread_is_conversation(db, "acc", "t1") is True
     assert db.execute.await_count == 1
+    assert "NEEDS_REPLY" in str(db.execute.await_args_list[0][0][0])
+
+
+async def test_an_fyi_row_alone_proves_nothing() -> None:
+    """FYI is ALSO the default stamp for "nothing matched" — 3,226 of the live
+    account's 3,535 threads carry one, newsletters included. Treating it as
+    proof of conversation made the gate classify virtually the whole mailbox
+    as conversations: an LLM determination per repeat newsletter, and every
+    Newsletter/Receipt label suppressed in favour of FYI. Caught in prod
+    within minutes of deploy (0 messages harmed); pinned here so nobody
+    "simplifies" the status filter back to EXISTS.
+
+    The SQL filters FYI out, so an FYI-only thread returns NO row — and must
+    fall through to the participation test, where a blast (external, no our-
+    side message) stays bulk."""
+    db = _db([
+        _result(fetchone=None),  # FYI row filtered out by the status IN (…)
+        _result(fetchone=SimpleNamespace(email_address="me@fracktal.in")),
+        _result(fetchone=None),
+        _result(fetchone=SimpleNamespace(n=3, ours=False)),  # blast thread
+    ])
+    assert await _rz._thread_is_conversation(db, "acc", "t1") is False
 
 
 async def test_back_and_forth_with_our_side_is_a_conversation() -> None:

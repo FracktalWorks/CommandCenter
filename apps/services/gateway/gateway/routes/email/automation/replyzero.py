@@ -786,15 +786,20 @@ async def _thread_is_conversation(
     conversation (live account, 2026-07-21).
 
     Two signals, cheapest first, no model calls:
-      1. The thread already has a status row — it has been judged
-         conversational before, and that judgement outlives any one message.
+      1. A status row saying NEEDS_REPLY / AWAITING / DONE — statuses that are
+         only ever written from a genuine two-way judgement, which outlives
+         any one message. FYI rows are deliberately NOT enough: FYI is also
+         the default stamp for "nothing matched" (3,226 of the live account's
+         3,535 threads carry one, newsletters included), so an FYI row alone
+         proves nothing and falls through to the participation test.
       2. Real back-and-forth: ≥2 messages and OUR side (the owner or their org
          domains) has participated. A newsletter blast never trips this; a
          colleague thread or a vendor exchange does.
     """
     st = (await db.execute(text(
         """SELECT 1 FROM email_thread_status
-            WHERE account_id = :aid AND thread_id = :tid"""
+            WHERE account_id = :aid AND thread_id = :tid
+              AND status IN ('NEEDS_REPLY', 'AWAITING', 'DONE')"""
     ), {"aid": account_id, "tid": thread_id})).fetchone()
     if st is not None:
         return True

@@ -26,10 +26,8 @@ from gateway.routes.email.core import (
     _account_scope,
     _assert_account_owner,
     _get_db,
-    _instantiate_provider,
     _llm_json,
     _log,
-    _persist_rotated_creds,
     provider_session,
     router,
 )
@@ -395,29 +393,24 @@ async def _bulk_reconcile_provider(
     """
     db = await _get_db()
     try:
-        row = (await db.execute(text(
-            "SELECT provider, credentials_encrypted FROM email_accounts WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if not row:
-            return
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-        provider = _instantiate_provider(row.provider, creds)
-        if not await provider.authenticate():
-            return
-        rekeys = await provider.bulk_apply(provider_msg_ids, action)
-        # Outlook's /move mints a NEW message id and invalidates the old one.
-        # Dropping these (as this job used to) leaves every bulk-archived
-        # Outlook message pointing at a dead id, so the next action on it 404s
-        # until a full re-sync happens to notice.
-        for old_id, new_id in rekeys.items():
-            await db.execute(text(
-                "UPDATE email_messages SET provider_message_id = :new, "
-                "updated_at = now() "
-                "WHERE account_id = :aid AND provider_message_id = :old"
-            ), {"aid": account_id, "old": old_id, "new": new_id})
-        await _persist_rotated_creds(db, store, account_id, provider)
+        # Unscoped session: background task, no request user. Missing account
+        # raises 404 → caught by the broad handler below.
+        async with provider_session(
+            db, None, account_id=account_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                return
+            rekeys = await sess.provider.bulk_apply(provider_msg_ids, action)
+            # Outlook's /move mints a NEW message id and invalidates the old
+            # one. Dropping these (as this job used to) leaves every
+            # bulk-archived Outlook message pointing at a dead id, so the next
+            # action on it 404s until a full re-sync happens to notice.
+            for old_id, new_id in rekeys.items():
+                await db.execute(text(
+                    "UPDATE email_messages SET provider_message_id = :new, "
+                    "updated_at = now() "
+                    "WHERE account_id = :aid AND provider_message_id = :old"
+                ), {"aid": account_id, "old": old_id, "new": new_id})
         await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.bulk_reconcile_failed", account_id=account_id,
@@ -680,27 +673,22 @@ async def _create_block_filter(
     providers without filters (IMAP) — the AUTO_ARCHIVED sweep covers those."""
     db = await _get_db()
     try:
-        row = (await db.execute(text(
-            "SELECT provider, credentials_encrypted FROM email_accounts WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if not row:
-            return
-        from acb_llm.key_store import get_key_store  # noqa: PLC0415
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.credentials_encrypted))
-        provider = _instantiate_provider(row.provider, creds)
-        if not await provider.authenticate():
-            return
-        filter_id = await provider.create_filter(
-            from_email=email, archive=True, label=label
-        )
-        await _persist_rotated_creds(db, store, account_id, provider)
-        if filter_id:
-            await db.execute(text(
-                "UPDATE email_newsletters SET auto_archive_filter_id = :fid, "
-                "updated_at = now() WHERE account_id = :aid "
-                "AND LOWER(email) = LOWER(:email)"
-            ), {"fid": filter_id, "aid": account_id, "email": email})
+        # Unscoped session: background task, no request user. Missing account
+        # raises 404 → caught by the broad handler below.
+        async with provider_session(
+            db, None, account_id=account_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                return
+            filter_id = await sess.provider.create_filter(
+                from_email=email, archive=True, label=label
+            )
+            if filter_id:
+                await db.execute(text(
+                    "UPDATE email_newsletters SET auto_archive_filter_id = :fid, "
+                    "updated_at = now() WHERE account_id = :aid "
+                    "AND LOWER(email) = LOWER(:email)"
+                ), {"fid": filter_id, "aid": account_id, "email": email})
         await db.commit()
         _log.info("email.block_filter", account_id=account_id, email=email,
                   filter_id=filter_id or "none")
@@ -718,26 +706,24 @@ async def _remove_block_filter(account_id: str, email: str) -> None:
     db = await _get_db()
     try:
         row = (await db.execute(text(
-            """SELECT n.auto_archive_filter_id AS fid, a.provider,
-                      a.credentials_encrypted AS creds
-               FROM email_newsletters n
-               JOIN email_accounts a ON a.id = n.account_id
-               WHERE n.account_id = :aid AND LOWER(n.email) = LOWER(:email)"""
+            """SELECT auto_archive_filter_id AS fid FROM email_newsletters
+               WHERE account_id = :aid AND LOWER(email) = LOWER(:email)"""
         ), {"aid": account_id, "email": email})).fetchone()
         if not row or not row.fid:
             return
-        from acb_llm.key_store import get_key_store  # noqa: PLC0415
-        store = get_key_store()
-        creds = json.loads(store.decrypt(row.creds))
-        provider = _instantiate_provider(row.provider, creds)
-        if await provider.authenticate():
-            await provider.delete_filter(row.fid)
-            await _persist_rotated_creds(db, store, account_id, provider)
-        await db.execute(text(
-            "UPDATE email_newsletters SET auto_archive_filter_id = NULL, "
-            "updated_at = now() WHERE account_id = :aid "
-            "AND LOWER(email) = LOWER(:email)"
-        ), {"aid": account_id, "email": email})
+        # Unscoped session: background task, no request user. The row is
+        # cleared even when auth fails — matching the pre-refactor behaviour
+        # (the filter id is stale either way once the user unblocked).
+        async with provider_session(
+            db, None, account_id=account_id, require_auth=False,
+        ) as sess:
+            if sess.authed:
+                await sess.provider.delete_filter(row.fid)
+            await db.execute(text(
+                "UPDATE email_newsletters SET auto_archive_filter_id = NULL, "
+                "updated_at = now() WHERE account_id = :aid "
+                "AND LOWER(email) = LOWER(:email)"
+            ), {"aid": account_id, "email": email})
         await db.commit()
         _log.info("email.block_filter_removed", account_id=account_id, email=email)
     except Exception as exc:  # noqa: BLE001

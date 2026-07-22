@@ -21,11 +21,8 @@ from gateway.routes.email.core import (
     _attachment_summaries,
     _fmt_addr_list,
     _get_db,
-    _instantiate_provider,
     _llm_json,
     _log,
-    _persist_rotated_creds,
-    _provider_for_account,
     _row_to_message,
     email_memory_scope,
     provider_session,
@@ -309,27 +306,20 @@ async def _cleanup_thread_drafts(account_id: str, thread_id: str) -> None:
         ), {"aid": account_id, "tid": thread_id})).fetchall()
         if not rows:
             return
-        acc = (await db.execute(text(
-            "SELECT provider, credentials_encrypted FROM email_accounts "
-            "WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if not acc:
-            return
-        from acb_llm.key_store import get_key_store  # noqa: PLC0415
-        store = get_key_store()
-        creds = json.loads(store.decrypt(acc.credentials_encrypted))
-        provider = _instantiate_provider(acc.provider, creds)
-        if not await provider.authenticate():
-            return
-        for r in rows:
-            try:
-                await provider.trash_message(r.provider_message_id)
-            except Exception:  # noqa: BLE001 — one stuck draft shouldn't abort
-                pass
-            await db.execute(text(
-                "DELETE FROM email_messages WHERE id = :id"), {"id": r.id})
-        if provider.credentials_dirty():
-            await _persist_rotated_creds(db, store, account_id, provider)
+        # Unscoped session: background task, no request user. Missing account
+        # raises 404 → caught by the broad handler below.
+        async with provider_session(
+            db, None, account_id=account_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                return
+            for r in rows:
+                try:
+                    await sess.provider.trash_message(r.provider_message_id)
+                except Exception:  # noqa: BLE001 — one stuck draft: no abort
+                    pass
+                await db.execute(text(
+                    "DELETE FROM email_messages WHERE id = :id"), {"id": r.id})
         await db.commit()
         _log.info("email.thread_drafts_cleaned",
                   account_id=account_id, count=len(rows))
@@ -1667,86 +1657,89 @@ async def upsert_draft(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        provider, store, owner_email = await _provider_for_account(
-            db, req.account_id, user.email or "anonymous"
-        )
-        if not await provider.authenticate():
-            raise HTTPException(status_code=401, detail="Email account auth failed")
+        async with provider_session(
+            db, user.email or "anonymous", account_id=req.account_id,
+        ) as sess:
+            provider = sess.provider
 
-        to = [t for t in (req.to or []) if t]
-        cc = [c for c in (req.cc or []) if c]
-        bcc = [b for b in (req.bcc or []) if b]
-        subject = req.subject or ""
-        atts = _resolve_draft_attachments(req.attachments, req.artifacts)
-        thread_id: str | None = None
+            to = [t for t in (req.to or []) if t]
+            cc = [c for c in (req.cc or []) if c]
+            bcc = [b for b in (req.bcc or []) if b]
+            subject = req.subject or ""
+            atts = _resolve_draft_attachments(req.attachments, req.artifacts)
+            thread_id: str | None = None
 
-        if req.draft_id:
-            drow = (await db.execute(text(
-                "SELECT provider_message_id, thread_id, subject FROM email_messages"
-                " WHERE id = :id AND account_id = :aid"
-                " AND LOWER(folder) IN ('drafts', 'draft')"
-            ), {"id": req.draft_id, "aid": req.account_id})).fetchone()
-            if not drow:
-                raise HTTPException(status_code=404, detail="Draft not found")
-            thread_id = drow.thread_id
-            subject = subject or (drow.subject or "")
-            try:
-                provider_id = await provider.update_draft(
-                    drow.provider_message_id, to=to or None,
-                    subject=subject or None, body_text=req.body,
-                    thread_id=thread_id or None,
-                    cc=cc, bcc=bcc, attachments=atts or None,
-                )
-            except NotImplementedError:
-                # No in-place update primitive → make a fresh draft, drop the old.
+            if req.draft_id:
+                drow = (await db.execute(text(
+                    "SELECT provider_message_id, thread_id, subject"
+                    " FROM email_messages"
+                    " WHERE id = :id AND account_id = :aid"
+                    " AND LOWER(folder) IN ('drafts', 'draft')"
+                ), {"id": req.draft_id, "aid": req.account_id})).fetchone()
+                if not drow:
+                    raise HTTPException(status_code=404, detail="Draft not found")
+                thread_id = drow.thread_id
+                subject = subject or (drow.subject or "")
+                try:
+                    provider_id = await provider.update_draft(
+                        drow.provider_message_id, to=to or None,
+                        subject=subject or None, body_text=req.body,
+                        thread_id=thread_id or None,
+                        cc=cc, bcc=bcc, attachments=atts or None,
+                    )
+                except NotImplementedError:
+                    # No in-place update primitive → fresh draft, drop the old.
+                    provider_id = await provider.create_draft(
+                        to=to, subject=subject, body_text=req.body,
+                        thread_id=thread_id or None, cc=cc, bcc=bcc,
+                        attachments=atts or None,
+                    )
+                    try:
+                        await provider.trash_message(drow.provider_message_id)
+                    except Exception:  # noqa: BLE001
+                        pass
+            elif req.reply_to_message_id:
+                # Accept either the local message id (inline reply) or the
+                # provider message id (full composer pop-out passes
+                # providerMessageId).
+                rrow = (await db.execute(text(
+                    "SELECT provider_message_id, thread_id, subject, from_address"
+                    " FROM email_messages WHERE account_id = :aid"
+                    " AND (id = :id OR provider_message_id = :id)"
+                    " LIMIT 1"
+                ), {"id": req.reply_to_message_id,
+                    "aid": req.account_id})).fetchone()
+                if not rrow:
+                    raise HTTPException(
+                        status_code=404, detail="Reply target not found")
+                thread_id = rrow.thread_id
+                if not subject:
+                    s0 = rrow.subject or ""
+                    subject = s0 if s0.lower().startswith("re:") else f"Re: {s0}"
+                if not to:
+                    frm = rrow.from_address \
+                        if isinstance(rrow.from_address, dict) \
+                        else json.loads(rrow.from_address or "{}")
+                    if frm.get("email"):
+                        to = [frm["email"]]
                 provider_id = await provider.create_draft(
                     to=to, subject=subject, body_text=req.body,
+                    reply_to_message_id=rrow.provider_message_id,
                     thread_id=thread_id or None, cc=cc, bcc=bcc,
                     attachments=atts or None,
                 )
-                try:
-                    await provider.trash_message(drow.provider_message_id)
-                except Exception:  # noqa: BLE001
-                    pass
-        elif req.reply_to_message_id:
-            # Accept either the local message id (inline reply) or the provider
-            # message id (full composer pop-out passes providerMessageId).
-            rrow = (await db.execute(text(
-                "SELECT provider_message_id, thread_id, subject, from_address"
-                " FROM email_messages WHERE account_id = :aid"
-                " AND (id = :id OR provider_message_id = :id)"
-                " LIMIT 1"
-            ), {"id": req.reply_to_message_id, "aid": req.account_id})).fetchone()
-            if not rrow:
-                raise HTTPException(status_code=404, detail="Reply target not found")
-            thread_id = rrow.thread_id
-            if not subject:
-                s0 = rrow.subject or ""
-                subject = s0 if s0.lower().startswith("re:") else f"Re: {s0}"
-            if not to:
-                frm = rrow.from_address if isinstance(rrow.from_address, dict) \
-                    else json.loads(rrow.from_address or "{}")
-                if frm.get("email"):
-                    to = [frm["email"]]
-            provider_id = await provider.create_draft(
-                to=to, subject=subject, body_text=req.body,
-                reply_to_message_id=rrow.provider_message_id,
-                thread_id=thread_id or None, cc=cc, bcc=bcc,
-                attachments=atts or None,
-            )
-        else:
-            provider_id = await provider.create_draft(
-                to=to, subject=subject, body_text=req.body, cc=cc, bcc=bcc,
-                attachments=atts or None,
-            )
+            else:
+                provider_id = await provider.create_draft(
+                    to=to, subject=subject, body_text=req.body, cc=cc, bcc=bcc,
+                    attachments=atts or None,
+                )
 
-        local_id = await _upsert_local_draft(
-            db, req.account_id, provider_id, thread_id=thread_id,
-            owner_email=owner_email, to_email=(to[0] if to else ""),
-            subject=subject, body=req.body, cc=cc, bcc=bcc,
-            has_attachments=bool(atts),
-        )
-        await _persist_rotated_creds(db, store, req.account_id, provider)
+            local_id = await _upsert_local_draft(
+                db, req.account_id, provider_id, thread_id=thread_id,
+                owner_email=sess.owner_email, to_email=(to[0] if to else ""),
+                subject=subject, body=req.body, cc=cc, bcc=bcc,
+                has_attachments=bool(atts),
+            )
         await db.commit()
         return await _fetch_message_dict(db, local_id)
     finally:
@@ -1778,68 +1771,68 @@ async def send_draft_endpoint(
         ), {"id": req.draft_id, "aid": req.account_id})).fetchone()
         if not drow:
             raise HTTPException(status_code=404, detail="Draft not found")
-        provider, store, _owner = await _provider_for_account(
-            db, req.account_id, user.email or "anonymous"
-        )
-        if not await provider.authenticate():
-            raise HTTPException(status_code=401, detail="Email account auth failed")
+        async with provider_session(
+            db, user.email or "anonymous", account_id=req.account_id,
+        ) as sess:
+            provider = sess.provider
 
-        # The account signature is appended at send time; the stored draft is
-        # signature-free. The provider draft is already threaded onto its
-        # conversation (created via Gmail threadId / Outlook createReply), so we
-        # sign it IN PLACE (update_draft, which preserves the thread) and then
-        # send it natively — the reply lands in its conversation. Sending a fresh
-        # message instead would start a new thread (the "reply shows up as a
-        # separate email in Sent" bug). Providers without an update/send-draft
-        # primitive (IMAP) fall back to a thread-aware fresh send.
-        from gateway.routes.email.signature import \
-            build_signed_bodies  # noqa: PLC0415
-        sig_row = (await db.execute(text(
-            "SELECT signature FROM email_assistant_settings WHERE account_id = :aid"
-        ), {"aid": req.account_id})).fetchone()
-        signature = (sig_row.signature if sig_row else "") or ""
-        recips = drow.to_addresses if isinstance(drow.to_addresses, list) \
-            else json.loads(drow.to_addresses or "[]")
-        to = [a.get("email") for a in recips if a.get("email")]
+            # The account signature is appended at send time; the stored draft
+            # is signature-free. The provider draft is already threaded onto its
+            # conversation (created via Gmail threadId / Outlook createReply),
+            # so we sign it IN PLACE (update_draft, which preserves the thread)
+            # and then send it natively — the reply lands in its conversation.
+            # Sending a fresh message instead would start a new thread (the
+            # "reply shows up as a separate email in Sent" bug). Providers
+            # without an update/send-draft primitive (IMAP) fall back to a
+            # thread-aware fresh send.
+            from gateway.routes.email.signature import \
+                build_signed_bodies  # noqa: PLC0415
+            sig_row = (await db.execute(text(
+                "SELECT signature FROM email_assistant_settings "
+                "WHERE account_id = :aid"
+            ), {"aid": req.account_id})).fetchone()
+            signature = (sig_row.signature if sig_row else "") or ""
+            recips = drow.to_addresses if isinstance(drow.to_addresses, list) \
+                else json.loads(drow.to_addresses or "[]")
+            to = [a.get("email") for a in recips if a.get("email")]
 
-        async def _send_new_and_trash() -> None:
-            # Fallback (e.g. IMAP): send a fresh message threaded via the reply
-            # reference, then bin the leftover draft.
-            send_text, send_html = build_signed_bodies(
-                signature, drow.body_text or "", None)
-            await provider.send_message(
-                to=to, subject=drow.subject or "",
-                body_text=send_text, body_html=send_html,
-                reply_to_message_id=drow.thread_id or None,
-                thread_id=drow.thread_id or None)
-            try:
-                await provider.trash_message(drow.provider_message_id)
-            except Exception:  # noqa: BLE001
-                pass
-
-        if signature.strip():
-            send_text, send_html = build_signed_bodies(
-                signature, drow.body_text or "", None)
-            try:
-                await provider.update_draft(
-                    drow.provider_message_id, to=to or None,
-                    subject=drow.subject or None,
+            async def _send_new_and_trash() -> None:
+                # Fallback (e.g. IMAP): send a fresh message threaded via the
+                # reply reference, then bin the leftover draft.
+                send_text, send_html = build_signed_bodies(
+                    signature, drow.body_text or "", None)
+                await provider.send_message(
+                    to=to, subject=drow.subject or "",
                     body_text=send_text, body_html=send_html,
+                    reply_to_message_id=drow.thread_id or None,
                     thread_id=drow.thread_id or None)
-                await provider.send_draft(drow.provider_message_id)
-            except NotImplementedError:
-                await _send_new_and_trash()
-        else:
-            try:
-                await provider.send_draft(drow.provider_message_id)
-            except NotImplementedError:
-                await _send_new_and_trash()
-        # The draft has left the mailbox — remove the local row.
-        await db.execute(
-            text("DELETE FROM email_messages WHERE id = :id"),
-            {"id": req.draft_id},
-        )
-        await _persist_rotated_creds(db, store, req.account_id, provider)
+                try:
+                    await provider.trash_message(drow.provider_message_id)
+                except Exception:  # noqa: BLE001
+                    pass
+
+            if signature.strip():
+                send_text, send_html = build_signed_bodies(
+                    signature, drow.body_text or "", None)
+                try:
+                    await provider.update_draft(
+                        drow.provider_message_id, to=to or None,
+                        subject=drow.subject or None,
+                        body_text=send_text, body_html=send_html,
+                        thread_id=drow.thread_id or None)
+                    await provider.send_draft(drow.provider_message_id)
+                except NotImplementedError:
+                    await _send_new_and_trash()
+            else:
+                try:
+                    await provider.send_draft(drow.provider_message_id)
+                except NotImplementedError:
+                    await _send_new_and_trash()
+            # The draft has left the mailbox — remove the local row.
+            await db.execute(
+                text("DELETE FROM email_messages WHERE id = :id"),
+                {"id": req.draft_id},
+            )
         await db.commit()
         # Reply complete: learn from the sent body and move the thread out of
         # "Reply" → Awaiting Reply (same hooks as the full /send path).

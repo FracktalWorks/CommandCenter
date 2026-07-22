@@ -115,3 +115,28 @@ async def test_requires_account_or_message() -> None:
     with pytest.raises(ValueError):
         async with m.provider_session(db, "me@x.com"):
             pass
+
+
+async def test_unscoped_mode_uses_the_any_loader() -> None:
+    # user_email=None → background job: load the account with NO ownership
+    # filter, still persisting rotated creds on clean exit.
+    db = MagicMock()
+    db.execute = AsyncMock()
+    provider, store = _provider(authed=True, dirty=True), _store()
+    with patch.object(m, "_provider_for_account_any",
+                      AsyncMock(return_value=(provider, store, "acct@x.com"))) \
+            as any_loader, \
+            patch.object(m, "_provider_for_account", AsyncMock()) as scoped:
+        async with m.provider_session(db, None, account_id="acc1") as sess:
+            assert sess.owner_email == "acct@x.com"
+    any_loader.assert_awaited_once()
+    scoped.assert_not_awaited()  # never the user-scoped loader without a user
+    assert _persist_happened(db)
+
+
+async def test_unscoped_message_scope_is_refused() -> None:
+    # No background path loads by message; a user-less message session is a bug.
+    db = MagicMock()
+    with pytest.raises(ValueError):
+        async with m.provider_session(db, None, message_id="msg1"):
+            pass

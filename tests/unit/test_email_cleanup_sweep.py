@@ -268,11 +268,9 @@ async def test_sweep_pages_until_the_mailbox_runs_dry() -> None:
 
     with patch.object(c, "_SWEEP_PAGE", 2), \
             patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
-            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch.object(c, "_provider_for_account_any", AsyncMock(
+                return_value=(provider, MagicMock(), "own@x.com"))), \
             patch.object(c, "_persist_rotated_creds", AsyncMock()), \
-            patch("acb_llm.key_store.get_key_store",
-                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
-                      return_value="{}")))), \
             patch.object(c, "_uncategorized_inbox", fake_page), \
             patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
             patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
@@ -322,10 +320,8 @@ async def test_live_sweep_aborts_when_provider_auth_fails() -> None:
     import gateway.routes.email.automation.runner as runner
 
     with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
-            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
-            patch("acb_llm.key_store.get_key_store",
-                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
-                      return_value="{}")))), \
+            patch.object(c, "_provider_for_account_any", AsyncMock(
+                return_value=(provider, MagicMock(), "own@x.com"))), \
             patch.object(c, "_uncategorized_inbox", fake_page), \
             patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
             patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
@@ -371,11 +367,9 @@ async def test_a_failed_apply_is_counted_not_swallowed() -> None:
     import gateway.routes.email.automation.runner as runner
 
     with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
-            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch.object(c, "_provider_for_account_any", AsyncMock(
+                return_value=(provider, MagicMock(), "own@x.com"))), \
             patch.object(c, "_persist_rotated_creds", AsyncMock()), \
-            patch("acb_llm.key_store.get_key_store",
-                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
-                      return_value="{}")))), \
             patch.object(c, "_uncategorized_inbox", fake_page), \
             patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
             patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \

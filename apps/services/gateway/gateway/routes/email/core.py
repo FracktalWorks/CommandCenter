@@ -171,6 +171,29 @@ async def _provider_for_account(db: Any, account_id: str, user_email: str):
     return provider, store, row.email_address
 
 
+async def _provider_for_account_any(db: Any, account_id: str):
+    """Unscoped account loader — for BACKGROUND jobs (scheduler ticks, webhook
+    tasks, fire-and-forget cleanups) that act on an account with no request user
+    to scope by. Same contract as ``_provider_for_account`` (404 on a missing
+    account, returns ``(provider, store, owner_email)``) minus the ownership
+    filter, which a background job has no user to apply.
+    """
+    row = (await db.execute(
+        text(
+            """SELECT provider, credentials_encrypted, email_address
+               FROM email_accounts WHERE id = :id"""
+        ),
+        {"id": account_id},
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Account not found")
+    from acb_llm.key_store import get_key_store
+    store = get_key_store()
+    creds = json.loads(store.decrypt(row.credentials_encrypted))
+    provider = _instantiate_provider(row.provider, creds)
+    return provider, store, row.email_address
+
+
 async def _persist_rotated_creds(db: Any, store: Any, account_id: str, provider) -> None:
     """Persist refreshed OAuth tokens if the provider rotated them mid-request."""
     if provider.credentials_dirty():
@@ -206,7 +229,7 @@ class ProviderSession:
 @asynccontextmanager
 async def provider_session(
     db: Any,
-    user_email: str,
+    user_email: str | None,
     *,
     account_id: str | None = None,
     message_id: str | None = None,
@@ -224,6 +247,11 @@ async def provider_session(
     OR ``account_id`` (account-scoped: yields ``owner_email``). A 404 loader
     error propagates unchanged.
 
+    ``user_email=None`` selects the UNSCOPED account loader — for background
+    jobs (scheduler ticks, webhook tasks, fire-and-forget cleanups) that act on
+    an account with no request user to scope by. Message-scoped sessions always
+    require a user (no background path loads by message today).
+
     ``require_auth=True`` (default) raises ``HTTPException(401)`` on auth failure,
     matching the send/draft write-paths. ``require_auth=False`` yields with
     ``authed=False`` so best-effort readers (body hydrate, the cleaner's
@@ -236,6 +264,8 @@ async def provider_session(
     ``db.commit()`` boundary, so nothing here changes when the transaction lands.
     """
     if message_id is not None:
+        if user_email is None:
+            raise ValueError("message-scoped provider_session needs a user")
         provider, pmid, account_id, store = await _provider_for_message(
             db, message_id, user_email,
         )
@@ -244,9 +274,14 @@ async def provider_session(
             provider_message_id=pmid,
         )
     elif account_id is not None:
-        provider, store, owner = await _provider_for_account(
-            db, account_id, user_email,
-        )
+        if user_email is None:
+            provider, store, owner = await _provider_for_account_any(
+                db, account_id,
+            )
+        else:
+            provider, store, owner = await _provider_for_account(
+                db, account_id, user_email,
+            )
         sess = ProviderSession(
             provider=provider, account_id=account_id, store=store,
             owner_email=owner,

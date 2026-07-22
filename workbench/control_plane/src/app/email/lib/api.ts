@@ -4,7 +4,7 @@ import {
   AutomationRule, RuleTestResult, ExecutedRule, AssistantSettings,
   RecentTestResult, ColdSender, KnowledgeEntry,
   LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
-  RuleGuidance,
+  RuleGuidance, MessageTimeline,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -1510,6 +1510,15 @@ export async function getRulesHistory(
     `/email/rules/history?${sp}`
   );
   return res.history ?? [];
+}
+
+/** The audit timeline for one message — everything the automation did to it. */
+export async function getMessageTimeline(
+  messageId: string
+): Promise<MessageTimeline> {
+  return gatewayFetch<MessageTimeline>(
+    `/email/messages/${encodeURIComponent(messageId)}/timeline`
+  );
 }
 
 export async function approveExecution(

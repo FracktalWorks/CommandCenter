@@ -23,6 +23,7 @@ import { SignaturePreview } from "./SignaturePreview";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { LabelMenu } from "./LabelMenu";
 import { LabelChip } from "./LabelChip";
+import { MessageTimelineModal } from "./MessageTimelineModal";
 import { useViewMode } from "@/components/ViewModeProvider";
 
 interface EmailDetailProps {
@@ -41,6 +42,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
   const [read, setRead] = useState(email?.isRead ?? true);
   const [flagged, setFlagged] = useState(email?.isFlagged ?? false);
   const [showMoreMenu, setShowMoreMenu] = useState(false);
+  const [showTimeline, setShowTimeline] = useState(false);
   const [showMoveMenu, setShowMoveMenu] = useState(false);
   const [showLabelMenu, setShowLabelMenu] = useState(false);
   const [replyMode, setReplyMode] = useState<"reply" | "reply-all" | "forward" | null>(
@@ -768,6 +770,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <div className="absolute right-0 top-full mt-1 z-20 bg-popover border border-border rounded-lg shadow-xl py-1 w-44">
                 {[
                   {
+                    label: "View activity",
+                    run: () => setShowTimeline(true),
+                  },
+                  {
                     label: "Mark as spam",
                     run: () => updateEmail(email.id, { folder: "junk" }),
                   },
@@ -1198,6 +1204,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
           </div>
         )}
       </div>
+
+      {showTimeline && email && (
+        <MessageTimelineModal
+          messageId={email.id}
+          subject={email.subject}
+          onClose={() => setShowTimeline(false)}
+        />
+      )}
     </div>
   );
 }

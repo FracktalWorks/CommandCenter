@@ -271,6 +271,84 @@ async def rules_history(
         await db.close()
 
 
+@router.get("/messages/{message_id}/timeline")
+async def message_timeline(
+    message_id: str,
+    user: UserContext = Depends(get_current_user),
+):
+    """The audit timeline for a single message — every automation event that ever
+    touched it, oldest first.
+
+    Reply Zero History is a *global* feed of what the rules engine did across the
+    mailbox; this is its per-message inverse: open one email and see its whole
+    story — when it arrived, and each rule run that classified, labelled, drafted,
+    moved, or failed on it (including corrections that re-ran later). Reuses the
+    same `email_executed_rules` audit rows, scoped to this one message and to the
+    caller's own accounts."""
+    db = await _get_db()
+    try:
+        # Anchor: the message itself (received event) + ownership check. A message
+        # the caller doesn't own — or one we never synced — yields 404, never a
+        # cross-account peek.
+        msg = (await db.execute(text(
+            """SELECT em.id, em.subject, em.received_at, em.folder,
+                      em.from_address ->> 'email' AS from_email,
+                      em.from_address ->> 'name' AS from_name
+               FROM email_messages em
+               JOIN email_accounts ea ON ea.id = em.account_id
+               WHERE em.id = :mid AND ea.user_id = :uid"""
+        ), {"mid": message_id, "uid": user.email or "anonymous"})).fetchone()
+        if msg is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        rows = (await db.execute(text(
+            """SELECT er.id, er.rule_id, er.rule_name, er.status, er.automated,
+                      er.actions_taken, er.reason, er.action_errors,
+                      er.match_source, er.created_at
+               FROM email_executed_rules er
+               WHERE er.message_id = :mid
+               ORDER BY er.created_at ASC"""
+        ), {"mid": message_id})).fetchall()
+
+        events: list[dict[str, Any]] = []
+        if msg.received_at:
+            events.append({
+                "kind": "received",
+                "at": msg.received_at.isoformat(),
+                "from": msg.from_name or msg.from_email or "",
+                "from_email": msg.from_email or "",
+            })
+        for r in rows:
+            actions = (r.actions_taken if isinstance(r.actions_taken, list)
+                       else json.loads(r.actions_taken or "[]"))
+            errors = ((r.action_errors if isinstance(r.action_errors, list)
+                       else json.loads(r.action_errors or "[]"))
+                      if r.action_errors is not None else [])
+            events.append({
+                "kind": "skipped" if r.status == "SKIPPED" else "rule",
+                "at": r.created_at.isoformat() if r.created_at else None,
+                "rule_id": str(r.rule_id) if r.rule_id else None,
+                "rule_name": r.rule_name,
+                "status": r.status,
+                "automated": bool(r.automated),
+                "actions": actions,
+                "action_errors": errors,
+                "match_source": r.match_source,
+                "reason": r.reason,
+            })
+        # Oldest-first overall: the received anchor may post-date an execution row
+        # only in odd backfills, so sort the whole list by timestamp defensively.
+        events.sort(key=lambda e: e.get("at") or "")
+
+        return {
+            "message_id": message_id,
+            "subject": msg.subject or "",
+            "events": events,
+        }
+    finally:
+        await db.close()
+
+
 # Actions a retry will never perform, however the original rule was configured.
 # A retry re-runs a decision the assistant ALREADY made, possibly weeks ago; the
 # label and the move are idempotent and safe to repeat, but sending or drafting

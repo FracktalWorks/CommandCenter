@@ -546,7 +546,7 @@ def _draft_direction_note(email: dict[str, str], to_line: str, cc_line: str) -> 
 async def _llm_draft_reply(
     email: dict[str, str], about: str, signature: str,
     instructions: str = "", context: str = "", user_email: str = "",
-    *, model: str = "tier-powerful",
+    *, model: str = "tier-powerful", interactive_fallback: bool = False,
 ) -> str:
     """Draft a reply body with the LLM, using the user's About context plus any
     extra `context` gathered from memory / specialist agents.
@@ -555,7 +555,14 @@ async def _llm_draft_reply(
     with the prompt fitted to its context window. A confidence gate may make the
     model return the NO_DRAFT sentinel, which is propagated to the caller.
 
-    Falls back to a neutral template if the LLM is unavailable.
+    On LLM failure the behaviour depends on ``interactive_fallback``:
+      * False (default — automation paths): return the NO_DRAFT sentinel so the
+        rule DRAFT_EMAIL action / follow-up nudge simply skips. An outage must
+        NOT auto-file a generic "I'll get back to you" draft into the mailbox
+        and then feed that boilerplate into the edit-learning loop.
+      * True (interactive paths — the compose box's "Draft with AI"): return a
+        neutral human-editable template so the user who clicked the button has a
+        starting point rather than a silent no-op.
     """
     try:
         from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
@@ -684,8 +691,16 @@ async def _llm_draft_reply(
         )
         body = _clean_draft_body((resp.choices[0].message.content or "").strip())
     except Exception as exc:  # noqa: BLE001
-        _log.warning("email.llm_draft_failed", error=str(exc)[:200])
-        body = "Hi,\n\nThanks for your email — I'll review this and get back to you shortly."
+        _log.warning("email.llm_draft_failed", error=str(exc)[:200],
+                     interactive=interactive_fallback)
+        if interactive_fallback:
+            body = ("Hi,\n\nThanks for your email — I'll review this and get "
+                    "back to you shortly.")
+        else:
+            # Automation path: the sentinel makes the caller skip. Never file a
+            # boilerplate draft the user didn't write (and never teach the
+            # edit-learner from it) just because the model was down.
+            body = DRAFT_NO_DRAFT_SENTINEL
     # Confidence gate: when the drafter declined (or returned nothing), return the
     # CANONICAL sentinel with no signature, so every consumer detects it uniformly
     # via _is_no_draft and exact-equality history logging stays consistent.
@@ -1014,6 +1029,7 @@ async def _agent_draft_reply(
     *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
     follow_up: bool = False, confidence: str = "ALL_EMAILS",
     model: str = "tier-powerful", account_id: str = "",
+    interactive_fallback: bool = False,
 ) -> str:
     """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
     rule actions), run the email-assistant MAF agent first; otherwise — and on any
@@ -1039,6 +1055,7 @@ async def _agent_draft_reply(
         email, about, signature, user_email,
         max_agents=max_agents, agent_timeout=agent_timeout,
         instructions=instructions, model=model, account_id=account_id,
+        interactive_fallback=interactive_fallback,
     )
 
 
@@ -1046,6 +1063,7 @@ async def _orchestrate_draft(
     email: dict[str, str], about: str, signature: str, user_email: str,
     *, max_agents: int = 2, agent_timeout: float = 90.0, instructions: str = "",
     model: str = "tier-powerful", account_id: str = "",
+    interactive_fallback: bool = False,
 ) -> str:
     """In-gateway orchestrating drafter: gather context from memory + specialist
     agents (sales / task-manager), then draft. Best-effort; degrades to an
@@ -1117,31 +1135,34 @@ async def _orchestrate_draft(
     draft = await _llm_draft_reply(
         email, about, signature, instructions=instructions,
         context="\n\n".join(context_parts), user_email=user_email,
-        model=model,
+        model=model, interactive_fallback=interactive_fallback,
     )
 
     # 3) Record this exchange in Mem0 (episodic, pgvector) so future drafts to
     # this correspondent have context. Use add_memories_background — NOT
     # add_episode, which targets Graphiti/Neo4j (disabled → silent no-op).
     # Scoped to this inbox (mem_scope) so it reads back under the same key.
-    try:
-        from acb_memory import add_memories_background  # noqa: PLC0415
-        await add_memories_background(
-            mem_scope or "default",
-            [
-                {"role": "user",
-                 "content": (
-                     f"Email from {email.get('from', '')} — subject "
-                     f"'{email.get('subject', '')}': "
-                     f"{(email.get('body', '') or '')[:600]}"
-                 )},
-                {"role": "assistant",
-                 "content": f"I replied: {draft[:600]}"},
-            ],
-            agent_id="email",
-        )
-    except Exception:  # noqa: BLE001
-        pass
+    # Skip when the drafter declined or failed: storing "I replied: NO_DRAFT"
+    # (or a boilerplate fallback) as precedent poisons future retrievals.
+    if not _is_no_draft(draft):
+        try:
+            from acb_memory import add_memories_background  # noqa: PLC0415
+            await add_memories_background(
+                mem_scope or "default",
+                [
+                    {"role": "user",
+                     "content": (
+                         f"Email from {email.get('from', '')} — subject "
+                         f"'{email.get('subject', '')}': "
+                         f"{(email.get('body', '') or '')[:600]}"
+                     )},
+                    {"role": "assistant",
+                     "content": f"I replied: {draft[:600]}"},
+                ],
+                agent_id="email",
+            )
+        except Exception:  # noqa: BLE001
+            pass
 
     return draft
 
@@ -1235,6 +1256,7 @@ async def draft_reply_smart(
             email, about, signature, user.email or "",
             max_agents=1, agent_timeout=18.0, follow_up=req.follow_up,
             model=models["draft"], account_id=req.account_id,
+            interactive_fallback=True,
         )
 
         # Confidence gate (defense-in-depth): if the drafter declined, never
@@ -1334,6 +1356,7 @@ async def compose_assist(
                     ctx, about, signature, user.email or "",
                     max_agents=1, agent_timeout=18.0,
                     model=models["draft"], account_id=req.account_id,
+                    interactive_fallback=True,
                 )
                 if _is_no_draft(draft):
                     return {"draft": "", "skipped": "low_confidence"}

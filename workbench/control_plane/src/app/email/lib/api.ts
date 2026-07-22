@@ -122,6 +122,7 @@ function mapEmail(raw: Record<string, unknown>): Email {
     folder: String(raw.folder ?? "INBOX"),
     receivedAt: raw.received_at ? String(raw.received_at) : new Date().toISOString(),
     syncedAt: raw.synced_at ? String(raw.synced_at) : new Date().toISOString(),
+    snoozedUntil: raw.snoozed_until != null ? String(raw.snoozed_until) : null,
     // Present only on /email/search results.
     rank: raw.rank != null ? Number(raw.rank) : undefined,
     highlight: raw.highlight != null ? String(raw.highlight) : undefined,
@@ -1516,6 +1517,18 @@ export async function getRulesHistory(
     `/email/rules/history?${sp}`
   );
   return res.history ?? [];
+}
+
+/** Snooze (or, with until=null, un-snooze) a conversation. Applies to the whole
+ *  thread; it reappears in the inbox on its own once the time passes. */
+export async function snoozeEmail(
+  messageId: string,
+  until: string | null
+): Promise<{ ok: boolean; snoozed_until: string | null }> {
+  return gatewayFetch(
+    `/email/messages/${encodeURIComponent(messageId)}/snooze`,
+    { method: "POST", body: JSON.stringify({ until }) }
+  );
 }
 
 /** The audit timeline for one message — everything the automation did to it. */

@@ -199,6 +199,13 @@ async def list_messages(
             folder_sql = folder_scope(folder, params)
             if folder_sql:
                 where_clauses.append(folder_sql)
+        # Snooze: hide currently-sleeping conversations from every browse EXCEPT
+        # the Snoozed view itself and a thread load (opening a snoozed thread
+        # still shows all of it). The wake is at query time — once now() passes
+        # snoozed_until the conversation reappears with no scheduler involved.
+        if not thread_id and (folder or "").strip().lower() != "snoozed":
+            where_clauses.append(
+                "(em.snoozed_until IS NULL OR em.snoozed_until <= now())")
         if label:
             # Match either a user label or an assigned category (both TEXT[]).
             where_clauses.append(
@@ -309,7 +316,7 @@ async def list_messages(
                    em.snippet, em.has_attachments,
                    em.is_read, em.is_starred, em.is_flagged,
                    em.importance, em.categories,
-                   em.received_at, em.synced_at"""
+                   em.received_at, em.synced_at, em.snoozed_until"""
         if do_collapse:
             # DISTINCT ON keeps the newest message per conversation IN THIS VIEW
             # (so a thread appears represented by its latest matching message);
@@ -595,7 +602,7 @@ async def get_message(
                           em.snippet, em.has_attachments,
                           em.is_read, em.is_starred, em.is_flagged,
                           em.importance, em.categories,
-                          em.received_at, em.synced_at
+                          em.received_at, em.synced_at, em.snoozed_until
                    FROM email_messages em
                    JOIN email_accounts ea ON em.account_id = ea.id
                    WHERE em.id = :message_id AND ea.user_id = :user_id"""
@@ -819,6 +826,59 @@ async def update_message(
 
         # Return updated message
         return await get_message(message_id, user)
+    finally:
+        await db.close()
+
+
+class SnoozeRequest(BaseModel):
+    # ISO timestamp to sleep until; null clears the snooze (bring it back now).
+    until: str | None = None
+
+
+@router.post("/messages/{message_id}/snooze")
+async def snooze_message(
+    message_id: str,
+    req: SnoozeRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Snooze (or, with until=null, un-snooze) a conversation.
+
+    Snooze is inbox triage, applied to the whole conversation: every message in
+    the thread is stamped so it leaves and returns together (a lone message with
+    no thread is stamped on its own). It's app-local — there is no provider
+    concept of snooze — so nothing is pushed upstream. The conversation reappears
+    on its own once the time passes (query-time wake; no scheduler)."""
+    db = await _get_db()
+    try:
+        row = (await db.execute(text(
+            """SELECT em.account_id, em.thread_id
+               FROM email_messages em
+               JOIN email_accounts ea ON em.account_id = ea.id
+               WHERE em.id = :id AND ea.user_id = :uid"""
+        ), {"id": message_id, "uid": user.email or "anonymous"})).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Message not found")
+
+        until = _parse_dt(req.until) if req.until else None
+        params: dict[str, Any] = {"until": until, "acc": str(row.account_id)}
+        if row.thread_id:
+            scope = "thread_id = :tid"
+            params["tid"] = row.thread_id
+        else:
+            scope = "id = :mid"
+            params["mid"] = message_id
+        res = await db.execute(text(
+            f"""UPDATE email_messages SET snoozed_until = :until, updated_at = now()
+                WHERE account_id = :acc AND {scope}"""
+        ), params)
+        await db.commit()
+        return {
+            "ok": True,
+            "message_id": message_id,
+            "thread_id": row.thread_id,
+            "snoozed_until": until.isoformat() if until else None,
+            "affected": res.rowcount,
+        }
     finally:
         await db.close()
 

@@ -31,6 +31,8 @@ function demoEmailsFor(accountId: string | null, folder: string): Email[] {
   return MOCK_EMAILS.filter((e) => {
     if (accountId && e.accountId !== accountId) return false;
     if (folder === "starred") return e.isStarred;
+    if (folder === "snoozed")
+      return !!e.snoozedUntil && new Date(e.snoozedUntil).getTime() > Date.now();
     if (folder === FOLDER_ALL) return !FOLDER_ALL_EXCLUDES.has(e.folder);
     return e.folder === folder;
   });
@@ -88,7 +90,7 @@ const FOLDER_ALL_EXCLUDES = new Set(["junk", "trash", "sent", "drafts"]);
  * which is exactly why adding `all` silently offered mail a folder that doesn't
  * exist.
  */
-const PSEUDO_FOLDERS = new Set([FOLDER_ALL, "starred"]);
+const PSEUDO_FOLDERS = new Set([FOLDER_ALL, "starred", "snoozed"]);
 
 /** True when `key` is a real provider folder — somewhere mail can actually be
  *  moved to, and paged from. False for the All/Starred views. */
@@ -101,6 +103,7 @@ const DEFAULT_SYSTEM_FOLDERS: EmailFolder[] = [
   { icon: "Mails", label: "All", key: FOLDER_ALL, count: 0, type: "system" },
   { icon: "Inbox", label: "Inbox", key: "inbox", count: 0, type: "system" },
   { icon: "Star", label: "Starred", key: "starred", count: 0, type: "system" },
+  { icon: "Clock", label: "Snoozed", key: "snoozed", count: 0, type: "system" },
   { icon: "Send", label: "Sent", key: "sent", count: 0, type: "system" },
   { icon: "FileText", label: "Drafts", key: "drafts", count: 0, type: "system" },
   { icon: "Archive", label: "Archive", key: "archive", count: 0, type: "system" },
@@ -381,6 +384,9 @@ interface EmailState {
   /** Remove ALL categories from the given messages. */
   clearCategories: (ids: string[]) => Promise<void>;
   deleteEmail: (id: string) => Promise<void>;
+  /** Snooze a conversation until `until` (ISO), or bring it back now (until=null).
+   *  Optimistically drops it from the current view, then reconciles. */
+  snoozeEmail: (id: string, until: string | null) => Promise<void>;
   sendEmail: (params: api.SendEmailParams) => Promise<void>;
   undoSend: () => void;
   /** Create or update a draft (provider + local mirror); returns the saved draft. */
@@ -1270,6 +1276,28 @@ export const useEmailStore = create<EmailState>((set, get) => ({
       clearSelectionIfDeleted();
     } catch (err: any) {
       set({ emails: prevEmails, error: err.message || "Failed to delete email" });
+    }
+  },
+
+  snoozeEmail: async (id, until) => {
+    const prevEmails = get().emails;
+    const target = prevEmails.find((e) => e.id === id);
+    const tid = target?.threadId;
+    // Optimistically drop the whole conversation from the current list — it's
+    // leaving the inbox (snooze) or leaving the Snoozed view (un-snooze). The
+    // refetch below reconciles thread siblings and folder counts with the server.
+    set({
+      emails: prevEmails.filter((e) => (tid ? e.threadId !== tid : e.id !== id)),
+    });
+    if (get().selectedEmailId === id) {
+      set({ selectedEmailId: get().emails[0]?.id ?? null });
+    }
+    if (DEMO) return;
+    try {
+      await api.snoozeEmail(id, until);
+      get().fetchEmails();
+    } catch (err: any) {
+      set({ emails: prevEmails, error: err.message || "Failed to snooze email" });
     }
   },
 

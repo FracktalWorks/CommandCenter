@@ -5,7 +5,7 @@ import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
   Plus, ChevronDown, ChevronRight, Check,
   ShieldAlert, Folder, Mails, MailMinus, Sparkles,
-  BarChart3, Zap, Newspaper, MessageSquare,
+  BarChart3, Zap, Newspaper, MessageSquare, Clock,
 } from "lucide-react";
 import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
 
@@ -232,6 +232,7 @@ function getFolderIcon(key: string, type?: "system" | "user"): React.ElementType
     all: Mails,
     inbox: Inbox,
     starred: Star,
+    snoozed: Clock,
     sent: Send,
     drafts: FileText,
     archive: Archive,

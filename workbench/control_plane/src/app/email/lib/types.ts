@@ -41,6 +41,9 @@ export interface Email {
   folder: string;
   receivedAt: string; // ISO 8601
   syncedAt: string;
+  /** When set and in the future, the conversation is snoozed out of the inbox
+   *  until this time (ISO 8601). Null/absent for normal mail. */
+  snoozedUntil?: string | null;
   /** Search-only: relevance score (ts_rank_cd) — present on /email/search hits. */
   rank?: number;
   /** Search-only: highlighted snippet (<mark>…</mark>) showing why it matched. */

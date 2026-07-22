@@ -221,6 +221,22 @@ async def trigger_sync(
             if not await provider.authenticate():
                 raise HTTPException(status_code=401, detail="Auth failed")
 
+            # Persist a rotated refresh token IMMEDIATELY after auth — Microsoft
+            # rotates it on refresh, and if any sync step below fails before the
+            # end-of-sync persist, the new token would be lost and the account
+            # would need a manual reconnect. The scheduler path (_sync_account)
+            # already does this; the manual path used to persist only at the end,
+            # which is exactly the refresh-token-loss this closes.
+            if provider.credentials_dirty():
+                await db.execute(text(
+                    """UPDATE email_accounts
+                       SET credentials_encrypted = :creds, updated_at = now()
+                       WHERE id = :id"""
+                ), {"id": req.account_id,
+                    "creds": store.encrypt(
+                        json.dumps(provider.export_credentials()))})
+                await db.commit()
+
             # Deep 1-year backfill on first sync (or when forced via ?full);
             # otherwise a cheap shallow/incremental sync.
             deep = req.full or not bool(getattr(row, "initial_sync_done", False))
@@ -336,7 +352,8 @@ async def trigger_sync(
                     """UPDATE email_accounts
                        SET sync_status = 'idle',
                            last_synced_at = now(),
-                           last_history_id = :history_id,
+                           last_history_id = COALESCE(
+                               :history_id, last_history_id),
                            sync_error = NULL,
                            initial_sync_done = initial_sync_done OR :deep,
                            updated_at = now()

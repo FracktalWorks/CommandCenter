@@ -89,7 +89,12 @@ export function ClarifyModal() {
       onClick={close}
     >
       <div
-        className="flex max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:max-h-[84vh] sm:rounded-2xl sm:border sm:pb-0"
+        // Mobile: a FIXED near-full-height sheet (small top gap keeps the
+        // sheet mental model + tap-to-dismiss). Content-sized sheets jump
+        // around as the AI proposal arrives/changes — a stable frame reads
+        // calmer while blitzing through the inbox. Desktop keeps the sized
+        // dialog.
+        className="flex h-[calc(100%-1.75rem)] max-h-full w-full max-w-lg flex-col overflow-hidden rounded-t-2xl border-t border-border bg-card shadow-2xl pb-safe sm:h-auto sm:max-h-[84vh] sm:rounded-2xl sm:border sm:pb-0"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="shrink-0 border-b border-border">

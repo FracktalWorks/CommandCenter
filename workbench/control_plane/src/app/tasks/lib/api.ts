@@ -42,6 +42,11 @@ function asPerson(v: unknown): Person | undefined {
   };
 }
 
+/** A raw person array → Person[]; drops blanks. */
+function personList(v: unknown): Person[] {
+  return Array.isArray(v) ? (v.map(asPerson).filter(Boolean) as Person[]) : [];
+}
+
 /** Pull the proposed owner's workload flags (server-annotated on the clarify
  *  proposal, §5 Phase 2) off the raw suggested_assignee. Undefined when the
  *  server didn't annotate load (semantic/workload path off or no owner). */
@@ -83,6 +88,14 @@ function mapItem(raw: Raw): GtdItem {
     waitingOn: asPerson(raw.waiting_on),
     delegatedAt: raw.delegated_at ? String(raw.delegated_at) : undefined,
     assignee: asPerson(raw.assignee),
+    // Full owner set; fall back to the single assignee (mock rows / not-yet-
+    // migrated data) so there's always at least the primary owner.
+    assignees: (() => {
+      const list = personList(raw.assignees);
+      if (list.length) return list;
+      const one = asPerson(raw.assignee);
+      return one ? [one] : [];
+    })(),
     providerStatus: raw.provider_status ? String(raw.provider_status) : undefined,
     workflowStage: raw.workflow_stage ? String(raw.workflow_stage) : undefined,
     sortKey: raw.sort_key == null ? undefined : Number(raw.sort_key),
@@ -463,6 +476,8 @@ export async function apiPatchItem(
     sort_key?: number;
     assignee?: { name: string; email?: string; provider_user_id?: string };
     clear_assignee?: boolean;
+    /** the full owner set — [] clears everyone; takes precedence over assignee */
+    assignees?: { name: string; email?: string; provider_user_id?: string }[];
     is_mine?: boolean;
     important?: boolean;
     leveraged?: boolean;
@@ -475,6 +490,16 @@ export async function apiPatchItem(
       body: JSON.stringify(patch),
     })
   );
+}
+
+/** The ordered ClickUp statuses of a synced task's OWN list — the stage-picker
+ *  options for the detail panel, so a task shows just its project's pipeline,
+ *  not the whole-workspace union. Empty for a LOCAL / not-yet-pushed task. */
+export async function apiItemStageOptions(id: string): Promise<string[]> {
+  const r = await gatewayFetch<Raw>(`/items/${id}/stage-options`);
+  return Array.isArray(r.statuses)
+    ? (r.statuses as unknown[]).map(String)
+    : [];
 }
 
 /** Items to render on the calendar grid for the window [fromIso, toIso):

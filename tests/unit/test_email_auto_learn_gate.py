@@ -158,6 +158,18 @@ async def test_an_unreadable_history_refuses_to_pin() -> None:
     db = AsyncMock()
     db.execute.side_effect = RuntimeError("boom")
     assert await m._sender_is_a_correspondent(db, _ACC, "a@b.com")
+    # …and the failure must not leave the transaction aborted: the caller goes
+    # on to INSERT the audit row on this same session, which would die with
+    # InFailedSQLTransaction (the exact class of the /digest/send prod 500).
+    db.rollback.assert_awaited_once()
+
+
+async def test_a_failed_consistency_probe_rolls_back_too() -> None:
+    """Same session-hygiene contract for the other best-effort gate probe."""
+    db = AsyncMock()
+    db.execute.side_effect = RuntimeError("boom")
+    assert not await m._sender_consistent_for_rule(db, _ACC, "a@b.com", _RULE)
+    db.rollback.assert_awaited_once()
 
 
 def test_the_correspondent_check_runs_before_the_pattern_is_written() -> None:

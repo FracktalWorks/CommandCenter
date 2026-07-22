@@ -33,6 +33,10 @@ import {
   Unlock,
   Play,
   ClipboardCheck,
+  Star,
+  Sun,
+  Moon,
+  ExternalLink,
 } from "lucide-react";
 import {
   apiPlanDay,
@@ -47,6 +51,7 @@ import {
 import { useTaskStore } from "../lib/taskStore";
 import { GtdItem } from "../lib/types";
 import { durationLabel } from "../lib/utils";
+import { priorityRank } from "../lib/priority";
 import {
   DEFAULT_BLOCK_MINS,
   startOfDay,
@@ -56,6 +61,19 @@ import {
   blocksForDay,
   firstFreeSlot,
 } from "../lib/scheduling";
+import { FocusMode } from "./FocusMode";
+import { StartupRitual } from "./StartupRitual";
+import { ContextMenu, type CtxItem } from "./ContextMenu";
+import {
+  dayKey,
+  loadFocusPrefs,
+  oneThingIdFor,
+  saveFocusPrefs,
+  toggleOneThing,
+} from "../lib/focusPrefs";
+
+/** Truncated project-outcome lookup for the outcome ribbon on blocks. */
+export type OutcomeById = Map<string, string>;
 
 type Mode = "day" | "week" | "month";
 
@@ -164,7 +182,11 @@ function fmtLeft(mins: number): string {
 
 export function CalendarView() {
   const items = useTaskStore((s) => s.items);
+  const projects = useTaskStore((s) => s.projects);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const applySchedule = useTaskStore((s) => s.applySchedule);
+  const openSchedule = useTaskStore((s) => s.openSchedule);
+  const requestDelete = useTaskStore((s) => s.requestDelete);
   const openFocus = useTaskStore((s) => s.openFocus);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadDone = useTaskStore((s) => s.loadDone);
@@ -191,6 +213,38 @@ export function CalendarView() {
   // One live clock drives the now-line, the current-block ring and the Now/Next
   // countdowns so the whole surface ages in real time (30s tick).
   const now = useNow();
+  // Focus Mode — the full-screen "Do" room for one block (F1). null = closed.
+  const [focusModeId, setFocusModeId] = useState<string | null>(null);
+  // Startup ritual (F0): the modal itself + the once-a-day offer banner. Both
+  // resolve client-side from focusPrefs in an effect (localStorage isn't
+  // available during SSR, and reading it in render would mismatch hydration).
+  const [startupOpen, setStartupOpen] = useState(false);
+  const [startupOffered, setStartupOffered] = useState(false);
+  const [dayClosed, setDayClosed] = useState(false);
+  // Today's ★ One Thing (per-day, prefs-backed). Re-read on the clock tick so
+  // midnight rolls it over without a reload.
+  const [oneThingId, setOneThingId] = useState<string | null>(null);
+  useEffect(() => {
+    /* eslint-disable react-hooks/set-state-in-effect -- prefs live in
+       localStorage (client-only); reading them in render would mismatch the
+       SSR hydration, so they resolve here on mount + the clock tick. */
+    const prefs = loadFocusPrefs();
+    setOneThingId(oneThingIdFor(new Date(), prefs));
+    setStartupOffered(prefs.startupDoneOn !== dayKey());
+    setDayClosed(prefs.dayClosedOn === dayKey());
+    /* eslint-enable react-hooks/set-state-in-effect */
+  }, [now]);
+  const handleToggleOneThing = (id: string) => {
+    toggleOneThing(new Date(), id);
+    setOneThingId((cur) => (cur === id ? null : id));
+  };
+  const oneThingItem = items.find((i) => i.id === oneThingId) ?? null;
+
+  // project outcome lookup — the outcome ribbon on blocks (§4.7).
+  const outcomeById: OutcomeById = useMemo(
+    () => new Map(projects.map((p) => [p.id, p.outcome])),
+    [projects],
+  );
 
   // Persist the user's real IANA timezone so the server-side nightly roll-over
   // computes their local-day boundary correctly (defaults to UTC otherwise).
@@ -255,24 +309,68 @@ export function CalendarView() {
     };
   }, [items, anchor]);
 
-  const schedule = (item: GtdItem, day: Date, at?: Date) => {
-    const mins = item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
+  // Every scheduling mutation goes through applySchedule so it lands in the
+  // undo toast — a mis-drag or stray unschedule is always one tap from safe.
+  // Without `at`, the task lands in the day's FIRST FREE SLOT (from now, when
+  // the day is today). An already-scheduled item keeps its block length and
+  // its own old block never counts as "busy".
+  const schedule = (item: GtdItem, day: Date, at?: Date, label = "Scheduled") => {
+    const blockMins =
+      item.scheduledStart && item.scheduledEnd
+        ? Math.max(
+            SNAP_MINS,
+            Math.round(
+              (new Date(item.scheduledEnd).getTime() -
+                new Date(item.scheduledStart).getTime()) /
+                60000,
+            ),
+          )
+        : undefined;
+    const mins = blockMins ?? item.timeEstimateMins ?? DEFAULT_BLOCK_MINS;
     const start =
-      at ?? firstFreeSlot(blocksForDay(items, day), day, mins, dayStart, dayEnd);
+      at ??
+      firstFreeSlot(
+        blocksForDay(items, day).filter((b) => b.item.id !== item.id),
+        day,
+        mins,
+        dayStart,
+        dayEnd,
+      );
     const end = new Date(start.getTime() + mins * 60000);
-    updateItem(item.id, {
-      scheduledStart: start.toISOString(),
-      scheduledEnd: end.toISOString(),
-    });
+    applySchedule(label, [
+      {
+        id: item.id,
+        patch: {
+          scheduledStart: start.toISOString(),
+          scheduledEnd: end.toISOString(),
+        },
+      },
+    ]);
   };
+  // "Move to next free slot" — the one-gesture fix for an overdue block (and
+  // the menu's home for the old Timebox-into-first-slot behavior).
+  const moveToNextFree = (item: GtdItem) =>
+    schedule(item, startOfDay(new Date()), undefined, "Moved to next free slot");
   const unschedule = (item: GtdItem) =>
-    updateItem(item.id, { scheduledStart: "", scheduledEnd: "" });
+    applySchedule("Removed from calendar", [
+      { id: item.id, patch: { scheduledStart: "", scheduledEnd: "" } },
+    ]);
   // Move/resize a block to an exact start+end (drag-drop + resize commit here).
-  const reschedule = (id: string, start: Date, end: Date) =>
-    updateItem(id, {
-      scheduledStart: start.toISOString(),
-      scheduledEnd: end.toISOString(),
-    });
+  const reschedule = (
+    id: string,
+    start: Date,
+    end: Date,
+    label = "Moved block",
+  ) =>
+    applySchedule(label, [
+      {
+        id,
+        patch: {
+          scheduledStart: start.toISOString(),
+          scheduledEnd: end.toISOString(),
+        },
+      },
+    ]);
 
   // Focus timer: stamp when you actually START a block (clears any prior end so
   // it re-times cleanly). Actual work-time = actualEnd − actualStart.
@@ -294,7 +392,8 @@ export function CalendarView() {
 
   // Overdue = a past time-block whose task isn't done → offer a one-click
   // roll-over into today's open slots (the "fell behind → stale plan" failure).
-  const overdueCount = useMemo(() => {
+  // The list itself feeds the startup ritual's carry-forward step.
+  const overdueItems = useMemo(() => {
     // Real wall-clock is intentional here (the calendar is a live surface,
     // unlike the demo cards that use a frozen MOCK_NOW).
     // eslint-disable-next-line react-hooks/purity
@@ -305,8 +404,24 @@ export function CalendarView() {
         i.scheduledEnd &&
         i.disposition !== "DONE" &&
         new Date(i.scheduledEnd).getTime() < nowMs,
-    ).length;
+    );
   }, [items]);
+  const overdueCount = overdueItems.length;
+
+  // Leverage meter (80/20): of the focused day's booked focus-time, how much
+  // sits on leveraged/important work (the ★ One Thing always counts — it IS
+  // the 20%). Rendered beside the capacity meter.
+  const leverageStats = useMemo(() => {
+    const blocks = blocksForDay(items, anchor);
+    const mins = (b: Block) => (b.end.getTime() - b.start.getTime()) / 60000;
+    const total = blocks.reduce((n, b) => n + mins(b), 0);
+    const lev = blocks
+      .filter(
+        (b) => b.item.leveraged || b.item.important || b.item.id === oneThingId,
+      )
+      .reduce((n, b) => n + mins(b), 0);
+    return { totalMins: total, leveragedMins: lev };
+  }, [items, anchor, oneThingId]);
 
   // Is there anything left to reorganize today? "Replan the rest of my day" only
   // makes sense with ≥1 flexible, not-done block still ahead (end ≥ now) — a
@@ -359,9 +474,13 @@ export function CalendarView() {
         capacity_mins: capacityTarget,
         buffer_mins: settings.bufferMins ?? 0,
       });
-      for (const b of res.blocks) {
-        updateItem(b.itemId, { scheduledStart: b.start, scheduledEnd: b.end });
-      }
+      applySchedule(
+        `Rolled ${res.blocks.length} block${res.blocks.length === 1 ? "" : "s"} into today`,
+        res.blocks.map((b) => ({
+          id: b.itemId,
+          patch: { scheduledStart: b.start, scheduledEnd: b.end },
+        })),
+      );
     } catch {
       /* best-effort */
     } finally {
@@ -423,15 +542,31 @@ export function CalendarView() {
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
-        <div className="relative ml-auto flex items-center gap-2">
+        {/* Actions: share the row with the title on desktop (ml-auto), but on
+            mobile take a FULL second row so the pills never get squeezed into
+            wrapping against the date. */}
+        <div className="relative flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           {dueSoon.length > 0 && (
             <span
               title={`${dueSoon.length} unscheduled task(s) due within 2 weeks`}
-              className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning"
             >
               <AlertTriangle className="h-3 w-3" />
               {dueSoon.length} due soon
             </span>
+          )}
+          {/* (Re)start the day — the ritual is never locked out: skipped the
+              morning banner, or want to re-pick the One Thing? Run it again. */}
+          {!dayClosed && (
+            <button
+              type="button"
+              onClick={() => setStartupOpen(true)}
+              title="Start (or restart) your day — breathe · review · commit the One Thing"
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            >
+              <Sun className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Start day</span>
+            </button>
           )}
           {hasTodayActivity && (
             <button
@@ -478,7 +613,7 @@ export function CalendarView() {
           >
             <Settings2 className="h-4 w-4" />
           </button>
-          <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
+          <div className="ml-auto flex rounded-lg bg-secondary p-0.5 text-xs sm:ml-0">
             {(["day", "week", "month"] as Mode[]).map((m) => (
               <button
                 key={m}
@@ -513,12 +648,44 @@ export function CalendarView() {
         items={items}
         onOpen={openFocus}
         onComplete={completeBlock}
-        onStart={startFocus}
-        onGoToToday={() => {
-          setAnchor(startOfDay(new Date()));
-          if (mode === "month") setMode("day");
+        onStart={(item) => {
+          startFocus(item);
+          setFocusModeId(item.id);
+        }}
+        onFillGap={() => {
+          // idle gap → the Gap Filler sheet, anchored to right now
+          const at = new Date(Math.ceil(Date.now() / 300000) * 300000);
+          setSheet({ day: startOfDay(new Date()), at });
         }}
       />
+
+      {/* Startup ritual offer — once per local day, dismissible. Habits form
+          around rituals; the banner invites, it never ambushes. */}
+      {startupOffered && !startupOpen && !dayClosed && (
+        <div className="flex items-center gap-2 border-b border-border bg-warning/5 px-4 py-2 text-[12px]">
+          <Sun className="h-4 w-4 shrink-0 text-warning" />
+          <span className="min-w-0 flex-1 text-foreground">
+            Start your day — breathe · review · commit the One Thing.
+          </span>
+          <button
+            type="button"
+            onClick={() => setStartupOpen(true)}
+            className="tech-transition shrink-0 rounded-md bg-warning/20 px-2.5 py-1 font-medium text-warning hover:bg-warning/30"
+          >
+            Begin (5 min)
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              saveFocusPrefs({ startupDoneOn: dayKey() });
+              setStartupOffered(false);
+            }}
+            className="tech-transition shrink-0 rounded-md px-2 py-1 text-muted-foreground hover:text-foreground"
+          >
+            Skip
+          </button>
+        </div>
+      )}
 
       {overdueCount > 0 && (
         <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[12px]">
@@ -564,6 +731,13 @@ export function CalendarView() {
               dayStart={dayStart}
               dayEnd={dayEnd}
               energyWindows={energyWindows}
+              oneThingId={oneThingId}
+              outcomeById={outcomeById}
+              onToggleOneThing={handleToggleOneThing}
+              onFocusMode={(item) => {
+                if (!item.actualStart || item.actualEnd) startFocus(item);
+                setFocusModeId(item.id);
+              }}
               onOpen={openFocus}
               onUnschedule={unschedule}
               onComplete={completeBlock}
@@ -572,6 +746,9 @@ export function CalendarView() {
               onSetFlexible={(item, flexible) =>
                 updateItem(item.id, { flexible })
               }
+              onReschedulePopup={openSchedule}
+              onMoveToFree={moveToNextFree}
+              onDelete={(id) => requestDelete([id])}
             />
           )}
         </div>
@@ -581,20 +758,21 @@ export function CalendarView() {
         {mode !== "month" && (
           <UnscheduledRail
             tasks={unscheduled}
-            focusedDayLabel={
-              mode === "week" ? "this week's first open slot" : "today"
-            }
-            capacityMins={blocksForDay(items, anchor).reduce(
-              (n, b) => n + (b.end.getTime() - b.start.getTime()) / 60000,
-              0,
-            )}
+            capacityMins={leverageStats.totalMins}
             capacityTarget={capacityTarget}
+            leveragedMins={leverageStats.leveragedMins}
+            oneThingId={oneThingId}
+            onToggleOneThing={handleToggleOneThing}
             dueSoon={dueSoon}
+            urgentWindowHours={settings.urgentWindowHours}
             doneStats={doneStats}
             onPlan={() => setPlanMode("plan")}
-            onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
-            onScheduleToday={(t) => schedule(t, startOfDay(new Date()))}
             onOpen={openFocus}
+            onTimebox={(t) =>
+              schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)
+            }
+            onReschedulePopup={openSchedule}
+            onDelete={(id) => requestDelete([id])}
           />
         )}
       </div>
@@ -624,11 +802,21 @@ export function CalendarView() {
           day={sheet.day}
           at={sheet.at}
           tasks={unscheduled}
+          items={items}
           dueSoon={dueSoon}
+          urgentWindowHours={settings.urgentWindowHours}
+          dayEndHour={dayEnd}
           onSchedule={(t, at) => {
             schedule(t, sheet.day, at);
             setSheet(null);
+            // Scheduling INTO the live moment flows straight into the Focus
+            // room — the Gap Filler's zero-ceremony start (§4.5).
+            if (at && Math.abs(at.getTime() - Date.now()) < 5 * 60000) {
+              startFocus(t);
+              setFocusModeId(t.id);
+            }
           }}
+          onDoNow={(t) => quickDispose(t.id, "DONE")}
           onPlan={() => {
             setSheet(null);
             setPlanMode("plan");
@@ -641,7 +829,13 @@ export function CalendarView() {
         <EndOfDayReview
           now={now}
           items={items}
+          oneThingId={oneThingId}
+          urgentWindowHours={settings.urgentWindowHours}
           onOpen={openFocus}
+          onCloseDay={() => {
+            setDayClosed(true);
+            setReviewOpen(false);
+          }}
           onClose={() => setReviewOpen(false)}
         />
       )}
@@ -657,8 +851,33 @@ export function CalendarView() {
           capacityMins={capacityTarget}
           bufferMins={settings.bufferMins ?? 0}
           energyWindows={energyWindows}
+          extraNote={
+            oneThingItem
+              ? `The user's ONE Thing for today (top priority): "${oneThingItem.title}" — place it in the first high-energy window and protect it.`
+              : undefined
+          }
           onClose={() => setPlanMode(null)}
         />
+      )}
+
+      {startupOpen && (
+        <StartupRitual
+          items={items}
+          urgentWindowHours={settings.urgentWindowHours}
+          carryForward={overdueItems}
+          rolling={rolling}
+          onRollover={() => void rollOver()}
+          onPlan={() => setPlanMode("plan")}
+          onClose={() => {
+            setStartupOpen(false);
+            setStartupOffered(false);
+            setOneThingId(oneThingIdFor(new Date()));
+          }}
+        />
+      )}
+
+      {focusModeId && (
+        <FocusMode itemId={focusModeId} onClose={() => setFocusModeId(null)} />
       )}
     </div>
   );
@@ -675,14 +894,16 @@ function NowNextBar({
   onOpen,
   onComplete,
   onStart,
-  onGoToToday,
+  onFillGap,
 }: {
   now: Date;
   items: GtdItem[];
   onOpen: (id: string) => void;
   onComplete: (item: GtdItem) => void;
+  /** enter the Focus room for the current block (stamps actualStart). */
   onStart: (item: GtdItem) => void;
-  onGoToToday: () => void;
+  /** open right now with nothing scheduled → the Gap Filler (§4.5). */
+  onFillGap: () => void;
 }) {
   const nowMs = now.getTime();
   const todayBlocks = blocksForDay(items, startOfDay(now));
@@ -764,21 +985,23 @@ function NowNextBar({
             >
               <Check className="h-3 w-3" strokeWidth={3} />
             </button>
-            {!running && (
-              <button
-                type="button"
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onStart(current.item);
-                }}
-                aria-label="Start focus timer"
-                title="Start — track how long this actually takes"
-                className="tech-transition flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/50 px-2 text-[10px] font-semibold text-primary hover:bg-primary/10"
-              >
-                <Play className="h-2.5 w-2.5" fill="currentColor" />
-                Start
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={(e) => {
+                e.stopPropagation();
+                onStart(current.item);
+              }}
+              aria-label="Enter Focus Mode"
+              title={
+                running
+                  ? "Re-enter the Focus room"
+                  : "Focus — full-screen room + timer (tracks how long this actually takes)"
+              }
+              className="tech-transition flex h-5 shrink-0 items-center gap-1 rounded-full border border-primary/50 px-2 text-[10px] font-semibold text-primary hover:bg-primary/10"
+            >
+              <Play className="h-2.5 w-2.5" fill="currentColor" />
+              Focus
+            </button>
             <button
               type="button"
               onClick={() => onOpen(current.item.id)}
@@ -806,11 +1029,14 @@ function NowNextBar({
         ) : (
           <button
             type="button"
-            onClick={onGoToToday}
-            title="Nothing scheduled at the moment"
+            onClick={onFillGap}
+            title="See what fits in this gap — 2-minute pile first"
             className="min-w-0 flex-1 truncate text-left text-[12px] text-muted-foreground hover:text-foreground"
           >
-            Open right now — nothing scheduled.
+            Open right now —{" "}
+            <span className="font-medium text-primary">
+              fill the gap with quick wins?
+            </span>
           </button>
         )}
       </div>
@@ -841,22 +1067,41 @@ function NowNextBar({
   );
 }
 
-// ── End-of-day review ────────────────────────────────────────────────────────
-// A 2-minute reflection (calendar_ux_review §3 P3): what got DONE (celebrated,
-// with planned-vs-actual), what carries FORWARD (framed kindly, not as failure),
-// and how your estimates are trending — the loop that builds trust + accuracy.
+// ── End-of-day review / shutdown ─────────────────────────────────────────────
+// A 2-minute reflection (calendar_ux_review §3 P3, extended per
+// calendar_focus_os.md §4.2): what got DONE (celebrated, with planned-vs-
+// actual), the leverage ratio (80/20 scoreboard), the One-Thing verdict, what
+// carries FORWARD (framed kindly), estimate trends — and "seed tomorrow", the
+// ≤3 picks that pre-load tomorrow's startup ritual. "Close the day" is the
+// explicit permission-to-stop end state.
 function EndOfDayReview({
   now,
   items,
+  oneThingId,
+  urgentWindowHours,
   onOpen,
+  onCloseDay,
   onClose,
 }: {
   now: Date;
   items: GtdItem[];
+  oneThingId: string | null;
+  urgentWindowHours: number;
   onOpen: (id: string) => void;
+  /** "Close the day" — persists tomorrow's seeds + the closed stamp. */
+  onCloseDay: () => void;
   onClose: () => void;
 }) {
   const [stats, setStats] = useState<EstimateStats | null>(null);
+  const [seedIds, setSeedIds] = useState<string[]>([]);
+  const toggleSeed = (id: string) =>
+    setSeedIds((cur) =>
+      cur.includes(id)
+        ? cur.filter((x) => x !== id)
+        : cur.length >= 3
+          ? cur
+          : [...cur, id],
+    );
   useEffect(() => {
     let alive = true;
     apiEstimateStats()
@@ -872,15 +1117,57 @@ function EndOfDayReview({
   const blocks = blocksForDay(items, startOfDay(now));
   const done = blocks.filter((b) => b.item.disposition === "DONE");
   const unfinished = blocks.filter((b) => b.item.disposition !== "DONE");
-  const doneHrs =
-    Math.round(
-      (done.reduce(
-        (n, b) => n + (b.end.getTime() - b.start.getTime()) / 60000,
-        0,
-      ) /
-        60) *
-        10,
-    ) / 10;
+  const doneMins = done.reduce(
+    (n, b) => n + (b.end.getTime() - b.start.getTime()) / 60000,
+    0,
+  );
+  const doneHrs = Math.round((doneMins / 60) * 10) / 10;
+  // Leverage ratio — done-hours can flatter a busy, pointless day; this can't.
+  const leveragedDoneMins = done
+    .filter(
+      (b) => b.item.leveraged || b.item.important || b.item.id === oneThingId,
+    )
+    .reduce((n, b) => n + (b.end.getTime() - b.start.getTime()) / 60000, 0);
+  const leveragePct =
+    doneMins > 0 ? Math.round((leveragedDoneMins / doneMins) * 100) : null;
+  // One-Thing verdict: if it got done, the day was a win regardless of the rest.
+  const oneThing = oneThingId
+    ? items.find((i) => i.id === oneThingId) ?? null
+    : null;
+  const oneThingDone = oneThing?.disposition === "DONE";
+  // Seed-tomorrow candidates: today's unfinished blocks first, then the
+  // highest-ranked unscheduled next actions. Up to 6 choices, ≤3 picks.
+  const seedCandidates: GtdItem[] = (() => {
+    const seen = new Set<string>();
+    const out: GtdItem[] = [];
+    for (const b of unfinished) {
+      if (!seen.has(b.item.id)) {
+        seen.add(b.item.id);
+        out.push(b.item);
+      }
+    }
+    const pool = items
+      .filter(
+        (i) =>
+          i.disposition === "NEXT" &&
+          i.isMine &&
+          !i.archivedAt &&
+          !i.scheduledStart &&
+          !seen.has(i.id),
+      )
+      .sort(
+        (a, b) =>
+          priorityRank(a, urgentWindowHours) - priorityRank(b, urgentWindowHours),
+      );
+    return [...out, ...pool].slice(0, 6);
+  })();
+  const closeDay = () => {
+    saveFocusPrefs({
+      seeds: { date: dayKey(addDays(now, 1)), ids: seedIds },
+      dayClosedOn: dayKey(now),
+    });
+    onCloseDay();
+  };
   const dateLabel = now.toLocaleDateString(undefined, {
     weekday: "long",
     month: "short",
@@ -919,7 +1206,7 @@ function EndOfDayReview({
         </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
-          {/* At-a-glance tally */}
+          {/* At-a-glance tally — done · leverage ratio · carry forward */}
           <div className="mb-3 flex gap-2">
             <div className="flex-1 rounded-lg border border-border bg-background/60 p-2.5 text-center">
               <div className="text-lg font-semibold tabular-nums text-success">
@@ -930,6 +1217,12 @@ function EndOfDayReview({
               </div>
             </div>
             <div className="flex-1 rounded-lg border border-border bg-background/60 p-2.5 text-center">
+              <div className="text-lg font-semibold tabular-nums text-amber-500">
+                {leveragePct == null ? "—" : `${leveragePct}%`}
+              </div>
+              <div className="text-[10px] text-muted-foreground">leveraged</div>
+            </div>
+            <div className="flex-1 rounded-lg border border-border bg-background/60 p-2.5 text-center">
               <div className="text-lg font-semibold tabular-nums text-foreground">
                 {unfinished.length}
               </div>
@@ -938,6 +1231,37 @@ function EndOfDayReview({
               </div>
             </div>
           </div>
+
+          {/* One-Thing verdict */}
+          {oneThing && (
+            <div
+              className={[
+                "mb-3 flex items-center gap-2 rounded-lg border p-2.5 text-[12px]",
+                oneThingDone
+                  ? "border-amber-500/40 bg-amber-500/10 text-foreground"
+                  : "border-border bg-background/60 text-muted-foreground",
+              ].join(" ")}
+            >
+              <Star
+                className={[
+                  "h-4 w-4 shrink-0",
+                  oneThingDone
+                    ? "fill-amber-400 text-amber-400"
+                    : "text-amber-500/60",
+                ].join(" ")}
+              />
+              {oneThingDone ? (
+                <span>
+                  <span className="font-semibold">One Thing done</span> —{" "}
+                  {oneThing.title}. That was the day.
+                </span>
+              ) : (
+                <span>
+                  One Thing still open — {oneThing.title}. Seed it for tomorrow?
+                </span>
+              )}
+            </div>
+          )}
 
           {/* Estimate accuracy — the learned-estimate signal */}
           {stats && stats.samples >= 5 ? (
@@ -1061,13 +1385,53 @@ function EndOfDayReview({
           )}
         </div>
 
-        <div className="flex items-center justify-end border-t border-border px-4 py-3">
+        {/* Seed tomorrow — ≤3 picks pre-load the morning startup ritual, so
+            planning tomorrow takes 5 minutes, not 20. */}
+        {seedCandidates.length > 0 && (
+          <div className="border-t border-border px-4 py-3">
+            <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+              Seed tomorrow · pick up to 3
+            </p>
+            <div className="flex flex-wrap gap-1.5">
+              {seedCandidates.map((c) => {
+                const on = seedIds.includes(c.id);
+                return (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => toggleSeed(c.id)}
+                    className={[
+                      "tech-transition max-w-full truncate rounded-full border px-2.5 py-1 text-[11px] font-medium",
+                      on
+                        ? "border-primary/50 bg-primary/15 text-primary"
+                        : "border-border bg-secondary/60 text-muted-foreground hover:text-foreground",
+                    ].join(" ")}
+                  >
+                    {on ? "✓ " : ""}
+                    {c.title}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
           <button
             type="button"
             onClick={onClose}
-            className="tech-transition rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+            className="rounded-md px-3 py-2 text-[12px] font-medium text-muted-foreground hover:text-foreground"
           >
-            Done
+            Not yet
+          </button>
+          <button
+            type="button"
+            onClick={closeDay}
+            title="Save tomorrow's seeds and end the work day — permission to stop"
+            className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90"
+          >
+            <Moon className="h-3.5 w-3.5" />
+            Close the day
           </button>
         </div>
       </div>
@@ -1075,27 +1439,39 @@ function EndOfDayReview({
   );
 }
 
-// ── Schedule sheet (mobile + tap-to-schedule) ───────────────────────────────
+// ── Schedule sheet / Gap Filler (mobile + tap-to-schedule) ──────────────────
 // Touch devices have no HTML5 drag-and-drop and the unscheduled rail is
 // desktop-only, so on a phone you could view but barely schedule. This
 // bottom-anchored sheet is the mobile path — and also what a tap on an empty
-// grid slot opens on any device. Pick a task to timebox it: at the tapped time
-// when `at` is set, otherwise auto-placed into the day's first free slot. Plan
-// my day is the primary CTA up top.
+// grid slot opens on any device. With `at` set it becomes the GAP FILLER
+// (calendar_focus_os.md §4.5): it measures the free minutes until the next
+// block and answers "you have N minutes — here's what fits": the 2-minute
+// pile first (done on the spot, tip 9 — never scheduled individually), then
+// tasks whose estimate fits the gap, ranked by the priority matrix.
 function ScheduleSheet({
   day,
   at,
   tasks,
+  items,
   dueSoon,
+  urgentWindowHours,
+  dayEndHour,
   onSchedule,
+  onDoNow,
   onPlan,
   onClose,
 }: {
   day: Date;
   at?: Date;
   tasks: GtdItem[];
+  /** full store rows — for measuring the gap against the day's blocks. */
+  items: GtdItem[];
   dueSoon: { item: GtdItem; days: number }[];
+  urgentWindowHours: number;
+  dayEndHour: number;
   onSchedule: (t: GtdItem, at?: Date) => void;
+  /** the 2-minute rule: just do it — mark done without ever scheduling. */
+  onDoNow: (t: GtdItem) => void;
   onPlan: () => void;
   onClose: () => void;
 }) {
@@ -1107,6 +1483,59 @@ function ScheduleSheet({
     month: "short",
     day: "numeric",
   });
+  // Track 2-minute tasks done from this sheet so they collapse in place — the
+  // satisfying "clear the pile" loop instead of rows vanishing abruptly.
+  const [clearedIds, setClearedIds] = useState<string[]>([]);
+
+  // ── the gap: free minutes from `at` until the next block (or day end) ──────
+  const gap = useMemo(() => {
+    if (!at) return null;
+    const atMs = at.getTime();
+    const nextBlock = blocksForDay(items, day).find(
+      (b) => b.item.disposition !== "DONE" && b.start.getTime() > atMs,
+    );
+    const dayEndAt = new Date(day);
+    dayEndAt.setHours(dayEndHour, 0, 0, 0);
+    const until = nextBlock ? nextBlock.start : dayEndAt;
+    const mins = Math.max(0, Math.round((until.getTime() - atMs) / 60000));
+    return {
+      mins,
+      untilLabel: nextBlock ? nextBlock.item.title : "end of day",
+    };
+  }, [at, items, day, dayEndHour]);
+
+  // The 2-minute pile: flagged at clarify, or tiny by estimate.
+  const twoMinute = useMemo(
+    () =>
+      tasks.filter(
+        (t) =>
+          !clearedIds.includes(t.id) &&
+          (t.isTwoMinute || (t.timeEstimateMins != null && t.timeEstimateMins <= 5)),
+      ),
+    [tasks, clearedIds],
+  );
+  const twoMinIds = useMemo(
+    () => new Set(twoMinute.map((t) => t.id)),
+    [twoMinute],
+  );
+  // Everything else, ranked by the matrix; split around the gap when known.
+  const ranked = useMemo(
+    () =>
+      tasks
+        .filter((t) => !twoMinIds.has(t.id) && !clearedIds.includes(t.id))
+        .sort(
+          (a, b) =>
+            priorityRank(a, urgentWindowHours) -
+            priorityRank(b, urgentWindowHours),
+        ),
+    [tasks, twoMinIds, clearedIds, urgentWindowHours],
+  );
+  const fits = gap
+    ? ranked.filter((t) => (t.timeEstimateMins ?? DEFAULT_BLOCK_MINS) <= gap.mins)
+    : ranked;
+  const tooLong = gap
+    ? ranked.filter((t) => (t.timeEstimateMins ?? DEFAULT_BLOCK_MINS) > gap.mins)
+    : [];
   return (
     <div
       className="fixed inset-0 z-[80] flex flex-col justify-end bg-black/40"
@@ -1123,11 +1552,13 @@ function ScheduleSheet({
           <CalendarPlus className="h-4 w-4 shrink-0 text-primary" />
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
-              {at ? `Schedule at ${fmtClock(at)}` : "Schedule a task"}
+              {gap
+                ? `${gap.mins} min until ${gap.untilLabel}`
+                : "Schedule a task"}
             </h2>
             <p className="truncate text-[11px] text-muted-foreground">
               {dayLabel}
-              {at ? "" : " · first free slot"}
+              {at ? ` · from ${fmtClock(at)}` : " · first free slot"}
             </p>
           </div>
           <button
@@ -1158,11 +1589,47 @@ function ScheduleSheet({
             </p>
           ) : (
             <>
-              <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                Unscheduled ({tasks.length})
-              </p>
+              {/* the 2-minute pile — do, don't schedule (tip 9) */}
+              {twoMinute.length > 0 && (
+                <>
+                  <p className="mb-1 flex items-center gap-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-primary">
+                    <Zap className="h-3 w-3" /> 2-minute pile ({twoMinute.length})
+                    — just do it
+                  </p>
+                  <div className="mb-2.5 flex flex-col gap-1">
+                    {twoMinute.map((t) => (
+                      <div
+                        key={t.id}
+                        className="flex items-center gap-2 rounded-lg border border-primary/25 bg-primary/5 p-2 pl-2.5"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
+                          {t.title}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setClearedIds((c) => [...c, t.id]);
+                            onDoNow(t);
+                          }}
+                          title="Done — no scheduling ceremony for small wins"
+                          className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-success/15 px-2 py-1 text-[11px] font-medium text-success hover:bg-success/25"
+                        >
+                          <Check className="h-3 w-3" strokeWidth={3} />
+                          Done
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                </>
+              )}
+
+              {fits.length > 0 && (
+                <p className="mb-1 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                  {gap ? `Fits in ${gap.mins} min` : "Unscheduled"} ({fits.length})
+                </p>
+              )}
               <div className="flex flex-col gap-1.5">
-                {tasks.map((t) => {
+                {fits.map((t) => {
                   const d = dueDays.get(t.id);
                   return (
                     <button
@@ -1173,6 +1640,9 @@ function ScheduleSheet({
                     >
                       <span className="min-w-0 flex-1">
                         <span className="block truncate text-[13px] font-medium text-foreground">
+                          {t.leveraged && (
+                            <span className="text-amber-500">★ </span>
+                          )}
                           {t.title}
                         </span>
                         <span className="mt-0.5 flex items-center gap-2 text-[10px] text-muted-foreground">
@@ -1202,13 +1672,49 @@ function ScheduleSheet({
                         </span>
                       </span>
                       <span className="inline-flex shrink-0 items-center gap-1 rounded-md bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary">
-                        <CalendarPlus className="h-3.5 w-3.5" />
-                        {at ? fmtClock(at) : "Timebox"}
+                        {gap ? (
+                          <>
+                            <Play className="h-3 w-3" fill="currentColor" />
+                            Start
+                          </>
+                        ) : (
+                          <>
+                            <CalendarPlus className="h-3.5 w-3.5" />
+                            {at ? fmtClock(at) : "Timebox"}
+                          </>
+                        )}
                       </span>
                     </button>
                   );
                 })}
               </div>
+
+              {/* longer than the gap — visible (so nothing feels hidden) but
+                  quiet; scheduling one anyway is allowed, eyes open. */}
+              {tooLong.length > 0 && (
+                <>
+                  <p className="mb-1 mt-3 px-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/70">
+                    Longer than the gap ({tooLong.length})
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    {tooLong.map((t) => (
+                      <button
+                        key={t.id}
+                        type="button"
+                        onClick={() => onSchedule(t, at)}
+                        className="tech-transition flex items-center gap-2 rounded-lg border border-border/60 bg-background/40 p-2 text-left opacity-70 hover:opacity-100"
+                      >
+                        <span className="min-w-0 flex-1 truncate text-[12px] text-muted-foreground">
+                          {t.title}
+                        </span>
+                        <span className="shrink-0 text-[10px] tabular-nums text-warning">
+                          {durationLabel(t.timeEstimateMins ?? DEFAULT_BLOCK_MINS)}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                </>
+              )}
             </>
           )}
         </div>
@@ -1226,6 +1732,7 @@ function PlanDayPanel({
   capacityMins,
   bufferMins,
   energyWindows,
+  extraNote,
   onClose,
 }: {
   mode?: "plan" | "replan";
@@ -1235,10 +1742,14 @@ function PlanDayPanel({
   capacityMins: number;
   bufferMins: number;
   energyWindows: EnergyWindow[];
+  /** standing guidance appended to every run — e.g. the ★ One Thing directive
+   *  (protect it in the first peak window). Rides the existing energy_note
+   *  seam so no backend change is needed. */
+  extraNote?: string;
   onClose: () => void;
 }) {
   const isReplan = mode === "replan";
-  const updateItem = useTaskStore((s) => s.updateItem);
+  const applySchedule = useTaskStore((s) => s.applySchedule);
   const [note, setNote] = useState("");
   const [loading, setLoading] = useState(false);
   const [plan, setPlan] = useState<DayPlanResult | null>(null);
@@ -1269,7 +1780,8 @@ function PlanDayPanel({
           }),
           capacity_mins: capacityMins,
           buffer_mins: bufferMins,
-          energy_note: n.trim() || undefined,
+          energy_note:
+            [n.trim(), extraNote].filter(Boolean).join(" ") || undefined,
         }),
       );
     } catch (err) {
@@ -1287,9 +1799,13 @@ function PlanDayPanel({
 
   const apply = () => {
     if (!plan) return;
-    for (const b of plan.blocks) {
-      updateItem(b.itemId, { scheduledStart: b.start, scheduledEnd: b.end });
-    }
+    applySchedule(
+      `Planned ${plan.blocks.length} block${plan.blocks.length === 1 ? "" : "s"}`,
+      plan.blocks.map((b) => ({
+        id: b.itemId,
+        patch: { scheduledStart: b.start, scheduledEnd: b.end },
+      })),
+    );
     onClose();
   };
 
@@ -1653,12 +2169,19 @@ function TimeGrid({
   dayStart,
   dayEnd,
   energyWindows,
+  oneThingId,
+  outcomeById,
+  onToggleOneThing,
+  onFocusMode,
   onOpen,
   onUnschedule,
   onComplete,
   reschedule,
   onPickSlot,
   onSetFlexible,
+  onReschedulePopup,
+  onMoveToFree,
+  onDelete,
 }: {
   days: Date[];
   items: GtdItem[];
@@ -1666,14 +2189,27 @@ function TimeGrid({
   dayStart: number;
   dayEnd: number;
   energyWindows: EnergyWindow[];
+  /** today's ★ One Thing (gold, protected-feeling) — null when unset. */
+  oneThingId: string | null;
+  outcomeById: OutcomeById;
+  onToggleOneThing: (id: string) => void;
+  /** enter the full-screen Focus room for a block. */
+  onFocusMode: (item: GtdItem) => void;
   onOpen: (id: string) => void;
   onUnschedule: (item: GtdItem) => void;
   onComplete: (item: GtdItem) => void;
-  reschedule: (id: string, start: Date, end: Date) => void;
+  reschedule: (id: string, start: Date, end: Date, label?: string) => void;
   /** Tap an empty grid slot → schedule a task at that snapped time. */
   onPickSlot: (day: Date, at: Date) => void;
   /** Pin (false) / unpin (true) a block so the auto-mover skips / includes it. */
   onSetFlexible: (item: GtdItem, flexible: boolean) => void;
+  /** "Reschedule…" → the global Schedule popup (date/time picker + Unschedule). */
+  onReschedulePopup: (id: string) => void;
+  /** "Move to next free slot" — re-timebox into today's first opening (the
+   *  one-gesture fix for an overdue block). */
+  onMoveToFree: (item: GtdItem) => void;
+  /** "Delete task…" → the store's confirm-first delete flow. */
+  onDelete: (id: string) => void;
 }) {
   const hours = Array.from({ length: dayEnd - dayStart }, (_, i) => dayStart + i);
   const gridHeight = hours.length * HOUR_PX;
@@ -1681,6 +2217,32 @@ function TimeGrid({
   const [resizing, setResizing] = useState<{ id: string; endMs: number } | null>(null);
   const resizingRef = useRef(false); // suppress the native block-drag while resizing
   const [dragOverKey, setDragOverKey] = useState<string | null>(null);
+  // Block context menu — right-click on desktop, LONG-PRESS on touch (the
+  // hover micro-buttons don't exist on a phone, so this menu IS the mobile
+  // path to unschedule / pin / star / focus / reschedule / delete).
+  const [ctx, setCtx] = useState<{
+    x: number;
+    y: number;
+    item: GtdItem;
+    day: Date;
+  } | null>(null);
+  const lpTimer = useRef<number | null>(null);
+  const lpFired = useRef(false);
+  const startLongPress = (e: React.PointerEvent, item: GtdItem, day: Date) => {
+    if (e.pointerType === "mouse") return; // mouse has real right-click
+    const { clientX, clientY } = e;
+    lpFired.current = false;
+    lpTimer.current = window.setTimeout(() => {
+      lpFired.current = true;
+      setCtx({ x: clientX, y: clientY, item, day });
+    }, 450);
+  };
+  const cancelLongPress = () => {
+    if (lpTimer.current != null) {
+      clearTimeout(lpTimer.current);
+      lpTimer.current = null;
+    }
+  };
 
   // Drop a dragged task/block onto `day` at the cursor's Y → snapped start+end.
   const handleDrop = (e: React.DragEvent, day: Date) => {
@@ -1701,7 +2263,15 @@ function TimeGrid({
     const start = new Date(day);
     start.setHours(dayStart, 0, 0, 0);
     start.setMinutes(start.getMinutes() + mins);
-    reschedule(p.id, start, new Date(start.getTime() + p.durationMins * 60000));
+    // Honest undo label: a rail card lands as "Scheduled", an existing block
+    // as "Moved block".
+    const wasScheduled = !!items.find((i) => i.id === p.id)?.scheduledStart;
+    reschedule(
+      p.id,
+      start,
+      new Date(start.getTime() + p.durationMins * 60000),
+      wasScheduled ? "Moved block" : "Scheduled",
+    );
   };
 
   const onBlockDragStart = (e: React.DragEvent, b: Block) => {
@@ -1743,9 +2313,18 @@ function TimeGrid({
     const onUp = (ev: PointerEvent) => {
       window.removeEventListener("pointermove", onMove);
       window.removeEventListener("pointerup", onUp);
-      reschedule(b.item.id, new Date(startMs), new Date(clampEnd(ev.clientY)));
-      resizingRef.current = false;
+      reschedule(
+        b.item.id,
+        new Date(startMs),
+        new Date(clampEnd(ev.clientY)),
+        "Resized block",
+      );
       setResizing(null);
+      // Release AFTER the trailing click event, so finishing a resize doesn't
+      // also open the task card (the block's click handler checks this ref).
+      window.setTimeout(() => {
+        resizingRef.current = false;
+      }, 0);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -1762,6 +2341,7 @@ function TimeGrid({
             return (
               <div
                 key={d.toISOString()}
+                style={{ minWidth: 96 }}
                 className="flex-1 border-l border-border px-2 py-1.5 text-center"
               >
                 <div className="text-[10px] font-medium uppercase text-muted-foreground">
@@ -1832,7 +2412,12 @@ function TimeGrid({
                 "relative flex-1 cursor-pointer border-l border-border",
                 dragOverKey === dayKey ? "bg-primary/5" : "",
               ].join(" ")}
-              style={{ height: gridHeight }}
+              // Week view on a phone: 7 columns keep a readable minimum width
+              // and the grid scrolls horizontally instead of crushing blocks.
+              style={{
+                height: gridHeight,
+                minWidth: days.length > 1 ? 96 : undefined,
+              }}
             >
               {/* hour lines */}
               {hours.map((h) => (
@@ -1920,6 +2505,14 @@ function TimeGrid({
                   b.end.getTime() > now.getTime();
                 // Fixed (meeting) block — roll-over/replan leave it put.
                 const isFixed = b.item.flexible === false;
+                // Leverage lens (80/20): leveraged work reads gold at a glance;
+                // the ★ One Thing gets the strongest treatment on the grid.
+                const isOneThing = b.item.id === oneThingId && !isDone;
+                const isLeveraged =
+                  !isDone && !conflict && (b.item.leveraged || isOneThing);
+                const outcome = b.item.projectId
+                  ? outcomeById.get(b.item.projectId)
+                  : undefined;
                 // Planned-vs-actual: for a completed, timed block, how far off
                 // the plan the real work-time was (the estimate-accuracy signal).
                 const plannedMins = Math.round(
@@ -1943,7 +2536,33 @@ function TimeGrid({
                     key={b.item.id}
                     draggable
                     onDragStart={(e) => onBlockDragStart(e, b)}
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      // Click anywhere on the block → open the task card
+                      // (controls stopPropagation; drag/resize never emit a
+                      // plain click). stopPropagation keeps the day column's
+                      // empty-slot tap from also firing.
+                      e.stopPropagation();
+                      if (resizingRef.current) return; // trailing resize click
+                      onOpen(b.item.id);
+                    }}
+                    onClickCapture={(e) => {
+                      // a long-press already opened the menu — swallow the
+                      // click that follows so it doesn't also open the task
+                      if (lpFired.current) {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        lpFired.current = false;
+                      }
+                    }}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      setCtx({ x: e.clientX, y: e.clientY, item: b.item, day });
+                    }}
+                    onPointerDown={(e) => startLongPress(e, b.item, day)}
+                    onPointerMove={cancelLongPress}
+                    onPointerUp={cancelLongPress}
+                    onPointerCancel={cancelLongPress}
                     style={{
                       top: Math.max(0, top),
                       height,
@@ -1959,15 +2578,24 @@ function TimeGrid({
                         ? "border-success/40 bg-success/10"
                         : conflict
                           ? "border-destructive/60 bg-destructive/10"
-                          : isNow
-                            ? "border-primary bg-primary/20"
-                            : "border-primary/40 bg-primary/10",
+                          : isOneThing
+                            ? "border-amber-400/80 bg-amber-500/15 shadow-[0_0_12px_rgba(245,158,11,0.18)]"
+                            : isLeveraged
+                              ? "border-amber-500/50 bg-amber-500/10"
+                              : isNow
+                                ? "border-primary bg-primary/20"
+                                : "border-primary/40 bg-primary/10",
                       isNow
                         ? "z-10 ring-2 ring-primary ring-offset-1 ring-offset-background shadow-md"
                         : "",
                       // A pinned block gets a solid left accent so "this won't
                       // move" is glanceable, not only on the lock icon.
                       isFixed && !isDone ? "border-l-2 border-l-primary" : "",
+                      // Leveraged work carries a gold left edge even when other
+                      // states (now/fixed) win the fill.
+                      isLeveraged && !isFixed
+                        ? "border-l-2 border-l-amber-400"
+                        : "",
                     ].join(" ")}
                   >
                     <div className="flex items-start gap-1">
@@ -1998,9 +2626,18 @@ function TimeGrid({
                             : "text-foreground",
                         ].join(" ")}
                       >
+                        {isOneThing && (
+                          <span className="text-amber-400">★ </span>
+                        )}
                         {b.item.title}
                       </button>
                     </div>
+                    {/* outcome ribbon — why this block matters (tall blocks) */}
+                    {outcome && mins >= 45 && (
+                      <div className="truncate pr-3 text-[9px] font-medium text-amber-500/90">
+                        → {outcome}
+                      </div>
+                    )}
                     <div className="flex items-center gap-1 text-[9px] text-muted-foreground">
                       {b.start.toLocaleTimeString(undefined, {
                         hour: "numeric",
@@ -2034,6 +2671,56 @@ function TimeGrid({
                         </span>
                       )}
                     </div>
+                    {/* ▶ enter the Focus room. Always visible on the current
+                        block (the one you should be in), hover elsewhere. */}
+                    {!isDone && (
+                      <button
+                        type="button"
+                        aria-label="Focus on this block"
+                        title="Focus — full-screen room + timer"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onFocusMode(b.item);
+                        }}
+                        className={[
+                          "tech-transition absolute right-[54px] top-0.5 rounded p-0.5",
+                          isNow
+                            ? "text-primary hover:bg-black/10"
+                            : "text-muted-foreground opacity-0 hover:bg-black/10 hover:text-primary group-hover:opacity-100",
+                        ].join(" ")}
+                      >
+                        <Play className="h-3 w-3" fill="currentColor" />
+                      </button>
+                    )}
+                    {/* ★ commit / uncommit the One Thing (today only). */}
+                    {!isDone && sameDay(day, now) && (
+                      <button
+                        type="button"
+                        aria-label={
+                          isOneThing ? "Unset the One Thing" : "Make this the One Thing"
+                        }
+                        title={
+                          isOneThing
+                            ? "Your One Thing today. Click to unset."
+                            : "If only one thing gets done today… make it this."
+                        }
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          onToggleOneThing(b.item.id);
+                        }}
+                        className={[
+                          "tech-transition absolute right-[36px] top-0.5 rounded p-0.5",
+                          isOneThing
+                            ? "text-amber-400 hover:bg-black/10"
+                            : "text-muted-foreground opacity-0 hover:bg-black/10 hover:text-amber-400 group-hover:opacity-100",
+                        ].join(" ")}
+                      >
+                        <Star
+                          className="h-3 w-3"
+                          fill={isOneThing ? "currentColor" : "none"}
+                        />
+                      </button>
+                    )}
                     {/* Fixed ↔ flexible. A fixed (meeting) block is skipped by
                         roll-over/replan; the lock is persistent when fixed and
                         hover-to-pin when flexible. */}
@@ -2066,7 +2753,10 @@ function TimeGrid({
                       type="button"
                       aria-label="Unschedule"
                       title="Remove from calendar"
-                      onClick={() => onUnschedule(b.item)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onUnschedule(b.item);
+                      }}
                       className="tech-transition absolute right-0.5 top-0.5 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-black/10 hover:text-destructive group-hover:opacity-100"
                     >
                       <X className="h-3 w-3" />
@@ -2086,6 +2776,103 @@ function TimeGrid({
           );
         })}
       </div>
+
+      {/* block context menu (right-click / long-press) */}
+      {ctx &&
+        (() => {
+          const it = ctx.item;
+          const isDone = it.disposition === "DONE";
+          const isFixed = it.flexible === false;
+          const isOT = it.id === oneThingId;
+          const today = sameDay(ctx.day, now);
+          const menu: CtxItem[] = [
+            {
+              kind: "item",
+              label: "Open task",
+              icon: ExternalLink,
+              onSelect: () => onOpen(it.id),
+            },
+            ...(!isDone
+              ? [
+                  {
+                    kind: "item",
+                    label: "Focus on this",
+                    icon: Play,
+                    onSelect: () => onFocusMode(it),
+                  } as CtxItem,
+                ]
+              : []),
+            {
+              kind: "item",
+              label: isDone ? "Mark not done" : "Mark done",
+              icon: Check,
+              onSelect: () => onComplete(it),
+            },
+            { kind: "sep" },
+            ...(!isDone && today
+              ? [
+                  {
+                    kind: "item",
+                    label: isOT ? "Unset One Thing" : "Make it the One Thing",
+                    icon: Star,
+                    checked: isOT,
+                    onSelect: () => onToggleOneThing(it.id),
+                  } as CtxItem,
+                ]
+              : []),
+            ...(!isDone
+              ? [
+                  {
+                    kind: "item",
+                    label: isFixed
+                      ? "Make flexible (auto-moves)"
+                      : "Pin as fixed (won't move)",
+                    icon: isFixed ? Unlock : Lock,
+                    checked: isFixed,
+                    onSelect: () => onSetFlexible(it, isFixed),
+                  } as CtxItem,
+                ]
+              : []),
+            { kind: "sep" },
+            ...(!isDone
+              ? [
+                  {
+                    kind: "item",
+                    label: "Move to next free slot",
+                    icon: CalendarPlus,
+                    onSelect: () => onMoveToFree(it),
+                  } as CtxItem,
+                ]
+              : []),
+            {
+              kind: "item",
+              label: "Reschedule…",
+              icon: CalendarClock,
+              onSelect: () => onReschedulePopup(it.id),
+            },
+            {
+              kind: "item",
+              label: "Remove from calendar",
+              icon: X,
+              onSelect: () => onUnschedule(it),
+            },
+            {
+              kind: "item",
+              label: "Delete task…",
+              icon: Trash2,
+              danger: true,
+              onSelect: () => onDelete(it.id),
+            },
+          ];
+          return (
+            <ContextMenu
+              x={ctx.x}
+              y={ctx.y}
+              items={menu}
+              onClose={() => setCtx(null)}
+            />
+          );
+        })()}
     </div>
   );
 }
@@ -2185,28 +2972,63 @@ function MonthGrid({
 // ── Unscheduled rail ─────────────────────────────────────────────────────────
 function UnscheduledRail({
   tasks,
-  focusedDayLabel,
   capacityMins,
   capacityTarget,
+  leveragedMins,
+  oneThingId,
+  onToggleOneThing,
   dueSoon,
+  urgentWindowHours,
   doneStats,
   onPlan,
-  onSchedule,
-  onScheduleToday,
   onOpen,
+  onTimebox,
+  onReschedulePopup,
+  onDelete,
 }: {
   tasks: GtdItem[];
-  focusedDayLabel: string;
   capacityMins: number;
   capacityTarget: number;
+  /** of the booked minutes, how many sit on leveraged/important work (80/20). */
+  leveragedMins: number;
+  oneThingId: string | null;
+  onToggleOneThing: (id: string) => void;
+  /** approaching deadlines — rendered as a badge + sort boost ON the normal
+   *  cards (one list, no duplication; every card drags + timeboxes alike). */
   dueSoon: { item: GtdItem; days: number }[];
+  urgentWindowHours: number;
   doneStats: { count: number; mins: number };
   onPlan: () => void;
-  onSchedule: (t: GtdItem) => void;
-  onScheduleToday: (t: GtdItem) => void;
   onOpen: (id: string) => void;
+  /** context menu: timebox into the first free slot (no dragging needed). */
+  onTimebox: (t: GtdItem) => void;
+  /** context menu: exact date/time via the global Schedule popup. */
+  onReschedulePopup: (id: string) => void;
+  /** context menu: confirm-first delete flow. */
+  onDelete: (id: string) => void;
 }) {
   const over = capacityMins > capacityTarget;
+  // Right-click menu on a card (the rail is desktop-only, so no long-press).
+  const [ctx, setCtx] = useState<{ x: number; y: number; item: GtdItem } | null>(
+    null,
+  );
+  const leveragePct =
+    capacityMins > 0 ? Math.round((leveragedMins / capacityMins) * 100) : 0;
+  // ONE list: ★ One Thing first, then approaching deadlines (soonest first),
+  // then the rest by the priority matrix. Deadline pressure is a property of
+  // a card, not a separate pile.
+  const dueDays = new Map(dueSoon.map((d) => [d.item.id, d.days]));
+  const ordered = [...tasks].sort((a, b) => {
+    const oa = a.id === oneThingId ? 0 : 1;
+    const ob = b.id === oneThingId ? 0 : 1;
+    if (oa !== ob) return oa - ob;
+    const da = dueDays.get(a.id) ?? Infinity;
+    const db = dueDays.get(b.id) ?? Infinity;
+    if (da !== db) return da - db;
+    return (
+      priorityRank(a, urgentWindowHours) - priorityRank(b, urgentWindowHours)
+    );
+  });
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-card md:flex">
       <div className="border-b border-border px-3 py-2">
@@ -2215,7 +3037,7 @@ function UnscheduledRail({
           Unscheduled
         </div>
         <p className="mt-0.5 text-[10px] text-muted-foreground">
-          Drag onto the grid, or click Timebox ({focusedDayLabel}).
+          Drag a card onto the grid to timebox it · click to open.
         </p>
         <div
           className={[
@@ -2227,6 +3049,22 @@ function UnscheduledRail({
           {Math.round((capacityTarget / 60) * 10) / 10}h booked
           {over ? " — over capacity" : ""}
         </div>
+        {/* leverage meter (80/20): how much of the booked day is the 20% */}
+        {capacityMins > 0 && (
+          <div
+            className="mt-0.5 text-[10px] text-amber-500"
+            title="Share of booked focus-time on leveraged/important work (the 80/20 scoreboard)"
+          >
+            ★ {Math.round((leveragedMins / 60) * 10) / 10}h leveraged ·{" "}
+            {leveragePct}%
+            <span className="mt-0.5 block h-1 overflow-hidden rounded-full bg-secondary">
+              <span
+                className="block h-full rounded-full bg-amber-400/80"
+                style={{ width: `${Math.min(100, leveragePct)}%` }}
+              />
+            </span>
+          </div>
+        )}
         {doneStats.count > 0 && (
           <div className="mt-0.5 inline-flex items-center gap-1 text-[10px] font-medium text-success">
             <Check className="h-3 w-3" />
@@ -2236,61 +3074,24 @@ function UnscheduledRail({
         )}
       </div>
       <div className="flex-1 overflow-y-auto p-2">
-        {/* Deadline radar — due-soon tasks that aren't timeboxed yet. */}
-        {dueSoon.length > 0 && (
-          <div className="mb-2">
-            <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-warning">
-              <AlertTriangle className="h-3 w-3" /> Due soon
-            </p>
-            <div className="flex flex-col gap-1">
-              {dueSoon.map(({ item, days }) => (
-                <div
-                  key={item.id}
-                  className="rounded-md border border-warning/40 bg-warning/5 p-1.5"
-                >
-                  <button
-                    type="button"
-                    onClick={() => onOpen(item.id)}
-                    className="block w-full truncate text-left text-[12px] text-foreground"
-                  >
-                    {item.title}
-                  </button>
-                  <div className="mt-0.5 flex items-center justify-between">
-                    <span
-                      className={`text-[10px] font-medium ${
-                        days <= 1 ? "text-destructive" : "text-warning"
-                      }`}
-                    >
-                      {days <= 0
-                        ? "due today"
-                        : days === 1
-                          ? "due tomorrow"
-                          : `due in ${days}d`}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onScheduleToday(item)}
-                      title="Timebox into today"
-                      className="tech-transition inline-flex items-center gap-0.5 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning hover:bg-warning/30"
-                    >
-                      <CalendarPlus className="h-3 w-3" /> Today
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         {tasks.length === 0 ? (
           <p className="px-1 py-4 text-center text-[11px] text-muted-foreground">
             Nothing to schedule — inbox zero on next actions. 🎉
           </p>
         ) : (
           <div className="flex flex-col gap-1.5">
-            {tasks.map((t) => (
+            {ordered.map((t) => (
               <div
                 key={t.id}
                 draggable
+                // Same grammar as a calendar block: CLICK opens the task card,
+                // CLICK-AND-HOLD drags it onto the grid at the slot you want,
+                // RIGHT-CLICK for everything else (incl. first-free-slot).
+                onClick={() => onOpen(t.id)}
+                onContextMenu={(e) => {
+                  e.preventDefault();
+                  setCtx({ x: e.clientX, y: e.clientY, item: t });
+                }}
                 onDragStart={(e) => {
                   e.dataTransfer.setData(
                     DRAG_TYPE,
@@ -2302,15 +3103,53 @@ function UnscheduledRail({
                   );
                   e.dataTransfer.effectAllowed = "move";
                 }}
-                className="group cursor-grab rounded-md border border-border bg-background/60 p-2 hover:border-primary/40 active:cursor-grabbing"
+                className={[
+                  "group cursor-grab rounded-md border p-2 active:cursor-grabbing",
+                  t.id === oneThingId
+                    ? "border-amber-400/70 bg-amber-500/10"
+                    : t.leveraged
+                      ? "border-amber-500/40 bg-background/60 hover:border-amber-400/60"
+                      : dueDays.has(t.id)
+                        ? "border-warning/40 bg-warning/5 hover:border-warning/70"
+                        : "border-border bg-background/60 hover:border-primary/40",
+                ].join(" ")}
               >
-                <button
-                  type="button"
-                  onClick={() => onOpen(t.id)}
-                  className="block w-full truncate text-left text-[12px] text-foreground"
-                >
-                  {t.title}
-                </button>
+                <div className="flex items-start gap-1">
+                  <span className="min-w-0 flex-1 truncate text-left text-[12px] text-foreground">
+                    {t.id === oneThingId && (
+                      <span className="text-amber-400">★ </span>
+                    )}
+                    {t.title}
+                  </span>
+                  <button
+                    type="button"
+                    aria-label={
+                      t.id === oneThingId
+                        ? "Unset the One Thing"
+                        : "Make this the One Thing"
+                    }
+                    title={
+                      t.id === oneThingId
+                        ? "Your One Thing today. Click to unset."
+                        : "If only one thing gets done today… make it this."
+                    }
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleOneThing(t.id);
+                    }}
+                    className={[
+                      "tech-transition shrink-0 rounded p-0.5",
+                      t.id === oneThingId
+                        ? "text-amber-400"
+                        : "text-muted-foreground/60 opacity-0 hover:text-amber-400 group-hover:opacity-100",
+                    ].join(" ")}
+                  >
+                    <Star
+                      className="h-3 w-3"
+                      fill={t.id === oneThingId ? "currentColor" : "none"}
+                    />
+                  </button>
+                </div>
                 <div className="mt-1 flex items-center gap-2 text-[10px] text-muted-foreground">
                   {t.timeEstimateMins ? (
                     <span className="inline-flex items-center gap-0.5">
@@ -2329,15 +3168,24 @@ function UnscheduledRail({
                       {t.energy}
                     </span>
                   )}
+                  {dueDays.has(t.id) && (
+                    <span
+                      className={[
+                        "inline-flex items-center gap-0.5 font-medium",
+                        (dueDays.get(t.id) as number) <= 1
+                          ? "text-destructive"
+                          : "text-warning",
+                      ].join(" ")}
+                    >
+                      <AlertTriangle className="h-3 w-3" />
+                      {(dueDays.get(t.id) as number) <= 0
+                        ? "due today"
+                        : dueDays.get(t.id) === 1
+                          ? "due tomorrow"
+                          : `due in ${dueDays.get(t.id)}d`}
+                    </span>
+                  )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onSchedule(t)}
-                  className="tech-transition mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20"
-                >
-                  <CalendarPlus className="h-3 w-3" />
-                  Timebox
-                </button>
               </div>
             ))}
           </div>
@@ -2355,6 +3203,54 @@ function UnscheduledRail({
           Plan my day
         </button>
       </div>
+
+      {/* card context menu */}
+      {ctx && (
+        <ContextMenu
+          x={ctx.x}
+          y={ctx.y}
+          items={[
+            {
+              kind: "item",
+              label: "Open task",
+              icon: ExternalLink,
+              onSelect: () => onOpen(ctx.item.id),
+            },
+            {
+              kind: "item",
+              label: "Timebox → first free slot",
+              icon: CalendarPlus,
+              onSelect: () => onTimebox(ctx.item),
+            },
+            { kind: "sep" },
+            {
+              kind: "item",
+              label:
+                ctx.item.id === oneThingId
+                  ? "Unset One Thing"
+                  : "Make it the One Thing",
+              icon: Star,
+              checked: ctx.item.id === oneThingId,
+              onSelect: () => onToggleOneThing(ctx.item.id),
+            },
+            { kind: "sep" },
+            {
+              kind: "item",
+              label: "Schedule…",
+              icon: CalendarClock,
+              onSelect: () => onReschedulePopup(ctx.item.id),
+            },
+            {
+              kind: "item",
+              label: "Delete task…",
+              icon: Trash2,
+              danger: true,
+              onSelect: () => onDelete(ctx.item.id),
+            },
+          ]}
+          onClose={() => setCtx(null)}
+        />
+      )}
     </aside>
   );
 }

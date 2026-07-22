@@ -169,6 +169,9 @@ export interface ItemMetaPatch {
   workflowStage?: string;     // the local Kanban stage (board move)
   sortKey?: number;           // manual (drag) rank within a group/column
   assignee?: Person | null;   // null → unassign
+  /** the full owner set — [] unassigns everyone; takes precedence over assignee
+   *  and keeps the primary `assignee` (= assignees[0]) in step. */
+  assignees?: Person[] | null;
   /** personal "My Next Actions" membership (My Next Actions = NEXT & isMine).
    *  false drops a handed-off/unassigned task from my list without deleting it
    *  on ClickUp; a LOCAL overlay only — never back-synced. */
@@ -360,6 +363,11 @@ interface UndoSnapshot {
    *  upstream. archivedTo is the direction that was applied (true = archived). */
   archivedIds?: string[];
   archivedTo?: boolean;
+  /** Ids whose SCHEDULING (time block / pin) this change touched — an
+   *  unschedule, drag/resize, roll-over, plan-apply or focus-mode reflow.
+   *  Undo re-patches their scheduled_start/end + flexible from the snapshot
+   *  rows, so a mis-drag on the calendar is always one tap from safe. */
+  scheduleRevertIds?: string[];
 }
 
 /** Friendly past-tense label for a one-tap disposition (undo toast). */
@@ -549,6 +557,20 @@ interface TaskState {
    *  items (context/energy/estimate/due/stage/assignee/next action/notes).
    *  For a SYNCED ClickUp task, the mapped fields also back-sync upstream. */
   updateItem: (id: string, patch: ItemMetaPatch) => void;
+  /** Apply one or many SCHEDULING changes (timebox / unschedule / move /
+   *  resize / pin / plan-apply / roll-over / reflow) as a single UNDOABLE
+   *  step: one snapshot, one undo-toast entry, however many blocks moved.
+   *  `label` is the toast text ("Removed from calendar", "Planned 5 blocks"). */
+  applySchedule: (
+    label: string,
+    changes: {
+      id: string;
+      patch: Pick<
+        ItemMetaPatch,
+        "scheduledStart" | "scheduledEnd" | "flexible"
+      >;
+    }[],
+  ) => void;
   /** Drag-reorder: move `id` to `toIndex` within `groupItems` (the destination
    *  group's items in their current manual order), optionally re-filing it to a
    *  new workflow stage / provider status. Computes a fractional sortKey between
@@ -1596,10 +1618,22 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               ]
               ? "DONE"
               : i.disposition,
+          // The full owner set takes precedence and keeps the primary in step;
+          // else the single-assignee patch; else unchanged.
+          assignees:
+            patch.assignees !== undefined
+              ? patch.assignees ?? []
+              : patch.assignee !== undefined
+                ? patch.assignee
+                  ? [patch.assignee]
+                  : []
+                : i.assignees,
           assignee:
-            patch.assignee !== undefined
-              ? patch.assignee ?? undefined
-              : i.assignee,
+            patch.assignees !== undefined
+              ? patch.assignees?.[0] ?? undefined
+              : patch.assignee !== undefined
+                ? patch.assignee ?? undefined
+                : i.assignee,
           isMine: patch.isMine !== undefined ? patch.isMine : i.isMine,
           important:
             patch.important !== undefined ? patch.important : i.important,
@@ -1635,7 +1669,14 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.workflowStage !== undefined)
         body.workflow_stage = patch.workflowStage;
       if (patch.sortKey !== undefined) body.sort_key = patch.sortKey;
-      if (patch.assignee !== undefined) {
+      if (patch.assignees !== undefined) {
+        // The full set (may be []) — the backend keeps `assignee` in step.
+        body.assignees = (patch.assignees ?? []).map((p) => ({
+          name: p.name,
+          email: p.email,
+          provider_user_id: p.providerUserId,
+        }));
+      } else if (patch.assignee !== undefined) {
         if (patch.assignee === null) body.clear_assignee = true;
         else
           body.assignee = {
@@ -1660,6 +1701,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         );
       }
     }
+  },
+
+  applySchedule: (label, changes) => {
+    if (!changes.length) return;
+    flushPendingPurge(get().undoSnapshot, get().backend);
+    // Snapshot BEFORE applying, so undo restores the pre-change grid exactly;
+    // the per-item writes then ride the normal updateItem path (optimistic +
+    // server sync + authoritative-row swap).
+    set((s) => ({
+      undoSnapshot: {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label,
+        scheduleRevertIds: changes.map((c) => c.id),
+      },
+    }));
+    for (const c of changes) get().updateItem(c.id, c.patch);
   },
 
   reorderItem: (id, groupItems, toIndex, refile) => {
@@ -1723,7 +1783,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const snap = get().undoSnapshot;
     if (!snap) return;
     const { items, projects, processed, selectedItemId, changedIds,
-      deletedItems, softDeletedIds, archivedIds, archivedTo } = snap;
+      deletedItems, softDeletedIds, archivedIds, archivedTo,
+      scheduleRevertIds } = snap;
     set({
       items,
       projects,
@@ -1763,6 +1824,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // Flip the archive back the other way upstream (local state is already
       // restored from the snapshot).
       sync(apiBulkArchive(archivedIds, !archivedTo).catch(() => {}));
+    } else if (scheduleRevertIds?.length) {
+      // Revert the server rows' SCHEDULING to the snapshot values ("" clears a
+      // block that the undone change had created). Local state is already
+      // restored from the snapshot.
+      const prev = new Map(items.map((i) => [i.id, i]));
+      sync(
+        Promise.all(
+          scheduleRevertIds.map((id) => {
+            const p = prev.get(id);
+            return p
+              ? apiPatchItem(id, {
+                  scheduled_start: p.scheduledStart ?? "",
+                  scheduled_end: p.scheduledEnd ?? "",
+                  flexible: p.flexible ?? true,
+                }).catch(() => {})
+              : Promise.resolve();
+          }),
+        ),
+      );
     } else if (changedIds?.length) {
       // Revert the server rows to their pre-change disposition (the local
       // state is already fully restored from the snapshot).

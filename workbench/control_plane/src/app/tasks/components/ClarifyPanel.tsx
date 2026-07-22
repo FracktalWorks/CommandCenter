@@ -41,7 +41,7 @@ import { apiClarifyPropose, apiSuggestTitle } from "../lib/api";
 import type { ConnectedProvider } from "../lib/mockData";
 import { Energy, GtdItem, GtdProject, Person, Target } from "../lib/types";
 import type { TaskAccount } from "../lib/api";
-import { durationLabel, initials, originEmailHref, snoozeOptions } from "../lib/utils";
+import { durationLabel, formatStatus, initials, originEmailHref, snoozeOptions } from "../lib/utils";
 import { SourceBadge } from "./SourceBadge";
 import { AttachmentChips } from "./AttachmentComposer";
 
@@ -205,6 +205,12 @@ export function ClarifyPanel({
   const [parentDismissed, setParentDismissed] = useState(false);
 
   // ── Sort → Shape state ────────────────────────────────────────────────────
+  // The manual form is PROGRESSIVE DISCLOSURE: the assistant's proposal already
+  // seeds every field below, so while the user agrees with it the form is pure
+  // duplication — it stays collapsed behind "Adjust". Re-clarify opens expanded
+  // (the user came specifically to edit), and the form force-opens whenever the
+  // proposal can't be applied as-is (something's missing — show them what).
+  const [adjustOpen, setAdjustOpen] = useState(reclarify);
   const [sort, setSort] = useState<Sort>(sortOf(proposal.disposition));
   const [size, setSize] = useState<Size>(sizeOf(proposal.disposition, proposal.complexity));
   const [owner, setOwner] = useState<Owner>(proposal.suggestedAssignee ? "delegate" : "me");
@@ -549,6 +555,12 @@ export function ClarifyPanel({
           ? !!(projectId || targetSpaceId) && !!buildDecision()
           : !!buildDecision();
 
+  // Progressive disclosure: show the manual Sort→Shape form only when the user
+  // asked to adjust — or when the proposal can't apply as-is, so the missing
+  // piece (an assignee, a destination list…) is visible instead of a dead
+  // Accept button.
+  const showForm = adjustOpen || !canApply;
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const el = e.target as HTMLElement | null;
@@ -623,12 +635,25 @@ export function ClarifyPanel({
           <SourceBadge source={item.source} provider={item.provider} />
         </div>
         <div className="flex items-start gap-2">
-          {/* The title is directly editable now — retype it, or use the
-              context field / Improve to have the assistant rewrite it. Saves on
-              blur / Enter; Escape reverts. */}
-          <input
+          {/* The title is directly editable — retype it, or use the context
+              field / Improve to have the assistant rewrite it. Saves on blur /
+              Enter; Escape reverts. An auto-growing TEXTAREA (not an input) so
+              a long capture WRAPS and stays fully readable — you can't clarify
+              what you can't read, especially on mobile. */}
+          <textarea
             value={title}
-            onChange={(e) => setTitle(e.target.value)}
+            rows={1}
+            ref={(el) => {
+              if (el) {
+                el.style.height = "auto";
+                el.style.height = `${el.scrollHeight}px`;
+              }
+            }}
+            onChange={(e) => {
+              setTitle(e.target.value);
+              e.currentTarget.style.height = "auto";
+              e.currentTarget.style.height = `${e.currentTarget.scrollHeight}px`;
+            }}
             onBlur={() => {
               const t = title.trim();
               if (t && t !== item.title) renameItem(item.id, t);
@@ -639,7 +664,7 @@ export function ClarifyPanel({
               if (e.key === "Escape") { setTitle(item.title); e.currentTarget.blur(); }
             }}
             aria-label="Task title — click to edit"
-            className="tech-transition -mx-1 flex-1 rounded-md border border-transparent bg-transparent px-1 text-lg font-bold leading-snug text-foreground hover:border-border focus:border-primary/50 focus:bg-background focus:outline-none"
+            className="tech-transition -mx-1 flex-1 resize-none overflow-hidden rounded-md border border-transparent bg-transparent px-1 text-lg font-bold leading-snug text-foreground hover:border-border focus:border-primary/50 focus:bg-background focus:outline-none"
           />
           <button
             type="button"
@@ -672,11 +697,9 @@ export function ClarifyPanel({
             <AttachmentChips attachments={item.attachments} />
           </div>
         )}
-        <p className="mt-1 text-[11px] text-muted-foreground">
-          {reclarify
-            ? "Refine this — or break it into next actions."
-            : "What is it — and what needs to happen next?"}
-        </p>
+        {/* (No tagline — the assistant block and the Sort field label already
+            carry the "what is it?" question; every saved row keeps the dialog
+            calmer.) */}
         {/* Freeform guidance → re-clarify. Collapsed by default so it costs no
             height; expand to describe what the item really is and let the
             assistant re-derive the title / project / steps from it. */}
@@ -930,11 +953,15 @@ export function ClarifyPanel({
           )}
 
           <p className="mt-1.5 text-[11px] italic text-muted-foreground">{proposal.rationale}</p>
-          <div className="mt-2.5 flex items-center gap-2">
+          {/* The one decision row: Accept (primary) · Adjust (open the manual
+              form) · Trash (escape hatch). Accept disables — instead of
+              silently no-opping — when the decision can't build yet; the form
+              below force-opens in that case to show what's missing. */}
+          <div className="mt-2.5 flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={() => void apply()}
-              disabled={creatingTarget}
+              disabled={creatingTarget || !canApply}
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-60"
             >
               {creatingTarget ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Check className="h-3.5 w-3.5" />}
@@ -942,6 +969,17 @@ export function ClarifyPanel({
                 ? `Accept & create all ${subtasks.length || 1} step${subtasks.length === 1 ? "" : "s"}`
                 : "Accept & next"}
             </button>
+            {!showForm && (
+              <button
+                type="button"
+                onClick={() => setAdjustOpen(true)}
+                title="Change the sort, owner, timing, or destination yourself"
+                className="tech-transition inline-flex items-center gap-1 rounded-md border border-border px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:border-primary/40 hover:text-foreground"
+              >
+                <Pencil className="h-3 w-3" />
+                Adjust
+              </button>
+            )}
             <button
               type="button"
               onClick={trashNow}
@@ -954,6 +992,10 @@ export function ClarifyPanel({
           </div>
         </div>
 
+        {/* The manual form — collapsed while the proposal is accepted as-is
+            (the assistant block above already SHOWS these values); opened via
+            Adjust, on re-clarify, or when the decision needs more input. */}
+        {showForm && (<>
         {/* STEP 1 — Sort */}
         <Field label="Sort it — what kind of thing is this?">
           <div className="flex flex-wrap gap-1.5">
@@ -1263,22 +1305,26 @@ export function ClarifyPanel({
                 tool to see it.
               </p>
             )}
-            <button
-              type="button"
-              disabled={!canApply || creatingTarget}
-              onClick={() => void apply()}
-              className={[
-                "tech-transition inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium",
-                canApply && !creatingTarget
-                  ? "bg-primary text-primary-foreground hover:opacity-90"
-                  : "cursor-not-allowed bg-secondary text-muted-foreground",
-              ].join(" ")}
-            >
-              {creatingTarget ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
-              Organize it <ArrowRight className="h-4 w-4" />
-            </button>
           </div>
         )}
+        {/* The form's own apply — OUTSIDE the actionable-only block, so picking
+            Reference/Someday/Trash in the Sort row also has a visible button
+            (previously only actionable had one; other sorts relied on Enter). */}
+        <button
+          type="button"
+          disabled={!canApply || creatingTarget}
+          onClick={() => void apply()}
+          className={[
+            "tech-transition inline-flex items-center justify-center gap-1.5 rounded-lg px-3 py-2.5 text-sm font-medium",
+            canApply && !creatingTarget
+              ? "bg-primary text-primary-foreground hover:opacity-90"
+              : "cursor-not-allowed bg-secondary text-muted-foreground",
+          ].join(" ")}
+        >
+          {creatingTarget ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+          Organize it <ArrowRight className="h-4 w-4" />
+        </button>
+        </>)}
       </div>
     </div>
   );
@@ -1465,7 +1511,7 @@ function DuplicateBanner({
         {(dup.projectName || dup.providerStatus) && (
           <div className="mt-0.5 flex flex-wrap items-center gap-x-2 pl-5 text-[10.5px] text-muted-foreground">
             {dup.projectName && <span>{dup.projectName}</span>}
-            {dup.providerStatus && <span>· {dup.providerStatus}</span>}
+            {dup.providerStatus && <span>· {formatStatus(dup.providerStatus)}</span>}
           </div>
         )}
       </div>

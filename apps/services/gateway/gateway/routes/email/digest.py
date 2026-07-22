@@ -146,6 +146,10 @@ async def _digest_commitments(
     (see tasks/email_link.py). Best-effort: the tasks feature may be absent, and
     a digest must never fail because of it."""
     try:
+        # ``:aid`` binds ONCE, against the uuid column. The json text on the
+        # other side compares to ``ea.id::text`` — binding the same parameter in
+        # both a uuid and a text context makes Postgres deduce uuid for it and
+        # fail with "operator does not exist: text = uuid" on every call.
         rows = (await db.execute(text(
             """SELECT gi.title,
                       to_char(gi.due_at, 'Mon DD') AS due_label,
@@ -153,7 +157,7 @@ async def _digest_commitments(
                FROM gtd_items gi
                JOIN email_accounts ea ON ea.id = :aid
                WHERE gi.user_id = ea.user_id
-                 AND gi.origin->>'account_id' = :aid
+                 AND gi.origin->>'account_id' = ea.id::text
                  AND gi.disposition NOT IN ('DONE', 'TRASH')
                  AND gi.due_at IS NOT NULL
                  AND gi.due_at <= now()
@@ -161,7 +165,16 @@ async def _digest_commitments(
                ORDER BY gi.due_at ASC
                LIMIT :lim"""
         ), {"aid": account_id, "horizon": horizon_days, "lim": limit})).fetchall()
-    except Exception:  # noqa: BLE001
+    except Exception as exc:  # noqa: BLE001
+        # Best-effort must leave the SESSION usable, not just return []: a
+        # failed query aborts the transaction, and without a rollback every
+        # later query in the same request dies with InFailedSQLTransaction —
+        # exactly how /digest/send 500'd while the digest preview looked fine.
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _log.warning("email.digest_commitments_failed", error=str(exc))
         return []
     return [{"title": (r.title or "(untitled)"), "due": r.due_label,
              "overdue": bool(r.overdue)} for r in rows]

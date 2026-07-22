@@ -178,6 +178,11 @@ async def test_commitments_are_best_effort_when_tasks_absent() -> None:
     db = AsyncMock()
     db.execute.side_effect = RuntimeError("relation gtd_items does not exist")
     assert await m.digest._digest_commitments(db, "acc-1") == []
+    # …and best-effort means the SESSION survives: a failed query aborts the
+    # transaction, so without a rollback every later query in the request dies
+    # with InFailedSQLTransaction (how /digest/send 500'd in prod while the
+    # preview looked fine — the preview simply had no queries after this one).
+    db.rollback.assert_awaited_once()
 
 
 async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> None:
@@ -186,7 +191,11 @@ async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> N
     out = await m.digest._digest_commitments(db, "acc-1")
     sql = str(db.execute.call_args[0][0])
     assert "disposition NOT IN ('DONE', 'TRASH')" in sql
-    assert "origin->>'account_id' = :aid" in sql
+    # The json-text side compares to ea.id::text, NOT to :aid — binding the
+    # same parameter against both a uuid column and json text makes Postgres
+    # deduce uuid for it and fail ("operator does not exist: text = uuid").
+    assert "origin->>'account_id' = ea.id::text" in sql
+    assert sql.count(":aid") == 1
     assert out == [{"title": "Send quote", "due": "Jul 25", "overdue": True}]
 
 

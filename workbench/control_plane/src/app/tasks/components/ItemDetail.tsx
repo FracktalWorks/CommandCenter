@@ -28,7 +28,6 @@ import {
   Maximize2,
   Archive,
   ArchiveRestore,
-  RotateCcw,
   type LucideIcon,
 } from "lucide-react";
 import { useTaskStore } from "../lib/taskStore";
@@ -36,6 +35,7 @@ import {
   originEmailHref,
   DISPOSITION_LABEL,
   durationLabel,
+  formatStatus,
   initials,
   isOverdue,
   relativeTime,
@@ -43,6 +43,7 @@ import {
 import { Disposition, Energy, GtdItem, Person } from "../lib/types";
 import {
   apiItemDetail,
+  apiItemStageOptions,
   type ProviderTaskDetail,
   type TaskComment,
   type TaskSubtask,
@@ -55,6 +56,7 @@ import { AiTaskActions } from "./AiTaskActions";
 import { DelegateDialog } from "./DelegateDialog";
 import { WeightToggles, PriorityBadge, SuggestionBadge } from "./PriorityControls";
 import { isUntagged } from "../lib/priority";
+import { useCardActions } from "../lib/useCardActions";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
@@ -167,10 +169,10 @@ export function TaskDetail({
   // person until the destination dialog resolves.
   const [delegateTo, setDelegateTo] = useState<Person | null>(null);
   // After reassigning/unassigning a task that's currently in MY Next Actions,
-  // offer to drop it from my list (is_mine=false) — it stays on ClickUp.
+  // offer to drop it from my list (is_mine=false) — it stays on ClickUp. This
+  // component is keyed by item.id at every call site, so it remounts per task
+  // and the offer resets to false on its own (no reset effect needed).
   const [offerDropFromNext, setOfferDropFromNext] = useState(false);
-  // Reset that offer when switching to a different task.
-  useEffect(() => { setOfferDropFromNext(false); }, [item.id]);
 
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
@@ -183,6 +185,29 @@ export function TaskDetail({
   // Delegate/assignee options + stage options for a synced task.
   const memberPeople: Person[] = account?.members?.length ? account.members : people;
   const stageOptions: string[] = account?.statuses ?? [];
+  // The local Kanban stage (the workflow-stage axis of My Next Actions). Used to
+  // show/change a LOCAL task's stage in the detail — synced tasks show their raw
+  // ClickUp status instead (below). setStage handles done/reopen like the card.
+  const stageActions = useCardActions(item);
+  // The full owner set (falls back to the single assignee for older rows / mock).
+  const assigneeList: Person[] =
+    item.assignees ?? (item.assignee ? [item.assignee] : []);
+
+  // A synced task's stage options are THIS task's own list statuses (a project
+  // usually uses only a few of the workspace's many). Loaded on open; until then
+  // (or if unresolved) we fall back to the account-wide set so the picker still
+  // works. Keyed by item.id at the call site → remounts per task, so no reset.
+  const [taskStages, setTaskStages] = useState<string[] | null>(null);
+  useEffect(() => {
+    if (backend !== "live" || !isSynced || item.syncState === "pending") return;
+    let live = true;
+    apiItemStageOptions(item.id)
+      .then((s) => { if (live) setTaskStages(s); })
+      .catch(() => { /* keep the fallback */ });
+    return () => { live = false; };
+  }, [item.id, isSynced, item.syncState, backend]);
+  const syncedStageOptions =
+    taskStages && taskStages.length ? taskStages : stageOptions;
 
   const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
 
@@ -193,44 +218,10 @@ export function TaskDetail({
         {/* focused → the modal's × occupies the top-right corner; keep the
             archive/delete actions clear of it */}
         <div className={`mb-2 flex flex-wrap items-center gap-2 ${focused ? "pr-9" : ""}`}>
+          {/* Status is changed through the status chip (disposition) and the
+              Stage card below — not a standalone Done button, which read as
+              "this task is complete" even when it wasn't. */}
           <StatusPicker item={item} onPick={(d) => quickDispose(item.id, d)} />
-          {/* One-click complete — the primary action. StatusPicker can still set
-              DONE among the other states, but a task shouldn't need a dropdown to
-              be finished. Toggles to Reopen once done. Hidden for REFERENCE. */}
-          {item.disposition !== "REFERENCE" && (
-            <button
-              type="button"
-              onClick={() =>
-                quickDispose(
-                  item.id,
-                  item.disposition === "DONE" ? "NEXT" : "DONE",
-                )
-              }
-              title={
-                item.disposition === "DONE"
-                  ? "Reopen this task"
-                  : "Mark this task done"
-              }
-              className={[
-                "tech-transition inline-flex items-center gap-1.5 rounded-md px-2.5 py-1 text-[12px] font-medium",
-                item.disposition === "DONE"
-                  ? "bg-secondary text-muted-foreground hover:text-foreground"
-                  : "bg-success text-white hover:opacity-90",
-              ].join(" ")}
-            >
-              {item.disposition === "DONE" ? (
-                <>
-                  <RotateCcw className="h-3.5 w-3.5" />
-                  Reopen
-                </>
-              ) : (
-                <>
-                  <Check className="h-3.5 w-3.5" />
-                  Done
-                </>
-              )}
-            </button>
-          )}
           <SourceBadge source={item.source} provider={item.provider} />
           {isSynced && item.providerUrl && (
             <a
@@ -405,57 +396,100 @@ export function TaskDetail({
               )}
             </MetaEdit>
 
-            {/* Stage (synced only) */}
-            {isSynced && stageOptions.length > 0 && (
-              <MetaEdit label="Stage" icon={CircleDot}
-                display={item.providerStatus ? <span>{item.providerStatus}</span> : null}
+            {/* Stage — for a SYNCED task the raw ClickUp status (back-syncs on
+                change); for a LOCAL task the workflow stage (the My Next Actions
+                column). Local tasks always show one now, so their stage is
+                visible/changeable here too, not just on the board. */}
+            {isSynced ? (
+              syncedStageOptions.length > 0 && (
+                <MetaEdit label="Stage" icon={CircleDot}
+                  display={item.providerStatus
+                    ? <span>{formatStatus(item.providerStatus)}</span>
+                    : null}
+                >
+                  {(close) => (
+                    <ChipMenu
+                      options={syncedStageOptions}
+                      active={item.providerStatus}
+                      format={formatStatus}
+                      onPick={(v) => { updateItem(item.id, { providerStatus: v ?? "" }); close(); }}
+                    />
+                  )}
+                </MetaEdit>
+              )
+            ) : (
+              stageActions.stages.length > 0 && (
+                <MetaEdit label="Stage" icon={CircleDot}
+                  display={<span>{stageActions.currentStage}</span>}
+                >
+                  {(close) => (
+                    <ChipMenu
+                      options={stageActions.stages}
+                      active={stageActions.currentStage}
+                      onPick={(v) => { if (v) stageActions.setStage(v); close(); }}
+                    />
+                  )}
+                </MetaEdit>
+              )
+            )}
+
+            {/* Assignee(s). A SYNCED task supports MULTIPLE owners (ClickUp
+                allows several) — a multi-select toggle list. A LOCAL task keeps
+                the single-owner flow: assigning a teammate must first create a
+                ClickUp task (they can't see a private local one), so it routes
+                through the destination picker. */}
+            {isSynced ? (
+              <MetaEdit label="Assignees" icon={UserRound}
+                display={assigneeList.length
+                  ? <AssigneeStack people={assigneeList} />
+                  : null}
+              >
+                {() => (
+                  <MultiPersonMenu
+                    people={memberPeople}
+                    active={assigneeList}
+                    onToggle={(p) => {
+                      const on = assigneeList.some((a) => samePerson(a, p));
+                      const next = on
+                        ? assigneeList.filter((a) => !samePerson(a, p))
+                        : [...assigneeList, p];
+                      updateItem(item.id, { assignees: next });
+                    }}
+                    onClear={() => updateItem(item.id, { assignees: [] })}
+                  />
+                )}
+              </MetaEdit>
+            ) : (
+              <MetaEdit label="Assignee" icon={UserRound}
+                display={item.assignee
+                  ? <span className="inline-flex items-center gap-1.5">
+                      <Avatar name={item.assignee.name} />
+                      {item.assignee.name}
+                    </span>
+                  : null}
               >
                 {(close) => (
-                  <ChipMenu
-                    options={stageOptions}
-                    active={item.providerStatus}
-                    onPick={(v) => { updateItem(item.id, { providerStatus: v ?? "" }); close(); }}
+                  <PersonMenu
+                    people={memberPeople}
+                    active={item.assignee ?? null}
+                    onPick={(p) => {
+                      // A LOCAL task assigned to a teammate must become a ClickUp
+                      // task (they can't see a private local one) → open the
+                      // destination picker. Un-assigning (p=null) just patches.
+                      if (p) {
+                        setDelegateTo(p);
+                      } else {
+                        updateItem(item.id, { assignee: p });
+                        if (item.disposition === "NEXT" && item.isMine) {
+                          setOfferDropFromNext(true);
+                        }
+                      }
+                      close();
+                    }}
                   />
                 )}
               </MetaEdit>
             )}
-
-            {/* Assignee */}
-            <MetaEdit label="Assignee" icon={UserRound}
-              display={item.assignee
-                ? <span className="inline-flex items-center gap-1.5">
-                    <Avatar name={item.assignee.name} />
-                    {item.assignee.name}
-                  </span>
-                : null}
-            >
-              {(close) => (
-                <PersonMenu
-                  people={memberPeople}
-                  active={item.assignee ?? null}
-                  onPick={(p) => {
-                    // A LOCAL task assigned to a teammate must become a ClickUp
-                    // task (they can't see a private local one) → open the
-                    // destination picker. Un-assigning (p=null) or an already-
-                    // synced task just patches (back-syncs the assignee delta).
-                    if (p && !isSynced) {
-                      setDelegateTo(p);
-                    } else {
-                      updateItem(item.id, { assignee: p });
-                      // Handed to someone else (or unassigned) a task that's in
-                      // MY Next Actions → offer to drop it from my list.
-                      const changedOwner =
-                        (p?.providerUserId ?? p?.name ?? null) !==
-                        (item.assignee?.providerUserId ?? item.assignee?.name ?? null);
-                      if (changedOwner && item.disposition === "NEXT" && item.isMine) {
-                        setOfferDropFromNext(true);
-                      }
-                    }
-                    close();
-                  }}
-                />
-              )}
-            </MetaEdit>
 
             {/* Project (read-only link for now — re-file happens via clarify) */}
             {project && (
@@ -885,7 +919,7 @@ function SubtaskRow({ s }: { s: TaskSubtask }) {
       </span>
       {s.status && (
         <span className="shrink-0 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
-          {s.status}
+          {formatStatus(s.status)}
         </span>
       )}
       {s.assignees[0] && <Avatar name={s.assignees[0].name} />}
@@ -1042,7 +1076,10 @@ function EditableText({
   );
 }
 
-/** A metadata cell that flips to an inline editor on click. */
+/** A metadata cell that flips to an inline editor on click. When closed the
+ *  WHOLE card is the click target (label, value, and the empty space around
+ *  them) — not just a thin strip under the label — so it's an easy, obvious hit
+ *  area. Opening reveals the editor with an × to dismiss. */
 function MetaEdit({
   label,
   icon: Icon,
@@ -1055,35 +1092,45 @@ function MetaEdit({
   children: (close: () => void) => React.ReactNode;
 }) {
   const [open, setOpen] = useState(false);
+
+  if (!open) {
+    return (
+      <button
+        type="button"
+        onClick={() => setOpen(true)}
+        aria-label={`Edit ${label}`}
+        className="tech-transition group min-w-0 rounded-md border border-border bg-card px-3 py-2 text-left hover:border-primary/40 hover:bg-secondary/30"
+      >
+        <div className="flex items-center justify-between">
+          <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+            <Icon className="h-3 w-3" />
+            {label}
+          </span>
+          <Pencil className="h-3 w-3 shrink-0 text-muted-foreground/50 opacity-0 transition-opacity group-hover:opacity-100" />
+        </div>
+        <div className="mt-0.5 text-sm text-foreground">
+          {display ?? <span className="text-muted-foreground/60">—</span>}
+        </div>
+      </button>
+    );
+  }
   return (
-    <div className="min-w-0 rounded-md border border-border bg-card px-3 py-2">
+    <div className="min-w-0 rounded-md border border-primary/40 bg-card px-3 py-2">
       <div className="flex items-center justify-between">
-        <div className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+        <span className="inline-flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
           <Icon className="h-3 w-3" />
           {label}
-        </div>
-        {!open && (
-          <button
-            type="button"
-            onClick={() => setOpen(true)}
-            className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:text-primary"
-            aria-label={`Edit ${label}`}
-          >
-            <Pencil className="h-3 w-3" />
-          </button>
-        )}
-      </div>
-      {open ? (
-        <div className="mt-1.5">{children(() => setOpen(false))}</div>
-      ) : (
+        </span>
         <button
           type="button"
-          onClick={() => setOpen(true)}
-          className="mt-0.5 block w-full text-left text-sm text-foreground"
+          onClick={() => setOpen(false)}
+          className="tech-transition rounded p-0.5 text-muted-foreground/60 hover:text-foreground"
+          aria-label={`Close ${label} editor`}
         >
-          {display ?? <span className="text-muted-foreground/60">—</span>}
+          <X className="h-3 w-3" />
         </button>
-      )}
+      </div>
+      <div className="mt-1.5">{children(() => setOpen(false))}</div>
     </div>
   );
 }
@@ -1094,6 +1141,7 @@ function ChipMenu({
   mono,
   capitalize,
   allowClear,
+  format,
   onPick,
 }: {
   options: string[];
@@ -1101,6 +1149,9 @@ function ChipMenu({
   mono?: boolean;
   capitalize?: boolean;
   allowClear?: boolean;
+  /** display transform for the chip label; the raw option is still the value
+   *  passed to onPick (so e.g. a title-cased status keeps its raw value). */
+  format?: (o: string) => React.ReactNode;
   onPick: (v: string | null) => void;
 }) {
   return (
@@ -1118,7 +1169,7 @@ function ChipMenu({
               : "border-border text-muted-foreground hover:bg-secondary",
           ].join(" ")}
         >
-          {o}
+          {format ? format(o) : o}
         </button>
       ))}
       {allowClear && active && (
@@ -1130,6 +1181,89 @@ function ChipMenu({
           Clear
         </button>
       )}
+    </div>
+  );
+}
+
+/** Same person across the members list and the assignee set — by provider id
+ *  when both have one, else by name. */
+function samePerson(a: Person, b: Person): boolean {
+  if (a.providerUserId && b.providerUserId)
+    return a.providerUserId === b.providerUserId;
+  return a.name === b.name;
+}
+
+/** Overlapping avatars + a label ("Name" for one, "N people" for several). */
+function AssigneeStack({ people }: { people: Person[] }) {
+  const shown = people.slice(0, 3);
+  return (
+    <span className="inline-flex items-center gap-1.5">
+      <span className="flex -space-x-1.5">
+        {shown.map((p, i) => (
+          <span key={p.providerUserId || p.name || i} className="ring-1 ring-card rounded-full">
+            <Avatar name={p.name} />
+          </span>
+        ))}
+        {people.length > shown.length && (
+          <span className="flex h-4 w-4 items-center justify-center rounded-full bg-secondary text-[8px] font-bold text-muted-foreground ring-1 ring-card">
+            +{people.length - shown.length}
+          </span>
+        )}
+      </span>
+      <span className="truncate">
+        {people.length === 1 ? people[0].name : `${people.length} people`}
+      </span>
+    </span>
+  );
+}
+
+/** Multi-select owner picker — each person toggles in/out of the set; the menu
+ *  stays open so several can be chosen before dismissing. "Unassigned" clears. */
+function MultiPersonMenu({
+  people,
+  active,
+  onToggle,
+  onClear,
+}: {
+  people: Person[];
+  active: Person[];
+  onToggle: (p: Person) => void;
+  onClear: () => void;
+}) {
+  return (
+    <div className="flex flex-wrap gap-1.5">
+      <button
+        type="button"
+        onClick={onClear}
+        className={[
+          "tech-transition rounded-full border px-2 py-0.5 text-[12px]",
+          active.length === 0
+            ? "border-primary bg-primary/10 text-primary"
+            : "border-border text-muted-foreground hover:bg-secondary",
+        ].join(" ")}
+      >
+        Unassigned
+      </button>
+      {people.map((p) => {
+        const on = active.some((a) => samePerson(a, p));
+        return (
+          <button
+            key={p.providerUserId || p.name}
+            type="button"
+            onClick={() => onToggle(p)}
+            aria-pressed={on}
+            className={[
+              "tech-transition inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[12px]",
+              on
+                ? "border-primary bg-primary/10 text-primary"
+                : "border-border text-muted-foreground hover:bg-secondary",
+            ].join(" ")}
+          >
+            {on ? <Check className="h-3 w-3 shrink-0" /> : <Avatar name={p.name} />}
+            {p.name}
+          </button>
+        );
+      })}
     </div>
   );
 }

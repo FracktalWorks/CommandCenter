@@ -19,6 +19,7 @@ from gateway.routes.email.automation.identity import (
     resolve_org_domains,
     sender_scope,
 )
+from gateway.routes.email.automation.jobs import JobTracker
 from gateway.routes.email.core import (
     CLEANUP_CATEGORIES,
     _assert_account_owner,
@@ -1596,16 +1597,58 @@ async def _maybe_classify_threads(account_id: str) -> None:
         await db.close()
 
 
-async def _reclassify_reply_zero_job(account_id: str) -> None:
+# Reclassify progress, so the UI (or a poller) can watch a whole-mailbox rebuild
+# drain instead of guessing when a fire-and-forget job finished. Same token guard
+# as the other email jobs — a second reclassify supersedes the first cleanly.
+_RECLASSIFY_JOBS = JobTracker()
+
+
+def _dt_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+# Safety ceiling on drain passes: 200 threads scanned per pass, so this covers a
+# ~40k-thread mailbox — far past any real one. The real stop is "no more work" or
+# "a pass made no progress"; this only bounds a pathological loop.
+_RECLASSIFY_MAX_PASSES = 200
+
+
+async def _count_reply_zero_backlog(db: Any, account_id: str) -> int:
+    """How many threads still NEED a status — the same "needs work" predicate the
+    backfill selects on (statusless, latest-message changed, or a provisional
+    "· auto" status). Drives both the progress total and the drain's stop test."""
+    return (await db.execute(text(
+        """WITH latest AS (
+             SELECT DISTINCT ON (thread_id) thread_id, id
+             FROM email_messages
+             WHERE account_id = :aid AND thread_id IS NOT NULL
+             ORDER BY thread_id, received_at DESC
+           )
+           SELECT COUNT(*) FROM latest l
+             LEFT JOIN email_thread_status s
+                    ON s.account_id = :aid AND s.thread_id = l.thread_id
+            WHERE s.thread_id IS NULL
+               OR s.last_message_id::text <> l.id::text
+               OR COALESCE(s.reason, '') LIKE '%· auto'"""
+    ), {"aid": account_id})).scalar() or 0
+
+
+async def _reclassify_reply_zero_job(
+    account_id: str, *, token: int | None = None,
+) -> None:
     """Rebuild an account's Reply Zero statuses from scratch with the current
     rules-based logic — used when the classifier changed (e.g. to clear threads
     that the old parallel classifier stale-labelled as needs-reply).
 
     Drops the DERIVED statuses (NEEDS_REPLY / AWAITING / FYI) but PRESERVES DONE,
-    so a user's "Mark done" decisions survive a reclassify. Then runs the engine
-    backfill a bounded number of times (each pass scans ≤200 threads and
-    classifies ≤25 inbound, so this covers the whole recent window without
-    unbounded LLM cost). Best-effort."""
+    so a user's "Mark done" decisions survive a reclassify. Then DRAINS the whole
+    mailbox: it runs the backfill pass repeatedly until nothing still needs a
+    status — not a fixed 8 passes, which on a real mailbox (3,500 threads, 200 a
+    pass) rebuilt only the newest ~1,600 and left the rest on the old logic.
+
+    Resumable by construction: a pass that makes NO progress (LLM down, so the
+    inbound remainder can't be classified) stops the drain rather than spinning —
+    those threads keep their gap, so re-triggering reclassify picks up where this
+    left off. Progress is published per pass for the UI to poll. Best-effort."""
     db = await _get_db()
     try:
         await db.execute(text(
@@ -1613,16 +1656,40 @@ async def _reclassify_reply_zero_job(account_id: str) -> None:
             "WHERE account_id = :aid AND status <> 'DONE'"
         ), {"aid": account_id})
         await db.commit()
+        total = await _count_reply_zero_backlog(db, account_id)
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.reclassify_reset_failed",
                      account_id=account_id, error=str(exc)[:160])
+        _RECLASSIFY_JOBS.finish(
+            account_id, token, status="error", error=str(exc)[:160],
+            finished_at=_dt_now_iso())
         await db.close()
         return
-    else:
+    finally:
         await db.close()
-    # Each pass classifies the next batch of now-statusless threads.
-    for _ in range(8):
+
+    _RECLASSIFY_JOBS.update(account_id, token, total=total, remaining=total)
+    prev_remaining: int | None = None
+    for _ in range(_RECLASSIFY_MAX_PASSES):
+        db = await _get_db()
+        try:
+            remaining = await _count_reply_zero_backlog(db, account_id)
+        finally:
+            await db.close()
+        _RECLASSIFY_JOBS.update(
+            account_id, token, remaining=remaining,
+            processed=max(0, total - remaining))
+        if remaining == 0:
+            break
+        # No forward progress since the last pass → the remainder can't be
+        # classified right now (e.g. the LLM is unavailable). Stop instead of
+        # looping to the safety cap; the gap persists, so this is resumable.
+        if prev_remaining is not None and remaining >= prev_remaining:
+            break
+        prev_remaining = remaining
         await _maybe_classify_threads(account_id)
+    _RECLASSIFY_JOBS.finish(
+        account_id, token, status="done", finished_at=_dt_now_iso())
 
 
 class ThreadResolveRequest(BaseModel):
@@ -1719,16 +1786,45 @@ async def reclassify_reply_zero(
     """Rebuild Reply Zero from scratch with the current rules-based logic.
 
     Clears the derived statuses (Reply / Awaiting / FYI) — preserving threads
-    you've marked Done — then re-runs classification through the rules engine.
-    Useful after the classifier changed. Runs in the background; poll
-    GET /email/reply-zero to see the rebuilt buckets."""
+    you've marked Done — then DRAINS the whole mailbox through the rules engine
+    (not a fixed handful of passes). Runs in the background; poll
+    GET /email/reply-zero/reclassify/status for progress, or GET /email/reply-zero
+    to see the rebuilt buckets."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
     finally:
         await db.close()
-    background.add_task(_reclassify_reply_zero_job, req.account_id)
+    # One rebuild at a time per account: a second click while one is draining
+    # would double the LLM spend and race on the same status rows.
+    if _RECLASSIFY_JOBS.is_running(req.account_id):
+        return {"scheduled": False, "already_running": True}
+    # Seed the running row + mint the guard token SYNCHRONOUSLY, before the task
+    # is scheduled, so an immediate status poll sees "running" rather than a gap.
+    token = _RECLASSIFY_JOBS.start(
+        req.account_id, status="running", total=0, remaining=0, processed=0,
+        started_at=_dt_now_iso(), finished_at=None, error=None)
+    background.add_task(
+        _reclassify_reply_zero_job, req.account_id, token=token)
     return {"scheduled": True}
+
+
+@router.get("/reply-zero/reclassify/status")
+async def reclassify_reply_zero_status(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Progress of an in-flight (or the last) whole-mailbox reclassify: status,
+    total threads to rebuild, how many remain, and how many are done."""
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+    finally:
+        await db.close()
+    job = _RECLASSIFY_JOBS.get(account_id)
+    if not job:
+        return {"status": "idle"}
+    return {k: v for k, v in job.items() if k != "token"}
 
 
 @router.get("/reply-zero")

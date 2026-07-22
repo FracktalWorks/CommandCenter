@@ -142,6 +142,12 @@ class EmailMessage:
     provider_message_id: str
     thread_id: str | None
     folder: str
+    # The RFC 5322 Message-ID header — stable across a provider re-key. Outlook
+    # changes provider_message_id when a message moves folders, which would
+    # otherwise insert a duplicate "ghost" row; the ingest upsert dedupes on this
+    # instead. None when the provider doesn't expose it (kept nullable so nothing
+    # that omits it breaks).
+    internet_message_id: str | None = None
     labels: list[str] = field(default_factory=list)
     from_address: EmailAddress | None = None
     to_addresses: list[EmailAddress] = field(default_factory=list)

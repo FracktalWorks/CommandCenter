@@ -56,7 +56,7 @@ def truncate_body(value: str | None, max_bytes: int) -> str | None:
 
 
 _INSERT = """INSERT INTO email_messages
-    (id, account_id, provider_message_id, thread_id,
+    (id, account_id, provider_message_id, internet_message_id, thread_id,
      folder, labels, categories, importance,
      from_address, to_addresses,
      cc_addresses, bcc_addresses, subject,
@@ -64,7 +64,7 @@ _INSERT = """INSERT INTO email_messages
      has_attachments, is_read, is_starred, is_flagged,
      unsubscribe_link, received_at, synced_at)
    VALUES
-    (:id, :account_id, :provider_id, :thread_id,
+    (:id, :account_id, :provider_id, :internet_message_id, :thread_id,
      :folder, :labels, :categories, :importance,
      :from_addr, :to_addrs,
      :cc_addrs, :bcc_addrs, :subject,
@@ -90,6 +90,8 @@ _INSERT = """INSERT INTO email_messages
 # cleared them". See EmailMessage.categories_authoritative.
 _ON_CONFLICT_UPDATE = """
    ON CONFLICT (account_id, provider_message_id) DO UPDATE SET
+     internet_message_id = COALESCE(EXCLUDED.internet_message_id,
+                                    email_messages.internet_message_id),
      thread_id = EXCLUDED.thread_id,
      folder = EXCLUDED.folder,
      labels = EXCLUDED.labels,
@@ -142,6 +144,7 @@ def _message_params(account_id: str, msg: Any) -> dict[str, Any]:
         "id": str(uuid4()),
         "account_id": account_id,
         "provider_id": msg.provider_message_id,
+        "internet_message_id": getattr(msg, "internet_message_id", None),
         "thread_id": msg.thread_id,
         "folder": msg.folder or "INBOX",
         "labels": msg.labels,
@@ -193,6 +196,35 @@ async def upsert_message(
 
     The caller owns the transaction (``db.commit()``).
     """
+    # Provider re-key dedupe: Outlook changes provider_message_id when a message
+    # moves folders, so the same logical message arrives under a new id and would
+    # INSERT a duplicate ghost. Before inserting, reclaim the existing row for
+    # this stable Message-ID by pointing it at the new provider id; the upsert
+    # below then conflicts on (account_id, new id) and refreshes it in place, so
+    # the message keeps its ONE row — categories and the rules_processed_at
+    # watermark ride along, and it is not re-classified.
+    #
+    # Guarded to be collision-free on the hot path: rename ONLY when exactly one
+    # row carries this id and nothing already holds the new provider id, so the
+    # UPDATE can never collapse two rows onto the same (account_id, provider id)
+    # and trip its unique index. A rare pre-existing multi-ghost (both rows
+    # already carrying the id) is left untouched for the one-off merge pass.
+    imid = getattr(msg, "internet_message_id", None)
+    if on_conflict == "update" and imid:
+        await db.execute(text(
+            "UPDATE email_messages SET provider_message_id = :new_pmid, "
+            "updated_at = now() "
+            "WHERE account_id = :aid AND internet_message_id = :imid "
+            "  AND provider_message_id <> :new_pmid "
+            "  AND NOT EXISTS (SELECT 1 FROM email_messages e "
+            "        WHERE e.account_id = :aid "
+            "          AND e.provider_message_id = :new_pmid) "
+            "  AND (SELECT COUNT(*) FROM email_messages c "
+            "        WHERE c.account_id = :aid "
+            "          AND c.internet_message_id = :imid) = 1"),
+            {"new_pmid": msg.provider_message_id, "aid": account_id,
+             "imid": imid})
+
     conflict = _ON_CONFLICT_UPDATE if on_conflict == "update" else _ON_CONFLICT_NOTHING
     await db.execute(text(_INSERT + conflict), _message_params(account_id, msg))
     for att in msg.attachments:

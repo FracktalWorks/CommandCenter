@@ -35,6 +35,7 @@ class _Att:
 @dataclass
 class _Msg:
     provider_message_id: str = "pm-1"
+    internet_message_id: str | None = None
     thread_id: str | None = "t-1"
     folder: str = "INBOX"
     labels: list = field(default_factory=list)
@@ -142,6 +143,58 @@ async def test_body_is_truncated_for_every_ingest_path():
     _, params = db.calls[0]
     assert params["body_text"].endswith(" ... [truncated]")
     assert len(params["body_text"].encode("utf-8")) <= MAX_BODY_TEXT_BYTES
+
+
+async def test_insert_carries_internet_message_id_and_refreshes_it():
+    db = _FakeDB()
+    await upsert_message(db, "acct-1", _Msg(internet_message_id="<abc@x>"))
+    # The reclaim UPDATE runs first, then the INSERT.
+    sql, params = db.calls[-1]
+    assert "internet_message_id" in sql  # column is inserted
+    assert params["internet_message_id"] == "<abc@x>"
+    # On conflict the id is refreshed but never wiped by a NULL from a provider
+    # that omits it.
+    assert ("internet_message_id = COALESCE(EXCLUDED.internet_message_id"
+            in sql)
+
+
+async def test_a_rekeyed_message_reclaims_its_row_instead_of_ghosting():
+    """Outlook re-keying a message (new provider id, same Message-ID) must update
+    its existing row, not insert a duplicate ghost."""
+    db = _FakeDB()
+    await upsert_message(
+        db, "acct-1", _Msg(provider_message_id="pm-NEW",
+                           internet_message_id="<abc@x>"))
+    reclaim_sql, reclaim_params = db.calls[0]
+    assert reclaim_sql.startswith("UPDATE email_messages SET provider_message_id")
+    assert reclaim_params == {
+        "new_pmid": "pm-NEW", "aid": "acct-1", "imid": "<abc@x>"}
+    # The reclaim is collision-free: it only renames when nothing already holds
+    # the new id and exactly one row carries this Message-ID.
+    assert "NOT EXISTS" in reclaim_sql
+    assert "COUNT(*)" in reclaim_sql and ") = 1" in reclaim_sql
+    # ...and the INSERT still runs after it.
+    assert "INSERT INTO email_messages" in db.calls[1][0]
+
+
+async def test_no_reclaim_without_a_message_id():
+    db = _FakeDB()
+    await upsert_message(db, "acct-1", _Msg(internet_message_id=None))
+    # First (and only pre-attachment) call is the INSERT — no reclaim UPDATE.
+    assert "INSERT INTO email_messages" in db.calls[0][0]
+    assert not db.calls[0][0].startswith("UPDATE email_messages")
+
+
+async def test_no_reclaim_on_the_insert_only_path():
+    # Inbound (on_conflict='nothing') is authoritative-on-arrival — it must not
+    # reach back and reclaim/rename an existing row.
+    db = _FakeDB()
+    await upsert_message(
+        db, "acct-1", _Msg(internet_message_id="<abc@x>"),
+        on_conflict="nothing")
+    assert "INSERT INTO email_messages" in db.calls[0][0]
+    assert all(not sql.startswith("UPDATE email_messages")
+               for sql, _ in db.calls)
 
 
 def test_truncate_body_passthrough_and_cap():

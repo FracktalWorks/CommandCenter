@@ -384,10 +384,11 @@ class OutlookProvider(BaseEmailProvider):
             params: dict[str, Any] = {
                 "$top": min(max_results, 100),
                 "$orderby": "receivedDateTime desc",
-                "$select": "id,subject,from,toRecipients,ccRecipients,"
-                           "bccRecipients,receivedDateTime,isRead,hasAttachments,"
-                           "flag,bodyPreview,categories,parentFolderId,"
-                           "conversationId,importance,internetMessageHeaders",
+                "$select": "id,internetMessageId,subject,from,toRecipients,"
+                           "ccRecipients,bccRecipients,receivedDateTime,isRead,"
+                           "hasAttachments,flag,bodyPreview,categories,"
+                           "parentFolderId,conversationId,importance,"
+                           "internetMessageHeaders",
             }
             if query:
                 params["$search"] = f'"{query}"'
@@ -1148,6 +1149,7 @@ class OutlookProvider(BaseEmailProvider):
 
         return EmailMessage(
             provider_message_id=raw["id"],
+            internet_message_id=raw.get("internetMessageId"),
             thread_id=raw.get("conversationId"),
             folder=raw.get("parentFolderId", "inbox"),
             labels=categories,

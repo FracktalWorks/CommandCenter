@@ -920,6 +920,10 @@ export interface SaveDraftParams {
   /** Local id of the message being replied to (creates a threaded reply draft). */
   replyToMessageId?: string;
   to?: string[];
+  /** Carried ON the draft now, so a Cc'd reply saves as a draft instead of
+   *  forcing a full send (the old three-way composer branch). */
+  cc?: string[];
+  bcc?: string[];
   subject?: string;
   body?: string;
 }
@@ -937,6 +941,8 @@ export async function saveDraft(params: SaveDraftParams): Promise<Email> {
       draft_id: params.draftId ?? null,
       reply_to_message_id: params.replyToMessageId ?? null,
       to: params.to ?? [],
+      cc: params.cc ?? [],
+      bcc: params.bcc ?? [],
       subject: params.subject ?? "",
       body: params.body ?? "",
     }),

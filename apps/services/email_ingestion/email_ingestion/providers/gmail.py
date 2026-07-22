@@ -407,6 +407,8 @@ class GmailProvider(BaseEmailProvider):
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Create a Gmail draft (drafts.create); threads it when a thread id is
         given so the reply lands in the right conversation. Adds file
@@ -430,6 +432,10 @@ class GmailProvider(BaseEmailProvider):
         else:
             msg = MIMEText(body_text, "plain" if not body_html else "html")
         msg["To"] = ", ".join(to)
+        if cc:
+            msg["Cc"] = ", ".join(a for a in cc if a)
+        if bcc:
+            msg["Bcc"] = ", ".join(a for a in bcc if a)
         msg["Subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         message: dict[str, Any] = {"raw": raw}
@@ -449,6 +455,8 @@ class GmailProvider(BaseEmailProvider):
         body_text: str | None = None,
         body_html: str | None = None,
         thread_id: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Replace a Gmail draft's content in place (drafts.update). Returns the
         (unchanged) draft id so the editor keeps tracking the same draft.
@@ -461,6 +469,10 @@ class GmailProvider(BaseEmailProvider):
             msg = MIMEText(body_text or "", "plain")
         if to is not None:
             msg["To"] = ", ".join(to)
+        if cc is not None:
+            msg["Cc"] = ", ".join(a for a in cc if a)
+        if bcc is not None:
+            msg["Bcc"] = ", ".join(a for a in bcc if a)
         if subject is not None:
             msg["Subject"] = subject
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()

@@ -5,13 +5,9 @@ import {
   Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
   Settings2,
 } from "lucide-react";
-import {
-  getDigest, sendDigest, getAssistantSettings, saveAssistantSettings,
-} from "../../lib/api";
-import {
-  DigestData, AssistantSettings, DigestFrequency, WEEKDAYS,
-} from "../../lib/types";
-import { Modal, Toggle } from "./ui";
+import { getDigest, sendDigest } from "../../lib/api";
+import { DigestData } from "../../lib/types";
+import { DigestSettingsDialog } from "./DigestSettingsDialog";
 
 interface DigestViewProps {
   accountId: string | null;
@@ -105,7 +101,7 @@ export function DigestView({ accountId }: DigestViewProps) {
       </div>
 
       {showConfig && accountId && (
-        <DigestConfigDialog
+        <DigestSettingsDialog
           accountId={accountId}
           onClose={() => setShowConfig(false)}
         />
@@ -252,122 +248,6 @@ export function DigestView({ accountId }: DigestViewProps) {
 }
 
 /** Inline digest schedule config (inbox-zero's "Configure" dialog). */
-function DigestConfigDialog({
-  accountId,
-  onClose,
-}: {
-  accountId: string;
-  onClose: () => void;
-}) {
-  const [s, setS] = useState<AssistantSettings | null>(null);
-  const [saving, setSaving] = useState(false);
-  const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    getAssistantSettings(accountId).then(setS).catch(() => {});
-  }, [accountId]);
-
-  const set = (patch: Partial<AssistantSettings>) =>
-    setS((prev) => (prev ? { ...prev, ...patch } : prev));
-
-  const save = async () => {
-    if (!s) return;
-    setSaving(true);
-    setErr(null);
-    try {
-      await saveAssistantSettings(s);
-      onClose();
-    } catch (e) {
-      setErr((e as Error).message || "Couldn't save.");
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Modal
-      title="Digest schedule"
-      description="Get a recurring summary of your inbox emailed to you."
-      onClose={onClose}
-      maxWidth="max-w-md"
-      footer={
-        <button
-          onClick={save}
-          disabled={saving || !s}
-          className="ml-auto flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors disabled:opacity-50"
-        >
-          {saving ? <Loader2 className="animate-spin" size={13} /> : <Check size={13} />}
-          Save
-        </button>
-      }
-    >
-      {!s ? (
-        <div className="flex items-center gap-2 text-xs text-muted-foreground py-4">
-          <Loader2 className="animate-spin" size={14} /> Loading…
-        </div>
-      ) : (
-        <div className="space-y-3">
-          <div>
-            <label className="text-[11px] text-muted-foreground">Frequency</label>
-            <select
-              value={s.digest_frequency}
-              onChange={(e) =>
-                set({ digest_frequency: e.target.value as DigestFrequency })
-              }
-              className={INPUT_CLS}
-            >
-              <option value="OFF">Off</option>
-              <option value="DAILY">Daily</option>
-              <option value="WEEKLY">Weekly</option>
-            </select>
-          </div>
-          {s.digest_frequency === "WEEKLY" && (
-            <div>
-              <label className="text-[11px] text-muted-foreground">Day of week</label>
-              <select
-                value={s.digest_day_of_week}
-                onChange={(e) =>
-                  set({ digest_day_of_week: parseInt(e.target.value, 10) })
-                }
-                className={INPUT_CLS}
-              >
-                {WEEKDAYS.map((d, i) => (
-                  <option key={d} value={i}>
-                    {d}
-                  </option>
-                ))}
-              </select>
-            </div>
-          )}
-          {s.digest_frequency !== "OFF" && (
-            <div>
-              <label className="text-[11px] text-muted-foreground">Time of day (UTC)</label>
-              <input
-                type="time"
-                value={s.digest_time_of_day}
-                onChange={(e) => set({ digest_time_of_day: e.target.value })}
-                className={INPUT_CLS}
-              />
-            </div>
-          )}
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-foreground">Email the digest to me</span>
-            <Toggle
-              enabled={s.digest_send_to_email}
-              onChange={(v) => set({ digest_send_to_email: v })}
-            />
-          </div>
-          {err && (
-            <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
-              {err}
-            </div>
-          )}
-        </div>
-      )}
-    </Modal>
-  );
-}
-
 function Stat({
   icon: Icon,
   label,

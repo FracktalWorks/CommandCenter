@@ -49,19 +49,32 @@ async def test_needs_reply_reads_thread_status_not_inbox_heuristic() -> None:
 
 
 async def test_category_filter_normalises_and_drops_non_categories() -> None:
+    """The configured rule names normalise through the canonicaliser and filter
+    the COMPOSED analytics aggregate's rows — since 2.7 the filter is a
+    projection over the one shared computation, not a second SQL variant."""
+    from unittest.mock import patch
+
+    from gateway.routes.email.automation import analytics as an
+
     captured: list[tuple[str, dict]] = []
     db = _fake_db(captured)
-    await m.digest._generate_digest(
-        db, "acc-1", 7,
-        # rule-name variants: plural alias, wrong casing/whitespace, and a name
-        # that isn't a category at all.
-        ["Cold Emails", " newsletter ", "My weekly roundup"],
-    )
-    # The category-breakdown query binds the normalised, de-junked set.
-    cat_params = [p for s, p in captured if "GROUP BY 1 ORDER BY 2 DESC" in s
-                  and "cats" in p]
-    assert cat_params, "category-breakdown query should bind :cats"
-    assert cat_params[0]["cats"] == ["Cold Email", "Newsletter"]
+    rows = [
+        {"category": "Cold Email", "count": 3, "prev_count": 0},
+        {"category": "Newsletter", "count": 5, "prev_count": 1},
+        {"category": "Receipt", "count": 2, "prev_count": 0},
+        {"category": "Reply", "count": 1, "prev_count": 0},
+    ]
+    with patch.object(an, "_categories", AsyncMock(return_value=rows)):
+        out = await m.digest._generate_digest(
+            db, "acc-1", 7,
+            # rule-name variants: plural alias, wrong casing/whitespace, and a
+            # name that isn't a category at all.
+            ["Cold Emails", " newsletter ", "My weekly roundup"],
+        )
+    # Only the normalised, de-junked selections survive; the thread-status row
+    # ("Reply") and unselected categories are projected out.
+    assert [r["category"] for r in out["by_category"]] == [
+        "Cold Email", "Newsletter"]
 
 
 # ── 2.7: projection + honesty ────────────────────────────────────────────────

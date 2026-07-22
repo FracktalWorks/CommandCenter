@@ -56,40 +56,54 @@ async def _digest_totals(db: Any, params: dict[str, Any]) -> dict[str, int]:
     }
 
 
+# The digest's scope, in the ANALYTICS helpers' ``m`` alias: this account,
+# inbox only, never the account's own address (self-notes, BCC-to-self, and the
+# digest email itself, which would inflate the NEXT digest's counts).
+_PROJ_SCOPE = ("m.account_id = :aid AND LOWER(COALESCE(m.folder, '')) = 'inbox' "
+               "AND (:self = '' OR LOWER(m.from_address->>'email') <> :self)")
+_PROJ_WIN = "m.received_at >= now() - make_interval(days => :days)"
+_PROJ_PREV_WIN = ("m.received_at >= now() - make_interval(days => :days * 2) "
+                  "AND m.received_at < now() - make_interval(days => :days)")
+
+
 async def _digest_categories(
-    db: Any, params: dict[str, Any], cat_clause: str,
+    db: Any, params: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """Category breakdown of the window's inbound inbox mail, by sender category
-    (the same email_senders rollup the Analytics category chart reads)."""
-    rows = (await db.execute(text(
-        f"""SELECT COALESCE(s.category, 'Unknown') AS category, COUNT(*) AS c
-            FROM email_messages em
-            LEFT JOIN email_senders s
-              ON s.account_id = em.account_id
-             AND s.email = LOWER(em.from_address->>'email')
-            WHERE {_DIGEST_WIN} AND {_DIGEST_INBOUND}{cat_clause}
-            GROUP BY 1 ORDER BY 2 DESC"""
-    ), params)).fetchall()
-    return [{"category": r.category, "count": r.c} for r in rows]
+    """Category breakdown = the ANALYTICS category aggregate, projected onto the
+    digest's window and scope.
+
+    This used to run its own SQL over the ``email_senders`` rollup, which
+    disagreed with the Analytics chart (message categories with the per-thread
+    status fallback — see ``analytics._categories`` for why an empty categories
+    array does NOT mean unclassified). One computation, two projections: the
+    digest passes its scope (this account, inbox-only, self-excluded) and its
+    window; the aggregate itself lives in analytics.
+    """
+    from gateway.routes.email.automation.analytics import (  # noqa: PLC0415
+        _categories,
+    )
+    return await _categories(db, _PROJ_SCOPE, params, _PROJ_WIN, _PROJ_PREV_WIN)
 
 
 async def _digest_top_senders(
     db: Any, params: dict[str, Any],
 ) -> list[dict[str, Any]]:
-    """The window's noisiest inbound senders (Analytics' 'noisy senders', capped
-    to the digest's shorter list)."""
-    rows = (await db.execute(text(
-        f"""SELECT MAX(em.from_address->>'name') AS name,
-                   LOWER(em.from_address->>'email') AS email, COUNT(*) AS c
-            FROM email_messages em
-            WHERE {_DIGEST_WIN} AND {_DIGEST_INBOUND}
-              AND COALESCE(em.from_address->>'email','') <> ''
-            GROUP BY 2 ORDER BY 3 DESC LIMIT 8"""
-    ), params)).fetchall()
-    return [
-        {"name": r.name or r.email, "email": r.email, "count": r.c}
-        for r in rows
-    ]
+    """The senders worth telling the user about = the ANALYTICS noisy-senders
+    aggregate (mail you neither read nor ever replied to), projected onto the
+    digest's window and scope.
+
+    The old version ranked by raw volume, which on a founder's mailbox just
+    lists colleagues — the exact panel Analytics already replaced with "senders
+    you pay attention costs for and have never once answered". Same projection
+    discipline as the category breakdown: digest scope, analytics computation.
+    ``count`` mirrors ``messages`` for the renderers.
+    """
+    from gateway.routes.email.automation.analytics import (  # noqa: PLC0415
+        _noisy_senders,
+    )
+    rows = await _noisy_senders(db, _PROJ_SCOPE, params, _PROJ_WIN)
+    return [{**r, "name": r["name"] or r["email"], "count": r["messages"]}
+            for r in rows[:8]]
 
 
 async def _digest_needs_reply(db: Any, account_id: str) -> int:
@@ -196,7 +210,7 @@ def _render_digest_markdown(
     lines += ["", "## By category"]
     lines += [f"- **{c['category']}**: {c['count']}"
               for c in by_category] or ["- (none)"]
-    lines += ["", "## Top senders"]
+    lines += ["", "## Noisy senders you never answer"]
     lines += [f"- {s['name']} — {s['count']}"
               for s in top_senders] or ["- (none)"]
     return "\n".join(lines)
@@ -253,7 +267,7 @@ def _render_digest_html(
         f"<b>{totals['attachments']}</b> with attachments</p>"
         f"{action}"
         f"{_h3('By category')}{cats}"
-        f"{_h3('Top senders')}{senders}"
+        f"{_h3('Noisy senders you never answer')}{senders}"
         "</div>"
     )
 
@@ -272,24 +286,32 @@ async def _generate_digest(
     """
     params: dict[str, Any] = {"aid": account_id, "days": period_days}
     self_row = (await db.execute(text(
-        "SELECT LOWER(email_address) AS self FROM email_accounts WHERE id = :aid"
+        "SELECT LOWER(email_address) AS self, user_id "
+        "FROM email_accounts WHERE id = :aid"
     ), {"aid": account_id})).fetchone()
     params["self"] = (getattr(self_row, "self", "") or "") if self_row else ""
+    # The analytics noisy-senders aggregate excludes the user's OWN connected
+    # addresses via a per-user subquery (:uid) — hand it the account owner.
+    params["uid"] = (getattr(self_row, "user_id", "") or "") if self_row else ""
     # The UI offers rule names ("Cold Emails", "newsletter", " Marketing "); the
-    # sender rollup stores canonical cleanup categories. Normalise each selection
-    # through the same canonicaliser the cleaner uses, so casing/whitespace/plural
-    # variants match and a name that isn't a category (which could never match a
-    # sender category anyway) is dropped rather than silently emptying the section.
+    # aggregates report canonical categories. Normalise each selection through
+    # the same canonicaliser the cleaner uses, so casing/whitespace/plural
+    # variants match; a name that isn't a category is dropped rather than
+    # silently emptying the section.
     raw_cats = ["Cold Email" if c == "Cold Emails" else c
                 for c in (categories or [])]
     cats = sorted({canonical_cleanup_category(c) for c in raw_cats} - {None})
-    cat_clause = ""
-    if cats:
-        params["cats"] = cats
-        cat_clause = " AND COALESCE(s.category, 'Unknown') = ANY(:cats)"
 
     totals = await _digest_totals(db, params)
-    by_category = await _digest_categories(db, params, cat_clause)
+    by_category = await _digest_categories(db, params)
+    if cats:
+        # Restrict the breakdown to the configured cleanup categories, applied
+        # to the shared aggregate's output (the aggregate itself is not
+        # re-parameterized per config — one computation, filtered projection).
+        by_category = [
+            r for r in by_category
+            if canonical_cleanup_category(str(r.get("category") or "")) in cats
+        ]
     top_senders = await _digest_top_senders(db, params)
     needs = await _digest_needs_reply(db, account_id)
     totals["needs_reply"] = needs

@@ -1,13 +1,17 @@
 # Email AI Assistant — Overview, Architecture & Feature Inventory
 
+> **⚠️ ARCHIVED 2026-07-22 — superseded by [`../email_app_master_plan.md`](../email_app_master_plan.md)**,
+> the consolidated single source of truth (current state + prioritized roadmap). Known staleness
+> in this doc: agent tools are 42 (not 67), migrations run to 87 (not 43), the multi-Gmail
+> success criterion is retired, and §8's gap list has been re-verified and absorbed into the
+> master plan. Kept for architecture detail, the provider capability matrix, and design rationale.
+>
 > **Product:** CommandCenter · **Feature:** Email AI Assistant App · **Updated:** 2026-06-29 · **Version:** 2.0
-> **Status:** 🟢 Live on the VPS. Full email client (Gmail / Microsoft 365 / IMAP) with multi-account sync, two-way write-back, conversation/threading UI, a complete inbox-zero-parity automation suite (rules, Reply Zero, drafting, sender categorization, cold-email blocker, inbox cleaner, analytics, digests) and an agent-backed assistant chat.
+> **Status at archive time:** 🟢 Live on the VPS. Full email client (Gmail / Microsoft 365 / IMAP) with multi-account sync, two-way write-back, conversation/threading UI, a complete inbox-zero-parity automation suite (rules, Reply Zero, drafting, sender categorization, cold-email blocker, inbox cleaner, analytics, digests) and an agent-backed assistant chat.
 >
 > **Companion docs:**
-> - [`archive/email_inbox_zero_parity_plan.md`](./archive/email_inbox_zero_parity_plan.md) — the forward-looking roadmap, remaining inbox-zero gaps, and deferred backend hardening.
-> - [`archive/email_app_review.md`](./archive/email_app_review.md) — the milestone build log (chronological history of what shipped).
->
-> This doc is the **single source of truth for what the email app *is* and *has*.** §6 is the classified feature inventory; §8 lists what is **not yet built or only partial**.
+> - [`email_inbox_zero_parity_plan.md`](./email_inbox_zero_parity_plan.md) — the historical parity roadmap.
+> - [`email_app_review.md`](./email_app_review.md) — the milestone build log (chronological history of what shipped).
 
 ---
 
@@ -267,7 +271,7 @@ Legend: ✅ shipped · 🟡 shipped with a documented limitation. Provider gaps 
 
 ## 8. NOT YET BUILT / PARTIAL
 
-Grouped by area. Detailed acceptance criteria and the inbox-zero parity audit live in [`archive/email_inbox_zero_parity_plan.md`](./archive/email_inbox_zero_parity_plan.md).
+Grouped by area. Detailed acceptance criteria and the inbox-zero parity audit live in [`email_inbox_zero_parity_plan.md`](./email_inbox_zero_parity_plan.md). **(Archived note: this section has been re-verified 2026-07-22 and absorbed into `../email_app_master_plan.md` §5-§7.)**
 
 ### 8.1 Provider / sync gaps
 - 🟡 **Outlook delta sync** disabled — running on full-snapshot sweep; needs a verified delta/deletion approach for true incremental + instant non-inbox changes.

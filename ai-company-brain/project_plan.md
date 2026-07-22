@@ -115,7 +115,7 @@ Dynamic `as_tool()` agent registry (LLM routes by description, zero hard-coded r
 | **M2.6** | Foundation hardening — chat history, cloud sandbox, integration OAuth, AG-UI events | 2026-06-18 | ✅ PASSED |
 | **M2.7** | Universal tool injection — web search + inter-agent wiring | 2026-06-06 | ✅ PASSED |
 | **M2.8** | Memory live — Mem0 episodic + Graphiti bi-temporal KG | 2026-06-12 | ✅ PASSED |
-| **M2.9** | Email app — multi-account client (Gmail/Outlook) + AI assistant | 2026-06-20 | 🔄 In progress — UI + OAuth + sync shipped; Outlook display bugs fixed (see [`specs/email_ai_assistant.md`](specs/email_ai_assistant.md)) |
+| **M2.9** | Email app — multi-account client (Gmail/Outlook) + AI assistant | 2026-06-20 | 🔄 In progress — full client + automation suite live; consolidated plan + prioritized completion roadmap: [`specs/email_app_master_plan.md`](specs/email_app_master_plan.md) |
 | **M3** | Full Agent Ecosystem — Sales + Triage + Reconciler agents via UI | ~2026-08-26 | 🔲 Not started — platform work: Zoho + Gmail ingestion, entity resolution, Action Broker hardening |
 | **M4** | Capture live — meetings + WhatsApp + ambient triggers | ~2026-10-14 | 🔲 Not started |
 | **M5** | Suggest+Apply live — approval-gated writes to ClickUp/Zoho | ~2026-12-09 | 🔲 Not started |

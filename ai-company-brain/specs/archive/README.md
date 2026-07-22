@@ -19,9 +19,10 @@ and `competitive_hardening_2026-07.md` are the current trackers.
 | `chat_implementation_review_2026-07.md` | Point-in-time audit; its P0 fixes + strategic refactors landed in code. | any residual P1/P2 → `../chat_ux.md` §12 |
 | `chat_ui_agui_hitl_review_2026-07.md` | Point-in-time audit; both gaps (inline HITL, typed renderer registry) closed. | — |
 | `runtime_agent_effectiveness_2026-07.md` | Items ①②④ SHIPPED (tool_scope, tool-output trim, message compression). | item ③ (sandbox/`Dockerfile.mutation`) → **BO-7** |
-| `email_app_review.md` | Pure M0→M9 build changelog; subsumed by `../email_ai_assistant.md` §6. | — |
-| `email_inbox_zero_parity_plan.md` | Parity audit; core shipped. | **open feature gaps** → `project_plan.md`: Gmail Pub/Sub push, calendar context, AI-Clean, Slack/Teams/Telegram notify |
-| `email_tool_consolidation.md` | Goal met — tool surface consolidated 63→41 (`agent-email-assistant/agents.py`). | — |
+| `email_ai_assistant.md` | v2.0 feature inventory (2026-06-29); superseded 2026-07-22 by the consolidated `../email_app_master_plan.md`. Kept for architecture detail + provider matrix. | all residual work → `../email_app_master_plan.md` |
+| `email_app_review.md` | Pure M0→M9 build changelog; subsumed by `email_ai_assistant.md` §6 (also archived). | — |
+| `email_inbox_zero_parity_plan.md` | Parity audit; core shipped. | open items absorbed into `../email_app_master_plan.md` §5-§7 |
+| `email_tool_consolidation.md` | Goal met — tool surface consolidated 63→42 (`agent-email-assistant/agents.py`); plan closed at 42 (master plan §6 decision). | fossil card-key cleanup → `../email_app_master_plan.md` §6 |
 | `pixel_art_office_pipeline.md` | Real Pixel-Lab art SHIPPED; described artifacts (`sprites.generated.ts`/`spriteFor()`/Avatar Studio) SUPERSEDED by the top-down office (`office-topdown.tsx` + `character-library.generated.ts`). | — asset-anchor reference only |
 | `stream_reconnection.md` | SHIPPED (`stream_relay` push/replay/subscribe/run_detached; audit rates it "solid"). | — |
 | `vscode_tool_integration.md` | SHIPPED (5/6 VS Code tools live). | `github_search` no-auth bug → audit **M9** |

@@ -1,10 +1,22 @@
 # Calendar → Focus OS — evaluation & redesign brainstorm
 
-Status: **PROPOSAL / brainstorm** (2026-07-22). Nothing here is built; this doc
-evaluates the calendar shipped via `calendar_timeboxing.md` + `calendar_ux_review.md`
-and proposes the configuration that would make it the *primary* daily tool —
-the place you focus, complete work and plan the day — effectively replacing the
-task list as the surface you live in. Mockups: `mockups/calendar_focus_os.html`.
+Status: **F0 + F1 BUILT** (2026-07-22, branch
+`claude/calendar-productivity-redesign-rdh50k`): leverage lens + One Thing +
+leverage meter + outcome ribbon, Gap Filler (2-minute pile), Startup ritual
+(breathe → review → commit), Shutdown (leverage ratio, One-Thing verdict, seed
+tomorrow, close the day) and Focus Mode (pomodoro/flow, subtask checklist,
++15 reflow, capture-in-focus via `C`). Frontend-only — per-day state
+(One Thing / seeds / ritual stamps / timer prefs) lives in localStorage
+(`lib/focusPrefs.ts`); the One-Thing planner directive rides the existing
+`energy_note` seam, so no backend or schema changes were needed. F2+ (breaks
+in the packer, batch blocks, Email windows, Waiting-on chase, `gtd_time_blocks`)
+and the Focus Shield remain per §7.
+
+This doc evaluates the calendar shipped via `calendar_timeboxing.md` +
+`calendar_ux_review.md` and proposes the configuration that makes it the
+*primary* daily tool — the place you focus, complete work and plan the day —
+effectively replacing the task list as the surface you live in. Mockups:
+`mockups/calendar_focus_os.html`.
 
 ---
 

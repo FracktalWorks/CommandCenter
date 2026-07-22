@@ -861,10 +861,21 @@ async def recompute_thread_status(
         corrections=await _status_corrections_block(db, account_id))
     rz_status, label = _THREAD_STATUS_MAP.get(
         _canon_status_key(status), ("AWAITING", "Awaiting Reply"))
+    # Whoever spoke last is a FACT, not a judgment call. The determiner
+    # sometimes answers REPLY even when the real last message is the owner's —
+    # which stamps "you owe a reply" on a thread the user just answered, and the
+    # digest then repeats that lie every morning (10 of 29 NEEDS_REPLY rows on
+    # the live account were exactly this). When our side sent last, the only
+    # honest open state is AWAITING; the reason records the coercion.
+    coerced = ctx.our_side_last and rz_status == "NEEDS_REPLY"
+    if coerced:
+        rz_status, label = "AWAITING", "Awaiting Reply"
     prefix = _TRIGGER_REASON.get(trigger, trigger.capitalize())
     # A low-confidence (fallback) determination keeps the "· auto" marker so the
     # backfill re-checks it instead of trusting a guessed AWAITING.
-    reason = f"{prefix} — {status}" + ("" if confident else " · auto")
+    reason = (f"{prefix} — {status}"
+              + (" → Awaiting (we sent last)" if coerced else "")
+              + ("" if confident else " · auto"))
     await _upsert_thread_status(
         db, account_id, thread_id, rz_status, ctx.last_message_id,
         ctx.last_message_at, reason,

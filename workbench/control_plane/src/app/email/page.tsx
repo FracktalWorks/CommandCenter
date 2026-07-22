@@ -700,6 +700,13 @@ export default function EmailPage() {
             onClose={() => setAutomationFeature(null)}
             onArchived={fetchEmails}
             onNavigate={setAutomationFeature}
+            onOpenEmail={(id) => {
+              // A dashboard row navigates to its conversation: fetch/select the
+              // message (it may live outside the loaded folder) and drop back
+              // to the mailbox so the reading pane is visible.
+              useEmailStore.getState().openEmailById(id);
+              setAutomationFeature(null);
+            }}
           />
         </div>
       ) : (

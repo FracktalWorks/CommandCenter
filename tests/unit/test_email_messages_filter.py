@@ -113,6 +113,20 @@ async def test_date_state_and_sender_filters():
     assert isinstance(params["received_after"], datetime)
 
 
+async def test_query_uses_websearch_tsquery_not_plainto():
+    # find_urgent sends "urgent OR deadline OR ASAP …"; plainto_tsquery ANDs
+    # every term so it could never match. The /messages FTS must use
+    # websearch_to_tsquery (matching transport/search.py) so OR works.
+    _resp, captured = await _run_list_full(query="urgent OR deadline OR ASAP")
+    sql = " ".join(s for s, _ in captured)
+    params: dict = {}
+    for _s, p in captured:
+        params.update(p)
+    assert "websearch_to_tsquery('english', :query)" in sql
+    assert "plainto_tsquery" not in sql
+    assert params["query"] == "urgent OR deadline OR ASAP"
+
+
 async def test_sort_importance_orders_by_priority_case():
     _resp, captured = await _run_list_full(sort="importance")
     sql = " ".join(s for s, _ in captured)

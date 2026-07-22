@@ -106,6 +106,17 @@ async def analytics_overview(
         rule_stats, action_stats, auto_handled = await _automation(
             db, params, account_id)
 
+        # Data-health alarm: statused conversations still showing #112 damage.
+        # Zero is the only healthy value; a non-zero count means the cleaner or
+        # runner re-damaged conversations and the repair path needs to run. Same
+        # damage definition the one-off repair script uses — one shared SQL, so
+        # the alarm can never drift from the fix.
+        from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+            count_damaged_conversation_threads,
+        )
+        damaged_threads = await count_damaged_conversation_threads(
+            db, account_id, user.email or None)
+
         received = flow.received or 0
         return {
             "range": {"days": days},
@@ -134,6 +145,9 @@ async def analytics_overview(
             "noisy_senders": noisy,
             "rule_stats": rule_stats,
             "action_stats": action_stats,
+            # Regression alarm for the #110 one-classification invariant. Zero
+            # is healthy; non-zero means conversations were re-damaged.
+            "data_health": {"damaged_threads": damaged_threads},
         }
     finally:
         await db.close()

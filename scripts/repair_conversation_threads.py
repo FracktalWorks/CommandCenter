@@ -40,34 +40,6 @@ _STATUS_LABEL = {
     "DONE": "Done",
 }
 
-# Same damage definition the investigation measured: a cleanup chip on a
-# statused conversation, or a message still in the folder our rule moved it to.
-_DAMAGED_THREADS_SQL = """
-    SELECT DISTINCT ts.account_id, ts.thread_id, ts.status
-    FROM email_thread_status ts
-    WHERE ts.status IN ('NEEDS_REPLY', 'AWAITING', 'DONE')
-      AND (
-        EXISTS (SELECT 1 FROM email_messages em
-                WHERE em.account_id = ts.account_id
-                  AND em.thread_id = ts.thread_id
-                  AND em.categories && ARRAY['Newsletter', 'Marketing',
-                      'Receipt', 'Calendar', 'Notification', 'Cold Email'])
-        OR EXISTS (SELECT 1 FROM email_messages em
-                WHERE em.account_id = ts.account_id
-                  AND em.thread_id = ts.thread_id
-                  AND LOWER(COALESCE(em.folder, '')) NOT IN
-                      ('inbox', 'sent', 'drafts', 'trash', 'junk')
-                  AND EXISTS (SELECT 1 FROM email_executed_rules er
-                        JOIN email_actions ea ON ea.rule_id = er.rule_id
-                         AND ea.type = 'MOVE_FOLDER'
-                        WHERE er.message_id = em.id
-                          AND er.status = 'APPLIED'
-                          AND er.actions_taken @> '"MOVE_FOLDER"'
-                          AND LOWER(TRIM(ea.label)) =
-                              LOWER(COALESCE(em.folder, '')))))
-"""
-
-
 async def _provider_for(db, store, account_id):
     from gateway.routes.email.core import _instantiate_provider
     from sqlalchemy import text
@@ -92,6 +64,7 @@ async def _provider_for(db, store, account_id):
 async def main(apply: bool) -> int:
     from acb_llm.key_store import get_key_store
     from gateway.routes.email.automation.replyzero import (
+        DAMAGED_CONVERSATION_THREADS_SQL,
         _reconcile_thread_labels,
         _restore_conversation_messages,
     )
@@ -100,7 +73,8 @@ async def main(apply: bool) -> int:
 
     db = await _get_db()
     try:
-        rows = (await db.execute(text(_DAMAGED_THREADS_SQL))).fetchall()
+        rows = (await db.execute(
+            text(DAMAGED_CONVERSATION_THREADS_SQL))).fetchall()
         print(f"threads needing repair: {len(rows)}")
         if not rows:
             return 0

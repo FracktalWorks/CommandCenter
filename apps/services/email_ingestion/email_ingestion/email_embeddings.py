@@ -38,6 +38,25 @@ def _embed_text(subject: str | None, body: str | None) -> str:
             )[:_MAX_EMBED_CHARS]
 
 
+def _hash_source(subject: str | None, body: str | None) -> str:
+    """The EXACT text whose sha256 is stored as content_hash.
+
+    This must be byte-identical to what the SQL candidate predicate in
+    ``embed_pending_messages`` hashes, or a message's stored hash never matches
+    the predicate and it is re-selected + re-embedded every sweep tick, burning
+    tokens and never settling. So this mirrors the SQL exactly:
+
+        coalesce(subject, '') || E'\\n\\n' || coalesce(body, '')
+
+    In particular it does NOT ``.strip()`` — the SQL coalesces the raw column
+    values, so stripping here (as an earlier version did) meant any message with
+    a trailing newline in its body — i.e. most of them — hashed differently on
+    the two sides and thrashed forever. The embedded text (``_embed_text``) is a
+    separate, capped-and-stripped string; only the *hash source* must match SQL.
+    """
+    return f"{subject or ''}\n\n{body or ''}"
+
+
 def _content_hash(content: str) -> str:
     return hashlib.sha256(content.encode("utf-8", "replace")).hexdigest()
 
@@ -108,8 +127,9 @@ async def embed_pending_messages(
               AND em.body_text IS NOT NULL AND em.body_text <> ''
               AND (ee.message_id IS NULL
                    OR ee.content_hash <> encode(
-                        sha256((coalesce(em.subject,'') || E'\\n\\n'
-                                || coalesce(em.body_text,''))::bytea), 'hex'))
+                        sha256(convert_to(
+                            coalesce(em.subject,'') || E'\\n\\n'
+                            || coalesce(em.body_text,''), 'UTF8')), 'hex'))
             ORDER BY em.received_at DESC NULLS LAST
             LIMIT :lim"""),
         {"aid": account_id, "lim": batch},
@@ -117,13 +137,12 @@ async def embed_pending_messages(
     if not rows:
         return 0
 
-    # content_hash MUST match the SQL candidate predicate above, which hashes the
-    # FULL "subject\n\nbody" (uncapped) — otherwise a message whose capped head is
-    # unchanged but full body differs would be re-selected every tick and never
-    # settle. So hash the full text here, but embed only the capped head.
-    full_texts = [f"{(r.subject or '').strip()}\n\n{(r.body_text or '').strip()}"
-                  for r in rows]
-    hashes = [_content_hash(t) for t in full_texts]
+    # content_hash MUST match the SQL candidate predicate above byte-for-byte
+    # (see _hash_source): the SQL hashes the raw, UNstripped coalesce of the FULL
+    # "subject\n\nbody" — so we hash the same here, uncapped and unstripped.
+    # (The embedded text below is separately capped + stripped; only the hash
+    # source has to agree with SQL.)
+    hashes = [_content_hash(_hash_source(r.subject, r.body_text)) for r in rows]
     texts = [_embed_text(r.subject, r.body_text) for r in rows]
     vectors = await _embed_batch(texts, model)
     if vectors is None or len(vectors) != len(rows):

@@ -471,7 +471,8 @@ async def _hydrate_attachments(
                         provider_attachment_id)
                        VALUES (:mid, :filename, :mime_type, :size_bytes,
                                :provider_attachment_id)
-                       ON CONFLICT DO NOTHING"""
+                       ON CONFLICT (message_id, provider_attachment_id)
+                           DO NOTHING"""
                 ),
                 {
                     "mid": message_id,
@@ -626,7 +627,8 @@ async def get_message(
                                     provider_attachment_id)
                                    VALUES (:mid, :filename, :mime_type, :size_bytes,
                                            :provider_attachment_id)
-                                   ON CONFLICT DO NOTHING"""
+                                   ON CONFLICT (message_id, provider_attachment_id)
+                                       DO NOTHING"""
                             ),
                             {
                                 "mid": message_id,

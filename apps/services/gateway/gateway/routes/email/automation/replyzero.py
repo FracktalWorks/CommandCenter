@@ -509,6 +509,73 @@ _CONVERSATION_LABELS = ("Reply", "Awaiting Reply", "Done", "FYI")
 _LEGACY_CONVERSATION_LABELS = ("To Reply", "Actioned")
 _FOLLOW_UP_LABEL = "Follow-up"
 
+# The canonical definition of a "damaged" conversation thread: a statused
+# conversation (#110 — one classification per conversation) that still shows the
+# damage #112 repaired — a stale cleanup chip on it, or a message still sitting
+# in the exact folder an APPLIED rule-move put it in. FYI is excluded on purpose:
+# it is also the default stamp for "nothing matched" (#111), so FYI threads are
+# not conversations and are never swept.
+#
+# This is the ONE copy of that definition. The one-off repair script
+# (scripts/repair_conversation_threads.py) selects these rows to heal them, and
+# the analytics health metric (count_damaged_conversation_threads) counts them so
+# the #110 invariant has a permanent regression alarm instead of a script someone
+# has to remember to run. Keep them sharing this constant — if the definition of
+# "damaged" ever drifts between the alarm and the fix, the alarm lies.
+DAMAGED_CONVERSATION_THREADS_SQL = """
+    SELECT DISTINCT ts.account_id, ts.thread_id, ts.status
+    FROM email_thread_status ts
+    WHERE ts.status IN ('NEEDS_REPLY', 'AWAITING', 'DONE')
+      AND (
+        EXISTS (SELECT 1 FROM email_messages em
+                WHERE em.account_id = ts.account_id
+                  AND em.thread_id = ts.thread_id
+                  AND em.categories && ARRAY['Newsletter', 'Marketing',
+                      'Receipt', 'Calendar', 'Notification', 'Cold Email'])
+        OR EXISTS (SELECT 1 FROM email_messages em
+                WHERE em.account_id = ts.account_id
+                  AND em.thread_id = ts.thread_id
+                  AND LOWER(COALESCE(em.folder, '')) NOT IN
+                      ('inbox', 'sent', 'drafts', 'trash', 'junk')
+                  AND EXISTS (SELECT 1 FROM email_executed_rules er
+                        JOIN email_actions ea ON ea.rule_id = er.rule_id
+                         AND ea.type = 'MOVE_FOLDER'
+                        WHERE er.message_id = em.id
+                          AND er.status = 'APPLIED'
+                          AND er.actions_taken @> '"MOVE_FOLDER"'
+                          AND LOWER(TRIM(ea.label)) =
+                              LOWER(COALESCE(em.folder, '')))))
+"""
+
+
+async def count_damaged_conversation_threads(
+    db: Any, account_id: str | None = None, user_email: str | None = None,
+) -> int:
+    """How many statused conversations still show #112 damage — the health metric
+    behind the #110 invariant. Zero is the only healthy value; a non-zero count
+    means the cleaner/runner re-damaged conversations and the repair path (or a
+    manual run of the repair script) needs to run.
+
+    Scoped like the analytics overview: to ``account_id`` when given, else every
+    account the user owns; unscoped (all accounts) when neither is passed, which
+    is how the repair script and ops checks use it.
+    """
+    where = []
+    params: dict[str, Any] = {}
+    if account_id:
+        where.append("d.account_id = :aid")
+        params["aid"] = account_id
+    if user_email:
+        where.append(
+            "d.account_id IN (SELECT id FROM email_accounts WHERE user_id = :uid)"
+        )
+        params["uid"] = user_email
+    filt = (" WHERE " + " AND ".join(where)) if where else ""
+    row = (await db.execute(text(
+        f"SELECT COUNT(*) AS n FROM ({DAMAGED_CONVERSATION_THREADS_SQL}) d{filt}"
+    ), params)).fetchone()
+    return int(row.n or 0)
+
 # Conversation-status rule key → stored Reply Zero status. The rules pipeline is
 # the single source of truth: when the engine matches one of these rules for an
 # inbound message, the runner projects the corresponding status here (Reply Zero

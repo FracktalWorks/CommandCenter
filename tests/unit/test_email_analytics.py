@@ -58,6 +58,7 @@ _ANY_ROW = SimpleNamespace(
     inbound=0, replied=0, median_h=None, p90_h=None,
     inbound_prev=0, replied_prev=0, median_h_prev=None,
     total=0, classified=0, decided=0, rejected=0, repairable=0, permanent=0,
+    n=0,  # damaged-conversation health count (data_health.damaged_threads)
 )
 
 # The three queries allowed to ignore the range selector, and why. Anything else

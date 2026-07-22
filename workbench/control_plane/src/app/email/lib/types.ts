@@ -205,6 +205,10 @@ export interface AnalyticsOverview {
   };
   /** Breakdown of actions the assistant took (LABEL/ARCHIVE/…). */
   action_stats?: { action: string; count: number }[];
+  /** Regression alarm for the one-classification-per-conversation invariant.
+   *  damaged_threads is 0 when healthy; non-zero means the cleaner/runner
+   *  re-damaged statused conversations and the repair path needs to run. */
+  data_health?: { damaged_threads: number };
 }
 
 // ── Senders (bulk archive / unsubscribe) ────────────────────────────────────

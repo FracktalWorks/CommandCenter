@@ -185,6 +185,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     nextAction: "Read the diff and leave review comments on PR #214",
     disposition: "NEXT", context: "@computer", energy: "high",
     timeEstimateMins: 45, projectId: "p1", isMine: true,
+    important: true,
     createdAt: iso(-30), updatedAt: iso(-4),
   },
   {
@@ -193,6 +194,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     nextAction: "Draft a reply approving option B and asking for the timeline",
     disposition: "NEXT", context: "@computer", energy: "low",
     timeEstimateMins: 10, projectId: "p2", isMine: true,
+    important: true,
     createdAt: iso(-48), updatedAt: iso(-6),
   },
   {
@@ -201,7 +203,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     nextAction: "Call Meera and confirm the Coorg dates for the trip",
     disposition: "NEXT", context: "@calls", energy: "low",
     timeEstimateMins: 10, projectId: "p3", isMine: true,
-    isTwoMinute: false,
+    isTwoMinute: false, important: true, dueAt: iso(20),
     createdAt: iso(-20), updatedAt: iso(-20),
   },
   {
@@ -218,6 +220,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     nextAction: "Sketch the 5-step section headings in the draft doc",
     disposition: "NEXT", context: "@computer", energy: "medium",
     timeEstimateMins: 30, projectId: "p4", isMine: true,
+    leveraged: true,
     createdAt: iso(-10), updatedAt: iso(-10),
   },
   {
@@ -255,7 +258,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     title: "Quasar X1 2.0 go/no-go release call",
     nextAction: "Join the release call and make the ship decision",
     disposition: "NEXT", context: "@calls", energy: "high",
-    projectId: "p1", isMine: true,
+    projectId: "p1", isMine: true, important: true,
     dueAt: iso(31), isHardDate: true,
     createdAt: iso(-40), updatedAt: iso(-40),
   },

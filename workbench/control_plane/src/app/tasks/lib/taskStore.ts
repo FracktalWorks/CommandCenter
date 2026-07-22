@@ -450,6 +450,12 @@ interface TaskState {
   eliminateItemId: string | null;
   openEliminate: (id: string) => void;
   closeEliminate: () => void;
+  /** A task the "Delegate" affordance is handing off (the nudge pill / column) —
+   *  drives the global DelegatePopup (eligible people only; a LOCAL task routes
+   *  on to the promote-to-ClickUp dialog). null = closed. */
+  delegateItemId: string | null;
+  openDelegate: (id: string) => void;
+  closeDelegate: () => void;
   /** "Mine only / Synced / All" board filter — hides the connected-workspace
    *  mirror so your own captures aren't swamped. */
   sourceFilter: "all" | "local" | "synced";
@@ -741,6 +747,9 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   eliminateItemId: null,
   openEliminate: (id) => set({ eliminateItemId: id }),
   closeEliminate: () => set({ eliminateItemId: null }),
+  delegateItemId: null,
+  openDelegate: (id) => set({ delegateItemId: id }),
+  closeDelegate: () => set({ delegateItemId: null }),
   sourceFilter: "all",
   setSourceFilter: (f) => set({ sourceFilter: f }),
   filters: DEFAULT_FILTERS,

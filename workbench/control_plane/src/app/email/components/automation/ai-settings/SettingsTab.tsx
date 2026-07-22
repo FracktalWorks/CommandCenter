@@ -1535,6 +1535,7 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
                 p={p}
                 tone="active"
                 busy={busy}
+                onReject={() => review([p.id], false)}
                 onForget={() => forget(p.id)}
               />
             ))}
@@ -1563,6 +1564,7 @@ function LearnedPatternsList({ accountId }: { accountId: string | null }) {
                   p={p}
                   tone="rejected"
                   busy={busy}
+                  onApprove={() => review([p.id], true)}
                   onForget={() => forget(p.id)}
                 />
               ))}
@@ -1673,31 +1675,40 @@ function PatternRow({
               : `about ${p.reach.toLocaleString()} emails`}
           </span>
         )}
+        {/* Actions are driven by which handlers the group passed, so every state
+            offers the right verbs: pending → approve / reject; in-force → reject
+            (the sticky "this is wrong", which the cleaner's re-learn respects —
+            unlike Forget, which just deletes the row and lets the assistant
+            re-infer it) plus forget; rejected → restore (approve) plus forget. */}
         <span className="ml-auto flex items-center gap-2">
-          {tone === "review" ? (
-            <>
-              <button
-                onClick={onApprove}
-                disabled={busy}
-                title="Approve — let the cleaner use this"
-                className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
-              >
-                <Check size={14} />
-              </button>
-              <button
-                onClick={onReject}
-                disabled={busy}
-                title="Reject — this pattern is wrong"
-                className="text-muted-foreground hover:text-destructive disabled:opacity-50"
-              >
-                <X size={14} />
-              </button>
-            </>
-          ) : (
+          {onApprove && (
+            <button
+              onClick={onApprove}
+              disabled={busy}
+              title={tone === "rejected"
+                ? "Restore — approve this pattern again"
+                : "Approve — let the cleaner use this"}
+              className="text-emerald-500 hover:text-emerald-400 disabled:opacity-50"
+            >
+              <Check size={14} />
+            </button>
+          )}
+          {onReject && (
+            <button
+              onClick={onReject}
+              disabled={busy}
+              title="Reject — this pattern is wrong (and won't be re-learned)"
+              className="text-muted-foreground hover:text-destructive disabled:opacity-50"
+            >
+              <X size={14} />
+            </button>
+          )}
+          {onForget && (
             <button
               onClick={onForget}
+              disabled={busy}
               title="Forget this"
-              className="text-muted-foreground hover:text-destructive"
+              className="text-muted-foreground hover:text-destructive disabled:opacity-50"
             >
               <Trash2 size={13} />
             </button>

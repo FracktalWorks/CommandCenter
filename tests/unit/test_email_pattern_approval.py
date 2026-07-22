@@ -167,6 +167,19 @@ async def test_approving_clears_a_previous_rejection() -> None:
     assert "approved_at = now(), rejected_at = NULL" in sql
 
 
+async def test_reviewing_by_id_is_not_gated_to_pending() -> None:
+    """The review UI now lets the user reject an IN-FORCE pattern and restore a
+    REJECTED one — both act on an already-decided row by id. So a by-id review
+    must target the row regardless of its current state (only "approve all",
+    which passes no ids, is restricted to the pending set)."""
+    _, sql_rej, params = await _review(pattern_ids=["p1"], approve=False)
+    assert "id = ANY(:ids)" in sql_rej
+    assert "approved_at IS NULL AND rejected_at IS NULL" not in sql_rej
+    assert params["ids"] == ["p1"]
+    _, sql_appr, _ = await _review(pattern_ids=["p1"], approve=True)
+    assert "approved_at IS NULL AND rejected_at IS NULL" not in sql_appr
+
+
 async def test_approve_all_only_touches_what_is_waiting() -> None:
     """"Approve everything waiting" must not silently un-reject what the user
     has already turned down."""

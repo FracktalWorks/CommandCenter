@@ -40,6 +40,8 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import json
+import os
+import uuid
 from typing import Any, AsyncIterator
 
 import redis.asyncio as aioredis
@@ -50,7 +52,14 @@ _log = get_logger("orchestrator.stream_relay")
 
 STREAM_PREFIX = "cc:stream"
 ACTIVE_PREFIX = "cc:active"
-STREAM_MAXLEN = 10_000
+# Cap on entries per thread stream. Every SSE frame is one entry — reasoning
+# models emit one entry per token delta, so a long tool-heavy turn can run to
+# tens of thousands of entries. Trimming evicts the OLDEST entries (RUN_STARTED
+# + the head of the answer), which truncates both reconnect replay and the
+# run-end fold that persists the turn to Postgres (audit R1) — so the cap is
+# generous and env-tunable rather than tight. ~200B/entry → 50k ≈ 10MB per
+# live thread, bounded by the 1h TTL.
+STREAM_MAXLEN = int(os.environ.get("STREAM_RELAY_MAXLEN", "50000"))
 STREAM_TTL_SECONDS = 3600  # 1 hour
 
 
@@ -312,6 +321,24 @@ async def is_active(thread_id: str) -> bool:
         pass  # shared pooled client — never closed per-call
 
 
+async def touch_active(thread_id: str) -> None:
+    """Refresh the ACTIVE flag + stream TTL WITHOUT pushing an event.
+
+    ``push_event`` refreshes both on every write, but a run parked on a HITL
+    question pushes nothing for up to the whole ask_user budget (3600s == the
+    TTL), so the flag lapsed mid-park: live subscribers terminated and
+    reconnect reported the still-parked run as finished, clearing the question
+    card (audit R3). HITL waits heartbeat through here instead. ``xx=True`` so
+    a finished/cancelled run is never resurrected. Best-effort.
+    """
+    try:
+        r = await _get_client()
+        await r.set(_active_key(thread_id), "1", ex=STREAM_TTL_SECONDS, xx=True)
+        await r.expire(_stream_key(thread_id), STREAM_TTL_SECONDS)
+    except Exception:  # noqa: BLE001 — heartbeat must never break a wait
+        _log.warning("stream_relay.touch_active_failed", thread_id=thread_id[:12])
+
+
 async def stream_exists(thread_id: str) -> bool:
     """Check whether the event stream still exists (not expired)."""
     r = await _get_client()
@@ -364,10 +391,50 @@ async def push_sse_event(thread_id: str, sse_line: str) -> str:
 # finished/unknown run is a harmless no-op on every worker.
 
 CONTROL_PREFIX = "cc:control"
+CONTROL_ACK_PREFIX = "cc:ctrl-ack"
+# How long a dispatcher waits for the owning worker to acknowledge a relayed
+# command before reporting failure. Redis pub/sub is fire-and-forget: without
+# the ack, an answer/cancel published into the subscribe race (or after the
+# owning worker restarted) was silently lost while the API reported success —
+# the HITL card cleared and the agent stayed parked for the full budget
+# (audit R2).
+CONTROL_ACK_TIMEOUT = float(os.environ.get("CONTROL_ACK_TIMEOUT_SECONDS", "2.0"))
 
 
 def _control_channel(thread_id: str) -> str:
     return f"{CONTROL_PREFIX}:{thread_id}"
+
+
+def _ack_key(ack_id: str) -> str:
+    return f"{CONTROL_ACK_PREFIX}:{ack_id}"
+
+
+async def _write_control_ack(ack_id: str) -> None:
+    """Record that a relayed control command was applied (owner side)."""
+    try:
+        r = await _get_client()
+        await r.set(_ack_key(ack_id), "1", ex=60)
+    except Exception:  # noqa: BLE001 — ack is confirmation, never a blocker
+        _log.warning("stream_relay.control_ack_write_failed", ack_id=ack_id[:12])
+
+
+async def wait_control_ack(
+    ack_id: str, timeout: float = CONTROL_ACK_TIMEOUT,
+) -> bool:
+    """Poll for the owner's ack of a relayed command (dispatcher side)."""
+    try:
+        r = await _get_client()
+        deadline = asyncio.get_running_loop().time() + timeout
+        while True:
+            if await r.get(_ack_key(ack_id)):
+                with contextlib.suppress(Exception):
+                    await r.delete(_ack_key(ack_id))
+                return True
+            if asyncio.get_running_loop().time() >= deadline:
+                return False
+            await asyncio.sleep(0.05)
+    except Exception:  # noqa: BLE001
+        return False
 
 
 # thread_id → {cmd → applier}.  Present only on the worker that owns the run.
@@ -447,20 +514,36 @@ async def dispatch_control(thread_id: str, command: dict[str, Any]) -> bool:
     """Deliver a control *command* to whichever worker owns the run.
 
     Tries the local handler first (owning run on THIS worker → applied inline,
-    no Redis round-trip).  On a local miss, publishes to the control channel so
-    the owning worker's listener applies it, and reports success when the run is
-    still active anywhere (so a cross-worker command isn't mistaken for a stale
-    request).  Returns False only when no run is active for this thread.
+    no Redis round-trip).  On a local miss, publishes to the control channel
+    with an ``ack_id`` and waits for the owning worker's listener to confirm it
+    APPLIED the command.  Returns True only on confirmed application — never on
+    "the run looks active somewhere", which previously reported success for
+    answers lost in the pub/sub subscribe race or after an owner restart
+    (audit R2: the card cleared while the agent stayed parked for an hour).
+    A zero-subscriber publish is retried once (~0.3s) to ride out the short
+    listener-startup race at run boundaries.
     """
     if _apply_control_local(thread_id, command):
         return True
-    # Not ours — relay to the owner and confirm the run is live somewhere.
+    # Not ours — relay to the owner and wait for its applied-ack.
+    ack_id = command.setdefault("ack_id", uuid.uuid4().hex)
     delivered = await publish_control(thread_id, command)
-    if delivered > 0:
+    if delivered <= 0:
+        await asyncio.sleep(0.3)
+        delivered = await publish_control(thread_id, command)
+    if delivered <= 0:
+        _log.warning(
+            "stream_relay.control_undelivered",
+            thread_id=thread_id[:12], cmd=str(command.get("cmd")),
+        )
+        return False
+    if await wait_control_ack(ack_id):
         return True
-    # No live subscriber received it.  It may still be a valid run whose owner
-    # hasn't wired a listener (defensive); fall back to the ACTIVE flag.
-    return await is_active(thread_id)
+    _log.warning(
+        "stream_relay.control_unacked",
+        thread_id=thread_id[:12], cmd=str(command.get("cmd")),
+    )
+    return False
 
 
 async def _control_listener(thread_id: str) -> None:
@@ -485,7 +568,10 @@ async def _control_listener(thread_id: str) -> None:
             except (json.JSONDecodeError, TypeError):
                 continue
             if isinstance(command, dict):
-                _apply_control_local(thread_id, command)
+                applied = _apply_control_local(thread_id, command)
+                ack_id = command.get("ack_id")
+                if applied and ack_id:
+                    await _write_control_ack(str(ack_id))
     except asyncio.CancelledError:
         raise
     except Exception:  # noqa: BLE001 — never let the bus kill anything
@@ -714,12 +800,26 @@ async def cancel_run(thread_id: str) -> bool:
         _DETACHED_TASKS.pop(thread_id, None)
     else:
         # Not ours: the run may be owned by another worker (P1-2).  Relay the
-        # cancel over the control bus so the owning worker stops its task; the
-        # terminal-event teardown below (idempotent, via the shared stream)
-        # still unblocks every subscriber regardless of which worker owns it.
-        relayed = await publish_control(thread_id, {"cmd": "cancel"})
-        if relayed > 0:
-            found = True
+        # cancel over the control bus and require the owner's applied-ack —
+        # a bare publish into the subscribe race (or after an owner restart)
+        # reported "stopped" while the detached task kept running and
+        # spending (audit R2/R3 sibling).  dispatch_control retries the
+        # zero-subscriber case once and returns True only on confirmed
+        # application.  When it fails BUT the ACTIVE flag is still set, the
+        # owner is unreachable (listener died / worker gone): the teardown
+        # below still clears the flag so the UI recovers, but we log it and
+        # report found=False so the caller can surface "stop not confirmed"
+        # instead of claiming the backend stopped.
+        found = await dispatch_control(thread_id, {"cmd": "cancel"})
+        if not found:
+            # Diagnostic only — Redis being down must not break the teardown
+            # below (every other Redis call here is equally best-effort).
+            with contextlib.suppress(Exception):
+                if await is_active(thread_id):
+                    _log.warning(
+                        "stream_relay.cancel_unconfirmed_owner_unreachable",
+                        thread_id=thread_id[:12],
+                    )
 
     # Cancel-cascade: stop any background sub-agents spawned by this run
     # (call_agent_background) so they don't keep executing after a Stop.

@@ -88,6 +88,171 @@ def _clamp_max_tokens(requested: int, model: str) -> int:
     )
     return limits.max_output
 
+
+# ── Output-truncation visibility (audit CX4) ──────────────────────────────
+# When the provider cuts generation at max_tokens (finish_reason="length"),
+# the text just stops mid-sentence and the turn otherwise renders as a normal
+# completed answer — nothing anywhere inspected finish_reason. Appending an
+# explicit marker makes the cut visible to the user (and greppable in
+# transcripts/traces). Disable with V1_SURFACE_TRUNCATION=0 for byte-exact
+# passthrough.
+_SURFACE_TRUNCATION = os.environ.get(
+    "V1_SURFACE_TRUNCATION", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+_TRUNCATION_NOTICE = (
+    "\n\n[output truncated: the model hit its output-token limit]"
+)
+
+
+def _chunk_finish_reason(data: dict[str, Any]) -> str | None:
+    """Extract choices[0].finish_reason from a streamed chunk dict."""
+    try:
+        choices = data.get("choices") or []
+        return choices[0].get("finish_reason") if choices else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _truncation_notice_chunk(model: str) -> dict[str, Any]:
+    """A synthetic OpenAI-format chunk carrying the truncation notice."""
+    return {
+        "id": "cc-truncation-notice",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": _TRUNCATION_NOTICE},
+            "finish_reason": None,
+        }],
+    }
+
+
+def _mark_truncated_nonstream(choices: Any) -> bool:
+    """Append the truncation notice to a non-streaming completion in place.
+
+    Returns True when choices[0] was cut at the output limit and text content
+    was available to annotate. Handles both dict and litellm-object shapes.
+    """
+    try:
+        c0 = choices[0]
+        fr = (
+            c0.get("finish_reason") if isinstance(c0, dict)
+            else getattr(c0, "finish_reason", None)
+        )
+        if fr != "length":
+            return False
+        msg = (
+            c0.get("message") if isinstance(c0, dict)
+            else getattr(c0, "message", None)
+        )
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+            msg["content"] += _TRUNCATION_NOTICE
+            return True
+        if msg is not None and isinstance(getattr(msg, "content", None), str):
+            msg.content += _TRUNCATION_NOTICE
+            return True
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
+# ── Context-window guard ──────────────────────────────────────────────────
+# Safety margin between what we count and what the provider counts (tokenizer
+# divergence, per-message envelopes), and the smallest completion reservation
+# worth keeping once the prompt is under pressure.
+_CONTEXT_FIT_SAFETY_TOKENS: int = 512
+_CONTEXT_FIT_MIN_OUTPUT: int = 1024
+
+
+def _fit_context_window(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None,
+    model: str,
+    max_tokens: int,
+) -> tuple[list[dict[str, Any]], int]:
+    """Keep ``prompt + completion`` inside ``model``'s context window.
+
+    This route is the choke point for ALL agent traffic — including Copilot-SDK
+    sessions, whose backend compaction is disabled for BYOK models
+    (orchestrator/_copilot_session.py) and whose session-accumulated history
+    therefore arrives here unbounded. Nothing upstream fits that prompt, so
+    without this guard a long chat session eventually reaches the provider as a
+    hard 4xx ("context length exceeded") mid-conversation.
+
+    No-op when the request already fits (the overwhelming majority). Otherwise
+    recover in escalating steps — a trimmed request that works beats a faithful
+    one the provider rejects:
+      1. shrink ``max_tokens`` so prompt + completion fits (never below
+         ``_CONTEXT_FIT_MIN_OUTPUT``);
+      2. still over → drop oldest non-system messages, dropping any tool
+         results orphaned by an evicted assistant turn;
+      3. still over → char-trim the longest remaining message
+         (``fit_messages_to_context``).
+    """
+    try:
+        from acb_llm.context import (context_window_for, count_message_tokens,
+                                     fit_messages_to_context)
+        window = context_window_for(model)
+        if window <= 0:
+            return messages, max_tokens
+        # Tool schemas ride in the same input window; count them roughly.
+        tools_tokens = (len(json.dumps(tools, default=str)) // 4) if tools else 0
+        prompt_tokens = count_message_tokens(messages, model) + tools_tokens
+        if prompt_tokens + max_tokens + _CONTEXT_FIT_SAFETY_TOKENS <= window:
+            return messages, max_tokens
+
+        # 1. Shrink the output reservation before touching the prompt.
+        room = window - prompt_tokens - _CONTEXT_FIT_SAFETY_TOKENS
+        if room >= _CONTEXT_FIT_MIN_OUTPUT:
+            _log.warning(
+                "v1.context_fit_output_shrunk", model=model, window=window,
+                prompt_tokens=prompt_tokens, requested=max_tokens,
+                shrunk_to=room,
+            )
+            return messages, min(max_tokens, room)
+
+        # 2. Evict oldest non-system turns until the floor reservation fits.
+        out = [dict(m) for m in messages]
+        budget = window - _CONTEXT_FIT_MIN_OUTPUT - _CONTEXT_FIT_SAFETY_TOKENS
+        dropped = 0
+        while count_message_tokens(out, model) + tools_tokens > budget:
+            idx = next(
+                (i for i, m in enumerate(out[:-1])
+                 if m.get("role") not in ("system", "developer")),
+                None,
+            )
+            if idx is None:
+                break  # only system + the current turn left
+            del out[idx]
+            dropped += 1
+            # A tool result whose assistant tool_call was just evicted is an
+            # orphan some providers reject — evict it with its turn.
+            while idx < len(out) - 1 and out[idx].get("role") == "tool":
+                del out[idx]
+                dropped += 1
+
+        # 3. Last resort: char-trim the longest remaining message.
+        out, _trimmed = fit_messages_to_context(
+            out, model,
+            max_output_tokens=_CONTEXT_FIT_MIN_OUTPUT,
+            safety_margin=_CONTEXT_FIT_SAFETY_TOKENS,
+        )
+        final_prompt = count_message_tokens(out, model) + tools_tokens
+        _log.warning(
+            "v1.context_fit_messages_evicted", model=model, window=window,
+            dropped=dropped, trimmed=bool(_trimmed),
+            final_prompt_tokens=final_prompt,
+        )
+        return out, min(max_tokens, max(
+            _CONTEXT_FIT_MIN_OUTPUT,
+            window - final_prompt - _CONTEXT_FIT_SAFETY_TOKENS,
+        ))
+    except Exception:  # noqa: BLE001 — the guard must never break a working call
+        _log.warning("v1.context_fit_failed", model=model, exc_info=True)
+        return messages, max_tokens
+
+
 # Mount at /v1 (OpenAI standard) and also at root for SDKs that omit the prefix.
 router_v1 = APIRouter(prefix="/v1", tags=["openai-compat"])
 router_root = APIRouter(tags=["openai-compat"])
@@ -300,6 +465,12 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
     # Sanitize messages for providers with strict validation (e.g. DeepSeek).
     messages = _sanitize_messages_for_provider(messages, provider or model)
 
+    # Context-window guard (single-agent chat audit C1/CX1): fit prompt +
+    # completion into the model's window BEFORE cache annotation, so an
+    # unbounded Copilot-session history degrades gracefully (shrunk output /
+    # evicted oldest turns) instead of a provider 4xx mid-conversation.
+    messages, max_tokens = _fit_context_window(messages, tools, model, max_tokens)
+
     # Provider-aware prompt caching (specs/llm_caching_memory.md Phase 2/3).
     # This is THE choke point every agent runtime (native-MAF
     # OpenAIChatCompletionClient, Copilot SDK) POSTs through, so marking the
@@ -339,6 +510,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
             # byte-identical for the client. Observability is derived, never
             # intrusive.
             _chunks: list[Any] = []
+            _length_cut = False
             try:
                 response = await acompletion(**common, stream=True)
                 async for chunk in response:
@@ -352,7 +524,23 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                     # must carry an empty list, which the client already skips.
                     if data.get("choices") is None:
                         data["choices"] = []
+                    if _chunk_finish_reason(data) == "length":
+                        _length_cut = True
                     yield f"data: {json.dumps(data)}\n\n"
+                # Truncation visibility (audit CX4): the provider stopped at
+                # max_tokens mid-generation. Append one synthetic delta chunk
+                # so the cut is visible in the rendered turn instead of the
+                # text just stopping mid-sentence with a "completed" status.
+                if _length_cut and _SURFACE_TRUNCATION:
+                    _log.warning(
+                        "v1.output_truncated", model=model,
+                        agent=_obs_agent, max_tokens=max_tokens,
+                    )
+                    yield (
+                        "data: "
+                        + json.dumps(_truncation_notice_chunk(model))
+                        + "\n\n"
+                    )
                 yield "data: [DONE]\n\n"
             except Exception as exc:
                 # Log the full detail server-side; surface a SANITIZED reason +
@@ -429,6 +617,12 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                         "type": "UpstreamResponseError",
                     }
                 },
+            )
+        # Truncation visibility (audit CX4), non-streaming shape.
+        if _SURFACE_TRUNCATION and _mark_truncated_nonstream(_choices):
+            _log.warning(
+                "v1.output_truncated", model=model,
+                agent=_obs_agent, max_tokens=max_tokens,
             )
         return payload  # type: ignore[return-value]
     except Exception as exc:

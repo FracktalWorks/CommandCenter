@@ -365,6 +365,47 @@ def resolve_user_input(
     return True
 
 
+async def wait_user_future(
+    fut: "asyncio.Future[dict[str, Any]]",
+    timeout: float,
+    thread_id: str | None = None,
+    slice_seconds: float = 60.0,
+) -> dict[str, Any]:
+    """Await a parked HITL future, heartbeating the relay while waiting.
+
+    A parked question pushes no events, so the ``cc:active`` flag's TTL
+    (refreshed only by ``push_event``) lapsed during long waits — live
+    subscribers terminated and reconnect reported the still-parked run as
+    finished, clearing the question card (audit R3). Waiting in 60s slices
+    and touching the flag between them keeps the run visibly alive for the
+    whole HITL budget. Raises ``asyncio.TimeoutError`` when *timeout*
+    elapses, like the ``asyncio.wait_for`` it replaces; the future itself is
+    left to the caller to clean up.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    tid = thread_id or resolve_relay_thread_id() or ""
+    while True:
+        remaining = deadline - loop.time()
+        if remaining <= 0:
+            raise asyncio.TimeoutError
+        try:
+            # Shield: a slice timeout must not cancel the shared future —
+            # the next slice keeps waiting on it.
+            return await asyncio.wait_for(
+                asyncio.shield(fut), timeout=min(slice_seconds, remaining)
+            )
+        except asyncio.TimeoutError:
+            if fut.done():
+                return fut.result()
+            if tid:
+                try:
+                    from orchestrator.stream_relay import touch_active  # noqa: PLC0415
+                    await touch_active(tid)
+                except Exception:  # noqa: BLE001 — heartbeat is best-effort
+                    pass
+
+
 def _make_user_input_handler(thread_id: str) -> Any:
     """Build an ``on_user_input_request`` handler bound to *thread_id*.
 
@@ -410,8 +451,8 @@ def _make_user_input_handler(thread_id: str) -> Any:
         await _push_sse_to_stream(thread_id, line)
 
         try:
-            result = await asyncio.wait_for(
-                fut, timeout=_USER_INPUT_TIMEOUT
+            result = await wait_user_future(
+                fut, _USER_INPUT_TIMEOUT, thread_id=thread_id
             )
         except (asyncio.TimeoutError, asyncio.CancelledError):
             result = {"answer": "", "wasFreeform": True}
@@ -1964,12 +2005,28 @@ async def run_agent_stream(
 
             agent = agents[0]
 
+            # Detect Copilot-SDK-backed agents by capability, NOT the registry
+            # runtime label. Some agents (e.g. task-manager, apis-config) are
+            # built with GitHubCopilotAgent but registered as runtime "maf";
+            # they still need BYOK provider routing or agent.run() opens a
+            # NATIVE Copilot session (→ 402). A genuine MAF agent has no
+            # ``_default_options``. Computed BEFORE session restore so every
+            # session-continuity gate below keys on capability too — gating on
+            # the label made mislabeled Copilot agents silently skip session
+            # resume (re-injecting history every turn) and the ask_user/
+            # working_directory wiring (audit follow-up, 2026-07-22).
+            _is_copilot_sdk = (
+                _agent_runtime == "github-copilot"
+                or (hasattr(agent, "_default_options")
+                    and agent._default_options is not None)
+            )
+
             # ── Session continuity: restore Copilot SDK session if available ─
             # Storing the service_session_id allows MAF's _get_or_create_session
             # to call resume_session() instead of create_session(), maintaining
             # server-side conversation state across browser restarts.
             _copilot_session_id: str | None = None
-            if _agent_runtime == "github-copilot" and thread_id:
+            if _is_copilot_sdk and thread_id:
                 _copilot_session_id = _get_stored_session_id(thread_id)
                 if _copilot_session_id:
                     _log.debug("executor.session_restore",
@@ -1986,17 +2043,6 @@ async def run_agent_stream(
                         _a._permission_handler = _ph
             except Exception:  # noqa: BLE001
                 pass
-
-            # Detect Copilot-SDK-backed agents by capability, NOT the registry
-            # runtime label. Some agents (e.g. email-assistant) are built with
-            # GitHubCopilotAgent but registered as runtime "maf"; they still need
-            # BYOK provider routing or agent.run() opens a NATIVE Copilot session
-            # (→ 402). A genuine MAF agent has no ``_default_options``.
-            _is_copilot_sdk = (
-                _agent_runtime == "github-copilot"
-                or (hasattr(agent, "_default_options")
-                    and agent._default_options is not None)
-            )
 
             # ── BYOK early detection (must happen BEFORE tier selection) ────
             # When a LiteLLM model is requested (contains '/' or starts with
@@ -2098,7 +2144,7 @@ async def run_agent_stream(
             _effective_agent_dir = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
             )
-            if _agent_runtime == "github-copilot":
+            if _is_copilot_sdk:
                 for _ag in agents:
                     try:
                         if (
@@ -2121,7 +2167,7 @@ async def run_agent_stream(
             # session so a new one is created with the new model.  The
             # conversation continuity fallback prepends messages[] history
             # so the LLM sees full context despite the new session.
-            if (_agent_runtime == "github-copilot"
+            if (_is_copilot_sdk
                     and _copilot_session_id
                     and _final_model_early
                     and thread_id):
@@ -2153,6 +2199,23 @@ async def run_agent_stream(
                 _native_input = _compose_maf_run_input(
                     agent_name, run_id, event_payload, integrations,
                 )
+                # Context-pressure notice (audit CX6): eviction was silent —
+                # a long conversation just degraded as oldest turns dropped.
+                # Surface one unobtrusive progress line so the user knows.
+                try:
+                    from acb_llm.context import last_fit_stats  # noqa: PLC0415
+                    _fit = last_fit_stats.get() or {}
+                    if _fit.get("dropped_turns"):
+                        yield _sse({
+                            "type": "PROGRESS_UPDATE",
+                            "message": (
+                                "Long conversation: the oldest "
+                                f"{_fit['dropped_turns']} turn(s) no longer "
+                                "fit the model's context and were left out."
+                            ),
+                        })
+                except Exception:  # noqa: BLE001
+                    pass
                 _nq: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 _nq_token = _active_run_queue.set(_nq)
                 _n_emitted = False
@@ -2326,7 +2389,14 @@ async def run_agent_stream(
                                         f"{_loop_max} times (loop detected)."
                                     ),
                                 })
-                                _next_task.cancel()
+                                # _next_task is None here in the normal flow
+                                # (reset after .result() above); it is only a
+                                # live task if the trip path ever moves before
+                                # the reset. Guard it — an unconditional
+                                # .cancel() crashed the loop-trip path with
+                                # AttributeError and skipped the aclose().
+                                if _next_task is not None:
+                                    _next_task.cancel()
                                 with contextlib.suppress(Exception):
                                     await _agen.aclose()
                                 break
@@ -2359,7 +2429,10 @@ async def run_agent_stream(
                                 "(possible stall)."
                             ),
                         })
-                    else:
+                    elif not _loop_tripped:
+                        # A loop trip already emitted its terminal RUN_ERROR
+                        # inline — don't follow it with a RUN_FINISHED that
+                        # would make the client render the run as successful.
                         yield _sse({
                             "type": "RUN_FINISHED", "runId": run_id,
                             "threadId": thread_id,
@@ -2782,8 +2855,12 @@ async def run_agent_stream(
                         # ── Save Copilot session ID before context exits ──
                         # The CopilotClient is closed when async with agent:
                         # exits.  Capture the session ID while still inside
-                        # the context manager block.
-                        if _agent_runtime == "github-copilot" and thread_id:
+                        # the context manager block.  Gated on capability, not
+                        # the registry label — this whole attempt only runs
+                        # for Copilot-SDK agents, and label-gating meant a
+                        # "maf"-labelled Copilot agent never saved (or later
+                        # resumed) its session.
+                        if _is_copilot_sdk and thread_id:
                             try:
                                 _last_sid = await agent._client.get_last_session_id()
                                 _log.info(
@@ -2820,6 +2897,13 @@ async def run_agent_stream(
                 #   cleared stale session + history injected as context.
                 for _attempt in range(2):
                     _ag_sess: Any = None
+                    # Nothing streamed to the user yet in THIS attempt. A
+                    # genuine stale-session resume fails inside the SDK's
+                    # session setup BEFORE any event is emitted; once output
+                    # has streamed, a "session error" is a mid-run failure
+                    # (provider 4xx, CLI death) and retrying would re-run the
+                    # whole turn and duplicate everything already rendered.
+                    _attempt_emitted = False
                     if _copilot_session_id and not _session_retry_attempted:
                         try:
                             _ag_sess = agent.get_session(_copilot_session_id)
@@ -2827,6 +2911,7 @@ async def run_agent_stream(
                             pass
                     try:
                         async for _line in _run_copilot_attempt(_effective_msg, _ag_sess):
+                            _attempt_emitted = True
                             yield _line
                             # ── Drain artifact events (write_artifact pushes
                             # artifact_created CUSTOM events here) ──────────
@@ -2850,6 +2935,14 @@ async def run_agent_stream(
                         _is_resume_err = (
                             not _session_retry_attempted
                             and bool(_copilot_session_id)
+                            # Emitted-output guard: only a failure BEFORE any
+                            # event streamed can be a stale resume. Without
+                            # this, a mid-stream provider/session error (the
+                            # broad substring match below catches any
+                            # "GitHub Copilot session error: …") re-ran the
+                            # turn with fresh message ids and the user saw
+                            # the entire partial output duplicated.
+                            and not _attempt_emitted
                             and (
                                 "Failed to create GitHub Copilot session" in str(_exc)
                                 or "resume_session" in str(_exc).lower()

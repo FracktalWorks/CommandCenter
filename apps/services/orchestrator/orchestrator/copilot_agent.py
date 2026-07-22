@@ -51,6 +51,16 @@ _HITL_STALL_TIMEOUT: float = float(
     os.environ.get("HITL_IDLE_TIMEOUT_SECONDS", "3600")
 )
 
+# While a tool is executing, the session can be legitimately quiet for far
+# longer than the bare stall budget — a multi-minute shell build/test run
+# buffers its output and emits no TOOL_EXECUTION_PROGRESS for the duration.
+# Mirror the native-MAF watchdog's tool_open tier (same env knob,
+# WatchdogPolicy.tool_open) so a working tool isn't killed at 300s with a
+# misleading "CLI subprocess may have crashed" (audit C3).
+_TOOL_STALL_TIMEOUT: float = float(
+    os.environ.get("NATIVE_TOOL_IDLE_TIMEOUT_SECONDS", "600")
+)
+
 
 def _hitl_pending() -> bool:
     """True while any blocking ask_user / ask_questions Future awaits the user.
@@ -358,6 +368,11 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         # the duplicate full-content ASSISTANT_MESSAGE event at turn end.
         _accumulated_text: str = ""
 
+        # Tool calls currently executing (started, not yet completed) — the
+        # stall detector grants a longer quiet budget while any is in flight
+        # (audit C3). A set of call ids so an unmatched COMPLETE can't skew it.
+        _tools_in_flight: set[str] = set()
+
         def _on_event(event: SessionEvent) -> None:
             """Translate Copilot SDK events to AgentResponseUpdate objects."""
             nonlocal _accumulated_text
@@ -439,6 +454,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                     tc_id = getattr(d, "tool_call_id", "") or ""
                     tc_name = getattr(d, "tool_name", "") or ""
                     args = getattr(d, "arguments", None)
+                    _tools_in_flight.add(tc_id or tc_name or "tool")
                     queue.put_nowait(AgentResponseUpdate(
                         role="assistant",
                         contents=[Content.from_function_call(
@@ -453,6 +469,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 elif t == SessionEventType.TOOL_EXECUTION_COMPLETE:
                     tc_id = getattr(d, "tool_call_id", "") or ""
                     tc_name = getattr(d, "tool_name", "") or ""
+                    _tools_in_flight.discard(tc_id or tc_name or "tool")
                     result_obj = getattr(d, "result", None)
                     result_text = getattr(result_obj, "content", "") if result_obj else ""
                     success = getattr(d, "success", None)
@@ -491,6 +508,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                     tc_id = getattr(d, "tool_call_id", "") or ""
                     tc_name = getattr(d, "tool_name", "") or ""
                     args = getattr(d, "arguments", None)
+                    _tools_in_flight.add(tc_id or tc_name or "tool")
                     queue.put_nowait(AgentResponseUpdate(
                         role="assistant",
                         contents=[Content.from_function_call(
@@ -505,6 +523,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                 elif t == SessionEventType.EXTERNAL_TOOL_COMPLETED:
                     tc_id = getattr(d, "tool_call_id", "") or ""
                     tc_name = getattr(d, "tool_name", "") or ""
+                    _tools_in_flight.discard(tc_id or tc_name or "tool")
                     result_obj = getattr(d, "result", None)
                     result_text = (
                         getattr(result_obj, "content", "")
@@ -645,10 +664,23 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                             elapsed, _HITL_STALL_TIMEOUT,
                         )
                         continue
+                    # ── Tool-in-flight grace (audit C3) ───────────────
+                    # A running tool (long shell build/test, big file op)
+                    # legitimately emits nothing until it completes — give
+                    # it the same extended budget the native-MAF watchdog
+                    # grants an open tool instead of killing the run with
+                    # a misleading "CLI crashed" at the bare stall limit.
+                    if _tools_in_flight and elapsed < _TOOL_STALL_TIMEOUT:
+                        logger.info(
+                            "copilot_stream_quiet_tool_running: %d tool(s) "
+                            "in flight for %.0fs (budget=%.0fs) — not a stall",
+                            len(_tools_in_flight), elapsed, _TOOL_STALL_TIMEOUT,
+                        )
+                        continue
                     logger.error(
                         "copilot_stream_stalled: no event for %.0fs "
-                        "(stall_timeout=%.0fs)",
-                        elapsed, _STREAM_STALL_TIMEOUT,
+                        "(stall_timeout=%.0fs, tools_in_flight=%d)",
+                        elapsed, _STREAM_STALL_TIMEOUT, len(_tools_in_flight),
                     )
                     raise AgentException(
                         f"Copilot session stalled: no event for "

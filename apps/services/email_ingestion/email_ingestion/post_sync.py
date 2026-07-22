@@ -18,8 +18,14 @@ from __future__ import annotations
 
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
+from typing import Any
 
 PostSyncHook = Callable[[str], Awaitable[None]]
+# Unlike the plain hooks, the label-learning hook needs the per-message data the
+# scheduler captured DURING persist — it takes ``(account_id, changes)`` where
+# ``changes`` is a list of ``(message, old_categories)`` pairs (the categories a
+# message had BEFORE this sync's upsert overwrote them). See ``learn_label_changes``.
+LabelLearnHook = Callable[[str, list[Any]], Awaitable[None]]
 
 
 @dataclass
@@ -43,6 +49,13 @@ class PostSyncHooks:
     send_follow_up_reminders: PostSyncHook | None = None
     # Subscription/watch upkeep:
     ensure_subscription: PostSyncHook | None = None
+    # Learn FROM-classification patterns from manual label changes the USER made
+    # in their mail client, detected as a category delta during persist. Carries
+    # the per-message pre-upsert categories (destroyed by the upsert on a
+    # categories-authoritative provider like Outlook), so it does NOT fit the
+    # plain () -> None shape. The scheduler path used to skip this entirely —
+    # every label change made during normal polling was silently lost.
+    learn_label_changes: LabelLearnHook | None = None
 
 
 hooks = PostSyncHooks()
@@ -64,3 +77,12 @@ async def run_hook(hook: PostSyncHook | None, account_id: str) -> None:
     """Await ``hook`` if one is registered; no-op otherwise."""
     if hook is not None:
         await hook(account_id)
+
+
+async def run_label_learn_hook(
+    hook: LabelLearnHook | None, account_id: str, changes: list[Any],
+) -> None:
+    """Await the label-learning hook with the ``(message, old_categories)``
+    changes captured during persist; no-op if unregistered or nothing changed."""
+    if hook is not None and changes:
+        await hook(account_id, changes)

@@ -1244,6 +1244,9 @@ export async function submitRuleFeedback(params: {
   /** Set when the correction was a conversation-status fix (thread status set
    *  directly, since learned patterns are overridden for those rules). */
   status_correction?: { ok: boolean; status?: string; label?: string } | null;
+  /** The label surgery done on the corrected message itself (H6): the wrong
+   *  rules' labels stripped, and the corrected rule's label applied. */
+  label_correction?: { removed: string[]; added: string[] } | null;
 }> {
   return gatewayFetch("/email/rules/feedback", {
     method: "POST",

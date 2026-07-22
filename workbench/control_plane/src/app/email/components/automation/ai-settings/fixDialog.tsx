@@ -172,12 +172,19 @@ function FixDialog({
           : reran.matched
             ? " Re-ran on this email."
             : " Re-ran on this email → no rule matched now.";
+      // H6: the correction now strips the wrong label off THIS email, not just
+      // teaches future mail. Say so, so the user sees the chip actually changed.
+      const removed = res?.label_correction?.removed ?? [];
+      const stripNote = removed.length
+        ? ` Removed "${removed.join('", "')}" from this email.`
+        : "";
       setDone(
         (expected === "none"
           ? `Got it — emails ${target} won't match ${
               current.ruleName || "that rule"
             } anymore.`
           : `Learned — emails ${target} will now match "${expected.name}".`) +
+          stripNote +
           rerunNote,
       );
       onReran?.();

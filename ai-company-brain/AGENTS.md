@@ -112,6 +112,7 @@ to it and to `competitive_hardening_2026-07.md` (CH-*) rather than re-describe t
 | [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST | 🔄 MCP half **built** (`_inject_mcp_servers`); plugin store not started |
 | [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / org account research — identity, roles, tenancy | 🔲 research done, not implemented |
 | [`chat_agent_framework_review_2026-07.md`](specs/chat_agent_framework_review_2026-07.md) | **Chat + agent framework review** — dual-runtime verdict (MAF framework, Copilot as coding engine), orchestration/memory/artifact/HITL/co-authoring gaps, prioritized plan | 🟢 review complete |
+| [`single_agent_chat_bug_audit_2026-07.md`](specs/single_agent_chat_bug_audit_2026-07.md) | **Single-agent chat bug audit** — past issues verified fixed; 7 confirmed live bugs (Tier-1 loop-trip crash, Copilot retry duplication, unbounded resumed-session context, relay truncation/ack holes) + fix plan | 🟢 audit complete |
 | [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, tickets ST-DRW-01…13 (master) | 🔲 proposed — **genuinely unbuilt** |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — `diagram-svc` wire contract (sub-doc of the master) | 🔲 proposed — unbuilt |
 

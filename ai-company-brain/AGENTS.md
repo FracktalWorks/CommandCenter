@@ -111,6 +111,7 @@ to it and to `competitive_hardening_2026-07.md` (CH-*) rather than re-describe t
 | [`llm_caching_memory.md`](specs/llm_caching_memory.md) | Prompt caching (ADR-008) + session memory | 🔄 caching **shipped & wired**; session-memory shipped but **inert by default** (→ BO-21); Phase 7 open |
 | [`mcp_plugin_integration.md`](specs/mcp_plugin_integration.md) | MCP servers vs Claude plugins vs REST | 🔄 MCP half **built** (`_inject_mcp_servers`); plugin store not started |
 | [`multi_user_organization_research.md`](specs/multi_user_organization_research.md) | Multi-user / org account research — identity, roles, tenancy | 🔲 research done, not implemented |
+| [`chat_agent_framework_review_2026-07.md`](specs/chat_agent_framework_review_2026-07.md) | **Chat + agent framework review** — dual-runtime verdict (MAF framework, Copilot as coding engine), orchestration/memory/artifact/HITL/co-authoring gaps, prioritized plan | 🟢 review complete |
 | [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, tickets ST-DRW-01…13 (master) | 🔲 proposed — **genuinely unbuilt** |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — `diagram-svc` wire contract (sub-doc of the master) | 🔲 proposed — unbuilt |
 

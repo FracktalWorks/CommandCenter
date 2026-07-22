@@ -136,6 +136,7 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
           <Skeleton />
         ) : (
           <>
+            <DataHealth data={data} />
             <KeepingUp data={data} />
             <Backlog data={data} onNavigate={onNavigate} />
             <Volume data={data} days={days} />
@@ -149,6 +150,33 @@ export function AnalyticsView({ accountId, onNavigate }: AnalyticsViewProps) {
           </>
         )}
       </div>
+    </div>
+  );
+}
+
+/* ── Data-health alarm ────────────────────────────────────────────────────── */
+
+// The one-classification-per-conversation invariant (#110) made visible: shown
+// only when it's been violated, so a healthy mailbox sees nothing. Non-zero
+// means the cleaner/runner re-damaged statused conversations and the repair
+// path needs to run.
+function DataHealth({ data }: { data: AnalyticsOverview }) {
+  const damaged = data.data_health?.damaged_threads ?? 0;
+  if (damaged <= 0) return null;
+  return (
+    <div className="rounded-xl border border-amber-500/30 bg-amber-500/10 px-4 py-3">
+      <div className="text-[10px] uppercase tracking-wide text-amber-600 dark:text-amber-400">
+        Conversation health
+      </div>
+      <p className="mt-1 text-sm text-foreground">
+        {damaged === 1
+          ? "1 conversation is showing a stale label or a misfiled message."
+          : `${damaged} conversations are showing a stale label or a misfiled message.`}
+      </p>
+      <p className="mt-0.5 text-[11px] text-muted-foreground">
+        These heal automatically on the next message in the thread; a full
+        repair can be run manually if they persist.
+      </p>
     </div>
   );
 }

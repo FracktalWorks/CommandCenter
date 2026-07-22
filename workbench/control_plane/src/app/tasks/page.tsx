@@ -23,6 +23,7 @@ import { UndoToast } from "./components/UndoToast";
 import { DeleteConfirmModal } from "./components/DeleteConfirmModal";
 import { SchedulePopup } from "./components/SchedulePopup";
 import { EliminatePopup } from "./components/EliminatePopup";
+import { DelegatePopup } from "./components/DelegatePopup";
 
 // Task Manager (GTD) — 4-panel shell, mirroring the email app's layout
 // philosophy: Lists/Contexts · Item list (+ capture) · Item detail · Assistant.
@@ -153,6 +154,7 @@ export default function TasksPage() {
         <DeleteConfirmModal />
         <SchedulePopup />
         <EliminatePopup />
+      <DelegatePopup />
       </div>
     );
   }
@@ -271,6 +273,7 @@ export default function TasksPage() {
       <DeleteConfirmModal />
       <SchedulePopup />
       <EliminatePopup />
+      <DelegatePopup />
     </div>
   );
 }

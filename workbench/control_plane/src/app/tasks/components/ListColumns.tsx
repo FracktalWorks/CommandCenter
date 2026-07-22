@@ -2,6 +2,7 @@
 
 import { AlertTriangle, Clock, Paperclip, ListTree, Zap } from "lucide-react";
 import { GtdItem } from "../lib/types";
+import { useTaskStore } from "../lib/taskStore";
 import { durationLabel, isOverdue, relativeTime } from "../lib/utils";
 import { PriorityBadge } from "./PriorityControls";
 import { ACTION_MODE_META, actionMode, type ActionMode } from "../lib/priority";
@@ -36,6 +37,51 @@ const ALIGN: Record<ColumnDef["align"], string> = {
   center: "justify-center text-center",
   right: "justify-end text-right",
 };
+
+/** The Suggestion column's pill — and it ACTS, same as the card nudge:
+ *  "Do It"/"Schedule?" open the add-to-calendar popup, "Delegate?" the
+ *  eligible-people picker, "Eliminate?" the Someday-or-delete popup.
+ *  stopPropagation so the row doesn't also open the task. */
+function ModePill({
+  item,
+  urgentWindowHours,
+}: {
+  item: GtdItem;
+  urgentWindowHours?: number;
+}) {
+  const openSchedule = useTaskStore((s) => s.openSchedule);
+  const openEliminate = useTaskStore((s) => s.openEliminate);
+  const openDelegate = useTaskStore((s) => s.openDelegate);
+  const mode = actionMode(item, urgentWindowHours);
+  const meta = ACTION_MODE_META[mode];
+  const ModeIcon = MODE_ICON[mode];
+  const titles: Record<ActionMode, string> = {
+    do: "Yours to do — put it on the calendar",
+    schedule: "Schedule it on the calendar",
+    delegate: "Pick who to hand this to",
+    drop: "Let it go — Someday, or delete",
+  };
+  const act = (e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (mode === "delegate") openDelegate(item.id);
+    else if (mode === "drop") openEliminate(item.id);
+    else openSchedule(item.id);
+  };
+  return (
+    <button
+      type="button"
+      onClick={act}
+      title={titles[mode]}
+      className={[
+        "tech-transition inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium hover:brightness-110",
+        MODE_TONE[mode],
+      ].join(" ")}
+    >
+      <ModeIcon className="h-3 w-3 shrink-0" aria-hidden />
+      {meta.label}
+    </button>
+  );
+}
 
 /** The header cell (column label) — matches the grid so headers sit above their
  *  column. Name is rendered by the caller as the flexible first track. */
@@ -84,25 +130,11 @@ function CellBody({
       return (
         <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
       );
-    case "mode": {
+    case "mode":
       // The suggestion of what to DO with this task — from the shared
       // actionMode() logic (same as the "Action mode" group-by lens). Shown on
       // every task: "Do It" (yours) or a "?" nudge (Delegate/Schedule/Eliminate).
-      const mode = actionMode(item, urgentWindowHours);
-      const meta = ACTION_MODE_META[mode];
-      const ModeIcon = MODE_ICON[mode];
-      return (
-        <span
-          className={[
-            "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-[10px] font-medium",
-            MODE_TONE[mode],
-          ].join(" ")}
-        >
-          <ModeIcon className="h-3 w-3 shrink-0" aria-hidden />
-          {meta.label}
-        </span>
-      );
-    }
+      return <ModePill item={item} urgentWindowHours={urgentWindowHours} />;
     case "context":
       return item.context ? (
         <span

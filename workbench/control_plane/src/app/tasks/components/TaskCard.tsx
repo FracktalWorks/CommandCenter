@@ -187,22 +187,23 @@ export function TaskCard({
           <Mail className="h-3 w-3" />
         </span>
       )}
-      {/* Priority signal. The matrix-cell PILL (🔥 Critical, 📈 High-Leverage,
-          …) now rides on EVERY card so the priority is visible at a glance in
-          the list and board — with its label except on the dense Priority view,
-          which is already grouped by level (`showPriority` → icon-only there to
-          avoid repeating the section header). The competing action NUDGE
-          (delegate / schedule / eliminate) sits ALONGSIDE it — different meaning
-          (what it IS vs what to DO about it) — dismissible via its × (keep mine),
-          and hidden on the Priority view where the pill already carries it. */}
-      <PriorityBadge
-        item={item}
-        urgentWindowHours={urgentWindowHours}
-        showLabel={!showPriority}
-        hideLowPriority={!showPriority}
-      />
-      {!showPriority && (
-        <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} compact />
+      {/* Priority signal — LIST ROW only. The matrix-cell PILL (what it IS)
+          and the action NUDGE (what to DO about it) ride in the wrapping meta
+          here; the BOARD card pins the same pair to its top corners instead
+          (priority top-left above the title, nudge top-right). Label hidden on
+          the dense Priority view, which is already grouped by level. */}
+      {variant === "row" && (
+        <>
+          <PriorityBadge
+            item={item}
+            urgentWindowHours={urgentWindowHours}
+            showLabel={!showPriority}
+            hideLowPriority={!showPriority}
+          />
+          {!showPriority && (
+            <SuggestionBadge item={item} urgentWindowHours={urgentWindowHours} compact />
+          )}
+        </>
       )}
     </>
   );
@@ -297,7 +298,20 @@ export function TaskCard({
             <GripVertical className="absolute right-1.5 top-1.5 h-3.5 w-3.5 text-muted-foreground/30 opacity-0 transition-opacity group-hover:opacity-100" />
           )
         )}
-        <div className="flex items-start gap-2 pr-4">
+        {/* Top corners: priority pill top-LEFT (above the title — always shown
+            on the board, it's the ranking signal) · the action nudge top-RIGHT.
+            pr-5 keeps the nudge clear of the absolute grip/checkbox. */}
+        <div className="flex items-start gap-2 pr-5">
+          <PriorityBadge item={item} urgentWindowHours={urgentWindowHours} />
+          <span className="ml-auto shrink-0">
+            <SuggestionBadge
+              item={item}
+              urgentWindowHours={urgentWindowHours}
+              compact
+            />
+          </span>
+        </div>
+        <div className="flex items-start gap-2">
           {!selectMode && showStage && <StatusPill item={item} />}
           <p className="text-[13px] font-medium leading-snug text-foreground">
             {item.title}

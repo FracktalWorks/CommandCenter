@@ -168,16 +168,16 @@ Ranked by value to the founder-on-Outlook customer:
 
 | # | Feature | Customer job | Effort | Notes |
 |---|---|---|---|---|
-| 3.1 | **Sent-mail few-shot drafting** ("sent-email knowledge profile") | Draft in my voice | M | The long-requested item, now cheap: embed incoming message in `_build_reply_context`, cosine-match the account's **Sent** mail via `email_embeddings`, inject top-3 quote-stripped bodies as `<sent_examples>`. No new store. **Depends on 2.5.** |
+| ~~3.1~~ | ~~**Sent-mail few-shot drafting**~~ ✅ **#131** (code shipped; DORMANT until semantic flag ON) | Draft in my voice | M | `_fetch_sent_fewshot` cosine-matches the account's Sent mail → `<voice>` block. Zero cost when `email_semantic_search_enabled` is off; enabling it (token-costing live sweep) is a confirm-point. |
 | 3.2 | **Conversation collapse in the mailbox list** | Triage at thread level | M | `threadCount` badge exists; rows are still per-message. The UI half of the #110/#113 invariant — a statused thread reads as one row with one chip. |
 | 3.3 | **Snooze + schedule-send** | Control timing | M-L | `snoozed_until` column + `/messages` filter + list affordance; send-later table + scheduler hook. The two most-missed daily-driver features vs any modern client. |
 | ~~3.4~~ | ~~**H6 — Fix strips the wrong label**~~ ✅ **#124** | Corrections stick | S | `remove_label` + `correct_applied_labels` strip the wrong rules' LABEL values off the message + apply the corrected one. |
-| 3.5 | **KB relevance ranking** | Grounded drafts | S-M | Embed `email_knowledge` entries; select by similarity within the 4k budget (not recency first-fit); stop injecting KB into thread-status classifier prompts. Depends on 2.5. |
+| ~~3.5~~ | ~~**KB relevance ranking**~~ ✅ **#132** | Grounded drafts | S-M | Lexical relevance ranking (not recency first-fit) via `_load_assistant_about(query=)`, always-on; KB dropped from the thread-status classifier (`include_kb=False`). Embedding-cosine variant deferred. |
 | ~~3.6~~ | ~~**Pattern review UX completion**~~ ✅ **#127** (reject in-force / restore rejected) | Trust the teaching loop | S | Deferred: manual pattern-add / `USER` badge, None-Fix exclude re-expose. |
 | ~~3.7~~ | ~~**Reclassify that finishes the job**~~ ✅ **#129** | One-click recovery | S-M | Now drains the whole mailbox (loop-until-empty), resumable no-progress stop, JobTracker progress + status endpoint, concurrency guard. |
 | ~~3.8~~ | ~~**Rule-path draft context parity** + compose-assist learning~~ ✅ **#125** | Auto-drafts as good as manual | S | Runner routes through `_build_reply_context`; compose-assist stores AI draft; follow-up nudge hydrates; pop-out passes `messageId`. |
 | 3.9 | **History per-message timeline** | Audit any message | S-M | The last inbox-zero History parity gap (carried from the parity plan). |
-| 3.10 | **Calendar context in drafts** | Scheduling replies | M | Re-scoped: the old blocker "needs a calendar integration" is gone — the CommandCenter calendar/timeboxing app is live (#71). Inject availability from the internal calendar into `_build_reply_context` when the incoming mail asks about scheduling. External Google/Outlook calendar sync stays deferred. |
+| ~~3.10~~ | ~~**Calendar context in drafts**~~ ✅ **#133** | Scheduling replies | M | `_asks_about_scheduling` heuristic + `_fetch_calendar_context` (internal calendar = gtd_items hard-dates) → calendar block in the draft prompt only on scheduling asks. External calendar sync stays deferred. |
 | ~~3.11~~ | ~~**Digest as the daily brief**~~ ✅ **#128** | One glance a day | S-M | Backlog aging (oldest NEEDS_REPLY) + commitments-due (open gtd_items linked via origin) lead both bodies + in-app cards. |
 | ~~3.12~~ | ~~Search filter UI completion~~ ✅ **#126** | Find anything | S | Date-range / sender-category / importance pills + FilterMenu sections; `importance` added to `/search`. |
 

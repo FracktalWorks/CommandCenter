@@ -829,6 +829,48 @@ async def _match_email_to_rules_multi(
     return matches
 
 
+async def classify_matches(
+    db: Any, account_id: str, message_row: Any, email: dict[str, str],
+    *, multi_rule: bool = False, resolve: bool = True, provider: Any = None,
+) -> list[dict[str, Any]]:
+    """THE match → conversation-resolve step, in one place.
+
+    Every path that classifies inbound mail — the live runner, "Process past
+    emails", the single-message re-run, the Reply Zero backfill — must obey the
+    same #110 invariant: a conversation has ONE classification, re-evaluated on
+    each new message. That invariant was enforced at only some call sites, which
+    is how run-message/process-past splintered conversations. It lives HERE now:
+
+      1. match the email to rules (``multi_rule`` → every match, else the best),
+      2. unless ``resolve`` is off, re-evaluate the whole CONVERSATION so a
+         thread keeps its single status (the resolver is itself cost-aware — it
+         spends no model call on bulk mail, and degrades to the per-message pick
+         on any failure).
+
+    ``resolve=False`` is the dry-run/preview policy: match only, touch nothing,
+    spend no thread-status model call. Raises ``LLMUnavailable`` when the
+    classifier model itself is down (a genuine no-match still returns ``[]``), so
+    the caller can skip its ``rules_processed_at`` watermark and retry next cycle
+    instead of burning the message unseen.
+    """
+    if multi_rule:
+        matches = await _match_email_to_rules_multi(db, account_id, email)
+    else:
+        m = await _match_email_to_rule(db, account_id, email)
+        matches = [m] if m else []
+    if not resolve:
+        return matches
+    # Lazy import: replyzero sits ABOVE the engine (it imports match helpers from
+    # here), so importing it at module scope would cycle. The resolver is the
+    # thread-status authority; it owns the #110 conversation logic.
+    from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
+        resolve_conversation_status_matches,
+    )
+    resolved = await resolve_conversation_status_matches(
+        db, account_id, message_row, matches, provider=provider)
+    return resolved or []
+
+
 async def _email_payload_from_id(db: Any, message_id: str, user_email: str) -> dict[str, str]:
     row = (await db.execute(text(
         """SELECT em.id, em.account_id, em.subject, em.body_text, em.snippet,

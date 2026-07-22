@@ -29,6 +29,7 @@ from gateway.routes.email.automation.engine import (
     _llm_json,
     _match_email_to_rule,
     _match_email_to_rules_multi,
+    classify_matches,
     email_dict_from_row,
 )
 from gateway.routes.email.automation.identity import resolve_org_domains
@@ -1051,15 +1052,17 @@ async def run_rules_on_message(
             "WHERE account_id = :aid"
         ), {"aid": req.account_id})).fetchone()
         multi_rule = bool(mr_row and getattr(mr_row, "multi_rule_execution", None))
-        if multi_rule:
-            try:
-                matches = await _match_email_to_rules_multi(
-                    db, req.account_id, email) or [match]
-            except LLMUnavailable:
-                # Already have the primary single match; apply just that rather
-                # than failing the whole apply on a second classifier call.
-                matches = [match]
-        else:
+        # Through the shared enforcement point, so a single-message re-run obeys
+        # the #110 conversation invariant too (it used to skip the resolve — the
+        # run-message bypass). resolve=True because this is an apply, not a test.
+        try:
+            matches = await classify_matches(
+                db, req.account_id, row, email,
+                multi_rule=multi_rule, resolve=True, provider=provider,
+            ) or [match]
+        except LLMUnavailable:
+            # Already have the primary single match; apply just that rather than
+            # failing the whole apply on a second classifier call.
             matches = [match]
         for m in matches:
             await _apply_and_log_match(
@@ -1733,15 +1736,17 @@ async def _run_rules_job(
             email = email_dict_from_row(
                 r, self_email, about, extra_domains=org_domains,
                 attachments=attach.get(str(r.id), ""))
-            # Multi-rule execution (inbox-zero parity): when on, every matching
-            # rule applies; otherwise just the single best match.
+            # Match + conversation-resolve, through the ONE shared enforcement
+            # point (engine.classify_matches). Multi-rule applies every match;
+            # otherwise the single best. resolve is live-runs-only — the dry-run
+            # preview stays per-message and spends no thread-status model call.
+            # The resolver re-evaluates the whole thread so a conversation keeps
+            # its ONE status (#110), even when the message matched no rule.
             try:
-                if multi_rule:
-                    matches = await _match_email_to_rules_multi(
-                        db, account_id, email)
-                else:
-                    m = await _match_email_to_rule(db, account_id, email)
-                    matches = [m] if m else []
+                matches = await classify_matches(
+                    db, account_id, r, email,
+                    multi_rule=multi_rule, resolve=not dry_run,
+                    provider=provider)
             except LLMUnavailable as exc:
                 # The classifier was down — this is NOT "no rule matched". Leave
                 # the message unstamped (skip the watermark below) so the next
@@ -1750,21 +1755,6 @@ async def _run_rules_job(
                              account_id=account_id, message_id=str(r.id),
                              error=str(exc)[:160])
                 continue
-            # Thread-unit classification (inbox-zero determineConversationStatus
-            # parity, widened): a conversation has ONE classification, and every
-            # new message re-evaluates it with the full thread as context. The
-            # resolver — not the per-message match — decides whether this thread
-            # is a conversation, so it runs even when nothing matched: a bare
-            # "ok noted" that matches no rule must still refresh the thread's
-            # status rather than leave it stale. For bulk mail it returns the
-            # per-message matches untouched without spending a model call.
-            # Live runs only — the dry-run preview stays per-message and cheap.
-            if not dry_run:
-                from gateway.routes.email.automation.replyzero import (  # noqa: PLC0415
-                    resolve_conversation_status_matches,
-                )
-                matches = await resolve_conversation_status_matches(
-                    db, account_id, r, matches, provider=provider)
             if matches:
                 apply = (not dry_run) and provider is not None
                 for match in matches:

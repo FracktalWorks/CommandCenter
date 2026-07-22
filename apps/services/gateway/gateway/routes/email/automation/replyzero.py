@@ -1446,7 +1446,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
     try:
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
             LLMUnavailable,
-            _match_email_to_rule,
+            classify_matches,
             email_dict_from_row,
         )
         # Select threads that NEED WORK, not simply the newest ones.
@@ -1562,17 +1562,17 @@ async def _maybe_classify_threads(account_id: str) -> None:
             email = email_dict_from_row(
                 r, self_email, about, extra_domains=extra_domains,
                 attachments=gap_attach.get(str(r.id), ""))
+            # Match + full-thread status determination through the shared
+            # enforcement point (the SAME #110 path the live runner uses).
             try:
-                match = await _match_email_to_rule(db, account_id, email)
+                matches = await classify_matches(
+                    db, account_id, r, email,
+                    multi_rule=False, resolve=True, provider=provider)
             except LLMUnavailable:
                 # Classifier down for this one — skip it (this backfill writes no
                 # watermark, so the gap query re-selects it next cycle) rather
                 # than abort the whole batch on the outer handler.
                 continue
-            # Full-thread status determination (same parity as the live runner)
-            # when the match is a conversation.
-            matches = await resolve_conversation_status_matches(
-                db, account_id, r, [match] if match else [], provider=provider)
             keep_label = await project_reply_status_from_matches(
                 db, account_id, r, matches)
             # Collapse the thread to that ONE conversation label. This backfill

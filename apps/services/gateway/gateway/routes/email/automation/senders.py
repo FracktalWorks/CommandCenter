@@ -30,7 +30,7 @@ from gateway.routes.email.core import (
     _llm_json,
     _log,
     _persist_rotated_creds,
-    _provider_for_account,
+    provider_session,
     router,
 )
 from pydantic import BaseModel
@@ -793,14 +793,16 @@ async def unsubscribe_sender(
             ok, detail = await _http_unsubscribe(link)
         elif low.startswith("mailto:"):
             method = "mailto"
-            provider, store, _ = await _provider_for_account(
-                db, req.account_id, user.email or "anonymous")
-            if await provider.authenticate():
-                ok, detail = await _mailto_unsubscribe(provider, link)
-                await _persist_rotated_creds(db, store, req.account_id, provider)
+            async with provider_session(
+                db, user.email or "anonymous",
+                account_id=req.account_id, require_auth=False,
+            ) as sess:
+                if sess.authed:
+                    ok, detail = await _mailto_unsubscribe(sess.provider, link)
+                else:
+                    detail = "auth-failed"
+            if sess.authed:
                 await db.commit()
-            else:
-                detail = "auth-failed"
 
         # Unsubscribe worked → UNSUBSCRIBED (the sender stops; no filter needed).
         # Otherwise block: AUTO_ARCHIVED + a provider filter so future mail is

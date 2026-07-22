@@ -20,6 +20,7 @@ from gateway.routes.email.core import (
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
+    provider_session,
     router,
 )
 from pydantic import BaseModel
@@ -364,31 +365,24 @@ async def send_digest(
         days = 7 if req.period == "week" else 1
         cats = await _configured_categories(db, req.account_id)
         digest = await _generate_digest(db, req.account_id, days, cats)
-        acc = (await db.execute(text(
-            "SELECT provider, credentials_encrypted, email_address "
-            "FROM email_accounts WHERE id = :id"
-        ), {"id": req.account_id})).fetchone()
-        if not acc:
-            raise HTTPException(status_code=404, detail="Account not found")
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(acc.credentials_encrypted))
-        provider = _instantiate_provider(acc.provider, creds)
-        if not await provider.authenticate():
-            raise HTTPException(status_code=502, detail="Provider auth failed")
-        await provider.send_message(
-            to=[acc.email_address],
-            subject=f"📥 Your inbox digest — last {'week' if days > 1 else 'day'}",
-            body_text=digest["markdown"],
-            body_html=digest["html"],
-        )
-        await _persist_rotated_creds(db, store, req.account_id, provider)
-        await db.execute(text(
-            "UPDATE email_assistant_settings SET last_digest_at = now() "
-            "WHERE account_id = :aid"
-        ), {"aid": req.account_id})
+        async with provider_session(
+            db, user.email or "anonymous",
+            account_id=req.account_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                raise HTTPException(status_code=502, detail="Provider auth failed")
+            await sess.provider.send_message(
+                to=[sess.owner_email],
+                subject=f"📥 Your inbox digest — last {'week' if days > 1 else 'day'}",
+                body_text=digest["markdown"],
+                body_html=digest["html"],
+            )
+            await db.execute(text(
+                "UPDATE email_assistant_settings SET last_digest_at = now() "
+                "WHERE account_id = :aid"
+            ), {"aid": req.account_id})
         await db.commit()
-        return {"sent": True, "to": acc.email_address}
+        return {"sent": True, "to": sess.owner_email}
     finally:
         await db.close()
 

@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import json
 import os
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any
 
@@ -182,6 +184,93 @@ async def _persist_rotated_creds(db: Any, store: Any, account_id: str, provider)
         )
 
 
+@dataclass
+class ProviderSession:
+    """The live handle yielded by :func:`provider_session`.
+
+    ``provider`` is authenticated (unless ``require_auth=False`` and it failed —
+    then ``authed`` is False and the caller decides what to do). ``account_id``
+    and ``store`` are what a persist needs; ``provider_message_id`` is set only
+    for the message-scoped form, ``owner_email`` only for the account-scoped
+    form (each is the extra datum its ``_provider_for_*`` loader returns).
+    """
+
+    provider: Any
+    account_id: str
+    store: Any
+    authed: bool = False
+    provider_message_id: str | None = None
+    owner_email: str | None = None
+
+
+@asynccontextmanager
+async def provider_session(
+    db: Any,
+    user_email: str,
+    *,
+    account_id: str | None = None,
+    message_id: str | None = None,
+    require_auth: bool = True,
+):
+    """Instantiate → authenticate → (on clean exit) persist rotated creds.
+
+    The three-step provider dance — load+decrypt+instantiate, ``authenticate()``,
+    and ``_persist_rotated_creds`` — was hand-copied at ~a dozen call sites, each
+    an opportunity to forget the persist (dropping a refreshed OAuth token, so
+    the NEXT request re-auths from a stale refresh token and eventually fails).
+    This is that dance in ONE place.
+
+    Pass EITHER ``message_id`` (message-scoped: yields ``provider_message_id``)
+    OR ``account_id`` (account-scoped: yields ``owner_email``). A 404 loader
+    error propagates unchanged.
+
+    ``require_auth=True`` (default) raises ``HTTPException(401)`` on auth failure,
+    matching the send/draft write-paths. ``require_auth=False`` yields with
+    ``authed=False`` so best-effort readers (body hydrate, the cleaner's
+    categorize pass) keep their own skip-or-abort handling.
+
+    The rotated-cred persist runs in a ``finally`` ONLY on a clean exit — never
+    after the body raised (a half-failed request must not commit a token write
+    onto a session that is about to roll back). This preserves the pre-refactor
+    "persist after the work succeeds" ordering exactly; the caller still owns the
+    ``db.commit()`` boundary, so nothing here changes when the transaction lands.
+    """
+    if message_id is not None:
+        provider, pmid, account_id, store = await _provider_for_message(
+            db, message_id, user_email,
+        )
+        sess = ProviderSession(
+            provider=provider, account_id=account_id, store=store,
+            provider_message_id=pmid,
+        )
+    elif account_id is not None:
+        provider, store, owner = await _provider_for_account(
+            db, account_id, user_email,
+        )
+        sess = ProviderSession(
+            provider=provider, account_id=account_id, store=store,
+            owner_email=owner,
+        )
+    else:
+        raise ValueError("provider_session needs account_id or message_id")
+
+    sess.authed = await provider.authenticate()
+    if require_auth and not sess.authed:
+        raise HTTPException(
+            status_code=401, detail="Email account authentication failed",
+        )
+
+    raised = False
+    try:
+        yield sess
+    except BaseException:
+        raised = True
+        raise
+    finally:
+        if not raised:
+            await _persist_rotated_creds(db, sess.store, sess.account_id, provider)
+
+
 async def hydrate_message_body(db: Any, message_id: str, user_email: str) -> str:
     """Ensure a message's full ``body_text`` is present, fetching it if needed.
 
@@ -208,26 +297,25 @@ async def hydrate_message_body(db: Any, message_id: str, user_email: str) -> str
         return row.body_text  # already hydrated
     # Header-only row: fetch the full body from the provider and persist it.
     try:
-        provider, provider_msg_id, account_id, store = await _provider_for_message(
-            db, message_id, user_email,
-        )
-        if not await provider.authenticate():
-            return row.body_text or ""
-        full = await provider.get_message(provider_msg_id)
-        body_text = _truncate_body(full.body_text or "", MAX_BODY_TEXT_BYTES)
-        body_html = (
-            _truncate_body(full.body_html, MAX_BODY_HTML_BYTES)
-            if full.body_html else None
-        )
-        await db.execute(
-            text(
-                """UPDATE email_messages
-                   SET body_text = :bt, body_html = :bh, updated_at = now()
-                   WHERE id = :id"""
-            ),
-            {"id": message_id, "bt": body_text, "bh": body_html},
-        )
-        await _persist_rotated_creds(db, store, account_id, provider)
+        async with provider_session(
+            db, user_email, message_id=message_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                return row.body_text or ""
+            full = await sess.provider.get_message(sess.provider_message_id)
+            body_text = _truncate_body(full.body_text or "", MAX_BODY_TEXT_BYTES)
+            body_html = (
+                _truncate_body(full.body_html, MAX_BODY_HTML_BYTES)
+                if full.body_html else None
+            )
+            await db.execute(
+                text(
+                    """UPDATE email_messages
+                       SET body_text = :bt, body_html = :bh, updated_at = now()
+                       WHERE id = :id"""
+                ),
+                {"id": message_id, "bt": body_text, "bh": body_html},
+            )
         await db.commit()
         return body_text
     except HTTPException:

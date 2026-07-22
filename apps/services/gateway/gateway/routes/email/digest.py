@@ -26,22 +26,164 @@ from pydantic import BaseModel
 from sqlalchemy import text
 
 
+# The digest is a PROJECTION of the same windowed inbox aggregates the Analytics
+# screen reports — never a parallel re-derivation with its own (drifting) rules.
+# Each section below is one small aggregate helper so _generate_digest just
+# composes them, and each can be pinned by a test. The window is inbound inbox
+# mail only, and the account's OWN address is excluded everywhere: self-notes,
+# BCC-to-self, automation — and the digest email itself, which lands in the inbox
+# from the account and would otherwise inflate the NEXT digest's counts.
+#
+# ``_INBOUND`` is the shared predicate: inbox folder, not from self. ``em`` is the
+# table alias; ``:aid``/``:days``/``:self`` come from the shared params.
+_DIGEST_WIN = ("em.account_id = :aid AND em.received_at >= "
+               "now() - make_interval(days => :days)")
+_DIGEST_INBOUND = ("LOWER(em.folder) = 'inbox' "
+                   "AND (:self = '' OR LOWER(em.from_address->>'email') <> :self)")
+
+
+async def _digest_totals(db: Any, params: dict[str, Any]) -> dict[str, int]:
+    """New inbound inbox mail in the window: count, unread, with-attachments."""
+    row = (await db.execute(text(
+        f"""SELECT COUNT(*) AS inbox,
+                   COUNT(*) FILTER (WHERE is_read = false) AS unread,
+                   COUNT(*) FILTER (WHERE has_attachments) AS attachments
+            FROM email_messages em
+            WHERE {_DIGEST_WIN} AND {_DIGEST_INBOUND}"""
+    ), params)).fetchone()
+    return {
+        "inbox": (row.inbox if row else 0) or 0,
+        "unread": (row.unread if row else 0) or 0,
+        "attachments": (row.attachments if row else 0) or 0,
+    }
+
+
+async def _digest_categories(
+    db: Any, params: dict[str, Any], cat_clause: str,
+) -> list[dict[str, Any]]:
+    """Category breakdown of the window's inbound inbox mail, by sender category
+    (the same email_senders rollup the Analytics category chart reads)."""
+    rows = (await db.execute(text(
+        f"""SELECT COALESCE(s.category, 'Unknown') AS category, COUNT(*) AS c
+            FROM email_messages em
+            LEFT JOIN email_senders s
+              ON s.account_id = em.account_id
+             AND s.email = LOWER(em.from_address->>'email')
+            WHERE {_DIGEST_WIN} AND {_DIGEST_INBOUND}{cat_clause}
+            GROUP BY 1 ORDER BY 2 DESC"""
+    ), params)).fetchall()
+    return [{"category": r.category, "count": r.c} for r in rows]
+
+
+async def _digest_top_senders(
+    db: Any, params: dict[str, Any],
+) -> list[dict[str, Any]]:
+    """The window's noisiest inbound senders (Analytics' 'noisy senders', capped
+    to the digest's shorter list)."""
+    rows = (await db.execute(text(
+        f"""SELECT MAX(em.from_address->>'name') AS name,
+                   LOWER(em.from_address->>'email') AS email, COUNT(*) AS c
+            FROM email_messages em
+            WHERE {_DIGEST_WIN} AND {_DIGEST_INBOUND}
+              AND COALESCE(em.from_address->>'email','') <> ''
+            GROUP BY 2 ORDER BY 3 DESC LIMIT 8"""
+    ), params)).fetchall()
+    return [
+        {"name": r.name or r.email, "email": r.email, "count": r.c}
+        for r in rows
+    ]
+
+
+async def _digest_needs_reply(db: Any, account_id: str) -> int:
+    """Threads the user actually owes a reply on — the Reply Zero classification
+    (email_thread_status), the SAME source analytics._backlog reads. Never the
+    old heuristic that counted every inbox-tailed thread all-time."""
+    return (await db.execute(text(
+        """SELECT COUNT(*) FROM email_thread_status
+           WHERE account_id = :aid AND status = 'NEEDS_REPLY'"""
+    ), {"aid": account_id})).scalar() or 0
+
+
+def _digest_is_empty(digest: dict) -> bool:
+    """A digest with no new mail AND nothing awaiting a reply is noise — the
+    scheduler suppresses it rather than mailing an empty summary every morning."""
+    t = digest["totals"]
+    return (t["inbox"] == 0 and t["needs_reply"] == 0
+            and not digest["by_category"] and not digest["top_senders"])
+
+
+def _render_digest_markdown(
+    period: str, totals: dict, needs: int,
+    by_category: list[dict], top_senders: list[dict],
+) -> str:
+    lines = [
+        f"# Inbox digest — last {period}",
+        "",
+        f"**{totals['inbox']}** new in inbox · **{totals['unread']}** unread · "
+        f"**{needs}** threads awaiting your reply · "
+        f"**{totals['attachments']}** with attachments",
+        "",
+        "## By category",
+    ]
+    lines += [f"- **{c['category']}**: {c['count']}"
+              for c in by_category] or ["- (none)"]
+    lines += ["", "## Top senders"]
+    lines += [f"- {s['name']} — {s['count']}"
+              for s in top_senders] or ["- (none)"]
+    return "\n".join(lines)
+
+
+def _esc(s: Any) -> str:
+    """Minimal HTML escape for the small, trusted digest strings."""
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;"))
+
+
+def _render_digest_html(
+    period: str, totals: dict, needs: int,
+    by_category: list[dict], top_senders: list[dict],
+) -> str:
+    """A simple, self-contained HTML body so the emailed digest renders as more
+    than a wall of Markdown asterisks in a mail client."""
+    def _ul(items: list[str]) -> str:
+        if not items:
+            return "<p style='color:#888'>(none)</p>"
+        lis = "".join(f"<li>{it}</li>" for it in items)
+        return f"<ul style='margin:4px 0 12px;padding-left:20px'>{lis}</ul>"
+
+    cats = _ul([f"<b>{_esc(c['category'])}</b>: {c['count']}"
+                for c in by_category])
+    senders = _ul([f"{_esc(s['name'])} — {s['count']}" for s in top_senders])
+    return (
+        "<div style='font-family:-apple-system,Segoe UI,Roboto,sans-serif;"
+        "max-width:560px;color:#1a1a1a'>"
+        f"<h2 style='margin:0 0 4px'>Inbox digest — last {_esc(period)}</h2>"
+        "<p style='font-size:15px;margin:8px 0 16px'>"
+        f"<b>{totals['inbox']}</b> new in inbox &middot; "
+        f"<b>{totals['unread']}</b> unread &middot; "
+        f"<b>{needs}</b> awaiting your reply &middot; "
+        f"<b>{totals['attachments']}</b> with attachments</p>"
+        "<h3 style='margin:0 0 4px;font-size:13px;text-transform:uppercase;"
+        f"color:#666'>By category</h3>{cats}"
+        "<h3 style='margin:0 0 4px;font-size:13px;text-transform:uppercase;"
+        f"color:#666'>Top senders</h3>{senders}"
+        "</div>"
+    )
+
+
 async def _generate_digest(
     db: Any, account_id: str, period_days: int,
     categories: list[str] | None = None,
 ) -> dict:
-    """Build an inbox digest for the window: totals, category breakdown, top
-    senders, and how many threads need a reply. Deterministic (no LLM).
+    """Build an inbox digest for the window by COMPOSING the shared aggregates
+    above (totals, category breakdown, top senders, needs-reply). Deterministic
+    (no LLM). Returns both a Markdown and an HTML body.
 
     `categories` (optional) restricts the category breakdown to the selected
     sender categories ("Cold Emails" maps to the "Cold Email" category); empty
     or None includes everything.
     """
     params: dict[str, Any] = {"aid": account_id, "days": period_days}
-    win = ("em.account_id = :aid AND em.received_at >= "
-           "now() - make_interval(days => :days)")
-    # The account's own address — excluded from "top senders" so the user is never
-    # listed as someone who emails them (self-notes / BCC-to-self / automation).
     self_row = (await db.execute(text(
         "SELECT LOWER(email_address) AS self FROM email_accounts WHERE id = :aid"
     ), {"aid": account_id})).fetchone()
@@ -59,75 +201,23 @@ async def _generate_digest(
         params["cats"] = cats
         cat_clause = " AND COALESCE(s.category, 'Unknown') = ANY(:cats)"
 
-    totals = (await db.execute(text(
-        f"""SELECT COUNT(*) AS total,
-                   COUNT(*) FILTER (WHERE is_read = false) AS unread,
-                   COUNT(*) FILTER (WHERE LOWER(folder) = 'inbox') AS inbox,
-                   COUNT(*) FILTER (WHERE has_attachments) AS attachments
-            FROM email_messages em WHERE {win}"""
-    ), params)).fetchone()
+    totals = await _digest_totals(db, params)
+    by_category = await _digest_categories(db, params, cat_clause)
+    top_senders = await _digest_top_senders(db, params)
+    needs = await _digest_needs_reply(db, account_id)
+    totals["needs_reply"] = needs
 
-    cat_rows = (await db.execute(text(
-        f"""SELECT COALESCE(s.category, 'Unknown') AS category, COUNT(*) AS c
-            FROM email_messages em
-            LEFT JOIN email_senders s
-              ON s.account_id = em.account_id
-             AND s.email = LOWER(em.from_address->>'email')
-            WHERE {win} AND LOWER(em.folder) = 'inbox'{cat_clause}
-            GROUP BY 1 ORDER BY 2 DESC"""
-    ), params)).fetchall()
-
-    sender_rows = (await db.execute(text(
-        f"""SELECT MAX(from_address->>'name') AS name,
-                   LOWER(from_address->>'email') AS email, COUNT(*) AS c
-            FROM email_messages em
-            WHERE {win} AND LOWER(folder) = 'inbox'
-              AND COALESCE(from_address->>'email','') <> ''
-              AND (:self = '' OR LOWER(from_address->>'email') <> :self)
-            GROUP BY 2 ORDER BY 3 DESC LIMIT 8"""
-    ), params)).fetchall()
-
-    # Threads the user actually owes a reply on — the Reply Zero classification,
-    # not a heuristic. The old query counted EVERY thread whose latest message
-    # sat in the inbox (all-time, thousands on a real mailbox) and labelled it
-    # "awaiting your reply" — a large meaningless constant. email_thread_status
-    # is the same source analytics._backlog reads; NEEDS_REPLY is "I owe them".
-    needs = (await db.execute(text(
-        """SELECT COUNT(*) FROM email_thread_status
-           WHERE account_id = :aid AND status = 'NEEDS_REPLY'"""
-    ), {"aid": account_id})).scalar() or 0
-
-    period = "day" if period_days <= 1 else ("week" if period_days <= 7 else f"{period_days} days")
-    by_category = [{"category": r.category, "count": r.c} for r in cat_rows]
-    top_senders = [
-        {"name": r.name or r.email, "email": r.email, "count": r.c}
-        for r in sender_rows
-    ]
-
-    lines = [
-        f"# Inbox digest — last {period}",
-        "",
-        f"**{totals.inbox or 0}** new in inbox · **{totals.unread or 0}** unread · "
-        f"**{needs}** threads awaiting your reply · "
-        f"**{totals.attachments or 0}** with attachments",
-        "",
-        "## By category",
-    ]
-    lines += [f"- **{c['category']}**: {c['count']}" for c in by_category] or ["- (none)"]
-    lines += ["", "## Top senders"]
-    lines += [f"- {s['name']} — {s['count']}" for s in top_senders] or ["- (none)"]
-
+    period = ("day" if period_days <= 1
+              else ("week" if period_days <= 7 else f"{period_days} days"))
     return {
         "period_days": period_days,
-        "totals": {
-            "inbox": totals.inbox or 0,
-            "unread": totals.unread or 0,
-            "attachments": totals.attachments or 0,
-            "needs_reply": needs,
-        },
+        "totals": totals,
         "by_category": by_category,
         "top_senders": top_senders,
-        "markdown": "\n".join(lines),
+        "markdown": _render_digest_markdown(
+            period, totals, needs, by_category, top_senders),
+        "html": _render_digest_html(
+            period, totals, needs, by_category, top_senders),
     }
 
 
@@ -192,6 +282,7 @@ async def send_digest(
             to=[acc.email_address],
             subject=f"📥 Your inbox digest — last {'week' if days > 1 else 'day'}",
             body_text=digest["markdown"],
+            body_html=digest["html"],
         )
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.execute(text(
@@ -251,6 +342,13 @@ async def _maybe_send_digest(account_id: str) -> None:
 
         categories = list(getattr(row, "digest_categories", None) or [])
         digest = await _generate_digest(db, account_id, period_days, categories)
+        # Empty-digest suppression: a scheduled digest with no new mail and
+        # nothing awaiting a reply is noise. Skip the send WITHOUT stamping
+        # last_digest_at, so the moment real mail arrives (still past the send
+        # time) the next cycle delivers one.
+        if _digest_is_empty(digest):
+            _log.info("email.digest_suppressed_empty", account_id=account_id)
+            return
         acc = (await db.execute(text(
             "SELECT provider, credentials_encrypted, email_address "
             "FROM email_accounts WHERE id = :id"
@@ -268,6 +366,7 @@ async def _maybe_send_digest(account_id: str) -> None:
             subject=f"📥 Your inbox digest — last "
                     f"{'week' if period_days > 1 else 'day'}",
             body_text=digest["markdown"],
+            body_html=digest["html"],
         )
         await _persist_rotated_creds(db, store, account_id, provider)
         await db.execute(text(

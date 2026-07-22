@@ -41,7 +41,7 @@ from datetime import datetime, timezone
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
-from fastapi import BackgroundTasks, Depends, Query
+from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from gateway.routes.email.automation.engine import (
     _load_rule_patterns,
     _pattern_hit,
@@ -59,6 +59,7 @@ from gateway.routes.email.core import (
     _instantiate_provider,
     _log,
     _persist_rotated_creds,
+    _provider_for_account_any,
     router,
 )
 from pydantic import BaseModel
@@ -545,19 +546,17 @@ async def sweep_uncategorized(
         internal_domains = await _internal_domains(db, account_id)
 
         if not dry_run:
-            acc = (await db.execute(text(
-                "SELECT provider, credentials_encrypted FROM email_accounts "
-                "WHERE id = :id"
-            ), {"id": account_id})).fetchone()
-            if not acc:
+            # Unscoped loader (scheduler ticks + manual sweeps share this job;
+            # there is no request user here). The sweep keeps its own explicit
+            # auth/persist choreography — the auth-failure verdict goes into
+            # ``summary`` and the rotated-cred persist deliberately happens only
+            # on the success tail (see the end of this function).
+            try:
+                provider, store, _owner = await _provider_for_account_any(
+                    db, account_id)
+            except HTTPException:
                 summary["error"] = "account not found"
                 return summary
-            import json  # noqa: PLC0415
-
-            from acb_llm.key_store import get_key_store  # noqa: PLC0415
-            store = get_key_store()
-            creds = json.loads(store.decrypt(acc.credentials_encrypted))
-            provider = _instantiate_provider(acc.provider, creds)
             if not await provider.authenticate():
                 # ABORT — do NOT continue with provider=None. A local-only label
                 # is logged APPLIED but Outlook (categories-authoritative) wipes

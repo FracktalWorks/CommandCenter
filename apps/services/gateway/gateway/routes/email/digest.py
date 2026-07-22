@@ -7,7 +7,6 @@ there), so it stays importable from the original location.
 """
 from __future__ import annotations
 
-import json
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
@@ -17,9 +16,7 @@ from gateway.routes.email.automation.senders import canonical_cleanup_category
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
-    _instantiate_provider,
     _log,
-    _persist_rotated_creds,
     provider_session,
     router,
 )
@@ -441,30 +438,24 @@ async def _maybe_send_digest(account_id: str) -> None:
         if _digest_is_empty(digest):
             _log.info("email.digest_suppressed_empty", account_id=account_id)
             return
-        acc = (await db.execute(text(
-            "SELECT provider, credentials_encrypted, email_address "
-            "FROM email_accounts WHERE id = :id"
-        ), {"id": account_id})).fetchone()
-        if not acc:
-            return
-        from acb_llm.key_store import get_key_store
-        store = get_key_store()
-        creds = json.loads(store.decrypt(acc.credentials_encrypted))
-        provider = _instantiate_provider(acc.provider, creds)
-        if not await provider.authenticate():
-            return
-        await provider.send_message(
-            to=[acc.email_address],
-            subject=f"📥 Your inbox digest — last "
-                    f"{'week' if period_days > 1 else 'day'}",
-            body_text=digest["markdown"],
-            body_html=digest["html"],
-        )
-        await _persist_rotated_creds(db, store, account_id, provider)
-        await db.execute(text(
-            "UPDATE email_assistant_settings SET last_digest_at = now() "
-            "WHERE account_id = :aid"
-        ), {"aid": account_id})
+        # Unscoped session: this is a scheduler tick, no request user to scope
+        # by. Missing account raises 404 → caught by the broad handler below.
+        async with provider_session(
+            db, None, account_id=account_id, require_auth=False,
+        ) as sess:
+            if not sess.authed:
+                return
+            await sess.provider.send_message(
+                to=[sess.owner_email],
+                subject=f"📥 Your inbox digest — last "
+                        f"{'week' if period_days > 1 else 'day'}",
+                body_text=digest["markdown"],
+                body_html=digest["html"],
+            )
+            await db.execute(text(
+                "UPDATE email_assistant_settings SET last_digest_at = now() "
+                "WHERE account_id = :aid"
+            ), {"aid": account_id})
         await db.commit()
         _log.info("email.digest_sent", account_id=account_id)
     except Exception as exc:  # noqa: BLE001

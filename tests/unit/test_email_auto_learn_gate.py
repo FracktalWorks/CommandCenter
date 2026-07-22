@@ -114,12 +114,17 @@ def test_an_ambiguous_message_teaches_nothing() -> None:
 
 def test_every_caller_reports_whether_the_match_was_sole() -> None:
     """A default of True is right for a single-match caller but wrong for a
-    multi-rule loop, so the loops must pass it explicitly."""
-    src = inspect.getsource(m)
-    assert src.count("sole_match=len(matches) == 1") == 3, (
-        "a call site that stopped passing sole_match silently re-enables "
-        "learning from ambiguous multi-rule classifications"
+    multi-rule loop, so the loop must pass it explicitly. The three apply loops
+    are now the ONE shared ``_apply_matches`` (2.2) — the single place that runs
+    matches — so the guard is enforced there, once."""
+    src = inspect.getsource(m._apply_matches)
+    assert "sole_match=len(matches) == 1" in src, (
+        "the shared apply loop stopped passing sole_match — that silently "
+        "re-enables learning from ambiguous multi-rule classifications"
     )
+    # And no OTHER function re-introduces a hand-rolled apply loop that could
+    # forget the guard: _apply_and_log_match is called from exactly one place.
+    assert inspect.getsource(m).count("await _apply_and_log_match(") == 1
 
 
 # ── people are not senders of a category ────────────────────────────────────

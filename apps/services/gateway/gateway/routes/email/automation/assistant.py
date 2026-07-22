@@ -3,8 +3,12 @@ generation, learned-pattern listing, and the shared about-context loader."""
 
 from __future__ import annotations
 
+import re
 from typing import Any
 from uuid import uuid4
+
+# Word tokens for lexical KB relevance ranking (letters/digits, 2+ chars).
+_KB_WORD_RE = re.compile(r"[a-z0-9]{2,}")
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query, status
@@ -20,13 +24,42 @@ from pydantic import BaseModel, Field
 from sqlalchemy import text
 
 
-async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
+def _rank_kb_by_relevance(
+    kb_rows: list, query: str | None,
+) -> list:
+    """Order KB entries by relevance to ``query`` (lexical term overlap on
+    title+content), then recency — replacing the old recency-first-fit that let
+    a 4k budget fill with the newest entries while the one that actually answers
+    the email sat just past the cut. No query → recency order (unchanged)."""
+    if not query or not query.strip():
+        return list(kb_rows)
+    terms = {t for t in _KB_WORD_RE.findall(query.lower()) if len(t) >= 3}
+    if not terms:
+        return list(kb_rows)
+
+    def _score(k: Any) -> int:
+        hay = f"{k.title or ''} {k.content or ''}".lower()
+        return sum(1 for t in terms if t in hay)
+    # Stable sort by score desc; equal scores keep the incoming recency order.
+    return sorted(kb_rows, key=_score, reverse=True)
+
+
+async def _load_assistant_about(
+    db: Any, account_id: str, *,
+    include_kb: bool = True, query: str | None = None,
+) -> tuple[str, str]:
     """Return (enriched_about, signature) for draft context.
 
     `enriched_about` bundles the user's About text with their personal
     instructions, writing style, and knowledge base as tagged blocks, so the
     single `about` string carries the full drafting context into both the LLM
     drafter and the MAF agent. Empty string if nothing is set.
+
+    ``include_kb=False`` drops the knowledge base — the thread-status classifier
+    only decides whether a thread needs a reply, so drafting facts are pure noise
+    (and token cost) in that prompt. ``query`` (the message being replied to)
+    ranks the KB by relevance to it rather than recency, so the entries that
+    actually bear on this email make the budget.
     """
     row = (await db.execute(text(
         """SELECT about, signature, personal_instructions, writing_style,
@@ -40,10 +73,14 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
     learned_style = (
         getattr(row, "learned_writing_style", None) or "") if row else ""
 
+    # KB is DRAFTING knowledge; the thread-status classifier (include_kb=False)
+    # doesn't need it. Fetch a wider recency window than the budget holds so the
+    # relevance ranking has something to reorder — then the top-scoring entries
+    # for THIS email make the 4k budget, not just the newest.
     kb_rows = (await db.execute(text(
         """SELECT title, content FROM email_knowledge
-           WHERE account_id = :aid ORDER BY updated_at DESC LIMIT 20"""
-    ), {"aid": account_id})).fetchall()
+           WHERE account_id = :aid ORDER BY updated_at DESC LIMIT 40"""
+    ), {"aid": account_id})).fetchall() if include_kb else []
 
     parts: list[str] = []
     if about.strip():
@@ -64,7 +101,7 @@ async def _load_assistant_about(db: Any, account_id: str) -> tuple[str, str]:
         )
     if kb_rows:
         kb_text, budget = [], 4000
-        for k in kb_rows:
+        for k in _rank_kb_by_relevance(kb_rows, query):
             chunk = f"## {k.title}\n{(k.content or '').strip()}"
             if budget - len(chunk) < 0:
                 break

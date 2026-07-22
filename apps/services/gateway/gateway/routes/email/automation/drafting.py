@@ -1347,7 +1347,10 @@ async def draft_reply_smart(
             db, req.account_id, req.message_id, user.email or "anonymous")
         if email is None:
             raise HTTPException(status_code=404, detail="Message not found")
-        about, signature = await _load_assistant_about(db, req.account_id)
+        # Rank the KB by relevance to THIS message, not recency (3.5).
+        about, signature = await _load_assistant_about(
+            db, req.account_id,
+            query=f"{email.get('subject', '')} {email.get('body', '')}")
         models = await _account_models(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy
         # timeout (one specialist agent, short timeout).
@@ -1430,7 +1433,10 @@ async def compose_assist(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
-        about, signature = await _load_assistant_about(db, req.account_id)
+        # Rank the KB by what's being composed, not recency (3.5).
+        about, signature = await _load_assistant_about(
+            db, req.account_id,
+            query=f"{req.subject or ''} {req.body or ''}")
         models = await _account_models(db, req.account_id)
         recipient = ""
         subject = req.subject or ""

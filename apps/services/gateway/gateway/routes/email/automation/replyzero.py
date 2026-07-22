@@ -1027,7 +1027,11 @@ async def resolve_conversation_status_matches(
             and not await _thread_is_conversation(db, account_id, thread_id):
         return matches
     try:
-        about, _sig = await _load_assistant_about(db, account_id)
+        # Thread-status classification only decides whether a thread needs a
+        # reply — the knowledge base is drafting facts, pure noise + token cost
+        # in this prompt. Drop it (3.5).
+        about, _sig = await _load_assistant_about(
+            db, account_id, include_kb=False)
         acc = (await db.execute(text(
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()
@@ -1280,7 +1284,11 @@ async def _mark_thread_replied(
         return
     db = await _get_db()
     try:
-        about, _sig = await _load_assistant_about(db, account_id)
+        # Thread-status classification only decides whether a thread needs a
+        # reply — the knowledge base is drafting facts, pure noise + token cost
+        # in this prompt. Drop it (3.5).
+        about, _sig = await _load_assistant_about(
+            db, account_id, include_kb=False)
         acc = (await db.execute(text(
             "SELECT email_address, provider, credentials_encrypted "
             "FROM email_accounts WHERE id = :id"
@@ -1496,7 +1504,11 @@ async def _maybe_classify_threads(account_id: str) -> None:
                 "FROM email_thread_status WHERE account_id = :aid"
             ), {"aid": account_id})).fetchall()
         }
-        about, _sig = await _load_assistant_about(db, account_id)
+        # Thread-status classification only decides whether a thread needs a
+        # reply — the knowledge base is drafting facts, pure noise + token cost
+        # in this prompt. Drop it (3.5).
+        about, _sig = await _load_assistant_about(
+            db, account_id, include_kb=False)
         acc = (await db.execute(text(
             "SELECT email_address FROM email_accounts WHERE id = :id"
         ), {"id": account_id})).fetchone()

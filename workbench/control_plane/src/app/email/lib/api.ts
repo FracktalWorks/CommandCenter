@@ -926,6 +926,11 @@ export interface SaveDraftParams {
   bcc?: string[];
   subject?: string;
   body?: string;
+  /** Files to attach to the draft (base64 uploads + workspace artifact refs).
+   *  Pass only on the explicit pre-send save; the debounced auto-save omits them
+   *  so the provider adds each attachment exactly once. */
+  attachments?: SendAttachment[];
+  artifacts?: ArtifactAttachmentRef[];
 }
 
 /**
@@ -945,6 +950,8 @@ export async function saveDraft(params: SaveDraftParams): Promise<Email> {
       bcc: params.bcc ?? [],
       subject: params.subject ?? "",
       body: params.body ?? "",
+      attachments: params.attachments ?? [],
+      artifacts: params.artifacts ?? [],
     }),
   });
   return mapEmail(raw);

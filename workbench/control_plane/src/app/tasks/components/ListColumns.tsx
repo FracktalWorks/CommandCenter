@@ -5,6 +5,8 @@ import { GtdItem } from "../lib/types";
 import { durationLabel, isOverdue, relativeTime } from "../lib/utils";
 import { PriorityBadge } from "./PriorityControls";
 import { ACTION_MODE_META, actionMode, type ActionMode } from "../lib/priority";
+import { MODE_ICON } from "../lib/priorityIcons";
+import { contextAccent } from "../lib/contextColors";
 import type { ColumnDef } from "../lib/columns";
 
 // The desktop columnar cells for the Next-Actions list. Each renders the SAME
@@ -88,6 +90,7 @@ function CellBody({
       // every task: "Do It" (yours) or a "?" nudge (Delegate/Schedule/Eliminate).
       const mode = actionMode(item, urgentWindowHours);
       const meta = ACTION_MODE_META[mode];
+      const ModeIcon = MODE_ICON[mode];
       return (
         <span
           className={[
@@ -95,14 +98,19 @@ function CellBody({
             MODE_TONE[mode],
           ].join(" ")}
         >
-          <span aria-hidden>{meta.emoji}</span>
+          <ModeIcon className="h-3 w-3 shrink-0" aria-hidden />
           {meta.label}
         </span>
       );
     }
     case "context":
       return item.context ? (
-        <span className="inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 font-mono text-[10px] text-primary/90">
+        <span
+          className={[
+            "inline-flex items-center rounded border px-1.5 py-0.5 font-mono text-[10px]",
+            contextAccent(item.context).chip,
+          ].join(" ")}
+        >
           {item.context}
         </span>
       ) : null;

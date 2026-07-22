@@ -200,6 +200,9 @@ export function TaskBoard({
                       draggable={!selectMode}
                       selectMode={selectMode}
                       selected={selectedIds.has(i.id)}
+                      // The column IS the stage here — a per-card status pill
+                      // would just repeat it, so it's off on the board.
+                      showStage={false}
                       onToggleSelected={() => toggleSelected(i.id)}
                       onDragStart={() => setDragId(i.id)}
                       onDragEnd={() => { setDragId(null); setOverCol(null); setDropAt(null); }}

@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Calendar, Gem, Hand, Trash2, X, Zap } from "lucide-react";
+import { AlertTriangle, Gem, X, Zap } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
@@ -12,6 +12,7 @@ import {
   type ActionMode,
   type PriorityCell,
 } from "../lib/priority";
+import { CELL_ICON, MODE_ICON } from "../lib/priorityIcons";
 
 // Shared prioritization UI: the 3-flag Weight toggle (Important / Urgent-auto /
 // Leveraged) and the priority badges. Kept together so the visual language
@@ -157,6 +158,7 @@ export function PriorityBadge({
   const cell = priorityCell(item, urgentWindowHours);
   if (hideLowPriority && cell === "low-priority") return null;
   const meta = CELL_META[cell];
+  const Icon = CELL_ICON[cell];
   return (
     <span
       title={meta.label}
@@ -165,7 +167,7 @@ export function PriorityBadge({
         CELL_TONE[cell],
       ].join(" ")}
     >
-      <span aria-hidden>{meta.emoji}</span>
+      <Icon className="h-3 w-3 shrink-0" aria-hidden />
       {showLabel && meta.label}
     </span>
   );
@@ -175,12 +177,6 @@ const SUGGESTION_TONE: Record<Exclude<ActionMode, "do">, string> = {
   delegate: "border-orange-500/40 bg-orange-500/10 text-orange-600 dark:text-orange-400",
   schedule: "border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-400",
   drop: "border-border bg-secondary/60 text-muted-foreground",
-};
-
-const SUGGESTION_ICON: Record<Exclude<ActionMode, "do">, typeof Hand> = {
-  delegate: Hand,
-  schedule: Calendar,
-  drop: Trash2,
 };
 
 /** The competing SUGGESTION badge on a task card. The matrix reads a task as
@@ -206,7 +202,7 @@ export function SuggestionBadge({
   if (!sug || sug.mode === "do") return null;
   const mode = sug.mode as Exclude<ActionMode, "do">;
   const badge = SUGGESTION_BADGE[mode];
-  const Icon = SUGGESTION_ICON[mode];
+  const Icon = MODE_ICON[mode];
   // The nudge now ACTS: "Schedule?" opens the schedule popup, "Eliminate?" the
   // eliminate popup; a delegate nudge still opens the task (delegate lives there).
   const act = () => {

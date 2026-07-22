@@ -25,6 +25,7 @@ def _fake_db(captured: list[tuple[str, dict]]):
                 total=10, unread=3, inbox=8, attachments=2)
         elif "email_thread_status" in sql:
             r.scalar.return_value = 4
+            r.fetchall.return_value = []
         else:
             r.fetchall.return_value = []
             r.fetchone.return_value = None
@@ -92,6 +93,7 @@ def _fake_db_with_totals(captured: list[tuple[str, dict]]):
                 inbox=8, unread=3, attachments=2)
         elif "email_thread_status" in sql:
             r.scalar.return_value = 4
+            r.fetchall.return_value = []
         else:
             r.fetchall.return_value = []
             r.fetchone.return_value = None
@@ -123,8 +125,11 @@ async def test_every_aggregate_excludes_the_accounts_own_mail() -> None:
 async def test_generate_digest_returns_totals_and_both_bodies() -> None:
     out = await m.digest._generate_digest(
         _fake_db_with_totals([]), "acc-1", 1)
+    # needs_reply AND awaiting: the brief reports both sides of the ledger
+    # (what you owe, and what's owed to you).
     assert out["totals"] == {
-        "inbox": 8, "unread": 3, "attachments": 2, "needs_reply": 4}
+        "inbox": 8, "unread": 3, "attachments": 2,
+        "needs_reply": 4, "awaiting": 4}
     # Both a Markdown and an HTML body are produced for the email.
     assert "Inbox digest" in out["markdown"]
     assert out["html"].startswith("<div") and "8</b> new in inbox" in out["html"]
@@ -163,14 +168,60 @@ def _one_shot_db(rows: list):
     return db
 
 
+def _thread_row(**over):
+    base = dict(thread_id="t1", last_message_id="m1", subject="Invoice?",
+                from_name="Ada", from_email="ada@x.com",
+                to_name=None, to_email=None, age_days=5)
+    base.update(over)
+    return SimpleNamespace(**base)
+
+
+def _thread_list_db(rows: list):
+    """First execute returns the thread rows; the account-self lookup that
+    follows gets a fetchone."""
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(
+        fetchall=MagicMock(return_value=rows),
+        fetchone=MagicMock(return_value=SimpleNamespace(self="me@x.com")))
+    return db
+
+
 async def test_backlog_aging_reads_needs_reply_oldest_first() -> None:
-    rows = [SimpleNamespace(thread_id="t1", subject="Invoice?", age_days=5)]
-    db = _one_shot_db(rows)
+    db = _thread_list_db([_thread_row()])
     out = await m.digest._digest_backlog_aging(db, "acc-1")
-    sql = str(db.execute.call_args[0][0])
+    sql = str(db.execute.call_args_list[0][0][0])
     assert "status = 'NEEDS_REPLY'" in sql
     assert "ORDER BY ts.last_message_at ASC" in sql   # oldest first
-    assert out == [{"subject": "Invoice?", "age_days": 5}]
+    # Rows carry identity for the dashboard: the thread AND its last message,
+    # plus WHO the loop is with (sender, since the last message is theirs).
+    assert out == [{"subject": "Invoice?", "age_days": 5, "thread_id": "t1",
+                    "message_id": "m1", "who": "Ada"}]
+
+
+async def test_thread_lists_ignore_trashed_threads() -> None:
+    """A thread whose last message the user trashed/junked is not an open loop.
+    Live: a trashed sick-leave thread sat in "awaiting your reply" for weeks."""
+    db = _thread_list_db([])
+    await m.digest._digest_backlog_aging(db, "acc-1")
+    sql = str(db.execute.call_args_list[0][0][0])
+    assert "'trash'" in sql and "'junk'" in sql
+    # …and so does the count the stat row shows.
+    db2 = AsyncMock()
+    db2.execute.return_value = MagicMock(scalar=MagicMock(return_value=0))
+    await m.digest._digest_needs_reply(db2, "acc-1")
+    assert "'trash'" in str(db2.execute.call_args[0][0])
+
+
+async def test_awaiting_reads_the_other_side_of_the_ledger() -> None:
+    """"Waiting on them" = AWAITING threads; when the last message is the
+    user's own, the counterparty shown is its recipient."""
+    db = _thread_list_db([_thread_row(
+        from_name=None, from_email="me@x.com", to_name="Bob",
+        to_email="bob@y.com")])
+    out = await m.digest._digest_awaiting(db, "acc-1")
+    sql = str(db.execute.call_args_list[0][0][0])
+    assert "status = 'AWAITING'" in sql
+    assert out[0]["who"] == "Bob"
 
 
 async def test_commitments_are_best_effort_when_tasks_absent() -> None:
@@ -186,7 +237,8 @@ async def test_commitments_are_best_effort_when_tasks_absent() -> None:
 
 
 async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> None:
-    rows = [SimpleNamespace(title="Send quote", due_label="Jul 25", overdue=True)]
+    rows = [SimpleNamespace(title="Send quote", due_label="Jul 25", overdue=True,
+                            task_id="task-1", thread_id="t9")]
     db = _one_shot_db(rows)
     out = await m.digest._digest_commitments(db, "acc-1")
     sql = str(db.execute.call_args[0][0])
@@ -196,7 +248,24 @@ async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> N
     # deduce uuid for it and fail ("operator does not exist: text = uuid").
     assert "origin->>'account_id' = ea.id::text" in sql
     assert sql.count(":aid") == 1
-    assert out == [{"title": "Send quote", "due": "Jul 25", "overdue": True}]
+    assert out == [{"title": "Send quote", "due": "Jul 25", "overdue": True,
+                    "task_id": "task-1", "thread_id": "t9"}]
+
+
+async def test_dashboard_mode_includes_undated_commitments() -> None:
+    """3 of the 4 live commitments had no due date and were invisible to the
+    horizon filter. The dashboard (full) projection includes them; the emailed
+    brief keeps the due-soon horizon."""
+    db = _one_shot_db([SimpleNamespace(
+        title="Call back", due_label=None, overdue=None,
+        task_id="task-2", thread_id=None)])
+    out = await m.digest._digest_commitments(
+        db, "acc-1", include_undated=True)
+    _, params = db.execute.call_args[0][0], db.execute.call_args[0][1]
+    assert params["undated"] is True
+    assert out[0]["due"] is None and out[0]["overdue"] is False
+    # …and the renderers say "no due date" instead of crashing on None.
+    assert "no due date" in m.digest._due_phrase(out[0])
 
 
 def test_a_quiet_inbox_with_commitments_still_sends() -> None:

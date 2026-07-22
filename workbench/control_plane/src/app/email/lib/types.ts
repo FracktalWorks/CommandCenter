@@ -92,6 +92,16 @@ export type AutomationFeature =
 
 export type DigestFrequency = "OFF" | "DAILY" | "WEEKLY";
 
+/** One open loop (a thread in a Reply-Zero status), with enough identity to
+ *  open it: the thread, its last message, and who the loop is with. */
+export interface DigestThread {
+  subject: string;
+  age_days: number;
+  thread_id: string;
+  message_id: string | null;
+  who: string;
+}
+
 export interface DigestData {
   period_days: number;
   totals: {
@@ -99,13 +109,23 @@ export interface DigestData {
     unread: number;
     attachments: number;
     needs_reply: number;
+    /** Threads where the user replied and the other side owes the next move. */
+    awaiting: number;
   };
   by_category: { category: string; count: number }[];
   top_senders: { name: string; email: string; count: number }[];
   /** Oldest threads still awaiting the user's reply (Reply-Zero backlog, aged). */
-  backlog?: { subject: string; age_days: number }[];
-  /** Open commitments (tasks captured from a sent reply) due soon or overdue. */
-  commitments?: { title: string; due: string; overdue: boolean }[];
+  backlog?: DigestThread[];
+  /** Who the user is WAITING ON — AWAITING threads, longest first. */
+  awaiting?: DigestThread[];
+  /** Open commitments (tasks captured from a sent reply); due may be null. */
+  commitments?: {
+    title: string;
+    due: string | null;
+    overdue: boolean;
+    task_id?: string;
+    thread_id?: string | null;
+  }[];
   markdown: string;
 }
 

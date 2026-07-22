@@ -207,12 +207,27 @@ Ranked by value to the founder-on-Outlook customer:
 | ~~3.10~~ | ~~**Calendar context in drafts**~~ ✅ **#133** | Scheduling replies | M | `_asks_about_scheduling` heuristic + `_fetch_calendar_context` (internal calendar = gtd_items hard-dates) → calendar block in the draft prompt only on scheduling asks. External calendar sync stays deferred. |
 | ~~3.11~~ | ~~**Digest as the daily brief**~~ ✅ **#128** | One glance a day | S-M | Backlog aging (oldest NEEDS_REPLY) + commitments-due (open gtd_items linked via origin) lead both bodies + in-app cards. |
 | ~~3.12~~ | ~~Search filter UI completion~~ ✅ **#126** | Find anything | S | Date-range / sender-category / importance pills + FilterMenu sections; `importance` added to `/search`. |
+| ~~3.13~~ | ~~**Digest → mailbox DASHBOARD**~~ ✅ (2026-07-22, user-requested) | Act, not read | M | Live-audit found the digest's action half broken/unactionable: 10/29 NEEDS_REPLY were threads the user had ALREADY answered (determiner returned REPLY on our-side-last threads and the authority wrote it — now CLAMPED to AWAITING in `recompute_thread_status`, keyed on the real last speaker); a trashed thread sat in the backlog (thread lists/counts now exclude trash/junk); 91 AWAITING threads and 3-of-4 undated commitments were invisible. `_generate_digest(full=)`: dashboard projection = full lists + thread/message ids + awaiting + undated commitments; email keeps small caps (one computation, two projections). UI: `DashboardView` (feature key stays `digest`) — needs-reply + waiting-on-them ledgers with click-through (`openEmailById`) and row actions (Mark done via `/reply-zero/resolve`, Snooze-1d), commitments incl. undated, category/noisy-sender analytics. |
 
 **Explicitly deferred** (revisit after Phase 3): AI-scored "Clean" review queue; PDF/attachment
 content grounding; attachment auto-filing; meeting briefs; learning from bulk actions;
 categorization backfill date-range + coverage report; Gmail Pub/Sub push; richer AG-UI typed
 `requires_confirmation` events + rule-suggestion approve card; email-KB → other-agents/Mem0
 bridge (needs a scoping design so account-scoped memories stay private).
+
+**Dashboard v2 candidates** (brainstormed 2026-07-22 with 3.13; each is an owner call):
+- **Draft-from-dashboard**: a ✍️ action on a needs-reply row that opens the thread with an AI
+  draft already prepared (wire to the existing compose-assist path).
+- **Per-thread Nudge** on waiting-on-them rows: one-click AI follow-up draft (the follow-up
+  drafter exists; needs a per-thread endpoint + the confirm-before-send gate).
+- **AI priority ordering**: rank the reply queue by urgency/importance (sender importance ×
+  age × content), not just age — the current oldest-first surfaces dead loops.
+- **Dismiss ≠ Done**: an explicit "never mind this thread" that doesn't pretend completion
+  (today Mark done is the only closer).
+- **Click-through analytics**: category chips → filtered mailbox view; noisy senders → Email
+  Cleaner row (unsubscribe/block from the dashboard).
+- **Morning-brief LLM one-liner**: a single sentence ("2 urgent: X's quote, Y's contract")
+  atop the dashboard and the emailed digest — costed, opt-in.
 
 ### Build-or-kill decisions (each needs a one-line owner call)
 

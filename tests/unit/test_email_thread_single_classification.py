@@ -119,6 +119,65 @@ async def test_external_only_threads_are_not_conversations() -> None:
     assert await _rz._thread_is_conversation(db, "acc", "t1") is False
 
 
+# ── the authority: whoever spoke last is a fact, not a judgment ──────────────
+
+
+def _authority_env(status="REPLY", our_side_last=True, confident=True):
+    """Patches for a bare recompute_thread_status run."""
+    ctx = SimpleNamespace(thread_id="t1", last_message_id="m9",
+                          last_message_at=None, our_side_last=our_side_last,
+                          has_external=True, thread_text="thread…")
+    return (
+        patch.object(_rz, "build_thread_context",
+                     AsyncMock(return_value=ctx)),
+        patch.object(_rz, "_status_corrections_block",
+                     AsyncMock(return_value="")),
+        patch.object(_rz, "_llm_determine_thread_status",
+                     AsyncMock(return_value=(status, confident))),
+        patch.object(_rz, "_upsert_thread_status", AsyncMock()),
+    )
+
+
+async def test_replying_can_never_leave_you_owing_a_reply() -> None:
+    """THE stale-backlog regression: 10 of 29 live NEEDS_REPLY rows were
+    threads the user had ALREADY answered — the determiner said REPLY and the
+    authority wrote it, so the digest repeated "you owe a reply" every morning.
+    When our side sent last, the only honest open state is AWAITING, and the
+    reason discloses the coercion."""
+    env = _authority_env(status="REPLY", our_side_last=True)
+    with env[0], env[1], env[2], env[3] as upsert:
+        rz_status, label = await _rz.recompute_thread_status(
+            AsyncMock(), "acc", "t1", trigger="outbound")
+    assert (rz_status, label) == ("AWAITING", "Awaiting Reply")
+    written_status = upsert.call_args[0][3]
+    written_reason = upsert.call_args[0][6]
+    assert written_status == "AWAITING"
+    assert "we sent last" in written_reason
+
+
+async def test_their_message_last_still_determines_reply() -> None:
+    """The clamp is keyed on the REAL last speaker, not the trigger: when the
+    other side spoke last, a REPLY determination stands."""
+    env = _authority_env(status="REPLY", our_side_last=False)
+    with env[0], env[1], env[2], env[3] as upsert:
+        rz_status, _label = await _rz.recompute_thread_status(
+            AsyncMock(), "acc", "t1", trigger="inbound")
+    assert rz_status == "NEEDS_REPLY"
+    assert upsert.call_args[0][3] == "NEEDS_REPLY"
+    assert "we sent last" not in upsert.call_args[0][6]
+
+
+async def test_done_after_our_last_word_is_not_coerced() -> None:
+    """The clamp only forbids the impossible state — a DONE verdict on a thread
+    we closed out stays DONE."""
+    env = _authority_env(status="DONE", our_side_last=True)
+    with env[0], env[1], env[2], env[3] as upsert:
+        rz_status, _label = await _rz.recompute_thread_status(
+            AsyncMock(), "acc", "t1", trigger="outbound")
+    assert rz_status == "DONE"
+    assert "we sent last" not in upsert.call_args[0][6]
+
+
 # ── the resolver: single classification ──────────────────────────────────────
 
 

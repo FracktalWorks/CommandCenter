@@ -322,94 +322,86 @@ export function InboxView() {
         <span className="text-[11px] text-muted-foreground">Getting Things Done</span>
       </div>
 
-      {/* Capture hero — desktop only. On mobile the dedicated Capture button
-          (bottom nav / `C`) handles capture, so we give the list the space. */}
-      <div className="hidden shrink-0 border-b border-border sm:block">
-        <div className="mx-auto w-full max-w-4xl px-4 py-6 sm:px-6 sm:py-8">
-          <div className="mb-1 flex items-center gap-2">
-            <Inbox className="h-5 w-5 text-primary" />
-            <h1 className="text-xl font-bold text-foreground">Inbox</h1>
+      {/* Capture header — desktop only, ONE compact full-width row (mobile
+          captures via the bottom-nav button): title · capture box · attach ·
+          mind sweep · shortcuts. The old centered hero cost three stacked
+          rows before the list started; full width also matches Next Actions
+          and lets long captures breathe. */}
+      <div className="hidden shrink-0 border-b border-border bg-card sm:block">
+        <div className="flex items-center gap-2.5 px-4 py-2.5">
+          <div className="flex shrink-0 items-center gap-2">
+            <Inbox className="h-4 w-4 text-primary" />
+            <h1 className="text-base font-bold text-foreground">Inbox</h1>
           </div>
-          <p className="mb-4 text-sm text-muted-foreground">
-            Capture now, clarify later. Get it out of your head.
-          </p>
-          <div className="tech-transition flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3 focus-within:border-primary/50">
-            <Plus className="h-5 w-5 shrink-0 text-muted-foreground" />
+          <div className="tech-transition flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-background px-3 py-1.5 focus-within:border-primary/50">
+            <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
             <input
               value={value}
               onChange={(e) => setValue(e.target.value)}
               onKeyDown={onKeyDown}
-              placeholder="What's on your mind?"
+              placeholder="What's on your mind? Capture now, clarify later."
               aria-label="Capture a task"
-              className="flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none"
+              className="min-w-0 flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground focus:outline-none"
             />
             {value.trim() ? (
               <button
                 type="button"
                 onClick={submit}
-                className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90"
+                className="tech-transition inline-flex shrink-0 items-center gap-1 rounded-md bg-primary px-2 py-1 text-xs font-medium text-primary-foreground hover:opacity-90"
               >
-                Add <CornerDownLeft className="h-3.5 w-3.5" />
+                Add <CornerDownLeft className="h-3 w-3" />
               </button>
             ) : (
-              <kbd className="rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
+              <kbd className="shrink-0 rounded border border-border px-1.5 py-0.5 text-[10px] text-muted-foreground">
                 ↵
               </kbd>
             )}
           </div>
-          {/* Context attachments: a photo, a file, or a link kept WITH the
-              capture — clarify sees them later. */}
-          <AttachmentComposer attachments={pendingAtts} onChange={setPendingAtts} />
-
-          <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 px-1 text-[11px] text-muted-foreground">
-            <button
-              type="button"
-              onClick={() => openQuickCapture("sweep")}
-              className="tech-transition inline-flex items-center gap-1 hover:text-primary"
-            >
-              <Wind className="h-3.5 w-3.5" />
-              Mind sweep
-            </button>
-            <span className="hidden text-muted-foreground/50 sm:inline">·</span>
-            <span className="hidden sm:inline">
-              Press{" "}
-              <kbd className="rounded border border-border px-1 py-0.5 text-[10px]">
-                C
-              </kbd>{" "}
-              to capture from anywhere
-            </span>
-            <button
-              type="button"
-              onClick={() => setShowShortcuts((v) => !v)}
-              className="tech-transition ml-auto hidden items-center gap-1 hover:text-foreground sm:inline-flex"
-            >
-              <Keyboard className="h-3.5 w-3.5" />
-              Shortcuts
-            </button>
+          {/* Context attachments: photo/file/link kept WITH the capture —
+              icon triggers inline; pending chips appear above the icons. */}
+          <div className="max-w-[320px] shrink-0">
+            <AttachmentComposer compact attachments={pendingAtts} onChange={setPendingAtts} />
           </div>
-
-          {showShortcuts && (
-            <div className="mt-2 flex flex-wrap gap-x-3 gap-y-1 rounded-lg border border-border bg-secondary/30 px-3 py-2 text-[10px] text-muted-foreground">
-              <Sc k="j / k">move</Sc>
-              <Sc k="↵">clarify</Sc>
-              <Sc k="e">edit</Sc>
-              <Sc k="x">select</Sc>
-              <Sc k="t">delete</Sc>
-              <Sc k="s">someday</Sc>
-              <Sc k="r">reference</Sc>
-              <Sc k="2">do now</Sc>
-              <Sc k="u">undo</Sc>
-              <Sc k="esc">clear</Sc>
-            </div>
-          )}
-
+          <button
+            type="button"
+            onClick={() => openQuickCapture("sweep")}
+            title="Mind sweep — dump everything on your mind"
+            className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground hover:border-primary/40 hover:text-foreground"
+          >
+            <Wind className="h-3.5 w-3.5" />
+            <span className="hidden lg:inline">Mind sweep</span>
+          </button>
+          <button
+            type="button"
+            onClick={() => setShowShortcuts((v) => !v)}
+            title="Keyboard shortcuts (press C to capture from anywhere)"
+            aria-pressed={showShortcuts}
+            className="tech-transition inline-flex shrink-0 items-center rounded-md border border-border p-1.5 text-muted-foreground hover:border-primary/40 hover:text-foreground"
+          >
+            <Keyboard className="h-3.5 w-3.5" />
+          </button>
         </div>
+        {showShortcuts && (
+          <div className="flex flex-wrap gap-x-3 gap-y-1 border-t border-border px-4 py-2 text-[10px] text-muted-foreground">
+            <Sc k="C">capture</Sc>
+            <Sc k="j / k">move</Sc>
+            <Sc k="↵">clarify</Sc>
+            <Sc k="e">edit</Sc>
+            <Sc k="x">select</Sc>
+            <Sc k="t">delete</Sc>
+            <Sc k="s">someday</Sc>
+            <Sc k="r">reference</Sc>
+            <Sc k="2">do now</Sc>
+            <Sc k="u">undo</Sc>
+            <Sc k="esc">clear</Sc>
+          </div>
+        )}
       </div>
 
       {/* Capture undo — kept out of the hero so it shows on mobile too */}
       {undoCount > 0 && (
         <div className="shrink-0 border-b border-border bg-secondary/40">
-          <div className="mx-auto flex w-full max-w-4xl items-center justify-between px-4 py-2 sm:px-6">
+          <div className="flex w-full items-center justify-between px-4 py-2">
             <span className="text-[11px] text-muted-foreground">
               Captured {undoCount} item{undoCount === 1 ? "" : "s"}
             </span>
@@ -429,7 +421,7 @@ export function InboxView() {
           duplicates were auto-skipped (undoable); "similar" asks the user. */}
       {dupNotice && (
         <div className="shrink-0 border-b border-warning/30 bg-warning/10">
-          <div className="mx-auto flex w-full max-w-4xl flex-wrap items-center justify-between gap-2 px-4 py-2 sm:px-6">
+          <div className="flex w-full flex-wrap items-center justify-between gap-2 px-4 py-2">
             <span className="min-w-0 flex-1 text-[11px] text-foreground">
               {dupNotice.verdict === "duplicate" ? (
                 <>Already {matchWhere(dupNotice.matchDisposition, dupNotice.matchSource)}: &ldquo;{dupNotice.matchTitle}&rdquo; — not added again.</>
@@ -524,42 +516,127 @@ export function InboxView() {
         </div>
       )}
 
-      {/* Controls */}
+      {/* Controls — ONE full-width wrap row: count/status chips · filter
+          pills · search · sort · density · tickler · Clarify next. (Wraps to
+          stacked lines on mobile by itself.) Selection swaps in the bulk bar. */}
       {(activeInbox.length > 0 || tickler.length > 0) && (
         <div className="shrink-0 border-b border-border bg-background/80 backdrop-blur">
-          <div className="mx-auto w-full max-w-4xl px-4 sm:px-6">
-            <div className="flex items-center justify-between gap-2 py-3">
-              <div className="flex min-w-0 items-center gap-2">
-                <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
-                  {activeInbox.length} to process
-                </span>
-                {sourceFilter !== "all" && (
-                  <span
-                    className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
-                    title="Filtered by source — change it in the sidebar"
-                  >
-                    {sourceFilter === "local" ? (
-                      <HardDrive className="h-3 w-3" />
-                    ) : (
-                      <Cloud className="h-3 w-3" />
-                    )}
-                    {sourceFilter === "local" ? "Mine" : "ClickUp"}
-                  </span>
-                )}
-                {processed > 0 && (
-                  <span className="hidden items-center gap-1 whitespace-nowrap text-[11px] text-success sm:inline-flex">
-                    <CheckCircle2 className="h-3 w-3" />
-                    {processed} processed
-                  </span>
-                )}
+          {selectionActive && !showTickler ? (
+            <div className="flex flex-wrap items-center gap-2 px-4 py-2">
+              <span className="text-xs font-medium text-primary">
+                {selectedIds.size} selected
+              </span>
+              <div className="ml-auto flex items-center gap-1">
+                <BulkBtn icon={Lightbulb} onClick={() => bulk("SOMEDAY")}>
+                  Someday
+                </BulkBtn>
+                <BulkBtn icon={FileText} onClick={() => bulk("REFERENCE")}>
+                  Reference
+                </BulkBtn>
+                <BulkBtn icon={Trash2} danger onClick={bulkDelete}>
+                  Delete
+                </BulkBtn>
+                <button
+                  type="button"
+                  onClick={clearSelection}
+                  className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
+                  aria-label="Clear selection"
+                >
+                  <X className="h-4 w-4" />
+                </button>
               </div>
-              <div className="flex shrink-0 items-center gap-1.5">
+            </div>
+          ) : (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1.5 px-4 py-2">
+              <span className="whitespace-nowrap text-xs font-medium text-muted-foreground">
+                {activeInbox.length} to process
+              </span>
+              {sourceFilter !== "all" && (
+                <span
+                  className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary"
+                  title="Filtered by source — change it in the sidebar"
+                >
+                  {sourceFilter === "local" ? (
+                    <HardDrive className="h-3 w-3" />
+                  ) : (
+                    <Cloud className="h-3 w-3" />
+                  )}
+                  {sourceFilter === "local" ? "Mine" : "ClickUp"}
+                </span>
+              )}
+              {processed > 0 && (
+                <span className="hidden items-center gap-1 whitespace-nowrap text-[11px] text-success sm:inline-flex">
+                  <CheckCircle2 className="h-3 w-3" />
+                  {processed} processed
+                </span>
+              )}
+              {isAging && oldest && !showTickler && (
+                <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
+                  <AlertCircle className="h-3 w-3" />
+                  oldest {relativeTime(oldest.createdAt)}
+                </span>
+              )}
+              {!showTickler && (
+                <FilterPills
+                  items={pills}
+                  activeId={dateFilter}
+                  onChange={(id) => setDateFilter(id as DateFilter)}
+                  className="!min-w-0 !shrink !border-0 !px-0 !py-0"
+                />
+              )}
+              {/* Search + view controls: full-width second line on mobile;
+                  right-aligned same-line cluster from sm: up. */}
+              <div className="flex w-full min-w-0 items-center gap-1.5 sm:ml-auto sm:w-auto sm:min-w-[320px] sm:flex-1 sm:justify-end">
+                {!showTickler && (
+                  <>
+                    <div className="tech-transition flex min-w-0 max-w-sm flex-1 items-center gap-2 rounded-lg border border-border bg-card px-2.5 py-1.5 focus-within:border-primary/50">
+                      <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                      <input
+                        value={search}
+                        onChange={(e) => setSearch(e.target.value)}
+                        placeholder="Search captures…"
+                        aria-label="Search captured tasks"
+                        className="min-w-0 flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-xs"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setSortOrder((o) => (o === "newest" ? "oldest" : "newest"))
+                      }
+                      className="tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                      title="Toggle sort order"
+                    >
+                      <ArrowDownUp className="h-3.5 w-3.5" />
+                      <span className="hidden lg:inline">
+                        {sortOrder === "newest" ? "Newest" : "Oldest"}
+                      </span>
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setDensityPersist(density === "cards" ? "list" : "cards")
+                      }
+                      title={density === "cards" ? "Dense list view" : "Card view"}
+                      className="tech-transition inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-border px-2 py-1.5 text-xs text-muted-foreground hover:text-foreground"
+                    >
+                      {density === "cards" ? (
+                        <LayoutList className="h-3.5 w-3.5" />
+                      ) : (
+                        <LayoutGrid className="h-3.5 w-3.5" />
+                      )}
+                      <span className="hidden lg:inline">
+                        {density === "cards" ? "List" : "Cards"}
+                      </span>
+                    </button>
+                  </>
+                )}
                 {tickler.length > 0 && (
                   <button
                     type="button"
                     onClick={() => setShowTickler((v) => !v)}
                     className={[
-                      "tech-transition inline-flex items-center gap-1.5 whitespace-nowrap rounded-md px-2.5 py-1.5 text-xs font-medium",
+                      "tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md px-2 py-1.5 text-xs font-medium",
                       showTickler
                         ? "bg-primary/15 text-primary"
                         : "text-muted-foreground hover:bg-secondary hover:text-foreground",
@@ -576,7 +653,7 @@ export function InboxView() {
                     disabled={!oldest}
                     onClick={() => oldest && startClarify(oldest.id)}
                     title="Process the oldest item first (GTD FIFO)"
-                    className="tech-transition inline-flex items-center gap-1.5 whitespace-nowrap rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
+                    className="tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-md bg-primary/10 px-2.5 py-1.5 text-xs font-medium text-primary hover:bg-primary/20 disabled:opacity-40"
                   >
                     <Sparkles className="h-3.5 w-3.5" />
                     Clarify next
@@ -585,100 +662,13 @@ export function InboxView() {
                 )}
               </div>
             </div>
-            {isAging && oldest && !showTickler && (
-              <div className="pb-2">
-                <span className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/10 px-2 py-0.5 text-[10px] font-medium text-warning">
-                  <AlertCircle className="h-3 w-3" />
-                  oldest {relativeTime(oldest.createdAt)} — time to process
-                </span>
-              </div>
-            )}
-
-            {!showTickler &&
-              (selectionActive ? (
-                <div className="flex items-center gap-2 pb-2">
-                  <span className="text-xs font-medium text-primary">
-                    {selectedIds.size} selected
-                  </span>
-                  <div className="ml-auto flex items-center gap-1">
-                    <BulkBtn icon={Lightbulb} onClick={() => bulk("SOMEDAY")}>
-                      Someday
-                    </BulkBtn>
-                    <BulkBtn icon={FileText} onClick={() => bulk("REFERENCE")}>
-                      Reference
-                    </BulkBtn>
-                    <BulkBtn icon={Trash2} danger onClick={bulkDelete}>
-                      Delete
-                    </BulkBtn>
-                    <button
-                      type="button"
-                      onClick={clearSelection}
-                      className="tech-transition rounded-md p-1 text-muted-foreground hover:text-foreground"
-                      aria-label="Clear selection"
-                    >
-                      <X className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-              ) : (
-                <div className="flex items-center gap-2 pb-2">
-                  <div className="tech-transition flex min-w-0 flex-1 items-center gap-2 rounded-lg border border-border bg-card px-3 py-1.5 focus-within:border-primary/50">
-                    <Search className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <input
-                      value={search}
-                      onChange={(e) => setSearch(e.target.value)}
-                      placeholder="Search captured tasks…"
-                      aria-label="Search captured tasks"
-                      className="min-w-0 flex-1 bg-transparent text-base text-foreground placeholder:text-muted-foreground focus:outline-none sm:text-sm"
-                    />
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setSortOrder((o) => (o === "newest" ? "oldest" : "newest"))
-                    }
-                    className="tech-transition inline-flex shrink-0 items-center gap-1.5 whitespace-nowrap rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-                    title="Toggle sort order"
-                  >
-                    <ArrowDownUp className="h-3.5 w-3.5" />
-                    <span className="hidden sm:inline">
-                      {sortOrder === "newest" ? "Newest" : "Oldest"}
-                    </span>
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() =>
-                      setDensityPersist(density === "cards" ? "list" : "cards")
-                    }
-                    title={density === "cards" ? "Dense list view" : "Card view"}
-                    className="tech-transition inline-flex shrink-0 items-center gap-1 whitespace-nowrap rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground"
-                  >
-                    {density === "cards" ? (
-                      <LayoutList className="h-3.5 w-3.5" />
-                    ) : (
-                      <LayoutGrid className="h-3.5 w-3.5" />
-                    )}
-                    <span className="hidden sm:inline">
-                      {density === "cards" ? "List" : "Cards"}
-                    </span>
-                  </button>
-                </div>
-              ))}
-          </div>
-          {!showTickler && !selectionActive && (
-            <FilterPills
-              items={pills}
-              activeId={dateFilter}
-              onChange={(id) => setDateFilter(id as DateFilter)}
-              className="mx-auto max-w-4xl !px-4 sm:!px-6"
-            />
           )}
         </div>
       )}
 
-      {/* List */}
+      {/* List — full width, like Next Actions, so long captures read whole. */}
       <div className="flex-1 overflow-y-auto">
-        <div className="mx-auto w-full max-w-4xl px-4 py-4 sm:px-6 sm:py-5">
+        <div className="w-full px-4 py-4 sm:py-3">
           {loading ? (
             <div className="flex flex-col items-center justify-center gap-2 py-16 text-center">
               <Loader2 className="h-6 w-6 animate-spin text-muted-foreground/60" />

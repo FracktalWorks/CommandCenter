@@ -206,7 +206,7 @@ async def _fetch_thread(
 async def _llm_capture(
     *, subject: str, from_name: str, from_email: str, to_line: str,
     cc_line: str, owner_addrs: set[str], body: str, thread: str,
-    people: list[dict], model: str,
+    people: list[dict], model: str, contexts: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """LLM capture + routing on the user's email-capture model (gtd_settings).
     Returns {title, notes, disposition, next_action, assignee_name, due_at,
@@ -227,6 +227,9 @@ async def _llm_capture(
     ) or "(no team on record)"
 
     today = datetime.now(tz=UTC).date().isoformat()
+    # The user's real @context vocabulary (configurable) — never hard-coded.
+    ctx_names = contexts or ["@computer", "@calls", "@agenda"]
+    ctx_enum = "|".join(f'"{c}"' for c in ctx_names)
 
     system = (
         "You turn ONE email (with its thread) into ONE GTD task for the "
@@ -268,7 +271,7 @@ async def _llm_capture(
         'Return STRICT JSON only: {"title": str, "notes": str, "disposition": '
         '"NEXT"|"WAITING"|"CALENDAR"|"SOMEDAY", "next_action": str, '
         '"assignee_name": str|null, "due_at": str|null, "defer_until": '
-        'str|null, "context": "@computer"|"@calls"|"@agenda"|null, '
+        f'str|null, "context": {ctx_enum}|null, '
         '"energy": "high"|"medium"|"low"|null, "time_estimate_mins": int|null, '
         '"subtasks": [str]}'
     )
@@ -673,6 +676,7 @@ async def capture_from_email(
                                      str(email.thread_id or ""), str(email.id))
 
         # People power the delegate suggestion (org-knowledge layer, §6.1).
+        from gateway.routes.tasks.ai import _user_contexts
         from gateway.routes.tasks.people import fetch_people_for_clarify
         from gateway.routes.tasks.settings import gtd_models
         people = await fetch_people_for_clarify(db)
@@ -684,6 +688,7 @@ async def capture_from_email(
             cc_line=_fmt_addrs(cc_list), owner_addrs=owner_addrs,
             body=email.body_text or email.snippet or "", thread=thread,
             people=people, model=models["email_capture"],
+            contexts=await _user_contexts(db, uid),
         )
         used_llm = draft is not None
         if draft is None:
@@ -867,6 +872,7 @@ async def enhance_capture_from_email(
         thread = await _fetch_thread(db, str(email.account_id),
                                      str(email.thread_id or ""), str(email.id))
 
+        from gateway.routes.tasks.ai import _user_contexts
         from gateway.routes.tasks.people import fetch_people_for_clarify
         from gateway.routes.tasks.settings import gtd_models
         people = await fetch_people_for_clarify(db)
@@ -878,6 +884,7 @@ async def enhance_capture_from_email(
             cc_line=_fmt_addrs(cc_list), owner_addrs=owner_addrs,
             body=email.body_text or email.snippet or "", thread=thread,
             people=people, model=models["email_capture"],
+            contexts=await _user_contexts(db, uid),
         )
         used_llm = drafted is not None
         if drafted is None:
@@ -1078,6 +1085,7 @@ async def _account_owner(db: Any, uid: str, account_id: str) -> tuple[str, str]:
 async def _llm_detect_commitment(
     *, subject: str, owner_name: str, owner_addrs: set[str], body: str,
     thread: str, people: list[dict], model: str,
+    contexts: list[str] | None = None,
 ) -> dict[str, Any] | None:
     """Gate + draft: does the reply the OWNER just sent commit them (or their
     team) to a future action/deliverable? Returns a routed capture draft with an
@@ -1101,6 +1109,8 @@ async def _llm_detect_commitment(
         for p in (people or [])[:40]
     ) or "(no team on record)"
     today = datetime.now(tz=UTC).date().isoformat()
+    ctx_names = contexts or ["@computer", "@calls", "@agenda"]
+    ctx_enum = "|".join(f'"{c}"' for c in ctx_names)
 
     system = (
         "You read ONE reply that the OWNER (me) JUST SENT in an email thread and "
@@ -1132,7 +1142,7 @@ async def _llm_detect_commitment(
         'Return STRICT JSON only: {"is_commitment": bool, "title": str, '
         '"notes": str, "disposition": "NEXT"|"WAITING"|"CALENDAR"|"SOMEDAY", '
         '"next_action": str, "assignee_name": str|null, "due_at": str|null, '
-        '"defer_until": str|null, "context": "@computer"|"@calls"|"@agenda"|null,'
+        f'"defer_until": str|null, "context": {ctx_enum}|null,'
         ' "energy": "high"|"medium"|"low"|null, "time_estimate_mins": int|null, '
         '"subtasks": [str]}'
     )
@@ -1273,6 +1283,7 @@ async def detect_commitment_from_reply(
             if req.include_thread else ""
         )
 
+        from gateway.routes.tasks.ai import _user_contexts
         from gateway.routes.tasks.people import fetch_people_for_clarify
         from gateway.routes.tasks.settings import gtd_models
         people = await fetch_people_for_clarify(db)
@@ -1281,7 +1292,8 @@ async def detect_commitment_from_reply(
         detected = await _llm_detect_commitment(
             subject=req.subject, owner_name=owner_name, owner_addrs=owner_addrs,
             body=req.body, thread=thread, people=people,
-            model=models["email_capture"])
+            model=models["email_capture"],
+            contexts=await _user_contexts(db, uid))
         if not detected or not detected.get("is_commitment"):
             return DetectCommitmentResponse(is_commitment=False, used_llm=bool(detected))
 

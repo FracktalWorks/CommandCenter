@@ -46,6 +46,7 @@ from gateway.routes.email.core import (
     _parse_iso_date,
     _persist_rotated_creds,
     _provider_for_account,
+    _provider_for_message,
     router,
 )
 from pydantic import BaseModel
@@ -636,6 +637,80 @@ async def apply_label(
         "ELSE array_append(categories, :lbl) END, "
         "updated_at = now() WHERE id = :id"
     ), {"id": message_id, "lbl": lbl})
+
+
+async def remove_label(
+    db: Any, provider: Any, message_id: str, provider_msg_id: str, label: str,
+) -> None:
+    """The mirror image of ``apply_label``: strip ONE category off a message.
+
+    Same one-writer discipline — provider FIRST (so an authoritative round-trip
+    provider like Outlook doesn't re-add it on the next sync), then the local
+    ``categories`` mirror via a race-free ``array_remove``. This is what makes a
+    Fix correction visible on the message it was corrected from, not just on
+    future mail.
+    """
+    lbl = (label or "").strip()
+    if not lbl:
+        return
+    if provider is not None and provider_msg_id:
+        await provider.set_labels(provider_msg_id, add=[], remove=[lbl])
+    await db.execute(text(
+        "UPDATE email_messages SET categories = array_remove(categories, :lbl), "
+        "updated_at = now() WHERE id = :id"
+    ), {"id": message_id, "lbl": lbl})
+
+
+async def _rule_label_values(db: Any, rule_id: str) -> list[str]:
+    """The category label(s) a rule's LABEL action applies — the exact strings
+    the undo path removes, so a Fix strips precisely what the rule put on."""
+    rows = (await db.execute(text(
+        "SELECT label FROM email_actions WHERE rule_id = :rid "
+        "AND type = 'LABEL' AND label IS NOT NULL"
+    ), {"rid": str(rule_id)})).fetchall()
+    return [r.label for r in rows if r.label]
+
+
+async def correct_applied_labels(
+    db: Any, account_id: str, message_id: str, owner: str, *,
+    remove_rule_ids: list[str], add_rule_id: str | None = None,
+) -> dict[str, list[str]]:
+    """Make a Fix correction show on the message it came from: strip the label(s)
+    the wrongly-matched cleanup rules applied, and — when the correction names a
+    cleanup rule — apply that rule's label instead.
+
+    Reuses the one-writer ``remove_label``/``apply_label`` (provider-first), so
+    the fix sticks across the next re-sync. Best-effort and self-contained: a
+    provider failure updates the local mirror and returns what it managed, never
+    unwinding what ``rule_feedback`` already taught."""
+    provider: Any = None
+    pmid = ""
+    try:
+        provider, pmid, _aid, _store = await _provider_for_message(
+            db, message_id, owner)
+        if provider is not None and not await provider.authenticate():
+            provider = None  # local-mirror only; can't reach the provider
+    except Exception:  # noqa: BLE001
+        provider, pmid = None, ""
+
+    add_labels = (await _rule_label_values(db, add_rule_id)
+                  if add_rule_id else [])
+    to_remove: set[str] = set()
+    for rid in remove_rule_ids:
+        if rid:
+            to_remove.update(await _rule_label_values(db, rid))
+    # Never strip a label we're about to (re-)apply as the correct one.
+    to_remove -= set(add_labels)
+
+    removed: list[str] = []
+    for lbl in sorted(to_remove):
+        await remove_label(db, provider, message_id, pmid, lbl)
+        removed.append(lbl)
+    added: list[str] = []
+    for lbl in add_labels:
+        await apply_label(db, provider, message_id, pmid, lbl)
+        added.append(lbl)
+    return {"removed": removed, "added": added}
 
 
 def _now_iso() -> str:

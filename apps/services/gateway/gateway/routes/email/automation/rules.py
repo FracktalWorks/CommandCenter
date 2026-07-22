@@ -1017,6 +1017,33 @@ async def rule_feedback(
                     if await _teach(rid, True):
                         learned.append({"rule_id": rid, "exclude": True})
 
+        # Make the correction VISIBLE on the message it came from (H6): strip the
+        # label(s) the wrongly-matched cleanup rules put on, and apply the correct
+        # rule's label when the fix names one. Teaching alone fixed only FUTURE
+        # mail; the offending message kept its wrong chip. Conversation-status
+        # corrections set thread state (above), not a category, so they're
+        # excluded here. Best-effort — a provider hiccup never unwinds the teach.
+        label_correction: dict[str, list[str]] | None = None
+        if req.message_id:
+            wrong_rids = [
+                rid for rid in req.matched_rule_ids
+                if rid and rid != req.expected and not _conv_key(rid)]
+            add_rid = (req.expected
+                       if (req.expected not in ("none", "new")
+                           and not _conv_key(req.expected))
+                       else None)
+            if wrong_rids or add_rid:
+                from gateway.routes.email.automation.runner import (  # noqa: PLC0415
+                    correct_applied_labels,
+                )
+                try:
+                    label_correction = await correct_applied_labels(
+                        db, req.account_id, req.message_id,
+                        user.email or "anonymous",
+                        remove_rule_ids=wrong_rids, add_rule_id=add_rid)
+                except Exception:  # noqa: BLE001
+                    label_correction = None
+
         # The half that teaches rather than bypasses. Attached to the rule the
         # user says is correct; account-wide when they are only saying what this
         # ISN'T, since there is no one rule to hang it on.
@@ -1028,13 +1055,17 @@ async def rule_feedback(
                 req.message_id, req.thread_id)
 
         await db.commit()
+        changed_label = bool(
+            label_correction
+            and (label_correction["removed"] or label_correction["added"]))
         created = bool(
-            learned or taught
+            learned or taught or changed_label
             or (status_correction and status_correction.get("ok")))
         return {"created": created, "learned": learned, "sender": sender,
                 "subject_keyword": subject_kw or None,
                 "signals": [t for t, _ in signals],
-                "status_correction": status_correction}
+                "status_correction": status_correction,
+                "label_correction": label_correction}
     finally:
         await db.close()
 

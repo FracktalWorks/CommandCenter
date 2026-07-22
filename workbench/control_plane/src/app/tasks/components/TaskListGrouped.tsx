@@ -30,6 +30,7 @@ import {
   type ColumnDef,
 } from "../lib/columns";
 import { ColumnHeader, ColumnCell } from "./ListColumns";
+import { StatusPill } from "./StatusPill";
 
 // A status-segmented list (Jira backlog style): rows grouped under collapsible
 // stage headers with counts. In Manual sort the rows are drag-reorderable —
@@ -511,8 +512,15 @@ function RowContent({
         className="tech-transition hidden cursor-pointer items-center gap-2 py-2.5 pr-3.5 hover:bg-secondary/40 sm:grid"
         style={{ gridTemplateColumns: grid }}
       >
-        <span className="min-w-0 truncate text-sm text-foreground">
-          {item.title}
+        {/* Name cell. When the list is grouped by a lens the section header no
+            longer carries the stage, so the status pill rides in front of the
+            title (right where the eye associates it with the task) instead of
+            eating a fixed column and crushing the name. */}
+        <span className="flex min-w-0 items-center gap-2">
+          {showStage && <StatusPill item={item} />}
+          <span className="min-w-0 truncate text-sm text-foreground">
+            {item.title}
+          </span>
         </span>
         {columns.map((c) => (
           <ColumnCell

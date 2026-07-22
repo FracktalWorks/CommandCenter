@@ -11,7 +11,6 @@ import {
   ListTree,
   GripVertical,
   Check,
-  ChevronDown,
   CalendarClock,
   Trash2,
 } from "lucide-react";
@@ -19,10 +18,10 @@ import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import { useCardActions } from "../lib/useCardActions";
 import { durationLabel, initials, isOverdue, relativeTime } from "../lib/utils";
-import { stageAccent } from "../lib/stageColors";
 import { contextAccent } from "../lib/contextColors";
 import { SourceBadge } from "./SourceBadge";
 import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
+import { StatusPill } from "./StatusPill";
 import { ContextMenu, type CtxItem } from "./ContextMenu";
 
 const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
@@ -227,7 +226,7 @@ export function TaskCard({
           className="tech-transition group flex w-full cursor-pointer flex-col items-stretch gap-1 border-b border-border px-3.5 py-2.5 text-left hover:bg-secondary/50 sm:flex-row sm:items-center sm:gap-2.5"
         >
           <div className="flex min-w-0 flex-1 items-center gap-2.5">
-            {showStage && <StagePill actions={actions} />}
+            {showStage && <StatusPill item={item} />}
             <span className="min-w-0 flex-1 truncate text-sm text-foreground">
               {item.title}
             </span>
@@ -295,7 +294,7 @@ export function TaskCard({
           )
         )}
         <div className="flex items-start gap-2 pr-4">
-          {!selectMode && showStage && <StagePill actions={actions} />}
+          {!selectMode && showStage && <StatusPill item={item} />}
           <p className="text-[13px] font-medium leading-snug text-foreground">
             {item.title}
           </p>
@@ -329,78 +328,6 @@ export function TaskCard({
       </div>
       {contextMenu}
     </>
-  );
-}
-
-// The card's STATUS INDICATOR — the single status control on a card (there is
-// no separate Done button; the last stage is "Done" like any other stage). It
-// shows the task's current Next-Actions stage in the SAME per-stage colour the
-// board columns and list headers use (via stageAccent), so status reads the
-// same everywhere. Click opens a small stage list to change it — picking the
-// last stage marks the task done (see useCardActions). Works for local tasks
-// and reflects synced tasks' mapped stage. stopPropagation so it never opens
-// the card.
-function StagePill({
-  actions,
-}: {
-  actions: ReturnType<typeof useCardActions>;
-}) {
-  const { stages, currentStage, setStage } = actions;
-  const [open, setOpen] = useState(false);
-  // Colour the pill by the current stage, keyword-aware and consistent with the
-  // board/list (Done → green, In-progress → blue, …).
-  const accent = stageAccent(
-    currentStage,
-    Math.max(0, stages.indexOf(currentStage)),
-    stages.length,
-  );
-  return (
-    <div className="relative shrink-0" onClick={(e) => e.stopPropagation()}>
-      <button
-        type="button"
-        onClick={() => setOpen((v) => !v)}
-        title="Change status"
-        aria-label={`Status: ${currentStage}. Click to change.`}
-        className={[
-          "tech-transition inline-flex items-center gap-1 rounded-full border border-transparent px-1.5 py-0.5 text-[10px] font-medium hover:brightness-95",
-          accent.soft,
-          accent.text,
-        ].join(" ")}
-      >
-        <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${accent.dot}`} />
-        <span className="max-w-[84px] truncate">{currentStage}</span>
-        <ChevronDown className="h-2.5 w-2.5 opacity-60" />
-      </button>
-      {open && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute left-0 top-full z-50 mt-1 min-w-[150px] overflow-hidden rounded-lg border border-border bg-popover py-1 shadow-xl">
-            {stages.map((s, i) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => {
-                  setStage(s);
-                  setOpen(false);
-                }}
-                className="tech-transition flex w-full items-center gap-2 px-2.5 py-1.5 text-left text-[12px] text-foreground hover:bg-secondary"
-              >
-                <span
-                  className={`h-1.5 w-1.5 shrink-0 rounded-full ${stageAccent(s, i, stages.length).dot}`}
-                />
-                <span className="min-w-0 flex-1 truncate">{s}</span>
-                {s === currentStage && (
-                  <Check className="h-3 w-3 shrink-0 text-primary" />
-                )}
-              </button>
-            ))}
-          </div>
-        </>
-      )}
-    </div>
   );
 }
 

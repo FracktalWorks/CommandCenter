@@ -164,6 +164,51 @@ async def _fetch_sender_reply_examples(
     return "\n\n---\n\n".join(parts)
 
 
+async def _fetch_sent_fewshot(
+    db: Any, account_id: str, subject: str | None, body: str | None, *,
+    exclude_thread_id: str | None = None, limit: int = 3,
+) -> str:
+    """The account's OWN voice on SIMILAR messages — the "draft in my voice"
+    few-shot. Embeds what's being replied to, cosine-matches the account's Sent
+    mail via ``email_embeddings`` (pgvector), and returns the top quote-stripped
+    bodies. Distinct from ``sender_examples`` (past replies to THIS sender, which
+    show the relationship): these show the REGISTER for this kind of message,
+    from any recipient.
+
+    Returns "" when semantic search is off (``embed_query`` → None → no LLM cost)
+    or nothing is embedded yet, so the drafter just falls back to its other
+    context. The thread being replied to is excluded so it can't echo itself."""
+    try:
+        from email_ingestion.email_embeddings import (  # noqa: PLC0415
+            _embed_text,
+            embed_query,
+        )
+        qvec = await embed_query(_embed_text(subject, body))
+        if qvec is None:
+            return ""
+        qlit = "[" + ",".join(f"{x:.7f}" for x in qvec) + "]"
+        rows = (await db.execute(text(
+            """SELECT em.body_text, em.snippet
+               FROM email_embeddings ee
+               JOIN email_messages em ON em.id = ee.message_id
+               WHERE ee.account_id = :aid
+                 AND LOWER(COALESCE(em.folder, '')) = 'sent'
+                 AND (:extid = '' OR COALESCE(em.thread_id, '') <> :extid)
+               ORDER BY ee.embedding <=> CAST(:qv AS vector) ASC
+               LIMIT :lim"""
+        ), {"aid": account_id, "qv": qlit,
+            "extid": exclude_thread_id or "", "lim": limit})).fetchall()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.sent_fewshot_failed", error=str(exc)[:160])
+        return ""
+    parts: list[str] = []
+    for r in rows:
+        b = split_quoted_text((r.body_text or r.snippet or "").strip())[0].strip()
+        if b:
+            parts.append(b[:800])
+    return "\n\n---\n\n".join(parts)
+
+
 async def _fetch_reply_memories(
     db: Any, account_id: str, email: dict[str, str], *, limit: int = 6,
 ) -> str:
@@ -675,6 +720,16 @@ async def _llm_draft_reply(
             "tone, brevity and directness; do NOT reuse their specific facts:\n"
             f"{examples[:2500]}\n\n" if examples else ""
         )
+        # "Draft in my voice": the owner's own Sent mail on semantically similar
+        # topics (any recipient). Shows register/phrasing for THIS kind of
+        # message; sender_examples above shows the relationship. Empty when
+        # semantic search is off or nothing is embedded yet.
+        voice = (email.get("sent_examples") or "").strip()
+        voice_block = (
+            "Examples of how you (the owner) write about similar things — match "
+            "this voice, phrasing and length; do NOT reuse their specific "
+            f"facts:\n{voice[:2500]}\n\n" if voice else ""
+        )
         memories = (email.get("reply_memories") or "").strip()
         memories_block = (
             "Learned reply memories relevant to this sender/topic (advisory — "
@@ -713,6 +768,7 @@ async def _llm_draft_reply(
             f"{attach_block}\n"
             f"{memories_block}"
             f"{examples_block}"
+            f"{voice_block}"
             f"{thread_block}"
             "Latest message — reply to THIS, taking the thread above into "
             f"account:\n{(email.get('body', '') or '')[:_DRAFT_BODY_MAX_CHARS]}\n"
@@ -1261,6 +1317,11 @@ async def _build_reply_context(
             db, account_id, frm.get("email", "")),
     }
     email["reply_memories"] = await _fetch_reply_memories(db, account_id, email)
+    # "Draft in my voice": semantically-nearest SENT mail (any recipient) to what
+    # we're replying to. No-op + no cost when semantic search is off.
+    email["sent_examples"] = await _fetch_sent_fewshot(
+        db, account_id, row.subject, email["body"],
+        exclude_thread_id=row.thread_id or "")
     return email
 
 

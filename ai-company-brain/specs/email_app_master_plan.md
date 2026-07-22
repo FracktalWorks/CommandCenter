@@ -106,13 +106,25 @@ Four phases, strictly ordered by the PM lens from §1:
 
 Effort: **XS** <2h · **S** ≤1d · **M** 2-4d · **L** ~1wk.
 
+### Remaining work at a glance (updated 2026-07-22, post-Phase-2 + same-day review)
+
+Phases 1-3 are **done and live** (every non-parked item). What remains, by kind:
+
+| Kind | Item | Where |
+|---|---|---|
+| **Live verification** (user, minutes) | Label-learn cycle · manual Sync + Resync · digest send retry (post-#148/#150) · ghost-merge dry→`--apply` · Phase-1 1.3/1.4/1.5 after a real cycle | §4, §5 notes |
+| **Parked — dedicated session** (user's call) | 2.5 semantic search deep-dive (also unblocks dormant 3.1 voice few-shot) · 3.3b schedule-send (design ready; the one auto-send feature) | §5 2.5, §6 3.3 |
+| **Owner decisions pending** | Build-or-kill batch-delete (§6 table — all six verified still present; one S PR) · manual pattern-add flow (badge exists, no create UI) · read-state push-on-open | §6, §7 Tier 2 |
+| **Before any 2nd user/account** | Phase 4 Tier 1 (OAuth owner-binding → session-across-I/O → LLM cap → N+1s/indexes → 401 mid-sync retry) | §7 |
+| **Hygiene, fold into next touch** | `followups.py` inline label-mirror → `actions.apply_label` · ~20 hand-rolled provider pairs → `provider_session` | §5 notes |
+
 ---
 
-## 4. Phase 1 — Stop the lying (P0) — ✅ COMPLETE (branch `fix/email-phase1-stop-the-lying`, 2026-07-22)
+## 4. Phase 1 — Stop the lying (P0) — ✅ COMPLETE, **MERGED + DEPLOYED** (PR #114, 2026-07-22)
 
-All twelve items done. Landed as 11 commits on the branch (1.1 was already fixed by
-PR #113 mid-review). 706 email unit tests pass (+10 new); repo-wide CI-blocking lint
-(`F821,F601,F602,F502,F7,B006`) and frontend `tsc` clean. Not yet merged/deployed.
+All twelve items done (1.1 was already fixed by PR #113 mid-review). Merged to main as
+PR #114 and live on the VPS. 706 email unit tests pass (+10 new); repo-wide CI-blocking
+lint (`F821,F601,F602,F502,F7,B006`) and frontend `tsc` clean.
 
 | # | Fix | Status | Where |
 |---|---|---|---|
@@ -135,8 +147,8 @@ PR #113 mid-review). 706 email unit tests pass (+10 new); repo-wide CI-blocking 
 the `provisional` boolean column replacing the `'· auto'` reason-suffix self-heal marker
 (review §3.1 P2-4) — a schema change; fold into 2.2's `classify_and_apply` work.
 
-**Next:** open the PR, deploy, verify on the live account (esp. 1.3/1.4/1.5 need a real
-sync cycle to confirm — see memory note on verifying-after-a-cycle), then start Phase 2.
+**Live verification owed on the real account** (1.3/1.4/1.5 need a real sync cycle to
+confirm — see memory note on verifying-after-a-cycle).
 
 ---
 
@@ -161,13 +173,19 @@ sync cycle to confirm — see memory note on verifying-after-a-cycle), then star
 | ~~2.8~~ | ~~`email_attachments` UNIQUE `(message_id, provider_attachment_id)` + dedupe migration~~ ✅ **mig 88 + both inserts (`messages.py:512,668`) name the arbiter** | Closes the dormant Gmail duplication bug at the schema level | S | review §3.2 |
 | ~~2.9~~ | ~~Shared `JobTracker` with sequence-token guard; concurrency guard on manual sweeps~~ ✅ **`automation/jobs.py::JobTracker` adopted by cleaner/runner/replyzero; `is_running` guard at `cleanup.py:937,1000` + `replyzero.py:1812`** | Kills the job-clobbering class | S | review §2.1 |
 | ~~2.10~~ | ~~Sync-loop exponential backoff + orphaned-`running` sweep; cache `masterCategories`; Graph 429 `Retry-After`~~ ✅ **`scheduler.py::_next_backoff`(cap 3600s)+`_close_orphaned_syncs`; `outlook.py` per-instance `_master_categories` cache + `_MAX_RETRY_AFTER_SECS` 429 handling** | Stops hammering a revoked account every 300s; cuts every Outlook label apply from 3 Graph calls to 2 | S-M | review §2.1, §3.2 |
-| 2.11 ◐ | `provider_session()` context helper (instantiate → authenticate → persist rotated creds on exit) replacing the boilerplate copies. **PARTIAL (helper + request paths done):** `core.provider_session` async CM added, persists rotated creds in a `finally` only on clean exit; converted the clean user-scoped request paths (hydrate, both draft-create handlers, digest test-send, mailto-unsubscribe) + 6 tests. **Remains (Tier-A follow-up):** the large `/send` handler (persist sits mid-body among post-send learning) and the background/scheduler jobs (digest scheduled-send `digest.py:448`, cleaner sweep, senders categorize) — those query by `account_id` with no user, so they need an UNSCOPED loader variant + live-cycle validation. | Credential-rotation safety by construction | S | review §3.1 |
+| 2.11 ✅ | `provider_session()` context helper (instantiate → authenticate → persist rotated creds on exit) replacing the boilerplate copies. **DONE (#139 + #144 + #150):** `core.provider_session` async CM (persists rotated creds in a `finally` only on clean exit; `user_email=None` = unscoped background mode via `_provider_for_account_any`). Converged: hydrate, both draft-create handlers, digest test-send + scheduled-send, mailto-unsubscribe, `/send`, drafts upsert/send, cleaner sweep, senders background jobs, and (#150, found in review) `download_attachment` — which had been the one site with NO persist *and* no `authenticate()` at all. **Scope honesty:** ~20 hand-rolled instantiate+persist PAIRS remain (`messages.py` ×5, `folders.py`, `cleanup.py` ×4, `replyzero.py` ×5, `runner.py` ×8, `sync.py::_ensure_subscription`, `followups.py` ×2) — each spot-checked to pair its persist correctly, so no dropped-token defect today; converge them opportunistically when touching those files, not as a dedicated pass. | Credential-rotation safety by construction | S | review §3.1 |
 | ~~2.12~~ | ~~Promote the repair script's damaged-threads SQL to a maintained health metric~~ ✅ **`analytics.py::count_damaged_conversation_threads` (shared w/ the repair script) → `data_health.damaged_threads`** | The #110 invariant gets a permanent regression alarm instead of a one-off script | S | review §3.1 |
 
 **Exit criterion:** no behavior-bearing logic exists in two places; every invariant has exactly
 one enforcement point.
 
-**PHASE 2 COMPLETE (2026-07-22).** Every item closed: 2.1 (sync-core collapse + scheduler label-learning), 2.2 (one apply+watermark enforcement point), 2.3 (runner/replyzero splits + LIKE-collision fix), 2.4, 2.6 (mig 89 + ghost-merge script — the one-off `--apply` run on live data is the user's call, after a sync backfills `internet_message_id`), 2.7 (digest = projection + one dialog), 2.8, 2.9, 2.10, 2.11 (provider_session everywhere), 2.12. The single deliberate exception: **2.5 semantic search stays PARKED by the user** (dedicated deep-dive session). Landed as PRs #139, #140, #141, #143, #144, #145, #146, and the 2.7 PR.
+**PHASE 2 COMPLETE (2026-07-22).** Every item closed: 2.1 (sync-core collapse + scheduler label-learning), 2.2 (one apply+watermark enforcement point), 2.3 (runner/replyzero splits + LIKE-collision fix), 2.4, 2.6 (mig 89 + ghost-merge script — the one-off `--apply` run on live data is the user's call, after a sync backfills `internet_message_id`), 2.7 (digest = projection + one dialog), 2.8, 2.9, 2.10, 2.11 (provider_session on all write/background paths), 2.12. The single deliberate exception: **2.5 semantic search stays PARKED by the user** (dedicated deep-dive session). Landed as PRs #139, #140, #141, #143, #144, #145, #146, #147.
+
+**Post-completion review (2026-07-22, same day — three parallel audit agents over merged main, findings hand-verified).** The structure held: single watermark writer confirmed (`runner._stamp_processed_watermark` is the only `rules_processed_at` UPDATE in the tree), no import cycles among the split automation modules, re-exports + route flattening correct, digest verified as a true projection (no leftover local aggregate SQL), `_run_manual_sync` delegation semantics verified (ownership check, error propagation, post-sync hook, `full=True` on resync). Three defects found and fixed same-day:
+- **#148 (prod 500, user-reported):** the digest commitments query bound `:aid` in both a uuid and a text context — Postgres deduces ONE type per prepared-statement parameter, so it failed on *every* call — and its best-effort `except` left the transaction aborted, killing the next query in `/digest/send` while the preview looked fine. Fixed: single-context bind + rollback-and-log in the catch. **Lesson recorded:** a mocked-DB test cannot catch asyncpg type deduction, and `except Exception: return []` on a shared session is a transaction poison — every best-effort DB catch must roll back.
+- **#150:** the same no-rollback pattern in `learning.py`'s two gate probes (directly upstream of the audit-row INSERT on the same session) — patched with rollback + log.
+- **#150:** `download_attachment` was the last RAW provider call site (no `authenticate()`, no rotated-cred persist) — converted to `provider_session`.
+Remaining hygiene from the review (SMELL, not defects): `followups.py:177` re-implements the local label-mirror append inline instead of calling `actions.apply_label` — fold into the next touch of that file.
 
 ---
 
@@ -210,31 +228,69 @@ bridge (needs a scoping design so account-scoped memories stay private).
 | Unfinished tool merges (M7 `manage_rule`, M8 `manage_knowledge`, M13 `manage_labels`) | **Close the plan at 42 tools** — measured value of further merging is low; delete the fossil card keys instead |
 | `Support`/`Unknown` sender categories, `'user'` category-override reservation | Remove from the API vocabulary or build the manual set-category flow in 3.6 |
 
+**Verified 2026-07-22:** every kill-candidate above is *still present in code* — the table records
+recommendations, not executed work. Evidence: `inbound.py` exists unlaunched (only its own
+docstring references its start function); `GET /newsletters` (`senders.py:465`) and
+`POST /artifacts/import` (`send.py:205`) have zero frontend callers; `useEmails.ts` has zero
+importers; the Slack/Telegram "Coming soon" block renders at `RulesTab.tsx:1215-1244`;
+`delay_minutes` is an editable input at `RulesTab.tsx:1180-1189`; `email_folders` is written at
+`folders.py:177-187` and read nowhere. `/email/ai/chat` + `/email/ai/quick-action` are
+*deliberately* retained for external callers (in-app clients removed by design) — not part of the
+kill batch. **One approved batch-delete PR (S) closes all six.** Also confirmed still open from
+3.6's deferral: the manual pattern-add flow — the `USER`/"Manual" badge exists but there is no UI
+or API client to create a pattern by hand.
+
 ---
 
 ## 7. Phase 4 — Harden and scale (P3)
 
-Security batch (carried from the 2026-07 codebase audit + review, still open):
-- **OAuth owner-binding**: drop the `user_email` query-param identity override; authenticate the
-  callback; move `_oauth_states` to Redis+TTL.
-- **SSRF DNS-rebind**: pin the resolved IP into the transport (custom `AsyncHTTPTransport`) in
-  the unsubscribe fetcher and image proxy (both currently resolve-then-refetch).
-- Workspace path containment via `Path.is_relative_to` (two `startswith` sites in `send.py`).
-- Webhook `clientState`: reject when stored state is NULL; `secrets.compare_digest`.
-- Sanitize provider error text before persisting/surfacing; encode `Content-Disposition`.
+> **Re-verified against main 2026-07-22** (agent audit, file:line evidence checked): every item
+> below is STILL REAL. Ranked by urgency **before any second user/account is added** — today,
+> with one trusted user on one account, none of these is an active incident.
 
-Scale prerequisites (before any second user/account):
-- 401-retry mid-sync (refresh + rebuild client + retry once) in both providers.
-- Stop holding DB sessions across LLM/provider I/O in rule paths.
-- LLM batching + shared concurrency cap / per-account daily budget for rule matching.
-- N+1s + indexes: `list_accounts` unread counts, `_load_rules` per-email action fetch,
-  `email_messages(account_id, thread_id, received_at DESC)`, FK on
-  `email_thread_status.last_message_id`.
-- Read-state two-way sync on open (today local-only despite the comment); Outlook star support
-  decision (local-only today).
+**Tier 1 — must land before a second user/account:**
+1. **OAuth owner-binding** (`transport/oauth.py`) — the one cross-tenant *security* defect:
+   `oauth_authorize` accepts `user_email` as a Query param and lets it **override** the
+   authenticated identity (`oauth.py:36,119`); `oauth_callback` is unauthenticated (no
+   `get_current_user`); `_oauth_states` is a process-local dict with no TTL (`oauth.py:28`) —
+   breaks under >1 worker and leaks entries forever. Fix: bind to the session identity, signed
+   state + authenticated/verified callback, Redis+TTL.
+2. **Stop holding DB sessions across LLM/provider I/O** — `_run_rules_job` opens one session
+   and holds it across the whole message loop including `_llm_json` awaits (`engine.py:747,815`)
+   and provider HTTP in the apply path; same in `_process_past_emails_job`. One account = a
+   pinned connection for seconds; N accounts = pool exhaustion.
+3. **LLM concurrency cap / per-account budget** — per-run bounds exist (run limit 50,
+   process-past 2000, 366-day span) but nothing coordinates *across* jobs/accounts; each account
+   gets its own perpetual loop task plus user-triggered background jobs. A second account
+   doubles uncapped classify traffic. Add a shared semaphore + per-account daily budget.
+4. **N+1s + indexes** — `list_accounts` runs one COUNT per account (`accounts.py:63-72`, twice);
+   `_load_rules` fetches actions per-rule (`rules.py:118-125`) and is called once **per email**
+   in the match loop. Missing: `email_messages(account_id, thread_id, received_at DESC)`
+   composite; `email_thread_status.last_message_id` has no FK and no index.
+5. **401-retry mid-sync** — providers refresh only at the initial `authenticate()` probe; the
+   cached client bakes a static bearer header (`outlook.py:119-130`, `gmail.py:172-183`) and
+   never rebuilds on a mid-stream 401 (Outlook retries only 429). A token expiring during a deep
+   backfill fails the whole cycle. Fix: refresh + rebuild client + retry once.
+
+**Tier 2 — real but lower urgency (defense-in-depth / polish):**
+- **SSRF DNS-rebind**: unsubscribe fetcher (`senders.py:586-644`) and image proxy
+  (`attachments.py:74-104`) both resolve-then-refetch by hostname; redirect-based SSRF is
+  already closed (manual per-hop revalidation), the residual is the rebind TOCTOU. Fix by
+  pinning the resolved IP into the transport.
+- **Webhook `clientState`** (`sync.py:346`): NULL stored state accepts unverified notifications;
+  `!=` not `secrets.compare_digest`. Impact ceiling is a forced sync, not data injection.
+- **Workspace path containment**: three `startswith` sites (`send.py:78,227`,
+  `actions.py:200`); `.resolve()` already kills `../`, residual is the sibling-prefix case →
+  `Path.is_relative_to`.
+- **Read-state on open is local-only** (`messages.py:617-624`, no provider write-back on the
+  implicit mark-read; explicit PATCH *is* two-way). Decide: push on open, or drop the stale
+  "two-way" comment. Outlook star support decision (local-only today).
+- Sanitize provider error text before persisting/surfacing.
 - Agent config hygiene: regenerate `config.json` `own_tool_scope` from `_TOOLS`; fix
   `instructions.md` references to ungranted tools.
 - BYOK `run_agent` (non-streaming) DeepSeek-primary (mirror the streaming pre-injection block).
+- Opportunistic: converge the ~20 remaining hand-rolled provider instantiate+persist pairs onto
+  `provider_session` when touching their files (see 2.11 scope note).
 
 ---
 

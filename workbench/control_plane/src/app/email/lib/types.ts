@@ -429,6 +429,34 @@ export interface ExecutedRule {
   rule_actions?: RuleAction[];
 }
 
+/** One event in a single message's audit timeline (GET /messages/{id}/timeline).
+ *  "received" = the mail arrived; "rule" = a rule matched & acted; "skipped" =
+ *  a run where nothing matched. */
+export interface MessageTimelineEvent {
+  kind: "received" | "rule" | "skipped";
+  /** ISO timestamp; null only for malformed audit rows. */
+  at: string | null;
+  /** received: sender display name/email. */
+  from?: string;
+  from_email?: string;
+  /** rule/skipped: */
+  rule_id?: string | null;
+  rule_name?: string | null;
+  /** APPLIED | SKIPPED | FAILED | UNDONE | REJECTED … */
+  status?: string;
+  automated?: boolean;
+  actions?: string[];
+  action_errors?: { type: string; error: string }[];
+  match_source?: string | null;
+  reason?: string | null;
+}
+
+export interface MessageTimeline {
+  message_id: string;
+  subject: string;
+  events: MessageTimelineEvent[];
+}
+
 /** Result of running rules against a single message (Test tab Test/Apply). */
 export interface RunMessageResult {
   matched: boolean;

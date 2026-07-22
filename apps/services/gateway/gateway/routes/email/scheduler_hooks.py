@@ -112,6 +112,27 @@ async def process_new_mail(account_id: str) -> None:
                      error=str(exc)[:200])
 
 
+async def learn_label_changes(account_id: str, changes: list) -> None:
+    """Post-sync hook: learn FROM-classification patterns from the manual label
+    changes the scheduler captured during persist (``(message, old_categories)``
+    pairs). Runs the SAME orchestration the manual-sync route uses, so the
+    background sync path — which is what actually polls every ~300s — finally
+    learns from label changes instead of dropping them.
+    """
+    from gateway.routes.email.transport.sync import (
+        learn_from_label_change_events,
+    )
+
+    db = await _get_db()
+    try:
+        await learn_from_label_change_events(db, account_id, changes)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("email.label_learn_hook_failed", account_id=account_id,
+                     error=str(exc)[:200])
+    finally:
+        await db.close()
+
+
 def register_email_post_sync_hooks() -> None:
     """Register every email post-sync callback into the scheduler registry.
 
@@ -143,5 +164,6 @@ def register_email_post_sync_hooks() -> None:
         send_digest=_maybe_send_digest,
         send_follow_up_reminders=_follow_up,
         ensure_subscription=_ensure_subscription,
+        learn_label_changes=learn_label_changes,
     )
     _log.info("email.post_sync_hooks_registered")

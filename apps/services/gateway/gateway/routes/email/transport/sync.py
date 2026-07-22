@@ -152,6 +152,38 @@ async def _apply_label_status_corrections(
                          account_id=account_id, error=str(exc)[:160])
 
 
+async def learn_from_label_change_events(
+    db: Any, account_id: str, changes: list,
+) -> None:
+    """Learn FROM-classification patterns from ``(message, old_categories)``
+    pairs captured during a sync's persist — the user's manual label add/removes,
+    seen as a category delta between what a message HAD stored and what the
+    provider now reports.
+
+    This is the shared orchestration the scheduler's post-sync hook runs so the
+    BACKGROUND sync path learns exactly like the manual-sync route's inline pass
+    does. Before this, only the manual route learned; the scheduler — which is
+    what actually polls every ~300s — never did, so every label change a user
+    made in their client between manual syncs was silently dropped.
+
+    Best-effort and idempotent-ish: an empty map (no rules) or empty ``changes``
+    is a no-op; ``_learn_from_label_changes`` guards each pattern write.
+    """
+    if not changes:
+        return
+    label_rule_map, conv_rule_keys = await _build_label_rule_map(db, account_id)
+    if not label_rule_map:
+        return
+    status_corrections: dict[str, str] = {}
+    for msg, old_categories in changes:
+        await _learn_from_label_changes(
+            db, account_id, msg, old_categories,
+            getattr(msg, "categories", []) or [], label_rule_map,
+            conv_rule_keys, status_corrections)
+    await db.commit()
+    await _apply_label_status_corrections(account_id, status_corrections)
+
+
 class SyncRequest(BaseModel):
     account_id: str
     # Force a deep re-sync (≈1 year, all folders) even if the initial sync

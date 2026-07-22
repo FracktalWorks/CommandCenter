@@ -26,7 +26,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 from sqlalchemy.pool import NullPool
 
 from email_ingestion.persist import upsert_message
-from email_ingestion.post_sync import hooks, run_hook
+from email_ingestion.post_sync import hooks, run_hook, run_label_learn_hook
 from email_ingestion.providers.factory import build_provider
 from email_ingestion.reconcile import reconcile_full_snapshot
 
@@ -238,6 +238,15 @@ async def _sync_account(
                 since=floor,
             )
 
+            # Capture pre-upsert categories so the post-sync learner can detect
+            # label changes the USER made in their mail client — the upsert
+            # overwrites categories on a categories-authoritative provider
+            # (Outlook), destroying the "before". Only when a learner is wired
+            # AND this is an incremental sync: a deep backfill replays history
+            # and would mislearn (the same gate the manual route uses).
+            learn_labels = hooks.learn_label_changes is not None and not do_deep
+            label_changes: list[Any] = []
+
             # Persist messages
             persisted_count = 0
             for msg in sync_result.messages:
@@ -253,12 +262,40 @@ async def _sync_account(
                     )
                     persisted_count += 1
                 else:
+                    old_categories = None
+                    if learn_labels:
+                        ocr = (await db.execute(
+                            text(
+                                "SELECT categories FROM email_messages "
+                                "WHERE account_id = :aid "
+                                "AND provider_message_id = :pid"
+                            ),
+                            {"aid": account_id,
+                             "pid": msg.provider_message_id},
+                        )).fetchone()
+                        # Existing rows only — a brand-new message has no prior
+                        # categories to diff against.
+                        old_categories = (
+                            list(ocr.categories or []) if ocr else None)
                     # ONE shared ingest upsert (message + attachments); see
                     # email_ingestion.persist.upsert_message.
                     await upsert_message(db, account_id, msg)
                     persisted_count += 1
+                    if old_categories is not None:
+                        label_changes.append((msg, old_categories))
 
             await db.commit()
+
+            # Revive label-learning on the scheduler path (email item 2.1): the
+            # gateway-registered hook learns FROM-classification patterns from
+            # the manual label changes captured above. Best-effort — a learning
+            # failure never fails the sync.
+            try:
+                await run_label_learn_hook(
+                    hooks.learn_label_changes, account_id, label_changes)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("sync.label_learn_failed account=%s err=%s",
+                               account_id, str(exc)[:160])
 
             # Reconcile provider-side deletions on a full snapshot (Outlook):
             # trash local messages that vanished from the mailbox entirely.

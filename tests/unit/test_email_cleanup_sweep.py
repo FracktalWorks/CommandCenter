@@ -343,6 +343,32 @@ async def test_dry_run_pages_by_the_full_window() -> None:
     assert res["exhausted"] is True
 
 
+def test_the_sweep_never_touches_conversation_threads() -> None:
+    """A message inside a live conversation is not the cleaner's to label.
+
+    The thread's status IS its classification (#110), and most messages of a
+    statused thread legitimately carry no chip — the status label sits on the
+    latest inbound message only. The sweep read those bare messages as
+    "uncategorized" and projected the sender's category back on: observed live
+    2026-07-22, a repair stripped stale Receipt/Marketing chips from
+    conversation threads and the very next sweep cycle re-applied 36 of them.
+    The two systems fought; this is the armistice line.
+
+    FYI is deliberately absent from the exclusion: it is also the default
+    stamp for "nothing matched" (#111), so excluding FYI threads would have
+    put 3,226 of the live account's 3,535 threads — newsletters included —
+    beyond the cleaner's reach.
+    """
+    src = c._CLEANUP_SCOPE
+    assert "email_thread_status" in src, (
+        "the sweep no longer excludes conversation threads"
+    )
+    assert "'NEEDS_REPLY', 'AWAITING', 'DONE'" in src
+    assert "'FYI'" not in src, (
+        "excluding FYI threads makes almost the whole mailbox unsweepable"
+    )
+
+
 def test_the_sweep_never_scans_outbound_mail() -> None:
     """Cleanup categories describe INBOUND bulk mail — a message you wrote is
     never a Newsletter.

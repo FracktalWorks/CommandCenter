@@ -321,6 +321,9 @@ class IMAPProvider(BaseEmailProvider):
         body_html: str | None = None,
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
+        attachments: list[dict[str, Any]] | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Save a draft by APPENDing it to the Drafts mailbox with the \\Draft flag."""
         username = self.credentials.get(
@@ -329,6 +332,10 @@ class IMAPProvider(BaseEmailProvider):
         msg = MIMEText(body_text, "plain" if not body_html else "html")
         msg["From"] = username
         msg["To"] = ", ".join(to)
+        if cc:
+            msg["Cc"] = ", ".join(a for a in cc if a)
+        if bcc:
+            msg["Bcc"] = ", ".join(a for a in bcc if a)
         msg["Subject"] = subject
         if reply_to_message_id:
             msg["In-Reply-To"] = reply_to_message_id

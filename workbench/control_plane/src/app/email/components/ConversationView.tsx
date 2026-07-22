@@ -316,7 +316,7 @@ export function DraftCard({
   }) => void;
 }) {
   const {
-    deleteEmail, selectedAccountId, saveDraft, sendDraft, sendEmail, accounts,
+    deleteEmail, selectedAccountId, saveDraft, sendDraft, accounts,
   } = useEmailStore();
   const ownEmail = accounts
     .find((a) => a.id === (draft.accountId || selectedAccountId))
@@ -446,6 +446,8 @@ export function DraftCard({
           accountId,
           draftId: draft.id,
           to: recipients(),
+          cc: ccList(),
+          bcc: bccList(),
           subject: draft.subject || "",
           body: combinedBody(),
         });
@@ -463,36 +465,20 @@ export function DraftCard({
     if (!accountId || recipients().length === 0) return;
     setSending(true);
     try {
-      if (ccList().length || bccList().length) {
-        // Cc/Bcc aren't carried by the draft write-path, so send via the full
-        // path (threaded) and remove the saved draft so it doesn't linger.
-        await sendEmail({
-          accountId,
-          to: recipients(),
-          cc: ccList(),
-          bcc: bccList(),
-          subject: draft.subject || "",
-          bodyText: combinedBody(),
-          replyToMessageId: replyTo?.providerMessageId,
-        });
-        onDismiss?.();
-        try {
-          await deleteEmail(draft.id);
-        } catch {
-          /* the message was sent; the leftover draft cleanup is best-effort */
-        }
-      } else {
-        // Persist the latest edits, then send THIS draft natively (Drafts →
-        // Sent, no duplicate). sendDraft removes it from the list.
-        await saveDraft({
-          accountId,
-          draftId: draft.id,
-          to: recipients(),
-          subject: draft.subject || "",
-          body: combinedBody(),
-        });
-        await sendDraft(accountId, draft.id);
-      }
+      // Persist the latest edits — Cc/Bcc included, now carried on the provider
+      // draft — then send THIS draft natively (Drafts → Sent, no duplicate).
+      // sendDraft removes it from the list. No more full-send detour for a Cc'd
+      // reply, which used to start a fresh (unthreaded) message.
+      await saveDraft({
+        accountId,
+        draftId: draft.id,
+        to: recipients(),
+        cc: ccList(),
+        bcc: bccList(),
+        subject: draft.subject || "",
+        body: combinedBody(),
+      });
+      await sendDraft(accountId, draft.id);
       // Surface the reply in the conversation at once + pull the real copy.
       const sentThreadId = replyTo?.threadId || draft.threadId;
       onSent?.(

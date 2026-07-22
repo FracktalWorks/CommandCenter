@@ -1396,23 +1396,31 @@ async def _upsert_local_draft(
     db: Any, account_id: str, provider_message_id: str, *,
     thread_id: str | None, owner_email: str, to_email: str,
     subject: str, body: str,
+    cc: list[str] | None = None, bcc: list[str] | None = None,
 ) -> str:
     """Persist a just-created/updated provider draft into ``email_messages`` so it
     shows in the Drafts folder and in-thread immediately — without waiting for the
     next provider sweep. Keyed on ``(account_id, provider_message_id)`` so that
     later Drafts sync updates this same row instead of duplicating it. Returns the
-    local message id."""
+    local message id.
+
+    ``cc``/``bcc`` are mirrored locally too, so a reopened draft shows its Cc/Bcc
+    from our own copy immediately instead of waiting for the next Drafts sweep."""
     res = await db.execute(text(
         """INSERT INTO email_messages
              (id, account_id, provider_message_id, thread_id, folder,
-              from_address, to_addresses, subject, body_text, snippet,
+              from_address, to_addresses, cc_addresses, bcc_addresses,
+              subject, body_text, snippet,
               is_read, is_starred, is_flagged, received_at, synced_at)
            VALUES (:id, :aid, :pmid, :tid, 'drafts',
-              :from_addr, :to_addrs, :subject, :body, :snippet,
+              :from_addr, :to_addrs, :cc_addrs, :bcc_addrs,
+              :subject, :body, :snippet,
               true, false, false, now(), now())
            ON CONFLICT (account_id, provider_message_id) DO UPDATE SET
              thread_id = COALESCE(EXCLUDED.thread_id, email_messages.thread_id),
              to_addresses = EXCLUDED.to_addresses,
+             cc_addresses = EXCLUDED.cc_addresses,
+             bcc_addresses = EXCLUDED.bcc_addresses,
              subject = EXCLUDED.subject,
              body_text = EXCLUDED.body_text,
              snippet = EXCLUDED.snippet,
@@ -1425,6 +1433,10 @@ async def _upsert_local_draft(
         "from_addr": json.dumps({"name": "", "email": owner_email or ""}),
         "to_addrs": json.dumps(
             [{"name": "", "email": to_email}] if to_email else []),
+        "cc_addrs": json.dumps(
+            [{"name": "", "email": a} for a in (cc or []) if a]),
+        "bcc_addrs": json.dumps(
+            [{"name": "", "email": a} for a in (bcc or []) if a]),
         "subject": subject or "", "body": body or "",
         "snippet": (body or "")[:200],
     })
@@ -1453,6 +1465,8 @@ class DraftUpsertRequest(BaseModel):
     # Local id of the message being replied to (creates a threaded reply draft).
     reply_to_message_id: str | None = None
     to: list[str] = []
+    cc: list[str] = []
+    bcc: list[str] = []
     subject: str = ""
     body: str = ""
 
@@ -1479,6 +1493,8 @@ async def upsert_draft(
             raise HTTPException(status_code=401, detail="Email account auth failed")
 
         to = [t for t in (req.to or []) if t]
+        cc = [c for c in (req.cc or []) if c]
+        bcc = [b for b in (req.bcc or []) if b]
         subject = req.subject or ""
         thread_id: str | None = None
 
@@ -1497,12 +1513,13 @@ async def upsert_draft(
                     drow.provider_message_id, to=to or None,
                     subject=subject or None, body_text=req.body,
                     thread_id=thread_id or None,
+                    cc=cc, bcc=bcc,
                 )
             except NotImplementedError:
                 # No in-place update primitive → make a fresh draft, drop the old.
                 provider_id = await provider.create_draft(
                     to=to, subject=subject, body_text=req.body,
-                    thread_id=thread_id or None,
+                    thread_id=thread_id or None, cc=cc, bcc=bcc,
                 )
                 try:
                     await provider.trash_message(drow.provider_message_id)
@@ -1531,17 +1548,17 @@ async def upsert_draft(
             provider_id = await provider.create_draft(
                 to=to, subject=subject, body_text=req.body,
                 reply_to_message_id=rrow.provider_message_id,
-                thread_id=thread_id or None,
+                thread_id=thread_id or None, cc=cc, bcc=bcc,
             )
         else:
             provider_id = await provider.create_draft(
-                to=to, subject=subject, body_text=req.body,
+                to=to, subject=subject, body_text=req.body, cc=cc, bcc=bcc,
             )
 
         local_id = await _upsert_local_draft(
             db, req.account_id, provider_id, thread_id=thread_id,
             owner_email=owner_email, to_email=(to[0] if to else ""),
-            subject=subject, body=req.body,
+            subject=subject, body=req.body, cc=cc, bcc=bcc,
         )
         await _persist_rotated_creds(db, store, req.account_id, provider)
         await db.commit()

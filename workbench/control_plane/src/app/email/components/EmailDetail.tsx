@@ -528,11 +528,12 @@ export function EmailDetail({ email }: EmailDetailProps) {
     const isForward = replyMode === "forward";
     const target = replyTargetRef.current ?? email;
     try {
-      // Native draft-send only when there's no Cc/Bcc and no attachments — the
-      // draft write-path doesn't carry them, so those go via the full send (and
-      // the auto-saved draft, if any, is discarded so it doesn't linger).
+      // Native draft-send now carries Cc/Bcc too (stored on the provider draft),
+      // so only attachments/artifacts still force a full send — the draft
+      // write-path can't upload attachment content yet. The auto-saved draft, if
+      // any, is discarded in the full-send branch so it doesn't linger.
       if (
-        draftIdRef.current && ccArr.length === 0 && bccArr.length === 0 &&
+        draftIdRef.current &&
         replyAttachments.length === 0 && replyArtifacts.length === 0
       ) {
         const saved = await saveDraft({
@@ -540,6 +541,8 @@ export function EmailDetail({ email }: EmailDetailProps) {
           draftId: draftIdRef.current,
           replyToMessageId: isForward ? undefined : target.id,
           to: toArr,
+          cc: ccArr,
+          bcc: bccArr,
           subject: replySubject(),
           body: composedReply(replyBody),
         });

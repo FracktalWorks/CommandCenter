@@ -488,6 +488,10 @@ class OutlookProvider(BaseEmailProvider):
         resp.raise_for_status()
         return "sent"  # Graph API doesn't return the sent message ID
 
+    @staticmethod
+    def _recipient_list(addrs: list[str] | None) -> list[dict[str, Any]]:
+        return [{"emailAddress": {"address": a}} for a in (addrs or []) if a]
+
     async def create_draft(
         self,
         to: list[str],
@@ -497,6 +501,8 @@ class OutlookProvider(BaseEmailProvider):
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Create an Outlook draft. For replies, use createReply (keeps threading)
         then set the body; otherwise create a standalone draft message. File
@@ -506,6 +512,14 @@ class OutlookProvider(BaseEmailProvider):
             "contentType": "html" if body_html else "text",
             "content": body_html or body_text,
         }
+        # Cc/Bcc live ON the draft so they survive a reopen/edit (Graph stores
+        # ccRecipients/bccRecipients on the message). Only set when provided, so
+        # createReply's prefilled recipients aren't wiped by an empty list.
+        recipients: dict[str, Any] = {}
+        if cc is not None:
+            recipients["ccRecipients"] = self._recipient_list(cc)
+        if bcc is not None:
+            recipients["bccRecipients"] = self._recipient_list(bcc)
         if reply_to_message_id:
             resp = await client.post(
                 f"/me/messages/{reply_to_message_id}/createReply"
@@ -513,7 +527,7 @@ class OutlookProvider(BaseEmailProvider):
             resp.raise_for_status()
             draft_id = resp.json().get("id", "")
             patch = await client.patch(
-                f"/me/messages/{draft_id}", json={"body": body_block}
+                f"/me/messages/{draft_id}", json={"body": body_block, **recipients}
             )
             patch.raise_for_status()
             await self._attach_files(client, draft_id, attachments)
@@ -521,9 +535,8 @@ class OutlookProvider(BaseEmailProvider):
         message: dict[str, Any] = {
             "subject": subject,
             "body": body_block,
-            "toRecipients": [
-                {"emailAddress": {"address": addr}} for addr in to
-            ],
+            "toRecipients": self._recipient_list(to),
+            **recipients,
         }
         resp = await client.post("/me/messages", json=message)
         resp.raise_for_status()
@@ -539,6 +552,8 @@ class OutlookProvider(BaseEmailProvider):
         body_text: str | None = None,
         body_html: str | None = None,
         thread_id: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Update an existing Outlook draft in place (PATCH /me/messages/{id}).
 
@@ -559,9 +574,11 @@ class OutlookProvider(BaseEmailProvider):
         if subject is not None:
             patch["subject"] = subject
         if to is not None:
-            patch["toRecipients"] = [
-                {"emailAddress": {"address": addr}} for addr in to if addr
-            ]
+            patch["toRecipients"] = self._recipient_list(to)
+        if cc is not None:
+            patch["ccRecipients"] = self._recipient_list(cc)
+        if bcc is not None:
+            patch["bccRecipients"] = self._recipient_list(bcc)
         if patch:
             resp = await client.patch(f"/me/messages/{draft_id}", json=patch)
             resp.raise_for_status()

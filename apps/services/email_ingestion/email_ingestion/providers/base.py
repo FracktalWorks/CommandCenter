@@ -476,8 +476,14 @@ class BaseEmailProvider(ABC):
         reply_to_message_id: str | None = None,
         thread_id: str | None = None,
         attachments: list[dict[str, Any]] | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Create a DRAFT message (not sent) on the provider; return its id.
+
+        ``cc`` / ``bcc`` (optional): additional recipients stored ON the draft, so
+        a draft with a Cc survives a reopen/edit instead of silently losing it (the
+        reason the composer used to fall back to a full send for any Cc'd reply).
 
         ``attachments`` (optional): a list of ``{"filename": str, "content":
         bytes, "mime_type": str}`` to attach to the draft.
@@ -498,6 +504,8 @@ class BaseEmailProvider(ABC):
         body_text: str | None = None,
         body_html: str | None = None,
         thread_id: str | None = None,
+        cc: list[str] | None = None,
+        bcc: list[str] | None = None,
     ) -> str:
         """Update an existing draft in place; return the (possibly new) draft id.
 

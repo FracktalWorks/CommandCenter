@@ -530,6 +530,19 @@ export function CalendarView() {
               {dueSoon.length} due soon
             </span>
           )}
+          {/* (Re)start the day — the ritual is never locked out: skipped the
+              morning banner, or want to re-pick the One Thing? Run it again. */}
+          {!dayClosed && (
+            <button
+              type="button"
+              onClick={() => setStartupOpen(true)}
+              title="Start (or restart) your day — breathe · review · commit the One Thing"
+              className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
+            >
+              <Sun className="h-3.5 w-3.5" />
+              <span className="hidden sm:inline">Start day</span>
+            </button>
+          )}
           {hasTodayActivity && (
             <button
               type="button"
@@ -728,10 +741,10 @@ export function CalendarView() {
             oneThingId={oneThingId}
             onToggleOneThing={handleToggleOneThing}
             dueSoon={dueSoon}
+            urgentWindowHours={settings.urgentWindowHours}
             doneStats={doneStats}
             onPlan={() => setPlanMode("plan")}
             onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
-            onScheduleToday={(t) => schedule(t, startOfDay(new Date()))}
             onOpen={openFocus}
           />
         )}
@@ -2267,8 +2280,12 @@ function TimeGrid({
         new Date(clampEnd(ev.clientY)),
         "Resized block",
       );
-      resizingRef.current = false;
       setResizing(null);
+      // Release AFTER the trailing click event, so finishing a resize doesn't
+      // also open the task card (the block's click handler checks this ref).
+      window.setTimeout(() => {
+        resizingRef.current = false;
+      }, 0);
     };
     window.addEventListener("pointermove", onMove);
     window.addEventListener("pointerup", onUp);
@@ -2480,7 +2497,15 @@ function TimeGrid({
                     key={b.item.id}
                     draggable
                     onDragStart={(e) => onBlockDragStart(e, b)}
-                    onClick={(e) => e.stopPropagation()}
+                    onClick={(e) => {
+                      // Click anywhere on the block → open the task card
+                      // (controls stopPropagation; drag/resize never emit a
+                      // plain click). stopPropagation keeps the day column's
+                      // empty-slot tap from also firing.
+                      e.stopPropagation();
+                      if (resizingRef.current) return; // trailing resize click
+                      onOpen(b.item.id);
+                    }}
                     onClickCapture={(e) => {
                       // a long-press already opened the menu — swallow the
                       // click that follows so it doesn't also open the task
@@ -2689,7 +2714,10 @@ function TimeGrid({
                       type="button"
                       aria-label="Unschedule"
                       title="Remove from calendar"
-                      onClick={() => onUnschedule(b.item)}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        onUnschedule(b.item);
+                      }}
                       className="tech-transition absolute right-0.5 top-0.5 rounded p-0.5 text-muted-foreground opacity-0 hover:bg-black/10 hover:text-destructive group-hover:opacity-100"
                     >
                       <X className="h-3 w-3" />
@@ -2902,10 +2930,10 @@ function UnscheduledRail({
   oneThingId,
   onToggleOneThing,
   dueSoon,
+  urgentWindowHours,
   doneStats,
   onPlan,
   onSchedule,
-  onScheduleToday,
   onOpen,
 }: {
   tasks: GtdItem[];
@@ -2916,22 +2944,32 @@ function UnscheduledRail({
   leveragedMins: number;
   oneThingId: string | null;
   onToggleOneThing: (id: string) => void;
+  /** approaching deadlines — rendered as a badge + sort boost ON the normal
+   *  cards (one list, no duplication; every card drags + timeboxes alike). */
   dueSoon: { item: GtdItem; days: number }[];
+  urgentWindowHours: number;
   doneStats: { count: number; mins: number };
   onPlan: () => void;
   onSchedule: (t: GtdItem) => void;
-  onScheduleToday: (t: GtdItem) => void;
   onOpen: (id: string) => void;
 }) {
   const over = capacityMins > capacityTarget;
   const leveragePct =
     capacityMins > 0 ? Math.round((leveragedMins / capacityMins) * 100) : 0;
-  // The ★ One Thing surfaces first — if it isn't timeboxed yet, it's the next
-  // thing to drag on.
+  // ONE list: ★ One Thing first, then approaching deadlines (soonest first),
+  // then the rest by the priority matrix. Deadline pressure is a property of
+  // a card, not a separate pile.
+  const dueDays = new Map(dueSoon.map((d) => [d.item.id, d.days]));
   const ordered = [...tasks].sort((a, b) => {
     const oa = a.id === oneThingId ? 0 : 1;
     const ob = b.id === oneThingId ? 0 : 1;
-    return oa - ob;
+    if (oa !== ob) return oa - ob;
+    const da = dueDays.get(a.id) ?? Infinity;
+    const db = dueDays.get(b.id) ?? Infinity;
+    if (da !== db) return da - db;
+    return (
+      priorityRank(a, urgentWindowHours) - priorityRank(b, urgentWindowHours)
+    );
   });
   return (
     <aside className="hidden w-64 shrink-0 flex-col border-l border-border bg-card md:flex">
@@ -2978,51 +3016,6 @@ function UnscheduledRail({
         )}
       </div>
       <div className="flex-1 overflow-y-auto p-2">
-        {/* Deadline radar — due-soon tasks that aren't timeboxed yet. */}
-        {dueSoon.length > 0 && (
-          <div className="mb-2">
-            <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-warning">
-              <AlertTriangle className="h-3 w-3" /> Due soon
-            </p>
-            <div className="flex flex-col gap-1">
-              {dueSoon.map(({ item, days }) => (
-                <div
-                  key={item.id}
-                  className="rounded-md border border-warning/40 bg-warning/5 p-1.5"
-                >
-                  <button
-                    type="button"
-                    onClick={() => onOpen(item.id)}
-                    className="block w-full truncate text-left text-[12px] text-foreground"
-                  >
-                    {item.title}
-                  </button>
-                  <div className="mt-0.5 flex items-center justify-between">
-                    <span
-                      className={`text-[10px] font-medium ${
-                        days <= 1 ? "text-destructive" : "text-warning"
-                      }`}
-                    >
-                      {days <= 0
-                        ? "due today"
-                        : days === 1
-                          ? "due tomorrow"
-                          : `due in ${days}d`}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={() => onScheduleToday(item)}
-                      title="Timebox into today"
-                      className="tech-transition inline-flex items-center gap-0.5 rounded bg-warning/20 px-1.5 py-0.5 text-[10px] font-medium text-warning hover:bg-warning/30"
-                    >
-                      <CalendarPlus className="h-3 w-3" /> Today
-                    </button>
-                  </div>
-                </div>
-              ))}
-            </div>
-          </div>
-        )}
         {tasks.length === 0 ? (
           <p className="px-1 py-4 text-center text-[11px] text-muted-foreground">
             Nothing to schedule — inbox zero on next actions. 🎉
@@ -3050,7 +3043,9 @@ function UnscheduledRail({
                     ? "border-amber-400/70 bg-amber-500/10"
                     : t.leveraged
                       ? "border-amber-500/40 bg-background/60 hover:border-amber-400/60"
-                      : "border-border bg-background/60 hover:border-primary/40",
+                      : dueDays.has(t.id)
+                        ? "border-warning/40 bg-warning/5 hover:border-warning/70"
+                        : "border-border bg-background/60 hover:border-primary/40",
                 ].join(" ")}
               >
                 <div className="flex items-start gap-1">
@@ -3108,11 +3103,33 @@ function UnscheduledRail({
                       {t.energy}
                     </span>
                   )}
+                  {dueDays.has(t.id) && (
+                    <span
+                      className={[
+                        "inline-flex items-center gap-0.5 font-medium",
+                        (dueDays.get(t.id) as number) <= 1
+                          ? "text-destructive"
+                          : "text-warning",
+                      ].join(" ")}
+                    >
+                      <AlertTriangle className="h-3 w-3" />
+                      {(dueDays.get(t.id) as number) <= 0
+                        ? "due today"
+                        : dueDays.get(t.id) === 1
+                          ? "due tomorrow"
+                          : `due in ${dueDays.get(t.id)}d`}
+                    </span>
+                  )}
                 </div>
                 <button
                   type="button"
                   onClick={() => onSchedule(t)}
-                  className="tech-transition mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded bg-primary/10 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/20"
+                  className={[
+                    "tech-transition mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[11px] font-medium",
+                    dueDays.has(t.id)
+                      ? "bg-warning/20 text-warning hover:bg-warning/30"
+                      : "bg-primary/10 text-primary hover:bg-primary/20",
+                  ].join(" ")}
                 >
                   <CalendarPlus className="h-3 w-3" />
                   Timebox

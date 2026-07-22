@@ -576,14 +576,22 @@ export function BulkUnsubscribeView({
         const st = await getCleanupStatus(accountId);
         if (st.status === "done") {
           const n = st.categorized ?? st.applied ?? 0;
+          const failed = st.failed ?? 0;
           setNotice(
             `Categorized ${n} email${n === 1 ? "" : "s"} from patterns you've ` +
-              `already taught the assistant.`
+              `already taught the assistant.` +
+              (failed
+                ? ` ${failed} couldn't be written to the mailbox and were left as-is.`
+                : "")
           );
           break;
         }
         if (st.status === "error") {
-          setError("Auto-categorize failed — see the assistant history.");
+          setError(
+            st.error
+              ? `Auto-categorize failed: ${st.error}`
+              : "Auto-categorize failed — see the assistant history."
+          );
           break;
         }
         // Show real progress rather than an opaque spinner: a whole-mailbox

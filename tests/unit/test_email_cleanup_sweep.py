@@ -250,16 +250,29 @@ async def test_sweep_pages_until_the_mailbox_runs_dry() -> None:
 
     class _DB:
         async def execute(self, clause, params=None):
+            # A live sweep looks up the account so it can authenticate before
+            # writing labels; give it one (auth succeeds below).
+            if "SELECT provider, credentials_encrypted" in str(clause):
+                return MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(
+                    provider="gmail", credentials_encrypted="x")))
             return MagicMock(fetchone=MagicMock(return_value=None),
                              fetchall=MagicMock(return_value=[]))
 
         async def commit(self): ...
         async def close(self): ...
 
+    provider = MagicMock()
+    provider.authenticate = AsyncMock(return_value=True)
+
     import gateway.routes.email.automation.runner as runner
 
     with patch.object(c, "_SWEEP_PAGE", 2), \
             patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch.object(c, "_persist_rotated_creds", AsyncMock()), \
+            patch("acb_llm.key_store.get_key_store",
+                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
+                      return_value="{}")))), \
             patch.object(c, "_uncategorized_inbox", fake_page), \
             patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
             patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
@@ -276,6 +289,104 @@ async def test_sweep_pages_until_the_mailbox_runs_dry() -> None:
     assert seen == ["m1", "m2", "m3"]
     # Offsets step past only the rows that stayed uncategorized.
     assert pages == [(2, 0), (2, 0), (2, 1)]
+
+
+async def test_live_sweep_aborts_when_provider_auth_fails() -> None:
+    """A live run whose provider won't authenticate must ABORT with an error,
+    not press on writing local-only labels. Those get logged APPLIED but Outlook
+    wipes them on the next sync, so the message re-enters scope and the sweep
+    re-applies it every cycle — false audit rows for writes that never landed."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    applied: list[str] = []
+
+    async def fake_page(db, aid, limit, offset=0, internal=frozenset()):
+        return [_msg("news@site.com", mid="m1")]
+
+    async def fake_apply(db, provider, mid, pmid, label):
+        applied.append(mid)
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            if "SELECT provider, credentials_encrypted" in str(clause):
+                return MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(
+                    provider="outlook", credentials_encrypted="x")))
+            return MagicMock(fetchone=MagicMock(return_value=None),
+                             fetchall=MagicMock(return_value=[]))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    provider = MagicMock()
+    provider.authenticate = AsyncMock(return_value=False)  # auth fails
+    import gateway.routes.email.automation.runner as runner
+
+    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch("acb_llm.key_store.get_key_store",
+                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
+                      return_value="{}")))), \
+            patch.object(c, "_uncategorized_inbox", fake_page), \
+            patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
+            patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
+            patch.object(c, "_label_tallies", AsyncMock(return_value=(
+                {"news@site.com": {"Newsletter": 6}}, {}))), \
+            patch.object(runner, "apply_label", fake_apply):
+        res = await c.sweep_uncategorized("acc-1", 100, dry_run=False)
+
+    assert res.get("error") == "provider authentication failed"
+    assert res["categorized"] == 0
+    assert applied == []  # nothing was written
+
+
+async def test_a_failed_apply_is_counted_not_swallowed() -> None:
+    """When a provider label write fails (e.g. Graph throttling), the row is
+    counted in `failed` — otherwise `categorized` and the decided total silently
+    disagree and a throttled run still reports success."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    async def fake_page(db, aid, limit, offset=0, internal=frozenset()):
+        if offset == 0:
+            return [_msg("news@site.com", mid="m1"),
+                    _msg("news@site.com", mid="m2")]
+        return []
+
+    async def flaky_apply(db, provider, mid, pmid, label):
+        if mid == "m2":
+            raise RuntimeError("429 Too Many Requests")
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            if "SELECT provider, credentials_encrypted" in str(clause):
+                return MagicMock(fetchone=MagicMock(return_value=SimpleNamespace(
+                    provider="gmail", credentials_encrypted="x")))
+            return MagicMock(fetchone=MagicMock(return_value=None),
+                             fetchall=MagicMock(return_value=[]))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    provider = MagicMock()
+    provider.authenticate = AsyncMock(return_value=True)
+    import gateway.routes.email.automation.runner as runner
+
+    with patch.object(c, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(c, "_instantiate_provider", MagicMock(return_value=provider)), \
+            patch.object(c, "_persist_rotated_creds", AsyncMock()), \
+            patch("acb_llm.key_store.get_key_store",
+                  MagicMock(return_value=MagicMock(decrypt=MagicMock(
+                      return_value="{}")))), \
+            patch.object(c, "_uncategorized_inbox", fake_page), \
+            patch.object(c, "_load_rule_patterns", AsyncMock(return_value={})), \
+            patch.object(c, "_rule_label_by_id", AsyncMock(return_value={})), \
+            patch.object(c, "_label_tallies", AsyncMock(return_value=(
+                {"news@site.com": {"Newsletter": 6}}, {}))), \
+            patch.object(runner, "apply_label", flaky_apply):
+        res = await c.sweep_uncategorized("acc-1", 100, dry_run=False)
+
+    assert res["categorized"] == 1        # only m1 landed
+    assert res["failed"] == 1             # m2 was counted, not swallowed
+    assert res["by_category"]["Newsletter"] == 2  # both were DECIDED
 
 
 async def test_sweep_honours_an_explicit_limit_and_says_it_stopped_short() -> None:

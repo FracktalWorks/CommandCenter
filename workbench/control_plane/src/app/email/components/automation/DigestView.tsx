@@ -291,7 +291,7 @@ function DigestConfigDialog({
           )}
           {s.digest_frequency !== "OFF" && (
             <div>
-              <label className="text-[11px] text-muted-foreground">Time of day</label>
+              <label className="text-[11px] text-muted-foreground">Time of day (UTC)</label>
               <input
                 type="time"
                 value={s.digest_time_of_day}

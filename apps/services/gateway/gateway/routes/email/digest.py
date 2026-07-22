@@ -13,6 +13,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, Query
+from gateway.routes.email.automation.senders import canonical_cleanup_category
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
@@ -45,7 +46,14 @@ async def _generate_digest(
         "SELECT LOWER(email_address) AS self FROM email_accounts WHERE id = :aid"
     ), {"aid": account_id})).fetchone()
     params["self"] = (getattr(self_row, "self", "") or "") if self_row else ""
-    cats = ["Cold Email" if c == "Cold Emails" else c for c in (categories or [])]
+    # The UI offers rule names ("Cold Emails", "newsletter", " Marketing "); the
+    # sender rollup stores canonical cleanup categories. Normalise each selection
+    # through the same canonicaliser the cleaner uses, so casing/whitespace/plural
+    # variants match and a name that isn't a category (which could never match a
+    # sender category anyway) is dropped rather than silently emptying the section.
+    raw_cats = ["Cold Email" if c == "Cold Emails" else c
+                for c in (categories or [])]
+    cats = sorted({canonical_cleanup_category(c) for c in raw_cats} - {None})
     cat_clause = ""
     if cats:
         params["cats"] = cats
@@ -79,13 +87,14 @@ async def _generate_digest(
             GROUP BY 2 ORDER BY 3 DESC LIMIT 8"""
     ), params)).fetchall()
 
+    # Threads the user actually owes a reply on — the Reply Zero classification,
+    # not a heuristic. The old query counted EVERY thread whose latest message
+    # sat in the inbox (all-time, thousands on a real mailbox) and labelled it
+    # "awaiting your reply" — a large meaningless constant. email_thread_status
+    # is the same source analytics._backlog reads; NEEDS_REPLY is "I owe them".
     needs = (await db.execute(text(
-        """WITH latest AS (
-             SELECT DISTINCT ON (thread_id) thread_id, folder
-             FROM email_messages
-             WHERE account_id = :aid AND thread_id IS NOT NULL
-             ORDER BY thread_id, received_at DESC)
-           SELECT COUNT(*) AS c FROM latest WHERE LOWER(folder) = 'inbox'"""
+        """SELECT COUNT(*) FROM email_thread_status
+           WHERE account_id = :aid AND status = 'NEEDS_REPLY'"""
     ), {"aid": account_id})).scalar() or 0
 
     period = "day" if period_days <= 1 else ("week" if period_days <= 7 else f"{period_days} days")
@@ -122,6 +131,17 @@ async def _generate_digest(
     }
 
 
+async def _configured_categories(db: Any, account_id: str) -> list[str]:
+    """The account's saved digest_categories, so the manual preview and the
+    'send now' endpoint filter exactly like the scheduled digest — otherwise the
+    user previews one thing and the scheduler emails another."""
+    row = (await db.execute(text(
+        "SELECT digest_categories FROM email_assistant_settings "
+        "WHERE account_id = :aid"
+    ), {"aid": account_id})).fetchone()
+    return list(getattr(row, "digest_categories", None) or []) if row else []
+
+
 @router.get("/digest")
 async def get_digest(
     account_id: str = Query(...),
@@ -133,7 +153,8 @@ async def get_digest(
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         days = 7 if period == "week" else 1
-        return await _generate_digest(db, account_id, days)
+        cats = await _configured_categories(db, account_id)
+        return await _generate_digest(db, account_id, days, cats)
     finally:
         await db.close()
 
@@ -153,7 +174,8 @@ async def send_digest(
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         days = 7 if req.period == "week" else 1
-        digest = await _generate_digest(db, req.account_id, days)
+        cats = await _configured_categories(db, req.account_id)
+        digest = await _generate_digest(db, req.account_id, days, cats)
         acc = (await db.execute(text(
             "SELECT provider, credentials_encrypted, email_address "
             "FROM email_accounts WHERE id = :id"

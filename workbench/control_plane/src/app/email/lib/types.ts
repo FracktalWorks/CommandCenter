@@ -469,7 +469,8 @@ export interface AssistantSettings {
   digest_categories: string[];
   /** 0=Sun … 6=Sat — used when digest_frequency is WEEKLY. */
   digest_day_of_week: number;
-  /** HH:MM (24h, account-local) the digest is sent. */
+  /** HH:MM (24h, UTC) the digest is sent. The backend treats this as UTC; there
+   *  is no per-account timezone yet, so the UI labels it UTC to stay honest. */
   digest_time_of_day: string;
   /** Email the digest to the account address. */
   digest_send_to_email: boolean;

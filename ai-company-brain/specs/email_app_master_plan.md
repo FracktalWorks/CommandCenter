@@ -108,24 +108,35 @@ Effort: **XS** <2h · **S** ≤1d · **M** 2-4d · **L** ~1wk.
 
 ---
 
-## 4. Phase 1 — Stop the lying (P0)
+## 4. Phase 1 — Stop the lying (P0) — ✅ COMPLETE (branch `fix/email-phase1-stop-the-lying`, 2026-07-22)
 
-| # | Fix | Why (customer impact) | Where | Effort | Source |
-|---|---|---|---|---|---|
-| 1.1 | ~~Cleaner sweep labels conversation messages~~ | **DONE — PR #113** | `_CLEANUP_SCOPE` | — | review §3.1 |
-| 1.2 | `_upsert_rule_pattern` `return True` + return-value test (+ reason enum for guard refusals) | Fix-with-pin saves the pattern but tells the user "Nothing was saved" — direct gaslighting of the teaching loop | `rules.py:775` | XS | review §2.2 |
-| 1.3 | Cleaner failure honesty: abort live sweep on auth failure; surface `st.error` in UI; add `failed` counter; count `by_category` on success | Failed sweeps report "Categorized N emails"; auth outage mints false APPLIED rows every 5 min | `cleanup.py`, `BulkUnsubscribeView.tsx` | S | review §2.1 |
-| 1.4 | Engine tri-state (`matched \| no_match \| unavailable`); never stamp `rules_processed_at` on `unavailable`; thread the `confident` flag into stored status (real `provisional` column, not the `'· auto'` suffix) | An LLM outage silently consumes mail *forever* — the single worst trust failure available | `engine.py`, `runner.py`, `replyzero.py` | M | review §3.1 |
-| 1.5 | Mirror-after-provider-ack in `_apply_rule_actions` (per action) | Failed actions fabricate local state; a failed TRASH permanently excludes itself from its own repair | `runner.py:1956-2116` | M | review §2.6 |
-| 1.6 | Digest truth: needs-reply from `email_thread_status`; category filter through `canonical_cleanup_category` (all sections or relabel); pass categories into preview/manual send; timezone column or honest "UTC" label | The one *push* surface opens with a meaningless number and a filter that matches nothing | `digest.py` | S-M | review §2.5 |
-| 1.7 | `undoSend` restores `pendingSend` wholesale (attachments/artifacts/cc/bcc/bodyHtml + quote separation) | Undo silently destroys the email you were protecting | `emailStore.ts`, `ComposePanel.tsx` | S | review §3.2 |
-| 1.8 | Central risk-annotation confirmation gating in the executor; annotate `digest(send=True)`, `unsubscribe_sender`, `manage_inbox(trash)`, `install_default_rules(reset)`, `sync_account(purge)` | "The agent never silently sends" is currently false for one tool and un-enforced for four destructive ones | executor + `agents.py` | S-M | review §3.4 |
-| 1.9 | Quote-strip (`split_quoted_text`) at all three learning seams: `_learn_from_sent`, writing-style generation, sender examples | The style system is learning your correspondents' prose; also fires a wasted LLM extraction on every unedited send | `drafting.py`, `send.py`, `assistant.py` | S | review §2.4 |
-| 1.10 | `/messages` FTS → `websearch_to_tsquery` (fixes agent `find_urgent`/`find_priority`) | The assistant's "find urgent" almost never matches — a headline AI promise that quietly does nothing | `messages.py:214` | XS | parity plan §6 + review |
-| 1.11 | Trust panel: split `failed_actions` into `repairable` (matches retry predicate, unwindowed) + `permanent`; gate the Repair button on `repairable`; fix dead "Try again" button; honest zero-state copy on query failure | The trust panel itself must never mislead | `analytics.py`, `AnalyticsView.tsx` | S | review §2.6 |
-| 1.12 | LLM-failure fallback in `_llm_draft_reply` → NO_DRAFT sentinel on automation paths (keep human fallback only for the sync UI path) | An outage auto-files boilerplate drafts and feeds them into edit-learning | `drafting.py:688` | XS | review §2.4 |
+All twelve items done. Landed as 11 commits on the branch (1.1 was already fixed by
+PR #113 mid-review). 706 email unit tests pass (+10 new); repo-wide CI-blocking lint
+(`F821,F601,F602,F502,F7,B006`) and frontend `tsc` clean. Not yet merged/deployed.
 
-**Exit criterion:** every number, toast, and status the app shows is either true or absent.
+| # | Fix | Status | Where |
+|---|---|---|---|
+| 1.1 | Cleaner sweep labels conversation messages | ✅ **PR #113** | `_CLEANUP_SCOPE` |
+| 1.2 | `_upsert_rule_pattern` returns True on success (Fix-with-pin no longer says "Nothing was saved") | ✅ `9031ee1` | `rules.py` |
+| 1.3 | Cleaner failure honesty: abort live sweep on auth failure; `_sweep_job` stamps error; `failed` counter; UI surfaces the real error | ✅ `e71bed4` | `cleanup.py`, `BulkUnsubscribeView.tsx` |
+| 1.4 | Engine tri-state via `LLMUnavailable`; never stamp `rules_processed_at` on an outage; all 5 callers handle it | ✅ `640ddfc` | `engine.py`, `runner.py`, `replyzero.py` |
+| 1.5 | Provider-first in `_apply_rule_actions` (a refused action leaves no phantom local folder) | ✅ `a119f2e` | `runner.py` |
+| 1.6 | Digest truth: needs-reply from `email_thread_status`; category filter via `canonical_cleanup_category`; preview==sent; UTC-honest labels | ✅ `a49f14c` | `digest.py`, UI |
+| 1.7 | `undoSend` restores cc/attachments/artifacts + splits the body back into main+quote | ✅ `fb4a289` | `emailStore.ts`, `ComposePanel.tsx`, `page.tsx` |
+| 1.8 | Fail-closed `_confirm_destructive` on the 5 unguarded tools + `@_annotate_risk` | ✅ `9ff75a2` | `agents.py` |
+| 1.9 | Quote-strip at all three learning seams | ✅ `f089e11` | `drafting.py`, `assistant.py` |
+| 1.10 | `/messages` FTS → `websearch_to_tsquery` (fixes `find_urgent`) | ✅ `50f8e25` | `messages.py` |
+| 1.11 | Trust panel split into `repairable`/`permanent_failures`; button gated on repairable; dead "Try again" fixed | ✅ `111eee3` | `analytics.py`, `AnalyticsView.tsx` |
+| 1.12 | LLM-failure draft fallback → sentinel on automation paths (human template only interactive) + no Mem0 pollution | ✅ `02b77a0` | `drafting.py` |
+
+**Exit criterion met:** every number, toast, and status the app shows is either true or absent.
+
+**Deferred from 1.4 into Phase 2** (deliberately out of scope for the minimal outage fix):
+the `provisional` boolean column replacing the `'· auto'` reason-suffix self-heal marker
+(review §3.1 P2-4) — a schema change; fold into 2.2's `classify_and_apply` work.
+
+**Next:** open the PR, deploy, verify on the live account (esp. 1.3/1.4/1.5 need a real
+sync cycle to confirm — see memory note on verifying-after-a-cycle), then start Phase 2.
 
 ---
 

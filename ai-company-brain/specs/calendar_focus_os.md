@@ -11,6 +11,13 @@ tomorrow, close the day) and Focus Mode (pomodoro/flow, subtask checklist,
 `energy_note` seam, so no backend or schema changes were needed. F2+ (breaks
 in the packer, batch blocks, Email windows, Waiting-on chase, `gtd_time_blocks`)
 and the Focus Shield remain per §7.
+**Follow-up (same day):** block context menu (right-click on desktop,
+long-press on touch — Open · Focus · Done · One Thing · Pin · Reschedule… ·
+Remove from calendar · Delete), undoable scheduling (every timebox/move/
+resize/unschedule/plan-apply/roll-over/+15-reflow lands in the undo toast via
+`applySchedule`), and mobile parity: the long-press menu is the touch path to
+everything the hover micro-buttons do, and week view keeps a readable minimum
+column width (horizontal scroll) on phones.
 
 This doc evaluates the calendar shipped via `calendar_timeboxing.md` +
 `calendar_ux_review.md` and proposes the configuration that makes it the

@@ -363,6 +363,11 @@ interface UndoSnapshot {
    *  upstream. archivedTo is the direction that was applied (true = archived). */
   archivedIds?: string[];
   archivedTo?: boolean;
+  /** Ids whose SCHEDULING (time block / pin) this change touched — an
+   *  unschedule, drag/resize, roll-over, plan-apply or focus-mode reflow.
+   *  Undo re-patches their scheduled_start/end + flexible from the snapshot
+   *  rows, so a mis-drag on the calendar is always one tap from safe. */
+  scheduleRevertIds?: string[];
 }
 
 /** Friendly past-tense label for a one-tap disposition (undo toast). */
@@ -552,6 +557,20 @@ interface TaskState {
    *  items (context/energy/estimate/due/stage/assignee/next action/notes).
    *  For a SYNCED ClickUp task, the mapped fields also back-sync upstream. */
   updateItem: (id: string, patch: ItemMetaPatch) => void;
+  /** Apply one or many SCHEDULING changes (timebox / unschedule / move /
+   *  resize / pin / plan-apply / roll-over / reflow) as a single UNDOABLE
+   *  step: one snapshot, one undo-toast entry, however many blocks moved.
+   *  `label` is the toast text ("Removed from calendar", "Planned 5 blocks"). */
+  applySchedule: (
+    label: string,
+    changes: {
+      id: string;
+      patch: Pick<
+        ItemMetaPatch,
+        "scheduledStart" | "scheduledEnd" | "flexible"
+      >;
+    }[],
+  ) => void;
   /** Drag-reorder: move `id` to `toIndex` within `groupItems` (the destination
    *  group's items in their current manual order), optionally re-filing it to a
    *  new workflow stage / provider status. Computes a fractional sortKey between
@@ -1684,6 +1703,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     }
   },
 
+  applySchedule: (label, changes) => {
+    if (!changes.length) return;
+    flushPendingPurge(get().undoSnapshot, get().backend);
+    // Snapshot BEFORE applying, so undo restores the pre-change grid exactly;
+    // the per-item writes then ride the normal updateItem path (optimistic +
+    // server sync + authoritative-row swap).
+    set((s) => ({
+      undoSnapshot: {
+        items: s.items,
+        projects: s.projects,
+        processed: s.processedThisSession,
+        selectedItemId: s.selectedItemId,
+        label,
+        scheduleRevertIds: changes.map((c) => c.id),
+      },
+    }));
+    for (const c of changes) get().updateItem(c.id, c.patch);
+  },
+
   reorderItem: (id, groupItems, toIndex, refile) => {
     const moving = get().items.find((i) => i.id === id);
     if (!moving) return;
@@ -1745,7 +1783,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const snap = get().undoSnapshot;
     if (!snap) return;
     const { items, projects, processed, selectedItemId, changedIds,
-      deletedItems, softDeletedIds, archivedIds, archivedTo } = snap;
+      deletedItems, softDeletedIds, archivedIds, archivedTo,
+      scheduleRevertIds } = snap;
     set({
       items,
       projects,
@@ -1785,6 +1824,25 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       // Flip the archive back the other way upstream (local state is already
       // restored from the snapshot).
       sync(apiBulkArchive(archivedIds, !archivedTo).catch(() => {}));
+    } else if (scheduleRevertIds?.length) {
+      // Revert the server rows' SCHEDULING to the snapshot values ("" clears a
+      // block that the undone change had created). Local state is already
+      // restored from the snapshot.
+      const prev = new Map(items.map((i) => [i.id, i]));
+      sync(
+        Promise.all(
+          scheduleRevertIds.map((id) => {
+            const p = prev.get(id);
+            return p
+              ? apiPatchItem(id, {
+                  scheduled_start: p.scheduledStart ?? "",
+                  scheduled_end: p.scheduledEnd ?? "",
+                  flexible: p.flexible ?? true,
+                }).catch(() => {})
+              : Promise.resolve();
+          }),
+        ),
+      );
     } else if (changedIds?.length) {
       // Revert the server rows to their pre-change disposition (the local
       // state is already fully restored from the snapshot).

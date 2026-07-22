@@ -92,6 +92,7 @@ export function FocusMode({
   const items = useTaskStore((s) => s.items);
   const projects = useTaskStore((s) => s.projects);
   const updateItem = useTaskStore((s) => s.updateItem);
+  const applySchedule = useTaskStore((s) => s.applySchedule);
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadSubtasks = useTaskStore((s) => s.loadSubtasks);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
@@ -217,14 +218,18 @@ export function FocusMode({
   };
 
   // +15 — guilt-free overrun: extend this block and reflow the flexible rest
-  // of today's plan behind it (fixed/meeting blocks stay put).
+  // of today's plan behind it (fixed/meeting blocks stay put). One undoable
+  // step for the whole shift, however many blocks moved.
   const extend15 = () => {
     if (!item?.scheduledStart) return;
     const curEnd = item.scheduledEnd
       ? new Date(item.scheduledEnd)
       : new Date(new Date(item.scheduledStart).getTime() + 30 * 60000);
     const newEnd = new Date(curEnd.getTime() + 15 * 60000);
-    updateItem(item.id, { scheduledEnd: newEnd.toISOString() });
+    const changes: {
+      id: string;
+      patch: { scheduledStart?: string; scheduledEnd?: string };
+    }[] = [{ id: item.id, patch: { scheduledEnd: newEnd.toISOString() } }];
     for (const b of blocksForDay(items, startOfDay(new Date()))) {
       if (
         b.item.id !== item.id &&
@@ -232,12 +237,16 @@ export function FocusMode({
         (b.item.flexible ?? true) &&
         b.start.getTime() >= curEnd.getTime()
       ) {
-        updateItem(b.item.id, {
-          scheduledStart: new Date(b.start.getTime() + 15 * 60000).toISOString(),
-          scheduledEnd: new Date(b.end.getTime() + 15 * 60000).toISOString(),
+        changes.push({
+          id: b.item.id,
+          patch: {
+            scheduledStart: new Date(b.start.getTime() + 15 * 60000).toISOString(),
+            scheduledEnd: new Date(b.end.getTime() + 15 * 60000).toISOString(),
+          },
         });
       }
     }
+    applySchedule("Extended 15 min", changes);
   };
 
   const toggleSubtask = (st: GtdItem) => {

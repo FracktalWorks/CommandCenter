@@ -28,7 +28,7 @@ def _clear_jobs():
 
 def test_tracker_lifecycle_running_to_done() -> None:
     runner._past_job_start("acc-1", "u@example.com", total=3, dry_run=False)
-    job = runner._PAST_JOBS["acc-1"]
+    job = runner._PAST_JOBS.get("acc-1")
     assert job["status"] == "running"
     assert (job["total"], job["processed"]) == (3, 0)
 
@@ -45,15 +45,15 @@ def test_tracker_lifecycle_running_to_done() -> None:
 def test_zero_total_starts_done_and_ticks_noop() -> None:
     # An empty range is finished on the spot — no background job runs.
     runner._past_job_start("acc-1", "u@example.com", total=0, dry_run=False)
-    assert runner._PAST_JOBS["acc-1"]["status"] == "done"
+    assert runner._PAST_JOBS.get("acc-1")["status"] == "done"
     runner._past_job_tick("acc-1", applied=1)  # ignored once not running
-    assert runner._PAST_JOBS["acc-1"]["processed"] == 0
+    assert runner._PAST_JOBS.get("acc-1")["processed"] == 0
 
 
 def test_finish_records_error() -> None:
     runner._past_job_start("acc-1", "u@example.com", total=2, dry_run=False)
     runner._past_job_finish("acc-1", error="boom")
-    job = runner._PAST_JOBS["acc-1"]
+    job = runner._PAST_JOBS.get("acc-1")
     assert job["status"] == "error"
     assert job["error"] == "boom"
 
@@ -66,7 +66,7 @@ def test_stale_token_cannot_clobber_newer_run() -> None:
 
     # The first (stale) job finishing must not mark the new run done.
     runner._past_job_finish("acc-1", token=tok1)
-    job = runner._PAST_JOBS["acc-1"]
+    job = runner._PAST_JOBS.get("acc-1")
     assert job["status"] == "running" and job["total"] == 9
 
     # …and its ticks land on nothing.
@@ -128,7 +128,7 @@ async def test_handler_seeds_tracker_and_schedules_when_mail_exists() -> None:
                    "draft_replies": False, "skip_processed": True,
                    "already_processed": 0}
     assert len(bg.tasks) == 1                       # background job scheduled
-    job = runner._PAST_JOBS["acc-1"]
+    job = runner._PAST_JOBS.get("acc-1")
     assert job["status"] == "running" and job["total"] == 4
 
 
@@ -155,6 +155,6 @@ async def test_handler_schedules_download_even_when_nothing_local() -> None:
                    "draft_replies": False, "skip_processed": True,
                    "already_processed": 0}
     assert len(bg.tasks) == 1                        # scheduled to download first
-    job = runner._PAST_JOBS["acc-1"]
+    job = runner._PAST_JOBS.get("acc-1")
     assert job["status"] == "running"
     assert job["phase"] == "downloading"

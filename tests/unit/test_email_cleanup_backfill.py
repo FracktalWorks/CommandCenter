@@ -163,22 +163,27 @@ def test_the_sweep_ignores_both_watermarks() -> None:
 
 def test_both_phases_are_reported() -> None:
     """Downloading years of mail takes minutes. A job that reports nothing until
-    it finishes reads as stuck, and the user presses the button again."""
-    src = inspect.getsource(c._backfill_and_clean_job)
-    assert '"phase": "downloading"' in src
-    assert '"phase": "cleaning"' in src
+    it finishes reads as stuck, and the user presses the button again. The
+    'downloading' phase is seeded by the endpoint (before the task starts); the
+    'cleaning' phase is set by the job once the download lands."""
+    endpoint = inspect.getsource(c.cleanup_backfill)
+    job = inspect.getsource(c._backfill_and_clean_job)
+    assert 'phase="downloading"' in endpoint
+    assert 'phase="cleaning"' in job
 
 
 def test_the_tracker_is_seeded_before_any_slow_work() -> None:
     """The UI polls immediately after the POST returns; an empty tracker would
-    read as "idle" and the flow would look like it never started."""
-    src = inspect.getsource(c._backfill_and_clean_job)
-    assert src.index("_SWEEP_JOBS[account_id]") < src.index("_sync_account")
+    read as "idle" and the flow would look like it never started. The endpoint
+    now seeds the row (and mints the guard token) with .start() BEFORE scheduling
+    the background task, closing the check-then-act race the old in-job seed had."""
+    src = inspect.getsource(c.cleanup_backfill)
+    assert src.index("_SWEEP_JOBS.start(") < src.index("add_task")
 
 
 def test_a_failure_is_recorded_rather_than_lost() -> None:
     src = inspect.getsource(c._backfill_and_clean_job)
-    assert '"status": "error"' in src
+    assert 'status="error"' in src
 
 
 # ── the endpoint ────────────────────────────────────────────────────────────
@@ -187,7 +192,7 @@ def test_a_failure_is_recorded_rather_than_lost() -> None:
 async def test_a_second_run_is_refused_while_one_is_in_flight() -> None:
     """Two deep syncs on one mailbox race the provider and each other's progress
     row. Say so rather than silently start a second."""
-    c._SWEEP_JOBS[_ACC] = {"owner": "u@x", "status": "running"}
+    c._SWEEP_JOBS.set(_ACC, {"owner": "u@x", "status": "running"})
     try:
         with patch.object(c, "_get_db", AsyncMock(return_value=AsyncMock())), \
                 patch.object(c, "_assert_account_owner", AsyncMock()):
@@ -203,7 +208,7 @@ async def test_a_second_run_is_refused_while_one_is_in_flight() -> None:
 
 
 async def test_a_finished_run_does_not_block_the_next_one() -> None:
-    c._SWEEP_JOBS[_ACC] = {"owner": "u@x", "status": "done"}
+    c._SWEEP_JOBS.set(_ACC, {"owner": "u@x", "status": "done"})
     try:
         bg = None
         with patch.object(c, "_get_db", AsyncMock(return_value=AsyncMock())), \

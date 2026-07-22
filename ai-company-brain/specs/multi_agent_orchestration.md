@@ -366,6 +366,14 @@ dynamic and open-ended.
 
 ### Phase 0 — Fix the hand-off *(≈half a day · no deps · unblocks email today)*
 
+> **✅ LANDED 2026-07-22** — 0.1 delegation family in `_CORE_STANDARD_TOOL_NAMES`;
+> 0.2 `_build_injected_tools_addendum(effective_scope=…)` emits only sections for
+> tools actually injected (per-variant lru_cache keeps each agent's prefix
+> byte-stable); 0.3 `executor.tool_scope_unknown_entry` warning (catches
+> `ask_user`); 0.4 tests in `tests/unit/test_tool_scope_addendum.py` +
+> `test_core_tool_floor.py`. Phase 1 (design.md gating, registry trim,
+> re-measure) remains open.
+
 | # | Change | File |
 |---|---|---|
 | 0.1 | Add `call_agent`, `call_agents_parallel`, `call_agent_background` to `_CORE_STANDARD_TOOL_NAMES` | `_tool_injection.py` |

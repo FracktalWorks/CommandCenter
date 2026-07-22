@@ -56,3 +56,15 @@ def test_scope_union_is_additive_not_replacing() -> None:
     # that one — the floor is unconditional.
     assert _CORE_STANDARD_TOOL_NAMES <= resolved
     assert "web_search" in resolved
+
+
+def test_floor_includes_the_delegation_family() -> None:
+    """Phase 0.1 (multi_agent_orchestration.md): the floor guaranteed every
+    tool an agent needs to work ALONE and not one it needs to HAND OFF — a
+    scope that omitted call_agent silently stripped delegation (the email
+    hand-off failure). Delegation is part of the guaranteed baseline."""
+    for name in ("call_agent", "call_agents_parallel", "call_agent_background"):
+        assert name in _CORE_STANDARD_TOOL_NAMES
+    resolved = _resolve_injected_scope(["web_search"])
+    assert resolved is not None
+    assert "call_agent" in resolved

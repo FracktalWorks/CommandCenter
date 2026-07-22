@@ -45,6 +45,15 @@ _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
     "ask_questions",                     # HITL clarification
     "run_diagnostics", "get_errors",     # code / file error checking
     "save_note", "recall_notes",         # cross-session working memory
+    # Inter-agent delegation (multi_agent_orchestration.md Phase 0.1): the
+    # floor previously guaranteed every tool an agent needs to work ALONE and
+    # not one it needs to HAND OFF — a scope that omitted call_agent silently
+    # stripped delegation while the (then scope-blind) addendum still described
+    # it, so the agent flailed through fallbacks instead of delegating (the
+    # email hand-off failure). Blast radius is bounded: each target's own
+    # request_confirmation gate still requires a human, and the delegation
+    # cycle/depth guards in acb_skills.agent_tools already cap recursion.
+    "call_agent", "call_agents_parallel", "call_agent_background",
 })
 
 
@@ -204,7 +213,12 @@ def _gate_injected_tool(fn: Any) -> Any:
     return _sgated
 
 
-def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
+@functools.lru_cache(maxsize=32)
+def _build_injected_tools_addendum(
+    *,
+    is_sub_agent: bool = False,
+    effective_scope: frozenset[str] | None = None,
+) -> str:
     """Return a system-prompt addendum describing the CommandCenter-injected tools.
 
     Appended to every GitHub Copilot agent's system message at run time so the
@@ -217,10 +231,25 @@ def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
     a compact version is returned — tool names only, no workspace/commit instructions.
     This saves ~700 tokens per sub-agent invocation.
 
-    The full addendum is module-level cached after first build (the registry
-    only changes on gateway restart) to keep the system-prompt prefix byte-stable
-    across turns — required for KV-cache hits.
+    ``effective_scope`` is the agent's RESOLVED injected-tool set (its
+    ``tool_scope`` UNIONed with the core floor) — sections describing tools the
+    agent does not actually have are omitted (multi_agent_orchestration.md
+    Phase 0.2: the scope-blind addendum described ``call_agent`` — and named
+    delegatable agents — to agents whose scope had stripped it, so the model
+    was misinformed, not confused).  ``None`` means an unscoped agent and
+    yields the full addendum.
+
+    Cached per ``(is_sub_agent, effective_scope)`` variant so each agent's
+    system-prompt prefix stays byte-stable across turns — required for KV-cache
+    hits.  Call ``_build_injected_tools_addendum.cache_clear()`` alongside
+    ``_build_registry_block.cache_clear()`` when the registry changes.
     """
+
+    def _want(*names: str) -> bool:
+        return effective_scope is None or any(
+            n in effective_scope for n in names
+        )
+
     registry_block = _build_registry_block()
 
     # Byte-stable risk-annotation block (HH-2) — the registry is static, so
@@ -231,55 +260,103 @@ def _build_injected_tools_addendum(*, is_sub_agent: bool = False) -> str:
     except ImportError:
         risk_block = ""
 
+    _has_delegation = _want(
+        "call_agent", "call_agents_parallel", "call_agent_background",
+    )
+
     # ── Compact version for sub-agents ──────────────────────────────────────
     if is_sub_agent:
-        return f"""
----
-## CommandCenter Platform Tools
-{_build_output_discipline_block(compact=True)}
-call_agent(name,msg), call_agents_parallel(tasks), call_agent_background(name,msg)
-web_search(query), fetch_page(url)
-write_artifact(path,content) — files go to outputs/
-share_artifact(path) — show a file you already wrote as a download/preview card
-emit_generative_ui(ui) — render rich UI inline; reach for it EAGERLY when the answer is data/status/comparison/a checklist/a value to pick or set (not for trivial one-liners). On-brand automatically. 3 modes: (1) component tree card/table/keyValue/badge/callout/button(label+action) + an icon node (type:icon, name=any Lucide icon e.g. 'cloud-sun'); (2) a template node (type:template, name= weatherCard/statDashboard/barChart/sparkTrend/comparison/progressTracker) pre-designed animated cards, supply data only (stats take optional icon); (3) an html node (type:html, props code + optional icons list of Lucide names) custom animated HTML/CSS/JS in a sandbox — style with the pre-set CSS vars --cc-primary/--cc-accent/--cc-fg/--cc-card/--cc-border/--cc-radius/--cc-ease (native inputs+sliders pre-styled), use icons via ccIcon('Name') or a span with data-cc-icon='Name', wire interactivity via data-cc-action='msg' (fixed follow-up) or data-cc-submit='label'/ccSubmit('label',value) to send user-set slider/input/select VALUES back. Prefer template over tree over html.
-remember(query)/save_memory(fact) = THIS USER's private memory; recall_agent(query)/save_agent_memory(fact) = shared across ALL users of this agent; recall_org(query)/save_org_memory(fact) = organisation-wide (every agent+user); recall_timeline(entity,query), save_episode(name,content)
-manage_todo_list(todoList) — structured task tracking panel (JSON array)
-ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)
-run_diagnostics(filePaths?) — run code diagnostics: check Python files for syntax/lint errors (alias: get_errors)
-install_dependency(packages) — install Python package(s) into the agent venv at runtime
-save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory
-query_history(sql) — SELECT-only query against chat history DB
-github_search(q,scope?,max?), github_repo_search(repo,q?) — code search
+        parts: list[str] = [
+            "\n---",
+            "## CommandCenter Platform Tools",
+            _build_output_discipline_block(compact=True),
+        ]
+        if _has_delegation:
+            parts.append(
+                "call_agent(name,msg), call_agents_parallel(tasks), "
+                "call_agent_background(name,msg)"
+            )
+        if _want("web_search", "fetch_page"):
+            parts.append("web_search(query), fetch_page(url)")
+        if _want("write_artifact"):
+            parts.append("write_artifact(path,content) — files go to outputs/")
+        if _want("share_artifact"):
+            parts.append(
+                "share_artifact(path) — show a file you already wrote as a "
+                "download/preview card"
+            )
+        if _want("emit_generative_ui"):
+            parts.append(
+                "emit_generative_ui(ui) — render rich UI inline; reach for it EAGERLY when the answer is data/status/comparison/a checklist/a value to pick or set (not for trivial one-liners). On-brand automatically. 3 modes: (1) component tree card/table/keyValue/badge/callout/button(label+action) + an icon node (type:icon, name=any Lucide icon e.g. 'cloud-sun'); (2) a template node (type:template, name= weatherCard/statDashboard/barChart/sparkTrend/comparison/progressTracker) pre-designed animated cards, supply data only (stats take optional icon); (3) an html node (type:html, props code + optional icons list of Lucide names) custom animated HTML/CSS/JS in a sandbox — style with the pre-set CSS vars --cc-primary/--cc-accent/--cc-fg/--cc-card/--cc-border/--cc-radius/--cc-ease (native inputs+sliders pre-styled), use icons via ccIcon('Name') or a span with data-cc-icon='Name', wire interactivity via data-cc-action='msg' (fixed follow-up) or data-cc-submit='label'/ccSubmit('label',value) to send user-set slider/input/select VALUES back. Prefer template over tree over html."
+            )
+        if _want("remember", "save_memory", "recall_agent", "save_agent_memory",
+                 "recall_org", "save_org_memory", "recall_timeline",
+                 "save_episode"):
+            parts.append(
+                "remember(query)/save_memory(fact) = THIS USER's private memory; recall_agent(query)/save_agent_memory(fact) = shared across ALL users of this agent; recall_org(query)/save_org_memory(fact) = organisation-wide (every agent+user); recall_timeline(entity,query), save_episode(name,content)"
+            )
+        if _want("manage_todo_list"):
+            parts.append(
+                "manage_todo_list(todoList) — structured task tracking panel (JSON array)"
+            )
+        if _want("ask_questions"):
+            parts.append(
+                "ask_user(question,choices?) — HITL: pause and ask the user one question (blocking; the run resumes with their answer)"
+            )
+        if _want("run_diagnostics", "get_errors"):
+            parts.append(
+                "run_diagnostics(filePaths?) — run code diagnostics: check Python files for syntax/lint errors (alias: get_errors)"
+            )
+        if _want("install_dependency"):
+            parts.append(
+                "install_dependency(packages) — install Python package(s) into the agent venv at runtime"
+            )
+        if _want("save_note", "recall_notes"):
+            parts.append(
+                "save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory"
+            )
+        if _want("query_history"):
+            parts.append(
+                "query_history(sql) — SELECT-only query against chat history DB"
+            )
+        if _want("github_search", "github_repo_search"):
+            parts.append(
+                "github_search(q,scope?,max?), github_repo_search(repo,q?) — code search"
+            )
+        parts.append(f"\n{risk_block}\n")
+        if _has_delegation:
+            parts.append(registry_block)
+        parts.append("---")
+        return "\n".join(parts)
 
-{risk_block}
-
-{registry_block}
----"""
-
-    return f"""
+    sections: list[str] = ["""
 ---
 ## CommandCenter Platform Tools (injected at runtime)
-
-### Inter-agent delegation
+"""]
+    if _has_delegation:
+        sections.append(f"""### Inter-agent delegation
 - **call_agent(agent_name, message)** — Delegate to another agent; waits for its response.
 - **call_agents_parallel(tasks)** — Run multiple agents concurrently (JSON array of {{"agent","message"}} objects).
 - **call_agent_background(agent_name, message)** — Fire-and-forget; use when result is not needed now.
 
 {registry_block}
-
-### Web access (no API key required)
+""")
+    if _want("web_search", "fetch_page"):
+        sections.append("""### Web access (no API key required)
 - **web_search(query, max_results=5)** — Web search (SerpAPI/Google first when configured, free engines as fallback). Use for current info, news, company research.
 - **fetch_page(url, max_chars=8000)** — Fetch a public URL as clean text via Jina Reader.
-
-### Memory & knowledge graph
+""")
+    if _want("remember", "save_memory", "recall_agent", "save_agent_memory",
+             "recall_org", "save_org_memory", "recall_timeline", "save_episode"):
+        sections.append("""### Memory & knowledge graph
 - **remember(query)** — Search episodic memory for past facts about the user. Call before making claims about history or preferences.
 - **recall_timeline(entity, query)** — Bi-temporal knowledge graph: "when did X happen?" or entity history.
 - **save_memory(fact)** — Persist a high-signal fact about THIS USER. Routine turns are handled automatically.
 - **recall_agent(query)** / **save_agent_memory(fact)** — This AGENT's memory, shared across EVERY user who talks to it. Use for durable knowledge the agent should carry regardless of who's asking (procedures, domain facts, decisions) — not one user's private preference.
 - **recall_org(query)** / **save_org_memory(fact)** — ORGANISATION-WIDE memory shared by every agent and user. Read when a question touches company-level context; write only genuinely company-level facts (structure, policy, standing priorities), and confirm before writing.
 - **save_episode(name, content, source?)** — Record a time-stamped episode; Graphiti extracts entities & relationships.
-
-### Workspace & file writing
+""")
+    sections.append(f"""### Workspace & file writing
 {_build_output_discipline_block()}
 
 Workspace folders visible in the Files Viewer: **outputs/** (default for generated files), **inputs/** (user uploads, read-only), **agent-data/** (reusable reference data).
@@ -291,47 +368,78 @@ Workspace folders visible in the Files Viewer: **outputs/** (default for generat
     3. **Custom HTML** (escape hatch, only when no template/tree fits, and the place for genuinely interactive controls) — a node with type "html" and props holding `code` (a full HTML/CSS/JS snippet) plus an optional `icons` array of Lucide names. Runs in an isolated sandbox for bespoke animation/layout. No external network/CDNs — inline everything; use declared icons via ccIcon('Name') or a span with data-cc-icon='Name'. DESIGN: use the pre-defined CSS variables so it matches the app — --cc-primary, --cc-accent, --cc-fg, --cc-muted, --cc-card, --cc-secondary, --cc-border, --cc-success, --cc-warning, --cc-danger, --cc-radius, --cc-ease — instead of hard-coded colors; native button/input/select/textarea and range sliders are already styled on-brand (add class cc-primary for a filled blue button, cc-card for a panel). INTERACTIVITY: put data-cc-action='<follow-up message>' on a clickable element (or call ccAction('...') in script) to fire a fixed follow-up like a button; put data-cc-submit='<label>' on a button to harvest every named input/select/textarea in its enclosing form (or a data-cc-form container) and submit their VALUES back — or call ccSubmit('Temperature', 22) directly — so when the user sets a slider/number/option the agent actually receives what they chose.
 
 **Delivering files to the user:** to give the user a downloadable/previewable file, call ``write_artifact`` (for content you generate) or ``share_artifact`` (for a file you already wrote). That is ALL you need — the card renders itself. Never try to guess or assemble a download URL yourself.
-
-### Task planning & progress tracking
+""")
+    if _want("manage_todo_list"):
+        sections.append("""### Task planning & progress tracking
 - **manage_todo_list(todoList)** — Update the live "Todos (n/m)" panel above the chat input.  Takes a JSON object with ``"todoList"`` (the COMPLETE array of all items) and optional ``"operation"`` (``"write"`` or ``"read"``).  Each item: ``id`` (number, sequential from 1), ``title`` (string, 3-7 words), ``status`` (``"not-started"``, ``"in-progress"``, or ``"completed"``).  Use this tool VERY frequently.  CRITICAL workflow: 1) Plan tasks with specific items. 2) Mark ONE as ``"in-progress"`` before starting. 3) Mark it ``"completed"`` immediately after finishing. 4) Move to next.  Do NOT use for trivial single-step requests.  The user sees this panel update in real time.
-
-**MANDATORY — You MUST call these functions. Do NOT use other tools for these purposes.**
-- For todo/task tracking: call ``manage_todo_list`` — do NOT use ``remember``, ``task_manager``, ClickUp, or any other tool.
-- For clarifying questions: call ``ask_user`` (native, blocking) or ``ask_questions`` — do NOT just ask in text.
-- For checking code / diagnostics: call ``run_diagnostics`` (alias ``get_errors``).
-- For notes: call ``save_note`` / ``recall_notes``.
-- For history: call ``query_history``.
-- For code search: call ``github_search`` / ``github_repo_search``.
-Function calls trigger real-time UI (TodoPanel, ElicitationCard) — text does nothing.
-
-### Human-in-the-Loop (HITL) elicitation
+""")
+    _mandatory_lines: list[str] = []
+    if _want("manage_todo_list"):
+        _mandatory_lines.append(
+            "- For todo/task tracking: call ``manage_todo_list`` — do NOT use "
+            "``remember``, ``task_manager``, ClickUp, or any other tool."
+        )
+    if _want("ask_questions"):
+        _mandatory_lines.append(
+            "- For clarifying questions: call ``ask_user`` (native, blocking) "
+            "or ``ask_questions`` — do NOT just ask in text."
+        )
+    if _want("run_diagnostics", "get_errors"):
+        _mandatory_lines.append(
+            "- For checking code / diagnostics: call ``run_diagnostics`` "
+            "(alias ``get_errors``)."
+        )
+    if _want("save_note", "recall_notes"):
+        _mandatory_lines.append("- For notes: call ``save_note`` / ``recall_notes``.")
+    if _want("query_history"):
+        _mandatory_lines.append("- For history: call ``query_history``.")
+    if _want("github_search", "github_repo_search"):
+        _mandatory_lines.append(
+            "- For code search: call ``github_search`` / ``github_repo_search``."
+        )
+    if _mandatory_lines:
+        sections.append(
+            "**MANDATORY — You MUST call these functions. Do NOT use other "
+            "tools for these purposes.**\n"
+            + "\n".join(_mandatory_lines)
+            + "\nFunction calls trigger real-time UI (TodoPanel, "
+            "ElicitationCard) — text does nothing.\n"
+        )
+    if _want("ask_questions"):
+        sections.append("""### Human-in-the-Loop (HITL) elicitation
 - **ask_user(question, choices?, allowFreeform?)** — Pause the run and ask the user ONE clarifying question via an interactive card.  This BLOCKS the agent turn: execution truly pauses and resumes automatically with the user's answer (no separate message turn).  ``choices`` is an optional list of suggested answers (rendered as buttons); ``allowFreeform`` (default true) lets the user type a custom answer.  Use when you need to disambiguate, a parameter is missing, or a decision has important implications.  Prefer ONE focused question per call.
 - **ask_questions(questions)** — Alternative for asking SEVERAL questions at once via a multi-question card (JSON object with a ``"questions"`` array; each has ``header``, ``question``, optional ``options``/``multiSelect``/``allowFreeformInput``).  Prefer ``ask_user`` for single blocking questions.
-
-### Code quality & error checking
+""")
+    if _want("run_diagnostics", "get_errors"):
+        sections.append("""### Code quality & error checking
 - **run_diagnostics(filePaths?)** (alias **get_errors**) — Run code diagnostics: check Python files for syntax, type, and lint errors.  Call after editing or creating files, before committing, or to diagnose a failed run.  Pass a JSON array of file paths (e.g. ``'["executor.py"]'``) or ``'[]'`` to auto-discover recently changed files.  Runs ``py_compile`` (syntax) and ``ruff`` (lint, if installed).  Returns structured errors or ``"No errors found."``.  Both names call the same tool.
-
-### Runtime dependencies
+""")
+    if _want("install_dependency"):
+        sections.append("""### Runtime dependencies
 - **install_dependency(packages)** — Install Python package(s) into the agent runtime so your imports/tools work.  Use this when you hit a ``ModuleNotFoundError`` or know a task needs a package that isn't installed.  Pass space- or comma-separated specs, e.g. ``"pandas openpyxl"`` or ``"requests==2.31.0"`` (plain names + optional version; no flags/URLs).  Installs into the shared agent venv via ``uv``; the package is importable immediately.  Prefer this over shell ``pip install`` (the venv has no pip).
-
-### Working memory (repo-scoped notes)
+""")
+    if _want("save_note", "recall_notes"):
+        sections.append("""### Working memory (repo-scoped notes)
 - **save_note(path, fact)** — Append a dated bullet to a markdown notes file under ``agent-data/``.  Your canonical working memory is ``agent-data/NOTES.md`` — read it at session start with ``recall_notes("NOTES.md")``.
 - **recall_notes(path, query?)** — Read back a notes file, optionally filtered by a search query.  Use to restore context from previous sessions.
-
-### Conversation history
+""")
+    if _want("query_history"):
+        sections.append("""### Conversation history
 - **query_history(query)** — Run a SELECT-only SQL query against the chat history database (tables: ``chat_session``, ``chat_message``).  Use to recall what was discussed in prior sessions, find past decisions, or resume work on a known thread.
-
-### GitHub code search
+""")
+    if _want("github_search", "github_repo_search"):
+        sections.append("""### GitHub code search
 - **github_search(query, scope?, maxResults?)** — Lexical search across public GitHub repositories.  Supports ``language:python``, ``repo:owner/name``, ``path:src/`` filters.
 - **github_repo_search(repo, query?)** — Search within a specific GitHub repository for code snippets and implementation patterns.
-
-### Working memory (NOTES.md pattern)
+""")
+    if _want("save_note", "recall_notes"):
+        sections.append("""### Working memory (NOTES.md pattern)
 Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
 - At the START of each session: read this file if it exists to restore context.
 - After each significant discovery, decision, or milestone: append a dated bullet (e.g. `- 2026-06-16: Closed ABC Corp deal at ₹50L`).
 - Keep entries concise — one line per fact. This file survives context compaction and session resets.
-
-{risk_block}
+""")
+    sections.append(f"""{risk_block}
 Tools marked DESTRUCTIVE are irreversible or outward-facing: never call one
 without an explicit user instruction, and let its built-in confirmation card
 do the confirming (do not also double-confirm in prose).
@@ -342,7 +450,8 @@ To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..
 - **If the user explicitly tells you to push (e.g. "commit and push") in this conversation**, then after committing run `git push --no-verify origin HEAD`. The `--no-verify` flag is required to bypass the approval hook. That commit is then recorded as already-approved — the user does not need to approve it again on the Agents page.
 
 {_design_md_section()}
----"""
+---""")
+    return "\n".join(sections)
 
 
 @functools.lru_cache(maxsize=1)
@@ -559,6 +668,18 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     # path and resorting to fragile shell heredocs.
     _scope_names = _resolve_injected_scope(tool_scope)
     if _scope_names is not None:
+        # Scope-typo guard (multi_agent_orchestration.md Phase 0.3): an entry
+        # matching no injectable platform tool silently no-ops — the exact bug
+        # where a scope listed "ask_user" (the native SDK tool's name, not an
+        # injected tool) and nothing warned. Surface each unknown entry.
+        _known = {fn.__name__ for fn in _all_tools} | set(_CORE_STANDARD_TOOL_NAMES)
+        for _entry in (tool_scope or []):
+            if _entry not in _known:
+                _log.warning(
+                    "executor.tool_scope_unknown_entry",
+                    entry=_entry,
+                    hint="matches no injectable platform tool; it will no-op",
+                )
         _extra_tools = [fn for fn in _all_tools if fn.__name__ in _scope_names]
         if not _extra_tools:
             # Neither the scope nor the core matched any known tool (e.g. every
@@ -644,7 +765,15 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                 # the form {'mode': 'append', 'content': '<text>'}.  We must use
                 # dict access (not setattr) and preserve the nested structure.
                 try:
-                    addendum = _build_injected_tools_addendum(is_sub_agent=is_sub_agent)
+                    addendum = _build_injected_tools_addendum(
+                        is_sub_agent=is_sub_agent,
+                        # Scope-aware (Phase 0.2): describe only the tools this
+                        # agent actually received; None = unscoped, full text.
+                        effective_scope=(
+                            frozenset(_scope_names)
+                            if _scope_names is not None else None
+                        ),
+                    )
                     opts = getattr(agent, "_default_options", None)
                     if isinstance(opts, dict):
                         existing_sys = opts.get("system_message")

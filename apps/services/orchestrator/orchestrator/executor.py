@@ -2005,12 +2005,28 @@ async def run_agent_stream(
 
             agent = agents[0]
 
+            # Detect Copilot-SDK-backed agents by capability, NOT the registry
+            # runtime label. Some agents (e.g. task-manager, apis-config) are
+            # built with GitHubCopilotAgent but registered as runtime "maf";
+            # they still need BYOK provider routing or agent.run() opens a
+            # NATIVE Copilot session (→ 402). A genuine MAF agent has no
+            # ``_default_options``. Computed BEFORE session restore so every
+            # session-continuity gate below keys on capability too — gating on
+            # the label made mislabeled Copilot agents silently skip session
+            # resume (re-injecting history every turn) and the ask_user/
+            # working_directory wiring (audit follow-up, 2026-07-22).
+            _is_copilot_sdk = (
+                _agent_runtime == "github-copilot"
+                or (hasattr(agent, "_default_options")
+                    and agent._default_options is not None)
+            )
+
             # ── Session continuity: restore Copilot SDK session if available ─
             # Storing the service_session_id allows MAF's _get_or_create_session
             # to call resume_session() instead of create_session(), maintaining
             # server-side conversation state across browser restarts.
             _copilot_session_id: str | None = None
-            if _agent_runtime == "github-copilot" and thread_id:
+            if _is_copilot_sdk and thread_id:
                 _copilot_session_id = _get_stored_session_id(thread_id)
                 if _copilot_session_id:
                     _log.debug("executor.session_restore",
@@ -2027,17 +2043,6 @@ async def run_agent_stream(
                         _a._permission_handler = _ph
             except Exception:  # noqa: BLE001
                 pass
-
-            # Detect Copilot-SDK-backed agents by capability, NOT the registry
-            # runtime label. Some agents (e.g. email-assistant) are built with
-            # GitHubCopilotAgent but registered as runtime "maf"; they still need
-            # BYOK provider routing or agent.run() opens a NATIVE Copilot session
-            # (→ 402). A genuine MAF agent has no ``_default_options``.
-            _is_copilot_sdk = (
-                _agent_runtime == "github-copilot"
-                or (hasattr(agent, "_default_options")
-                    and agent._default_options is not None)
-            )
 
             # ── BYOK early detection (must happen BEFORE tier selection) ────
             # When a LiteLLM model is requested (contains '/' or starts with
@@ -2139,7 +2144,7 @@ async def run_agent_stream(
             _effective_agent_dir = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
             )
-            if _agent_runtime == "github-copilot":
+            if _is_copilot_sdk:
                 for _ag in agents:
                     try:
                         if (
@@ -2162,7 +2167,7 @@ async def run_agent_stream(
             # session so a new one is created with the new model.  The
             # conversation continuity fallback prepends messages[] history
             # so the LLM sees full context despite the new session.
-            if (_agent_runtime == "github-copilot"
+            if (_is_copilot_sdk
                     and _copilot_session_id
                     and _final_model_early
                     and thread_id):
@@ -2833,8 +2838,12 @@ async def run_agent_stream(
                         # ── Save Copilot session ID before context exits ──
                         # The CopilotClient is closed when async with agent:
                         # exits.  Capture the session ID while still inside
-                        # the context manager block.
-                        if _agent_runtime == "github-copilot" and thread_id:
+                        # the context manager block.  Gated on capability, not
+                        # the registry label — this whole attempt only runs
+                        # for Copilot-SDK agents, and label-gating meant a
+                        # "maf"-labelled Copilot agent never saved (or later
+                        # resumed) its session.
+                        if _is_copilot_sdk and thread_id:
                             try:
                                 _last_sid = await agent._client.get_last_session_id()
                                 _log.info(

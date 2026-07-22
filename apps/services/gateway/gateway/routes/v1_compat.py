@@ -89,6 +89,74 @@ def _clamp_max_tokens(requested: int, model: str) -> int:
     return limits.max_output
 
 
+# ── Output-truncation visibility (audit CX4) ──────────────────────────────
+# When the provider cuts generation at max_tokens (finish_reason="length"),
+# the text just stops mid-sentence and the turn otherwise renders as a normal
+# completed answer — nothing anywhere inspected finish_reason. Appending an
+# explicit marker makes the cut visible to the user (and greppable in
+# transcripts/traces). Disable with V1_SURFACE_TRUNCATION=0 for byte-exact
+# passthrough.
+_SURFACE_TRUNCATION = os.environ.get(
+    "V1_SURFACE_TRUNCATION", "1"
+).strip().lower() in ("1", "true", "yes", "on")
+_TRUNCATION_NOTICE = (
+    "\n\n[output truncated: the model hit its output-token limit]"
+)
+
+
+def _chunk_finish_reason(data: dict[str, Any]) -> str | None:
+    """Extract choices[0].finish_reason from a streamed chunk dict."""
+    try:
+        choices = data.get("choices") or []
+        return choices[0].get("finish_reason") if choices else None
+    except Exception:  # noqa: BLE001
+        return None
+
+
+def _truncation_notice_chunk(model: str) -> dict[str, Any]:
+    """A synthetic OpenAI-format chunk carrying the truncation notice."""
+    return {
+        "id": "cc-truncation-notice",
+        "object": "chat.completion.chunk",
+        "created": 0,
+        "model": model,
+        "choices": [{
+            "index": 0,
+            "delta": {"content": _TRUNCATION_NOTICE},
+            "finish_reason": None,
+        }],
+    }
+
+
+def _mark_truncated_nonstream(choices: Any) -> bool:
+    """Append the truncation notice to a non-streaming completion in place.
+
+    Returns True when choices[0] was cut at the output limit and text content
+    was available to annotate. Handles both dict and litellm-object shapes.
+    """
+    try:
+        c0 = choices[0]
+        fr = (
+            c0.get("finish_reason") if isinstance(c0, dict)
+            else getattr(c0, "finish_reason", None)
+        )
+        if fr != "length":
+            return False
+        msg = (
+            c0.get("message") if isinstance(c0, dict)
+            else getattr(c0, "message", None)
+        )
+        if isinstance(msg, dict) and isinstance(msg.get("content"), str):
+            msg["content"] += _TRUNCATION_NOTICE
+            return True
+        if msg is not None and isinstance(getattr(msg, "content", None), str):
+            msg.content += _TRUNCATION_NOTICE
+            return True
+        return False
+    except Exception:  # noqa: BLE001
+        return False
+
+
 # ── Context-window guard ──────────────────────────────────────────────────
 # Safety margin between what we count and what the provider counts (tokenizer
 # divergence, per-message envelopes), and the smallest completion reservation
@@ -442,6 +510,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
             # byte-identical for the client. Observability is derived, never
             # intrusive.
             _chunks: list[Any] = []
+            _length_cut = False
             try:
                 response = await acompletion(**common, stream=True)
                 async for chunk in response:
@@ -455,7 +524,23 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                     # must carry an empty list, which the client already skips.
                     if data.get("choices") is None:
                         data["choices"] = []
+                    if _chunk_finish_reason(data) == "length":
+                        _length_cut = True
                     yield f"data: {json.dumps(data)}\n\n"
+                # Truncation visibility (audit CX4): the provider stopped at
+                # max_tokens mid-generation. Append one synthetic delta chunk
+                # so the cut is visible in the rendered turn instead of the
+                # text just stopping mid-sentence with a "completed" status.
+                if _length_cut and _SURFACE_TRUNCATION:
+                    _log.warning(
+                        "v1.output_truncated", model=model,
+                        agent=_obs_agent, max_tokens=max_tokens,
+                    )
+                    yield (
+                        "data: "
+                        + json.dumps(_truncation_notice_chunk(model))
+                        + "\n\n"
+                    )
                 yield "data: [DONE]\n\n"
             except Exception as exc:
                 # Log the full detail server-side; surface a SANITIZED reason +
@@ -532,6 +617,12 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
                         "type": "UpstreamResponseError",
                     }
                 },
+            )
+        # Truncation visibility (audit CX4), non-streaming shape.
+        if _SURFACE_TRUNCATION and _mark_truncated_nonstream(_choices):
+            _log.warning(
+                "v1.output_truncated", model=model,
+                agent=_obs_agent, max_tokens=max_tokens,
             )
         return payload  # type: ignore[return-value]
     except Exception as exc:

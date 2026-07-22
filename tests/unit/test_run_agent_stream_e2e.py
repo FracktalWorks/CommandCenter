@@ -416,6 +416,7 @@ class _CopilotShapedAgent:
         self.attempts = 0
 
     def get_session(self, _sid: str) -> Any:
+        self.get_session_calls = getattr(self, "get_session_calls", 0) + 1
         return object()
 
     def run(self, *_a: Any, **_k: Any) -> Any:
@@ -442,6 +443,7 @@ def _drive_copilot(
     monkeypatch,
     script: list[tuple[list[Any], Exception | None]],
     thread_id: str,
+    label: str = "github-copilot",
 ) -> tuple[list[dict[str, Any]], "_CopilotShapedAgent"]:
     agent = _CopilotShapedAgent(script)
 
@@ -458,12 +460,12 @@ def _drive_copilot(
 
     monkeypatch.setattr(executor, "load_agent", lambda *a, **k: _Ctx())
     monkeypatch.setattr(executor, "build_integrations", lambda *a, **k: ({}, {}))
-    # Register the agent as runtime "github-copilot": session restore
-    # (executor.py:1972) is gated on the registry label, and without it the
-    # stale-resume classifier is never eligible (no stored session id).
+    # Register the agent under the given runtime label. Session continuity is
+    # gated by CAPABILITY (non-None _default_options), so a "maf"-labelled
+    # Copilot-shaped agent must behave the same as a "github-copilot" one.
     import gateway.routes.agent as _agent_routes
     monkeypatch.setattr(_agent_routes, "_load_dynamic_agents", lambda: [
-        {"name": "test-agent-unregistered", "agent_runtime": "github-copilot",
+        {"name": "test-agent-unregistered", "agent_runtime": label,
          "repo_name": None, "local_path": None},
     ])
     # A stored session id is what makes the stale-resume classifier eligible.
@@ -520,4 +522,29 @@ def test_stale_session_before_emission_still_retries(monkeypatch):
         if e.get("type") == "TEXT_MESSAGE_CONTENT"
     )
     assert "recovered answer" in text
+    assert not [e for e in events if e.get("type") == "RUN_ERROR"]
+
+
+def test_mislabeled_copilot_agent_still_resumes_session(monkeypatch):
+    """Session continuity keys on CAPABILITY, not the registry label.
+
+    Regression: restore/save/working_directory were gated on
+    agent_runtime == "github-copilot" while Tier-1.5 entry is by capability —
+    so a Copilot-built agent registered "maf" (task-manager, apis-config)
+    never resumed its Copilot session and re-injected history every turn.
+    """
+    events, agent = _drive_copilot(
+        monkeypatch,
+        [([_update([_text("hello again")])], None)],
+        thread_id="t-mislabel",
+        label="maf",
+    )
+    assert getattr(agent, "get_session_calls", 0) == 1, (
+        "a maf-labelled Copilot-shaped agent must consult its stored session"
+    )
+    text = "".join(
+        e.get("delta", "") for e in events
+        if e.get("type") == "TEXT_MESSAGE_CONTENT"
+    )
+    assert "hello again" in text
     assert not [e for e in events if e.get("type") == "RUN_ERROR"]

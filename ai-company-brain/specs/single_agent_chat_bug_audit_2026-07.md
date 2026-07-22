@@ -7,6 +7,13 @@ control-bus applied-acks + truthful cancel, R3 `wait_user_future` heartbeat
 via `touch_active`, R1 MAXLEN 10k→50k env-tunable + head-trim warning, C3
 tool-in-flight stall grace — tests in `tests/unit/test_control_ack.py`,
 `tests/unit/test_hitl_heartbeat.py`, `tests/unit/test_hitl_stall_suppression.py`)
+· P2 fixes landed 2026-07-22 (CX4 truncation notice at /v1
+[`V1_SURFACE_TRUNCATION`], CX5 system-prompt protection + CX3 satisfiable
+rescue budget in `fit_messages_to_context`, and the session-continuity gates
+now key on capability not the registry label — tests in
+`tests/unit/test_v1_truncation_notice.py`,
+`tests/unit/test_context_trim_protections.py`,
+`test_run_agent_stream_e2e.py::test_mislabeled_copilot_agent_still_resumes_session`)
 · **Date:** 2026-07-22 · **Requested by:** Vijay
 
 **Landed-fix notes (P1):** `dispatch_control` now requires the owning

@@ -158,12 +158,19 @@ def fit_messages_to_context(
     Returns ``(messages, truncated)``. When already within budget the original
     list is returned untouched. Otherwise the longest string ``content`` is
     repeatedly trimmed (keeping a head + tail around a marker) until the prompt
-    fits — system messages are usually short, so this falls on the big user
-    payload (thread / body) rather than the instructions."""
+    fits. System/developer messages are protected: they are only trimmed when
+    no other message has trimmable content left (a degraded persona beats a
+    provider 4xx, but only as the last resort — audit CX5)."""
     budget = context_window_for(model) - max_output_tokens - safety_margin
     if budget < 1024:
-        # Pathologically small window (or huge max_tokens) — keep something usable.
-        budget = max(1024, (context_window_for(model) * 3) // 4)
+        # Pathologically small window (or huge max_tokens): the requested
+        # completion cannot coexist with a usable prompt, so budget against a
+        # floor-sized completion instead. The old ``window * 3 // 4`` rescue
+        # produced an unsatisfiable request by construction (prompt at 3/4
+        # window + the untouched max_tokens > window — audit CX3). The /v1
+        # choke point clamps the actual max_tokens to the room left after the
+        # prompt (gateway ``_fit_context_window``), keeping this consistent.
+        budget = max(1024, context_window_for(model) - 1024 - safety_margin)
 
     if count_message_tokens(messages, model) <= budget:
         return messages, False
@@ -175,13 +182,25 @@ def fit_messages_to_context(
     for _ in range(24):
         if count_message_tokens(out, model) <= budget:
             break
+        # Prefer trimming non-system content (the big user payload / tool
+        # results), keeping the persona/instructions intact (audit CX5).
         idx, longest = -1, 0
         for i, msg in enumerate(out):
+            if msg.get("role") in ("system", "developer"):
+                continue
             content = msg.get("content")
             if isinstance(content, str) and len(content) > longest:
                 idx, longest = i, len(content)
         if idx < 0 or longest <= len(_TRUNCATION_MARKER) + 200:
-            break  # nothing meaningful left to trim
+            # No trimmable non-system content left — last resort: allow the
+            # system block itself rather than ship an over-budget prompt.
+            idx, longest = -1, 0
+            for i, msg in enumerate(out):
+                content = msg.get("content")
+                if isinstance(content, str) and len(content) > longest:
+                    idx, longest = i, len(content)
+            if idx < 0 or longest <= len(_TRUNCATION_MARKER) + 200:
+                break  # nothing meaningful left to trim
         content = out[idx]["content"]
         body_len = len(content) - (len(_TRUNCATION_MARKER) if _TRUNCATION_MARKER in content else 0)
         keep = max(200, int(body_len * 0.7))

@@ -137,6 +137,56 @@ export function DigestView({ accountId }: DigestViewProps) {
               <Stat icon={Paperclip} label="Attachments" value={t!.attachments} />
             </div>
 
+            {/* The "act on this" half of a daily brief — what I promised to do
+                (commitments due) and what's going stale (aging reply backlog).
+                Shown only when there's something to act on. */}
+            {(data.commitments?.length || data.backlog?.length) ? (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+                {data.commitments && data.commitments.length > 0 && (
+                  <div className="bg-card border border-border rounded-xl p-4">
+                    <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
+                      <Check size={13} className="text-primary" /> Commitments due
+                    </h3>
+                    <div className="space-y-1.5">
+                      {data.commitments.map((c, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs gap-2">
+                          <span className="text-foreground truncate">{c.title}</span>
+                          <span
+                            className={`tabular-nums flex-shrink-0 ${
+                              c.overdue ? "text-destructive" : "text-muted-foreground"
+                            }`}
+                          >
+                            {c.overdue ? "overdue" : "due"} {c.due}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                {data.backlog && data.backlog.length > 0 && (
+                  <div className="bg-card border border-border rounded-xl p-4">
+                    <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
+                      <Reply size={13} className="text-primary" /> Awaiting your reply
+                    </h3>
+                    <div className="space-y-1.5">
+                      {data.backlog.map((b, i) => (
+                        <div key={i} className="flex items-center justify-between text-xs gap-2">
+                          <span className="text-foreground truncate">{b.subject}</span>
+                          <span className="text-muted-foreground tabular-nums flex-shrink-0">
+                            {b.age_days <= 0
+                              ? "today"
+                              : b.age_days === 1
+                                ? "1 day"
+                                : `${b.age_days} days`}
+                          </span>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
+              </div>
+            ) : null}
+
             <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
               {/* By category */}
               <div className="bg-card border border-border rounded-xl p-4">

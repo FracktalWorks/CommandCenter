@@ -96,8 +96,11 @@ async def test_every_aggregate_excludes_the_accounts_own_mail() -> None:
     # aggregate excludes self and binds :self.
     captured: list[tuple[str, dict]] = []
     await m.digest._generate_digest(_fake_db_with_totals(captured), "acc-1", 7)
+    # The WINDOWED inbox aggregates bind :days (the digest window). The backlog-
+    # aging / commitments queries read thread status + tasks, not recent inbox
+    # mail, so they aren't windowed and don't carry the self-exclusion.
     windowed = [(s, p) for s, p in captured
-                if "email_messages em" in s and "email_accounts" not in s]
+                if "email_messages em" in s and "days" in p]
     assert windowed, "expected the windowed inbox aggregates"
     for sql, params in windowed:
         assert "from_address->>'email') <> :self" in sql, sql[:120]
@@ -134,3 +137,70 @@ def test_digest_html_escapes_sender_and_category_text() -> None:
     assert "<script>" not in html
     assert "&lt;script&gt;" in html
     assert "A &amp; &lt;b&gt;" in html
+
+
+# ── 3.11: the daily brief — backlog aging + commitments due ───────────────────
+
+
+def _one_shot_db(rows: list):
+    """A DB whose single execute returns `rows` from fetchall."""
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(
+        fetchall=MagicMock(return_value=rows))
+    return db
+
+
+async def test_backlog_aging_reads_needs_reply_oldest_first() -> None:
+    rows = [SimpleNamespace(thread_id="t1", subject="Invoice?", age_days=5)]
+    db = _one_shot_db(rows)
+    out = await m.digest._digest_backlog_aging(db, "acc-1")
+    sql = str(db.execute.call_args[0][0])
+    assert "status = 'NEEDS_REPLY'" in sql
+    assert "ORDER BY ts.last_message_at ASC" in sql   # oldest first
+    assert out == [{"subject": "Invoice?", "age_days": 5}]
+
+
+async def test_commitments_are_best_effort_when_tasks_absent() -> None:
+    # gtd_items may not exist in a given deploy; a digest must never fail on it.
+    db = AsyncMock()
+    db.execute.side_effect = RuntimeError("relation gtd_items does not exist")
+    assert await m.digest._digest_commitments(db, "acc-1") == []
+
+
+async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> None:
+    rows = [SimpleNamespace(title="Send quote", due_label="Jul 25", overdue=True)]
+    db = _one_shot_db(rows)
+    out = await m.digest._digest_commitments(db, "acc-1")
+    sql = str(db.execute.call_args[0][0])
+    assert "disposition NOT IN ('DONE', 'TRASH')" in sql
+    assert "origin->>'account_id' = :aid" in sql
+    assert out == [{"title": "Send quote", "due": "Jul 25", "overdue": True}]
+
+
+def test_a_quiet_inbox_with_commitments_still_sends() -> None:
+    # The point of a daily brief: even a day with no new mail is worth sending if
+    # I owe something. Commitments (or an aging backlog) keep it non-empty.
+    base = {"totals": {"inbox": 0, "unread": 0, "attachments": 0,
+                       "needs_reply": 0},
+            "by_category": [], "top_senders": [], "backlog": []}
+    assert m.digest._digest_is_empty(base) is True
+    assert m.digest._digest_is_empty(
+        {**base, "commitments": [{"title": "x", "due": "Jul 25",
+                                  "overdue": False}]}) is False
+    assert m.digest._digest_is_empty(
+        {**base, "backlog": [{"subject": "y", "age_days": 3}]}) is False
+
+
+def test_brief_sections_render_in_both_bodies() -> None:
+    backlog = [{"subject": "Contract review", "age_days": 4}]
+    commitments = [{"title": "Send the deck", "due": "Jul 25", "overdue": True}]
+    md = m.digest._render_digest_markdown(
+        "day", {"inbox": 1, "unread": 0, "attachments": 0}, 2,
+        [], [], backlog, commitments)
+    assert "Commitments due" in md and "Send the deck" in md
+    assert "Awaiting your reply" in md and "Contract review" in md
+    html = m.digest._render_digest_html(
+        "day", {"inbox": 1, "unread": 0, "attachments": 0}, 2,
+        [], [], backlog, commitments)
+    assert "Commitments due" in html and "overdue" in html
+    assert "Contract review" in html

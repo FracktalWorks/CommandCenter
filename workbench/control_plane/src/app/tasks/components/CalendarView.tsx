@@ -732,9 +732,6 @@ export function CalendarView() {
         {mode !== "month" && (
           <UnscheduledRail
             tasks={unscheduled}
-            focusedDayLabel={
-              mode === "week" ? "this week's first open slot" : "today"
-            }
             capacityMins={leverageStats.totalMins}
             capacityTarget={capacityTarget}
             leveragedMins={leverageStats.leveragedMins}
@@ -744,7 +741,6 @@ export function CalendarView() {
             urgentWindowHours={settings.urgentWindowHours}
             doneStats={doneStats}
             onPlan={() => setPlanMode("plan")}
-            onSchedule={(t) => schedule(t, mode === "week" ? startOfWeek(anchor) : anchor)}
             onOpen={openFocus}
           />
         )}
@@ -2232,7 +2228,15 @@ function TimeGrid({
     const start = new Date(day);
     start.setHours(dayStart, 0, 0, 0);
     start.setMinutes(start.getMinutes() + mins);
-    reschedule(p.id, start, new Date(start.getTime() + p.durationMins * 60000));
+    // Honest undo label: a rail card lands as "Scheduled", an existing block
+    // as "Moved block".
+    const wasScheduled = !!items.find((i) => i.id === p.id)?.scheduledStart;
+    reschedule(
+      p.id,
+      start,
+      new Date(start.getTime() + p.durationMins * 60000),
+      wasScheduled ? "Moved block" : "Scheduled",
+    );
   };
 
   const onBlockDragStart = (e: React.DragEvent, b: Block) => {
@@ -2923,7 +2927,6 @@ function MonthGrid({
 // ── Unscheduled rail ─────────────────────────────────────────────────────────
 function UnscheduledRail({
   tasks,
-  focusedDayLabel,
   capacityMins,
   capacityTarget,
   leveragedMins,
@@ -2933,11 +2936,9 @@ function UnscheduledRail({
   urgentWindowHours,
   doneStats,
   onPlan,
-  onSchedule,
   onOpen,
 }: {
   tasks: GtdItem[];
-  focusedDayLabel: string;
   capacityMins: number;
   capacityTarget: number;
   /** of the booked minutes, how many sit on leveraged/important work (80/20). */
@@ -2950,7 +2951,6 @@ function UnscheduledRail({
   urgentWindowHours: number;
   doneStats: { count: number; mins: number };
   onPlan: () => void;
-  onSchedule: (t: GtdItem) => void;
   onOpen: (id: string) => void;
 }) {
   const over = capacityMins > capacityTarget;
@@ -2979,7 +2979,7 @@ function UnscheduledRail({
           Unscheduled
         </div>
         <p className="mt-0.5 text-[10px] text-muted-foreground">
-          Drag onto the grid, or click Timebox ({focusedDayLabel}).
+          Drag a card onto the grid to timebox it · click to open.
         </p>
         <div
           className={[
@@ -3026,6 +3026,10 @@ function UnscheduledRail({
               <div
                 key={t.id}
                 draggable
+                // Same grammar as a calendar block: CLICK opens the task card,
+                // CLICK-AND-HOLD drags it onto the grid at the slot you want.
+                // (A completed drag never emits the click.)
+                onClick={() => onOpen(t.id)}
                 onDragStart={(e) => {
                   e.dataTransfer.setData(
                     DRAG_TYPE,
@@ -3049,16 +3053,12 @@ function UnscheduledRail({
                 ].join(" ")}
               >
                 <div className="flex items-start gap-1">
-                  <button
-                    type="button"
-                    onClick={() => onOpen(t.id)}
-                    className="min-w-0 flex-1 truncate text-left text-[12px] text-foreground"
-                  >
+                  <span className="min-w-0 flex-1 truncate text-left text-[12px] text-foreground">
                     {t.id === oneThingId && (
                       <span className="text-amber-400">★ </span>
                     )}
                     {t.title}
-                  </button>
+                  </span>
                   <button
                     type="button"
                     aria-label={
@@ -3071,7 +3071,10 @@ function UnscheduledRail({
                         ? "Your One Thing today. Click to unset."
                         : "If only one thing gets done today… make it this."
                     }
-                    onClick={() => onToggleOneThing(t.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      onToggleOneThing(t.id);
+                    }}
                     className={[
                       "tech-transition shrink-0 rounded p-0.5",
                       t.id === oneThingId
@@ -3121,19 +3124,6 @@ function UnscheduledRail({
                     </span>
                   )}
                 </div>
-                <button
-                  type="button"
-                  onClick={() => onSchedule(t)}
-                  className={[
-                    "tech-transition mt-1.5 inline-flex w-full items-center justify-center gap-1 rounded px-2 py-1 text-[11px] font-medium",
-                    dueDays.has(t.id)
-                      ? "bg-warning/20 text-warning hover:bg-warning/30"
-                      : "bg-primary/10 text-primary hover:bg-primary/20",
-                  ].join(" ")}
-                >
-                  <CalendarPlus className="h-3 w-3" />
-                  Timebox
-                </button>
               </div>
             ))}
           </div>

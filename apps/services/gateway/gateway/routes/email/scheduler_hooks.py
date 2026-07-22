@@ -140,9 +140,11 @@ def register_email_post_sync_hooks() -> None:
     ``__init__``) so the wiring is explicit, and lazily (inside this function)
     so importing this module during app import can't create a cycle.
     """
+    from gateway.routes.email.automation.followups import (
+        _maybe_send_follow_up_reminders,
+    )
     from gateway.routes.email.automation.replyzero import (
         _maybe_classify_threads,
-        _maybe_send_follow_up_reminders,
     )
     from gateway.routes.email.digest import _maybe_send_digest
     from gateway.routes.email.transport.sync import _ensure_subscription

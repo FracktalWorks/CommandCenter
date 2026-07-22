@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import inspect
 
-from gateway.routes.email.automation import drafting, replyzero, runner
+from gateway.routes.email.automation import drafting, followups, runner
 
 
 def test_rule_action_drafter_uses_the_shared_reply_context_builder() -> None:
@@ -34,7 +34,7 @@ def test_compose_assist_stores_the_ai_draft_for_edit_learning() -> None:
 
 
 def test_follow_up_nudge_hydrates_the_body_before_drafting() -> None:
-    src = inspect.getsource(replyzero._maybe_send_follow_up_reminders)
+    src = inspect.getsource(followups._maybe_send_follow_up_reminders)
     assert "hydrate_message_body" in src, (
         "the follow-up nudge must hydrate the full body, not draft off a "
         "~200-char Outlook snippet")

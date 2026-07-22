@@ -90,10 +90,10 @@ def test_match_metadata_is_preserved() -> None:
 def test_suppressed_drafting_is_reported_on_the_job() -> None:
     """A run that skipped drafting must not read as one where the rules simply
     ran in full."""
-    r._PAST_JOBS["acc-x"] = {"token": 1, "status": "running"}
+    r._PAST_JOBS.set("acc-x", {"token": 1, "status": "running"})
     try:
         r._past_job_finish("acc-x", token=1, drafts_skipped=17)
-        assert r._PAST_JOBS["acc-x"]["drafts_skipped"] == 17
-        assert r._PAST_JOBS["acc-x"]["status"] == "done"
+        assert r._PAST_JOBS.get("acc-x")["drafts_skipped"] == 17
+        assert r._PAST_JOBS.get("acc-x")["status"] == "done"
     finally:
         r._PAST_JOBS.pop("acc-x", None)

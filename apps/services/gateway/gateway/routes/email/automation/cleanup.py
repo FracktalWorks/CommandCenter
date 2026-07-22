@@ -47,6 +47,7 @@ from gateway.routes.email.automation.engine import (
     _pattern_hit,
 )
 from gateway.routes.email.automation.identity import resolve_org_domains
+from gateway.routes.email.automation.jobs import JobTracker
 from gateway.routes.email.automation.senders import (
     _KNOWN_LABELS_LOWER,
     _NOT_DISPOSED,
@@ -93,10 +94,13 @@ _SWEEP_PAGE = 500
 # most recent mail and says so (`sampled`). The live run is unbounded.
 _PREVIEW_MAX = 2000
 
-# In-memory progress, same contract and lifetime as runner._PAST_JOBS: the
-# gateway runs a single worker, so the request handler and the background task
-# share this dict; a process restart kills the job and the tracker together.
-_SWEEP_JOBS: dict[str, dict[str, Any]] = {}
+# In-memory progress, same contract and lifetime as runner._PAST_JOBS — now the
+# SAME token-guarded JobTracker (automation/jobs.py). The gateway runs a single
+# worker, so the request handler and the background task share it; a process
+# restart kills the job and the tracker together. The token guard is what stops
+# an overlapping sweep+backfill (or a double-clicked sweep) from clobbering each
+# other's progress row — the bug this table had before and the runner did not.
+_SWEEP_JOBS = JobTracker()
 
 
 # ── Bulk shape ───────────────────────────────────────────────────────────────
@@ -484,7 +488,7 @@ def _taught_otherwise(
 
 async def sweep_uncategorized(
     account_id: str, limit: int, *, dry_run: bool, owner: str = "",
-    max_apply: int | None = None,
+    max_apply: int | None = None, job_token: int | None = None,
 ) -> dict[str, Any]:
     """Project existing categorization onto uncategorized mail.
 
@@ -622,7 +626,8 @@ async def sweep_uncategorized(
                         await db.commit()
                         applied += 1
                         page_applied += 1
-                        _sweep_tick(account_id, applied, summary["scanned"])
+                        _sweep_tick(account_id, applied, summary["scanned"],
+                                    token=job_token)
                     except Exception as exc:  # noqa: BLE001 — one bad message
                         # must not abort the sweep; the rest still gets cleaned.
                         # But it must be COUNTED: `by_category` was incremented at
@@ -659,33 +664,36 @@ async def sweep_uncategorized(
         await db.close()
 
 
-def _sweep_tick(account_id: str, applied: int, scanned: int = 0) -> None:
-    job = _SWEEP_JOBS.get(account_id)
+def _sweep_tick(account_id: str, applied: int, scanned: int = 0,
+                token: int | None = None) -> None:
+    job = _SWEEP_JOBS.guarded(account_id, token)
     if job:
         job["applied"] = applied
         if scanned:
             job["scanned"] = scanned
 
 
-async def _sweep_job(account_id: str, limit: int, owner: str) -> None:
-    """Background wrapper that keeps the polled progress row up to date."""
+async def _sweep_job(
+    account_id: str, limit: int, owner: str, token: int | None = None,
+) -> None:
+    """Background wrapper that keeps the polled progress row up to date.
+
+    ``token`` guards every write: if a newer sweep/backfill superseded this one
+    while it ran, these updates no-op instead of overwriting the newer row."""
     try:
         summary = await sweep_uncategorized(
-            account_id, limit, dry_run=False, owner=owner)
+            account_id, limit, dry_run=False, owner=owner, job_token=token)
         # sweep_uncategorized swallows its own exceptions into summary["error"]
         # and returns normally, so a run that died on page 1 must NOT be stamped
         # "done" here — the UI would show "Categorized N emails" for a failed run.
         status = "error" if summary.get("error") else "done"
-        _SWEEP_JOBS[account_id] = {
-            **_SWEEP_JOBS.get(account_id, {}), **summary,
-            "owner": owner, "status": status,
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }
+        _SWEEP_JOBS.finish(
+            account_id, token, **summary, owner=owner, status=status,
+            finished_at=datetime.now(timezone.utc).isoformat())
     except Exception as exc:  # noqa: BLE001
-        _SWEEP_JOBS[account_id] = {
-            **_SWEEP_JOBS.get(account_id, {}), "owner": owner,
-            "status": "error", "error": str(exc)[:200],
-        }
+        _SWEEP_JOBS.finish(
+            account_id, token, owner=owner, status="error",
+            error=str(exc)[:200])
 
 
 async def restore_provider_labels(account_id: str) -> dict[str, Any]:
@@ -832,6 +840,7 @@ async def _mark_history_held_back(
 
 async def _backfill_and_clean_job(
     account_id: str, since: datetime | None, owner: str,
+    token: int | None = None,
 ) -> None:
     """Download older mail, then categorize it deterministically.
 
@@ -851,12 +860,9 @@ async def _backfill_and_clean_job(
     rule run — without being marked rules-processed, so a deliberate "Process
     past emails" run can still reach it (migration 84).
     """
+    # The "running" row was seeded (and the token minted) by the endpoint, so a
+    # second request sees this run in-flight before this task even starts.
     started = datetime.now(timezone.utc)
-    _SWEEP_JOBS[account_id] = {
-        "owner": owner, "status": "running", "phase": "downloading",
-        "applied": 0, "scanned": 0, "synced": 0, "held_back": 0,
-        "started_at": started.isoformat(),
-    }
     try:
         db = await _get_db()
         try:
@@ -880,26 +886,22 @@ async def _backfill_and_clean_job(
         finally:
             await db.close()
 
-        _SWEEP_JOBS[account_id] = {
-            **_SWEEP_JOBS.get(account_id, {}),
-            "phase": "cleaning", "synced": fetched, "held_back": held_back,
-        }
+        _SWEEP_JOBS.update(
+            account_id, token, phase="cleaning", synced=fetched,
+            held_back=held_back)
         _log.info("email.cleanup_backfill_synced", account_id=account_id,
                   fetched=fetched, held_back=held_back)
 
         summary = await sweep_uncategorized(
-            account_id, _MAX_SWEEP, dry_run=False, owner=owner)
-        _SWEEP_JOBS[account_id] = {
-            **_SWEEP_JOBS.get(account_id, {}), **summary,
-            "owner": owner, "status": "done", "phase": "done",
-            "synced": fetched, "held_back": held_back,
-            "finished_at": datetime.now(timezone.utc).isoformat(),
-        }
+            account_id, _MAX_SWEEP, dry_run=False, owner=owner, job_token=token)
+        _SWEEP_JOBS.finish(
+            account_id, token, **summary, owner=owner, status="done",
+            phase="done", synced=fetched, held_back=held_back,
+            finished_at=datetime.now(timezone.utc).isoformat())
     except Exception as exc:  # noqa: BLE001
-        _SWEEP_JOBS[account_id] = {
-            **_SWEEP_JOBS.get(account_id, {}), "owner": owner,
-            "status": "error", "phase": "error", "error": str(exc)[:200],
-        }
+        _SWEEP_JOBS.finish(
+            account_id, token, owner=owner,
+            status="error", phase="error", error=str(exc)[:200])
         _log.warning("email.cleanup_backfill_failed", account_id=account_id,
                      error=str(exc)[:200])
 
@@ -932,13 +934,19 @@ async def cleanup_backfill(
         from gateway.routes.email.core import _parse_iso_date  # noqa: PLC0415
         since = _parse_iso_date(req.since_date, end_of_day=False)
 
-    running = _SWEEP_JOBS.get(req.account_id)
-    if running and running.get("status") == "running":
+    if _SWEEP_JOBS.is_running(req.account_id):
         # Two concurrent deep syncs on one mailbox would race the provider and
         # each other's progress row; say so rather than silently start a second.
         return {"scheduled": False, "reason": "already_running"}
 
-    background.add_task(_backfill_and_clean_job, req.account_id, since, owner)
+    # Seed the row (and mint the guard token) synchronously, BEFORE returning, so
+    # a second request racing this one sees the run in-flight.
+    token = _SWEEP_JOBS.start(
+        req.account_id, owner=owner, status="running", phase="downloading",
+        applied=0, scanned=0, synced=0, held_back=0,
+        started_at=datetime.now(timezone.utc).isoformat())
+    background.add_task(
+        _backfill_and_clean_job, req.account_id, since, owner, token)
     return {"scheduled": True, "since": req.since_date}
 
 
@@ -989,11 +997,18 @@ async def auto_categorize_inbox(
         res["sampled"] = not res.get("exhausted", False)
         return res
 
-    _SWEEP_JOBS[req.account_id] = {
-        "owner": owner, "status": "running", "applied": 0,
-        "started_at": datetime.now(timezone.utc).isoformat(),
-    }
-    background.add_task(_sweep_job, req.account_id, limit, owner)
+    if _SWEEP_JOBS.is_running(req.account_id):
+        # A sweep (or a backfill's cleaning phase) is already running for this
+        # mailbox. Two would race the provider and clobber each other's progress
+        # row — the exact class the shared token guard closes. Refuse, matching
+        # the backfill endpoint, rather than silently start a second.
+        return {"scheduled": False, "reason": "already_running"}
+
+    # Seed + mint the guard token synchronously so a racing request sees it.
+    token = _SWEEP_JOBS.start(
+        req.account_id, owner=owner, status="running", applied=0,
+        started_at=datetime.now(timezone.utc).isoformat())
+    background.add_task(_sweep_job, req.account_id, limit, owner, token)
     return {"scheduled": True}
 
 

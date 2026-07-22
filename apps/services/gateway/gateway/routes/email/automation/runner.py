@@ -32,6 +32,7 @@ from gateway.routes.email.automation.engine import (
     email_dict_from_row,
 )
 from gateway.routes.email.automation.identity import resolve_org_domains
+from gateway.routes.email.automation.jobs import JobTracker
 from gateway.routes.email.automation.rules import _upsert_rule_pattern
 from gateway.routes.email.automation.senders import _maybe_block_cold
 from gateway.routes.email.core import (
@@ -597,8 +598,10 @@ async def run_rules(
 # and expose it via GET /rules/process-past/status for the UI to poll. State is
 # ephemeral by design: if the process restarts the job dies too, so losing the
 # tracker with it is correct.
-_PAST_JOBS: dict[str, dict[str, Any]] = {}
-_PAST_JOB_SEQ = 0  # monotonic token so a stale job can't clobber a newer run
+# The "Process past emails" progress tracker. The monotonic-token guard that
+# stops a stale run from clobbering a newer one now lives in JobTracker, shared
+# with the cleaner's sweep (automation/jobs.py).
+_PAST_JOBS = JobTracker()
 
 
 async def apply_label(
@@ -648,29 +651,25 @@ def _past_job_start(
     ``downloading`` marks the run as in the pre-apply provider-backfill phase
     (the range is being fetched from upstream). The job then calls
     ``_past_job_begin_processing`` with the real in-range total once mail lands."""
-    global _PAST_JOB_SEQ
-    _PAST_JOB_SEQ += 1
-    token = _PAST_JOB_SEQ
     running = downloading or total > 0
-    _PAST_JOBS[account_id] = {
-        "token": token,
-        "owner": owner,
-        "status": "running" if running else "done",
-        "phase": "downloading" if downloading else "processing",
-        "total": total,
-        "processed": 0,
-        "applied": 0,
-        "skipped": 0,
+    return _PAST_JOBS.start(
+        account_id,
+        owner=owner,
+        status="running" if running else "done",
+        phase="downloading" if downloading else "processing",
+        total=total,
+        processed=0,
+        applied=0,
+        skipped=0,
         # Excluded up front as already-processed — NOT part of `total`, and not
         # a failure. Kept distinct from `skipped` (in range, processed, matched
         # no rule) so the UI can tell "already done" from "nothing applied".
-        "already_processed": already_processed,
-        "dry_run": dry_run,
-        "started_at": _now_iso(),
-        "finished_at": None if running else _now_iso(),
-        "error": None,
-    }
-    return token
+        already_processed=already_processed,
+        dry_run=dry_run,
+        started_at=_now_iso(),
+        finished_at=None if running else _now_iso(),
+        error=None,
+    )
 
 
 def _past_job_begin_processing(
@@ -684,10 +683,8 @@ def _past_job_begin_processing(
     ``already_processed`` is re-measured here for the same reason: the endpoint's
     figure predates the download, so mail that arrived (or was first synced)
     during it isn't reflected in it."""
-    job = _PAST_JOBS.get(account_id)
+    job = _PAST_JOBS.guarded(account_id, token)
     if not job:
-        return
-    if token is not None and job.get("token") != token:
         return
     job["total"] = total
     if already_processed is not None:
@@ -702,11 +699,9 @@ def _past_job_tick(
     account_id: str, *, token: int | None = None,
     applied: int = 0, skipped: int = 0,
 ) -> None:
-    job = _PAST_JOBS.get(account_id)
+    job = _PAST_JOBS.guarded(account_id, token)
     if not job or job.get("status") != "running":
-        return
-    if token is not None and job.get("token") != token:
-        return  # a newer run replaced this one — don't touch it
+        return  # gone, superseded by a newer run, or already finished
     job["processed"] += 1
     job["applied"] += applied
     job["skipped"] += skipped
@@ -716,11 +711,9 @@ def _past_job_finish(
     account_id: str, *, token: int | None = None, error: str | None = None,
     drafts_skipped: int = 0,
 ) -> None:
-    job = _PAST_JOBS.get(account_id)
+    job = _PAST_JOBS.guarded(account_id, token)
     if not job:
-        return
-    if token is not None and job.get("token") != token:
-        return  # a newer run replaced this one — leave it running
+        return  # gone, or a newer run replaced this one — leave it running
     job["status"] = "error" if error else "done"
     job["error"] = error
     # Report suppressed drafting, so a run that deliberately skipped it doesn't

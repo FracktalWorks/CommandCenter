@@ -92,12 +92,12 @@ def test_the_skipped_count_is_reported_separately() -> None:
     excluded is what tells them apart, so it must reach the tracker."""
     token = r._past_job_start(_ACC, "u@x", 0, False, already_processed=42)
     try:
-        assert r._PAST_JOBS[_ACC]["already_processed"] == 42
+        assert r._PAST_JOBS.get(_ACC)["already_processed"] == 42
         # And it must survive the transition out of the downloading phase.
         r._past_job_begin_processing(_ACC, token=token, total=3,
                                      already_processed=40)
-        assert r._PAST_JOBS[_ACC]["already_processed"] == 40
-        assert r._PAST_JOBS[_ACC]["total"] == 3
+        assert r._PAST_JOBS.get(_ACC)["already_processed"] == 40
+        assert r._PAST_JOBS.get(_ACC)["total"] == 3
     finally:
         r._PAST_JOBS.pop(_ACC, None)
 
@@ -108,8 +108,8 @@ def test_already_processed_is_not_folded_into_skipped() -> None:
     token = r._past_job_start(_ACC, "u@x", 5, False, already_processed=100)
     try:
         r._past_job_tick(_ACC, token=token, skipped=1)
-        assert r._PAST_JOBS[_ACC]["skipped"] == 1
-        assert r._PAST_JOBS[_ACC]["already_processed"] == 100
+        assert r._PAST_JOBS.get(_ACC)["skipped"] == 1
+        assert r._PAST_JOBS.get(_ACC)["already_processed"] == 100
     finally:
         r._PAST_JOBS.pop(_ACC, None)
 
@@ -119,6 +119,6 @@ def test_already_processed_defaults_to_zero() -> None:
     field the UI does arithmetic on."""
     r._past_job_start(_ACC, "u@x", 1, False)
     try:
-        assert r._PAST_JOBS[_ACC]["already_processed"] == 0
+        assert r._PAST_JOBS.get(_ACC)["already_processed"] == 0
     finally:
         r._PAST_JOBS.pop(_ACC, None)

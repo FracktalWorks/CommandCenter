@@ -13,7 +13,7 @@ import {
 import {
   createKnowledge, deleteKnowledge, deleteLearnedPattern, deleteRulePattern,
   generateWritingStyle, getAssistantSettings, listColdSenders, listKnowledge,
-  listLearnedPatterns, listRulePatterns, listRules, resetRules,
+  listLearnedPatterns, listRulePatterns, resetRules,
   listRuleGuidance, deleteRuleGuidance,
   reviewRulePatterns, saveAssistantSettings, scanFollowUps, updateKnowledge,
   upsertColdSender,
@@ -24,6 +24,7 @@ import {
   LearnedRulePattern, RuleGuidance, WEEKDAYS,
 } from "../../../lib/types";
 import { SignatureEditor } from "../../SignatureEditor";
+import { DigestSettingsDialog } from "../DigestSettingsDialog";
 import { Modal, SectionHeader, SettingCard, Toggle } from "../ui";
 import {
   Empty, Field, IconAction, INPUT_BASE, INPUT_CLS, Spinner, summary,
@@ -135,7 +136,6 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
   const [enabledModels, setEnabledModels] = useState<
     { id: string; label?: string; provider?: string }[]
   >([]);
-  const [ruleNames, setRuleNames] = useState<string[]>([]);
   const [dialog, setDialog] = useState<
     | "followup"
     | "digest"
@@ -173,9 +173,6 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
       .then((s) => !cancelled && setSettings(s))
       .catch((e) => !cancelled && setError(e.message || "Failed to load settings"))
       .finally(() => !cancelled && setLoading(false));
-    listRules(accountId)
-      .then((rs) => !cancelled && setRuleNames(rs.map((r) => r.name)))
-      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -515,10 +512,9 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
         <ResetRulesDialog
           accountId={accountId}
           onClose={() => setDialog(null)}
-          onDone={(names) => {
-            setRuleNames(names);
-            setDialog(null);
-          }}
+          // The rule names were only consumed by the digest dialog, which is
+          // now self-fetching (DigestSettingsDialog) — nothing to sync here.
+          onDone={() => setDialog(null)}
         />
       )}
       {dialog === "followup" && (
@@ -532,14 +528,10 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
         />
       )}
       {dialog === "digest" && (
-        <DigestDialog
-          settings={s}
-          ruleNames={ruleNames}
-          onSave={(next) => {
-            persist(next);
-            setDialog(null);
-          }}
+        <DigestSettingsDialog
+          accountId={accountId}
           onClose={() => setDialog(null)}
+          onSaved={(next) => setSettings(next)}
         />
       )}
       {dialog === "writingstyle" && (
@@ -927,125 +919,6 @@ function FollowUpDialog({
           {scanMsg}
         </div>
       )}
-    </Modal>
-  );
-}
-
-function DigestDialog({
-  settings,
-  ruleNames,
-  onSave,
-  onClose,
-}: {
-  settings: AssistantSettings;
-  ruleNames: string[];
-  onSave: (next: AssistantSettings) => void;
-  onClose: () => void;
-}) {
-  const [draft, setDraft] = useState(settings);
-  const options = [...ruleNames, "Cold Emails"];
-  const allSelected = draft.digest_categories.length === 0; // empty = everything
-  const toggleCat = (name: string) => {
-    const has = draft.digest_categories.includes(name);
-    setDraft({
-      ...draft,
-      digest_categories: has
-        ? draft.digest_categories.filter((c) => c !== name)
-        : [...draft.digest_categories, name],
-    });
-  };
-  const weekly = draft.digest_frequency === "WEEKLY";
-  return (
-    <Modal
-      title="Digest settings"
-      description="Configure when your digest is sent and which rules it includes."
-      onClose={onClose}
-      footer={
-        <button
-          onClick={() => onSave(draft)}
-          className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
-        >
-          <Check size={13} /> Save
-        </button>
-      }
-    >
-      <div>
-        <span className="text-xs text-muted-foreground mb-1.5 block">
-          What to include in the digest{" "}
-          {allSelected && <span className="text-muted-foreground/70">(all rules)</span>}
-        </span>
-        <div className="flex flex-wrap gap-1.5">
-          {options.map((name) => {
-            const on = draft.digest_categories.includes(name);
-            return (
-              <button
-                key={name}
-                onClick={() => toggleCat(name)}
-                className={`text-[11px] px-2 py-1 rounded-full border transition-colors ${
-                  on
-                    ? "bg-primary/15 text-primary border-primary/40"
-                    : "border-border text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                {name}
-              </button>
-            );
-          })}
-        </div>
-      </div>
-      <Field label="Send the digest">
-        <select
-          value={draft.digest_frequency}
-          onChange={(e) =>
-            setDraft({
-              ...draft,
-              digest_frequency: e.target.value as AssistantSettings["digest_frequency"],
-            })
-          }
-          className={INPUT_CLS}
-        >
-          <option value="DAILY">Every day</option>
-          <option value="WEEKLY">Every week</option>
-        </select>
-      </Field>
-      {weekly && (
-        <Field label="On">
-          <select
-            value={draft.digest_day_of_week}
-            onChange={(e) =>
-              setDraft({ ...draft, digest_day_of_week: parseInt(e.target.value, 10) })
-            }
-            className={INPUT_CLS}
-          >
-            {WEEKDAYS.map((d, i) => (
-              <option key={d} value={i}>
-                {d}
-              </option>
-            ))}
-          </select>
-        </Field>
-      )}
-      <Field label="At (UTC)">
-        <input
-          type="time"
-          value={draft.digest_time_of_day}
-          onChange={(e) =>
-            setDraft({ ...draft, digest_time_of_day: e.target.value || "09:00" })
-          }
-          className={INPUT_CLS}
-        />
-      </Field>
-      <label className="flex items-start gap-2 cursor-pointer pt-1">
-        <input
-          type="checkbox"
-          checked={draft.digest_send_to_email}
-          onChange={(e) =>
-            setDraft({ ...draft, digest_send_to_email: e.target.checked })
-          }
-          className="accent-primary mt-0.5"
-        />
-        <span className="text-xs text-foreground">Send digest to my email</span>
-      </label>
     </Modal>
   );
 }

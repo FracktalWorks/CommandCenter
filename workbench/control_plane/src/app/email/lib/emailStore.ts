@@ -9,6 +9,7 @@ import {
   toSearchParams,
 } from "./searchFilters";
 import { QUICK_ACTIONS, MOCK_ACCOUNTS, MOCK_EMAILS, MOCK_FOLDERS } from "./mockData";
+import { splitQuotedText } from "./quoting";
 
 /**
  * Dev-only demo mode. With NEXT_PUBLIC_EMAIL_DEMO=1 (set in .env.local) the
@@ -273,7 +274,19 @@ interface EmailState {
 
   // UI
   composeOpen: boolean;
-  composeDefaults: { to: string; subject: string; replyToBody?: string; quote?: string; replyToMessageId?: string } | null;
+  composeDefaults: {
+    to: string;
+    subject: string;
+    replyToBody?: string;
+    quote?: string;
+    replyToMessageId?: string;
+    // Carried so an undo-send reopen restores the full message, not a lossy
+    // subset. Without these the composer reset Cc/attachments/artifacts to
+    // empty on open and the user silently lost them.
+    cc?: string;
+    attachments?: api.SendAttachment[];
+    artifacts?: api.ArtifactAttachmentRef[];
+  } | null;
   /** A message queued to send, shown with an "Undo" toast until the timer fires. */
   pendingSend: api.SendEmailParams | null;
   /** A prompt handed from the Assistant's "Fix" flow to the AI chat panel, which
@@ -1285,15 +1298,24 @@ export const useEmailStore = create<EmailState>((set, get) => ({
     }
     const p = get().pendingSend;
     set({ pendingSend: null });
-    // Reopen the composer with the draft so it can be edited and re-sent.
+    // Reopen the composer with the FULL message so it can be edited and re-sent.
+    // p.bodyText is the combined body (new text + quoted chain); split it back so
+    // the editable box holds only what the user wrote and the quote stays out of
+    // reach (matching how the composer keeps them separate). Cc, attachments and
+    // artifacts are restored too — dropping them was a silent data loss.
     if (p) {
+      const { main, quoted } = splitQuotedText(p.bodyText || "");
       set({
         composeOpen: true,
         composeDefaults: {
           to: p.to.join(", "),
           subject: p.subject,
-          replyToBody: p.bodyText,
+          replyToBody: main,
+          quote: quoted || undefined,
           replyToMessageId: p.replyToMessageId,
+          cc: p.cc?.length ? p.cc.join(", ") : undefined,
+          attachments: p.attachments,
+          artifacts: p.artifacts,
         },
       });
     }

@@ -351,6 +351,20 @@ _CLEANUP_SCOPE = f"""
     AND NOT EXISTS (
           SELECT 1 FROM unnest(em.categories) AS c
            WHERE LOWER(TRIM(c)) = ANY(:labels))
+    -- A message inside a live CONVERSATION is not the cleaner's to label: the
+    -- thread's status IS its classification (#110), and most messages of a
+    -- statused thread legitimately carry no chip (the status label sits on the
+    -- latest inbound message only). Without this the sweep saw those bare
+    -- messages as "uncategorized" and projected the sender's category back on
+    -- — observed live 2026-07-22: a repair stripped stale Receipt/Marketing
+    -- chips from conversation threads and the very next sweep cycle re-applied
+    -- 36 of them. FYI rows are NOT conversations (#111), so FYI-statused bulk
+    -- threads stay sweepable.
+    AND NOT EXISTS (
+          SELECT 1 FROM email_thread_status ts
+           WHERE ts.account_id = em.account_id
+             AND ts.thread_id = em.thread_id
+             AND ts.status IN ('NEEDS_REPLY', 'AWAITING', 'DONE'))
 """
 
 

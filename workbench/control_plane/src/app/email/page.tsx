@@ -1053,6 +1053,7 @@ export default function EmailPage() {
         replyToBody={composeDefaults?.replyToBody}
         quote={composeDefaults?.quote}
         replyToMessageId={composeDefaults?.replyToMessageId}
+        messageId={composeDefaults?.messageId}
         initialAttachments={composeDefaults?.attachments}
         initialArtifacts={composeDefaults?.artifacts}
       />

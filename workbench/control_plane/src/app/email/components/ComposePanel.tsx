@@ -35,6 +35,9 @@ interface ComposePanelProps {
    *  send, and kept OUT of the editable body so AI/edits never touch it. */
   quote?: string;
   replyToMessageId?: string;
+  /** LOCAL id of the message being replied to — lets "Draft with AI" load the
+   *  same reply context the inline reply had (compose-assist keys off it). */
+  messageId?: string;
   /** Seed attachments/artifacts (e.g. restored on an undo-send reopen) so the
    *  user doesn't silently lose what they'd attached before undoing. */
   initialAttachments?: SendAttachment[];
@@ -52,6 +55,7 @@ export function ComposePanel({
   replyToBody,
   quote,
   replyToMessageId,
+  messageId,
   initialAttachments,
   initialArtifacts,
 }: ComposePanelProps) {
@@ -114,6 +118,9 @@ export function ComposePanel({
         body: main,
         instruction: aiInstruction.trim(),
         mode: replyToMessageId ? "reply" : "new",
+        // The local message id lets the drafter load the replied-to thread +
+        // direction context (parity with the inline reply's "Draft with AI").
+        messageId,
         to: toArr,
         subject,
       });

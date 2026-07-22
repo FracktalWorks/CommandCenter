@@ -1398,6 +1398,13 @@ async def compose_assist(
                 )
                 if _is_no_draft(draft):
                     return {"draft": "", "skipped": "low_confidence"}
+                # Remember this draft (same as /draft-reply) so when the user
+                # edits it in the composer and sends, _learn_from_sent can diff
+                # the sent body against what the AI wrote. Without this the
+                # highest-traffic "Draft with AI" entry point taught nothing.
+                if ctx.get("thread_id"):
+                    await _store_ai_draft(
+                        db, req.account_id, ctx["thread_id"], draft)
                 return {"draft": draft}
             subject = subject or ctx.get("subject", "")
             thread = ctx.get("thread", "")

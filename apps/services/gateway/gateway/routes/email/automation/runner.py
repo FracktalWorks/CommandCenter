@@ -14,6 +14,7 @@ from fastapi import BackgroundTasks, Depends, HTTPException, Query
 from gateway.routes.email.automation.assistant import _load_assistant_about
 from gateway.routes.email.automation.drafting import (
     _agent_draft_reply,
+    _build_reply_context,
     _fetch_reply_memories,
     _fetch_sender_reply_examples,
     _fetch_thread_context,
@@ -2134,28 +2135,37 @@ async def _apply_rule_actions(
                 if tmpl:
                     body = tmpl
                 else:
-                    # Hydrate the FULL incoming body before AI drafting — a
-                    # header-only row (Outlook/Graph) otherwise hands the drafter
-                    # a ~200-char snippet cut off mid-sentence. Just-in-time for
-                    # the one message being drafted (no batch-wide provider cost).
-                    from gateway.routes.email.core import (  # noqa: PLC0415
-                        hydrate_message_body,
-                    )
-                    _hb = await hydrate_message_body(db, str(message_id), user_email)
-                    draft_email = {
-                        **email,
-                        "body": (_hb or "").strip() or email.get("body", ""),
-                        "thread": await _fetch_thread_context(
-                            db, account_id, email.get("thread_id", ""),
-                            provider_msg_id) if email.get("thread_id") else "",
-                        "sender_examples": await _fetch_sender_reply_examples(
-                            db, account_id, email.get("from", "")),
-                        "reply_memories": await _fetch_reply_memories(
-                            db, account_id, email),
-                        # Attachment metadata on the message being replied to.
-                        "attachments": (await _attachment_summaries(
-                            db, [message_id])).get(str(message_id), ""),
-                    }
+                    # Build the draft context through the SAME single builder the
+                    # interactive paths use (/draft-reply, "Draft with AI"), so the
+                    # highest-volume path gets full parity: hydrated body, thread,
+                    # sender examples + reply memories AND the direction/recipient-
+                    # role signals (self / sender_scope / To / Cc) that make the
+                    # drafter greet the right person and pick the right register.
+                    # Those signals were silently absent on the rule path before —
+                    # the hand-assembled dict carried neither sender_scope nor the
+                    # To/Cc lines. Fall back to a hydrated copy of the base dict if
+                    # the row can't be resolved (it always should here).
+                    draft_email = await _build_reply_context(
+                        db, account_id, str(message_id), user_email)
+                    if draft_email is None:
+                        from gateway.routes.email.core import (  # noqa: PLC0415
+                            hydrate_message_body,
+                        )
+                        _hb = await hydrate_message_body(
+                            db, str(message_id), user_email)
+                        draft_email = {
+                            **email,
+                            "body": (_hb or "").strip() or email.get("body", ""),
+                            "thread": await _fetch_thread_context(
+                                db, account_id, email.get("thread_id", ""),
+                                provider_msg_id) if email.get("thread_id") else "",
+                            "sender_examples": await _fetch_sender_reply_examples(
+                                db, account_id, email.get("from", "")),
+                            "reply_memories": await _fetch_reply_memories(
+                                db, account_id, email),
+                            "attachments": (await _attachment_summaries(
+                                db, [message_id])).get(str(message_id), ""),
+                        }
                     body = await _agent_draft_reply(
                         draft_email, about, signature, user_email, use_agent=True,
                         confidence=draft_conf,

@@ -71,6 +71,9 @@ class EmailMessageModel(BaseModel):
     folder: str = "INBOX"
     received_at: str | None = None
     synced_at: str | None = None
+    # When set and in the future, the conversation is snoozed out of the inbox
+    # until this time (see migration 90). Null for the vast majority of mail.
+    snoozed_until: str | None = None
 
 
 def _truncate_body(text: str, max_bytes: int) -> str:
@@ -410,6 +413,11 @@ def folder_scope(
         return "LOWER(em.folder) <> ALL(:folder_excludes)"
     if key == "starred":
         return "em.is_starred = true"
+    if key == "snoozed":
+        # The virtual Snoozed view: conversations still sleeping. (Every OTHER
+        # browse excludes these — that filter lives in list_messages so it also
+        # covers All/user folders, which don't route through here.)
+        return "em.snoozed_until > now()"
     params["folder"] = folder
     return "LOWER(em.folder) = LOWER(:folder)"
 
@@ -688,6 +696,9 @@ def _row_to_message(row: Any) -> EmailMessageModel:
         categories=list(row.categories) if getattr(row, "categories", None) else [],
         received_at=row.received_at.isoformat() if row.received_at else None,
         synced_at=row.synced_at.isoformat() if row.synced_at else None,
+        snoozed_until=(
+            row.snoozed_until.isoformat()
+            if getattr(row, "snoozed_until", None) else None),
     )
 
 

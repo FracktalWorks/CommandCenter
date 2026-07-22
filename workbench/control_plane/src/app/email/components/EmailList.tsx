@@ -6,7 +6,7 @@ import {
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, X,
   MessagesSquare, RefreshCw, Minus, Plus,
-  ListChecks,
+  ListChecks, Clock, AlarmClockOff,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
@@ -60,6 +60,37 @@ function renderHighlight(hl: string): { __html: string } {
   return { __html: withMarks };
 }
 
+// Snooze-until presets, computed at click time. "Later today" is +3h; the rest
+// anchor to sensible clock times so "tomorrow" means tomorrow morning, not +24h.
+function snoozePresets(): { label: string; until: string }[] {
+  const now = new Date();
+  const at = (d: Date, h: number) => {
+    const x = new Date(d);
+    x.setHours(h, 0, 0, 0);
+    return x;
+  };
+  const laterToday = new Date(now.getTime() + 3 * 60 * 60 * 1000);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowAm = at(tomorrow, 8);
+  // Next Saturday 8am (if today is Sat/Sun, the coming/!today Saturday).
+  const weekend = new Date(now);
+  const daysToSat = (6 - weekend.getDay() + 7) % 7 || 7;
+  weekend.setDate(weekend.getDate() + daysToSat);
+  const weekendAm = at(weekend, 8);
+  // Next Monday 8am.
+  const nextWeek = new Date(now);
+  const daysToMon = (1 - nextWeek.getDay() + 7) % 7 || 7;
+  nextWeek.setDate(nextWeek.getDate() + daysToMon);
+  const nextWeekAm = at(nextWeek, 8);
+  return [
+    { label: "Later today", until: laterToday.toISOString() },
+    { label: "Tomorrow", until: tomorrowAm.toISOString() },
+    { label: "This weekend", until: weekendAm.toISOString() },
+    { label: "Next week", until: nextWeekAm.toISOString() },
+  ];
+}
+
 interface CtxState {
   x: number;
   y: number;
@@ -92,7 +123,7 @@ export function EmailList({
     availableLabels, applyLabel, applyLabelBulk, clearCategories,
     selectedIds, toggleEmailSelected, setSelectedEmails, clearEmailSelection,
     bulkUpdateSelected, bulkDeleteSelected, captureEmailToTasks,
-    runTestOnMessage, testRunningIds,
+    runTestOnMessage, testRunningIds, snoozeEmail,
   } = useEmailStore();
   const { isMobile } = useViewMode();
   // Treat the post-sync "processing" window (background rules/labels pipeline)
@@ -570,6 +601,12 @@ export function EmailList({
             clearCategories(ctx.bulk ? [...selected] : [ctx.email.id])
           }
           onClose={() => setCtx(null)}
+          snoozedView={selectedFolder === "snoozed"}
+          onSnooze={(until) =>
+            (ctx.bulk ? [...selected] : [ctx.email.id]).forEach((id) =>
+              snoozeEmail(id, until),
+            )
+          }
           onReply={(k) => onToolbarAction(k, ctx.email)}
           onAddToTasks={() =>
             (ctx.bulk ? [...selected] : [ctx.email.id]).forEach((id) =>
@@ -594,6 +631,8 @@ function ContextMenu({
   onApplyLabel,
   onClearCategories,
   onClose,
+  snoozedView,
+  onSnooze,
   onReply,
   onAddToTasks,
   onUpdate,
@@ -608,6 +647,9 @@ function ContextMenu({
   onApplyLabel: (name: string, add: boolean) => void;
   onClearCategories: () => void;
   onClose: () => void;
+  /** True in the Snoozed view — offer "Unsnooze" instead of the presets. */
+  snoozedView: boolean;
+  onSnooze: (until: string | null) => void;
   onReply: (action: string) => void;
   onAddToTasks: () => void;
   onUpdate: (
@@ -668,6 +710,32 @@ function ContextMenu({
           label={bulk ? `Add ${count} to Tasks` : "Add to Tasks"}
           onClick={() => run(onAddToTasks)}
         />
+        {snoozedView ? (
+          <CtxItem
+            icon={AlarmClockOff}
+            label={bulk ? `Unsnooze ${count}` : "Unsnooze"}
+            onClick={() => run(() => onSnooze(null))}
+          />
+        ) : (
+          <CtxSubmenu icon={Clock} label="Snooze until…" flipLeft={flipLeft}>
+            {snoozePresets().map((p) => (
+              <button
+                key={p.label}
+                className="w-full flex items-center justify-between gap-3 px-3 py-1.5 text-foreground/80 hover:text-foreground hover:bg-secondary transition-colors"
+                onClick={() => run(() => onSnooze(p.until))}
+              >
+                <span>{p.label}</span>
+                <span className="text-[10px] text-muted-foreground">
+                  {new Date(p.until).toLocaleString(undefined, {
+                    weekday: "short",
+                    hour: "numeric",
+                    minute: "2-digit",
+                  })}
+                </span>
+              </button>
+            ))}
+          </CtxSubmenu>
+        )}
         <CtxDivider />
         <CtxItem
           icon={MailOpen}

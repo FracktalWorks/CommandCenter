@@ -1378,6 +1378,7 @@ async def _maybe_classify_threads(account_id: str) -> None:
     db = await _get_db()
     try:
         from gateway.routes.email.automation.engine import (  # noqa: PLC0415
+            LLMUnavailable,
             _match_email_to_rule,
             email_dict_from_row,
         )
@@ -1494,7 +1495,13 @@ async def _maybe_classify_threads(account_id: str) -> None:
             email = email_dict_from_row(
                 r, self_email, about, extra_domains=extra_domains,
                 attachments=gap_attach.get(str(r.id), ""))
-            match = await _match_email_to_rule(db, account_id, email)
+            try:
+                match = await _match_email_to_rule(db, account_id, email)
+            except LLMUnavailable:
+                # Classifier down for this one — skip it (this backfill writes no
+                # watermark, so the gap query re-selects it next cycle) rather
+                # than abort the whole batch on the outer handler.
+                continue
             # Full-thread status determination (same parity as the live runner)
             # when the match is a conversation.
             matches = await resolve_conversation_status_matches(

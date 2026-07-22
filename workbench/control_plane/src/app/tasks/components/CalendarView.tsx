@@ -517,11 +517,14 @@ export function CalendarView() {
             <ChevronRight className="h-4 w-4" />
           </button>
         </div>
-        <div className="relative ml-auto flex items-center gap-2">
+        {/* Actions: share the row with the title on desktop (ml-auto), but on
+            mobile take a FULL second row so the pills never get squeezed into
+            wrapping against the date. */}
+        <div className="relative flex w-full items-center gap-2 sm:ml-auto sm:w-auto">
           {dueSoon.length > 0 && (
             <span
               title={`${dueSoon.length} unscheduled task(s) due within 2 weeks`}
-              className="inline-flex items-center gap-1 rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning"
+              className="inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-warning/15 px-2 py-0.5 text-[11px] font-medium text-warning"
             >
               <AlertTriangle className="h-3 w-3" />
               {dueSoon.length} due soon
@@ -572,7 +575,7 @@ export function CalendarView() {
           >
             <Settings2 className="h-4 w-4" />
           </button>
-          <div className="flex rounded-lg bg-secondary p-0.5 text-xs">
+          <div className="ml-auto flex rounded-lg bg-secondary p-0.5 text-xs sm:ml-0">
             {(["day", "week", "month"] as Mode[]).map((m) => (
               <button
                 key={m}

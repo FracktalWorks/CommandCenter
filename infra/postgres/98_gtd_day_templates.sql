@@ -1,4 +1,5 @@
--- 94_gtd_day_templates.sql — flexible recurring calendar windows (spec:
+-- 98_gtd_day_templates.sql — flexible recurring calendar windows (spec:
+-- (renumbered 94→98 to resolve a duplicate-prefix collision on main; additive)
 -- calendar_focus_os.md ideal-week templates; user request 2026-07).
 --
 -- What: gtd_settings.day_templates — a JSONB list of recurring windows the AI

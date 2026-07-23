@@ -137,6 +137,9 @@ export interface GtdItem {
    *  dueAt via isUrgent(); the 8-cell label comes from priorityCell(). */
   important?: boolean;
   leveraged?: boolean;
+  /** needs an unbroken FLOW state (deep/creative/builder work) — the planner
+   *  protects a long peak-energy block; Focus Mode defaults to a longer timer */
+  deepWork?: boolean;
   /** the user dismissed the delegate/schedule suggestion ("this one's mine") */
   keptMine?: boolean;
   projectId?: string;

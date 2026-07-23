@@ -131,6 +131,8 @@ class ItemPatch(BaseModel):
     # derived from due_at, so it is NOT a patchable field.
     important: bool | None = None
     leveraged: bool | None = None
+    # Needs an unbroken flow state (deep/creative/builder work) — local overlay.
+    deep_work: bool | None = None
     kept_mine: bool | None = None          # dismiss the delegate/schedule hint
 
 
@@ -547,12 +549,14 @@ def _build_item_update(
         # Prioritization matrix flags (local overlay).
         (patch.important, "important = :important", patch.important),
         (patch.leveraged, "leveraged = :leveraged", patch.leveraged),
+        (patch.deep_work, "deep_work = :deep_work", patch.deep_work),
         (patch.kept_mine, "kept_mine = :kept_mine", patch.kept_mine),
         # Fixed/flexible block (calendar_ux_review.md §5.5) — local overlay.
         (patch.flexible, "flexible = :flexible", patch.flexible),
     ]
     keys = ["notes", "na", "ctx", "energy", "tem", "pstatus", "wstage",
-            "sortkey", "important", "leveraged", "kept_mine", "flexible"]
+            "sortkey", "important", "leveraged", "deep_work", "kept_mine",
+            "flexible"]
     for (present, clause, value), key in zip(simple, keys, strict=True):
         if present is not None:
             sets.append(clause)

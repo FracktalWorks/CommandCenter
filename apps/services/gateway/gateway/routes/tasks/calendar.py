@@ -309,6 +309,7 @@ def _candidate_brief(m: Any, now: datetime) -> dict[str, Any]:
         "energy": m.energy if m.energy in _ENERGY else None,
         "important": bool(getattr(m, "important", False)),
         "leveraged": bool(getattr(m, "leveraged", False)),
+        "deep_work": bool(getattr(m, "deep_work", False)),
         "due_in_days": due_in,
         "context": m.context,
     }
@@ -369,6 +370,8 @@ async def _llm_rank_day(
             tags.append("LEVERAGED")
         if c["important"]:
             tags.append("important")
+        if c.get("deep_work"):
+            tags.append("DEEP WORK (needs unbroken flow)")
         if c["due_in_days"] is not None:
             tags.append(f"due in {c['due_in_days']}d")
         if c["energy"]:
@@ -411,6 +414,11 @@ async def _llm_rank_day(
         "cognitive demand of the task, so it can be placed in a matching energy "
         "window. Give a terse `rationale` (why today / why now). Only use ids "
         "from the list.\n"
+        "DEEP WORK tasks need an unbroken FLOW state: always give them "
+        "`preferred_energy` high, place them EARLY (before the day fragments), "
+        "and never sandwich one between reactive tasks — flow takes ~15 minutes "
+        "to enter and one interruption to lose. Batch the shallow/administrative "
+        "tasks together AROUND the deep blocks, not interleaved with them.\n"
         'Return STRICT JSON only: {"plan": [{"id": str, "preferred_energy": '
         '"high"|"medium"|"low", "rationale": str}], "notes": str|null}'
     )

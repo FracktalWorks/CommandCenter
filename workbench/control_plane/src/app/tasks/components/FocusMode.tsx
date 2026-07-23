@@ -122,9 +122,16 @@ function FocusRoom({ itemId }: { itemId: string }) {
     [projects, item?.projectId],
   );
 
-  const [mode, setMode] = useState<FocusTimerMode>(
-    () => loadFocusPrefs().timerMode ?? "pomo25",
-  );
+  const [mode, setMode] = useState<FocusTimerMode>(() => {
+    const saved = loadFocusPrefs().timerMode;
+    if (saved) return saved;
+    // Flow research (Csikszentmihalyi): flow takes ~15 minutes to enter and an
+    // interruption to lose — a DEEP-WORK task defaults to the long 50/10
+    // cadence instead of 25/5, so the timer itself doesn't break the state the
+    // task needs. An explicit user choice (saved pref / the toggle) always wins.
+    const it = useTaskStore.getState().items.find((i) => i.id === itemId);
+    return it?.deepWork ? "pomo50" : "pomo25";
+  });
   const timerCfg = TIMER_MODES.find((m) => m.key === mode) ?? TIMER_MODES[0];
 
   // Segment state machine: work → (break due) → break → work…  "done" is the

@@ -42,6 +42,7 @@ _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
     "web_search", "fetch_page",          # web access
     "write_artifact", "share_artifact",  # file writing / delivery
     "emit_generative_ui",                # rich/interactive HITL UI (genui_2)
+    "load_design_system",                # on-demand design language (genui_2 §7)
     "manage_todo_list",                  # task tracking panel
     "ask_questions",                     # HITL clarification
     "run_diagnostics", "get_errors",     # code / file error checking
@@ -77,44 +78,6 @@ def _resolve_injected_scope(tool_scope: list[str] | None) -> set[str] | None:
     return set(tool_scope) | set(_CORE_STANDARD_TOOL_NAMES)
 
 
-@functools.lru_cache(maxsize=1)
-def _load_design_md() -> str:
-    """Return the Command Center DESIGN.md, cached for the process lifetime.
-
-    The design system is static (ships in acb_skills), so caching keeps the
-    system-prompt prefix byte-stable across turns for KV-cache hits. Injected
-    into every agent so any Markdown/HTML/generative-UI it produces follows the
-    Command Center design language. Returns "" if the file is missing (fail
-    open — never block agent load on a missing design doc).
-    """
-    try:
-        from pathlib import Path  # noqa: PLC0415
-
-        import acb_skills  # noqa: PLC0415
-
-        design_path = Path(acb_skills.__file__).parent / "design.md"
-        return design_path.read_text(encoding="utf-8", errors="replace").strip()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _design_md_section() -> str:
-    """The full DESIGN.md wrapped as a system-prompt section (or "" if absent).
-
-    Kept separate from :func:`_load_design_md` so the raw doc is reusable and the
-    section wrapper stays out of the cache key. Byte-stable across turns because
-    the underlying loader is cached.
-    """
-    design = _load_design_md()
-    if not design:
-        return ""
-    return (
-        "### Command Center design language (DESIGN.md)\n"
-        "Follow this for every document, report, and UI you generate:\n\n"
-        f"{design}"
-    )
-
-
 def _build_output_discipline_block(*, compact: bool = False) -> str:
     """The 'all generated files live under outputs/' + design-language rule.
 
@@ -123,8 +86,9 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
          (logical subfolders encouraged), for both MAF and Copilot agents. This
          keeps the workspace tidy and, crucially, persistent: ``outputs/`` is the
          durable, redeploy-surviving home for deliverables.
-      2. Design language — a pointer to the injected DESIGN.md so any document,
-         report, or UI matches the Command Center look.
+      2. Design language — a pointer to the on-demand design system
+         (``load_design_system()``) so any heavier document, report, or custom
+         HTML matches the Command Center look.
     """
     if compact:
         return (
@@ -132,8 +96,10 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
             "content directly; do NOT build files with shell heredocs / echo / "
             "printf / base64 (fragile quoting truncates large writes). Put "
             "every file under outputs/ (logical subfolders, e.g. "
-            "outputs/reports/); never the working-dir root. Markdown/HTML you "
-            "produce must follow the injected Command Center DESIGN.md."
+            "outputs/reports/); never the working-dir root. For a full-page "
+            "report or bespoke custom HTML, call load_design_system() first to "
+            "match the Command Center look (named genUI templates are already "
+            "on-brand)."
         )
     return (
         "### Output discipline (REQUIRED)\n"
@@ -154,8 +120,10 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
         "you made.\n"
         "- Prefer Markdown (`.md`) for written deliverables and HTML (`.html`) "
         "for rich/interactive reports — both get a live preview in the side "
-        "panel. Any Markdown, HTML, or generative UI you produce MUST follow "
-        "the **Command Center DESIGN.md** included below."
+        "panel. Before writing a full-page report or bespoke custom HTML, call "
+        "**`load_design_system()`** to load the Command Center design language "
+        "and follow it (named `emit_generative_ui` templates are already "
+        "on-brand and need no extra step)."
     )
 
 
@@ -533,7 +501,8 @@ To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..
 - **By default, do NOT push** — direct pushes are blocked and the commit queues for human approval in the Control Plane inbox.
 - **If the user explicitly tells you to push (e.g. "commit and push") in this conversation**, then after committing run `git push --no-verify origin HEAD`. The `--no-verify` flag is required to bypass the approval hook. That commit is then recorded as already-approved — the user does not need to approve it again on the Agents page.
 
-{_design_md_section()}
+### Design language — load on demand
+Named `emit_generative_ui` templates are already on-brand (supply data only), and the `--cc-*` CSS tokens above cover simple custom HTML. For anything HEAVIER — a full-page HTML or Markdown **report**, or a bespoke custom-HTML `emit_generative_ui` card — call **`load_design_system()`** FIRST to load the Command Center design system (palette tokens, typography, spacing, motion, dark/light, and the `cc-report` block kit), then follow it. Don't guess the styling for a report; load it.
 ---""")
     return "\n".join(sections)
 
@@ -733,6 +702,15 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     try:
         from acb_skills.integration_tools import list_integrations  # noqa: PLC0415
         _all_tools = _all_tools + [list_integrations]
+    except ImportError:
+        pass
+
+    # On-demand design system — the full ~16KB design.md is no longer injected
+    # into every prompt; agents load it only when writing a heavy report or
+    # bespoke custom HTML (generative_ui_2 §7).
+    try:
+        from acb_skills.design_tools import load_design_system  # noqa: PLC0415
+        _all_tools = _all_tools + [load_design_system]
     except ImportError:
         pass
 

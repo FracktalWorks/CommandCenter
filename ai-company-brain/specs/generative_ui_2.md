@@ -173,10 +173,23 @@ was wrong with *creation*):
   idempotency. So MAF and Copilot agents now get the same answer-time rule.
 - Pick/set flows are steered to `formCard`/`optionPicker` + `"hitl":true`.
 
-Design-language note: full 16 KB `design.md` is intentionally NOT dumped into
-every MAF prompt — templates are on-brand without it, and that's the path we
-steer to. Injecting `design.md` for MAF agents that lean on custom-HTML reports
-remains an optional follow-up (the `--cc-*` hook covers the common case).
+**Design language — now on demand for ALL agents (shipped 2026-07-23).** The
+full ~16 KB `design.md` used to be pasted inline into every *Copilot* agent's
+prompt every turn (and never reached MAF at all). It is now a tool,
+`load_design_system()` (`acb_skills/design_tools.py`), on the core floor for
+both runtimes:
+- The inline `_design_md_section()` injection is removed; the addendum carries
+  only a cheap POINTER ("### Design language — load on demand"). Net effect:
+  ~16 KB off every Copilot prompt, and MAF agents finally have design access.
+- Agents call it only for the HEAVY cases — a full-page HTML/Markdown report or
+  bespoke custom-HTML `emit_generative_ui` card. Named templates stay on-brand
+  by construction (no call), and the `--cc-*` tokens named in the UI directive
+  cover simple custom HTML. `design.md` gained YAML front matter (`when_to_use`,
+  `summary`) documenting the trigger; the tool strips it and returns the body.
+- Coverage: `tests/unit/test_design_tools.py` (real doc, front-matter strip,
+  floor + read-only annotation) and a drift-eval guard
+  (`test_design_system_is_on_demand_not_inlined`) that fails if the whole doc
+  is ever re-inlined.
 
 Coverage locked by `evals/trajectories/test_tool_addendum_drift_trajectory.py`
 (directive leads both addenda, template-before-html ordering, gated on the tool)

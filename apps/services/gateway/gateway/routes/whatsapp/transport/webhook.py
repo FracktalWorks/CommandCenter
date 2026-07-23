@@ -121,17 +121,24 @@ async def receive_webhook(request: Request):
         counts = await persist_sync_result(db, account_id, result)
         await db.commit()
 
-        # Fire the post-sync pipeline (no-op until W2 registers hooks). Best-effort
-        # so a hook failure never turns into a Meta retry of an already-stored batch.
+        # Fire the post-sync pipeline (intent classification, then Reply Zero
+        # chat status). Best-effort so a hook failure never turns into a Meta
+        # retry of an already-stored batch. classify_chats runs whenever a batch
+        # landed — even a status-only echo can flip a chat from NEEDS_REPLY to
+        # AWAITING — so it is not gated on new inbound the way on_new_messages is.
         if counts["messages"]:
             try:
-                from whatsapp_ingestion.post_sync import (
-                    hooks,
-                    run_hook,
-                )
+                from whatsapp_ingestion.post_sync import hooks, run_hook
                 await run_hook(hooks.on_new_messages, account_id)
             except Exception as exc:
-                _log.warning("whatsapp.webhook.hook_failed", error=str(exc)[:200])
+                _log.warning("whatsapp.webhook.hook_failed",
+                             hook="on_new_messages", error=str(exc)[:200])
+        try:
+            from whatsapp_ingestion.post_sync import hooks, run_hook
+            await run_hook(hooks.classify_chats, account_id)
+        except Exception as exc:
+            _log.warning("whatsapp.webhook.hook_failed",
+                         hook="classify_chats", error=str(exc)[:200])
 
         _log.info(
             "whatsapp.webhook.ingested",

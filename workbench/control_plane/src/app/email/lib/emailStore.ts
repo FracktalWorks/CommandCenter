@@ -276,6 +276,7 @@ interface EmailState {
    *  reply composer AND kicks off an AI draft — the dashboard's draft-from-row. */
   viewerCommand:
     | "reply" | "reply-all" | "forward" | "block" | "download" | "reply-ai"
+    | "nudge"
     | null;
 
   // UI

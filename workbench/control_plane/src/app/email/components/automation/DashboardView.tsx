@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
   Settings2, Hourglass, ExternalLink, Clock, CheckCheck, XCircle,
-  AlertTriangle, ChevronRight, PenLine,
+  AlertTriangle, ChevronRight, PenLine, BellRing,
 } from "lucide-react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
 import { DigestData, DigestThread } from "../../lib/types";
@@ -31,10 +31,12 @@ interface DashboardViewProps {
   onFilterSender?: (email: string) => void;
   /** Open a thread and start an AI-drafted reply (the ✍️ row action). */
   onDraftReply?: (messageId: string) => void;
+  /** Open a waiting-on-them thread and start an AI-drafted follow-up nudge. */
+  onNudge?: (messageId: string) => void;
 }
 
 export function DashboardView({
-  accountId, onOpenEmail, onFilterLabel, onFilterSender, onDraftReply,
+  accountId, onOpenEmail, onFilterLabel, onFilterSender, onDraftReply, onNudge,
 }: DashboardViewProps) {
   const [period, setPeriod] = useState<"day" | "week">("day");
   const [data, setData] = useState<DigestData | null>(null);
@@ -268,7 +270,21 @@ export function DashboardView({
                 ) : (
                   <div className="max-h-72 overflow-y-auto pr-1 space-y-0.5">
                     {data.awaiting.map((b) => (
-                      <ThreadRow key={b.thread_id} row={b} onOpen={onOpenEmail} />
+                      <ThreadRow
+                        key={b.thread_id}
+                        row={b}
+                        onOpen={onOpenEmail}
+                        actions={
+                          b.message_id && onNudge ? (
+                            <RowBtn
+                              title="Nudge — open the thread with an AI follow-up draft ready"
+                              onClick={() => onNudge(b.message_id!)}
+                            >
+                              <BellRing size={12} />
+                            </RowBtn>
+                          ) : undefined
+                        }
+                      />
                     ))}
                   </div>
                 )}

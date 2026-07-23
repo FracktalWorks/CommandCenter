@@ -104,15 +104,19 @@ async def apply_intents(db: Any, account_id: str) -> int:
 
 
 async def process_new_messages(account_id: str) -> None:
-    """Post-sync ``on_new_messages`` hook: run intent classification over the new
-    inbound messages. (Sender categorization + auto-answer rules layer on here in
-    later phases, the same way the email on_new_mail pipeline grew.)"""
+    """Post-sync ``on_new_messages`` hook: the new-message pipeline. Runs intent
+    classification (inbound) then commitment extraction (both directions) over
+    the newly-landed messages. Grows the way the email on_new_mail pipeline did;
+    sender categorization + auto-answer execution layer on here later."""
+    from gateway.routes.whatsapp.automation.commitments import apply_commitments
     from gateway.routes.whatsapp.core import _get_db
     db = await _get_db()
     try:
-        n = await apply_intents(db, account_id)
+        classified = await apply_intents(db, account_id)
+        commitments = await apply_commitments(db, account_id)
         await db.commit()
         _log.info("whatsapp.process_new_messages.done",
-                  account_id=account_id, classified=n)
+                  account_id=account_id, classified=classified,
+                  commitments=commitments)
     finally:
         await db.close()

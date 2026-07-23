@@ -10,7 +10,7 @@
 // AppShell). Specs: calendar_timeboxing.md, calendar_focus_os.md,
 // calendar_ai_review.md.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -53,6 +53,7 @@ import {
   DAY_END_HOUR,
   SOFT_CAPACITY_MINS,
   SNAP_MINS,
+  HOUR_PX,
   addMonths,
   startOfWeek,
   useNow,
@@ -81,10 +82,17 @@ export function CalendarView() {
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadDone = useTaskStore((s) => s.loadDone);
   const settings = useTaskStore((s) => s.settings);
+  // Full-day (24h) mode — for entrepreneurs who work whenever, not 9-to-5. When
+  // on, the grid, manual scheduling AND the AI planner span 0–24 instead of the
+  // working-hours window. Persisted client-side; resolved in an effect (SSR).
+  const [fullDay, setFullDay] = useState(false);
   // The plannable day window + capacity come from the user's calendar prefs so
-  // the grid and the AI planner agree; sane defaults when unset.
-  const dayStart = settings.dayStartHour ?? DAY_START_HOUR;
-  const dayEnd = Math.max(dayStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
+  // the grid and the AI planner agree; sane defaults when unset. Full-day mode
+  // overrides the window to the whole 24 hours.
+  const dayStart = fullDay ? 0 : settings.dayStartHour ?? DAY_START_HOUR;
+  const dayEnd = fullDay
+    ? 24
+    : Math.max(dayStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
   const capacityTarget = settings.dailyCapacityMins ?? SOFT_CAPACITY_MINS;
   const energyWindows = settings.energyWindows ?? [];
   const updateSettings = useTaskStore((s) => s.updateSettings);
@@ -123,8 +131,27 @@ export function CalendarView() {
     setOneThingId(oneThingIdFor(new Date(), prefs));
     setStartupOffered(prefs.startupDoneOn !== dayKey());
     setDayClosed(prefs.dayClosedOn === dayKey());
+    setFullDay(!!prefs.fullDayGrid);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [now]);
+  const toggleFullDay = () => {
+    setFullDay((v) => {
+      const next = !v;
+      saveFocusPrefs({ fullDayGrid: next });
+      return next;
+    });
+  };
+  // Auto-scroll the day/week grid to the current hour when full-day (0–24) is
+  // on, so it doesn't strand the user at midnight. Runs when full-day / mode
+  // changes (not every clock tick).
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!fullDay || mode === "month") return;
+    const el = gridScrollRef.current;
+    if (!el) return;
+    const h = new Date().getHours();
+    el.scrollTop = Math.max(0, (h - 1) * HOUR_PX);
+  }, [fullDay, mode]);
   const handleToggleOneThing = (id: string) => {
     const prev = oneThingIdFor(new Date());
     toggleOneThing(new Date(), id);
@@ -509,6 +536,26 @@ export function CalendarView() {
             <Wand2 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Plan my day</span>
           </button>
+          {mode !== "month" && (
+            <button
+              type="button"
+              onClick={toggleFullDay}
+              aria-pressed={fullDay}
+              title={
+                fullDay
+                  ? "Showing all 24 hours — click for working hours only"
+                  : "Show the full 24-hour day (schedule any time, day or night)"
+              }
+              className={[
+                "tech-transition rounded-md px-2 py-1 text-[12px] font-medium",
+                fullDay
+                  ? "bg-primary/10 text-primary"
+                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+              ].join(" ")}
+            >
+              24h
+            </button>
+          )}
           <button
             type="button"
             onClick={() => setSettingsOpen((v) => !v)}
@@ -622,7 +669,7 @@ export function CalendarView() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-auto">
+        <div ref={gridScrollRef} className="min-w-0 flex-1 overflow-auto">
           {mode === "month" ? (
             <MonthGrid
               anchor={anchor}

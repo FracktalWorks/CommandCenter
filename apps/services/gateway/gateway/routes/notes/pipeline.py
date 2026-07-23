@@ -35,6 +35,12 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
             ).fetchone()
             if rec is None:
                 raise RuntimeError("recording row vanished before transcription")
+            owner = (
+                await db.execute(
+                    text("SELECT owner_email FROM meeting WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+            ).fetchone()
             await _set_run(db, run_id, status="running", stage="transcribe")
             await db.execute(
                 text("UPDATE summary_run SET started_at = now() WHERE id = :id"),
@@ -45,12 +51,17 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
         path = media_dir() / rec.artifact_path
         audio_bytes = Path(path).read_bytes()
 
+        # Bias transcription toward the owner's org vocabulary (glossary).
+        from gateway.routes.notes.glossary import glossary_prompt
+
+        prompt = await glossary_prompt(owner.owner_email if owner else "")
+
         from acb_stt import AudioInput, SttOptions, resolve_stt_provider
 
         provider = await resolve_stt_provider()
         result = await provider.transcribe(
             AudioInput(data=audio_bytes, filename=path.name, mime=rec.mime),
-            SttOptions(diarize=True),
+            SttOptions(diarize=True, prompt=prompt or None),
         )
 
         async with await _get_db() as db:

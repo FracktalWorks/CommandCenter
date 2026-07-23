@@ -200,6 +200,32 @@ export function eventsUrl(meetingId: string): string {
   return `/api/notes/meetings/${meetingId}/events`;
 }
 
+// ── Glossary (org vocabulary that biases transcription) ─────────────────────
+
+export interface GlossaryTerm {
+  id: string;
+  term: string;
+}
+
+export async function listGlossary(): Promise<GlossaryTerm[]> {
+  return json(await fetch(`/api/notes/glossary`, { cache: "no-store" }));
+}
+
+export async function addGlossaryTerm(term: string): Promise<GlossaryTerm> {
+  return json(
+    await fetch(`/api/notes/glossary`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ term }),
+    })
+  );
+}
+
+export async function deleteGlossaryTerm(id: string): Promise<void> {
+  const res = await fetch(`/api/notes/glossary/${id}`, { method: "DELETE" });
+  if (!res.ok && res.status !== 204) throw new Error(`${res.status}`);
+}
+
 export interface AskAnswer {
   answer: string;
   citations: { segment_id: string; idx: number }[];

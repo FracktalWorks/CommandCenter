@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AudioLines,
+  BookMarked,
   Clock,
   FileAudio,
   Loader2,
@@ -20,6 +21,7 @@ import {
   Users,
 } from "lucide-react";
 import { createMeeting, formatClock, listMeetings, uploadRecording } from "./lib/api";
+import GlossaryModal from "./components/GlossaryModal";
 import type { MeetingListItem } from "./lib/types";
 
 const STATUS_META: Record<
@@ -40,6 +42,7 @@ export default function NotesPage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [showGlossary, setShowGlossary] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (q?: string) => {
@@ -97,6 +100,14 @@ export default function NotesPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            onClick={() => setShowGlossary(true)}
+            className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+            title="Glossary — teach transcription your jargon"
+            aria-label="Glossary"
+          >
+            <BookMarked className="w-4 h-4" />
+          </button>
           <button
             onClick={onRecord}
             className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
@@ -224,6 +235,8 @@ export default function NotesPage() {
           )}
         </div>
       </div>
+
+      {showGlossary && <GlossaryModal onClose={() => setShowGlossary(false)} />}
     </div>
   );
 }

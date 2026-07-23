@@ -254,6 +254,15 @@ class MeetingNote(Base):
     updated_at: Mapped[datetime] = _updated_at()
 
 
+class NotesGlossary(Base):
+    __tablename__ = "notes_glossary"
+
+    id: Mapped[UUID] = _uuid_pk()
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    term: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+
+
 class SummaryRun(Base):
     __tablename__ = "summary_run"
     __table_args__ = (

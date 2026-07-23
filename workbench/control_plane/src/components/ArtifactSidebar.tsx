@@ -28,6 +28,7 @@ import {
   PanelLeft,
   History,
   ArrowUpToLine,
+  FolderOpen,
 } from "lucide-react";
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -497,13 +498,10 @@ export default function ArtifactSidebar({
             }`
       }
     >
-      {/* Header */}
-      <div
-        className={`flex items-center border-b border-border ${
-          open ? "justify-between px-3 py-2.5" : "justify-center py-2.5"
-        }`}
-      >
-        {open && (
+      {/* Header — only rendered while open; the collapsed state is a rail
+          (icon + count + vertical label) matching the other columns. */}
+      {open && (
+        <div className="flex items-center justify-between border-b border-border px-3 py-2.5">
           <div className="flex items-center gap-2">
             <span className="text-xs font-semibold text-foreground">Files</span>
             {files.length > 0 && (
@@ -512,9 +510,7 @@ export default function ArtifactSidebar({
               </span>
             )}
           </div>
-        )}
-        <div className={`flex items-center gap-1 ${open ? "" : "flex-col"}`}>
-          {open && (
+          <div className="flex items-center gap-1">
             <button
               onClick={fetchTree}
               className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
@@ -522,21 +518,17 @@ export default function ArtifactSidebar({
             >
               <RefreshCw size={12} className={loading ? "animate-spin" : ""} />
             </button>
-          )}
-          <button
-            onClick={onToggle}
-            className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
-            title={open ? "Collapse file browser" : "Expand file browser"}
-          >
-            {/* Chevron points toward the edge the panel collapses into. */}
-            {(open ? side === "right" : side === "left") ? (
-              <ChevronRight size={14} />
-            ) : (
-              <ChevronLeft size={14} />
-            )}
-          </button>
+            <button
+              onClick={onToggle}
+              className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+              title="Collapse file browser"
+            >
+              {/* Chevron points toward the edge the panel collapses into. */}
+              {side === "right" ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+            </button>
+          </div>
         </div>
-      </div>
+      )}
 
       {/* Content */}
       {open && (
@@ -576,23 +568,30 @@ export default function ArtifactSidebar({
         </div>
       )}
 
-      {/* Collapsed rail: count pill + rotated label (matches the other rails) */}
+      {/* Collapsed rail — same anatomy as the conversations/documents rails:
+          reopen icon, count pill, vertical label. The WHOLE rail is the
+          click target (a thin strip is fiddly to hit an icon inside). */}
       {!open && (
-        <div className="flex flex-1 flex-col items-center pt-1.5">
+        <button
+          onClick={onToggle}
+          className="flex w-full flex-1 cursor-pointer flex-col items-center py-2.5 text-muted-foreground hover:bg-secondary/40 hover:text-foreground transition-colors"
+          title="Open file browser"
+        >
+          <FolderOpen size={15} />
           {files.length > 0 && (
-            <span className="rounded-full bg-secondary px-1 text-[10px] text-muted-foreground">
+            <span className="mt-1 rounded-full bg-secondary px-1 text-[10px]">
               {files.length}
             </span>
           )}
-          <div className="flex flex-1 items-center justify-center">
+          <span className="mt-3 flex flex-1 items-center justify-center">
             <span
-              className="text-[10px] text-muted-foreground font-semibold tracking-widest"
+              className="text-[10px] font-semibold tracking-widest"
               style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
             >
               FILES
             </span>
-          </div>
-        </div>
+          </span>
+        </button>
       )}
     </aside>
   );

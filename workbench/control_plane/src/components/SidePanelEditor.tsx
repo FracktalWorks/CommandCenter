@@ -28,30 +28,32 @@ export default function SidePanelEditor() {
   const state = useSyncExternalStore(subscribe, getState, getState);
   const { open, docs, activePath } = state;
 
-  // Collapsed rail — a thin strip that reopens the panel and shows a doc count.
+  // Collapsed rail — a thin strip that reopens the panel and shows a doc
+  // count. The WHOLE rail is the click target (a thin strip is fiddly to hit
+  // an icon inside).
   if (!open) {
     return (
-      <aside className="flex w-10 shrink-0 flex-col items-center border-r border-border bg-card/40 py-2.5">
+      <aside className="flex w-10 shrink-0 flex-col border-r border-border bg-card/40">
         <button
           onClick={togglePanel}
-          className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
+          className="flex w-full flex-1 cursor-pointer flex-col items-center py-2.5 text-muted-foreground hover:bg-secondary/60 hover:text-foreground transition-colors"
           title="Open document panel"
         >
           <FileText size={15} />
+          {docs.length > 0 && (
+            <span className="mt-1 rounded-full bg-secondary px-1 text-[10px]">
+              {docs.length}
+            </span>
+          )}
+          <span className="mt-3 flex flex-1 items-center justify-center">
+            <span
+              className="text-[10px] font-semibold tracking-widest"
+              style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+            >
+              DOCUMENTS
+            </span>
+          </span>
         </button>
-        {docs.length > 0 && (
-          <span className="mt-1 rounded-full bg-secondary px-1 text-[10px] text-muted-foreground">
-            {docs.length}
-          </span>
-        )}
-        <div className="mt-3 flex flex-1 items-center justify-center">
-          <span
-            className="text-[10px] font-semibold tracking-widest text-muted-foreground"
-            style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
-          >
-            DOCUMENTS
-          </span>
-        </div>
       </aside>
     );
   }

@@ -1104,7 +1104,7 @@ function AgentTile({
   return (
     <button
       onClick={onClick}
-      className={`text-left w-full p-4 rounded-xl border transition-all relative ${
+      className={`text-left w-full rounded-xl border transition-all relative overflow-hidden ${
         selected
           ? "border-primary bg-primary/5 ring-1 ring-primary/20"
           : "border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
@@ -1116,14 +1116,14 @@ function AgentTile({
           <button
             onClick={handlePull}
             disabled={pulling}
-            className="absolute -top-1.5 -right-1.5 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md hover:bg-amber-600 disabled:opacity-60 transition-colors cursor-pointer z-10"
+            className="absolute top-1 right-1 rounded-full bg-amber-500 px-2 py-0.5 text-[10px] font-bold text-white shadow-md hover:bg-amber-600 disabled:opacity-60 transition-colors cursor-pointer z-10"
             title={`${behindBy} commit${behindBy !== 1 ? "s" : ""} behind — click to pull`}
           >
             {pulling ? "…" : behindBy}
           </button>
         ) : (
           <span
-            className="absolute -top-1.5 -right-1.5 rounded-full bg-success/80 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md z-10"
+            className="absolute top-1 right-1 rounded-full bg-success/80 px-1.5 py-0.5 text-[10px] font-bold text-white shadow-md z-10"
             title="Up to date"
           >
             ✓
@@ -1131,36 +1131,52 @@ function AgentTile({
         )
       )}
 
-      <div className="flex items-start justify-between mb-3">
-        <AgentAvatar
-          libraryId={avatarLibraryId}
-          size={28}
-          fallback={<Icon size={28} className={`${color} shrink-0`} />}
-        />
-        <span
-          className={`w-2 h-2 mt-1 rounded-full shrink-0 ${
-            readiness === "ready"   ? "bg-success" :
-            readiness === "blocked" ? "bg-warning"  : "bg-muted"
-          }`}
-          title={
-            readiness === "ready"   ? "Ready" :
-            readiness === "blocked" ? "Blocked \u2014 needs API connections" : "Unknown"
-          }
-        />
+      {/* Two columns: the agent's CHARACTER (breathing) fills the left at
+          full card height; identity + status + description on the right. */}
+      <div className="flex items-stretch min-h-[6.5rem]">
+        <div className="flex w-16 shrink-0 items-center justify-center self-stretch border-r border-border/60 bg-background/40">
+          <BreathingCharacter
+            char={characterForAgent(agent.name, avatarLibraryId)}
+            box={56}
+            fallback={
+              <AgentAvatar
+                libraryId={avatarLibraryId}
+                size={34}
+                fallback={<Icon size={26} className={`${color} shrink-0`} />}
+              />
+            }
+          />
+        </div>
+        <div className="min-w-0 flex-1 p-3">
+          <div className="flex items-start justify-between gap-2">
+            <div className="font-medium text-sm text-foreground leading-tight truncate">
+              {agent.display_name || agent.name}
+            </div>
+            <span
+              className={`w-2 h-2 mt-1 rounded-full shrink-0 ${
+                readiness === "ready"   ? "bg-success" :
+                readiness === "blocked" ? "bg-warning"  : "bg-muted"
+              }`}
+              title={
+                readiness === "ready"   ? "Ready" :
+                readiness === "blocked" ? "Blocked \u2014 needs API connections" : "Unknown"
+              }
+            />
+          </div>
+          <div className={`text-[10px] mt-0.5 ${
+            readiness === "ready"   ? "text-success" :
+            readiness === "blocked" ? "text-warning"  : "text-muted-foreground"
+          }`}>
+            {readiness === "ready" ? "\u25cf Ready" :
+             readiness === "blocked" ? "\u26a0 Blocked" : "\u25cb Unknown"}
+          </div>
+          {agent.description && (
+            <p className="text-[10px] text-muted-foreground mt-1.5 line-clamp-2 leading-relaxed">
+              {agent.description}
+            </p>
+          )}
+        </div>
       </div>
-      <div className="font-medium text-sm text-foreground leading-tight">{agent.display_name || agent.name}</div>
-      <div className={`text-[10px] mt-0.5 ${
-        readiness === "ready"   ? "text-success" :
-        readiness === "blocked" ? "text-warning"  : "text-muted-foreground"
-      }`}>
-        {readiness === "ready" ? "\u25cf Ready" :
-         readiness === "blocked" ? "\u26a0 Blocked" : "\u25cb Unknown"}
-      </div>
-      {agent.description && (
-        <p className="text-[10px] text-muted-foreground mt-2 line-clamp-2 leading-relaxed">
-          {agent.description}
-        </p>
-      )}
     </button>
   );
 }

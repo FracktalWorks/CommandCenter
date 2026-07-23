@@ -456,6 +456,19 @@ interface TaskState {
   delegateItemId: string | null;
   openDelegate: (id: string) => void;
   closeDelegate: () => void;
+  /** The Focus-Mode SESSION (the "Do" room + its timer). Store-held so the room
+   *  can MINIMIZE to a compact dock that stays visible across the whole control
+   *  plane (the component stays mounted in AppShell, so the pomodoro segment
+   *  survives minimize/navigation). null = no session. Distinct from
+   *  `focusedItemId` (the task-detail modal). */
+  focusSessionId: string | null;
+  focusMinimized: boolean;
+  enterFocusSession: (id: string) => void;
+  minimizeFocusSession: () => void;
+  expandFocusSession: () => void;
+  /** Remove the session UI. The component stops the remote timer (actualEnd)
+   *  before calling this when the timer is still running. */
+  clearFocusSession: () => void;
   /** "Mine only / Synced / All" board filter — hides the connected-workspace
    *  mirror so your own captures aren't swamped. */
   sourceFilter: "all" | "local" | "synced";
@@ -750,6 +763,15 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   delegateItemId: null,
   openDelegate: (id) => set({ delegateItemId: id }),
   closeDelegate: () => set({ delegateItemId: null }),
+  focusSessionId: null,
+  focusMinimized: false,
+  // Entering the room also closes the task-detail modal (z-[80], which would
+  // otherwise sit ON TOP of the z-[70] room it just launched).
+  enterFocusSession: (id) =>
+    set({ focusSessionId: id, focusMinimized: false, focusedItemId: null }),
+  minimizeFocusSession: () => set({ focusMinimized: true }),
+  expandFocusSession: () => set({ focusMinimized: false }),
+  clearFocusSession: () => set({ focusSessionId: null, focusMinimized: false }),
   sourceFilter: "all",
   setSourceFilter: (f) => set({ sourceFilter: f }),
   filters: DEFAULT_FILTERS,

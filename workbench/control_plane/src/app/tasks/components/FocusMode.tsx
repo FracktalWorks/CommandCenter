@@ -7,6 +7,18 @@
 // (actualStart/actualEnd) that already powers planned-vs-actual + learned
 // estimates, so no new backend is needed.
 //
+// The SESSION is store-held (taskStore.focusSessionId) and the component is
+// mounted once in AppShell, so it survives navigating anywhere in the control
+// plane. It renders in one of two shapes:
+//   • expanded — the full-screen room (below);
+//   • MINIMIZED — a compact dock with the live timer: a floating card
+//     bottom-right on desktop, and a strip that extends the bottom nav bar on
+//     mobile. The component stays mounted across the switch, so the pomodoro
+//     segment/pause state carries over exactly.
+// Minimize keeps the timer running; the ✕ ENDS the session — it stops the
+// remote timer (stamps actualEnd) and removes the UI. Re-entering focus from
+// the task manager re-stamps actualStart and starts fresh.
+//
 // Layering: z-[70] — deliberately BELOW QuickCapture (z-[80]) so the global
 // `C` capture hotkey (page.tsx) opens the capture palette on top of the room:
 // a stray thought is one keystroke to the inbox and the timer never stops.
@@ -17,6 +29,8 @@ import {
   ChevronRight,
   Coffee,
   Footprints,
+  Maximize2,
+  Minimize2,
   Pause,
   Play,
   Plus,
@@ -82,13 +96,16 @@ function Ring({
   );
 }
 
-export function FocusMode({
-  itemId,
-  onClose,
-}: {
-  itemId: string;
-  onClose: () => void;
-}) {
+/** The one global mount (AppShell): renders nothing without a session; keyed
+ *  by task so the room's timer state resets per task, and ONLY per task —
+ *  minimize/expand keep the same mounted instance. */
+export function FocusSession() {
+  const focusSessionId = useTaskStore((s) => s.focusSessionId);
+  if (!focusSessionId) return null;
+  return <FocusRoom key={focusSessionId} itemId={focusSessionId} />;
+}
+
+function FocusRoom({ itemId }: { itemId: string }) {
   const items = useTaskStore((s) => s.items);
   const projects = useTaskStore((s) => s.projects);
   const updateItem = useTaskStore((s) => s.updateItem);
@@ -96,6 +113,10 @@ export function FocusMode({
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadSubtasks = useTaskStore((s) => s.loadSubtasks);
   const quickCaptureOpen = useTaskStore((s) => s.quickCaptureOpen);
+  const minimized = useTaskStore((s) => s.focusMinimized);
+  const minimize = useTaskStore((s) => s.minimizeFocusSession);
+  const expand = useTaskStore((s) => s.expandFocusSession);
+  const clearSession = useTaskStore((s) => s.clearFocusSession);
 
   const item = items.find((i) => i.id === itemId);
   const outcome = useMemo(
@@ -259,14 +280,27 @@ export function FocusMode({
     quickDispose(st.id, toDone ? "DONE" : "NEXT");
   };
 
-  // Esc leaves the room (timer keeps running — actuals are server-side).
+  // End the session: stop the REMOTE timer (stamp actualEnd — the durable,
+  // server-side signal) unless it's already stamped (completed / never ran),
+  // then remove the UI. Restartable later from the task manager: re-entering
+  // focus re-stamps actualStart.
+  const endSession = useCallback(() => {
+    const cur = useTaskStore.getState().items.find((i) => i.id === itemId);
+    if (cur?.actualStart && !cur.actualEnd) {
+      updateItem(itemId, { actualEnd: new Date().toISOString() });
+    }
+    clearSession();
+  }, [itemId, updateItem, clearSession]);
+
+  // Esc minimizes the room to the dock (timer keeps running, still visible).
   useEffect(() => {
+    if (minimized) return;
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !quickCaptureOpen) onClose();
+      if (e.key === "Escape" && !quickCaptureOpen) minimize();
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [onClose, quickCaptureOpen]);
+  }, [minimized, minimize, quickCaptureOpen]);
 
   if (!item) {
     // deleted / filtered away underneath us — nothing to focus on
@@ -296,6 +330,99 @@ export function FocusMode({
       ? 1 - breakLeftSec / (timerCfg.brk * 60)
       : Math.min(1, workElapsedSec / workTargetSec);
 
+  // ── Minimized: the compact dock ────────────────────────────────────────────
+  // Same mounted instance, so the segment/pause state carries over exactly.
+  // Mobile: a strip that visually EXTENDS the bottom nav bar (flush above it).
+  // Desktop: a floating animated card bottom-right. Tap the body to expand;
+  // ✕ ends the session (stops the remote timer).
+  if (minimized) {
+    const timeText =
+      seg.kind === "break"
+        ? fmtTimer(Math.max(0, breakLeftSec))
+        : timerCfg.work != null
+          ? fmtTimer(Math.max(0, workTargetSec - workElapsedSec))
+          : fmtTimer(workElapsedSec);
+    const stateLabel = finished
+      ? "done — expand to wrap up"
+      : pausedAt != null
+        ? "paused"
+        : seg.kind === "break"
+          ? `${breakKind} break`
+          : workDone
+            ? "break due"
+            : `focusing · ${focusMins}m`;
+    const dot = finished
+      ? "bg-success"
+      : pausedAt != null
+        ? "bg-muted-foreground/50"
+        : seg.kind === "break"
+          ? "animate-pulse bg-success"
+          : "animate-pulse bg-primary";
+    return (
+      <div className="chat-fade-in fixed inset-x-0 bottom-[calc(3rem+env(safe-area-inset-bottom))] z-[60] sm:inset-x-auto sm:bottom-4 sm:right-4 sm:w-80">
+        <div className="flex items-center gap-2.5 border-t border-border bg-card/95 px-3 py-2 shadow-2xl backdrop-blur sm:rounded-xl sm:border">
+          <span className={`h-2 w-2 shrink-0 rounded-full ${dot}`} />
+          <button
+            type="button"
+            onClick={expand}
+            title="Expand focus mode"
+            className="flex min-w-0 flex-1 items-center gap-2.5 text-left"
+          >
+            <span
+              className={[
+                "shrink-0 text-base font-bold tabular-nums",
+                seg.kind === "break" ? "text-success" : "text-foreground",
+              ].join(" ")}
+            >
+              {timeText}
+            </span>
+            <span className="min-w-0 flex-1">
+              <span className="block truncate text-[12px] font-medium text-foreground">
+                {item.title}
+              </span>
+              <span className="block truncate text-[10px] text-muted-foreground">
+                {stateLabel}
+              </span>
+            </span>
+          </button>
+          {!finished && (
+            <button
+              type="button"
+              onClick={togglePause}
+              aria-label={pausedAt != null ? "Resume timer" : "Pause timer"}
+              title={pausedAt != null ? "Resume" : "Pause"}
+              className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+            >
+              {pausedAt != null ? (
+                <Play className="h-3.5 w-3.5" fill="currentColor" />
+              ) : (
+                <Pause className="h-3.5 w-3.5" />
+              )}
+            </button>
+          )}
+          <button
+            type="button"
+            onClick={expand}
+            aria-label="Expand focus mode"
+            title="Expand"
+            className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+          >
+            <Maximize2 className="h-3.5 w-3.5" />
+          </button>
+          <button
+            type="button"
+            onClick={endSession}
+            aria-label="End focus session"
+            title="End focus — stops the timer"
+            className="tech-transition shrink-0 rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="fixed inset-0 z-[70] flex flex-col bg-background">
       {/* top bar */}
@@ -323,10 +450,19 @@ export function FocusMode({
         </div>
         <button
           type="button"
-          onClick={onClose}
-          aria-label="Back to calendar"
-          title="Back to calendar (esc) — the timer keeps running"
+          onClick={minimize}
+          aria-label="Minimize focus mode"
+          title="Minimize (esc) — the timer keeps running in a corner dock"
           className="tech-transition ml-auto rounded-md p-1.5 text-muted-foreground hover:bg-secondary hover:text-foreground"
+        >
+          <Minimize2 className="h-4 w-4" />
+        </button>
+        <button
+          type="button"
+          onClick={endSession}
+          aria-label="End focus session"
+          title="End focus — stops the timer and closes this"
+          className="tech-transition rounded-md p-1.5 text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
         >
           <X className="h-4 w-4" />
         </button>
@@ -381,10 +517,12 @@ export function FocusMode({
                 </button>
               ))}
             </div>
+            {/* Task complete — the timer is already stamped, so leaving here
+                just clears the session UI. */}
             {nextBlock && (
               <button
                 type="button"
-                onClick={onClose}
+                onClick={clearSession}
                 className="tech-transition mt-4 inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-3 py-2 text-[12px] font-medium text-primary hover:bg-primary/20"
               >
                 Next · {nextBlock.item.title} at {fmtClock(nextBlock.start)}
@@ -393,7 +531,7 @@ export function FocusMode({
             )}
             <button
               type="button"
-              onClick={onClose}
+              onClick={clearSession}
               className="mt-3 text-[12px] text-muted-foreground hover:text-foreground"
             >
               Back to calendar
@@ -575,7 +713,7 @@ export function FocusMode({
           <kbd className="rounded border border-border px-1 text-[9px]">C</kbd>{" "}
           capture a stray thought ·{" "}
           <kbd className="rounded border border-border px-1 text-[9px]">esc</kbd>{" "}
-          calendar
+          minimize
         </span>
       </div>
     </div>

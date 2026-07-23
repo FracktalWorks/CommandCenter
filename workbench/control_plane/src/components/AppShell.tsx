@@ -29,6 +29,10 @@ import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
 import { NAV_SECTIONS } from "@/lib/nav";import { ThemeToggleMenuItem } from "@/components/ThemeToggle";
+// The task manager's Focus Mode session (room + minimizable timer dock). Lives
+// in the SHELL so the running timer stays visible across every app in the
+// control plane; renders nothing when no focus session is active.
+import { FocusSession } from "@/app/tasks/components/FocusMode";
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
 // drawer without AppShell needing to know about sessions or filters.
@@ -75,6 +79,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
         <main className="flex-1 min-w-0 overflow-auto">{children}</main>
+        <FocusSession />
 
         {/* Floating "Mobile view" pill — only when desktop is forced on a phone. */}
         {isNarrow && forceDesktop && (
@@ -121,6 +126,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <div className="fixed bottom-0 inset-x-0 z-50 border-t border-border bg-card/90 backdrop-blur pb-safe">
           <MobileBottomNavInner pathname={pathname} toggleView={toggleView} />
         </div>
+
+        {/* Focus Mode session: full-screen room, or — minimized — a compact
+            timer strip that extends the bottom bar upward. */}
+        <FocusSession />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (

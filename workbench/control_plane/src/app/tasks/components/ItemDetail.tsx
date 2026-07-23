@@ -26,6 +26,7 @@ import {
   Loader2,
   Plus,
   Maximize2,
+  Timer,
   Archive,
   ArchiveRestore,
   type LucideIcon,
@@ -161,6 +162,7 @@ export function TaskDetail({
   const requestDelete = useTaskStore((s) => s.requestDelete);
   const archiveItem = useTaskStore((s) => s.archiveItem);
   const openFocus = useTaskStore((s) => s.openFocus);
+  const enterFocusSession = useTaskStore((s) => s.enterFocusSession);
   const isArchived = !!item.archivedAt;
 
   const [pushState, setPushState] = useState<"idle" | "busy" | string>("idle");
@@ -233,6 +235,20 @@ export function TaskDetail({
               <ExternalLink className="h-3 w-3" />
               Open in {item.provider}
             </a>
+          )}
+          {/* Start (or restart) a Focus-Mode session on this task — the room +
+              timer open globally and can be minimized to the dock. Actionable
+              open tasks only. */}
+          {(item.disposition === "NEXT" || item.disposition === "PROJECT") && (
+            <button
+              type="button"
+              onClick={() => enterFocusSession(item.id)}
+              title="Start Focus Mode — a full-screen timer for this task"
+              className="tech-transition inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
+            >
+              <Timer className="h-3 w-3" />
+              Focus
+            </button>
           )}
           {!focused && (
             <button

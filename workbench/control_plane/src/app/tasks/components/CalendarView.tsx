@@ -63,7 +63,6 @@ import {
   blocksForDay,
   firstFreeSlot,
 } from "../lib/scheduling";
-import { FocusMode } from "./FocusMode";
 import { StartupRitual } from "./StartupRitual";
 import { ContextMenu, type CtxItem } from "./ContextMenu";
 import {
@@ -215,8 +214,9 @@ export function CalendarView() {
   // One live clock drives the now-line, the current-block ring and the Now/Next
   // countdowns so the whole surface ages in real time (30s tick).
   const now = useNow();
-  // Focus Mode — the full-screen "Do" room for one block (F1). null = closed.
-  const [focusModeId, setFocusModeId] = useState<string | null>(null);
+  // Focus Mode — the store-held session (F1): the room + its minimizable dock
+  // live globally in AppShell now, so entering here survives navigation.
+  const enterFocusSession = useTaskStore((s) => s.enterFocusSession);
   // Startup ritual (F0): the modal itself + the once-a-day offer banner. Both
   // resolve client-side from focusPrefs in an effect (localStorage isn't
   // available during SSR, and reading it in render would mismatch hydration).
@@ -681,7 +681,7 @@ export function CalendarView() {
         onComplete={completeBlock}
         onStart={(item) => {
           startFocus(item);
-          setFocusModeId(item.id);
+          enterFocusSession(item.id);
         }}
         onFillGap={() => {
           // idle gap → the Gap Filler sheet, anchored to right now
@@ -767,7 +767,7 @@ export function CalendarView() {
               onToggleOneThing={handleToggleOneThing}
               onFocusMode={(item) => {
                 if (!item.actualStart || item.actualEnd) startFocus(item);
-                setFocusModeId(item.id);
+                enterFocusSession(item.id);
               }}
               onOpen={openFocus}
               onUnschedule={unschedule}
@@ -844,7 +844,7 @@ export function CalendarView() {
             // room — the Gap Filler's zero-ceremony start (§4.5).
             if (at && Math.abs(at.getTime() - Date.now()) < 5 * 60000) {
               startFocus(t);
-              setFocusModeId(t.id);
+              enterFocusSession(t.id);
             }
           }}
           onDoNow={(t) => quickDispose(t.id, "DONE")}
@@ -912,9 +912,9 @@ export function CalendarView() {
         />
       )}
 
-      {focusModeId && (
-        <FocusMode itemId={focusModeId} onClose={() => setFocusModeId(null)} />
-      )}
+      {/* Focus Mode renders globally (FocusSession in AppShell) — entering a
+          block here just sets the store session, so the room and its
+          minimized dock survive leaving the calendar. */}
     </div>
   );
 }

@@ -35,6 +35,10 @@ export function CalendarSettings({
     });
   const inputCls =
     "rounded border border-border bg-background px-1 py-0.5 text-right text-foreground focus:border-primary/50 focus:outline-none";
+  // One shared section-heading style so the popover reads as grouped sections
+  // ("When you work", "Breaks & protected time", …) instead of a flat wall.
+  const sectionCls =
+    "mb-1.5 mt-3 border-t border-border pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80";
   // Lunch is "on" only when a valid window is stored (end > start); we toggle it
   // off by storing 0–0 rather than nulling (the settings PUT is additive).
   const lunchOn =
@@ -75,6 +79,7 @@ export function CalendarSettings({
         />
       </div>
 
+      <p className={sectionCls}>When you work</p>
       <label className="mb-1 flex items-center justify-between gap-2">
         <span className="text-muted-foreground">Working hours</span>
         <span className="flex items-center gap-1">
@@ -132,6 +137,7 @@ export function CalendarSettings({
       </label>
 
       {/* Breaks — so the day isn't wall-to-wall focus work. */}
+      <p className={sectionCls}>Breaks &amp; protected time</p>
       <label className="mb-2 flex items-center justify-between gap-2">
         <span className="min-w-0 text-muted-foreground">
           Break after focus run (min, 0 = off)
@@ -203,7 +209,13 @@ export function CalendarSettings({
           </span>
         </label>
       )}
+      <p className="mb-2 text-[10px] text-muted-foreground">
+        Lunch is the quick preset. For other daily protected time (gym, school
+        run, family), add a Recurring&nbsp;→&nbsp;<b className="text-foreground">Block</b>{" "}
+        below — same idea, on the days you choose.
+      </p>
 
+      <p className={sectionCls}>Automation</p>
       <label className="mb-3 flex cursor-pointer items-center justify-between gap-2">
         <span className="min-w-0 text-muted-foreground">
           Auto roll-over overdue tasks daily
@@ -216,6 +228,7 @@ export function CalendarSettings({
         />
       </label>
 
+      <p className={sectionCls}>Energy &amp; themed time</p>
       <div className="mb-1 flex items-center justify-between">
         <span className="font-medium text-foreground">Energy windows</span>
         <button
@@ -234,7 +247,10 @@ export function CalendarSettings({
         </button>
       </div>
       <p className="mb-1.5 text-[10px] text-muted-foreground">
-        The planner puts high-energy work in peak windows, admin in low ones.
+        When you&apos;re sharp vs tired: the planner puts high-energy work in
+        peak windows, admin in low ones. (To reserve a time for a{" "}
+        <i>kind</i> of work — calls, deep work — use a Recurring&nbsp;→&nbsp;Focus
+        window below instead.)
       </p>
       {wins.length === 0 ? (
         <p className="text-[11px] text-muted-foreground/70">None set.</p>

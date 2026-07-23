@@ -130,6 +130,9 @@ export interface DigestData {
     task_id?: string;
     thread_id?: string | null;
   }[];
+  /** Opt-in LLM one-liner orienting the day ("2 urgent: X's quote, Y's
+   *  contract"). Empty unless morning_brief_enabled is on. */
+  brief?: string;
   markdown: string;
 }
 
@@ -544,6 +547,9 @@ export interface AssistantSettings {
   digest_time_of_day: string;
   /** Email the digest to the account address. */
   digest_send_to_email: boolean;
+  /** Opt-in AI one-liner atop the dashboard + digest (default off; costs a
+   *  model call each build). */
+  morning_brief_enabled?: boolean;
   /** Allow more than one rule to run on the same email (inbox-zero multi-rule). */
   multi_rule_execution: boolean;
   /** Skip auto-drafting on emails that look like they carry sensitive data. */

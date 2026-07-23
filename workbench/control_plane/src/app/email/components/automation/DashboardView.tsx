@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
   Settings2, Hourglass, ExternalLink, Clock, CheckCheck, XCircle,
-  AlertTriangle, ChevronRight, PenLine, BellRing,
+  AlertTriangle, ChevronRight, PenLine, BellRing, Sparkles,
 } from "lucide-react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
 import { DigestData, DigestThread } from "../../lib/types";
@@ -186,6 +186,15 @@ export function DashboardView({
           </div>
         ) : !data ? null : (
           <>
+            {/* Opt-in morning brief: one LLM sentence orienting the day. Only
+                present when the setting is on (empty string otherwise). */}
+            {data.brief && (
+              <div className="flex items-start gap-2 rounded-xl border border-primary/30 bg-primary/5 px-4 py-3">
+                <Sparkles size={15} className="text-primary flex-shrink-0 mt-0.5" />
+                <p className="text-sm text-foreground leading-snug">{data.brief}</p>
+              </div>
+            )}
+
             {/* Stat row */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
               <Stat icon={Mail} label="In inbox" value={t!.inbox} />

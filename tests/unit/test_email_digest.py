@@ -8,7 +8,7 @@ filter normalises the user's selections to canonical cleanup categories.
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import AsyncMock, MagicMock
+from unittest.mock import AsyncMock, MagicMock, patch
 
 from gateway.routes import email as m
 
@@ -199,6 +199,37 @@ async def test_backlog_aging_reads_needs_reply_oldest_first() -> None:
     assert out == [{"subject": "Invoice?", "age_days": 5, "thread_id": "t1",
                     "message_id": "m1", "who": "Ada",
                     "important": False, "unread": False}]
+
+
+async def test_morning_brief_is_off_by_default_no_llm_call() -> None:
+    # The opt-in one-liner must cost nothing unless enabled: with the flag off
+    # (or unset), _digest_brief returns "" without calling the model.
+    called = {"llm": False}
+
+    async def fake_llm(*a, **k):
+        called["llm"] = True
+        return {"brief": "x"}, "", {}
+
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(
+        fetchone=MagicMock(return_value=SimpleNamespace(morning_brief_enabled=False)))
+    with patch.object(m.digest, "_llm_json", fake_llm):
+        out = await m.digest._digest_brief(
+            db, "acc-1", [{"subject": "Invoice?"}], [])
+    assert out == "" and called["llm"] is False
+
+
+async def test_morning_brief_generates_when_enabled() -> None:
+    async def fake_llm(*a, **k):
+        return {"brief": "2 urgent: Ada's invoice, the contract."}, "", {}
+
+    db = AsyncMock()
+    db.execute.return_value = MagicMock(
+        fetchone=MagicMock(return_value=SimpleNamespace(morning_brief_enabled=True)))
+    with patch.object(m.digest, "_llm_json", fake_llm):
+        out = await m.digest._digest_brief(
+            db, "acc-1", [{"subject": "Invoice?", "who": "Ada", "age_days": 3}], [])
+    assert "urgent" in out
 
 
 async def test_dashboard_backlog_ranks_by_priority_not_age() -> None:

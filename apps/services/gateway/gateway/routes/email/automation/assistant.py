@@ -219,6 +219,9 @@ class AssistantSettingsModel(BaseModel):
     digest_day_of_week: int = 1  # 0=Sun … 6=Sat (used when WEEKLY)
     digest_time_of_day: str = "09:00"  # HH:MM, account-local
     digest_send_to_email: bool = True
+    # Opt-in "morning brief" (migration 96): an LLM one-liner atop the dashboard
+    # and the emailed digest. OFF by default — it costs a model call per build.
+    morning_brief_enabled: bool = False
     # inbox-zero parity (migration 30)
     multi_rule_execution: bool = False  # allow >1 rule to run on one email
     sensitive_data_protection: bool = True  # skip drafting on sensitive emails
@@ -246,6 +249,7 @@ async def get_assistant_settings(
                       follow_up_awaiting_days, follow_up_needs_reply_days,
                       follow_up_auto_draft, digest_categories, digest_day_of_week,
                       digest_time_of_day, digest_send_to_email,
+                      morning_brief_enabled,
                       multi_rule_execution, sensitive_data_protection,
                       org_domains
                FROM email_assistant_settings WHERE account_id = :aid"""
@@ -319,6 +323,11 @@ async def get_assistant_settings(
                 if row and getattr(row, "digest_send_to_email", None) is not None
                 else True
             ),
+            "morning_brief_enabled": (
+                bool(row.morning_brief_enabled)
+                if row and getattr(row, "morning_brief_enabled", None) is not None
+                else False
+            ),
             "multi_rule_execution": (
                 bool(row.multi_rule_execution)
                 if row and getattr(row, "multi_rule_execution", None) is not None
@@ -365,14 +374,14 @@ async def put_assistant_settings(
                   writing_style, draft_replies, follow_up_days, draft_confidence,
                   follow_up_awaiting_days, follow_up_needs_reply_days,
                   follow_up_auto_draft, digest_categories, digest_day_of_week,
-                  digest_time_of_day, digest_send_to_email,
+                  digest_time_of_day, digest_send_to_email, morning_brief_enabled,
                   multi_rule_execution, sensitive_data_protection, org_domains,
                   updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :rule_model,
                        :draft_model, :chat_model,
                        :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
-                       :ddow, :dtod, :dste, :mre, :sdp, :orgd, now())
+                       :ddow, :dtod, :dste, :mbe, :mre, :sdp, :orgd, now())
                ON CONFLICT (account_id) DO UPDATE SET
                  about = EXCLUDED.about,
                  signature = EXCLUDED.signature,
@@ -394,6 +403,7 @@ async def put_assistant_settings(
                  digest_day_of_week = EXCLUDED.digest_day_of_week,
                  digest_time_of_day = EXCLUDED.digest_time_of_day,
                  digest_send_to_email = EXCLUDED.digest_send_to_email,
+                 morning_brief_enabled = EXCLUDED.morning_brief_enabled,
                  multi_rule_execution = EXCLUDED.multi_rule_execution,
                  sensitive_data_protection = EXCLUDED.sensitive_data_protection,
                  org_domains = EXCLUDED.org_domains,
@@ -413,6 +423,7 @@ async def put_assistant_settings(
             "ddow": req.digest_day_of_week,
             "dtod": req.digest_time_of_day or "09:00",
             "dste": req.digest_send_to_email,
+            "mbe": req.morning_brief_enabled,
             "mre": req.multi_rule_execution,
             "sdp": req.sensitive_data_protection,
             "orgd": org_domains})

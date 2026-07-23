@@ -24,7 +24,8 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 9. routes/v1_compat.py -- OpenAI-compatible /v1/chat/completions endpoint (used by Copilot SDK BYOK provider and MAF OpenAIChatCompletionClient). Includes message sanitization for providers with strict validation (e.g. DeepSeek rejects assistant messages with neither content nor tool_calls).
 10. routes/debug.py -- E2 post-hoc diagnostics over the agent_run trace store (GET /debug/runs, /debug/runs/{id}, POST .../flag). EXECUTIVE/AGENT-gated.
 11. routes/observability.py -- E2 LIVE observability over the global activity bus (cc:activity): GET /observability/activity/recent (backfill), /observability/activity/stream (SSE, agent+model activations across chat and ALL apps), /observability/active (runs in flight), /observability/roster (all agents + working/idle status for the office view), /observability/cost (daily LLM $ rollup by model/app). EXECUTIVE/AGENT-gated. Publish side: acb_common.activity + the executor run boundary + acb_llm._emit_usage (which also prices each call via litellm). App attribution is automatic — acb_llm.context._infer_app_source() reads the caller's gateway.routes.<app> module, so any new app is observable with zero wiring.
-12. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
+12. routes/notes/ -- AI Note Taker /notes API (spec: ai-company-brain/specs/note_taker_app.md): meeting CRUD + library search, recording upload (multipart -> NOTES_MEDIA_DIR) + audio playback, background transcription pipeline over the pluggable acb_stt provider layer (BYOK Groq/OpenAI/Deepgram; summary_run rows carry per-stage status/errors). Same core/feature-module layout as routes/tasks.
+13. agents.json -- Dynamic agent registry (persisted alongside pyproject.toml)
 
 ## Work Guidance
 

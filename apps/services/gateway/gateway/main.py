@@ -742,6 +742,13 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    from gateway.routes.notes import router as _notes_router
+
+    app.include_router(_notes_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.settings import router as _settings_router
 
     app.include_router(_settings_router)

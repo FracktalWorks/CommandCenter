@@ -9,7 +9,15 @@
 // never as more always-on chrome on the queue.
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, MessageCircle, PanelRight, Plus, Search, Send } from "lucide-react";
+import {
+  Loader2,
+  MessageCircle,
+  PanelRight,
+  Plus,
+  Search,
+  Send,
+  Sparkles,
+} from "lucide-react";
 import {
   captureTask,
   fetchAccounts,
@@ -18,6 +26,7 @@ import {
   fetchMessages,
   fetchStreams,
   fetchTemplates,
+  generateDraft,
   sendTemplate,
   sendText,
 } from "./lib/api";
@@ -263,6 +272,7 @@ function Conversation({
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
+  const [drafting, setDrafting] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [showDetails, setShowDetails] = useState(false);
   const [context, setContext] = useState<WaChatContext | null>(null);
@@ -291,6 +301,16 @@ function Conversation({
       setError(res.error ?? "send failed");
     }
   }, [text, sending, chat.id, onReload]);
+
+  const doDraft = useCallback(async () => {
+    if (drafting) return;
+    setDrafting(true);
+    setError(null);
+    const res = await generateDraft(chat.id);
+    setDrafting(false);
+    if (res.ok && res.data) setText(res.data.draft_text);
+    else setError(res.error ?? "couldn't draft a reply");
+  }, [drafting, chat.id]);
 
   const doSendTemplate = useCallback(
     async (t: WaTemplate) => {
@@ -350,29 +370,44 @@ function Conversation({
             </div>
           )}
           {chat.window_open ? (
-            <div className="flex items-end gap-2">
-              <textarea
-                value={text}
-                onChange={(e) => setText(e.target.value)}
-                onKeyDown={(e) => {
-                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doSendText();
-                }}
-                rows={2}
-                placeholder="Type a reply…  (⌘↵ to send)"
-                className="min-h-[40px] flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary"
-              />
+            <div>
               <button
-                onClick={doSendText}
-                disabled={!text.trim() || sending}
-                className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[12px] font-semibold text-white disabled:opacity-50"
+                onClick={doDraft}
+                disabled={drafting}
+                className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary disabled:opacity-50"
               >
-                {sending ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                {drafting ? (
+                  <Loader2 className="h-3 w-3 animate-spin" />
                 ) : (
-                  <Send className="h-3.5 w-3.5" />
+                  <Sparkles className="h-3 w-3" />
                 )}
-                Send
+                Suggest reply
               </button>
+              <div className="flex items-end gap-2">
+                <textarea
+                  value={text}
+                  onChange={(e) => setText(e.target.value)}
+                  onKeyDown={(e) => {
+                    if ((e.metaKey || e.ctrlKey) && e.key === "Enter")
+                      doSendText();
+                  }}
+                  rows={2}
+                  placeholder="Type a reply…  (⌘↵ to send)"
+                  className="min-h-[40px] flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary"
+                />
+                <button
+                  onClick={doSendText}
+                  disabled={!text.trim() || sending}
+                  className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[12px] font-semibold text-white disabled:opacity-50"
+                >
+                  {sending ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <Send className="h-3.5 w-3.5" />
+                  )}
+                  Send
+                </button>
+              </div>
             </div>
           ) : (
             <div>

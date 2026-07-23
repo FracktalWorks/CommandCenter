@@ -104,3 +104,10 @@ export function captureTask(messageId: string) {
     { message_id: messageId }
   );
 }
+
+export function generateDraft(chatId: string) {
+  return postJSON<{ chat_id: string; draft_text: string; language: string }>(
+    `chats/${chatId}/draft`,
+    {}
+  );
+}

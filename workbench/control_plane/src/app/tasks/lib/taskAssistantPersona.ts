@@ -161,7 +161,11 @@ export function buildTaskAssistantPersona(opts: {
       "For a single explicit move use gtd_schedule(item_id, start, end) / " +
       "gtd_unschedule(item_id); read the grid with gtd_list_schedule(from, " +
       "to). Never move a 🔒 fixed block; respect the working window, capacity, " +
-      "energy windows and buffer.",
+      "energy windows and buffer. The planner already applies the user's " +
+      "STANDING planning philosophy (from Settings) plus the humane geometry " +
+      "(breaks between long focus runs, a protected lunch, whitespace) — pass " +
+      "the user's request for TODAY as energy_note (e.g. 'calls only', 'deep " +
+      "work', 'low energy', 'free after 3pm') and let the server do the rest.",
   );
   parts.push(calLines.join("\n"));
 

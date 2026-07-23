@@ -32,8 +32,16 @@ export function CalendarSettings({
     });
   const inputCls =
     "rounded border border-border bg-background px-1 py-0.5 text-right text-foreground focus:border-primary/50 focus:outline-none";
+  // Lunch is "on" only when a valid window is stored (end > start); we toggle it
+  // off by storing 0–0 rather than nulling (the settings PUT is additive).
+  const lunchOn =
+    settings.lunchStartHour != null &&
+    settings.lunchEndHour != null &&
+    settings.lunchEndHour > settings.lunchStartHour;
+  const DEFAULT_PROMPT_HINT =
+    "e.g. Leave breathing room — don't cram every minute. Front-load deep work in the morning, batch calls in the afternoon, protect time to think.";
   return (
-    <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-border bg-card p-3 text-[12px] shadow-xl">
+    <div className="absolute right-0 top-full z-30 mt-2 max-h-[80vh] w-80 overflow-y-auto rounded-lg border border-border bg-card p-3 text-[12px] shadow-xl">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-semibold text-foreground">Calendar settings</span>
         <button
@@ -44,6 +52,24 @@ export function CalendarSettings({
         >
           <X className="h-3.5 w-3.5" />
         </button>
+      </div>
+
+      {/* How the AI plans your day — the standing planning philosophy. */}
+      <div className="mb-3 rounded-md border border-primary/20 bg-primary/[0.04] p-2">
+        <label className="mb-1 block font-medium text-foreground">
+          How should the AI plan your day?
+        </label>
+        <p className="mb-1.5 text-[10px] text-muted-foreground">
+          A standing instruction the planner follows every time. Leave blank for
+          a sensible, humane default.
+        </p>
+        <textarea
+          value={settings.planningPrompt ?? ""}
+          onChange={(e) => onChange({ planningPrompt: e.target.value })}
+          placeholder={DEFAULT_PROMPT_HINT}
+          rows={4}
+          className="w-full resize-y rounded border border-border bg-background px-2 py-1.5 text-[11px] leading-snug text-foreground focus:border-primary/50 focus:outline-none"
+        />
       </div>
 
       <label className="mb-2 flex items-center justify-between gap-2">
@@ -84,7 +110,7 @@ export function CalendarSettings({
         />
       </label>
 
-      <label className="mb-3 flex items-center justify-between gap-2">
+      <label className="mb-2 flex items-center justify-between gap-2">
         <span className="text-muted-foreground">Buffer between blocks (min)</span>
         <input
           type="number"
@@ -96,6 +122,79 @@ export function CalendarSettings({
           className={`w-14 ${inputCls}`}
         />
       </label>
+
+      {/* Breaks — so the day isn't wall-to-wall focus work. */}
+      <label className="mb-2 flex items-center justify-between gap-2">
+        <span className="min-w-0 text-muted-foreground">
+          Break after focus run (min, 0 = off)
+        </span>
+        <input
+          type="number"
+          min={0}
+          max={240}
+          step={15}
+          value={settings.maxFocusRunMins}
+          onChange={(e) => onChange({ maxFocusRunMins: num(e.target.value, 90) })}
+          className={`w-14 ${inputCls}`}
+        />
+      </label>
+      <label className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Break length (min)</span>
+        <input
+          type="number"
+          min={5}
+          max={60}
+          step={5}
+          value={settings.breakMins}
+          onChange={(e) => onChange({ breakMins: num(e.target.value, 10) })}
+          className={`w-14 ${inputCls}`}
+        />
+      </label>
+
+      {/* Protected lunch — the planner won't book over it. */}
+      <label className="mb-2 flex cursor-pointer items-center justify-between gap-2">
+        <span className="min-w-0 text-muted-foreground">Protect a lunch break</span>
+        <input
+          type="checkbox"
+          checked={lunchOn}
+          onChange={(e) =>
+            onChange(
+              e.target.checked
+                ? { lunchStartHour: 13, lunchEndHour: 14 }
+                : { lunchStartHour: 0, lunchEndHour: 0 },
+            )
+          }
+          className="h-4 w-4 shrink-0 accent-primary"
+        />
+      </label>
+      {lunchOn && (
+        <label className="mb-3 flex items-center justify-between gap-2 pl-2">
+          <span className="text-muted-foreground">Lunch window</span>
+          <span className="flex items-center gap-1">
+            <input
+              type="number"
+              min={0}
+              max={23}
+              value={settings.lunchStartHour ?? 13}
+              onChange={(e) =>
+                onChange({ lunchStartHour: num(e.target.value, 13) })
+              }
+              className={`w-12 ${inputCls}`}
+            />
+            <span className="text-muted-foreground">–</span>
+            <input
+              type="number"
+              min={1}
+              max={24}
+              value={settings.lunchEndHour ?? 14}
+              onChange={(e) =>
+                onChange({ lunchEndHour: num(e.target.value, 14) })
+              }
+              className={`w-12 ${inputCls}`}
+            />
+          </span>
+        </label>
+      )}
 
       <label className="mb-3 flex cursor-pointer items-center justify-between gap-2">
         <span className="min-w-0 text-muted-foreground">

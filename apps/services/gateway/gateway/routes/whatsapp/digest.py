@@ -35,9 +35,20 @@ class DigestCounts(BaseModel):
     muted: int = 0
 
 
+class CommitmentWatchItem(BaseModel):
+    chat_id: str
+    text: str
+    due_hint: str | None = None
+    has_task: bool = False               # True once captured to a GTD item
+
+
 class WhatsAppDigestModel(BaseModel):
     needs_you: list[DigestItem] = []      # the ≤N that need the founder first
     counts: DigestCounts = DigestCounts()
+    # Promises WE made that are still open — the ones the digest nudges you to
+    # turn into tasks (has_task=False is the "never became work" flag).
+    commitment_watch: list[CommitmentWatchItem] = []
+    waiting_on_count: int = 0             # promises THEY made, still open
 
 
 def status_counts(rows: list[Any]) -> DigestCounts:
@@ -116,6 +127,36 @@ async def digest(
             for r in need_rows
         ])
 
-        return WhatsAppDigestModel(needs_you=needs_you, counts=counts)
+        # Commitment watch: our open promises, task-linked or not.
+        watch_rows = (await db.execute(
+            text(f"""SELECT k.chat_id, k.text, k.due_hint,
+                            (k.gtd_item_id IS NOT NULL) AS has_task
+                     FROM wa_commitments k
+                     WHERE k.direction = 'ours' AND k.status = 'open'
+                       AND k.account_id {scope}
+                     ORDER BY k.created_at DESC
+                     LIMIT 5"""),
+            params,
+        )).fetchall()
+        commitment_watch = [
+            CommitmentWatchItem(
+                chat_id=str(r.chat_id), text=r.text, due_hint=r.due_hint,
+                has_task=bool(r.has_task),
+            )
+            for r in watch_rows
+        ]
+
+        waiting_on_count = int((await db.execute(
+            text(f"""SELECT COUNT(*) FROM wa_commitments
+                     WHERE direction = 'theirs' AND status = 'open'
+                       AND account_id {scope}"""),
+            params,
+        )).scalar() or 0)
+
+        return WhatsAppDigestModel(
+            needs_you=needs_you, counts=counts,
+            commitment_watch=commitment_watch,
+            waiting_on_count=waiting_on_count,
+        )
     finally:
         await db.close()

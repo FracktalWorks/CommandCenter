@@ -159,6 +159,56 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
     )
 
 
+def _ui_first_directive(*, compact: bool = False) -> str:
+    """The proactive 'render UI by default' rule (generative_ui_2 Phase 2).
+
+    Static, byte-stable text delivered at the SYSTEM-PROMPT level to BOTH
+    runtimes (Copilot via the addendum, native MAF via an instructions append)
+    so the model actually REACHES FOR ``emit_generative_ui`` at answer time —
+    the tool's own docstring alone was too weak a signal, and MAF agents never
+    saw the addendum's genUI guidance at all. Template-first ordering keeps it
+    token-cheap and on-brand by construction (custom HTML is the costly last
+    resort). Gate rendering on the agent actually having ``emit_generative_ui``.
+    """
+    if compact:
+        return (
+            "Rich UI by default: when the answer is data / a metric / a status "
+            "/ a comparison / steps / a choice / a value to set, call "
+            "emit_generative_ui with a named TEMPLATE (supply data only — "
+            "on-brand and cheapest: weatherCard, statDashboard, barChart, "
+            "sparkTrend, comparison, progressTracker, recipeCard, flightStatus, "
+            "trainStatus, formCard, optionPicker) rather than describing it in "
+            "prose; use a component tree for simple structured data and custom "
+            "html only as a last resort; pair any pick/set with \"hitl\":true. "
+            "Skip UI only for a trivial one-liner or a long narrative."
+        )
+    return (
+        "### Rich UI by default for structured answers "
+        "(call emit_generative_ui)\n"
+        "Before you answer in prose, ask: is the reply data, numbers/metrics, "
+        "a status, a comparison, steps or a checklist, or a value the user "
+        "should pick or set? If yes, RENDER it — a card is clearer than a "
+        "paragraph and can be interactive. This is expected behaviour, not "
+        "decoration. Pick the CHEAPEST mode that fits (which also keeps you "
+        "on-brand):\n"
+        "- **Template first** — `{\"type\":\"template\",\"props\":{\"name\":…,"
+        "\"data\":{…}}}`. You supply DATA ONLY; fonts, colours, Lucide icons, "
+        "motion and light/dark are built in and correct every time. Names: "
+        "weatherCard, statDashboard, barChart, sparkTrend, comparison, "
+        "progressTracker, recipeCard, flightStatus, trainStatus, formCard, "
+        "optionPicker.\n"
+        "- **Component tree** next — cards / tables / keyValue / badges / "
+        "callouts / buttons / icons for simple structured data.\n"
+        "- **Custom html LAST** — only when nothing above fits; it costs the "
+        "most tokens and you must match the brand yourself via the `--cc-*` "
+        "CSS variables. Never hand-roll HTML for something a template covers.\n"
+        "When the user must choose or set something, use formCard / "
+        "optionPicker (or buttons) with top-level `\"hitl\":true` so their "
+        "answer returns to you in the same turn. Skip UI only for a trivial "
+        "one-liner or a long narrative explanation."
+    )
+
+
 def _gate_injected_tool(fn: Any) -> Any:
     """Wrap an injected platform tool with the risk-aware permission gate (B6).
 
@@ -277,6 +327,10 @@ def _build_injected_tools_addendum(
             "## CommandCenter Platform Tools",
             _build_output_discipline_block(compact=True),
         ]
+        # Proactive UI rule first — it changes how the agent ANSWERS, so it
+        # leads (Phase 2). Gated: only agents that actually have the tool.
+        if _want("emit_generative_ui"):
+            parts.append(_ui_first_directive(compact=True))
         if _has_delegation:
             parts.append(
                 "call_agent(name,msg), call_agents_parallel(tasks), "
@@ -349,6 +403,11 @@ def _build_injected_tools_addendum(
 ---
 ## CommandCenter Platform Tools (injected at runtime)
 """]
+    # Proactive UI rule leads the addendum — it governs how the agent ANSWERS
+    # (render vs. prose), so it must be prominent, not buried among tool specs
+    # (Phase 2). Gated so a scoped-out agent isn't told to use a tool it lacks.
+    if _want("emit_generative_ui"):
+        sections.append(_ui_first_directive())
     if _has_delegation:
         sections.append(f"""### Inter-agent delegation
 - **call_agent(agent_name, message)** — Delegate to another agent; waits for its response.
@@ -746,6 +805,20 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     ):
         _extra_tools = [_gate_injected_tool(fn) for fn in _extra_tools]
 
+    # Whether emit_generative_ui actually landed in this agent's toolset — the
+    # gate above wraps the callables but functools.wraps preserves __name__.
+    # Native MAF agents get NONE of the Copilot addendum (which is where the
+    # proactive UI rule + genUI guidance live for Copilot), so when they DO
+    # carry the tool we append the same directive to their instructions —
+    # otherwise a MAF agent has the tool but no system-prompt nudge to use it
+    # (generative_ui_2 Phase 2).
+    _emit_injected = any(
+        getattr(fn, "__name__", "") == "emit_generative_ui" for fn in _extra_tools
+    )
+    # Present in BOTH the full and compact directive variants, so the
+    # idempotency guard holds whichever one a given agent/sub-agent receives.
+    _UI_DIRECTIVE_MARKER = "Rich UI by default"
+
     for agent in agents:
         injected = False
         _agent_label = getattr(agent, "name", None) or type(agent).__name__
@@ -888,6 +961,20 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                             )
                     except Exception:
                         pass
+                # Proactive UI rule for native MAF agents (Phase 2): they never
+                # receive the Copilot addendum, so without this a MAF agent that
+                # carries emit_generative_ui (e.g. email-assistant) has zero
+                # system-prompt guidance to render UI. Static + marker-guarded =
+                # byte-stable across turns (KV cache safe).
+                try:
+                    _prev2 = _do.get("instructions") or ""
+                    if _emit_injected and _UI_DIRECTIVE_MARKER not in _prev2:
+                        _do["instructions"] = (
+                            _prev2 + "\n\n"
+                            + _ui_first_directive(compact=is_sub_agent)
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
         except Exception as _exc:  # noqa: BLE001
             _log.warning(
@@ -908,6 +995,20 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                 for fn in _extra_tools:
                     if fn.__name__ not in existing_names:
                         agent.tools.append(fn)
+                # Proactive UI rule for this MAF shape too (Phase 2) — append to
+                # a writable string `instructions` attr if present; best-effort.
+                try:
+                    _instr = getattr(agent, "instructions", None)
+                    if (
+                        _emit_injected and isinstance(_instr, str)
+                        and _UI_DIRECTIVE_MARKER not in _instr
+                    ):
+                        agent.instructions = (
+                            _instr + "\n\n"
+                            + _ui_first_directive(compact=is_sub_agent)
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
         except Exception as _exc:  # noqa: BLE001
             _log.warning(

@@ -33,6 +33,8 @@ INJECTED_PLATFORM_TOOLS = {
     "get_errors", "run_diagnostics", "install_dependency",
     "save_note", "recall_notes", "query_history",
     "github_search", "github_repo_search",
+    # Coding skill + integration discoverability (agent_coding_skill.md).
+    "run_script", "code_task", "list_integrations",
 }
 
 
@@ -61,3 +63,27 @@ def test_run_diagnostics_action_verb_alias_documented():
     the addendum must name run_diagnostics (the alias that gets called)."""
     text = _build_injected_tools_addendum(is_sub_agent=False)
     assert "run_diagnostics" in text
+
+
+def test_proactive_ui_directive_leads_both_addenda():
+    """generative_ui_2 Phase 2: the 'render UI by default' rule must be present
+    AND early (it governs how the agent answers, so it can't be buried). Both
+    the full and compact addenda carry it, template-first for token thrift."""
+    for is_sub in (False, True):
+        text = _build_injected_tools_addendum(is_sub_agent=is_sub)
+        assert "Rich UI by default" in text, f"missing (sub={is_sub})"
+        # Template-first ordering is the token-efficiency lever — templates
+        # must be named ahead of the custom-html escape hatch.
+        assert text.index("optionPicker") < text.index("html"), (
+            f"templates must precede custom html (sub={is_sub})"
+        )
+        # It leads: appears before the bulk of per-tool specs (web access).
+        if "Web access" in text:
+            assert text.index("Rich UI by default") < text.index("Web access")
+
+
+def test_ui_directive_gated_on_the_tool_being_present():
+    """A scope WITHOUT emit_generative_ui must not be told to render UI."""
+    no_ui = frozenset({"web_search", "fetch_page", "write_artifact"})
+    text = _build_injected_tools_addendum(effective_scope=no_ui)
+    assert "Rich UI by default" not in text

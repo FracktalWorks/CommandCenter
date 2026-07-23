@@ -1,6 +1,6 @@
 # Generative UI 2.0 — Immersive HITL UI for Agents
 
-**Status:** Phase 1 shipped 2026-07-23 · **Owner:** Vijay
+**Status:** Phase 1 + proactive/cross-runtime parity (§7) shipped 2026-07-23 · **Owner:** Vijay
 **Scope:** how agents generate rich, interactive, on-brand UI — inline in chat AND
 as immersive side-panel views — with first-class human-in-the-loop interaction.
 
@@ -136,3 +136,49 @@ pattern, delete the bespoke HTML.
 - **Cleanup backlog:** migrate genUI primitive hardcoded hexes
   (`ICON_TONE`, badge/callout classes, `TONE_COLOR`) to semantic tokens;
   DESIGN_SYSTEM rule says never raw hex.
+
+## 7. Adoption & cross-runtime parity — SHIPPED 2026-07-23
+
+Phase 1 gave agents the *ability* to render UI; agents still weren't *reaching
+for it*. A review found two root causes, both on the prompting side (the emit
+path and the frontend render are fully runtime-agnostic — one shared
+`queue.put({CUSTOM, generative_ui})` via `resolve_run_queue(session_id)`,
+rendered on payload alone in `GenerativeUINode`/`renderTemplate`, so nothing
+was wrong with *creation*):
+
+1. **No answer-time nudge.** The "reach for it eagerly" guidance lived only in
+   the tool docstring (a weak signal the model consults *after* deciding to look
+   at tools) and, at system-prompt level, buried mid-addendum among ~15 other
+   tools. Nothing told the model, at answer time, to convert a data/status/
+   comparison/choice reply into UI.
+2. **Native MAF agents saw NONE of it.** `_build_injected_tools_addendum`
+   (which carries the genUI guidance + `design.md`) is applied ONLY on the
+   GitHub-Copilot `_tools` branch of `_inject_agent_tools`. Native MAF agents
+   (e.g. `email-assistant`, which explicitly scopes in `emit_generative_ui`)
+   got the tool + its docstring + at most the delegation registry — no addendum,
+   no design language. So the strongest UI agent-type had the weakest guidance.
+
+**Fix — a proactive "Rich UI by default" directive delivered to BOTH runtimes**
+(`_ui_first_directive`, `_tool_injection.py`):
+- Static, byte-stable (KV-cache safe), gated on the agent actually carrying
+  `emit_generative_ui`.
+- **Template-first ordering** is the token-thrift lever: it names the 11
+  templates as the cheapest + on-brand-by-construction path (data only), the
+  component tree next, and custom HTML as the costly last resort (with the
+  `--cc-*` token hook for when it's unavoidable). This directly answers "don't
+  burn tokens on custom generation" and "use the proper design language."
+- **Placement:** leads the Copilot addendum (full + compact) instead of being
+  buried; and — the parity fix — is appended to native-MAF agents' instructions
+  (both the `default_options` and `agent.tools` shapes), marker-guarded for
+  idempotency. So MAF and Copilot agents now get the same answer-time rule.
+- Pick/set flows are steered to `formCard`/`optionPicker` + `"hitl":true`.
+
+Design-language note: full 16 KB `design.md` is intentionally NOT dumped into
+every MAF prompt — templates are on-brand without it, and that's the path we
+steer to. Injecting `design.md` for MAF agents that lean on custom-HTML reports
+remains an optional follow-up (the `--cc-*` hook covers the common case).
+
+Coverage locked by `evals/trajectories/test_tool_addendum_drift_trajectory.py`
+(directive leads both addenda, template-before-html ordering, gated on the tool)
+and `tests/unit/test_genui_proactive_directive.py` (native-MAF instructions
+injection, idempotency, compact-vs-full variant, byte-stability).

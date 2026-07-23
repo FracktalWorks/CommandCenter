@@ -5,6 +5,7 @@ from __future__ import annotations
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.notes.core import (
+    Attendee,
     CreateMeetingRequest,
     MeetingDetail,
     MeetingListItem,
@@ -18,6 +19,7 @@ from gateway.routes.notes.core import (
     row_to_run,
     row_to_segment,
 )
+from pydantic import BaseModel
 from sqlalchemy import text
 
 _LIST_SQL = """
@@ -137,14 +139,64 @@ async def get_meeting(
             )
         ).fetchall()
     base = row_to_list_item(m)
+    attendees = m.attendees if isinstance(m.attendees, list) else []
     return MeetingDetail(
         **base.model_dump(),
         transcript_source=m.transcript_source,
         summary_md=m.summary_md,
+        scratch_notes=m.scratch_notes,
+        attendees=attendees,
         recordings=[row_to_recording(r) for r in recs],
         segments=[row_to_segment(s) for s in segs],
         runs=[row_to_run(r) for r in runs],
     )
+
+
+class PutScratchRequest(BaseModel):
+    scratch_notes: str = ""
+
+
+@router.put("/meetings/{meeting_id}/scratch")
+async def put_scratch(
+    meeting_id: str,
+    body: PutScratchRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Save the user's rough notes — merged into generation as emphasis signals."""
+    async with await _get_db() as db:
+        await _load_meeting(db, meeting_id)
+        await db.execute(
+            text("UPDATE meeting SET scratch_notes = :s WHERE id = :id"),
+            {"s": body.scratch_notes or None, "id": meeting_id},
+        )
+        await db.commit()
+    return {"ok": True}
+
+
+class PutAttendeesRequest(BaseModel):
+    attendees: list[Attendee] = []
+
+
+@router.put("/meetings/{meeting_id}/attendees")
+async def put_attendees(
+    meeting_id: str,
+    body: PutAttendeesRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> list[Attendee]:
+    """Replace the meeting's external attendee list (name + email)."""
+    import json as _json
+
+    clean = [
+        a for a in body.attendees if (a.name.strip() or a.email.strip())
+    ]
+    async with await _get_db() as db:
+        await _load_meeting(db, meeting_id)
+        await db.execute(
+            text("UPDATE meeting SET attendees = CAST(:a AS JSONB) WHERE id = :id"),
+            {"a": _json.dumps([a.model_dump() for a in clean]), "id": meeting_id},
+        )
+        await db.commit()
+    return clean
 
 
 @router.patch("/meetings/{meeting_id}")

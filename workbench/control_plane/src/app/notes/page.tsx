@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AudioLines,
+  BookMarked,
   Clock,
   FileAudio,
   Loader2,
@@ -20,6 +21,7 @@ import {
   Users,
 } from "lucide-react";
 import { createMeeting, formatClock, listMeetings, uploadRecording } from "./lib/api";
+import GlossaryModal from "./components/GlossaryModal";
 import type { MeetingListItem } from "./lib/types";
 
 const STATUS_META: Record<
@@ -40,6 +42,7 @@ export default function NotesPage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [showGlossary, setShowGlossary] = useState(false);
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (q?: string) => {
@@ -77,6 +80,16 @@ export default function NotesPage() {
     }
   }
 
+  async function onRecord() {
+    setError(null);
+    try {
+      const meeting = await createMeeting(undefined, "in_person");
+      router.push(`/notes/session/${meeting.id}`);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    }
+  }
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
@@ -88,16 +101,23 @@ export default function NotesPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground tech-transition cursor-not-allowed opacity-60"
-            title="Live recording arrives in the next slice — upload a file for now"
-            disabled
+            onClick={() => setShowGlossary(true)}
+            className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+            title="Glossary — teach transcription your jargon"
+            aria-label="Glossary"
+          >
+            <BookMarked className="w-4 h-4" />
+          </button>
+          <button
+            onClick={onRecord}
+            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
           >
             <span className="flex items-center gap-1.5">
               <Mic className="w-4 h-4" /> Record
             </span>
           </button>
           <button
-            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-60"
+            className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
           >
@@ -107,7 +127,7 @@ export default function NotesPage() {
               ) : (
                 <Upload className="w-4 h-4" />
               )}
-              {uploading ? "Uploading…" : "Upload recording"}
+              {uploading ? "Uploading…" : "Upload"}
             </span>
           </button>
           <input
@@ -215,6 +235,8 @@ export default function NotesPage() {
           )}
         </div>
       </div>
+
+      {showGlossary && <GlossaryModal onClose={() => setShowGlossary(false)} />}
     </div>
   );
 }

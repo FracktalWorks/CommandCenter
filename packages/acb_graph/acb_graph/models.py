@@ -182,6 +182,13 @@ class Meeting(Base):
     template_key: Mapped[str | None] = mapped_column(Text)
     summary_json: Mapped[dict | None] = mapped_column(JSONB)
     summary_md: Mapped[str | None] = mapped_column(Text)
+    # External attendees as [{name, email}] (infra/postgres/99_note_taker_slice2.sql);
+    # distinct from attendee_ids (org person refs).
+    attendees: Mapped[list | None] = mapped_column(JSONB, server_default="[]")
+    # The user's own rough notes (input), merged into generation as emphasis
+    # signals (infra/postgres/99_note_taker_slice2.sql). Distinct from the
+    # generated meeting_note output.
+    scratch_notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -245,6 +252,15 @@ class MeetingNote(Base):
     notes_json: Mapped[dict | None] = mapped_column(JSONB)
     updated_by: Mapped[str | None] = mapped_column(Text)
     updated_at: Mapped[datetime] = _updated_at()
+
+
+class NotesGlossary(Base):
+    __tablename__ = "notes_glossary"
+
+    id: Mapped[UUID] = _uuid_pk()
+    user_id: Mapped[str] = mapped_column(Text, nullable=False)
+    term: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = _created_at()
 
 
 class SummaryRun(Base):

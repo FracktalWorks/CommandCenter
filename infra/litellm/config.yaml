@@ -19,6 +19,13 @@ model_list:
     litellm_params:
       model: deepseek/deepseek-v4-pro
       api_key: os.environ/DEEPSEEK_API_KEY
+  # Speech-to-text tier for the Note Taker — routed via litellm.atranscription.
+  # Swap the model here (or in Settings → Models) to use OpenAI whisper-1,
+  # Deepgram nova-3, or the self-host faster-whisper endpoint (slice 3).
+  - model_name: tier-stt
+    litellm_params:
+      model: groq/whisper-large-v3-turbo
+      api_key: os.environ/GROQ_API_KEY
 
   # ── Copilot entries (github/… prefix for BYOK routing) ──────────────────
   - model_name: copilot/gpt-4o-mini

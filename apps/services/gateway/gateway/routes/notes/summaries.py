@@ -113,7 +113,24 @@ _MAP_SYSTEM = (
 )
 
 
-async def _map_reduce(segs: list[Any], template, model: str) -> dict | None:
+def _scratch_block(scratch: str) -> str:
+    """Format the user's rough notes as emphasis signals appended to the DATA.
+
+    They steer *what to cover*, not *what is true* — every fact still has to come
+    from the transcript (the Granola pattern; spec §4 Tier-1 item 3)."""
+    s = (scratch or "").strip()
+    if not s:
+        return ""
+    return (
+        "\n\nUSER'S OWN NOTES (emphasis signals — what mattered to the user "
+        "during the meeting). Expand these topics using the transcript, fix "
+        "their shorthand, and make sure each is addressed; but ground every "
+        "fact in the transcript and never invent anything from these notes:\n"
+        + s[:4000]
+    )
+
+
+async def _map_reduce(segs: list[Any], template, model: str, scratch: str = "") -> dict | None:
     chunks = _chunk_segments(segs)
     dropped = 0
     if len(chunks) > _MAX_CHUNKS:
@@ -148,17 +165,19 @@ async def _map_reduce(segs: list[Any], template, model: str) -> dict | None:
     )
     return await _llm_json(
         reduce_system,
-        "PARTIAL NOTES (DATA):\n" + json.dumps(partials, ensure_ascii=False),
+        "PARTIAL NOTES (DATA):\n"
+        + json.dumps(partials, ensure_ascii=False)
+        + _scratch_block(scratch),
         model,
         max_tokens=1800,
     )
 
 
-async def _single_pass(segs: list[Any], template, model: str) -> dict | None:
+async def _single_pass(segs: list[Any], template, model: str, scratch: str = "") -> dict | None:
     data = "\n".join(_tag(s) for s in segs)
     return await _llm_json(
         build_system_prompt(template),
-        f"TRANSCRIPT (DATA):\n{data}",
+        f"TRANSCRIPT (DATA):\n{data}" + _scratch_block(scratch),
         model,
         max_tokens=1800,
     )
@@ -181,7 +200,7 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
         async with await _get_db() as db:
             m = (
                 await db.execute(
-                    text("SELECT template_key FROM meeting WHERE id = :id"),
+                    text("SELECT template_key, scratch_notes FROM meeting WHERE id = :id"),
                     {"id": meeting_id},
                 )
             ).fetchone()
@@ -207,6 +226,7 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
             raise RuntimeError("no transcript segments to summarize")
 
         template = get_template(m.template_key if m else None)
+        scratch = (m.scratch_notes or "") if m else ""
         model = _model("meeting_summary")
         total_chars = sum(len(_tag(s)) for s in segs)
         chunk_total = max(1, (total_chars // _PASS_CHARS) + 1)
@@ -218,9 +238,9 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
             await db.commit()
 
         if total_chars <= _PASS_CHARS:
-            data = await _single_pass(segs, template, model)
+            data = await _single_pass(segs, template, model, scratch)
         else:
-            data = await _map_reduce(segs, template, model)
+            data = await _map_reduce(segs, template, model, scratch)
         if not data:
             raise RuntimeError("LLM produced no usable notes")
 

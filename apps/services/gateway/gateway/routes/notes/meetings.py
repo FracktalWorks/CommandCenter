@@ -144,11 +144,33 @@ async def get_meeting(
         **base.model_dump(),
         transcript_source=m.transcript_source,
         summary_md=m.summary_md,
+        scratch_notes=m.scratch_notes,
         attendees=attendees,
         recordings=[row_to_recording(r) for r in recs],
         segments=[row_to_segment(s) for s in segs],
         runs=[row_to_run(r) for r in runs],
     )
+
+
+class PutScratchRequest(BaseModel):
+    scratch_notes: str = ""
+
+
+@router.put("/meetings/{meeting_id}/scratch")
+async def put_scratch(
+    meeting_id: str,
+    body: PutScratchRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Save the user's rough notes — merged into generation as emphasis signals."""
+    async with await _get_db() as db:
+        await _load_meeting(db, meeting_id)
+        await db.execute(
+            text("UPDATE meeting SET scratch_notes = :s WHERE id = :id"),
+            {"s": body.scratch_notes or None, "id": meeting_id},
+        )
+        await db.commit()
+    return {"ok": True}
 
 
 class PutAttendeesRequest(BaseModel):

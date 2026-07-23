@@ -183,6 +183,18 @@ export async function summarize(
   );
 }
 
+export async function saveScratchNotes(
+  meetingId: string,
+  scratchNotes: string
+): Promise<void> {
+  const res = await fetch(`/api/notes/meetings/${meetingId}/scratch`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ scratch_notes: scratchNotes }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 /** SSE URL for the pipeline progress stream (open with `new EventSource`). */
 export function eventsUrl(meetingId: string): string {
   return `/api/notes/meetings/${meetingId}/events`;

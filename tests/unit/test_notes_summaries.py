@@ -3,7 +3,12 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from gateway.routes.notes.summaries import _chunk_segments, _collect_refs, _tag
+from gateway.routes.notes.summaries import (
+    _chunk_segments,
+    _collect_refs,
+    _scratch_block,
+    _tag,
+)
 from gateway.routes.notes.templates import (
     DEFAULT_TEMPLATE_KEY,
     build_system_prompt,
@@ -74,6 +79,22 @@ def test_chunk_segments_single_when_small() -> None:
 
 
 # ── Ref collection + markdown rendering ──────────────────────────────────────
+
+def test_scratch_block_empty_is_noop() -> None:
+    assert _scratch_block("") == ""
+    assert _scratch_block("   ") == ""
+    assert _scratch_block(None) == ""  # type: ignore[arg-type]
+
+
+def test_scratch_block_labels_and_bounds_user_notes() -> None:
+    block = _scratch_block("budget cut · ship in August")
+    assert "USER'S OWN NOTES" in block
+    assert "budget cut" in block
+    # grounding guardrail present so scratch never overrides the transcript
+    assert "never invent" in block.lower()
+    # long notes are bounded
+    assert len(_scratch_block("x" * 9000)) < 4300
+
 
 def test_collect_refs_from_actions_and_decisions() -> None:
     data = {

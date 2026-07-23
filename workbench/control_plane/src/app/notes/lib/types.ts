@@ -62,6 +62,7 @@ export interface Attendee {
 export interface MeetingDetail extends MeetingListItem {
   transcript_source: string | null;
   summary_md: string | null;
+  scratch_notes: string | null;
   attendees: Attendee[];
   recordings: Recording[];
   segments: Segment[];

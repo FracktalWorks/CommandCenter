@@ -10,7 +10,7 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2, Mic, Pause, Play, Square } from "lucide-react";
 import { MeetingRecorder, type RecorderState } from "../../lib/recorder";
-import { formatClock } from "../../lib/api";
+import { formatClock, saveScratchNotes } from "../../lib/api";
 
 const BARS = 48;
 
@@ -29,6 +29,8 @@ export default function SessionPage({
   const [elapsed, setElapsed] = useState(0);
   const [backlog, setBacklog] = useState(0);
   const [error, setError] = useState<string | null>(null);
+  const [scratch, setScratch] = useState("");
+  const scratchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -110,6 +112,9 @@ export default function SessionPage({
 
   async function finish() {
     try {
+      // Flush any pending jot before we hand off to the notes view.
+      if (scratchTimer.current) clearTimeout(scratchTimer.current);
+      if (scratch.trim()) await saveScratchNotes(id, scratch).catch(() => {});
       await recorderRef.current?.stop();
       router.push(`/notes/meeting/${id}`);
     } catch (e) {
@@ -120,6 +125,15 @@ export default function SessionPage({
   function discard() {
     recorderRef.current?.cancel();
     router.push("/notes");
+  }
+
+  function onScratchChange(v: string) {
+    setScratch(v);
+    if (scratchTimer.current) clearTimeout(scratchTimer.current);
+    // Debounced autosave — the jotting shouldn't fire a request per keystroke.
+    scratchTimer.current = setTimeout(() => {
+      void saveScratchNotes(id, v).catch(() => {});
+    }, 800);
   }
 
   const isLive = phase === "recording" || phase === "paused";
@@ -223,6 +237,13 @@ export default function SessionPage({
                 <Square className="w-7 h-7 fill-current" />
               </button>
             </div>
+            <textarea
+              value={scratch}
+              onChange={(e) => onScratchChange(e.target.value)}
+              placeholder="Jot notes as you go — decisions, owners, follow-ups. The AI merges these into the summary."
+              rows={2}
+              className="w-full max-w-2xl rounded-xl border border-border bg-card p-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+            />
           </>
         )}
 

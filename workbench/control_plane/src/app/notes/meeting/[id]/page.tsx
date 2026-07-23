@@ -38,6 +38,7 @@ import {
   listActions,
   rejectAction,
   saveAttendees,
+  saveScratchNotes,
   summarize,
 } from "../../lib/api";
 import type {
@@ -79,6 +80,8 @@ export default function MeetingPage({
   const [showEmail, setShowEmail] = useState(false);
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
+  const [scratch, setScratch] = useState("");
+  const scratchLoaded = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const refresh = useCallback(async () => {
@@ -91,6 +94,11 @@ export default function MeetingPage({
       setMeeting(m);
       setNotesMd(note?.notes_md ?? m.summary_md ?? null);
       setActions(acts);
+      // Seed the scratch editor once, then leave the user's live edits alone.
+      if (!scratchLoaded.current) {
+        setScratch(m.scratch_notes ?? "");
+        scratchLoaded.current = true;
+      }
       setError(null);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -448,6 +456,22 @@ export default function MeetingPage({
 
             {/* Notes + action items */}
             <div className="space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+                  Your notes
+                  <span className="text-[10px] text-muted-foreground font-normal">
+                    (merged into the summary as emphasis)
+                  </span>
+                </h2>
+                <textarea
+                  value={scratch}
+                  onChange={(e) => setScratch(e.target.value)}
+                  onBlur={() => void saveScratchNotes(id, scratch).catch(() => {})}
+                  placeholder="Jot the points that matter — decisions, who owns what, things to follow up. The AI will expand these from the transcript when you generate notes."
+                  rows={3}
+                  className="w-full rounded-xl border border-border bg-card p-3 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring resize-y"
+                />
+              </div>
               <div>
                 <h2 className="text-sm font-semibold text-foreground mb-2">
                   Notes

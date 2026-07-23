@@ -185,6 +185,10 @@ class Meeting(Base):
     # External attendees as [{name, email}] (infra/postgres/96_note_taker_attendees.sql);
     # distinct from attendee_ids (org person refs).
     attendees: Mapped[list | None] = mapped_column(JSONB, server_default="[]")
+    # The user's own rough notes (input), merged into generation as emphasis
+    # signals (infra/postgres/97_note_taker_scratch.sql). Distinct from the
+    # generated meeting_note output.
+    scratch_notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _created_at()
 
 

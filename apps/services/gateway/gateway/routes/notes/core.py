@@ -82,6 +82,7 @@ class Attendee(BaseModel):
 class MeetingDetail(MeetingListItem):
     transcript_source: str | None = None
     summary_md: str | None = None
+    scratch_notes: str | None = None
     attendees: list[Attendee] = []
     recordings: list[RecordingModel] = []
     segments: list[SegmentModel] = []

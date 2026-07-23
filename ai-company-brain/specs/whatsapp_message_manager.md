@@ -1,10 +1,12 @@
 # WhatsApp Message Manager — plan & feature brainstorm
 
 > **Product:** CommandCenter · **Feature:** WhatsApp channel vertical (channel #2, after email)
-> **Created:** 2026-07-23 · **Revised:** 2026-07-23 (v2 — **official WhatsApp Business Platform
-> only**, per founder decision; unofficial linked-device routes dropped; mockups repolished)
+> **Created:** 2026-07-23 · **Revised:** 2026-07-23 (v3 — calm-UI pass grounded in a prior-art
+> study; v2 — official WhatsApp Business Platform only, per founder decision; unofficial
+> linked-device routes dropped)
 > **Status:** 🧠 **PLANNING** — feature set, value map, architecture and UI mockups; no code yet.
-> **Mockups:** `mockups/whatsapp_message_manager.html` (7 screens + build notes, control-plane shell)
+> **Mockups:** `mockups/whatsapp_message_manager.html` (7 screens + build notes, control-plane shell,
+> rebuilt around a single organizing spine — see §7)
 > **Anchors:** ADR-007 (WhatsApp via Meta Cloud API), `email_app_master_plan.md` (the vertical
 > to mirror), `agent_registry.json` → `agent-triage` ("email / WhatsApp / meeting triage").
 
@@ -327,24 +329,75 @@ notify_policy, auto_reply_policy, draft_policy, escalate_after_mins)`.
 
 ---
 
-## 7. UI/UX — the screens (see mockups v2)
+## 7. UI/UX — the calm design (see mockups v3)
 
-The mockups render every screen inside the real control-plane shell (icon rail →
-side nav → main pane) so layout, tokens and components translate 1:1 into
-`workbench/control_plane/src/app/whatsapp/`. Screen 8 in the mockup file is a
-build-notes sheet: semantic color roles + a component map (mockup element →
-existing email/control-plane component to reuse → net-new work).
+### 7a. Prior-art study (what the mockups are grounded in)
+
+Before v3 the mockups were feature-complete but cluttered — five stat cards, a
+dense chip row, 3–4 pills + two buttons on every queue row, an always-on
+multi-card context rail. A prior-art pass across paid and open-source WhatsApp
+inboxes and the "calm/fast inbox" tradition showed that clutter is not a polish
+problem, it's an information-architecture one, and that the fix is well-trodden.
+
+**The tools reviewers call "clean, near-zero training":** Cooby (tabs +
+inbox-zero over WhatsApp Web), Rasayel and WATI (clean three-pane), SleekFlow and
+Kommo ("clutter-free", single spine), plus the calm-inbox canon — Superhuman
+(one accent, keyboard-first, almost no visible buttons), HEY (Imbox/Feed/Paper
+Trail — categories are *destinations*, not filters), Missive/Front/Shortwave
+(context and AI summoned, not resident), and Chatwoot (the OSS reference: a
+four-zone shell, Copilot-as-a-thread).
+
+**The tools reviewers call "cluttered / steep learning curve":** Periskope,
+Interakt, Gallabox, Trengo, Respond.io — and the specific complaints (too many
+pills per row, a busy always-on rail, a KPI dashboard bolted onto the workspace,
+multiple organizers stacked on one screen) were an exact description of our v2.
+
+The convergent lesson — **one organizing spine, not five** — drove the rebuild.
+
+### 7b. The six calm principles (now the house rules for this vertical)
+
+1. **One spine.** Triage streams live in the nav; there is no stat wall and no
+   chip cloud. The five numbers that were stat cards became stream counts —
+   same data, clickable, one active at a time (HEY / Cooby / Rasayel).
+2. **One triage number.** It's just the active stream's count. Volume, response
+   time and other metrics live in a separate analytics view you visit on purpose.
+3. **Quiet rows, revealed actions.** A row is avatar · name · one line · time ·
+   at most one red dot ("needs you"); hover or keys surface reply/snooze/done.
+   Inside a stream, rows don't re-state the category (Superhuman / WATI / Cooby).
+4. **Two panes by default; context on demand.** List → thread; the CRM/ERP
+   context is a "Details ▸" drawer (accordion'd, one section open), not a
+   permanent rail (Missive / Front / Chatwoot).
+5. **AI at the point of writing.** One "✦ Suggested reply" chip above the
+   composer, expandable to a copilot thread — never a standing AI column
+   (SleekFlow / Shortwave / WATI).
+6. **One accent, greyscale rest.** Cyan = active/primary/AI; WhatsApp green =
+   send & outbound only; a single red dot = needs you; gold ★ = VIP (a glyph,
+   not a fill); amber only for real payment aging, in context. Everything else
+   stays grey until it earns attention (Superhuman).
+
+**The governing constraint for every future feature:** it lands as a new stream
+in the nav, on a settings surface, or as a hover/drawer affordance — *never* as
+another always-on element on the queue or the thread. That single rule is what
+the cluttered tools violated, per their own reviews.
+
+### 7c. The screens
+
+Every screen renders inside the real control-plane shell (icon rail → streams nav
+→ main) so layout, tokens and components translate 1:1 into
+`workbench/control_plane/src/app/whatsapp/`. Screen 8 is a build-notes sheet:
+the principle→screen→prior-art map, color-as-signal legend, and a component map
+(mockup element → existing email/control-plane component to reuse → net-new).
 
 | # | Screen | What it proves |
 |---|---|---|
-| 1 | **Connect** | Embedded Signup + coexistence stepper; observable history/label import; a capability card that states the 24 h window, template pricing and label caveats up front |
-| 2 | **Reply queue** | The home screen is an obligation list: five stat cards (no unread count), category chips (🏷 = synced label), ranked rows each ending in an action, waiting-on strip, trust ledger |
-| 3 | **Conversation** | Three panes; session-window pill in the header; AI-parsed attachments; the overdue-invoice interception; draft-first composer with register/language chips; context rail (Zoho/Odoo/ClickUp/email) |
-| 4 | **Categories** | Labels as policy carriers (notify / auto-reply / drafts / escalation), Family hands-off row, AI suggestions with accept-all |
-| 5 | **Rules** | Rule cards with nested learnings + honest stats, autonomy ladder per rule, template costs surfaced, hard-guardrails card, plain-language compiler |
-| 6 | **Digest** | Needs-you-first ≤3, commitment watch, group roll-up, trust ledger, "clear in 10 min" |
-| 7 | **Companion** | Mobile PWA chat with genUI queue/draft cards; approve-&-send as the only send |
-| 8 | **Build notes** | Color semantics + component reuse map — the implementation checklist |
+| 1 | **Connect** | Embedded Signup + coexistence stepper; observable phased import; one quiet capability card stating the 24 h window, template pricing and label caveats up front |
+| 2 | **The queue** | The whole home is two panes: triage-streams nav (the single spine, replacing v2's stat cards + chip row) and quiet near-textual rows with a single "needs you" dot and hover-revealed actions |
+| 3 | **Conversation** | List + thread; 24 h window as a quiet header chip + `/` template picker; AI as one "Suggested reply" chip in the composer; the CRM/ERP moat in an on-demand accordion drawer (the overdue-invoice interception) |
+| 4 | **Categories** | A settings surface (depth allowed): labels as policy rows (notify / auto-reply / drafts / escalation), only the meaningful cell bright, Family "AI hands off", uncategorized drained by evidence-backed suggestions |
+| 5 | **Rules** | Rule cards with honest stats + nested learnings, the autonomy ladder visible per rule, template costs surfaced, an un-editable hard-guardrails card, plain-language compiler |
+| 6 | **Digest** | ≤3 "needs you first" with prepared actions; commitment watch both ways; sections divided by whitespace + one label color, not six filled cards |
+| 7 | **Companion** | Mobile PWA chat with quiet genUI queue/draft cards; approve-&-send as the only send |
+| 8 | **Build notes** | Principles→screens→prior-art map, color-as-signal legend, component reuse map — the implementation checklist |
 
 ---
 

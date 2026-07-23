@@ -60,10 +60,17 @@ export function EngageView() {
       return true;
     });
     // Rank by the matrix (Critical → …), then by due date within a tie.
+    // FLOW MATCHING (Csikszentmihalyi): when the user says they're SHARP,
+    // that scarce high-capacity state is exactly what deep/flow work needs —
+    // so within the same priority level, deep-work tasks surface first. At
+    // lower energy the deep tasks mostly filter out anyway (they're usually
+    // high-energy), and no boost applies — you can't flow when fried.
     return rows.sort((a, b) => {
       const pr =
         priorityRank(a, urgentWindowHours) - priorityRank(b, urgentWindowHours);
       if (pr !== 0) return pr;
+      if (energy === "high" && !!a.deepWork !== !!b.deepWork)
+        return a.deepWork ? -1 : 1;
       return (a.dueAt ?? "￿").localeCompare(b.dueAt ?? "￿");
     });
   }, [base, energy, maxMins, context, urgentWindowHours]);

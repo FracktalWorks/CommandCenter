@@ -224,6 +224,7 @@ export function ClarifyPanel({
   // the due date, so it isn't a toggle here).
   const [important, setImportant] = useState<boolean>(!!proposal.important);
   const [leveraged, setLeveraged] = useState<boolean>(!!proposal.leveraged);
+  const [deepWork, setDeepWork] = useState<boolean>(!!proposal.deepWork);
   const [assignee, setAssignee] = useState<Person | null>(proposal.suggestedAssignee ?? null);
   const [dueAt, setDueAt] = useState("");
   const [dest, setDest] = useState<Target>(proposal.target ?? { source: "LOCAL", provider: "local" });
@@ -264,6 +265,7 @@ export function ClarifyPanel({
       setEnergy(sp.energy ?? "medium");
       setImportant(!!sp.important);
       setLeveraged(!!sp.leveraged);
+      setDeepWork(!!sp.deepWork);
       setAssignee(sp.suggestedAssignee ?? null);
       if (sp.target) setDest(sp.target);
       setProjectId(sp.projectId);
@@ -529,13 +531,14 @@ export function ClarifyPanel({
       clarify(
         item.id,
         decision,
-        weightful ? { important, leveraged } : undefined,
+        weightful ? { important, leveraged, deepWork } : undefined,
       );
       onDone?.();
     }
   }, [sort, size, projectId, newListName, nextAction, item.id, item.title, dest,
       targetSpaceId, targetFolderId, destAccount, createWorkspaceProject,
-      createLocalProject, buildDecision, clarify, onDone, important, leveraged]);
+      createLocalProject, buildDecision, clarify, onDone, important, leveraged,
+      deepWork]);
 
   // Delegating to a connected tool needs a destination list so the teammate
   // can see it there — otherwise the task can't be pushed and would strand
@@ -923,6 +926,14 @@ export function ClarifyPanel({
           <div className="mt-2 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px] text-muted-foreground">
             {proposal.context && <span className="font-mono text-primary/80">{proposal.context}</span>}
             {proposal.energy && <span>{proposal.energy} energy</span>}
+            {proposal.deepWork && (
+              <span
+                title="Needs an unbroken flow state — the planner will protect a long peak-energy block"
+                className="inline-flex items-center gap-1 rounded-full border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 font-medium text-sky-600 dark:text-sky-400"
+              >
+                🌊 deep work
+              </span>
+            )}
             {proposal.timeEstimateMins ? <span>{durationLabel(proposal.timeEstimateMins)}</span> : null}
             {proposal.dueDate && (
               <span className="inline-flex items-center gap-1">
@@ -1188,6 +1199,11 @@ export function ClarifyPanel({
                       </Pill>
                       <Pill active={leveraged} onClick={() => setLeveraged((v) => !v)}>
                         ⚖️ Leveraged
+                      </Pill>
+                      {/* Work MODE, not priority rank: flow-state work gets a
+                          protected, unbroken peak-energy block from the planner. */}
+                      <Pill active={deepWork} onClick={() => setDeepWork((v) => !v)}>
+                        🌊 Deep work
                       </Pill>
                     </div>
                     {proposal.weightReason && (

@@ -82,6 +82,7 @@ function mapItem(raw: Raw): GtdItem {
     isTwoMinute: Boolean(raw.is_two_minute),
     important: Boolean(raw.important),
     leveraged: Boolean(raw.leveraged),
+    deepWork: Boolean(raw.deep_work),
     keptMine: Boolean(raw.kept_mine),
     projectId: raw.project_id ? String(raw.project_id) : undefined,
     isMine: Boolean(raw.is_mine ?? true),
@@ -481,6 +482,7 @@ export async function apiPatchItem(
     is_mine?: boolean;
     important?: boolean;
     leveraged?: boolean;
+    deep_work?: boolean;
     kept_mine?: boolean;
   }
 ): Promise<GtdItem> {
@@ -1255,6 +1257,7 @@ export async function apiClarifyPropose(
     dueDate: r.due_date ? String(r.due_date) : undefined,
     important: Boolean(r.important),
     leveraged: Boolean(r.leveraged),
+    deepWork: Boolean(r.deep_work),
     weightReason: r.leveraged
       ? "Looks high-leverage — a potential 100x outcome."
       : r.important

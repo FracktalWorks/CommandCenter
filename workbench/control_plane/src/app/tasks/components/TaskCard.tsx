@@ -13,6 +13,7 @@ import {
   Check,
   CalendarClock,
   Trash2,
+  Waves,
 } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
@@ -139,6 +140,17 @@ export function TaskCard({
           ].join(" ")}
         >
           {item.context}
+        </span>
+      )}
+      {/* Deep-work marker: this task needs an unbroken flow block — the
+          planner protects one, and Focus Mode opens on a longer timer. */}
+      {item.deepWork && (
+        <span
+          title="Deep work — needs an unbroken flow state"
+          className="inline-flex items-center gap-1 rounded border border-sky-500/30 bg-sky-500/10 px-1.5 py-0.5 text-[10px] font-medium text-sky-600 dark:text-sky-400"
+        >
+          <Waves className="h-3 w-3" />
+          Deep
         </span>
       )}
       {item.energy && (

@@ -1,6 +1,11 @@
 /** Thin client over /api/notes/* (the Next proxy to the gateway /notes API). */
 
-import type { MeetingDetail, MeetingListItem } from "./types";
+import type {
+  ActionItem,
+  MeetingDetail,
+  MeetingListItem,
+  NoteDoc,
+} from "./types";
 
 async function json<T>(res: Response): Promise<T> {
   if (!res.ok) {
@@ -61,6 +66,44 @@ export async function deleteMeeting(id: string): Promise<void> {
 
 export function audioUrl(id: string): string {
   return `/api/notes/meetings/${id}/audio`;
+}
+
+export async function getNote(meetingId: string): Promise<NoteDoc> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/note`, { cache: "no-store" })
+  );
+}
+
+export async function saveNote(
+  meetingId: string,
+  notesMd: string
+): Promise<NoteDoc> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/note`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ notes_md: notesMd }),
+    })
+  );
+}
+
+export async function listActions(meetingId: string): Promise<ActionItem[]> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/actions`, { cache: "no-store" })
+  );
+}
+
+export async function summarize(
+  meetingId: string
+): Promise<{ run_id: string; status: string }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/summarize`, { method: "POST" })
+  );
+}
+
+/** SSE URL for the pipeline progress stream (open with `new EventSource`). */
+export function eventsUrl(meetingId: string): string {
+  return `/api/notes/meetings/${meetingId}/events`;
 }
 
 export function formatClock(s: number): string {

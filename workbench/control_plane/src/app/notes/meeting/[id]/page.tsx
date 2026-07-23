@@ -1,16 +1,34 @@
 "use client";
 
 /**
- * /notes/meeting/[id] — meeting detail (slice 0: transcript segments + audio).
- * The two-pane transcript↔notes canvas with grounding highlights arrives with
- * notes generation (spec §5.3); this view proves the pipeline end-to-end.
+ * /notes/meeting/[id] — meeting detail: transcript ↔ notes, action items,
+ * live SSE pipeline progress (spec: note_taker_app.md §5.3/§5.4). Slice 1 adds
+ * generated notes + draft action items on top of slice 0's transcript view.
  */
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Play, Trash2 } from "lucide-react";
-import { audioUrl, deleteMeeting, formatClock, getMeeting } from "../../lib/api";
-import type { MeetingDetail } from "../../lib/types";
+import {
+  ArrowLeft,
+  CheckSquare,
+  Loader2,
+  Play,
+  RefreshCw,
+  Sparkles,
+  Trash2,
+} from "lucide-react";
+import MarkdownMessage from "@/components/MarkdownMessage";
+import {
+  audioUrl,
+  deleteMeeting,
+  eventsUrl,
+  formatClock,
+  getMeeting,
+  getNote,
+  listActions,
+  summarize,
+} from "../../lib/api";
+import type { ActionItem, MeetingDetail, MeetingEvent } from "../../lib/types";
 
 const SPEAKER_COLORS = [
   "text-primary",
@@ -34,12 +52,23 @@ export default function MeetingPage({
   const { id } = use(params);
   const router = useRouter();
   const [meeting, setMeeting] = useState<MeetingDetail | null>(null);
+  const [notesMd, setNotesMd] = useState<string | null>(null);
+  const [actions, setActions] = useState<ActionItem[]>([]);
+  const [progress, setProgress] = useState<MeetingEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [summarizing, setSummarizing] = useState(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const refresh = useCallback(async () => {
     try {
-      setMeeting(await getMeeting(id));
+      const [m, note, acts] = await Promise.all([
+        getMeeting(id),
+        getNote(id).catch(() => null),
+        listActions(id).catch(() => []),
+      ]);
+      setMeeting(m);
+      setNotesMd(note?.notes_md ?? m.summary_md ?? null);
+      setActions(acts);
       setError(null);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
@@ -50,14 +79,34 @@ export default function MeetingPage({
     void refresh();
   }, [refresh]);
 
-  // Poll while the pipeline is running.
+  // Live pipeline progress over SSE. On every state change (and on terminal),
+  // refetch the detail so transcript/notes/actions stay in step.
   useEffect(() => {
-    if (meeting?.status !== "processing") return;
-    const t = setInterval(() => void refresh(), 3000);
-    return () => clearInterval(t);
-  }, [meeting?.status, refresh]);
+    const es = new EventSource(eventsUrl(id));
+    es.onmessage = (ev) => {
+      try {
+        const snap = JSON.parse(ev.data) as MeetingEvent;
+        setProgress(snap);
+        void refresh();
+      } catch {
+        /* heartbeat / comment frame */
+      }
+    };
+    es.onerror = () => es.close();
+    return () => es.close();
+  }, [id, refresh]);
 
-  const transcribeRun = meeting?.runs.find((r) => r.kind === "transcribe");
+  async function onSummarize() {
+    setSummarizing(true);
+    try {
+      await summarize(id);
+      await refresh();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSummarizing(false);
+    }
+  }
 
   function seekTo(s: number) {
     if (audioRef.current) {
@@ -65,6 +114,12 @@ export default function MeetingPage({
       void audioRef.current.play();
     }
   }
+
+  const summaryRun = meeting?.runs.find((r) => r.kind === "summary");
+  const transcribeRun = meeting?.runs.find((r) => r.kind === "transcribe");
+  const busy =
+    meeting?.status === "processing" ||
+    progress?.runs.some((r) => r.status === "queued" || r.status === "running");
 
   return (
     <div className="flex flex-col h-full">
@@ -82,32 +137,51 @@ export default function MeetingPage({
               {meeting?.title || "Untitled meeting"}
             </h1>
             <p className="text-xs text-muted-foreground mt-0.5">
-              {meeting?.status === "processing"
-                ? "Transcribing…"
+              {busy
+                ? "Processing…"
                 : meeting?.transcript_source
                   ? `Transcribed by ${meeting.transcript_source}`
                   : "Meeting detail"}
             </p>
           </div>
         </div>
-        {meeting && (
-          <button
-            onClick={async () => {
-              if (!confirm("Delete this meeting, its audio and transcript?")) return;
-              await deleteMeeting(id);
-              router.push("/notes");
-            }}
-            className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition"
-          >
-            <span className="flex items-center gap-1.5">
-              <Trash2 className="w-4 h-4" /> Delete
-            </span>
-          </button>
-        )}
+        <div className="flex items-center gap-2">
+          {meeting && meeting.segments.length > 0 && (
+            <button
+              onClick={onSummarize}
+              disabled={summarizing || busy}
+              className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
+            >
+              <span className="flex items-center gap-1.5">
+                {summarizing ? (
+                  <Loader2 className="w-4 h-4 animate-spin" />
+                ) : notesMd ? (
+                  <RefreshCw className="w-4 h-4" />
+                ) : (
+                  <Sparkles className="w-4 h-4" />
+                )}
+                {notesMd ? "Regenerate" : "Generate notes"}
+              </span>
+            </button>
+          )}
+          {meeting && (
+            <button
+              onClick={async () => {
+                if (!confirm("Delete this meeting, its audio and transcript?"))
+                  return;
+                await deleteMeeting(id);
+                router.push("/notes");
+              }}
+              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition"
+            >
+              <Trash2 className="w-4 h-4" />
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="flex-1 overflow-y-auto">
-        <div className="max-w-3xl mx-auto px-4 sm:px-6 py-4 space-y-4">
+        <div className="max-w-6xl mx-auto px-4 sm:px-6 py-4 space-y-4">
           {error && (
             <div className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
@@ -124,18 +198,26 @@ export default function MeetingPage({
             />
           ) : null}
 
-          {meeting?.status === "processing" && (
+          {busy && (
             <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
               <Loader2 className="w-4 h-4 animate-spin text-warning" />
-              <div>
+              <div className="min-w-0">
                 <p className="text-sm font-semibold text-foreground">
-                  Transcribing recording…
+                  {progress?.runs.find((r) => r.status === "running")?.kind ===
+                  "summary"
+                    ? "Writing notes…"
+                    : "Transcribing…"}
                 </p>
                 <p className="text-xs text-muted-foreground">
-                  {transcribeRun?.stage
-                    ? `Stage: ${transcribeRun.stage}`
-                    : "Queued"}{" "}
-                  — this view refreshes automatically.
+                  {(() => {
+                    const run = progress?.runs.find(
+                      (r) => r.status === "running"
+                    );
+                    if (run?.chunk_total && run.chunk_total > 1)
+                      return `${run.stage ?? "working"} — chunk ${run.chunk_done}/${run.chunk_total}`;
+                    return run?.stage ?? "queued";
+                  })()}{" "}
+                  — updates live.
                 </p>
               </div>
             </div>
@@ -144,49 +226,122 @@ export default function MeetingPage({
           {meeting?.status === "failed" && (
             <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4">
               <p className="text-sm font-semibold text-destructive">
-                Transcription failed
+                Pipeline failed
               </p>
               <p className="text-xs text-muted-foreground mt-1 font-mono break-all">
-                {transcribeRun?.error ?? "No error detail recorded."}
+                {summaryRun?.error ??
+                  transcribeRun?.error ??
+                  "No error detail recorded."}
               </p>
             </div>
           )}
 
-          {meeting && meeting.segments.length > 0 && (
-            <div className="rounded-xl border border-border bg-card divide-y divide-border">
-              {meeting.segments.map((seg) => (
-                <div key={seg.id} className="flex gap-3 px-4 py-2.5">
-                  <button
-                    onClick={() => seekTo(seg.start_s)}
-                    className="shrink-0 flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-primary tech-transition mt-0.5"
-                    title="Play from here"
-                  >
-                    <Play className="w-3 h-3" />
-                    {formatClock(seg.start_s)}
-                  </button>
-                  <div className="min-w-0">
-                    {(seg.speaker_label || seg.channel) && (
-                      <span
-                        className={`text-[10px] font-semibold uppercase tracking-wide ${speakerColor(seg.speaker_label)}`}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+            {/* Transcript */}
+            <div>
+              <h2 className="text-sm font-semibold text-foreground mb-2">
+                Transcript
+              </h2>
+              {meeting && meeting.segments.length > 0 ? (
+                <div className="rounded-xl border border-border bg-card divide-y divide-border max-h-[70vh] overflow-y-auto">
+                  {meeting.segments.map((seg) => (
+                    <div key={seg.id} className="flex gap-3 px-4 py-2.5">
+                      <button
+                        onClick={() => seekTo(seg.start_s)}
+                        className="shrink-0 flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-primary tech-transition mt-0.5"
+                        title="Play from here"
                       >
-                        {seg.speaker_label ??
-                          (seg.channel === "mic" ? "You" : seg.channel)}
-                      </span>
-                    )}
-                    <p className="text-sm text-foreground">{seg.text}</p>
+                        <Play className="w-3 h-3" />
+                        {formatClock(seg.start_s)}
+                      </button>
+                      <div className="min-w-0">
+                        {(seg.speaker_label || seg.channel) && (
+                          <span
+                            className={`text-[10px] font-semibold uppercase tracking-wide ${speakerColor(seg.speaker_label)}`}
+                          >
+                            {seg.speaker_label ??
+                              (seg.channel === "mic" ? "You" : seg.channel)}
+                          </span>
+                        )}
+                        <p className="text-sm text-foreground">{seg.text}</p>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  {busy ? "Transcript is being generated…" : "No transcript."}
+                </p>
+              )}
+            </div>
+
+            {/* Notes + action items */}
+            <div className="space-y-4">
+              <div>
+                <h2 className="text-sm font-semibold text-foreground mb-2">
+                  Notes
+                </h2>
+                {notesMd ? (
+                  <div className="rounded-xl border border-border bg-card p-4 max-h-[70vh] overflow-y-auto text-sm">
+                    <MarkdownMessage content={notesMd} />
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-border bg-card p-6 text-center">
+                    <Sparkles className="w-6 h-6 mx-auto text-muted-foreground mb-2" />
+                    <p className="text-xs text-muted-foreground">
+                      {busy
+                        ? "Notes will appear once the transcript is ready."
+                        : meeting?.segments.length
+                          ? "Click “Generate notes” to summarize this meeting."
+                          : "Notes appear after transcription."}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {actions.length > 0 && (
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+                    <CheckSquare className="w-4 h-4" />
+                    Action items
+                    <span className="text-[10px] text-muted-foreground font-normal">
+                      (approve → task coming next)
+                    </span>
+                  </h2>
+                  <div className="space-y-2">
+                    {actions.map((a) => (
+                      <div
+                        key={a.id}
+                        className="rounded-lg border border-border bg-card p-3"
+                      >
+                        <p className="text-sm text-foreground">
+                          {a.description}
+                        </p>
+                        <div className="flex items-center gap-2 mt-1.5">
+                          <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                            <div
+                              className="h-full bg-primary"
+                              style={{
+                                width: `${Math.round(a.confidence * 100)}%`,
+                              }}
+                            />
+                          </div>
+                          <span className="text-[10px] text-muted-foreground shrink-0">
+                            {Math.round(a.confidence * 100)}% confident
+                          </span>
+                          {a.due_hint && (
+                            <span className="text-[10px] text-warning shrink-0">
+                              {a.due_hint}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 </div>
-              ))}
+              )}
             </div>
-          )}
-
-          {meeting &&
-            meeting.status === "ready" &&
-            meeting.segments.length === 0 && (
-              <p className="text-sm text-muted-foreground text-center py-8">
-                Transcription finished but produced no segments (silent audio?).
-              </p>
-            )}
+          </div>
         </div>
       </div>
     </div>

@@ -139,6 +139,15 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
             meeting_id=meeting_id, run_id=run_id,
             segments=len(result.segments), provider=result.provider,
         )
+        # Chain straight into notes generation so a single upload yields
+        # transcript → notes without a second user action.
+        if result.segments:
+            try:
+                from gateway.routes.notes.summaries import enqueue_summary
+
+                await enqueue_summary(meeting_id)
+            except Exception as exc:
+                _log.warning("notes.autosummary_enqueue_failed", error=str(exc)[:200])
     except Exception as exc:
         _log.error("notes.transcription_failed", meeting_id=meeting_id, error=str(exc))
         try:

@@ -997,6 +997,22 @@ export interface TaskSettings {
   /** optional protected lunch window (local hours); null = no protected lunch. */
   lunchStartHour: number | null;
   lunchEndHour: number | null;
+  /** recurring windows: block (protected) or focus (themed). Flexible ideal-week. */
+  dayTemplates: DayTemplate[];
+}
+
+/** A recurring calendar window (migration 94). Snake-keyed to match the wire
+ *  shape (like EnergyWindow) so it needs no per-field mapping. */
+export interface DayTemplate {
+  /** weekday numbers 0=Sun … 6=Sat; empty = every day. */
+  days: number[];
+  start_hour: number;
+  end_hour: number;
+  /** block = protected (no tasks); focus = preferred for a kind of work. */
+  kind: "block" | "focus";
+  label: string;
+  /** for focus windows: the kind of work ("deep", "calls", "meetings", …). */
+  theme: string;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -1037,6 +1053,9 @@ function mapSettings(r: Raw): TaskSettings {
     lunchStartHour:
       r.lunch_start_hour == null ? null : Number(r.lunch_start_hour),
     lunchEndHour: r.lunch_end_hour == null ? null : Number(r.lunch_end_hour),
+    dayTemplates: Array.isArray(r.day_templates)
+      ? (r.day_templates as DayTemplate[])
+      : [],
   };
 }
 
@@ -1087,6 +1106,8 @@ export async function updateTaskSettings(
     body.lunch_start_hour = patch.lunchStartHour;
   if (patch.lunchEndHour !== undefined)
     body.lunch_end_hour = patch.lunchEndHour;
+  if (patch.dayTemplates !== undefined)
+    body.day_templates = patch.dayTemplates;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",

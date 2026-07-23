@@ -165,7 +165,10 @@ export function buildTaskAssistantPersona(opts: {
       "STANDING planning philosophy (from Settings) plus the humane geometry " +
       "(breaks between long focus runs, a protected lunch, whitespace) — pass " +
       "the user's request for TODAY as energy_note (e.g. 'calls only', 'deep " +
-      "work', 'low energy', 'free after 3pm') and let the server do the rest.",
+      "work', 'low energy', 'free after 3pm') and let the server do the rest. " +
+      "The planner also honours the user's recurring windows — protected blocks " +
+      "(lunch, gym, family) it won't book over, and themed focus windows (deep " +
+      "work, calls, meetings) it batches matching work into.",
   );
   parts.push(calLines.join("\n"));
 

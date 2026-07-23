@@ -11,15 +11,18 @@ import {
   Paperclip, Pencil, Play, Plus, Sparkles, Tag, Trash2, Upload, Wand2, X, Zap,
 } from "lucide-react";
 import {
-  createEmailFolder, createRule, deleteRule, generateRules, installPresetRules,
-  listEmailArtifacts, listRules, processPastEmails, processPastEstimate,
-  updateRule, uploadEmailArtifacts,
+  createEmailFolder, createRule, deleteRule, deleteRulePattern, generateRules,
+  installPresetRules, listEmailArtifacts, listRulePatterns, listRules,
+  processPastEmails, processPastEstimate, reviewRulePatterns, updateRule,
+  uploadEmailArtifacts,
 } from "../../../lib/api";
 import type { EmailArtifact, ProcessPastEstimate } from "../../../lib/api";
 import {
-  AutomationRule, RuleAction, RuleActionAttachment, RuleActionType,
+  AutomationRule, LearnedRulePattern, RuleAction, RuleActionAttachment,
+  RuleActionType,
 } from "../../../lib/types";
 import { useEmailStore } from "../../../lib/emailStore";
+import { isPendingReview, PatternRow } from "./SettingsTab";
 import { LabeledToggle, Modal } from "../ui";
 import {
   ACTION_META, ACTION_TYPES, ActionChip, ActionIcon, actionIconColor,
@@ -265,7 +268,39 @@ export function RulesTab({
   const [menuFor, setMenuFor] = useState<string | null>(null);
   const [showPast, setShowPast] = useState(false);
   const [showAdd, setShowAdd] = useState(false);
+  // Learned patterns nested under their rule — the deterministic pre-AI stage
+  // shown WHERE the rules live, so "why does mail from X get filed as Y?" has
+  // one answer screen. Storage stays separate (approval gate + provenance);
+  // only the view is unified. Same rows as Settings → Learned patterns.
+  const [patterns, setPatterns] = useState<LearnedRulePattern[]>([]);
+  const [patternBusy, setPatternBusy] = useState(false);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
+
+  const loadPatterns = useCallback(() => {
+    if (!accountId) return;
+    // Best-effort: the rule list must render even if the pattern fetch fails.
+    listRulePatterns(accountId).then(setPatterns).catch(() => {});
+  }, [accountId]);
+
+  const reviewPattern = async (id: string, approve: boolean) => {
+    if (!accountId) return;
+    setPatternBusy(true);
+    try {
+      await reviewRulePatterns({ accountId, patternIds: [id], approve });
+    } finally {
+      setPatternBusy(false);
+      loadPatterns();
+    }
+  };
+
+  const forgetPattern = async (id: string) => {
+    setPatterns((prev) => prev.filter((p) => p.id !== id));
+    try {
+      await deleteRulePattern(id);
+    } catch {
+      loadPatterns();
+    }
+  };
 
   const duplicate = async (rule: AutomationRule) => {
     if (!accountId) return;
@@ -303,7 +338,8 @@ export function RulesTab({
       .then(setRules)
       .catch((e) => setError(e.message || "Failed to load rules"))
       .finally(() => setLoading(false));
-  }, [accountId]);
+    loadPatterns();
+  }, [accountId, loadPatterns]);
 
   const missingDefaults = PRESET_RULES.some(
     (p) => !rules.some((r) => r.name.toLowerCase() === p.name.toLowerCase())
@@ -382,7 +418,10 @@ export function RulesTab({
       )}
       <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
         <p className="text-xs text-muted-foreground">
-          Rules run on inbox mail; the AI matches your plain-English conditions.
+          Learned patterns file pinned senders first (no AI), then the AI
+          matches your plain-English conditions. Mail nothing matches shows
+          as Uncategorized — click its pill, or right-click → Fix, to teach
+          a pattern or add a rule.
         </p>
         <div className="flex items-center gap-2">
           {missingDefaults && rules.length > 0 && (
@@ -444,7 +483,7 @@ export function RulesTab({
           <div className="flex flex-col items-center text-center py-10 gap-3">
             <Sparkles size={22} className="text-primary/60" />
             <div className="text-sm text-muted-foreground max-w-xs">
-              No rules yet. Install the recommended set (Reply, FYI,
+              No rules yet. Install the recommended set (Needs Reply, FYI,
               Newsletter, Marketing, Calendar, Receipt, Notification, Cold Email)
               or create your own.
             </div>
@@ -497,6 +536,58 @@ export function RulesTab({
                   <ActionChip key={i} action={a} />
                 ))}
               </div>
+              {(() => {
+                // This rule's learned patterns — the deterministic stage that
+                // files a pinned sender before the AI ever sees the email.
+                // Rejected ones are records, not behaviour; they stay in
+                // Settings → Learned patterns only.
+                const rp = patterns.filter(
+                  (p) => p.rule_id === rule.id && !p.rejected_at,
+                );
+                if (rp.length === 0) return null;
+                const pending = rp.filter(isPendingReview).length;
+                return (
+                  <details className="mt-2">
+                    <summary
+                      className={`cursor-pointer select-none text-[11px] flex items-center gap-1 transition-colors ${
+                        pending > 0
+                          ? "text-amber-500 hover:text-amber-400"
+                          : "text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      <Zap size={11} />
+                      {rp.length === 1
+                        ? "1 learned pattern"
+                        : `${rp.length} learned patterns`}
+                      {pending > 0 && ` · ${pending} pending review`}
+                      <span className="text-muted-foreground/70 font-normal">
+                        — filed without the AI
+                      </span>
+                    </summary>
+                    <div className="mt-1.5 space-y-1.5">
+                      {rp.map((p) => (
+                        <PatternRow
+                          key={p.id}
+                          p={p}
+                          tone={isPendingReview(p) ? "review" : "active"}
+                          busy={patternBusy}
+                          onApprove={
+                            isPendingReview(p)
+                              ? () => reviewPattern(p.id, true)
+                              : undefined
+                          }
+                          onReject={() => reviewPattern(p.id, false)}
+                          onForget={
+                            isPendingReview(p)
+                              ? undefined
+                              : () => forgetPattern(p.id)
+                          }
+                        />
+                      ))}
+                    </div>
+                  </details>
+                );
+              })()}
             </div>
             <div className="relative flex items-center gap-1 flex-shrink-0">
               <IconAction

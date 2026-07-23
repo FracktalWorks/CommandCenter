@@ -215,6 +215,27 @@ categorization backfill date-range + coverage report; Gmail Pub/Sub push; richer
 `requires_confirmation` events + rule-suggestion approve card; email-KB → other-agents/Mem0
 bridge (needs a scoping design so account-scoped memories stay private).
 
+**Shipped 2026-07-23 (second wave, user-directed):**
+- **"Reply" → "Needs Reply" rename** (#168 + #170 hotfix, mig 93): mig rewrites owned data;
+  `persist._RENAMED_LABELS` canonicalises at ingest (the categories-authoritative provider
+  re-asserts old labels every sync); legacy aliases at every resolve seam. Prod-verified:
+  0 old-label / 167 new-label messages.
+- **Outlook-desktop quote collapse** (#171): text-heuristic boundary (From/Sent/To header
+  block, "On … wrote:", "Original Message") in `quoting.ts` — the Word renderer emits no
+  marker ids at all.
+- **Fix-anywhere** (#172): FixDialog from any mailbox row's context menu + Cleaner sender
+  rows. **Dismiss ≠ Done** shipped (#172): `/reply-zero/resolve dismiss=true` → FYI, tasks
+  left open.
+- **Uncategorized = state, not label** (#175): pill click recategorizes and branches on WHY
+  it failed — no-match (healthy classifier) auto-opens Fix; classifier-down surfaces as a
+  backend fault, never "fix your rules". Indicator unwritable at all four category writers;
+  fixed #168 regression where `CONVERSATION_LABELS_LOWER` lacked "needs reply" (Needs-Reply-
+  only mail counted as uncategorized in every facet).
+- **Rules-view unification** (#177): learned patterns nested under their rule in RulesTab
+  (same PatternRow as Settings, inline approve/reject/forget); header states the pipeline
+  order (patterns → AI → Uncategorized/Fix). Stores stay separate — approval gate (#96/#97)
+  and provenance preserved.
+
 **Dashboard v2 candidates** (brainstormed 2026-07-22 with 3.13; each is an owner call):
 - **Draft-from-dashboard**: a ✍️ action on a needs-reply row that opens the thread with an AI
   draft already prepared (wire to the existing compose-assist path).
@@ -222,8 +243,6 @@ bridge (needs a scoping design so account-scoped memories stay private).
   drafter exists; needs a per-thread endpoint + the confirm-before-send gate).
 - **AI priority ordering**: rank the reply queue by urgency/importance (sender importance ×
   age × content), not just age — the current oldest-first surfaces dead loops.
-- **Dismiss ≠ Done**: an explicit "never mind this thread" that doesn't pretend completion
-  (today Mark done is the only closer).
 - **Click-through analytics**: category chips → filtered mailbox view; noisy senders → Email
   Cleaner row (unsubscribe/block from the dashboard).
 - **Morning-brief LLM one-liner**: a single sentence ("2 urgent: X's quote, Y's contract")

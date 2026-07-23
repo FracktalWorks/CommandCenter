@@ -33,10 +33,14 @@ export function Modal({
   }, [onClose]);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-12 sm:pt-20 px-4">
+    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-4 sm:pt-20 px-4">
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
+      {/* Height cap in dvh (not vh): on mobile, 100vh includes the browser
+          chrome, so an 85vh card could run past the visible viewport and hide
+          its footer buttons behind the bottom bar. dvh tracks what's actually
+          visible; the footer stays pinned on-screen. */}
       <div
-        className={`relative w-full ${maxWidth} bg-card border border-border rounded-xl shadow-2xl overflow-hidden max-h-[85vh] flex flex-col`}
+        className={`relative w-full ${maxWidth} bg-card border border-border rounded-xl shadow-2xl overflow-hidden max-h-[calc(100dvh-6.5rem)] sm:max-h-[min(85vh,calc(100dvh-7rem))] flex flex-col`}
       >
         <div className="flex items-start justify-between px-4 py-3 border-b border-border bg-secondary/50">
           <div className="min-w-0">

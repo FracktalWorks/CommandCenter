@@ -227,14 +227,18 @@ export function ComposePanel({
   };
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-12 sm:pt-20 px-4">
+    <div className="fixed inset-0 z-[60] flex items-start justify-center pt-4 sm:pt-20 px-4">
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
-      {/* Compose window */}
-      <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
+      {/* Compose window — a column with a height cap (dvh, so mobile browser
+          chrome is accounted for) and a scrollable middle: the header and the
+          footer (Send/Discard) stay pinned on-screen instead of the card
+          growing past the viewport and burying its buttons under the mobile
+          bottom bar. */}
+      <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-6.5rem)] sm:max-h-[calc(100dvh-7rem)]">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/50">
+        <div className="flex-shrink-0 flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/50">
           <span className="text-sm font-medium text-foreground">New Message</span>
           <button
             onClick={onClose}
@@ -245,7 +249,7 @@ export function ComposePanel({
         </div>
 
         {/* Fields */}
-        <div className="px-4 py-3 space-y-3">
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
           {/* To */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground w-8 flex-shrink-0">To:</span>
@@ -350,7 +354,7 @@ export function ComposePanel({
         )}
 
         {/* Footer */}
-        <div className="px-4 py-3 border-t border-border flex items-center justify-between">
+        <div className="flex-shrink-0 px-4 py-3 border-t border-border flex items-center justify-between">
           <div className="flex-1">
             {sendError ? (
               <span className="text-[10px] text-red-500">{sendError}</span>

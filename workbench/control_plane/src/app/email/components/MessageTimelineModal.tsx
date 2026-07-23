@@ -63,7 +63,7 @@ export function MessageTimelineModal({
       onClick={onClose}
     >
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg max-h-[85vh] flex flex-col"
+        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg max-h-[min(85vh,calc(100dvh-3rem))] flex flex-col"
         onClick={(ev) => ev.stopPropagation()}
       >
         <div className="flex items-start justify-between gap-3 px-4 py-3 border-b border-border flex-shrink-0">

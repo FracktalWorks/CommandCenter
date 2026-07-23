@@ -219,7 +219,7 @@ export function TaskCaptureModal({
       onClick={() => !saving && onClose()}
     >
       <div
-        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg max-h-[88vh] flex flex-col"
+        className="bg-card border border-border rounded-xl shadow-2xl w-full max-w-lg max-h-[min(88vh,calc(100dvh-3rem))] flex flex-col"
         onClick={(ev) => ev.stopPropagation()}
       >
         {/* Header */}

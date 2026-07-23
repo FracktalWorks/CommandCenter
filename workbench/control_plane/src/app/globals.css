@@ -223,6 +223,17 @@ body {
 .min-safe-bottom {
   min-height: calc(env(safe-area-inset-bottom, 0px) + 44px);
 }
+/* Clears the mobile bottom-nav bar: its 3.5rem body PLUS the safe-area inset
+   it pads itself with (pb-safe). A plain pb-14 only cleared the body, so on
+   devices with a home indicator the last inset-height of page content — e.g.
+   the inline reply composer's Send row — sat hidden behind the bar. */
+.pb-nav {
+  padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+}
+/* Anchor for floating toasts on mobile: just above the bottom-nav bar. */
+.bottom-above-nav {
+  bottom: calc(4.25rem + env(safe-area-inset-bottom, 0px));
+}
 
 @keyframes chat-shimmer {
   0%   { background-position: 200% 0; }

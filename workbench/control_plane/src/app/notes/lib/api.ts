@@ -188,6 +188,25 @@ export function eventsUrl(meetingId: string): string {
   return `/api/notes/meetings/${meetingId}/events`;
 }
 
+export interface AskAnswer {
+  answer: string;
+  citations: { segment_id: string; idx: number }[];
+  truncated: boolean;
+}
+
+export async function askMeeting(
+  meetingId: string,
+  question: string
+): Promise<AskAnswer> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/ask`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ question }),
+    })
+  );
+}
+
 // ── Attendees + follow-up email ─────────────────────────────────────────────
 
 export async function saveAttendees(

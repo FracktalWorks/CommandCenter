@@ -35,6 +35,7 @@ _MAX_CHUNKS = 16  # runaway guard; excess is logged, never silently dropped
 _DEFAULT_MODELS = {
     "meeting_summary": "tier-powerful",
     "meeting_title": "tier-fast",
+    "meeting_qa": "tier-balanced",
 }
 
 # Keep strong refs to in-flight summary tasks (bare create_task() can be GC'd).

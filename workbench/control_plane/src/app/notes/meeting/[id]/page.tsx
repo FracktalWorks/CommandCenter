@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import MarkdownMessage from "@/components/MarkdownMessage";
+import AskPanel from "../../components/AskPanel";
 import FollowupEmailModal from "../../components/FollowupEmailModal";
 import {
   approveAction,
@@ -134,6 +135,17 @@ export default function MeetingPage({
       audioRef.current.currentTime = s;
       void audioRef.current.play();
     }
+  }
+
+  function jumpToSegment(segmentId: string) {
+    const seg = meeting?.segments.find((x) => x.id === segmentId);
+    const el = document.getElementById(`seg-${segmentId}`);
+    el?.scrollIntoView({ behavior: "smooth", block: "center" });
+    if (el) {
+      el.classList.add("ring-1", "ring-primary");
+      setTimeout(() => el.classList.remove("ring-1", "ring-primary"), 1600);
+    }
+    if (seg) seekTo(seg.start_s);
   }
 
   function flashToast(msg: string) {
@@ -400,7 +412,11 @@ export default function MeetingPage({
               {meeting && meeting.segments.length > 0 ? (
                 <div className="rounded-xl border border-border bg-card divide-y divide-border max-h-[70vh] overflow-y-auto">
                   {meeting.segments.map((seg) => (
-                    <div key={seg.id} className="flex gap-3 px-4 py-2.5">
+                    <div
+                      key={seg.id}
+                      id={`seg-${seg.id}`}
+                      className="flex gap-3 px-4 py-2.5 rounded-lg tech-transition"
+                    >
                       <button
                         onClick={() => seekTo(seg.start_s)}
                         className="shrink-0 flex items-center gap-1 text-[10px] font-mono text-muted-foreground hover:text-primary tech-transition mt-0.5"
@@ -558,6 +574,10 @@ export default function MeetingPage({
                     })}
                   </div>
                 </div>
+              )}
+
+              {meeting && meeting.segments.length > 0 && (
+                <AskPanel meetingId={id} onCite={jumpToSegment} />
               )}
             </div>
           </div>

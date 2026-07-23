@@ -84,6 +84,8 @@ class MeetingDetail(MeetingListItem):
     summary_md: str | None = None
     scratch_notes: str | None = None
     attendees: list[Attendee] = []
+    # Human names for diarized speaker labels, {"S1": "Alex Rivera", …}.
+    speaker_names: dict[str, str] = {}
     recordings: list[RecordingModel] = []
     segments: list[SegmentModel] = []
     runs: list[SummaryRunModel] = []

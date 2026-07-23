@@ -260,6 +260,19 @@ export async function saveAttendees(
   );
 }
 
+export async function saveSpeakerNames(
+  meetingId: string,
+  names: Record<string, string>
+): Promise<Record<string, string>> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/speakers`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ names }),
+    })
+  );
+}
+
 export async function draftFollowupEmail(
   meetingId: string
 ): Promise<EmailDraft> {

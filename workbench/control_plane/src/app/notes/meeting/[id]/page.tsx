@@ -15,6 +15,7 @@ import {
   ExternalLink,
   Loader2,
   Mail,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
@@ -39,6 +40,7 @@ import {
   rejectAction,
   saveAttendees,
   saveScratchNotes,
+  saveSpeakerNames,
   summarize,
 } from "../../lib/api";
 import type {
@@ -62,6 +64,20 @@ function speakerColor(label: string | null): string {
   return SPEAKER_COLORS[(isNaN(n) ? 0 : n - 1) % SPEAKER_COLORS.length];
 }
 
+const SPEAKER_AV = [
+  "bg-primary/15 text-primary",
+  "bg-accent/15 text-accent",
+  "bg-success/15 text-success",
+  "bg-warning/15 text-warning",
+  "bg-destructive/15 text-destructive",
+];
+
+function speakerAv(label: string | null): string {
+  if (!label) return "bg-muted text-muted-foreground";
+  const n = parseInt(label.replace(/\D/g, ""), 10);
+  return SPEAKER_AV[(isNaN(n) ? 0 : n - 1) % SPEAKER_AV.length];
+}
+
 export default function MeetingPage({
   params,
 }: {
@@ -81,6 +97,9 @@ export default function MeetingPage({
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
   const [scratch, setScratch] = useState("");
+  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingSpeaker, setSavingSpeaker] = useState(false);
   const scratchLoaded = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -180,6 +199,48 @@ export default function MeetingPage({
     setAddName("");
     setAddEmail("");
   }
+
+  const speakerNames = meeting?.speaker_names ?? {};
+  function displayName(label: string | null): string {
+    if (!label) return "";
+    return speakerNames[label] || label;
+  }
+  function initials(s: string): string {
+    const p = s.trim().split(/\s+/).filter(Boolean);
+    if (p.length >= 2) return (p[0][0] + p[1][0]).toUpperCase();
+    return (s.trim().slice(0, 2) || "?").toUpperCase();
+  }
+  function openRename(label: string) {
+    setEditingSpeaker(label);
+    setNameDraft(speakerNames[label] ?? "");
+  }
+  async function saveSpeaker() {
+    if (!editingSpeaker || !meeting) return;
+    const label = editingSpeaker;
+    const name = nameDraft.trim();
+    setSavingSpeaker(true);
+    try {
+      const next: Record<string, string> = { ...speakerNames };
+      if (name) next[label] = name;
+      else delete next[label];
+      const saved = await saveSpeakerNames(id, next);
+      setMeeting({ ...meeting, speaker_names: saved });
+      setEditingSpeaker(null);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSavingSpeaker(false);
+    }
+  }
+
+  // Distinct diarized speakers present in the transcript.
+  const speakerLabels = Array.from(
+    new Set(
+      (meeting?.segments ?? [])
+        .map((s) => s.speaker_label)
+        .filter((x): x is string => !!x)
+    )
+  );
 
   async function onApprove(actionId: string) {
     setActioning(actionId);
@@ -414,8 +475,17 @@ export default function MeetingPage({
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
             {/* Transcript */}
             <div>
-              <h2 className="text-sm font-semibold text-foreground mb-2">
+              <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2 flex-wrap">
                 Transcript
+                {speakerLabels.length > 0 && (
+                  <span className="text-[10px] text-muted-foreground font-normal">
+                    · {speakerLabels.length} speaker
+                    {speakerLabels.length > 1 ? "s" : ""}
+                    {speakerLabels.every((l) => speakerNames[l])
+                      ? ""
+                      : " — click a name to label them"}
+                  </span>
+                )}
               </h2>
               {meeting && meeting.segments.length > 0 ? (
                 <div className="rounded-xl border border-border bg-card divide-y divide-border max-h-[70vh] overflow-y-auto">
@@ -434,14 +504,29 @@ export default function MeetingPage({
                         {formatClock(seg.start_s)}
                       </button>
                       <div className="min-w-0">
-                        {(seg.speaker_label || seg.channel) && (
-                          <span
-                            className={`text-[10px] font-semibold uppercase tracking-wide ${speakerColor(seg.speaker_label)}`}
+                        {seg.speaker_label ? (
+                          <button
+                            onClick={() => openRename(seg.speaker_label!)}
+                            className="group inline-flex items-center gap-1.5 mb-0.5"
+                            title="Click to name this speaker"
                           >
-                            {seg.speaker_label ??
-                              (seg.channel === "mic" ? "You" : seg.channel)}
+                            <span
+                              className={`w-4 h-4 rounded-full grid place-items-center text-[8px] font-bold ${speakerAv(seg.speaker_label)}`}
+                            >
+                              {initials(displayName(seg.speaker_label))}
+                            </span>
+                            <span
+                              className={`text-[10px] font-semibold uppercase tracking-wide ${speakerColor(seg.speaker_label)}`}
+                            >
+                              {displayName(seg.speaker_label)}
+                            </span>
+                            <Pencil className="w-2.5 h-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 tech-transition" />
+                          </button>
+                        ) : seg.channel ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {seg.channel === "mic" ? "You" : seg.channel}
                           </span>
-                        )}
+                        ) : null}
                         <p className="text-sm text-foreground">{seg.text}</p>
                       </div>
                     </div>
@@ -617,6 +702,95 @@ export default function MeetingPage({
             flashToast(msg);
           }}
         />
+      )}
+
+      {editingSpeaker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4"
+          onClick={() => setEditingSpeaker(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-border bg-card shadow-xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold ${speakerAv(editingSpeaker)}`}
+              >
+                {initials(displayName(editingSpeaker))}
+              </span>
+              <h2 className="text-sm font-semibold text-foreground">
+                Name this speaker
+              </h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              Renames{" "}
+              <span className="font-mono text-foreground">{editingSpeaker}</span>{" "}
+              across the transcript, notes, action owners &amp; the follow-up
+              email. Regenerate notes to apply names there.
+            </p>
+            <input
+              autoFocus
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void saveSpeaker()}
+              placeholder="e.g. Alex Rivera"
+              className="w-full mt-3 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            {meeting && meeting.attendees.some((a) => a.name.trim()) && (
+              <div className="mt-2">
+                <p className="text-[10px] text-muted-foreground mb-1">
+                  From attendees
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {meeting.attendees
+                    .filter((a) => a.name.trim())
+                    .map((a, i) => (
+                      <button
+                        key={`${a.name}-${i}`}
+                        onClick={() => setNameDraft(a.name)}
+                        className="rounded-full bg-secondary px-2.5 py-1 text-xs text-foreground hover:bg-primary/10 hover:text-primary tech-transition"
+                      >
+                        {a.name}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                onClick={() => void saveSpeaker()}
+                disabled={savingSpeaker}
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 tech-transition"
+              >
+                {savingSpeaker ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+                Save
+              </button>
+              {speakerNames[editingSpeaker] && (
+                <button
+                  onClick={() => {
+                    setNameDraft("");
+                    void saveSpeaker();
+                  }}
+                  disabled={savingSpeaker}
+                  className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/30 tech-transition disabled:opacity-50"
+                >
+                  Clear name
+                </button>
+              )}
+              <button
+                onClick={() => setEditingSpeaker(null)}
+                className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground tech-transition ml-auto"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

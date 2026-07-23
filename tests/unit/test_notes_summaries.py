@@ -61,6 +61,15 @@ def test_tag_includes_index_and_speaker() -> None:
     assert _tag(_Seg(1, "x")) == "[#1 ?] x"
 
 
+def test_tag_resolves_named_speakers() -> None:
+    names = {"S1": "Alex Rivera", "S2": "Priya Menon"}
+    # A named label becomes the person; the LLM then writes notes with names.
+    assert _tag(_Seg(3, "hello", speaker_label="S2"), names) == "[#3 Priya Menon] hello"
+    # An un-named label keeps its raw tag; empty map is a no-op.
+    assert _tag(_Seg(4, "hi", speaker_label="S3"), names) == "[#4 S3] hi"
+    assert _tag(_Seg(5, "x", speaker_label="S1")) == "[#5 S1] x"
+
+
 def test_chunk_segments_splits_on_budget(monkeypatch) -> None:
     import gateway.routes.notes.summaries as mod
 

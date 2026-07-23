@@ -64,6 +64,8 @@ export interface MeetingDetail extends MeetingListItem {
   summary_md: string | null;
   scratch_notes: string | null;
   attendees: Attendee[];
+  /** Human names for diarized speaker labels, e.g. { "S1": "Alex Rivera" }. */
+  speaker_names: Record<string, string>;
   recordings: Recording[];
   segments: Segment[];
   runs: SummaryRun[];

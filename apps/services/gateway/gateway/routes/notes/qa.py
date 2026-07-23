@@ -99,14 +99,21 @@ async def ask_meeting(
                 {"id": meeting_id},
             )
         ).fetchall()
+        mrow = (
+            await db.execute(
+                text("SELECT speaker_names FROM meeting WHERE id=:id"),
+                {"id": meeting_id},
+            )
+        ).fetchone()
     if not segs:
         raise HTTPException(
             status_code=409, detail="no transcript yet — nothing to ask about"
         )
 
+    names = mrow.speaker_names if mrow and isinstance(mrow.speaker_names, dict) else {}
     chosen, truncated = _select_segments(segs, question)
     idx_to_id = {s.idx: str(s.id) for s in segs}
-    data = "\n".join(_tag(s) for s in chosen)
+    data = "\n".join(_tag(s, names) for s in chosen)
 
     system = (
         "Answer the user's question using ONLY the meeting transcript provided "

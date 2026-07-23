@@ -24,6 +24,9 @@ export interface FocusPrefs {
   dayClosedOn?: string;
   /** Focus Mode timer preference. */
   timerMode?: FocusTimerMode;
+  /** Show/schedule across the full 24h day (vs the working-hours window) — for
+   *  people who work whenever, not just 9-to-5. */
+  fullDayGrid?: boolean;
 }
 
 /** Local-day key, e.g. "2026-07-22" (local time, matching the grid's days). */

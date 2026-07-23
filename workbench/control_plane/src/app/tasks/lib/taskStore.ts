@@ -2019,6 +2019,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     energyWindows: [],
     timezone: "UTC",
     autoRollover: true,
+    planningPrompt: "",
+    maxFocusRunMins: 90,
+    breakMins: 10,
+    lunchStartHour: null,
+    lunchEndHour: null,
   },
 
   updateSettings: async (patch) => {

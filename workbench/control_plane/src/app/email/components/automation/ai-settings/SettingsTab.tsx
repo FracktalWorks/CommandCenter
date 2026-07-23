@@ -1208,8 +1208,9 @@ const _PATTERN_SOURCE_META: Record<string, { label: string; title: string }> = {
 
 /** A pattern still waiting for a human verdict. Only auto-learned ('AI')
  *  patterns can be in this state — anything the user authored is approved on
- *  creation. Excludes are never gated: they only ever PREVENT a label. */
-function isPendingReview(p: LearnedRulePattern): boolean {
+ *  creation. Excludes are never gated: they only ever PREVENT a label.
+ *  Exported: RulesTab nests each rule's patterns and needs the same verdict. */
+export function isPendingReview(p: LearnedRulePattern): boolean {
   return !p.exclude && !p.approved_at && !p.rejected_at;
 }
 
@@ -1491,8 +1492,10 @@ function PatternGroup({
  *  reach count does not fit one line in a dialog, and `truncate` cut the address
  *  mid-word — leaving the one thing you need to judge the pattern (who it is)
  *  unreadable. Chips and actions share the top row; the pattern itself gets the
- *  full width below and wraps. */
-function PatternRow({
+ *  full width below and wraps.
+ *  Exported: RulesTab renders the same rows nested under each rule, so the two
+ *  surfaces can't drift (one row component, two places it appears). */
+export function PatternRow({
   p, tone, busy, onApprove, onReject, onForget,
 }: {
   p: LearnedRulePattern;

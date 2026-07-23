@@ -116,6 +116,8 @@ to it and to `competitive_hardening_2026-07.md` (CH-*) rather than re-describe t
 | [`generative_ui_2.md`](specs/generative_ui_2.md) | **Generative UI 2.0** — immersive HITL UI: surface(panel)/hitl(blocking) on emit_generative_ui, 11-template library (recipe/flight/train/form/optionPicker…), side-panel genUI tabs, scenario→element map | 🔄 Phase 1 shipped |
 | [`drawio_integration.md`](specs/drawio_integration.md) | **draw.io** — architecture, tickets ST-DRW-01…13 (master) | 🔲 proposed — **genuinely unbuilt** |
 | [`drawio_diagram_svc_contract.md`](specs/drawio_diagram_svc_contract.md) | draw.io — `diagram-svc` wire contract (sub-doc of the master) | 🔲 proposed — unbuilt |
+| [`note_taker_app.md`](specs/note_taker_app.md) | **AI Note Taker (`/notes`)** — browser record (mic + Chromium tab audio) → pluggable STT (`acb_stt`: BYOK cloud + self-host faster-whisper/WhisperX + open diarization) → grounded notes via `acb_llm` template compiler → HITL action-items→`/tasks`, recap→`/email`, share→`/chat`; activates the dormant `meeting`/`action_item` tables | 🔲 proposed — architecture defined (2026-07-23), unbuilt |
+| [`note_taker_research_2026-07.md`](specs/note_taker_research_2026-07.md) | Note Taker — research appendix (sub-doc): Meetily deep dive, 18-project landscape survey, mid-2026 ASR/diarization SOTA, browser-capture constraints, license watch-list | 🟢 research complete |
 
 ---
 

@@ -5,6 +5,7 @@ from gateway.routes.whatsapp.transport import (  # noqa: F401
     accounts,
     capture,
     chats,
+    context,
     messages,
     send,
     templates,

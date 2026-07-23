@@ -308,6 +308,11 @@ export function EmailDetail({ email }: EmailDetailProps) {
   // ref because runAiDraft is defined after this hook (which must sit above the
   // early return).
   const runAiDraftRef = useRef<() => void>(() => {});
+  // Seeds the auto-draft's AI instruction: "" for a plain reply-ai draft, a
+  // nudge prompt for "nudge" (a follow-up on a thread we're waiting on).
+  // Read + cleared by runAiDraft — a ref, not state, so it's live the moment
+  // the nonce effect fires without another render.
+  const autoDraftInstructionRef = useRef("");
   const [autoDraftTick, setAutoDraftTick] = useState(0);
   useEffect(() => {
     if (!viewerCommand) return;
@@ -315,7 +320,17 @@ export function EmailDetail({ email }: EmailDetailProps) {
     if (viewerCommand === "block") h.block();
     else if (viewerCommand === "download") h.download();
     else if (viewerCommand === "reply-ai") {
+      autoDraftInstructionRef.current = "";
       h.reply("reply");
+      setAutoDraftTick((t) => t + 1);
+    } else if (viewerCommand === "nudge") {
+      // A follow-up on a thread we're waiting on. Reply-all (not reply): the
+      // last message is usually OURS, so a plain reply would address us — reply
+      // -all keeps the original recipients (the people we're waiting on).
+      autoDraftInstructionRef.current =
+        "Write a brief, friendly follow-up. I haven't heard back on this yet " +
+        "and want to gently nudge for a reply. Keep it short and polite.";
+      h.reply("reply-all");
       setAutoDraftTick((t) => t + 1);
     } else h.reply(viewerCommand);
     setViewerCommand(null);
@@ -504,10 +519,14 @@ export function EmailDetail({ email }: EmailDetailProps) {
     try {
       const target = replyTargetRef.current ?? email;
       const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
+      // A dashboard nudge seeds a follow-up instruction (consumed once); a
+      // manual AI draft uses whatever the user typed in the AI box.
+      const seeded = autoDraftInstructionRef.current;
+      autoDraftInstructionRef.current = "";
       const res = await composeAssist({
         accountId: selectedAccountId,
         body: replyBody, // NEW text only — the quote is excluded by design
-        instruction: aiInstruction.trim(),
+        instruction: seeded || aiInstruction.trim(),
         mode: replyMode === "forward" ? "forward" : "reply",
         messageId: target.id,
         to: toArr,

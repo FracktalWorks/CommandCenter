@@ -732,6 +732,13 @@ export default function EmailPage() {
               setAutomationFeature(null);
               useEmailStore.getState().setViewerCommand("reply-ai");
             }}
+            onNudge={async (id) => {
+              // 🔔 on a waiting-on-them row: same flow as a draft, but the
+              // "nudge" command opens a reply-all and seeds a follow-up prompt.
+              await useEmailStore.getState().openEmailById(id);
+              setAutomationFeature(null);
+              useEmailStore.getState().setViewerCommand("nudge");
+            }}
           />
         </div>
       ) : (

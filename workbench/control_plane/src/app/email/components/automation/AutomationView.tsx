@@ -28,6 +28,8 @@ interface AutomationViewProps {
   onFilterSender?: (email: string) => void;
   /** Open a thread and start an AI-drafted reply (dashboard ✍️ row action). */
   onDraftReply?: (messageId: string) => void;
+  /** Open a waiting-on-them thread and start an AI follow-up nudge. */
+  onNudge?: (messageId: string) => void;
 }
 
 const META: Record<
@@ -76,6 +78,7 @@ export function AutomationView({
   onFilterLabel,
   onFilterSender,
   onDraftReply,
+  onNudge,
 }: AutomationViewProps) {
   const meta = META[feature];
   const Icon = meta.icon;
@@ -116,6 +119,7 @@ export function AutomationView({
             onFilterLabel={onFilterLabel}
             onFilterSender={onFilterSender}
             onDraftReply={onDraftReply}
+            onNudge={onNudge}
           />
         )}
         {feature === "unsubscribe" && (

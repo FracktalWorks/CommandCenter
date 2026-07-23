@@ -281,9 +281,11 @@ function Node({
 
     case "template": {
       // Tier 2 — render a pre-designed animated component by name (data-only).
+      // Interactive templates (formCard, optionPicker) receive the same
+      // onAction channel buttons use, so their submits flow back to the agent.
       const name = s(props.name);
       const data = props.data;
-      return renderTemplate(name, data);
+      return renderTemplate(name, data, { onAction });
     }
 
     case "html": {

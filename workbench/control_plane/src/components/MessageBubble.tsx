@@ -14,12 +14,14 @@ import GenerativeUINode from "@/components/GenerativeUINode";
 import ErrorCard from "@/components/ChatErrorCard";
 import { DismissableCard } from "@/components/ToolCardShell";
 import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
-import { openDoc } from "@/lib/sidePanelStore";
+import { openDoc, openGenUI } from "@/lib/sidePanelStore";
+import { AppWindow } from "lucide-react";
 
 function MessageBubble({
   message,
   sessionId,
   onChoice,
+  onHitlRespond,
   onFileOpen,
   onResend,
   onRetryMessage,
@@ -28,6 +30,10 @@ function MessageBubble({
   message: ChatMessage;
   sessionId: string;
   onChoice?: (choice: string) => void;
+  /** Resolve a BLOCKING generative-UI interaction (spec carried a request_id):
+   *  answers resume the parked run via /agent/respond-input instead of being
+   *  sent as a new chat message. Falls back to onChoice when absent. */
+  onHitlRespond?: (requestId: string, answer: string) => void;
   onFileOpen?: (entry: FileEntry) => void;
   onResend?: (content: string) => void;
   onRetryMessage?: (m: ChatMessage) => void;
@@ -290,12 +296,46 @@ function MessageBubble({
           </div>
         );
       })()}
-      {/* Inline generative-UI trees — agent-pushed declarative components. */}
+      {/* Inline generative-UI trees — agent-pushed declarative components.
+          surface:"panel" specs render as a compact open-chip (the immersive
+          view lives in the side panel); specs carrying a request_id route
+          interactions through the blocking HITL resume path. */}
       {genUiEvents.length > 0 && (
         <div className="mt-3 space-y-2">
-          {genUiEvents.map((spec, i) => (
-            <GenerativeUINode key={i} spec={spec} onAction={onChoice} />
-          ))}
+          {genUiEvents.map((spec, i) => {
+            const rec = (spec && typeof spec === "object"
+              ? spec : {}) as Record<string, unknown>;
+            const requestId =
+              typeof rec.request_id === "string" ? rec.request_id : null;
+            const act = (msg: string) => {
+              if (requestId && onHitlRespond) onHitlRespond(requestId, msg);
+              else onChoice?.(msg);
+            };
+            if (rec.surface === "panel") {
+              const title = typeof rec.title === "string" && rec.title
+                ? rec.title : "Interactive view";
+              return (
+                <button
+                  key={i}
+                  type="button"
+                  onClick={() => openGenUI({
+                    id: `${message.id}:${i}`,
+                    title,
+                    sessionId,
+                    spec,
+                  })}
+                  className="flex items-center gap-2 rounded-lg border border-border/60 bg-card/50 px-3 py-2 text-xs text-foreground hover:bg-secondary/60 transition-colors"
+                >
+                  <AppWindow size={13} className="text-primary" />
+                  <span className="font-medium">{title}</span>
+                  <span className="text-muted-foreground">
+                    — open in side panel
+                  </span>
+                </button>
+              );
+            }
+            return <GenerativeUINode key={i} spec={spec} onAction={act} />;
+          })}
         </div>
       )}
       {/* Inline email-assistant cards (editable draft, rule disable/delete).

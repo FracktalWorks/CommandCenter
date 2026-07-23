@@ -480,8 +480,22 @@ async def emit_generative_ui(ui: str) -> dict:
     and the component tree are on-brand by construction; custom HTML inherits the
     real design tokens as CSS variables (see mode 3), so lean on those.
 
-    ``ui`` is a JSON object (string or dict). It supports THREE modes;
-    prefer them in this order (template → tree → html):
+    ``ui`` is a JSON object (string or dict). Two OPTIONAL top-level fields
+    apply to every mode:
+
+    • ``"surface"`` — ``"inline"`` (default; a card in the chat transcript) or
+      ``"panel"`` — opens as an IMMERSIVE view in the side panel (like a
+      document), with a compact "open" chip in the transcript. Use ``panel``
+      for big/rich UI: full dashboards, detailed itineraries, long recipes,
+      multi-section forms. Inline cards should stay compact.
+    • ``"hitl": true`` — BLOCKING human-in-the-loop: this tool call PAUSES the
+      run until the user interacts (submits the form / clicks an option /
+      presses a button), and returns their values as this call's result
+      (``{"ok":true,"response":<their answer>}``). Use whenever you need the
+      user's input to continue — a form to fill, an option to pick, a value to
+      set. Without it, clicks arrive as a NEW chat message instead.
+
+    It supports THREE modes; prefer them in this order (template → tree → html):
 
     1. NAMED TEMPLATE — pre-designed, animated, on-brand components. You supply
        ONLY data; the design is fixed and looks great every time. Use first when
@@ -498,6 +512,29 @@ async def emit_generative_ui(ui: str) -> dict:
              rows:[{label, value}]}]}
          • progressTracker — {title?, steps:[{label,
              state('done'|'active'|'pending')}]}
+         • recipeCard — {title, description?, servings?, prepMinutes?,
+             cookMinutes?, calories?, ingredients:[{item, amount?}],
+             steps:[string], tags?:[string], tip?}
+         • flightStatus — {airline?, flightNo, status('scheduled'|'boarding'|
+             'departed'|'in-air'|'landed'|'delayed'|'cancelled'),
+             from:{code,city?,time?,terminal?,gate?},
+             to:{code,city?,time?,terminal?,gate?}, progressPct?, durationMin?,
+             date?, note?}
+         • trainStatus — {operator?, trainNo?, line?, status('scheduled'|
+             'boarding'|'departed'|'arrived'|'delayed'|'cancelled'),
+             from:{station,time?,platform?}, to:{station,time?,platform?},
+             stops?:[{station, time?, state?('done'|'active'|'pending')}],
+             delayMin?, note?}
+         • formCard — {title?, description?, submitLabel?, fields:[{name,
+             label, type('text'|'number'|'select'|'slider'|'toggle'|'date'|
+             'textarea'), placeholder?, value?, required?, options?:[string]
+             (select), min?/max?/step?/unit? (number|slider)}]} — a
+             schema-driven form; PAIR WITH ``"hitl":true`` so the submitted
+             values come back as this call's result. Replaces hand-written
+             HTML forms.
+         • optionPicker — {title?, description?, multi?:bool, options:[{id,
+             label, description?, icon?, badge?, recommended?:bool}]} — rich
+             choice cards for decisions; PAIR WITH ``"hitl":true``.
 
     2. COMPONENT TREE — a safe whitelist of typed primitives (data, not code).
        Each node is ``{"type":<kind>,"props":{...},"children":[...]}``. Kinds:
@@ -614,6 +651,28 @@ async def emit_generative_ui(ui: str) -> dict:
     if not isinstance(spec, dict):
         return {"ok": False, "error": "ui must be a JSON object (a component node)"}
 
+    # ── HITL blocking mode (generative_ui_2 Phase 1) ──────────────────────
+    # ``"hitl": true`` parks THIS tool call on the same Future machinery as
+    # ask_questions: the UI's submit/action resolves it via
+    # /agent/respond-input and the run resumes in the SAME turn with the
+    # user's values as this tool's result. Without it, genUI submits arrive
+    # as a NEW chat message (non-blocking).
+    _blocking = bool(spec.pop("hitl", False))
+    _request_id: str | None = None
+    _fut = None
+    if _blocking:
+        try:
+            import asyncio as _asyncio  # noqa: PLC0415
+            import uuid as _uuid  # noqa: PLC0415
+
+            from orchestrator.executor import _pending_user_input  # noqa: PLC0415
+            _request_id = _uuid.uuid4().hex
+            _fut = _asyncio.get_running_loop().create_future()
+            _pending_user_input[_request_id] = _fut
+            spec["request_id"] = _request_id
+        except Exception:  # noqa: BLE001 — degrade to non-blocking emit
+            _blocking, _request_id, _fut = False, None, None
+
     # Push the CUSTOM event into the active run's SSE queue. resolve_run_queue
     # tries the ContextVar (native-MAF) first, then the plain _RUN_QUEUES
     # registry keyed by the session id — the latter is what makes this work for
@@ -623,13 +682,36 @@ async def emit_generative_ui(ui: str) -> dict:
         from orchestrator.executor import resolve_run_queue
         session_id = _WRITE_ARTIFACT_CONTEXT.get("session_id")
         queue = resolve_run_queue(session_id)
-        if queue is not None:
-            await queue.put({
-                "type": "CUSTOM",
-                "name": "generative_ui",
-                "value": spec,
-            })
+        if queue is None:
+            if _request_id is not None:
+                from orchestrator.executor import _pending_user_input  # noqa: PLC0415
+                _pending_user_input.pop(_request_id, None)
+            return {"ok": False, "error": "no active run stream to render into"}
+        await queue.put({
+            "type": "CUSTOM",
+            "name": "generative_ui",
+            "value": spec,
+        })
+        if not _blocking or _fut is None:
             return {"ok": True}
+        # Park until the user interacts (heartbeats the relay so the run
+        # stays visibly alive — same wait as every other HITL surface).
+        try:
+            from orchestrator.executor import (  # noqa: PLC0415
+                _pending_user_input,
+                wait_user_future,
+            )
+            try:
+                _result = await wait_user_future(_fut, 3600)
+            finally:
+                _pending_user_input.pop(_request_id, None)
+            return {"ok": True, "response": _result.get("answer", "")}
+        except Exception:  # noqa: BLE001 — timeout or wait failure
+            return {
+                "ok": True,
+                "response": None,
+                "note": "user did not respond to the UI",
+            }
     except Exception as exc:
         return {"ok": False, "error": str(exc)}
     return {"ok": False, "error": "no active run stream to render into"}

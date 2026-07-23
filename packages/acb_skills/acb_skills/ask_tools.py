@@ -49,6 +49,13 @@ HITL_BLOCKING_TOOLS: frozenset[str] = frozenset({
     "ask_questions",
     "ask_user",
     "request_confirmation",
+    # emit_generative_ui blocks only when the spec sets ``hitl: true``
+    # (generative_ui_2 Phase 1) — but listing it unconditionally is correct
+    # for every consumer of this set: the per-tool-timeout exemption is
+    # harmless for the instant non-blocking emit, and a turn that ends on a
+    # rendered UI card with no closing text is a legitimate ending (the card
+    # IS the output), exactly like the other card tools above.
+    "emit_generative_ui",
 })
 
 

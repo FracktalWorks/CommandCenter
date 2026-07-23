@@ -136,8 +136,8 @@ async def _sender_is_a_correspondent(
             """SELECT 1 FROM email_messages m
                 WHERE m.account_id = :aid
                   AND LOWER(m.from_address->>'email') = :sender
-                  AND m.categories && ARRAY['Reply', 'Awaiting Reply',
-                                            'Done', 'FYI']
+                  AND m.categories && ARRAY['Needs Reply', 'Reply',
+                                            'Awaiting Reply', 'Done', 'FYI']
                 LIMIT 1"""
         ), {"aid": account_id, "sender": sender})).fetchone()
     except Exception as exc:  # noqa: BLE001

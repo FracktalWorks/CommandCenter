@@ -147,7 +147,7 @@ async def test_a_thread_status_renders_as_its_display_name() -> None:
     await a._categories(db, "m.account_id = :aid", {"uid": "u", "days": 30},
                         "TRUE", "FALSE")
     sql = str(db.execute.call_args[0][0])
-    for token in ("'NEEDS_REPLY' THEN 'Reply'",
+    for token in ("'NEEDS_REPLY' THEN 'Needs Reply'",
                   "'AWAITING' THEN 'Awaiting Reply'",
                   "'DONE' THEN 'Done'"):
         assert token in sql

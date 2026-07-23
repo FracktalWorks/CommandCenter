@@ -43,6 +43,35 @@ function findQuoteBoundary(body: HTMLElement): Element | null {
   const cite = body.querySelector("blockquote[type='cite']");
   if (cite) return cite;
 
+  // Outlook DESKTOP (the Word renderer) emits NO marker id at all — the reply
+  // header is just a short block reading "From: … Sent/Date: … To/Subject: …",
+  // usually inside a border-top wrapper. Corporate/academic senders live on
+  // this client, and their RE: RE: chains rendered fully expanded because none
+  // of the id/class detectors above ever matched. Same text heuristic as the
+  // plain-text splitter, plus bare "On … wrote:" / "-- Original Message --"
+  // headers whose provider classes a sanitising forwarder stripped. The
+  // short-text cap keeps wrapper divs (whole-chain containers) from matching.
+  for (const el of Array.from(body.querySelectorAll("div, p"))) {
+    const t = (el.textContent ?? "").trim();
+    if (t.length === 0 || t.length > 400) continue;
+    const isHeaderBlock =
+      /^From:\s/i.test(t) &&
+      /\b(Sent|Date):/i.test(t) &&
+      /\b(To|Subject):/i.test(t);
+    const isWroteLine = /^On\b[\s\S]{0,200}\bwrote:\s*$/i.test(t);
+    const isOriginalMessage = /^-{2,}\s*Original Message\s*-{2,}/i.test(t);
+    if (isHeaderBlock || isWroteLine || isOriginalMessage) {
+      // Prefer the bordered wrapper when the header is its only child, so the
+      // divider line collapses along with the quote.
+      const parent = el.parentElement;
+      const target =
+        parent && parent !== body && parent.childElementCount === 1
+          ? parent
+          : el;
+      return hrBefore(target) || target;
+    }
+  }
+
   // A bare blockquote — only when it isn't the very first node (so we don't hide
   // a forward that is itself just a quote). The empty-main guard below is the
   // real backstop.

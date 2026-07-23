@@ -248,6 +248,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "groq":        "GROQ_API_KEY",
     "mistral":     "MISTRAL_API_KEY",
     "together":    "TOGETHER_API_KEY",
+    "deepgram":    "DEEPGRAM_API_KEY",  # speech-to-text w/ named speakers (Note Taker STT tier)
     "ollama":      "",        # local — always "configured" if URL reachable
     "vllm":        "VLLM_BASE_URL",
 }
@@ -262,6 +263,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "groq":        "Groq",
     "mistral":     "Mistral AI",
     "together":    "Together AI",
+    "deepgram":    "Deepgram (speech-to-text)",
     "ollama":      "Ollama (local)",
     "vllm":        "vLLM (local)",
 }
@@ -295,6 +297,10 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "openai/gpt-4.1-mini",
         "openai/o3-mini",
         "openai/o3",
+        # Speech-to-text (Note Taker STT tier)
+        "openai/gpt-4o-transcribe",
+        "openai/gpt-4o-mini-transcribe",
+        "openai/whisper-1",
     ],
     "anthropic": [
         "anthropic/claude-opus-4-5",
@@ -359,6 +365,9 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "groq/mixtral-8x7b-32768",
         "groq/gemma2-9b-it",
         "groq/moonshotai/kimi-k2-instruct",
+        # Speech-to-text (Note Taker STT tier)
+        "groq/whisper-large-v3-turbo",
+        "groq/whisper-large-v3",
     ],
     "mistral": [
         "mistral/mistral-small-latest",
@@ -372,6 +381,12 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo",
         "together_ai/mistralai/Mistral-7B-Instruct-v0.3",
         "together_ai/deepseek-ai/DeepSeek-R1",
+    ],
+    # Deepgram is speech-to-text only (no chat models). These power the Note
+    # Taker's STT tier and are the only models here that can name speakers.
+    "deepgram": [
+        "deepgram/nova-3",
+        "deepgram/nova-2",
     ],
     "vllm": [
         "openai/Qwen/Qwen3-8B-Instruct",
@@ -415,6 +430,8 @@ def _provider_from_model(model: str) -> str:
         return "mistral"
     if model.startswith("together_ai/"):
         return "together"
+    if model.startswith("deepgram/"):
+        return "deepgram"
     if model.startswith("ollama/"):
         return "ollama"
     if model.startswith("openai/"):
@@ -483,6 +500,7 @@ class ModelInfo(BaseModel):
     provider: str
     vision: bool = False
     audio: bool = False
+    transcription: bool = False   # speech-to-text model (routed via atranscription)
     reasoning: bool = False
     context_window: int = 0
     max_output: int = 0
@@ -1092,15 +1110,33 @@ def _cache_entry_fresh(entry: dict[str, Any]) -> bool:
         return False
 
 
+def _is_transcription_model(model_id: str) -> bool:
+    """Heuristic: is this a speech-to-text model (routed via atranscription)?
+
+    Used so un-catalogued STT models a live provider fetch surfaces (e.g. a new
+    whisper variant from Groq's ``/models``) are still offered for the STT tier
+    and kept out of the chat-tier pickers, without waiting for a catalogue entry.
+    """
+    mid = model_id.lower()
+    return (
+        "whisper" in mid
+        or mid.startswith("deepgram/")
+        or "transcribe" in mid
+        or "/nova-" in mid
+    )
+
+
 def _model_info_from_caps(model_id: str, provider: str) -> ModelInfo:
     """Build a ModelInfo from _MODEL_CAPABILITIES, falling back to bare defaults."""
     caps = _MODEL_CAPABILITIES.get(model_id, {})
+    is_stt = caps.get("transcription", _is_transcription_model(model_id))
     return ModelInfo(
         id=model_id,
         label=caps.get("label", model_id.split("/")[-1]),
         provider=provider,
         vision=caps.get("vision", False),
-        audio=caps.get("audio", False),
+        audio=caps.get("audio", is_stt),  # STT models consume audio input
+        transcription=is_stt,
         reasoning=caps.get("reasoning", False),
         context_window=caps.get("context_window", 0),
         max_output=caps.get("max_output", 0),

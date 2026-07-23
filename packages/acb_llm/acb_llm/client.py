@@ -238,6 +238,7 @@ async def _ensure_keys_loaded() -> None:
                 "GROQ_API_KEY": "groq",
                 "MISTRAL_API_KEY": "mistral",
                 "TOGETHER_API_KEY": "together",
+                "DEEPGRAM_API_KEY": "deepgram",
             }
             for env_var, provider in _env_to_provider.items():
                 val = os.environ.get(env_var, "")

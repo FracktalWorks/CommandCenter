@@ -48,22 +48,19 @@ def _get(obj: Any, key: str, default: Any = None) -> Any:
     return getattr(obj, key, default)
 
 
-def normalize_transcription(resp: Any, model: str, diarize: bool) -> TranscriptResult:
-    """Map a litellm ``TranscriptionResponse`` (OpenAI verbose_json shape) into
-    our provider-agnostic ``TranscriptResult``."""
+def _word(w: Any) -> TranscriptWord:
+    return TranscriptWord(
+        text=str(_get(w, "word") or _get(w, "text") or _get(w, "punctuated_word") or ""),
+        start_s=float(_get(w, "start") or 0.0),
+        end_s=float(_get(w, "end") or 0.0),
+    )
+
+
+def _segments_from_verbose_json(resp: Any) -> list[TranscriptSegmentData]:
+    """OpenAI/whisper ``verbose_json`` shape: a flat ``segments`` list."""
     segments: list[TranscriptSegmentData] = []
     for i, s in enumerate(_get(resp, "segments") or []):
-        words = None
         wraw = _get(s, "words")
-        if wraw:
-            words = [
-                TranscriptWord(
-                    text=str(_get(w, "word") or _get(w, "text") or ""),
-                    start_s=float(_get(w, "start") or 0.0),
-                    end_s=float(_get(w, "end") or 0.0),
-                )
-                for w in wraw
-            ]
         # Deepgram-via-litellm may surface a speaker int; whisper never does.
         speaker = _get(s, "speaker")
         segments.append(
@@ -73,10 +70,91 @@ def normalize_transcription(resp: Any, model: str, diarize: bool) -> TranscriptR
                 end_s=float(_get(s, "end") or 0.0),
                 text=str(_get(s, "text") or "").strip(),
                 speaker_label=f"S{int(speaker) + 1}" if speaker is not None else None,
-                words=words,
+                words=[_word(w) for w in wraw] if wraw else None,
             )
         )
-    text = str(_get(resp, "text") or "").strip() or flatten_text(segments)
+    return segments
+
+
+def _deepgram_words(resp: Any) -> list[dict[str, Any]]:
+    """The raw diarized word list Deepgram returns.
+
+    litellm's Deepgram transcription handler normalises the response down to
+    ``text`` + speaker-less ``words`` and stashes the full Deepgram JSON on
+    ``resp._hidden_params`` — so the per-word ``speaker`` (the whole point of
+    named speakers) only survives there. Pull it back out.
+    """
+    hp = getattr(resp, "_hidden_params", None)
+    if not isinstance(hp, dict):
+        return []
+    try:
+        alt = hp["results"]["channels"][0]["alternatives"][0]
+    except (KeyError, IndexError, TypeError):
+        return []
+    words = alt.get("words")
+    return words if isinstance(words, list) else []
+
+
+def _segments_from_deepgram_words(words: list[dict[str, Any]]) -> list[TranscriptSegmentData]:
+    """Group consecutive same-speaker words into speaker-attributed segments."""
+    segments: list[TranscriptSegmentData] = []
+    run: list[dict[str, Any]] = []
+    run_speaker: Any = None
+
+    def flush() -> None:
+        if not run:
+            return
+        text = " ".join(
+            str(w.get("punctuated_word") or w.get("word") or "") for w in run
+        ).strip()
+        segments.append(
+            TranscriptSegmentData(
+                idx=len(segments),
+                start_s=float(run[0].get("start") or 0.0),
+                end_s=float(run[-1].get("end") or 0.0),
+                text=text,
+                speaker_label=(
+                    f"S{int(run_speaker) + 1}" if run_speaker is not None else None
+                ),
+                words=[_word(w) for w in run],
+            )
+        )
+
+    for w in words:
+        speaker = w.get("speaker")
+        if run and speaker != run_speaker:
+            flush()
+            run = []
+        run_speaker = speaker
+        run.append(w)
+    flush()
+    return segments
+
+
+def normalize_transcription(resp: Any, model: str, diarize: bool) -> TranscriptResult:
+    """Map a litellm ``TranscriptionResponse`` into our provider-agnostic
+    ``TranscriptResult``.
+
+    Handles two shapes: OpenAI/whisper ``verbose_json`` (a flat ``segments``
+    list) and Deepgram (no segments — speaker-attributed words live on
+    ``_hidden_params``), so named speakers survive from whichever model the
+    STT tier is pointed at."""
+    segments = _segments_from_verbose_json(resp)
+    used_deepgram = False
+    if not any(s.speaker_label for s in segments):
+        # No speakers from the segment path — try Deepgram's diarized words.
+        dg = _segments_from_deepgram_words(_deepgram_words(resp))
+        if dg:
+            segments = dg
+            used_deepgram = True
+    # Deepgram's ``text`` is a "Speaker 0: …" reconstruction; the clean flatten
+    # of our segments is the better transcript. Whisper's ``text`` is already
+    # clean, so prefer it there.
+    text = (
+        flatten_text(segments)
+        if used_deepgram
+        else (str(_get(resp, "text") or "").strip() or flatten_text(segments))
+    )
     if not segments and text:
         # Providers that don't return segment timings still yield a renderable
         # transcript; timings are unknown.
@@ -101,10 +179,18 @@ class LiteLLMSTT(SttProvider):
         self._alias = model_alias or os.environ.get("NOTES_STT_MODEL") or DEFAULT_STT_ALIAS
 
     def capabilities(self) -> SttCaps:
-        # Diarization depends on the resolved model; whisper via litellm returns
-        # none (the pipeline falls back to the capture-channel prior). Word
-        # timestamps come through verbose_json where the provider supplies them.
-        return SttCaps(diarization=False, word_timestamps=True, streaming=False)
+        # Diarization (named speakers) depends on the resolved model: Deepgram's
+        # nova models return per-word speakers; whisper via litellm never does
+        # (the pipeline falls back to the capture-channel prior). Word
+        # timestamps come through where the provider supplies them.
+        from acb_llm.context import resolve_underlying_model
+
+        model = resolve_underlying_model(self._alias) or ""
+        return SttCaps(
+            diarization=model.startswith("deepgram/"),
+            word_timestamps=True,
+            streaming=False,
+        )
 
     async def transcribe(self, audio: AudioInput, opts: SttOptions) -> TranscriptResult:
         import litellm
@@ -126,11 +212,7 @@ class LiteLLMSTT(SttProvider):
         buf = io.BytesIO(audio.data)
         buf.name = audio.filename  # litellm/OpenAI infer the format from the name
 
-        extra: dict[str, Any] = {"response_format": "verbose_json"}
-        if opts.language:
-            extra["language"] = opts.language
-        if opts.prompt:
-            extra["prompt"] = opts.prompt
+        extra = self._provider_params(model, opts)
         litellm.drop_params = True  # ignore params a given provider doesn't take
 
         try:
@@ -141,5 +223,33 @@ class LiteLLMSTT(SttProvider):
         with contextlib.suppress(Exception):  # observability is best-effort
             _emit_usage(model, "", resp, source="gateway.routes.notes")
 
-        _log.info("acb_stt.transcribed", model=model, alias=alias)
+        _log.info(
+            "acb_stt.transcribed", model=model, alias=alias, diarize=opts.diarize
+        )
         return normalize_transcription(resp, model, diarize=opts.diarize)
+
+    @staticmethod
+    def _provider_params(model: str, opts: SttOptions) -> dict[str, Any]:
+        """Build the per-model kwargs for ``litellm.atranscription``.
+
+        Deepgram and whisper take different options: Deepgram names speakers via
+        native ``diarize`` + word-level output (``punctuate``/``smart_format``),
+        while OpenAI-compatible whisper models yield segments via
+        ``verbose_json`` and accept a glossary ``prompt`` bias. Sending the wrong
+        family's params would be dropped at best; branching keeps the request
+        clean per provider."""
+        extra: dict[str, Any] = {}
+        if opts.language:
+            extra["language"] = opts.language
+        if model.startswith("deepgram/"):
+            # Native diarization → per-word speaker labels ("named speakers").
+            if opts.diarize:
+                extra["diarize"] = True
+            extra["punctuate"] = True
+            extra["smart_format"] = True
+        else:
+            # OpenAI-compatible (whisper): segments + word timings; glossary bias.
+            extra["response_format"] = "verbose_json"
+            if opts.prompt:
+                extra["prompt"] = opts.prompt
+        return extra

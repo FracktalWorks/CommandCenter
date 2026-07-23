@@ -808,6 +808,13 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    from gateway.routes.whatsapp import router as _whatsapp_router
+
+    app.include_router(_whatsapp_router)
+except Exception:  # pragma: no cover
+    pass
+
 # ---------- Health ----------
 
 class Health(BaseModel):

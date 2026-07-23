@@ -1,3 +1,15 @@
+---
+name: Command Center design system (DESIGN.md)
+when_to_use: >
+  Load before writing a full-page HTML or Markdown report, or any bespoke
+  custom HTML/CSS for an emit_generative_ui "html" node, so the output matches
+  the Command Center look. You do NOT need it for named emit_generative_ui
+  templates — those are already on-brand by construction.
+summary: >
+  Palette tokens (--cc-*), typography, spacing, motion, dark/light theming, and
+  the full-page report block kit (cc-report, cc-eyebrow, cc-grid, cc-compare…).
+---
+
 # Command Center — DESIGN.md
 
 This is the single source of truth for how any UI, document, report, or HTML you

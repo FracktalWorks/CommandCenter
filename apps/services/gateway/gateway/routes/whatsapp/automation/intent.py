@@ -1,0 +1,118 @@
+"""Automation · intent — what does this message want?
+
+A deterministic, dependency-free intent classifier over a message body, mirroring
+the email vertical's "learned patterns short-circuit before any LLM" doctrine:
+cheap keyword/pattern matching handles the overwhelming majority of a hardware
+business's WhatsApp traffic, and an LLM refinement can layer on later for the
+ambiguous tail. The vocabulary is Hinglish-aware ("kab tak", "kitna", "quotation")
+because that is how the dealer network actually writes.
+
+Taxonomy (matches the spec §5): order_status · quote_request · payment ·
+service_issue · scheduling · social · spam. ``None`` when nothing matches (the
+message stays unclassified rather than being forced into a bucket).
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from acb_common import get_logger
+from sqlalchemy import text as _sql
+
+_log = get_logger("gateway.whatsapp.intent")
+
+# Bound one pass so a huge backlog (first history import) can't monopolise a
+# webhook handler; the next batch drains the rest.
+_MAX_PER_PASS = 500
+
+# Ordered most-specific → most-generic. The first taxonomy whose pattern hits
+# wins, so a payment-overdue message isn't swallowed by a generic greeting. Each
+# pattern is a single compiled alternation over lowercased text.
+_PATTERNS: list[tuple[str, re.Pattern[str]]] = [
+    ("payment", re.compile(
+        r"\b(payment|invoice|paid|overdue|outstanding|balance due|"
+        r"pending amount|bakaya|bhugtan|neft|rtgs|utr|cheque|"
+        r"proforma|advance)\b")),
+    ("order_status", re.compile(
+        r"\b(order status|where is my order|dispatch|dispatched|shipped|"
+        r"shipping|tracking|track|awb|courier|delivery|delivered|kab tak|"
+        r"kab milega|when will i get|eta)\b")),
+    ("quote_request", re.compile(
+        r"\b(quote|quotation|quotation for|pricing|price list|rate|rates|"
+        r"kitna|kitne ka|how much|cost|estimate|proposal|catalog|catalogue|"
+        r"price of)\b")),
+    ("service_issue", re.compile(
+        r"\b(not working|broken|jam|jammed|error|issue|problem|complaint|"
+        r"repair|service|stuck|down|failure|defective|kharab|nahi chal|"
+        r"warranty|support)\b")),
+    ("scheduling", re.compile(
+        r"\b(meeting|schedule|call at|available|availability|book a|appointment|"
+        r"demo|visit|reschedule|calendar|slot|kab free|when are you free)\b")),
+    ("spam", re.compile(
+        r"\b(congratulations you have won|click here to claim|limited offer|"
+        r"lucky draw|loan approved|earn from home|crypto|forex|"
+        r"investment opportunity|unsubscribe)\b")),
+    ("social", re.compile(
+        r"^\s*(hi|hii+|hello|hey|namaste|namaskar|good morning|good evening|"
+        r"good night|thanks|thank you|thank u|dhanyavaad|shukriya|ok|okay|"
+        r"👍|🙏|great|welcome|congrats|happy (birthday|diwali|new year))"
+        r"[\s!.😊🙏👍]*$")),
+]
+
+
+def classify_intent(body: str | None) -> str | None:
+    """Return the message intent, or ``None`` when nothing matches. Pure."""
+    if not body:
+        return None
+    text = body.strip().lower()
+    if not text:
+        return None
+    for label, pattern in _PATTERNS:
+        if pattern.search(text):
+            return label
+    return None
+
+
+# ── apply + post-sync hook ────────────────────────────────────────────────────
+
+async def apply_intents(db: Any, account_id: str) -> int:
+    """Classify + stamp every not-yet-processed INBOUND message on an account.
+
+    Only inbound messages get an intent (an outbound reply has no 'ask'). The
+    ``rules_processed_at`` watermark is the same one the email runner uses: set
+    once, so a message is never reclassified and a redelivered webhook is a
+    no-op here. Returns the number of messages processed. Caller owns the txn.
+    """
+    rows = (await db.execute(
+        _sql("""SELECT id, body_text FROM wa_messages
+                WHERE account_id = :aid AND direction = 'in'
+                  AND rules_processed_at IS NULL
+                ORDER BY sent_at ASC NULLS FIRST
+                LIMIT :lim"""),
+        {"aid": account_id, "lim": _MAX_PER_PASS},
+    )).fetchall()
+    for r in rows:
+        await db.execute(
+            _sql("""UPDATE wa_messages
+                    SET intent = :intent, rules_processed_at = now(),
+                        updated_at = now()
+                    WHERE id = :id"""),
+            {"intent": classify_intent(r.body_text), "id": str(r.id)},
+        )
+    return len(rows)
+
+
+async def process_new_messages(account_id: str) -> None:
+    """Post-sync ``on_new_messages`` hook: run intent classification over the new
+    inbound messages. (Sender categorization + auto-answer rules layer on here in
+    later phases, the same way the email on_new_mail pipeline grew.)"""
+    from gateway.routes.whatsapp.core import _get_db
+    db = await _get_db()
+    try:
+        n = await apply_intents(db, account_id)
+        await db.commit()
+        _log.info("whatsapp.process_new_messages.done",
+                  account_id=account_id, classified=n)
+    finally:
+        await db.close()

@@ -1,0 +1,17 @@
+[project]
+name = "acb-stt"
+version = "0.0.1"
+description = "Pluggable speech-to-text provider layer (BYOK cloud + self-host)."
+requires-python = ">=3.12,<3.14"
+dependencies = [
+    "httpx>=0.27",
+    "acb-common",
+    "acb-llm",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["acb_stt"]

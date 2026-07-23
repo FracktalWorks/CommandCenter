@@ -62,6 +62,7 @@ members = [
 acb-common    = { workspace = true }
 acb-graph     = { workspace = true }
 acb-llm       = { workspace = true }
+acb-stt       = { workspace = true }
 acb-audit     = { workspace = true }
 acb-skills     = { workspace = true }
 acb-memory     = { workspace = true }

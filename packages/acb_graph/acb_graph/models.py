@@ -19,11 +19,11 @@ from sqlalchemy import (
     Index,
     Integer,
     Numeric,
-    String,
     Text,
     func,
 )
-from sqlalchemy.dialects.postgresql import JSONB, UUID as PgUUID
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.dialects.postgresql import UUID as PgUUID
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, relationship
 
 
@@ -154,7 +154,14 @@ class Message(Base):
 class Meeting(Base):
     __tablename__ = "meeting"
     __table_args__ = (
-        CheckConstraint("platform IN ('meet','zoom','teams','other')", name="meeting_platform_check"),
+        CheckConstraint(
+            "platform IN ('meet','zoom','teams','other','in_person','upload')",
+            name="meeting_platform_check",
+        ),
+        CheckConstraint(
+            "status IN ('draft','recording','processing','ready','failed')",
+            name="meeting_status_check",
+        ),
     )
 
     id: Mapped[UUID] = _uuid_pk()
@@ -166,6 +173,108 @@ class Meeting(Base):
     )
     transcript: Mapped[str | None] = mapped_column(Text)
     transcript_source: Mapped[str | None] = mapped_column(Text)
+    # Note Taker app fields (infra/postgres/94_note_taker.sql)
+    title: Mapped[str | None] = mapped_column(Text)
+    status: Mapped[str] = mapped_column(Text, server_default="draft", nullable=False)
+    language: Mapped[str | None] = mapped_column(Text)
+    duration_s: Mapped[float | None] = mapped_column()
+    owner_email: Mapped[str | None] = mapped_column(Text)
+    template_key: Mapped[str | None] = mapped_column(Text)
+    summary_json: Mapped[dict | None] = mapped_column(JSONB)
+    summary_md: Mapped[str | None] = mapped_column(Text)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class MeetingRecording(Base):
+    __tablename__ = "meeting_recording"
+    __table_args__ = (
+        CheckConstraint(
+            "channel IN ('mic','system','mixed','upload')",
+            name="meeting_recording_channel_check",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    meeting_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("meeting.id", ondelete="CASCADE"), nullable=False
+    )
+    channel: Mapped[str] = mapped_column(Text, server_default="upload", nullable=False)
+    artifact_path: Mapped[str] = mapped_column(Text, nullable=False)
+    mime: Mapped[str] = mapped_column(
+        Text, server_default="application/octet-stream", nullable=False
+    )
+    duration_s: Mapped[float | None] = mapped_column()
+    byte_size: Mapped[int] = mapped_column(server_default="0", nullable=False)
+    created_at: Mapped[datetime] = _created_at()
+
+
+class TranscriptSegment(Base):
+    __tablename__ = "transcript_segment"
+
+    id: Mapped[UUID] = _uuid_pk()
+    meeting_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("meeting.id", ondelete="CASCADE"), nullable=False
+    )
+    recording_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("meeting_recording.id", ondelete="SET NULL")
+    )
+    idx: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    start_s: Mapped[float] = mapped_column(server_default="0", nullable=False)
+    end_s: Mapped[float] = mapped_column(server_default="0", nullable=False)
+    text: Mapped[str] = mapped_column(Text, nullable=False)
+    speaker_label: Mapped[str | None] = mapped_column(Text)
+    speaker_person_id: Mapped[UUID | None] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("person.id")
+    )
+    channel: Mapped[str | None] = mapped_column(Text)
+    confidence: Mapped[float | None] = mapped_column()
+    words: Mapped[list | None] = mapped_column(JSONB)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(1024))
+    created_at: Mapped[datetime] = _created_at()
+
+
+class MeetingNote(Base):
+    __tablename__ = "meeting_note"
+
+    meeting_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True),
+        ForeignKey("meeting.id", ondelete="CASCADE"),
+        primary_key=True,
+    )
+    notes_md: Mapped[str | None] = mapped_column(Text)
+    notes_json: Mapped[dict | None] = mapped_column(JSONB)
+    updated_by: Mapped[str | None] = mapped_column(Text)
+    updated_at: Mapped[datetime] = _updated_at()
+
+
+class SummaryRun(Base):
+    __tablename__ = "summary_run"
+    __table_args__ = (
+        CheckConstraint(
+            "kind IN ('transcribe','summary','actions','translate','title')",
+            name="summary_run_kind_check",
+        ),
+        CheckConstraint(
+            "status IN ('queued','running','done','failed','cancelled')",
+            name="summary_run_status_check",
+        ),
+    )
+
+    id: Mapped[UUID] = _uuid_pk()
+    meeting_id: Mapped[UUID] = mapped_column(
+        PgUUID(as_uuid=True), ForeignKey("meeting.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, server_default="summary", nullable=False)
+    status: Mapped[str] = mapped_column(Text, server_default="queued", nullable=False)
+    stage: Mapped[str | None] = mapped_column(Text)
+    chunk_done: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    chunk_total: Mapped[int] = mapped_column(Integer, server_default="0", nullable=False)
+    model: Mapped[str | None] = mapped_column(Text)
+    error: Mapped[str | None] = mapped_column(Text)
+    result: Mapped[dict | None] = mapped_column(JSONB)
+    result_backup: Mapped[dict | None] = mapped_column(JSONB)
+    started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    finished_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -186,6 +295,11 @@ class ActionItem(Base):
     confidence: Mapped[float] = mapped_column(server_default="0.0", nullable=False)
     status: Mapped[str] = mapped_column(Text, server_default="draft", nullable=False)
     resulting_task_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), ForeignKey("task.id"))
+    # Note Taker grounding (infra/postgres/94_note_taker.sql)
+    segment_ids: Mapped[list[UUID]] = mapped_column(
+        ARRAY(PgUUID(as_uuid=True)), server_default="{}", nullable=False
+    )
+    due_hint: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = _created_at()
 
 
@@ -207,14 +321,14 @@ class AuditEvent(Base):
 
 
 __all__ = [
-    "Base",
-    "Person",
-    "Customer",
-    "Project",
-    "Task",
-    "Deal",
-    "Message",
-    "Meeting",
     "ActionItem",
     "AuditEvent",
+    "Base",
+    "Customer",
+    "Deal",
+    "Meeting",
+    "Message",
+    "Person",
+    "Project",
+    "Task",
 ]

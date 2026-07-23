@@ -1,7 +1,7 @@
 # AI Note Taker App — Architecture & Product Plan
 
 > **Product:** CommandCenter · **Feature:** AI Note Taker app (`/notes`) · **Updated:** 2026-07-23 · **Version:** 0.1 (architecture — proposed)
-> **Status:** 🔲 planned — architecture defined, no code yet. The `/notes` nav slot and `ComingSoon` stub already exist (`workbench/control_plane/src/lib/nav.ts`, `src/app/notes/page.tsx`), and the `meeting`/`action_item` tables have been waiting in the schema since day one (`infra/postgres/01_schema.sql` L91–111) — this spec activates them.
+> **Status:** 🔄 slice 0 built (2026-07-23) — migration `94_note_taker.sql` (validated against a clean PG16+pgvector chain run), `packages/acb_stt` (Groq/OpenAI/Deepgram BYOK providers + registry, unit-tested), gateway `routes/notes/` (meeting CRUD, upload → background transcription pipeline, audio playback), Next proxy, and the `/notes` library + meeting-detail shell replacing the `ComingSoon` stub. **Resume point: slice 1 — the browser recorder (MediaRecorder chunked upload), SSE progress, and notes generation (§6).** The `meeting`/`action_item` tables from `01_schema.sql` L91–111 are now active.
 > **Sibling docs:** [`note_taker_research_2026-07.md`](note_taker_research_2026-07.md) — the evidence base (Meetily deep dive, landscape survey, ASR/diarization SOTA, browser-capture facts). Read it for *why*; this doc is *what and how*.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape, provider-layer thinking, HITL philosophy) and `gateway/routes/tasks/capture_email.py` (the Email→Task capture pattern this app mirrors as Meeting→Task).
 

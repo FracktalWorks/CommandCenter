@@ -13,6 +13,7 @@ dependencies = [
     "agent-framework-ag-ui",
     "acb-common",
     "acb-llm",
+    "acb-stt",
     "acb-auth",
     "orchestrator",
     "email-ingestion",

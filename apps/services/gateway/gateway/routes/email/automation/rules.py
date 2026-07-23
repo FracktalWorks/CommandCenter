@@ -15,6 +15,7 @@ from gateway.routes.email.core import (
     _get_db,
     _llm_json,
     _log,
+    provider_session,
     router,
 )
 from pydantic import BaseModel
@@ -578,6 +579,74 @@ def _normalize_generated_rules(data: Any) -> list[dict[str, Any]]:
             "actions": actions,
         })
     return out
+
+
+@router.get("/rules/policies")
+async def rule_policies(
+    account_id: str = Query(...),
+    user: UserContext = Depends(get_current_user),
+):
+    """Everything ELSE that acts on this mailbox, for display on the Rules
+    screen: the cold-email blocker mode, sender-disposition counts (the
+    Cleaner's standing per-sender policy), and the provider-native inbox rules
+    (Outlook message rules) — including which of those we created ourselves
+    (``managed``: its id is recorded on a sender row as the block filter).
+
+    Read-only. The provider listing is best-effort: no scope / consumer MSA /
+    auth failure degrade to ``provider_rules_supported: false`` rather than
+    failing the screen — the local policies still render.
+    """
+    db = await _get_db()
+    try:
+        await _assert_account_owner(db, account_id, user.email or "anonymous")
+        cb_row = (await db.execute(text(
+            "SELECT cold_email_blocker FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        cold = ((cb_row.cold_email_blocker if cb_row else None) or "OFF").upper()
+
+        disp_rows = (await db.execute(text(
+            """SELECT status, COUNT(*) AS n,
+                      COUNT(auto_archive_filter_id) AS filters
+               FROM email_newsletters WHERE account_id = :aid
+               GROUP BY status"""
+        ), {"aid": account_id})).fetchall()
+        dispositions = {r.status: int(r.n) for r in disp_rows}
+        filters_active = sum(int(r.filters) for r in disp_rows)
+        managed_rows = (await db.execute(text(
+            """SELECT auto_archive_filter_id AS fid FROM email_newsletters
+               WHERE account_id = :aid AND auto_archive_filter_id IS NOT NULL"""
+        ), {"aid": account_id})).fetchall()
+        managed_ids = {r.fid for r in managed_rows}
+
+        provider_rules: list[dict[str, Any]] = []
+        supported = False
+        try:
+            async with provider_session(
+                db, user.email or "anonymous", account_id=account_id,
+                require_auth=False,
+            ) as sess:
+                if sess.authed:
+                    provider_rules = [
+                        {**r, "managed": r.get("id") in managed_ids}
+                        for r in await sess.provider.list_filters()
+                    ]
+                    supported = True
+        except Exception as exc:  # noqa: BLE001
+            # Display-only extra — never fail the screen over it, but the
+            # session may be mid-transaction after a provider error.
+            await db.rollback()
+            _log.warning("email.rule_policies_provider_failed",
+                         account_id=account_id, error=str(exc)[:200])
+        return {
+            "cold_email_blocker": cold,
+            "dispositions": dispositions,
+            "filters_active": filters_active,
+            "provider_rules": provider_rules,
+            "provider_rules_supported": supported,
+        }
+    finally:
+        await db.close()
 
 
 class RuleGenerateRequest(BaseModel):

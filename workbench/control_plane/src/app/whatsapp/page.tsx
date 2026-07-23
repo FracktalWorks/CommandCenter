@@ -9,9 +9,27 @@
 // never as more always-on chrome on the queue.
 
 import { useCallback, useEffect, useState } from "react";
-import { Loader2, MessageCircle, Search } from "lucide-react";
-import { fetchAccounts, fetchChats, fetchMessages, fetchStreams } from "./lib/api";
-import { STREAMS, type WaAccount, type WaChat, type WaMessage, type WaStreams } from "./lib/types";
+import { Loader2, MessageCircle, PanelRight, Plus, Search, Send } from "lucide-react";
+import {
+  captureTask,
+  fetchAccounts,
+  fetchChats,
+  fetchContext,
+  fetchMessages,
+  fetchStreams,
+  fetchTemplates,
+  sendTemplate,
+  sendText,
+} from "./lib/api";
+import {
+  STREAMS,
+  type WaAccount,
+  type WaChat,
+  type WaChatContext,
+  type WaMessage,
+  type WaStreams,
+  type WaTemplate,
+} from "./lib/types";
 
 function relTime(iso: string | null): string {
   if (!iso) return "";
@@ -70,6 +88,10 @@ export default function WhatsAppPage() {
     setSelectedChat(chat);
     setMessages(await fetchMessages(chat.id));
   }, []);
+
+  const reloadMessages = useCallback(async () => {
+    if (selectedChat) setMessages(await fetchMessages(selectedChat.id));
+  }, [selectedChat]);
 
   if (loading) {
     return (
@@ -168,7 +190,12 @@ export default function WhatsAppPage() {
       {/* ── Conversation thread ───────────────────────────────────── */}
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedChat ? (
-          <Conversation chat={selectedChat} messages={messages} />
+          <Conversation
+            chat={selectedChat}
+            messages={messages}
+            accountId={accounts[0].id}
+            onReload={reloadMessages}
+          />
         ) : (
           <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
             Select a conversation
@@ -226,65 +253,273 @@ function ChatRow({
 function Conversation({
   chat,
   messages,
+  accountId,
+  onReload,
 }: {
   chat: WaChat;
   messages: WaMessage[];
+  accountId: string;
+  onReload: () => Promise<void> | void;
 }) {
+  const [text, setText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [showDetails, setShowDetails] = useState(false);
+  const [context, setContext] = useState<WaChatContext | null>(null);
+  const [templates, setTemplates] = useState<WaTemplate[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+
+  // Load context + approved templates when the details drawer or picker opens.
+  useEffect(() => {
+    if (showDetails) fetchContext(chat.id).then(setContext);
+  }, [showDetails, chat.id]);
+  useEffect(() => {
+    if (showTemplates && !templates.length)
+      fetchTemplates(accountId).then(setTemplates);
+  }, [showTemplates, templates.length, accountId]);
+
+  const doSendText = useCallback(async () => {
+    if (!text.trim() || sending) return;
+    setSending(true);
+    setError(null);
+    const res = await sendText(chat.id, text.trim());
+    setSending(false);
+    if (res.ok) {
+      setText("");
+      await onReload();
+    } else {
+      setError(res.error ?? "send failed");
+    }
+  }, [text, sending, chat.id, onReload]);
+
+  const doSendTemplate = useCallback(
+    async (t: WaTemplate) => {
+      setSending(true);
+      setError(null);
+      const res = await sendTemplate(chat.id, t.name, t.language);
+      setSending(false);
+      setShowTemplates(false);
+      if (res.ok) await onReload();
+      else setError(res.error ?? "send failed");
+    },
+    [chat.id, onReload]
+  );
+
   return (
-    <>
-      <div className="flex h-12 items-center gap-3 border-b border-border px-4">
-        <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-foreground/80">
-          {initials(chat.name, chat.wa_chat_id)}
-        </span>
-        <b className="text-[13px]">{chat.name || chat.wa_chat_id}</b>
-        <span className="ml-auto">
+    <div className="flex h-full min-h-0 flex-1">
+      <div className="flex min-w-0 flex-1 flex-col">
+        <div className="flex h-12 items-center gap-3 border-b border-border px-4">
+          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-foreground/80">
+            {initials(chat.name, chat.wa_chat_id)}
+          </span>
+          <b className="text-[13px]">{chat.name || chat.wa_chat_id}</b>
           {chat.window_open ? (
-            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
+            <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
               session open
             </span>
           ) : (
-            <span className="rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
+            <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
               window closed · template only
             </span>
           )}
-        </span>
-      </div>
-      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
-        {messages.length === 0 ? (
-          <div className="pt-8 text-center text-[12px] text-muted-foreground">
-            No messages loaded.
-          </div>
-        ) : (
-          messages.map((m) => <Bubble key={m.id} msg={m} />)
-        )}
-      </div>
-      {/* Composer is intentionally read-only in W0 — sending arrives in W1. */}
-      <div className="border-t border-border p-3">
-        <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-[12px] text-muted-foreground">
-          Reading only for now — replies and AI drafts arrive in the next phase.
+          <button
+            onClick={() => setShowDetails((v) => !v)}
+            className={`ml-auto flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
+              showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
+            }`}
+          >
+            <PanelRight className="h-3.5 w-3.5" /> Details
+          </button>
+        </div>
+
+        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
+          {messages.length === 0 ? (
+            <div className="pt-8 text-center text-[12px] text-muted-foreground">
+              No messages loaded.
+            </div>
+          ) : (
+            messages.map((m) => <Bubble key={m.id} msg={m} />)
+          )}
+        </div>
+
+        {/* Composer — window-aware. Open: free-form text. Closed: template picker. */}
+        <div className="border-t border-border p-3">
+          {error && (
+            <div className="mb-2 rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] text-red-500">
+              {error}
+            </div>
+          )}
+          {chat.window_open ? (
+            <div className="flex items-end gap-2">
+              <textarea
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                onKeyDown={(e) => {
+                  if ((e.metaKey || e.ctrlKey) && e.key === "Enter") doSendText();
+                }}
+                rows={2}
+                placeholder="Type a reply…  (⌘↵ to send)"
+                className="min-h-[40px] flex-1 resize-none rounded-lg border border-border bg-background px-3 py-2 text-[12px] outline-none focus:border-primary"
+              />
+              <button
+                onClick={doSendText}
+                disabled={!text.trim() || sending}
+                className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[12px] font-semibold text-white disabled:opacity-50"
+              >
+                {sending ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Send className="h-3.5 w-3.5" />
+                )}
+                Send
+              </button>
+            </div>
+          ) : (
+            <div>
+              <button
+                onClick={() => setShowTemplates((v) => !v)}
+                className="w-full rounded-lg border border-border bg-muted/40 px-3 py-2 text-left text-[12px] text-muted-foreground"
+              >
+                The 24h window is closed — send an approved template ▾
+              </button>
+              {showTemplates && (
+                <div className="mt-2 max-h-48 overflow-y-auto rounded-lg border border-border">
+                  {templates.length === 0 ? (
+                    <div className="p-3 text-[11px] text-muted-foreground">
+                      No approved templates yet.
+                    </div>
+                  ) : (
+                    templates.map((t) => (
+                      <button
+                        key={t.id}
+                        onClick={() => doSendTemplate(t)}
+                        disabled={sending}
+                        className="block w-full border-b border-border px-3 py-2 text-left last:border-0 hover:bg-muted/50 disabled:opacity-50"
+                      >
+                        <div className="text-[12px] font-semibold">{t.name}</div>
+                        <div className="truncate text-[11px] text-muted-foreground">
+                          {t.body}
+                        </div>
+                      </button>
+                    ))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       </div>
-    </>
+
+      {showDetails && <DetailsDrawer context={context} />}
+    </div>
+  );
+}
+
+function DetailsDrawer({ context }: { context: WaChatContext | null }) {
+  return (
+    <div className="w-60 shrink-0 overflow-y-auto border-l border-border bg-muted/20 p-4 text-[11px]">
+      <div className="mb-2 text-[12px] font-semibold">Details</div>
+      {!context ? (
+        <div className="text-muted-foreground">Loading…</div>
+      ) : (
+        <div className="space-y-4">
+          {context.contact && (
+            <div>
+              <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
+                CONTACT
+              </div>
+              <div className="font-semibold">
+                {context.contact.display_name || context.contact.phone_number}
+              </div>
+              <div className="text-muted-foreground">
+                {context.contact.phone_number}
+              </div>
+              {context.contact.category && (
+                <div className="mt-1 inline-block rounded-full bg-muted px-2 py-0.5 text-[10px]">
+                  {context.contact.category}
+                </div>
+              )}
+              {context.contact.entity && (
+                <div className="mt-1 text-muted-foreground">
+                  {context.contact.entity.system} ·{" "}
+                  {context.contact.entity.kind} #{context.contact.entity.id}
+                </div>
+              )}
+            </div>
+          )}
+          <div>
+            <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
+              OPEN LOOPS
+            </div>
+            {context.open_loops.length === 0 ? (
+              <div className="text-muted-foreground">None</div>
+            ) : (
+              <ul className="space-y-1">
+                {context.open_loops.map((l) => (
+                  <li key={l.id} className="leading-snug">
+                    {l.kind === "commitment" ? "★ " : "☐ "}
+                    {l.title}
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+          <div>
+            <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
+              HISTORY
+            </div>
+            <div className="text-muted-foreground">
+              {context.stats.message_count} messages
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
   );
 }
 
 function Bubble({ msg }: { msg: WaMessage }) {
+  const [captured, setCaptured] = useState(false);
+  const [busy, setBusy] = useState(false);
   const out = msg.direction === "out";
+
+  const doCapture = useCallback(async () => {
+    if (busy || captured) return;
+    setBusy(true);
+    const res = await captureTask(msg.id);
+    setBusy(false);
+    if (res.ok) setCaptured(true);
+  }, [busy, captured, msg.id]);
+
   return (
-    <div
-      className={`max-w-[78%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
-        out
-          ? "ml-auto rounded-br-sm bg-emerald-500/15 border border-emerald-500/25"
-          : "rounded-bl-sm border border-border bg-muted"
-      }`}
-    >
-      {msg.kind !== "text" && (
-        <span className="mr-1 text-muted-foreground">[{msg.kind}]</span>
+    <div className={`group flex flex-col ${out ? "items-end" : "items-start"}`}>
+      <div
+        className={`max-w-[78%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
+          out
+            ? "rounded-br-sm border border-emerald-500/25 bg-emerald-500/15"
+            : "rounded-bl-sm border border-border bg-muted"
+        }`}
+      >
+        {msg.kind !== "text" && (
+          <span className="mr-1 text-muted-foreground">[{msg.kind}]</span>
+        )}
+        {msg.body_text || (
+          <span className="text-muted-foreground">(no text)</span>
+        )}
+        <span className="mt-1 block text-right text-[8.5px] text-muted-foreground/60">
+          {relTime(msg.sent_at)}
+        </span>
+      </div>
+      {!out && (
+        <button
+          onClick={doCapture}
+          disabled={busy}
+          className="mt-0.5 flex items-center gap-1 text-[10px] text-muted-foreground opacity-0 transition-opacity group-hover:opacity-100 disabled:opacity-50"
+        >
+          <Plus className="h-3 w-3" />
+          {captured ? "captured" : "task"}
+        </button>
       )}
-      {msg.body_text || <span className="text-muted-foreground">(no text)</span>}
-      <span className="mt-1 block text-right text-[8.5px] text-muted-foreground/60">
-        {relTime(msg.sent_at)}
-      </span>
     </div>
   );
 }

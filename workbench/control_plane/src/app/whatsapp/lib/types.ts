@@ -53,6 +53,39 @@ export type WaStreams = {
   all: number;
 };
 
+export type WaTemplate = {
+  id: string;
+  name: string;
+  language: string;
+  category: string;
+  body: string;
+  variables: string[];
+  meta_status: string;
+  cost_hint: string | null;
+};
+
+export type WaEntityRef = { system: string; kind: string; id: string };
+
+export type WaOpenLoop = {
+  id: string;
+  title: string;
+  disposition: string;
+  kind: string;
+};
+
+export type WaChatContext = {
+  chat_id: string;
+  contact: {
+    phone_number: string;
+    display_name: string;
+    category: string | null;
+    entity: WaEntityRef | null;
+  } | null;
+  open_loops: WaOpenLoop[];
+  stats: { message_count: number; first_seen: string | null; last_seen: string | null };
+  crm: Record<string, unknown> | null;
+};
+
 // The triage streams shown in the nav — the single organizing spine.
 export const STREAMS: { key: string; label: string; icon: string }[] = [
   { key: "needs_reply", label: "Needs reply", icon: "✦" },

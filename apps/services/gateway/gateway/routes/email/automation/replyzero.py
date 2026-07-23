@@ -78,20 +78,23 @@ async def _upsert_thread_status(
 
 # Reply Zero status → (our thread status, the category label) mapping.
 # NOTE: the map/rule KEYS are REPLY / AWAITING_REPLY / FYI / DONE (the user-facing
-# labels are "Reply" / "Awaiting Reply" / "FYI" / "Done"). Legacy tokens
-# (TO_REPLY / ACTIONED) are still accepted via ``_LEGACY_STATUS_KEYS`` so a stale
-# provider label delta or an un-migrated rule name still resolves.
+# labels are "Needs Reply" / "Awaiting Reply" / "FYI" / "Done"). Legacy tokens
+# (TO_REPLY / ACTIONED / NEEDS_REPLY-as-rule-name) are still accepted via
+# ``_LEGACY_STATUS_KEYS`` so a stale provider label delta or an un-migrated rule
+# name still resolves.
 _THREAD_STATUS_MAP = {
-    "REPLY": ("NEEDS_REPLY", "Reply"),
+    "REPLY": ("NEEDS_REPLY", "Needs Reply"),
     "AWAITING_REPLY": ("AWAITING", "Awaiting Reply"),
     "DONE": ("DONE", "Done"),
     "FYI": ("FYI", "FYI"),
 }
 
-# Pre-rename conversation-status tokens → current keys. Applied wherever a
+# Pre/post-rename conversation-status tokens → current keys. Applied wherever a
 # system_type / rule-name / LLM status token is normalised, so old data keeps
-# working after the "To Reply"→"Reply" / "Actioned"→"Done" rename.
-_LEGACY_STATUS_KEYS = {"TO_REPLY": "REPLY", "ACTIONED": "DONE"}
+# working across the "To Reply"→"Reply"→"Needs Reply" / "Actioned"→"Done"
+# renames ("NEEDS_REPLY" is what the "Needs Reply" RULE NAME canonicalises to).
+_LEGACY_STATUS_KEYS = {"TO_REPLY": "REPLY", "ACTIONED": "DONE",
+                       "NEEDS_REPLY": "REPLY"}
 
 
 def _canon_status_key(key: str | None) -> str:
@@ -112,10 +115,10 @@ _TRIGGER_REASON = {
 # changes, the other three must be cleared so an old label never lingers on the
 # previous emails. "Follow-up" is a separate reminder label, cleared whenever the
 # thread is no longer awaiting the other person.
-_CONVERSATION_LABELS = ("Reply", "Awaiting Reply", "Done", "FYI")
+_CONVERSATION_LABELS = ("Needs Reply", "Awaiting Reply", "Done", "FYI")
 # Pre-rename label strings still living on the provider / local mirror. Always
 # swept alongside the current labels so a resync clears the orphaned old tags.
-_LEGACY_CONVERSATION_LABELS = ("To Reply", "Actioned")
+_LEGACY_CONVERSATION_LABELS = ("Reply", "To Reply", "Actioned")
 _FOLLOW_UP_LABEL = "Follow-up"
 
 # The canonical definition of a "damaged" conversation thread: a statused
@@ -1406,7 +1409,7 @@ async def resolve_thread(
             new_status = "AWAITING" if (
                 lm and (lm.folder or "").lower() == "sent") else "NEEDS_REPLY"
             keep_label = (
-                "Awaiting Reply" if new_status == "AWAITING" else "Reply")
+                "Awaiting Reply" if new_status == "AWAITING" else "Needs Reply")
             await db.execute(text(
                 "UPDATE email_thread_status SET status = :st, classified_at = now() "
                 "WHERE account_id = :aid AND thread_id = :tid"

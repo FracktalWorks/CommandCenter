@@ -1,11 +1,13 @@
-"""Backward-compat regression for the "To Reply"→"Reply" / "Actioned"→"Done"
-conversation-status rename (migration 63).
+"""Backward-compat regression for the conversation-status renames:
+"To Reply"→"Reply" (migration 63) and "Reply"→"Needs Reply" (migration 92).
 
 The user-facing labels and the internal enum keys were renamed, but old tokens
-can still reach the code from three places that migration 63 does NOT rewrite in
-lock-step: the LLM status determiner's output, a stale provider label delta, and
-(briefly) an un-migrated rule row. These tests lock the legacy aliases that keep
-those cases working — remove them only when legacy data can no longer exist."""
+can still reach the code from three places the migrations do NOT rewrite in
+lock-step: the LLM status determiner's output, a stale provider label delta
+(the categories-authoritative provider re-asserts old labels every sync — see
+persist._RENAMED_LABELS), and (briefly) an un-migrated rule row. These tests
+lock the legacy aliases that keep those cases working — remove them only when
+legacy data can no longer exist."""
 from __future__ import annotations
 
 from types import SimpleNamespace
@@ -31,7 +33,23 @@ def test_thread_status_map_resolves_via_legacy_key() -> None:
     legacy = _rz._THREAD_STATUS_MAP[_rz._canon_status_key("ACTIONED")]
     assert legacy == ("DONE", "Done")
     legacy_reply = _rz._THREAD_STATUS_MAP[_rz._canon_status_key("TO_REPLY")]
-    assert legacy_reply == ("NEEDS_REPLY", "Reply")
+    assert legacy_reply == ("NEEDS_REPLY", "Needs Reply")
+    # …and the "Needs Reply" RULE NAME canonicalises onto the same entry.
+    named = _rz._THREAD_STATUS_MAP[_rz._canon_status_key("NEEDS_REPLY")]
+    assert named == ("NEEDS_REPLY", "Needs Reply")
+
+
+def test_ingest_canonicalises_renamed_provider_labels() -> None:
+    # The provider is categories-authoritative: old labels still sitting on
+    # provider messages come back on EVERY sync, so the rename must stick at
+    # ingest, not only in the one-time DB rewrite (migration 92).
+    from email_ingestion.persist import _canon_categories
+
+    assert _canon_categories(["Reply", "Newsletter"]) == [
+        "Needs Reply", "Newsletter"]
+    assert _canon_categories(["To Reply", "Actioned"]) == [
+        "Needs Reply", "Done"]
+    assert _canon_categories(None) == []
 
 
 def test_legacy_named_rule_still_recognised_as_conversation_rule() -> None:

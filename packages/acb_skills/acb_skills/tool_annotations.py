@@ -43,6 +43,11 @@ TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
     "get_errors":            {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "run_diagnostics":       {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "install_dependency":    {"read_only": False, "destructive": False, "idempotent": True,  "open_world": True},
+    # Coding skill — run_script executes arbitrary saved code; code_task runs a
+    # bounded Copilot coding session. Both mutate the workspace and can reach
+    # out (a script may hit the network), hence open_world.
+    "run_script":            {"read_only": False, "destructive": False, "idempotent": False, "open_world": True},
+    "code_task":             {"read_only": False, "destructive": False, "idempotent": False, "open_world": True},
     # Notes / history / code search
     "save_note":             {"read_only": False, "destructive": False, "idempotent": False, "open_world": False},
     "recall_notes":          {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},

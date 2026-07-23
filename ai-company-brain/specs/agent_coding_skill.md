@@ -1,0 +1,119 @@
+# Agent Coding Skill — durable scripts for MAF agents (`code_task` + `run_script`)
+
+**Status:** 🟢 Phase 1 shipped (2026-07-23)
+**Depends on:** `chat_agent_framework_review_2026-07.md` §2 (dual-runtime verdict: MAF is the framework, the Copilot SDK is the coding **engine**), blob-store workspace durability (migration 71 `agent_blob`, `acb_memory.put_file`), `permissions_sandbox_b6.md` (risk annotations, BO-7 container sandbox).
+
+## 1. Why
+
+Native MAF agents have no way to *write a program* when their built-in tools fall
+short — previously the only coding path was a standalone GitHub Copilot SDK
+agent, a separate runtime with separate context. The framework review concluded
+the SDK should be a **capability, not a peer agent**. This skill makes every MAF
+agent able to:
+
+1. **author** scripts (a bounded Copilot session working in the agent's own
+   workspace), and
+2. **reuse** them forever (zero-LLM re-execution of a saved script),
+
+with the scripts stored durably — across operations, restarts, and CommandCenter
+updates.
+
+## 2. The two tiers
+
+| Tool | What it does | Cost |
+|---|---|---|
+| `code_task(task)` | One-shot Copilot SDK coding session (`orchestrator/code_session.py`) in the calling agent's workspace: writes, edits, runs, and debugs scripts under the script contract. 600 s wall-clock cap. | one LLM session |
+| `run_script(path, args?)` | Executes an existing workspace `.py`/`.sh` script directly (`packages/acb_skills/acb_skills/code_tools.py`). No reasoning step. | zero LLM |
+
+The intended loop: first need → `code_task` builds `agent-data/scripts/<x>.py`
+and catalogs it; every later need → `run_script("agent-data/scripts/<x>.py")`;
+changes → `code_task` naming the script (edited **in place**, not duplicated).
+
+### The script contract (manifest-first)
+
+Enforced by the coding session's harness prompt (`_HARNESS_INSTRUCTIONS`):
+
+- `agent-data/SCRIPTS.md` is the **manifest** — read first, updated before the
+  session ends (name, purpose, usage/args, last-changed per script).
+- Reusable scripts live under `agent-data/scripts/`; scratch + generated data
+  under `outputs/`.
+- Sessions are deliberately **stateless** (no `service_session_id` resume):
+  continuity lives in the workspace, not the conversation, so the contract works
+  identically after a restart, a redeploy, or from a different chat session.
+- Run what you write; no commit/push; no system packages (`uv pip install` into
+  the venv only when genuinely needed).
+
+## 3. Durability
+
+Scripts must survive operations, restarts, and CommandCenter updates:
+
+- The workspace lives **outside the app dir**, so deploy `git reset --hard`
+  never touches it.
+- `agent-data/`, `inputs/`, `outputs/` are blob-store backed (Postgres
+  authoritative, disk is a rehydratable cache) — survives volume wipes and box
+  moves.
+- **The gap this skill closes:** the Copilot CLI writes files with its *native*
+  tools, and scripts write their own outputs — both bypass the `write_artifact`
+  write-through mirror. So:
+  - `code_task` **always** finishes with a sweep (`_sweep_to_blob_store`) that
+    mirrors every file changed during the session under `agent-data/` +
+    `outputs/` into the store — *even when the session itself failed* (partial
+    work is not lost).
+  - `run_script` sweeps `outputs/` for files the script produced.
+  - Sweep bounds: 2 MB/file, 200 files/run (the store is for scripts and
+    reports, not gigabyte artifacts); failures skip the file, never the tool.
+
+## 4. Execution hygiene (agent-use standards)
+
+`run_script` (and, transitively, everything the coding session leaves behind)
+runs under process-level hygiene:
+
+- **Workspace jail** — the script path must resolve inside the workspace via
+  `resolve_in_workspace` (same containment guard as `write_artifact`); traversal
+  and absolute-path escapes fail closed.
+- **Secret-scrubbed env** — the subprocess env is rebuilt from an allowlist
+  (`PATH HOME LANG LC_ALL TZ TMPDIR PYTHONPATH`) with a deny-pattern
+  (`TOKEN|SECRET|KEY|PASSWORD|CREDENTIAL`) on top; gateway tokens, provider
+  keys, and DB URLs never reach arbitrary script code.
+- **Timeouts** — `RUN_SCRIPT_TIMEOUT_SECONDS` (default 120 s) per script run;
+  600 s per coding session (`asyncio.wait_for`).
+- **Output cap** — combined stdout/stderr returned to the model is middle-
+  truncated at 8 000 chars.
+- **Risk annotations** — both tools are registered in `TOOL_ANNOTATIONS` as
+  state-writing + **open-world** (a script may reach the network), so the
+  permission policy and the addendum's risk block see them; the injected-tool
+  permission gate (B6) wraps them like every other platform tool.
+- The coding session itself routes **BYOK through the gateway `/v1`** (same
+  provider block as Tier-1.5 agents) → platform model tiers, context-window
+  guard, and cost observability apply; `_copilot_permission_handler` gates the
+  CLI's own shell/file capabilities.
+
+This is process-level hygiene, not a container sandbox — **BO-7** remains the
+hardening path for genuinely untrusted code.
+
+## 5. Wiring
+
+- `orchestrator/_tool_injection.py` — both tools injected into every agent shape
+  (MAF + Copilot), added to `_CORE_STANDARD_TOOL_NAMES` (the guaranteed floor:
+  a `tool_scope` cannot strip them), documented in the full + compact
+  system-prompt addendum ("### Coding skill (durable scripts)").
+- `packages/acb_skills/acb_skills/code_tools.py` — the skill layer.
+- `apps/services/orchestrator/orchestrator/code_session.py` — the engine runner.
+
+## 6. Tests
+
+`tests/unit/test_code_tools.py` (24 cases): containment escapes, env scrub
+(live subprocess proves no `GATEWAY_INTERNAL_TOKEN`/`OPENAI_API_KEY`/
+`DATABASE_URL` leak), timeout, output cap, sweep selectivity (mtime cutoff +
+size bound), `code_task` always-sweep on failure, floor/addendum/annotation
+wiring.
+
+## 7. Open follow-ups
+
+- **BO-7**: move `run_script` execution into the container sandbox when it
+  lands; the skill API is already shaped for it (path + args in, capped output
+  out).
+- Optional `list_scripts` convenience tool (today `recall_notes("SCRIPTS.md")`
+  covers it).
+- DOE-v2 promotion: graduating a proven `agent-data/scripts/*` script into a
+  repo-baked agent tool via the existing pending-commit approval path.

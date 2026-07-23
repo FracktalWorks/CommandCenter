@@ -82,6 +82,9 @@ interface ArtifactSidebarProps {
   fullWidth?: boolean;
   /** Right-click → "Open in side panel". When omitted, the context menu is off. */
   onOpenInSidePanel?: (entry: FileEntry) => void;
+  /** Which edge of the chat the panel sits on — flips the border and the
+   *  collapse-chevron direction. Default "right" (legacy position). */
+  side?: "left" | "right";
 }
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -410,6 +413,7 @@ export default function ArtifactSidebar({
   artifactUpdates = [],
   fullWidth = false,
   onOpenInSidePanel,
+  side = "right",
 }: ArtifactSidebarProps) {
   const [files, setFiles] = useState<FileEntry[]>([]);
   const [loading, setLoading] = useState(false);
@@ -482,12 +486,13 @@ export default function ArtifactSidebar({
     return a.name.localeCompare(b.name);
   });
 
+  const edgeBorder = side === "left" ? "border-r" : "border-l";
   return (
     <aside
       className={
         fullWidth
           ? "h-full w-full border-l border-border bg-card flex flex-col"
-          : `shrink-0 border-l border-border bg-card/40 flex flex-col transition-all duration-200 ${
+          : `shrink-0 ${edgeBorder} border-border bg-card/40 flex flex-col transition-all duration-200 ${
               open ? "w-64" : "w-10"
             }`
       }
@@ -523,7 +528,12 @@ export default function ArtifactSidebar({
             className="rounded p-1 text-muted-foreground hover:bg-secondary hover:text-foreground transition-colors"
             title={open ? "Collapse file browser" : "Expand file browser"}
           >
-            {open ? <ChevronRight size={14} /> : <ChevronLeft size={14} />}
+            {/* Chevron points toward the edge the panel collapses into. */}
+            {(open ? side === "right" : side === "left") ? (
+              <ChevronRight size={14} />
+            ) : (
+              <ChevronLeft size={14} />
+            )}
           </button>
         </div>
       </div>
@@ -566,15 +576,22 @@ export default function ArtifactSidebar({
         </div>
       )}
 
-      {/* Collapsed: just show a rotated label */}
+      {/* Collapsed rail: count pill + rotated label (matches the other rails) */}
       {!open && (
-        <div className="flex flex-1 items-center justify-center">
-          <span
-            className="text-[10px] text-muted-foreground font-semibold tracking-widest"
-            style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
-          >
-            FILES
-          </span>
+        <div className="flex flex-1 flex-col items-center pt-1.5">
+          {files.length > 0 && (
+            <span className="rounded-full bg-secondary px-1 text-[10px] text-muted-foreground">
+              {files.length}
+            </span>
+          )}
+          <div className="flex flex-1 items-center justify-center">
+            <span
+              className="text-[10px] text-muted-foreground font-semibold tracking-widest"
+              style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+            >
+              FILES
+            </span>
+          </div>
         </div>
       )}
     </aside>

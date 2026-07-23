@@ -3,7 +3,8 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Trash2 } from "lucide-react";
+import { Bot, MessagesSquare, Search, Trash2 } from "lucide-react";
+import BreathingCharacter, { characterForAgent } from "@/components/BreathingCharacter";
 import {
   getSessions,
   upsertSession,
@@ -47,6 +48,87 @@ const COMMANDCENTER_PERSONA =
 // ---------------------------------------------------------------------------
 // Agent picker modal — shown on "+ New session"
 // ---------------------------------------------------------------------------
+
+/**
+ * One agent card in the picker: two columns — the agent's CHARACTER on the
+ * left at full card height (breathing, so the persona reads as alive), and
+ * everything about the agent on the right with the description clamped to a
+ * couple of lines so long personas never blow the card up.
+ */
+function AgentPickerCard({
+  name,
+  displayName,
+  description,
+  avatarId,
+  badge,
+  needsSetup,
+  tags,
+  onClick,
+}: {
+  name: string;
+  displayName: string;
+  description?: string;
+  avatarId?: string | null;
+  badge?: { label: string; className: string };
+  needsSetup?: boolean;
+  tags?: string[];
+  onClick: () => void;
+}) {
+  const char = characterForAgent(name, avatarId);
+  return (
+    <button
+      onClick={onClick}
+      className="group flex w-full items-stretch overflow-hidden rounded-lg border border-border bg-secondary/40 text-left hover:border-primary/40 hover:bg-secondary tech-transition"
+    >
+      {/* Character column — full height of the card */}
+      <div className="flex w-16 shrink-0 items-center justify-center self-stretch border-r border-border/60 bg-background/40 group-hover:bg-primary/5 tech-transition">
+        <BreathingCharacter
+          char={char}
+          box={52}
+          fallback={
+            <AgentAvatar
+              libraryId={avatarId}
+              size={34}
+              fallback={<Bot size={22} className="text-muted-foreground/70" />}
+            />
+          }
+        />
+      </div>
+      {/* Info column */}
+      <div className="min-w-0 flex-1 px-3.5 py-2.5">
+        <div className="flex items-center justify-between gap-2">
+          <div className="text-sm font-medium text-foreground truncate">{displayName}</div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            {badge && (
+              <span className={`text-[10px] px-1.5 py-0.5 rounded-full whitespace-nowrap ${badge.className}`}>
+                {badge.label}
+              </span>
+            )}
+            {needsSetup && (
+              <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/30 whitespace-nowrap">
+                ⚙ Setup needed
+              </span>
+            )}
+          </div>
+        </div>
+        {(tags?.length ?? 0) > 0 && (
+          <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+            {tags!.slice(0, 3).map((t) => (
+              <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground whitespace-nowrap">
+                {t}
+              </span>
+            ))}
+          </div>
+        )}
+        {description && (
+          <div className="text-xs text-muted-foreground mt-1 line-clamp-2 leading-relaxed">
+            {description}
+          </div>
+        )}
+      </div>
+    </button>
+  );
+}
 
 function AgentPickerModal({
   onSelect,
@@ -99,7 +181,7 @@ function AgentPickerModal({
       onClick={onClose}
     >
       <div
-        className="w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl tech-glass-subtle flex flex-col max-h-[85vh]"
+        className="w-full max-w-lg rounded-xl border border-border bg-card p-5 shadow-2xl tech-glass-subtle flex flex-col max-h-[85vh]"
         onClick={(e) => e.stopPropagation()}
       >
         <div className="mb-4 flex items-center justify-between shrink-0">
@@ -121,13 +203,13 @@ function AgentPickerModal({
           <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground/70 mb-1.5">
             Default
           </div>
-          <button
+          <AgentPickerCard
+            name="orchestrator"
+            displayName="CommandCenter"
+            description="General-purpose AI company brain — tasks, projects, sales pipeline, and company intelligence."
+            avatarId={agentAvatars["orchestrator"]}
             onClick={() => onSelect("orchestrator", "CommandCenter — AI company brain")}
-            className="w-full text-left rounded-lg border border-border bg-secondary/60 px-4 py-3 hover:border-primary/40 hover:bg-secondary tech-transition"
-          >
-            <div className="text-sm font-medium text-foreground">CommandCenter</div>
-            <div className="text-xs text-muted-foreground mt-0.5">General-purpose AI company brain</div>
-          </button>
+          />
         </div>
 
         {/* Copilot SDK Agents — talk directly to GitHub Copilot SDK */} 
@@ -140,33 +222,20 @@ function AgentPickerModal({
           ) : (
             <div className="flex flex-col gap-1.5">
               {agents.filter(a => a.agent_runtime === "github-copilot").map((a) => (
-                <div key={a.name}>
-                  <button
-                    onClick={() => handleAgentClick(a)}
-                    className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <AgentAvatar libraryId={agentAvatars[a.name]} size={22} fallback={null} />
-                        <div className="text-sm font-medium text-foreground truncate">{a.display_name || a.name}</div>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-primary/40 bg-primary/10 text-primary whitespace-nowrap">
-                          Copilot SDK
-                        </span>
-                        {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/30 whitespace-nowrap">
-                            ⚙ Setup needed
-                          </span>
-                        )}
-                        {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-muted text-muted-foreground whitespace-nowrap">{t}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{a.description}</div>
-                  </button>
-                </div>
+                <AgentPickerCard
+                  key={a.name}
+                  name={a.name}
+                  displayName={a.display_name || a.name}
+                  description={a.description}
+                  avatarId={agentAvatars[a.name]}
+                  badge={{
+                    label: "Copilot SDK",
+                    className: "border border-primary/40 bg-primary/10 text-primary",
+                  }}
+                  needsSetup={needsSetupBadge(a)}
+                  tags={a.tags}
+                  onClick={() => handleAgentClick(a)}
+                />
               ))}
               {agents.filter(a => a.agent_runtime === "github-copilot").length === 0 && (
                 <div className="text-xs text-muted-foreground py-1">No Copilot SDK agents registered</div>
@@ -185,33 +254,20 @@ function AgentPickerModal({
           ) : (
             <div className="flex flex-col gap-1.5">
               {agents.filter(a => a.agent_runtime !== "github-copilot").map((a) => (
-                <div key={a.name}>
-                  <button
-                    onClick={() => handleAgentClick(a)}
-                    className="w-full text-left rounded-lg border border-border bg-secondary/40 px-4 py-3 hover:border-primary/30 hover:bg-secondary tech-transition"
-                  >
-                    <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
-                      <div className="flex items-center gap-2 min-w-0">
-                        <AgentAvatar libraryId={agentAvatars[a.name]} size={22} fallback={null} />
-                        <div className="text-sm font-medium text-foreground truncate">{a.display_name || a.name}</div>
-                      </div>
-                      <div className="flex items-center gap-1.5 flex-wrap shrink-0">
-                        <span className="text-[10px] px-1.5 py-0.5 rounded-full border border-accent/40 bg-accent/10 text-accent whitespace-nowrap">
-                          MAF
-                        </span>
-                        {needsSetupBadge(a) && (
-                          <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-destructive/10 text-destructive border border-destructive/30 whitespace-nowrap">
-                            ⚙ Setup needed
-                          </span>
-                        )}
-                        {a.tags.slice(0, 2).map((t) => (
-                          <span key={t} className="text-[10px] px-1.5 py-0.5 rounded bg-secondary text-muted-foreground whitespace-nowrap">{t}</span>
-                        ))}
-                      </div>
-                    </div>
-                    <div className="text-xs text-muted-foreground mt-0.5">{a.description}</div>
-                  </button>
-                </div>
+                <AgentPickerCard
+                  key={a.name}
+                  name={a.name}
+                  displayName={a.display_name || a.name}
+                  description={a.description}
+                  avatarId={agentAvatars[a.name]}
+                  badge={{
+                    label: "MAF",
+                    className: "border border-accent/40 bg-accent/10 text-accent",
+                  }}
+                  needsSetup={needsSetupBadge(a)}
+                  tags={a.tags}
+                  onClick={() => handleAgentClick(a)}
+                />
               ))}
             </div>
           )}
@@ -302,6 +358,19 @@ function MemoryPanel({
 // Session list — grouped by agent with accordion sections
 // ---------------------------------------------------------------------------
 
+/** Compact "2h" / "3d" relative timestamp for the conversation list. */
+function relTime(iso?: string): string {
+  if (!iso) return "";
+  const t = Date.parse(iso);
+  if (!Number.isFinite(t)) return "";
+  const s = Math.max(0, (Date.now() - t) / 1000);
+  if (s < 60) return "now";
+  if (s < 3600) return `${Math.floor(s / 60)}m`;
+  if (s < 86400) return `${Math.floor(s / 3600)}h`;
+  if (s < 7 * 86400) return `${Math.floor(s / 86400)}d`;
+  return new Date(t).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
 function SessionList({
   sessions,
   activeId,
@@ -320,10 +389,21 @@ function SessionList({
   /** canonical agent name → friendly display name, for group headers. */
   agentAliases?: Record<string, string>;
 }) {
+  const agentAvatars = useAgentAvatars();
+  // Client-side filter over title/preview/agent — no backend involved.
+  const [query, setQuery] = useState("");
+  const visibleSessions = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return sessions;
+    return sessions.filter((s) =>
+      [s.title ?? s.name, s.lastPreview ?? "", s.agentName]
+        .join(" ").toLowerCase().includes(q),
+    );
+  }, [sessions, query]);
   // Group sessions by agentName
   const groups = useMemo(() => {
     const map = new Map<string, ChatSession[]>();
-    for (const s of sessions) {
+    for (const s of visibleSessions) {
       const list = map.get(s.agentName) ?? [];
       list.push(s);
       map.set(s.agentName, list);
@@ -337,7 +417,7 @@ function SessionList({
       return a.localeCompare(b);
     });
     return entries;
-  }, [sessions, activeId]);
+  }, [visibleSessions, sessions, activeId]);
 
   // Track which accordion sections are expanded (empty = all collapsed by default).
   const [expanded, setExpanded] = useState<Set<string>>(new Set());
@@ -370,48 +450,72 @@ function SessionList({
       <div className="flex flex-col gap-1">
         <button
           onClick={onNew}
-          className="mb-2 w-full rounded-md bg-secondary px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
+          className="mb-2 w-full rounded-md bg-primary/10 border border-primary/30 px-3 py-2 text-left text-sm font-medium text-primary hover:bg-primary/15 tech-transition"
         >
-          + New session
+          + New conversation
         </button>
-        <p className="px-1 text-xs text-muted-foreground">No sessions yet.</p>
+        <p className="px-1 text-xs text-muted-foreground">No conversations yet.</p>
       </div>
     );
   }
+
+  const searching = query.trim().length > 0;
 
   return (
     <div className="flex flex-col gap-1">
       <button
         onClick={onNew}
-        className="mb-2 w-full rounded-md bg-secondary px-3 py-2 text-left text-sm text-foreground hover:bg-secondary transition-colors"
+        className="mb-1.5 w-full rounded-md bg-primary/10 border border-primary/30 px-3 py-2 text-left text-sm font-medium text-primary hover:bg-primary/15 tech-transition"
       >
-        + New session
+        + New conversation
       </button>
 
+      {/* Search — client-side filter over titles, previews, and agent names. */}
+      <div className="relative mb-1.5">
+        <Search className="pointer-events-none absolute left-2.5 top-1/2 h-3.5 w-3.5 -translate-y-1/2 text-muted-foreground/60" />
+        <input
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Search conversations…"
+          className="w-full rounded-md border border-border bg-background/60 py-1.5 pl-8 pr-2 text-xs text-foreground placeholder:text-muted-foreground/60 focus:border-primary/50 focus:outline-none tech-transition"
+        />
+      </div>
+      {searching && groups.length === 0 && (
+        <p className="px-1 py-2 text-xs text-muted-foreground">No matches.</p>
+      )}
+
       {groups.map(([agentName, agentSessions]) => {
-        const isExpanded = expanded.has(agentName);
+        const isExpanded = searching || expanded.has(agentName);
         const isActiveAgent = agentSessions.some((s) => s.id === activeId);
         const count = agentSessions.length;
+        const groupRunning = agentSessions.some((s) => activeRunIds.has(s.id));
 
         return (
           <div key={agentName} className="mb-1">
-            {/* Accordion header */}
+            {/* Accordion header — the agent's character fronts its group */}
             <button
               onClick={() => toggleAgent(agentName)}
-              className={`w-full flex items-center gap-2 rounded-md px-3 py-1.5 text-left transition-colors ${
+              className={`w-full flex items-center gap-2 rounded-md px-2 py-1.5 text-left transition-colors ${
                 isActiveAgent
                   ? "bg-secondary/60 text-foreground"
                   : "text-muted-foreground hover:bg-secondary/40 hover:text-foreground"
               }`}
             >
-              <span className="text-[10px] transition-transform duration-150" style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
+              <span className="text-[10px] transition-transform duration-150 shrink-0" style={{ transform: isExpanded ? "rotate(0deg)" : "rotate(-90deg)" }}>
                 ▼
+              </span>
+              <span className={`shrink-0 rounded-full ${groupRunning ? "ring-2 ring-emerald-400/60" : ""}`}>
+                <AgentAvatar
+                  libraryId={agentAvatars[agentName] ?? agentName}
+                  size={18}
+                  fallback={<Bot size={14} className="text-muted-foreground/60" />}
+                />
               </span>
               <span className="flex-1 text-xs font-medium truncate">
                 {agentAliases?.[agentName] || agentName}
               </span>
               {/* Active run count badge */}
-              {agentSessions.some((s) => activeRunIds.has(s.id)) && (
+              {groupRunning && (
                 <span className="flex items-center gap-1 text-[10px] text-emerald-400 shrink-0" title="Agent is running">
                   <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
                   {agentSessions.filter((s) => activeRunIds.has(s.id)).length}
@@ -424,47 +528,61 @@ function SessionList({
 
             {/* Sessions for this agent */}
             {isExpanded && (
-              <div className="mt-1 ml-2.5 flex flex-col gap-1 border-l border-border/60 pl-2">
-                {agentSessions.map((s) => (
-                  <div
-                    key={s.id}
-                    className={`group flex items-start justify-between rounded-md px-2.5 py-2 cursor-pointer transition-colors ${
-                      s.id === activeId
-                        ? "bg-secondary text-sidebar-foreground"
-                        : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
-                    }`}
-                    onClick={() => onSelect(s.id)}
-                  >
-                    <div className="min-w-0 flex-1 space-y-0.5">
-                      <div className="truncate text-xs font-medium leading-snug flex items-center gap-1.5">
-                        {activeRunIds.has(s.id) && (
-                          <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Agent is generating a response" />
-                        )}
-                        <span className="truncate">{s.title ?? s.name}</span>
-                      </div>
-                      {s.lastPreview ? (
-                        <div className="truncate text-[10px] leading-snug text-muted-foreground">
-                          {s.lastPreview}
-                        </div>
-                      ) : null}
-                      <div className="text-[10px] leading-snug text-muted-foreground">
-                        {s.messageCount > 0 ? `${s.messageCount} msgs` : "New"}
-                      </div>
-                    </div>
-                    <button
-                      onClick={(e) => {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        onDelete(s.id);
-                      }}
-                      className="ml-2 shrink-0 rounded-md p-1.5 text-muted-foreground/60 hover:text-destructive hover:bg-destructive/10 transition-colors"
-                      title="Delete session"
-                      aria-label="Delete session"
+              <div className="mt-1 ml-2.5 flex flex-col gap-0.5 border-l border-border/60 pl-1.5">
+                {agentSessions.map((s) => {
+                  const isActive = s.id === activeId;
+                  return (
+                    <div
+                      key={s.id}
+                      className={`group relative flex items-start justify-between rounded-md py-2 pl-3 pr-1.5 cursor-pointer tech-transition ${
+                        isActive
+                          ? "bg-primary/10 text-sidebar-foreground"
+                          : "text-muted-foreground hover:bg-secondary/60 hover:text-foreground"
+                      }`}
+                      onClick={() => onSelect(s.id)}
                     >
-                      <Trash2 className="w-4 h-4" />
-                    </button>
-                  </div>
-                ))}
+                      {/* Active accent bar */}
+                      {isActive && (
+                        <span className="absolute left-0 top-1.5 bottom-1.5 w-0.5 rounded-full bg-primary" />
+                      )}
+                      <div className="min-w-0 flex-1 space-y-0.5">
+                        <div className="flex items-center gap-1.5 text-xs leading-snug">
+                          {activeRunIds.has(s.id) && (
+                            <span className="inline-block w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse shrink-0" title="Agent is generating a response" />
+                          )}
+                          <span className={`truncate flex-1 ${isActive ? "font-semibold text-foreground" : "font-medium"}`}>
+                            {s.title ?? s.name}
+                          </span>
+                          <span className="shrink-0 text-[10px] text-muted-foreground/70 tabular-nums">
+                            {relTime(s.updatedAt)}
+                          </span>
+                        </div>
+                        {s.lastPreview ? (
+                          <div className="truncate text-[10px] leading-snug text-muted-foreground">
+                            {s.lastPreview}
+                          </div>
+                        ) : (
+                          <div className="text-[10px] leading-snug text-muted-foreground/70">
+                            {s.messageCount > 0 ? `${s.messageCount} msgs` : "New"}
+                          </div>
+                        )}
+                      </div>
+                      {/* Delete — revealed on hover so rows stay clean */}
+                      <button
+                        onClick={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          onDelete(s.id);
+                        }}
+                        className="ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all"
+                        title="Delete conversation"
+                        aria-label="Delete conversation"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    </div>
+                  );
+                })}
               </div>
             )}
           </div>
@@ -896,64 +1014,95 @@ function ChatPageInner() {
         />
       )}
 
-      {/* ── Desktop: sessions sidebar ─────────────────────────────────── */}
-      {!isMobile && (
-        <aside
-          className={`shrink-0 border-r border-border bg-sidebar flex flex-col overflow-hidden transition-all duration-200 ${
-            sessionPanelOpen ? "w-72" : "w-10"
-          }`}
-        >
-          <div className={`flex items-center border-b border-border ${
-            sessionPanelOpen ? "justify-between px-4 py-3" : "justify-center py-3"
-          }`}>
-            {sessionPanelOpen && (
-              <div className="text-sm font-semibold text-sidebar-foreground">Conversations</div>
-            )}
-            <button
-              onClick={() => setSessionPanelOpen((o) => !o)}
-              className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground tech-transition"
-              title={sessionPanelOpen ? "Collapse conversations" : "Expand conversations"}
+      {/* ── Desktop: conversations sidebar ────────────────────────────── */}
+      {/* Collapsed → the same rail treatment as the Files / Documents
+          columns: reopen icon, conversation count, vertical label. */}
+      {!isMobile && !sessionPanelOpen && (
+        <aside className="flex w-10 shrink-0 flex-col items-center border-r border-border bg-sidebar py-2.5">
+          <button
+            onClick={() => setSessionPanelOpen(true)}
+            className="rounded p-1 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+            title="Open conversations"
+          >
+            <MessagesSquare size={15} />
+          </button>
+          {sessions.length > 0 && (
+            <span className="mt-1 rounded-full bg-secondary px-1 text-[10px] text-muted-foreground">
+              {sessions.length}
+            </span>
+          )}
+          {sessions.some((s) => activeRunIds.has(s.id)) && (
+            <span
+              className="mt-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"
+              title="An agent is running"
+            />
+          )}
+          <div className="mt-3 flex flex-1 items-center justify-center">
+            <span
+              className="text-[10px] font-semibold tracking-widest text-muted-foreground"
+              style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
             >
-              {sessionPanelOpen ? (
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M10 3L5 8l5 5" />
-                </svg>
-              ) : (
-                <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                  <path d="M6 3l5 5-5 5" />
-                </svg>
-              )}
+              CONVERSATIONS
+            </span>
+          </div>
+        </aside>
+      )}
+      {!isMobile && sessionPanelOpen && (
+        <aside className="w-72 shrink-0 border-r border-border bg-sidebar flex flex-col overflow-hidden">
+          <div className="flex items-center justify-between border-b border-border px-4 py-3">
+            <div className="text-sm font-semibold text-sidebar-foreground">Conversations</div>
+            <button
+              onClick={() => setSessionPanelOpen(false)}
+              className="shrink-0 rounded-lg p-1.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground tech-transition"
+              title="Collapse conversations"
+            >
+              <svg width="14" height="14" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
+                <path d="M10 3L5 8l5 5" />
+              </svg>
             </button>
           </div>
 
-          {sessionPanelOpen && (
-            <div className="flex flex-col flex-1 p-4 overflow-y-auto">
-              <div className="text-[10px] text-muted-foreground/60 mb-3 uppercase tracking-wider font-semibold">Sessions</div>
-              <SessionList
-                sessions={sessions}
-                activeId={activeSessionId}
-                activeRunIds={activeRunIds}
-                onSelect={handleSelectSession}
-                onNew={handleNewSession}
-                onDelete={handleDeleteSession}
-                agentAliases={agentAliasMap}
+          <div className="flex flex-col flex-1 p-4 overflow-y-auto">
+            <SessionList
+              sessions={sessions}
+              activeId={activeSessionId}
+              activeRunIds={activeRunIds}
+              onSelect={handleSelectSession}
+              onNew={handleNewSession}
+              onDelete={handleDeleteSession}
+              agentAliases={agentAliasMap}
+            />
+
+            {memoriesLoaded && (
+              <MemoryPanel
+                memories={memories}
+                userId={userId}
+                onDelete={handleDeleteMemory}
+                onRefresh={loadMemories}
               />
+            )}
 
-              {memoriesLoaded && (
-                <MemoryPanel
-                  memories={memories}
-                  userId={userId}
-                  onDelete={handleDeleteMemory}
-                  onRefresh={loadMemories}
-                />
-              )}
-
-              <div className="mt-auto pt-6 text-[10px] text-muted-foreground/50">
-                Memory persists to Mem0 · Sessions in localStorage
-              </div>
+            <div className="mt-auto pt-6 text-[10px] text-muted-foreground/50">
+              Memory persists to Mem0 · Sessions in localStorage
             </div>
-          )}
+          </div>
         </aside>
+      )}
+
+      {/* ── Desktop: files column (left of documents) ──────────────────── */}
+      {!isMobile && (
+        <ArtifactSidebar
+          side="left"
+          sessionId={activeSessionId}
+          open={artifactPanelOpen}
+          onToggle={() => setArtifactPanelOpen((o) => !o)}
+          onFileOpen={(entry) => {
+            setViewerEntry(entry);
+            setArtifactPanelOpen(true);
+          }}
+          onOpenInSidePanel={(entry) => handleOpenInSidePanel(entry)}
+          artifactUpdates={artifactUpdates}
+        />
       )}
 
       {/* ── Desktop: VS Code-style document side panel ─────────────────── */}
@@ -1050,21 +1199,6 @@ function ChatPageInner() {
             </div>
           )}
         </div>
-
-        {/* Desktop: Artifact sidebar */}
-        {!isMobile && (
-          <ArtifactSidebar
-            sessionId={activeSessionId}
-            open={artifactPanelOpen}
-            onToggle={() => setArtifactPanelOpen((o) => !o)}
-            onFileOpen={(entry) => {
-              setViewerEntry(entry);
-              setArtifactPanelOpen(true);
-            }}
-            onOpenInSidePanel={(entry) => handleOpenInSidePanel(entry)}
-            artifactUpdates={artifactUpdates}
-          />
-        )}
       </div>
 
       {/* File viewer modal (shared) */}

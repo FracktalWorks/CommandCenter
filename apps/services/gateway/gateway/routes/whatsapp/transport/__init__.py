@@ -6,5 +6,6 @@ from gateway.routes.whatsapp.transport import (  # noqa: F401
     chats,
     messages,
     send,
+    templates,
     webhook,
 )

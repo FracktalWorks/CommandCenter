@@ -26,6 +26,8 @@ interface AutomationViewProps {
   onFilterLabel?: (label: string) => void;
   /** Filter the mailbox by a sender (dashboard noisy-sender click-through). */
   onFilterSender?: (email: string) => void;
+  /** Open a thread and start an AI-drafted reply (dashboard ✍️ row action). */
+  onDraftReply?: (messageId: string) => void;
 }
 
 const META: Record<
@@ -73,6 +75,7 @@ export function AutomationView({
   onOpenEmail,
   onFilterLabel,
   onFilterSender,
+  onDraftReply,
 }: AutomationViewProps) {
   const meta = META[feature];
   const Icon = meta.icon;
@@ -112,6 +115,7 @@ export function AutomationView({
             onOpenEmail={onOpenEmail}
             onFilterLabel={onFilterLabel}
             onFilterSender={onFilterSender}
+            onDraftReply={onDraftReply}
           />
         )}
         {feature === "unsubscribe" && (

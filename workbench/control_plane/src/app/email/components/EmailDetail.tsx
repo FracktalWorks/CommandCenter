@@ -300,15 +300,31 @@ export function EmailDetail({ email }: EmailDetailProps) {
     block: () => void;
     download: () => void;
   }>({ reply: () => {}, block: () => {}, download: () => {} });
+  // Draft-from-dashboard: "reply-ai" opens the composer then auto-runs the AI
+  // draft. The two steps can't be chained synchronously — startReply sets state
+  // (recipients, mode) that runAiDraft reads, and that state isn't live until
+  // the next render. So we open the composer here and bump a nonce; an effect
+  // below fires the draft once the fresh state has committed. Routed through a
+  // ref because runAiDraft is defined after this hook (which must sit above the
+  // early return).
+  const runAiDraftRef = useRef<() => void>(() => {});
+  const [autoDraftTick, setAutoDraftTick] = useState(0);
   useEffect(() => {
     if (!viewerCommand) return;
     const h = cmdRef.current;
     if (viewerCommand === "block") h.block();
     else if (viewerCommand === "download") h.download();
-    else h.reply(viewerCommand);
+    else if (viewerCommand === "reply-ai") {
+      h.reply("reply");
+      setAutoDraftTick((t) => t + 1);
+    } else h.reply(viewerCommand);
     setViewerCommand(null);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [viewerCommand]);
+  useEffect(() => {
+    if (autoDraftTick === 0) return; // never on mount, only on an actual trigger
+    runAiDraftRef.current();
+  }, [autoDraftTick]);
 
   // Keep state in sync when email changes
   if (email && starred !== email.isStarred) setStarred(email.isStarred);
@@ -613,6 +629,9 @@ export function EmailDetail({ email }: EmailDetailProps) {
 
   // Keep the command bridge pointed at the live handlers (runs each render).
   cmdRef.current = { reply: startReply, block: blockSender, download: downloadEml };
+  // Point the auto-draft ref at the current-render closure so the nonce effect
+  // reads fresh reply state (recipients/mode startReply just set).
+  runAiDraftRef.current = runAiDraft;
 
   return (
     <div className="flex flex-col h-full overflow-hidden">

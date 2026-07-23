@@ -100,6 +100,10 @@ export interface DigestThread {
   thread_id: string;
   message_id: string | null;
   who: string;
+  /** Priority signals (needs-reply queue, which the dashboard ranks by urgency
+   *  rather than pure age). Let the row show WHY it's near the top. */
+  important?: boolean;
+  unread?: boolean;
 }
 
 export interface DigestData {

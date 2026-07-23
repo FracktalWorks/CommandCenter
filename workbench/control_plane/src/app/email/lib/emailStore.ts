@@ -396,7 +396,9 @@ interface EmailState {
   /** Queue a prompt for the AI chat panel (used by the Assistant "Fix" flow). */
   setPendingChatPrompt: (prompt: string | null) => void;
   /** Run rules on one message (Test = dry-run, Apply = execute) and store result. */
-  runTestOnMessage: (accountId: string, messageId: string, isTest: boolean) => Promise<void>;
+  runTestOnMessage: (
+    accountId: string, messageId: string, isTest: boolean
+  ) => Promise<RunMessageResult | null>;
   /** Sweep a list of messages sequentially; keeps running across navigation. */
   runTestOnAll: (accountId: string, messageIds: string[], isTest: boolean) => Promise<void>;
   /** Request the in-progress sweep to stop after the current message. */
@@ -1484,11 +1486,16 @@ export const useEmailStore = create<EmailState>((set, get) => ({
   setPendingChatPrompt: (prompt) => set({ pendingChatPrompt: prompt }),
 
   runTestOnMessage: async (accountId, messageId, isTest) => {
-    if (get().testRunningIds.includes(messageId)) return;
+    if (get().testRunningIds.includes(messageId)) return null;
     set({ testRunningIds: [...get().testRunningIds, messageId] });
     try {
       const res = await api.runRuleOnMessage({ accountId, messageId, isTest });
       set({ testResults: { ...get().testResults, [messageId]: res } });
+      // Classifier down = a BACKEND fault, not a rules gap — say so in the
+      // banner so a failed recategorize is never misread as "fix your rules".
+      if (res.unavailable) {
+        set({ error: res.reason || "The AI classifier is temporarily unavailable." });
+      }
       // Apply mode (isTest=false): reflect the freshly-applied category/folder
       // in the loaded list so the "Uncategorized" pill in the inbox row resolves
       // immediately. Before this, the apply wrote em.categories in the DB but the
@@ -1508,8 +1515,10 @@ export const useEmailStore = create<EmailState>((set, get) => ({
           ),
         });
       }
+      return res;
     } catch (err: any) {
       set({ error: err?.message || "Rule run failed" });
+      return null;
     } finally {
       set({ testRunningIds: get().testRunningIds.filter((id) => id !== messageId) });
     }

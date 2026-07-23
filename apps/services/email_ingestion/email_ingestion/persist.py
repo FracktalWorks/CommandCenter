@@ -146,7 +146,14 @@ _RENAMED_LABELS = {"Reply": "Needs Reply", "To Reply": "Needs Reply",
 
 
 def _canon_categories(cats: Any) -> list:
-    return [_RENAMED_LABELS.get(c, c) for c in (cats or [])]
+    # "Uncategorized" is a state (no known label), never a label — if it ever
+    # exists provider-side (hand-created, or leaked before the writers guarded
+    # it; see gateway core.RESERVED_INDICATORS), drop it at ingest so the
+    # indicator can't masquerade as a real category in the mirror.
+    return [
+        _RENAMED_LABELS.get(c, c) for c in (cats or [])
+        if (c or "").strip().lower() != "uncategorized"
+    ]
 
 
 def _message_params(account_id: str, msg: Any) -> dict[str, Any]:

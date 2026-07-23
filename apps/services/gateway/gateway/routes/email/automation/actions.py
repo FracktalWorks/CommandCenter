@@ -29,6 +29,7 @@ from gateway.routes.email.automation.drafting import (
     _upsert_local_draft,
 )
 from gateway.routes.email.core import (
+    RESERVED_INDICATORS,
     _attachment_summaries,
     _log,
     _provider_for_message,
@@ -58,6 +59,13 @@ async def apply_label(
     """
     lbl = (label or "").strip()
     if not lbl:
+        return
+    if lbl.lower() in RESERVED_INDICATORS:
+        # "Uncategorized" is the ABSENCE of a category, not a category — an
+        # AI-resolved label or a hand-authored rule could still produce it,
+        # and writing it (provider or mirror) would make the state permanent.
+        _log.warning("email.apply_label_reserved_indicator",
+                     message_id=message_id, label=lbl)
         return
     if provider is not None and provider_msg_id:
         await provider.set_labels(provider_msg_id, add=[lbl], remove=[])

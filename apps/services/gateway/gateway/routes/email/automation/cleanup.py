@@ -744,9 +744,14 @@ async def restore_provider_labels(account_id: str) -> dict[str, Any]:
         # and tens of thousands of messages, so this is ~20 round-trips instead
         # of 40,000 — the difference between a route that returns and one that
         # times out on exactly the large mailbox that needs it most.
+        # Same canonicalisation the sync ingest applies (renamed labels map to
+        # their new names, the "Uncategorized" indicator is dropped) — this
+        # repair writes raw provider label sets, so without it a restore would
+        # resurrect exactly the stale names ingest exists to retire.
+        from email_ingestion.persist import _canon_categories  # noqa: PLC0415
         by_labels: dict[tuple[str, ...], list[str]] = {}
         for pmid, labels in assignments.items():
-            by_labels.setdefault(tuple(labels), []).append(pmid)
+            by_labels.setdefault(tuple(_canon_categories(labels)), []).append(pmid)
         for labels_key, pmids in by_labels.items():
             res = await db.execute(text(
                 "UPDATE email_messages SET categories = :cats, updated_at = now() "

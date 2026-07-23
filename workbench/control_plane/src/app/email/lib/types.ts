@@ -495,6 +495,9 @@ export interface RunMessageResult {
   categories?: string[];
   /** Post-apply folder (apply mode) — the actions may have archived/moved it. */
   folder?: string | null;
+  /** True when the AI classifier was unreachable — a backend outage, NOT a
+   *  rules gap. Callers must not treat this like "no rule matched". */
+  unavailable?: boolean;
 }
 
 export interface AssistantSettings {

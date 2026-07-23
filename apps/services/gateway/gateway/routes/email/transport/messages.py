@@ -13,6 +13,7 @@ from gateway.routes.email.core import (
     KNOWN_LABELS_LOWER,
     MAX_BODY_HTML_BYTES,
     MAX_BODY_TEXT_BYTES,
+    RESERVED_INDICATORS,
     UNCATEGORIZED_SQL,
     AttachmentModel,
     EmailMessageModel,
@@ -706,6 +707,14 @@ async def update_message(
     user: UserContext = Depends(get_current_user),
 ):
     """Update email properties (read, starred, flagged, folder, labels)."""
+    # "Uncategorized" is a state (no known label), never a label — drop it here
+    # so neither the local mirror below nor the provider set_labels can create
+    # it as a real category (see core.RESERVED_INDICATORS).
+    if updates.add_labels:
+        updates.add_labels = [
+            name for name in updates.add_labels
+            if name.strip().lower() not in RESERVED_INDICATORS
+        ]
     db = await _get_db()
     try:
         # Verify ownership

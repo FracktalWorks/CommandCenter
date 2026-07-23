@@ -604,7 +604,69 @@ export interface KnowledgeEntry {
   account_id: string;
   title: string;
   content: string;
+  /** 'manual' (user-authored) | 'voice_profile' (proposed by the profile builder). */
+  source?: string;
+  /** 'active' (feeds drafts) | 'suggested' (awaiting the user's approval). */
+  status?: string;
   updated_at?: string | null;
+}
+
+/** Structured writing-style traits learned by the voice-profile builder. */
+export interface VoiceProfileTraits {
+  tone?: string;
+  formality?: string;
+  typical_length?: string;
+  sentence_style?: string;
+  emoji_usage?: string;
+  formatting_habits?: string;
+  greetings?: string[];
+  signoffs?: string[];
+  common_phrases?: string[];
+  languages?: string[];
+  dos?: string[];
+  donts?: string[];
+}
+
+export type VoiceProfileStatus = "EMPTY" | "BUILDING" | "READY" | "FAILED";
+
+/** The account's voice & writing-style profile, learned from past mail. */
+export interface VoiceProfile {
+  account_id: string;
+  status: VoiceProfileStatus;
+  /** Whether the profile feeds the drafting prompt (READY profiles only). */
+  enabled: boolean;
+  /** Narrative style guide — the prompt-facing text, hand-editable. */
+  style_guide: string;
+  traits: VoiceProfileTraits;
+  /** Folders it was learned from: 'sent' and/or 'drafts'. */
+  sources: string[];
+  range_start: string | null;
+  range_end: string | null;
+  analyzed_count: number;
+  built_at: string | null;
+  last_error: string | null;
+  /** Knowledge entries the builder proposed that still await review. */
+  suggested_knowledge: number;
+}
+
+/** Live counts for the builder's range picker. */
+export interface VoiceProfilePreview {
+  sent: number;
+  drafts: number;
+  total: number;
+  will_analyze: number;
+  cap: number;
+}
+
+/** Progress of a running (or the most recent) voice-profile build. */
+export interface VoiceProfileBuildStatus {
+  status: "idle" | "running" | "done" | "error";
+  phase?: "collecting" | "analyzing" | "synthesizing" | "knowledge" | "done";
+  processed?: number;
+  total?: number;
+  sample_count?: number;
+  suggested_knowledge?: number;
+  error?: string;
 }
 
 /** A configurable LLM tier/provider, from GET /api/settings/llm. */

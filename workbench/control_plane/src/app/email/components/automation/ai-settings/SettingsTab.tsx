@@ -11,8 +11,10 @@ import {
   RotateCcw, Settings, Sparkles, Trash2, Wand2, X,
 } from "lucide-react";
 import {
-  createKnowledge, deleteKnowledge, deleteLearnedPattern, deleteRulePattern,
-  generateWritingStyle, getAssistantSettings, listColdSenders, listKnowledge,
+  approveKnowledge, createKnowledge, deleteKnowledge, deleteLearnedPattern,
+  deleteRulePattern,
+  generateWritingStyle, getAssistantSettings, getVoiceProfile, listColdSenders,
+  listKnowledge,
   listLearnedPatterns, listRulePatterns, resetRules,
   listRuleGuidance, deleteRuleGuidance,
   reviewRulePatterns, saveAssistantSettings, scanFollowUps, updateKnowledge,
@@ -21,11 +23,12 @@ import {
 import {
   AssistantSettings, ColdBlockerMode, ColdSender, DRAFT_CONFIDENCE_OPTIONS,
   DraftConfidence, KnowledgeEntry, LLMConfigResponse, LearnedPattern,
-  LearnedRulePattern, RuleGuidance, WEEKDAYS,
+  LearnedRulePattern, RuleGuidance, VoiceProfile, WEEKDAYS,
 } from "../../../lib/types";
 import { SignatureEditor } from "../../SignatureEditor";
 import { DigestSettingsDialog } from "../DigestSettingsDialog";
 import { Modal, SectionHeader, SettingCard, Toggle } from "../ui";
+import { VoiceProfileDialog } from "./VoiceProfileDialog";
 import {
   Empty, Field, IconAction, INPUT_BASE, INPUT_CLS, Spinner, summary,
 } from "./common";
@@ -140,6 +143,7 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
     | "followup"
     | "digest"
     | "writingstyle"
+    | "voiceprofile"
     | "personal"
     | "signature"
     | "knowledge"
@@ -148,6 +152,18 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
     | "resetrules"
     | null
   >(null);
+  const [voiceProfile, setVoiceProfile] = useState<VoiceProfile | null>(null);
+
+  useEffect(() => {
+    if (!accountId) return;
+    let cancelled = false;
+    getVoiceProfile(accountId)
+      .then((p) => !cancelled && setVoiceProfile(p))
+      .catch(() => {});
+    return () => {
+      cancelled = true;
+    };
+  }, [accountId]);
 
   useEffect(() => {
     fetch("/api/settings/llm")
@@ -297,6 +313,22 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
             title="Writing style"
             description={summary(s.writing_style, "Define your tone and style — used to draft replies in your voice.")}
             right={<EditBtn onClick={() => setDialog("writingstyle")} set={!!s.writing_style} />}
+          />
+          <SettingCard
+            title="Voice profile"
+            description={voiceProfileSummary(voiceProfile)}
+            right={
+              <EditBtn
+                onClick={() => setDialog("voiceprofile")}
+                set={voiceProfile?.status === "READY"}
+                label={
+                  voiceProfile?.status === "READY" ||
+                  voiceProfile?.status === "BUILDING"
+                    ? "Manage"
+                    : undefined
+                }
+              />
+            }
           />
           <SettingCard
             title="Personal instructions"
@@ -545,6 +577,21 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
           onClose={() => setDialog(null)}
         />
       )}
+      {dialog === "voiceprofile" && voiceProfile && (
+        <VoiceProfileDialog
+          accountId={accountId}
+          profile={voiceProfile}
+          onProfileChange={setVoiceProfile}
+          onClose={() => {
+            setDialog(null);
+            // A build may have been started (or finished) in the dialog —
+            // refresh so the card's summary reflects it.
+            getVoiceProfile(accountId)
+              .then(setVoiceProfile)
+              .catch(() => {});
+          }}
+        />
+      )}
       {dialog === "personal" && (
         <PersonalInstructionsDialog
           settings={s}
@@ -594,6 +641,26 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
       )}
     </div>
   );
+}
+
+/** One-line summary for the Voice profile card, from the profile's state. */
+function voiceProfileSummary(p: VoiceProfile | null): string {
+  if (!p || p.status === "EMPTY") {
+    return "Teach the assistant to write like you — it studies emails you've already written, over a date range you pick.";
+  }
+  if (p.status === "BUILDING") return "Building — studying your emails…";
+  if (p.status === "FAILED") {
+    return `Last build failed${p.last_error ? `: ${p.last_error}` : ""} — open to try again.`;
+  }
+  const range =
+    p.range_start || p.range_end
+      ? ` (${p.range_start ?? "…"} → ${p.range_end ?? "today"})`
+      : "";
+  const suggested =
+    p.suggested_knowledge > 0
+      ? ` · ${p.suggested_knowledge} knowledge suggestion${p.suggested_knowledge === 1 ? "" : "s"} to review`
+      : "";
+  return `Learned from ${p.analyzed_count} email${p.analyzed_count === 1 ? "" : "s"}${range} · ${p.enabled ? "on" : "off"}${suggested}`;
 }
 
 /** Small "Edit"/"Manage" button used by the Settings rows to open an editor popup. */
@@ -1011,6 +1078,19 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
     }
   };
 
+  // Approve a voice-profile suggestion so it starts feeding drafts.
+  const approve = async (entry: KnowledgeEntry) => {
+    if (!entry.id) return;
+    setEntries((prev) =>
+      prev.map((e) => (e.id === entry.id ? { ...e, status: "active" } : e))
+    );
+    try {
+      await approveKnowledge(entry.id);
+    } catch {
+      load();
+    }
+  };
+
   if (!accountId) return null;
 
   return (
@@ -1077,14 +1157,40 @@ function KnowledgeBase({ accountId }: { accountId: string | null }) {
               className="flex items-start gap-2 border border-border rounded-lg px-3 py-2"
             >
               <div className="flex-1 min-w-0">
-                <div className="text-xs font-medium text-foreground truncate">
-                  {entry.title}
+                <div className="flex items-center gap-1.5 min-w-0">
+                  <div className="text-xs font-medium text-foreground truncate">
+                    {entry.title}
+                  </div>
+                  {entry.status === "suggested" ? (
+                    <span
+                      title="Proposed by the voice-profile builder — not used in drafts until you approve it"
+                      className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 flex-shrink-0"
+                    >
+                      Suggested
+                    </span>
+                  ) : entry.source === "voice_profile" ? (
+                    <span
+                      title="Learned from your past emails and approved by you"
+                      className="text-[9px] px-1.5 py-0.5 rounded-full bg-secondary text-muted-foreground flex-shrink-0"
+                    >
+                      Learned
+                    </span>
+                  ) : null}
                 </div>
                 <div className="text-[11px] text-muted-foreground line-clamp-2">
                   {entry.content}
                 </div>
               </div>
               <div className="flex items-center gap-1 flex-shrink-0">
+                {entry.status === "suggested" && (
+                  <IconAction
+                    title="Approve — start using this in drafts"
+                    onClick={() => approve(entry)}
+                    className="hover:text-emerald-400"
+                  >
+                    <Check size={12} />
+                  </IconAction>
+                )}
                 <IconAction title="Edit" onClick={() => setEditing(entry)}>
                   <Pencil size={12} />
                 </IconAction>

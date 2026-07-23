@@ -126,6 +126,16 @@ class GtdSettingsModel(BaseModel):
     # boundary the nightly job triggers on) + an opt-out toggle.
     timezone: str = "UTC"
     auto_rollover: bool = True
+    # Planning prefs (migration 93) — "how should the AI organize my day".
+    # planning_prompt: a standing instruction the LLM planner obeys every run
+    # (empty → the server default). max_focus_run/break: insert a break after a
+    # long focus run so the day isn't wall-to-wall. lunch_*: an optional
+    # protected midday window the planner won't book over (None = off).
+    planning_prompt: str = ""
+    max_focus_run_mins: int = 90
+    break_mins: int = 10
+    lunch_start_hour: int | None = None
+    lunch_end_hour: int | None = None
 
 
 class GtdSettingsPatch(BaseModel):
@@ -148,6 +158,11 @@ class GtdSettingsPatch(BaseModel):
     energy_windows: list[dict] | None = None
     timezone: str | None = None
     auto_rollover: bool | None = None
+    planning_prompt: str | None = None
+    max_focus_run_mins: int | None = None
+    break_mins: int | None = None
+    lunch_start_hour: int | None = None
+    lunch_end_hour: int | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -256,7 +271,28 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         energy_windows=_energy_windows(getattr(row, "energy_windows", None)),
         timezone=str(getattr(row, "timezone", None) or "UTC"),
         auto_rollover=bool(getattr(row, "auto_rollover", True)),
+        planning_prompt=str(getattr(row, "planning_prompt", None) or ""),
+        # 0 is a valid value (disables breaks) — don't `or` a default over it.
+        max_focus_run_mins=_int_or(getattr(row, "max_focus_run_mins", None), 90),
+        break_mins=_int_or(getattr(row, "break_mins", None), 10),
+        lunch_start_hour=_int_or_none(getattr(row, "lunch_start_hour", None)),
+        lunch_end_hour=_int_or_none(getattr(row, "lunch_end_hour", None)),
     )
+
+
+def _int_or(v: Any, default: int) -> int:
+    """int(v), or `default` when v is None (0 is preserved, unlike `v or d`)."""
+    try:
+        return int(v) if v is not None else default
+    except (TypeError, ValueError):
+        return default
+
+
+def _int_or_none(v: Any) -> int | None:
+    try:
+        return int(v) if v is not None else None
+    except (TypeError, ValueError):
+        return None
 
 
 def _energy_windows(val: Any) -> list[dict]:

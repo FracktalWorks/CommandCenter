@@ -10,5 +10,5 @@ shared ``core.router``; the package re-exports ``router`` for ``main.py``.
 """
 from __future__ import annotations
 
-from gateway.routes.whatsapp import core, transport  # noqa: F401
+from gateway.routes.whatsapp import automation, core, transport  # noqa: F401
 from gateway.routes.whatsapp.core import router  # noqa: F401

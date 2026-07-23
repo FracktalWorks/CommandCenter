@@ -16,7 +16,7 @@ import yaml
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger, get_settings
 from acb_llm.model_limits import FALLBACK_CONTEXT_WINDOWS, MODEL_CAPABILITIES
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 
 _log = get_logger("settings")
@@ -65,7 +65,7 @@ def _load_tier_overrides() -> dict[str, Any]:
     read after migration the DB is empty, so we seed it once from the legacy
     tier_overrides.yaml file.
     """
-    from acb_llm.model_config import load_blob, save_blob  # noqa: PLC0415
+    from acb_llm.model_config import load_blob, save_blob
 
     blob = load_blob("tier_overrides")
     if isinstance(blob, dict) and "model_list" in blob:
@@ -80,10 +80,10 @@ def _load_tier_overrides() -> dict[str, Any]:
                 try:
                     save_blob("tier_overrides", existing)
                     _log.info("settings.llm.tier_overrides_seeded_from_file")
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass  # DB unreachable — use file contents this request
                 return existing
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return {"model_list": []}
 
@@ -117,7 +117,7 @@ def _save_tier_override(tier_name: str, entry: dict[str, Any]) -> None:
     Stored in the DB rather than tier_overrides.yaml so Settings UI changes
     survive `git reset --hard` on deploy.
     """
-    from acb_llm.model_config import save_blob  # noqa: PLC0415
+    from acb_llm.model_config import save_blob
 
     existing = _load_tier_overrides()
     model_list: list[dict] = existing.get("model_list", [])
@@ -393,6 +393,7 @@ _TIER_LABELS: dict[str, dict[str, str]] = {
     "tier-fast":      {"id": "tier1", "label": "Tier 1 — Fast / Cheap", "description": "Triage, classification, quick routing"},
     "tier-balanced":  {"id": "tier2", "label": "Tier 2 — Balanced",     "description": "Structured extraction, drafting, summaries"},
     "tier-powerful":  {"id": "tier3", "label": "Tier 3 — Powerful",     "description": "Multi-hop reasoning, strategy, planning"},
+    "tier-stt":       {"id": "stt",   "label": "STT — Speech-to-text",  "description": "Transcribe meeting & voice audio (Note Taker)"},
 }
 
 
@@ -448,7 +449,7 @@ def _is_provider_configured(provider: str) -> bool:
     if not val:
         try:
             val = (getattr(get_settings(), env_var.lower(), "") or "").strip()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return bool(val)
 
@@ -615,7 +616,7 @@ async def update_tier(
     # Update in-memory _TIER_MODEL dict so the Test button and all subsequent
     # completions use the new model immediately — no gateway restart needed.
     try:
-        from acb_llm.client import set_tier_model  # noqa: PLC0415
+        from acb_llm.client import set_tier_model
 
         tier_id = _TIER_LABELS[req.tier_name]["id"]
         actual_model = params.get("model", req.model)
@@ -694,9 +695,8 @@ async def test_tier(
 ) -> TestResult:
     import time
 
-    from acb_llm.client import LLMTier, complete
     # Resolve alias → tier id from the ONE canonical map (no local literal copy).
-    from acb_llm.client import _TIER_ALIAS_MAP
+    from acb_llm.client import _TIER_ALIAS_MAP, LLMTier, complete
 
     tier_id = _TIER_ALIAS_MAP.get(req.tier_name)
     if not tier_id:
@@ -742,10 +742,9 @@ async def set_provider_key(
         os.environ[env_var] = req.api_key.strip()
         # Bust the settings LRU cache so get_settings() also picks up the new value.
         try:
-            from acb_common.settings import \
-                get_settings as _gs  # noqa: PLC0415
+            from acb_common.settings import get_settings as _gs
             _gs.cache_clear()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     except Exception as exc:
         raise HTTPException(status_code=500, detail=f"Failed to write env: {exc}") from exc
@@ -825,13 +824,13 @@ def _normalise_catalogue(data: object) -> dict[str, object]:
 
 def _load_catalogue_from_file() -> dict[str, object]:
     """Read the legacy enabled_models.json file (used only to seed the DB)."""
-    import json  # noqa: PLC0415
+    import json
     p = _enabled_models_path()
     if not p.exists():
         return {"enabled": [], "hidden": []}
     try:
         return _normalise_catalogue(json.loads(p.read_text(encoding="utf-8")))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {"enabled": [], "hidden": []}
 
 
@@ -842,7 +841,7 @@ def _load_catalogue() -> dict[str, object]:
     the config survives `git reset --hard` on deploy.  On the first read after
     migration the DB is empty, so we seed it from the legacy JSON file once.
     """
-    from acb_llm.model_config import load_blob, save_blob  # noqa: PLC0415
+    from acb_llm.model_config import load_blob, save_blob
 
     blob = load_blob("enabled_models")
     if blob is not None:
@@ -853,13 +852,13 @@ def _load_catalogue() -> dict[str, object]:
         try:
             save_blob("enabled_models", cat)
             _log.info("settings.llm.enabled_models_seeded_from_file")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass  # DB unreachable — fall back to file contents this request
     return cat
 
 
 def _save_catalogue(catalogue: dict[str, object]) -> None:
-    from acb_llm.model_config import save_blob  # noqa: PLC0415
+    from acb_llm.model_config import save_blob
     save_blob("enabled_models", catalogue)
 
 
@@ -1060,18 +1059,18 @@ def _models_cache_path() -> Path:
 
 
 def _load_models_cache() -> dict[str, Any]:
-    import json  # noqa: PLC0415
+    import json
     p = _models_cache_path()
     if not p.exists():
         return {}
     try:
         return json.loads(p.read_text(encoding="utf-8"))
-    except Exception:  # noqa: BLE001
+    except Exception:
         return {}
 
 
 def _save_models_cache(cache: dict[str, Any]) -> None:
-    import json  # noqa: PLC0415
+    import json
     p = _models_cache_path()
     p.write_text(
         json.dumps(cache, indent=2, ensure_ascii=False),
@@ -1081,15 +1080,15 @@ def _save_models_cache(cache: dict[str, Any]) -> None:
 
 def _cache_entry_fresh(entry: dict[str, Any]) -> bool:
     """True if the cache entry was fetched within _CACHE_TTL_SECONDS."""
-    import datetime  # noqa: PLC0415
+    import datetime
     fetched_at = entry.get("fetched_at", "")
     if not fetched_at:
         return False
     try:
         ts = datetime.datetime.fromisoformat(fetched_at.replace("Z", "+00:00"))
-        now = datetime.datetime.now(datetime.timezone.utc)
+        now = datetime.datetime.now(datetime.UTC)
         return (now - ts).total_seconds() < _CACHE_TTL_SECONDS
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -1113,7 +1112,6 @@ def _model_info_from_caps(model_id: str, provider: str) -> ModelInfo:
 
 async def _fetch_openrouter(key: str | None) -> list[ModelInfo]:
     """Fetch all models from OpenRouter — no auth required, key adds rate limits."""
-    import datetime  # noqa: PLC0415
     headers: dict[str, str] = {}
     if key:
         headers["Authorization"] = f"Bearer {key}"
@@ -1125,7 +1123,7 @@ async def _fetch_openrouter(key: str | None) -> list[ModelInfo]:
             )
             r.raise_for_status()
             data = r.json().get("data", [])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("openrouter.fetch_failed", error=str(exc))
         return []
 
@@ -1181,7 +1179,7 @@ async def _fetch_openai_compat(
             r = await client.get(f"{base_url}/models", headers=hdrs)
             r.raise_for_status()
             data = r.json().get("data", [])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning(f"{provider}.fetch_failed", error=str(exc))
         return []
 
@@ -1206,7 +1204,7 @@ async def _fetch_gemini(api_key: str) -> list[ModelInfo]:
             )
             r.raise_for_status()
             data = r.json().get("models", [])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("gemini.fetch_failed", error=str(exc))
         return []
 
@@ -1247,7 +1245,7 @@ async def _fetch_anthropic(api_key: str) -> list[ModelInfo]:
             )
             r.raise_for_status()
             data = r.json().get("data", [])
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("anthropic.fetch_failed", error=str(exc))
         return []
 
@@ -1269,7 +1267,7 @@ async def _fetch_ollama(base_url: str) -> list[ModelInfo]:
             r = await client.get(f"{url}/api/tags")
             r.raise_for_status()
             data = r.json().get("models", [])
-    except Exception:  # noqa: BLE001
+    except Exception:
         return []
 
     result: list[ModelInfo] = []
@@ -1456,7 +1454,7 @@ async def get_context_windows(
         for entry in cache.values():
             for m in entry.get("models", []):
                 _put_full(str(m.get("id", "")), int(m.get("context_window", 0) or 0))
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # 2. Static capabilities (curated, trusted) — overrides cache, adds bare.
@@ -1466,13 +1464,13 @@ async def get_context_windows(
     # 3. Tier aliases — resolved dynamically so the ring tracks the currently-
     #    configured model (Settings UI changes propagate immediately).
     try:
-        from acb_llm.context import context_window_for as _cwf  # noqa: PLC0415
-        from acb_llm.client import _TIER_ALIAS_MAP  # noqa: PLC0415
+        from acb_llm.client import _TIER_ALIAS_MAP
+        from acb_llm.context import context_window_for as _cwf
         for alias in _TIER_ALIAS_MAP:
             cw = _cwf(alias)
             if cw > 0:
                 _put_with_bare(alias, cw)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     # Static fallback for legacy / non-gateway tier aliases.
     for mid, cw in _TIER_CONTEXT_WINDOWS.items():
@@ -1514,7 +1512,7 @@ async def refresh_provider_models(
     ``null`` to refresh all configured ones.  Results are written to
     infra/provider_models_cache.json and returned immediately.
     """
-    import datetime  # noqa: PLC0415
+    import datetime
 
     # Determine which providers to refresh
     to_refresh: list[str] = req.providers or list(_PROVIDER_ENV_MAP.keys())
@@ -1536,7 +1534,7 @@ async def refresh_provider_models(
                     api_key = (
                         getattr(get_settings(), env_var.lower(), "") or ""
                     ).strip() or None
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
         # Skip providers that need a key but don't have one (except openrouter)
@@ -1545,18 +1543,18 @@ async def refresh_provider_models(
                 provider=provider,
                 count=0,
                 fetched_at=datetime.datetime.now(
-                    datetime.timezone.utc
+                    datetime.UTC
                 ).isoformat(),
                 error="No API key configured",
             ))
             continue
 
         fetched_at = datetime.datetime.now(
-            datetime.timezone.utc
+            datetime.UTC
         ).strftime("%Y-%m-%dT%H:%M:%SZ")
         try:
             models = await _fetch_live_models(provider, api_key)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             models = []
             _log.warning(
                 "provider_models.refresh_failed",

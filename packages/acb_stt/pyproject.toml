@@ -1,10 +1,10 @@
 [project]
 name = "acb-stt"
 version = "0.0.1"
-description = "Pluggable speech-to-text provider layer (BYOK cloud + self-host)."
+description = "Speech-to-text via the platform LiteLLM plumbing (tier-stt model config)."
 requires-python = ">=3.12,<3.14"
 dependencies = [
-    "httpx>=0.27",
+    "litellm>=1.52",
     "acb-common",
     "acb-llm",
 ]

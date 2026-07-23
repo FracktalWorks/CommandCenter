@@ -105,8 +105,10 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
                 ),
                 {
                     "id": meeting_id,
+                    # result.model is the resolved litellm id (e.g.
+                    # "groq/whisper-large-v3-turbo") — already provider-prefixed.
                     "transcript": result.text,
-                    "source": f"{result.provider}/{result.model}",
+                    "source": result.model,
                     "language": result.language,
                     "duration": result.duration_s,
                 },
@@ -120,7 +122,7 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
             )
             await _set_run(
                 db, run_id, status="done", stage="done",
-                model=f"{result.provider}/{result.model}",
+                model=result.model,
                 result=json.dumps(
                     {
                         "segments": len(result.segments),

@@ -38,6 +38,10 @@ _TIER_DEFAULTS: dict[str, str] = {
     "tier1": "groq/llama-3.3-70b-versatile",     # fast & cheap (Groq)
     "tier2": "deepseek/deepseek-chat",            # balanced (DeepSeek)
     "tier3": "deepseek/deepseek-reasoner",        # powerful reasoning
+    # Speech-to-text tier — resolved like any other tier and routed through
+    # litellm.atranscription. Configured in config.yaml (model_name: tier-stt)
+    # and editable in Settings → Models. Not a chat tier.
+    "stt": "groq/whisper-large-v3-turbo",
 }
 _TIER_MODEL: dict[str, str] = dict(_TIER_DEFAULTS)
 
@@ -46,7 +50,12 @@ _TIER_ALIAS_MAP: dict[str, str] = {
     "tier-fast": "tier1",
     "tier-balanced": "tier2",
     "tier-powerful": "tier3",
+    "tier-stt": "stt",
 }
+
+# Tier IDs whose model is a speech-to-text model (routed via atranscription,
+# not chat completions). Kept separate so chat-only call sites can ignore them.
+_STT_TIER_IDS: frozenset[str] = frozenset({"stt"})
 
 # Track whether keys have been loaded from the store.
 _keys_loaded = False
@@ -88,7 +97,7 @@ def _init_tier_models() -> None:
         return
     _tier_models_initialised = True
 
-    import yaml  # noqa: PLC0415
+    import yaml
 
     root = _find_workspace_root()
     if not root:
@@ -117,11 +126,11 @@ def _init_tier_models() -> None:
     # unreachable (e.g. very first boot before the gateway has seeded it).
     overrides: dict[str, Any] = {}
     try:
-        from acb_llm.model_config import load_blob  # noqa: PLC0415
+        from acb_llm.model_config import load_blob
         blob = load_blob("tier_overrides")
         if isinstance(blob, dict) and "model_list" in blob:
             overrides = blob
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("acb_llm.tier_models_db_read_failed", error=str(exc))
 
     if not overrides.get("model_list"):
@@ -185,7 +194,7 @@ def set_tier_model(tier_id: str, model: str) -> bool:
         ``False`` if the prefix is unknown, but the tier mapping is
         still updated so the caller can try the model anyway.
     """
-    if tier_id not in ("tier1", "tier2", "tier3"):
+    if tier_id not in ("tier1", "tier2", "tier3", *_STT_TIER_IDS):
         raise ValueError(f"Unknown tier_id: {tier_id!r}")
 
     _TIER_MODEL[tier_id] = model
@@ -293,7 +302,7 @@ def ensure_model_registered(model: str) -> str | None:
     This keeps the model catalogue dynamic — new provider models work
     immediately without waiting for a litellm or CommandCenter release.
     """
-    from litellm import model_cost  # noqa: PLC0415
+    from litellm import model_cost
 
     # Already known — return the provider
     if model in model_cost:
@@ -377,12 +386,12 @@ def _init_telemetry() -> None:
     if not os.environ.get("OTEL_EXPORTER_OTLP_ENDPOINT"):
         return
     try:
-        import litellm  # noqa: PLC0415
+        import litellm
 
         if "otel" not in (litellm.callbacks or []):
             litellm.callbacks = [*(litellm.callbacks or []), "otel"]
         _log.info("acb_llm.otel_enabled")
-    except Exception as exc:  # noqa: BLE001 — telemetry must never block calls
+    except Exception as exc:
         _log.warning("acb_llm.otel_init_failed", error=str(exc))
 
 
@@ -410,8 +419,8 @@ def _init_litellm_cache() -> None:
     if os.environ.get("LITELLM_REDIS_CACHE", "0") != "1":
         return
     try:
-        import litellm  # noqa: PLC0415
-        from litellm.caching.caching import Cache  # noqa: PLC0415
+        import litellm
+        from litellm.caching.caching import Cache
 
         ttl = int(os.environ.get("LITELLM_REDIS_CACHE_TTL", "300"))
         litellm.cache = Cache(
@@ -424,7 +433,7 @@ def _init_litellm_cache() -> None:
             mode="default_off",
         )
         _log.info("acb_llm.litellm_redis_cache_enabled", ttl=ttl)
-    except Exception as exc:  # noqa: BLE001 — cache must never block calls
+    except Exception as exc:
         _log.warning("acb_llm.litellm_cache_init_failed", error=str(exc))
 
 
@@ -461,7 +470,7 @@ def _usage_stats(response: Any) -> dict[str, int]:
             )
             if isinstance(cached, int):
                 stats["cached_tokens"] = cached
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return stats
 
@@ -482,14 +491,14 @@ def _compute_cost(model: str, response: Any, stats: dict[str, int]) -> float | N
     if model in _DYNAMIC_STUB_PRICED_MODELS:
         return None
     try:
-        from litellm import completion_cost  # noqa: PLC0415
+        from litellm import completion_cost
         c = completion_cost(completion_response=response, model=model)
         if isinstance(c, (int, float)) and c >= 0:
             return round(float(c), 8)
-    except Exception:  # noqa: BLE001 — unknown model / bad shape → try fallback
+    except Exception:
         pass
     try:
-        from litellm import cost_per_token  # noqa: PLC0415
+        from litellm import cost_per_token
         p, comp = cost_per_token(
             model=model,
             prompt_tokens=int(stats.get("prompt_tokens", 0) or 0),
@@ -497,7 +506,7 @@ def _compute_cost(model: str, response: Any, stats: dict[str, int]) -> float | N
         )
         total = float(p or 0.0) + float(comp or 0.0)
         return round(total, 8) if total >= 0 else None
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
 
 
@@ -522,9 +531,9 @@ def _emit_usage(
     # Run correlation (E2): merge_contextvars already tags this LOG line with
     # run_id/agent/user; pull them explicitly so the AUDIT row is joinable too.
     try:
-        from acb_common import get_run_context  # noqa: PLC0415
+        from acb_common import get_run_context
         _run_ctx = get_run_context()
-    except Exception:  # noqa: BLE001
+    except Exception:
         _run_ctx = {}
     _log.info("acb_llm.usage", model=model, tier=tier, cost_usd=cost, **stats)
     # Live activity feed (E2): surface every model call on the global bus so the
@@ -533,7 +542,7 @@ def _emit_usage(
     # inherited from the run context when this call is inside an agent run, and
     # `source` is inherited too unless the caller passes it explicitly.
     try:
-        from acb_common import publish_activity  # noqa: PLC0415
+        from acb_common import publish_activity
         publish_activity(
             kind="model",
             model=model,
@@ -543,12 +552,12 @@ def _emit_usage(
             source=source,
             agent=agent,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     if os.environ.get("LLM_USAGE_AUDIT", "0") != "1":
         return
     try:
-        from acb_audit import AuditEvent, record  # noqa: PLC0415
+        from acb_audit import AuditEvent, record
 
         _actor_agent = agent or _run_ctx.get("agent")
 
@@ -569,7 +578,7 @@ def _emit_usage(
             # record() opens a sync DB session — keep it off the event loop.
             task = loop.run_in_executor(None, _persist)
             task.add_done_callback(lambda t: t.exception())
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 

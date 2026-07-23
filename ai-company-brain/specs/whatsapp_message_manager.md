@@ -510,8 +510,14 @@ proof that the email vertical's shape was a *channel* shape all along.
   `/whatsapp/commitments` lists them.
 - `digest.py`: the brief now carries the commitment watch (our open promises,
   with a "never became a task" flag) + a waiting-on count.
+- `103_whatsapp_ai_drafts.sql` + `automation/drafting.py`: AI drafting in the
+  founder's WhatsApp voice (short/warm/emoji-tolerant, reply in the thread's own
+  language via a pure Devanagari-vs-Latin detector), with the email drafter's
+  two doctrines — conversation-as-DATA and sentinel-on-failure (NO_DRAFT / LLM
+  error → no fabricated draft). Cached in wa_ai_drafts; generate/get routes. The
+  composer gains a "✦ Suggest reply" chip (AI at the point of writing).
 
-**Tests:** 137 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**Tests:** 146 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist, post-sync registry, route helpers (signature/window/regime), templates,
 capture, context, Reply Zero, intent (21 cases), categories, digest + hook
 wiring, the auto-reply ladder (12), and commitment extraction (15). All new code

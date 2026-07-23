@@ -1018,33 +1018,35 @@ function ChatPageInner() {
       {/* Collapsed → the same rail treatment as the Files / Documents
           columns: reopen icon, conversation count, vertical label. */}
       {!isMobile && !sessionPanelOpen && (
-        <aside className="flex w-10 shrink-0 flex-col items-center border-r border-border bg-sidebar py-2.5">
+        <aside className="flex w-10 shrink-0 flex-col border-r border-border bg-sidebar">
+          {/* The whole rail is the click target — a thin strip is fiddly to
+              hit an icon inside. */}
           <button
             onClick={() => setSessionPanelOpen(true)}
-            className="rounded p-1 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
+            className="flex w-full flex-1 cursor-pointer flex-col items-center py-2.5 text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground transition-colors"
             title="Open conversations"
           >
             <MessagesSquare size={15} />
+            {sessions.length > 0 && (
+              <span className="mt-1 rounded-full bg-secondary px-1 text-[10px]">
+                {sessions.length}
+              </span>
+            )}
+            {sessions.some((s) => activeRunIds.has(s.id)) && (
+              <span
+                className="mt-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"
+                title="An agent is running"
+              />
+            )}
+            <span className="mt-3 flex flex-1 items-center justify-center">
+              <span
+                className="text-[10px] font-semibold tracking-widest"
+                style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
+              >
+                CONVERSATIONS
+              </span>
+            </span>
           </button>
-          {sessions.length > 0 && (
-            <span className="mt-1 rounded-full bg-secondary px-1 text-[10px] text-muted-foreground">
-              {sessions.length}
-            </span>
-          )}
-          {sessions.some((s) => activeRunIds.has(s.id)) && (
-            <span
-              className="mt-1.5 inline-block h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse"
-              title="An agent is running"
-            />
-          )}
-          <div className="mt-3 flex flex-1 items-center justify-center">
-            <span
-              className="text-[10px] font-semibold tracking-widest text-muted-foreground"
-              style={{ writingMode: "vertical-rl", transform: "rotate(180deg)" }}
-            >
-              CONVERSATIONS
-            </span>
-          </div>
         </aside>
       )}
       {!isMobile && sessionPanelOpen && (

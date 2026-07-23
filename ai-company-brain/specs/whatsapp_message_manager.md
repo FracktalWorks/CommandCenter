@@ -1,9 +1,10 @@
 # WhatsApp Message Manager — plan & feature brainstorm
 
 > **Product:** CommandCenter · **Feature:** WhatsApp channel vertical (channel #2, after email)
-> **Created:** 2026-07-23 · **Status:** 🧠 **PLANNING** — feature set, value map, architecture
-> options and UI mockups; no code yet.
-> **Mockups:** `mockups/whatsapp_message_manager.html` (7 screens, control-plane visual language)
+> **Created:** 2026-07-23 · **Revised:** 2026-07-23 (v2 — **official WhatsApp Business Platform
+> only**, per founder decision; unofficial linked-device routes dropped; mockups repolished)
+> **Status:** 🧠 **PLANNING** — feature set, value map, architecture and UI mockups; no code yet.
+> **Mockups:** `mockups/whatsapp_message_manager.html` (7 screens + build notes, control-plane shell)
 > **Anchors:** ADR-007 (WhatsApp via Meta Cloud API), `email_app_master_plan.md` (the vertical
 > to mirror), `agent_registry.json` → `agent-triage` ("email / WhatsApp / meeting triage").
 
@@ -24,7 +25,7 @@ learned rules, drafts in the user's voice, a daily digest-dashboard and an
 assistant agent with 42 tools. WhatsApp — the channel where an Indian hardware
 company actually transacts — still runs raw on a phone:
 
-1. **It's an interrupt stream, not an inbox.** 200+ messages/day across 300+
+1. **It's an interrupt stream, not an inbox.** 200+ messages/day across 200+
    chats; the one ₹11 L purchase order sits between a dealer-group meme and a
    school parents' group. There is no triage surface at all.
 2. **Groups bury the signal.** 18 dealer/team groups × dozens of messages; the
@@ -43,7 +44,7 @@ company actually transacts — still runs raw on a phone:
 
 | # | Value | One-line proof |
 |---|---|---|
-| V1 | **An obligation queue, not a chat list** | Open to 7 ranked "needs reply" items, not 300 unreads |
+| V1 | **An obligation queue, not a chat list** | Open to 7 ranked "needs reply" items, not 200 unreads |
 | V2 | **Hours back daily** | Routine asks answered from Odoo/price-list automatically, with an audit log |
 | V3 | **No dropped promises — either direction** | Commitments extracted from both sides' messages, tracked into tasks, nudged |
 | V4 | **Groups become one paragraph** | Per-group daily summaries; @mentions surface instantly |
@@ -74,7 +75,7 @@ CommandCenter rather than buying a WhatsApp inbox SaaS.
 | Sender rollups | `email_senders` category projection + auto-learn with consent | `automation/senders.py` |
 | Message → task | `TaskCaptureModal` + `routes/tasks/capture_email.py` (`origin.emailId` → `origin.waMessageId`) | tasks routes |
 | Assistant with tools + HITL | `agent-email-assistant` (42 tools, `request_confirmation` fail-closed) | `apps/agents/agent-email-assistant/agents.py` |
-| Outward-write approval | Action Broker approval queue — a WhatsApp send to 18 groups is exactly what it exists for | `apps/services/action_broker/` |
+| Outward-write approval | Action Broker approval queue — a WhatsApp broadcast to 18 groups is exactly what it exists for | `apps/services/action_broker/` |
 | Entity linking phone ↔ CRM | graphiti/mem0 + `skills/triage/entity_link` | `packages/acb_memory/`, skills |
 | Credentials | Integration Registry + BYOK encrypted key store (ADR-022) | `packages/acb_llm/key_store` |
 | Model tiering | `rule_model` tier-fast / `draft_model` tier-powerful / `chat_model` tier-balanced per account | `email_assistant_settings` pattern |
@@ -88,48 +89,49 @@ single-provider first, generalize later).
 
 ---
 
-## 3. Integration landscape → recommended architecture
+## 3. Integration — the official WhatsApp Business Platform, only
 
-### 3a. The field (researched 2026-07)
+**Decision (2026-07-23):** build exclusively on Meta's **WhatsApp Business Cloud
+API** — the only supported path for new integrations since Oct 2025 — using
+**coexistence** so the founder's existing WhatsApp Business app keeps working on
+the phone. This confirms and extends ADR-007. Unofficial protocol bridges
+(wacli / whatsmeow / Baileys / whatsapp-web.js) are **rejected**: they violate
+WhatsApp's ToS and risk a permanent ban of the number — unacceptable for the
+company line, and not worth maintaining a second transport for. Should Meta ever
+open an official path for personal numbers, that becomes a new decision.
 
-| Approach | What it is | Pros | Cons |
-|---|---|---|---|
-| **wacli** (openclaw) | Go CLI on **whatsmeow**: QR-pairs as a linked Web device, mirrors to SQLite+FTS5, send/search/webhooks, multi-account | Proven local-first mirror design; exactly our sync model; agent-friendly | Third-party protocol → **ban risk**; CLI, not a service |
-| **whatsmeow** (library) | Go library speaking the multidevice Web protocol directly | Full access: all chats, groups, history backfill, media, label app-state; no browser | Same ban risk; we own protocol churn |
-| **Baileys** | TypeScript equivalent of whatsmeow | Popular, active | Same risk; adds a Node runtime to a Python shop |
-| **whatsapp-web.js** | Puppeteer-driven headless WhatsApp Web | Easy | Heaviest, most fragile, same risk |
-| **WhatsApp MCP servers** (e.g. lharries/whatsapp-mcp) | whatsmeow bridge + MCP tool surface for agents | Validates the "agent runs your WhatsApp" UX | Personal-scale; no triage/store discipline |
-| **WhatsApp Business Cloud API** | Meta's official API — the only official path for new integrations since Oct 2025 | ToS-safe, webhooks, templates, no ban risk | Business number only; 24 h customer-service window; per-template pricing; historically no chat history |
-| **Cloud API + Coexistence** | Embedded-Signup QR links an **existing WhatsApp Business app number** to Cloud API; app keeps working | Official *and* rich: ~6 months history synced at onboarding, both-direction mirroring via webhooks (incl. messages typed on the phone), Business app labels stay usable on the phone | Business app numbers only; label objects live app-side (we mirror, see 4.2); regional availability caveats |
+### 3a. What the official platform gives us
 
-### 3b. Decision: two lanes, one pipeline (extends ADR-007)
+| Capability | How |
+|---|---|
+| Connect without losing the phone app | **Embedded Signup + coexistence**: scan a QR from the WhatsApp Business app; the number becomes API-enabled while the app keeps working |
+| History | ~6 months of chat history synced at onboarding (delivered in phases — the Connect screen shows progress honestly) |
+| Real-time, both directions | Webhooks mirror inbound *and* outbound — including messages the founder types on the phone — so the store is complete from day one |
+| Labels | Business-app labels import at onboarding; mirrored two-way where the API exposes label events, `sync_state` per label keeps the UI honest (🏷 synced vs local) |
+| Sends | Free-form replies inside each chat's **24 h customer-service window**; outside it, pre-approved **template messages** (per-message pricing) |
+| Media | Documents, images, voice notes in and out via the media API |
+| Trust | ToS-compliant, no ban risk, quality rating visible; business verification badge |
 
-ADR-007 already picked Meta Cloud API. Coexistence (which post-dates that ADR)
-removes its biggest historical downside — the empty-history cold start — and is
-how we "connect with the WhatsApp Business settings" the user already has.
+### 3b. Constraints we design around (not against)
 
-- **Lane A — official, default, the company number.** WhatsApp Business Cloud
-  API with **coexistence** via Embedded Signup. The founder's Business app keeps
-  working on the phone; we get webhooks for everything (both directions), ~6
-  months of history, template sends outside the 24 h window, zero ban risk.
-  *This is the lane all business automation runs on.*
-- **Lane B — linked-device bridge, opt-in, the personal number.** A small
-  sidecar service (`apps/services/wa_bridge/` — Go, whatsmeow, wacli as the
-  reference implementation) that QR-pairs as a linked device, mirrors messages
-  into the same store, and can read/write label app-state. Runs with explicit
-  ban-risk consent in the UI, per-number. *Read-mostly by default; sends from
-  Lane B are rate-guarded and drafts-only unless the user opts up.*
+| Constraint | Design response |
+|---|---|
+| 24 h service window | Window state is ambient UI: a header pill on every thread ("session open · replies free · 21 h left") and the composer switches to template mode automatically. Nudges/chases outside the window use an approved template set, with cost shown before send |
+| Template approval latency | The standing-rules that need templates (payment chase, follow-up nudge) ship with a small pre-approved template library created at onboarding |
+| Business numbers only — no personal SIMs | Personal WhatsApp is **out of scope for v1**. The business line is where the business runs; family/personal contacts who message it get a hands-off category (surfaced, never AI-touched) |
+| Label API coverage is partial/evolving | Import-once is the floor; two-way sync where events exist; per-label `sync_state` so the UI never lies about what's mirrored |
+| Webhook delivery is at-least-once and can burst | Ingestion lands webhooks on a queue → the shared upsert path (idempotent on `wa_message_id`); a periodic reconcile job backfills gaps |
+| Meta platform churn (coexistence is new) | All Meta specifics live behind the provider seam; worst case we degrade to standard Cloud API behavior (no history import) without touching triage/AI layers |
 
-Both lanes normalize into **one message store and one pipeline** — a
-`WhatsAppProvider` implementing the same conceptual contract as
-`BaseEmailProvider` (`sync_messages → SyncResult`, `send_message`, cursors), so
-triage/drafts/digest/rules are transport-blind. A founder can run Lane A on the
-company line and Lane B on the personal SIM; policies differ per account
-(personal defaults to *surface-only*: no auto-replies, no auto-drafts to Family).
+### 3c. Rejected alternatives (for the record)
 
-**Deliberate scope cuts for v1:** no multi-seat shared inbox (single-founder,
-same as email's single-mailbox doctrine), no bulk marketing campaigns (that's a
-BSP product and a spam vector), no payments-in-chat.
+wacli's architecture (QR-paired linked device via whatsmeow, local SQLite+FTS
+mirror, webhook fan-out) remains a useful *design reference* for the sync/store
+shape — but as a transport it is third-party protocol emulation: WhatsApp
+actively bans numbers using it, bans are permanent, and no triage feature is
+worth the founder's number. Baileys and whatsapp-web.js share the same
+disqualifier. WhatsApp MCP bridges validate the "agent runs your WhatsApp" UX we
+want, but with none of the store, triage or HITL discipline this plan requires.
 
 ---
 
@@ -150,23 +152,23 @@ BSP product and a spam vector), no payments-in-chat.
 
 ### 4.2 Categories = WhatsApp Business labels, upgraded to policy carriers ⭐
 
-- **Two-way label sync.** Lane A: mirror labels via coexistence app-state
-  where exposed; Lane B: whatsmeow reads/writes label app-state natively.
-  Fallback (API gaps): labels import one-way at onboarding and we own the
-  mapping table thereafter — the UI marks 🏷 synced vs local, and field staff
-  using the phone's Business app keep seeing the same labels either way.
+- **Label import + mirror.** Business-app labels import at onboarding and
+  mirror two-way where the coexistence API exposes label events; `sync_state`
+  per label (🏷 synced vs local) keeps the UI honest, and field staff using
+  the phone's Business app keep seeing the same labels either way.
 - A category answers four questions (this is the upgrade — labels become
   behavior): **notify** (instant / digest / @mention-only / never),
   **auto-reply** (never / holding reply / answer-from-system), **AI drafts**
   (always-ready / on-intent / never), **escalate if unanswered** (2 h → push…).
 - Ships with defaults mapping the Business app's stock labels (New customer,
   Order, Pending payment, Paid) + ours (★ VIP, Team, Vendors, Dealer groups,
-  Family, 🔇 Noise). `Uncategorized` is a state, not a label (email doctrine).
+  Family & personal, 🔇 Noise). `Uncategorized` is a state, not a label
+  (email doctrine).
 - **Auto-learn with consent:** classifier proposes homes for new senders
   (message content + phone-number ↔ Zoho/Odoo contact match); acceptances
   become visible learned patterns under the Rules screen.
-- **AI stays out of Family by default.** Surfaced, never drafted. This line
-  buys more founder trust than any feature.
+- **AI stays out of Family & personal by default.** Surfaced, never drafted,
+  never auto-handled. This line buys more founder trust than any feature.
 
 ### 4.3 Drafts in your WhatsApp voice ⭐
 
@@ -188,13 +190,16 @@ BSP product and a spam vector), no payments-in-chat.
   The ladder is per-rule and visible.
 - **Payment-chase cadence** on 🏷 Pending payment: 7d polite → 14d firmer +
   accounts CC'd via email (cross-channel!) → 21d escalation pack to founder.
+  Outside the 24 h window the cadence uses the approved `payment_reminder`
+  template — cost surfaced at the rule level.
 - **Plain-language rule compiler** ("when a dealer asks for the edu deck, send
   the latest PDF and label them Edu-pipeline") → compiled rule shown for
   approval — same `email_rules.instructions` pattern.
-- **Hard guardrails (not AI-editable):** never auto-send to VIP/Family; no
-  prices outside the published list; never promise delivery dates; ≤20
-  auto-replies/hour; personal number drafts-only; every send audit-logged.
-  Rules show honest stats ("41 handled, 0 corrections") — trust is earned.
+- **Hard guardrails (not AI-editable):** never auto-send to ★ VIP or Family;
+  no prices outside the published list; never promise delivery dates; ≤20
+  auto-replies/hour; templates only from the approved set; every send
+  audit-logged. Rules show honest stats ("41 handled, 0 corrections") —
+  trust is earned.
 
 ### 4.5 Digest + dashboard (projection pattern)
 
@@ -233,7 +238,7 @@ BSP product and a spam vector), no payments-in-chat.
 ### 4.9 AI companion — run WhatsApp by talking ⭐
 
 - Not a new app: the existing Control-Plane chat (and its mobile PWA) gains a
-  `wa.*` toolset on `agent-triage` / a new `agent-whatsapp-assistant`,
+  `wa_*` toolset on `agent-triage` / a new `agent-whatsapp-assistant`,
   mirroring the email agent's tool families: read/triage (`wa_find_needs_reply`,
   `wa_summarize_group`, `wa_query`), actions (`wa_draft_reply`, `wa_send` —
   HITL-gated), categories (`wa_categorize`), rules, digest.
@@ -253,8 +258,8 @@ BSP product and a spam vector), no payments-in-chat.
 
 ### 4.11 Search & memory
 
-- FTS + semantic search across all WhatsApp history (wacli's SQLite+FTS5
-  validates the shape; we land in Postgres + pgvector like email).
+- FTS + semantic search across the synced WhatsApp history, landing in
+  Postgres + pgvector exactly like email.
 - "What did we quote Meher in March?" answers across WhatsApp *and* email.
 
 ### 4.12 Focus integration
@@ -272,10 +277,11 @@ BSP product and a spam vector), no payments-in-chat.
 | Intent classification | Mirror `engine.py`: learned deterministic patterns short-circuit → tier-fast LLM picks rule/intent with guidance + history hints. Intent taxonomy: `order_status · quote_request · payment · service_issue · scheduling · social · spam/promo` |
 | Chat status | replyzero port; per-chat not per-thread (WhatsApp has no threads); group needs-you detection adds @mention/direct-address/answerable-question signals |
 | Drafting | `drafting.py` pattern: thread history + sender examples + semantically-near past sends + system context (Odoo/Zoho blocks when intent warrants) on `draft_model` (tier-powerful); LLM failure returns sentinel, never a fake draft |
-| Voice | `voice_profile.py` extended with `channel` + `audience` dimensions; learned from the user's own past WhatsApp sends (quote-stripped, their side only) |
+| Voice | `voice_profile.py` extended with `channel` + `audience` dimensions; learned from the founder's own past WhatsApp sends (quote-stripped, their side only) — the coexistence history import is what makes this possible on day one |
 | Language | Detect per-message; draft in the thread's language; translation layer for the founder's reading pane (auto-translate toggle) |
 | Commitments | Extraction prompt over outbound+inbound at classify time; writes candidate commitments; reconciler-style nightly diff against tasks/calendar |
 | Cost control | Groups classified as digest-tier by default (batch summarization, not per-message LLM); Noise category exits the pipeline after cheap pattern checks; per-role model overrides as in `email_assistant_settings` |
+| Send regimes | Every outbound decorated with its regime: `session` (free, inside 24 h window) vs `template` (₹, approved set only). Rules and the composer both surface this; templates are never improvised by the LLM |
 | HITL | All sends via `request_confirmation` fail-closed; broadcast + bulk actions via Action Broker queue; autonomy ladder only ever widened by the human |
 | Auditability | `wa_executed_rules` mirror + the dashboard trust ledger; every auto-send links to the rule that caused it |
 
@@ -284,21 +290,25 @@ BSP product and a spam vector), no payments-in-chat.
 ## 6. Data model (mirrors email migrations 17→94)
 
 ```
-wa_accounts        id, user_id, phone_number, display_name, lane('cloud_api'|'bridge'),
-                   credentials_encrypted, sync_enabled, sync_status, last_sync_cursor,
-                   webhook fields (lane A) / device session blob (lane B), initial_sync_done
-wa_chats           id, account_id, wa_chat_id (JID), kind('dm'|'group'|'broadcast'|'community'),
-                   name, participants jsonb, category_id, is_muted_upstream, UNIQUE(account_id, wa_chat_id)
+wa_accounts        id, user_id, phone_number, display_name, waba_id, phone_number_id,
+                   credentials via Integration Registry (BYOK), webhook_verify_token,
+                   sync_status, history_import_phase, initial_sync_done, quality_rating
+wa_chats           id, account_id, wa_chat_id (JID), kind('dm'|'group'|'broadcast'),
+                   name, participants jsonb, category_id, service_window_expires_at,
+                   UNIQUE(account_id, wa_chat_id)
 wa_messages        id, account_id, chat_id, wa_message_id, direction, sender jsonb, kind
                    ('text'|'image'|'video'|'audio'|'voice'|'document'|'sticker'|'location'|
                     'contact'|'reaction'|'system'), body_text, transcript_text, media_ref,
                    quoted_wa_message_id, mentions text[], categories text[], intent,
+                   template_name nullable (outbound template sends), send_regime,
                    sent_at, synced_at, rules_processed_at, UNIQUE(account_id, wa_message_id)
                    + FTS index + embeddings (pgvector)
 wa_media           message_id, mime_type, size_bytes, storage_path, ocr_text, transcription_status
 wa_contacts        account_id, phone_number, display_name, category_id, category_source,
                    entity_ref (graphiti/Zoho link), UNIQUE(account_id, phone_number)
 wa_labels          account_id, wa_label_id, name, color, sync_state('synced'|'local'|'import_only')
+wa_templates       account_id, name, language, body, meta_status('approved'|'pending'|'rejected'),
+                   cost_hint — the approved template library rules draw from
 wa_chat_status     PK(account_id, chat_id), status(NEEDS_REPLY|AWAITING|FYI|DONE),
                    reason, last_message_at, follow_up_reminded_at
 wa_commitments     id, account_id, chat_id, message_id, direction('ours'|'theirs'), text,
@@ -317,22 +327,24 @@ notify_policy, auto_reply_policy, draft_policy, escalate_after_mins)`.
 
 ---
 
-## 7. UI/UX — the seven screens (see mockups)
+## 7. UI/UX — the screens (see mockups v2)
+
+The mockups render every screen inside the real control-plane shell (icon rail →
+side nav → main pane) so layout, tokens and components translate 1:1 into
+`workbench/control_plane/src/app/whatsapp/`. Screen 8 in the mockup file is a
+build-notes sheet: semantic color roles + a component map (mockup element →
+existing email/control-plane component to reuse → net-new work).
 
 | # | Screen | What it proves |
 |---|---|---|
-| 1 | **Connect** | Two honest paths (QR linked-device w/ visible ban-risk vs Cloud API coexistence), multi-number, one pipeline |
-| 2 | **Dashboard** | Obligation queue + category chips (🏷 = synced label) + waiting-on strip + auto-handled trust ledger |
-| 3 | **Conversation + copilot** | WhatsApp-familiar thread; context rail (Zoho/Odoo/ClickUp/email); AI-read attachments; draft-in-voice composer with variant chips + language toggle |
-| 4 | **Categories** | Labels as policy carriers (notify/auto-reply/drafts/escalation), AI suggestions with accept-all |
-| 5 | **Rules** | Standing behaviors + nested learnings + honest stats + hard guardrails + plain-language compiler |
+| 1 | **Connect** | Embedded Signup + coexistence stepper; observable history/label import; a capability card that states the 24 h window, template pricing and label caveats up front |
+| 2 | **Reply queue** | The home screen is an obligation list: five stat cards (no unread count), category chips (🏷 = synced label), ranked rows each ending in an action, waiting-on strip, trust ledger |
+| 3 | **Conversation** | Three panes; session-window pill in the header; AI-parsed attachments; the overdue-invoice interception; draft-first composer with register/language chips; context rail (Zoho/Odoo/ClickUp/email) |
+| 4 | **Categories** | Labels as policy carriers (notify / auto-reply / drafts / escalation), Family hands-off row, AI suggestions with accept-all |
+| 5 | **Rules** | Rule cards with nested learnings + honest stats, autonomy ladder per rule, template costs surfaced, hard-guardrails card, plain-language compiler |
 | 6 | **Digest** | Needs-you-first ≤3, commitment watch, group roll-up, trust ledger, "clear in 10 min" |
-| 7 | **Companion chat** | Triage-by-conversation on mobile PWA; broadcast with approval gate |
-
-Placement in the control plane: a `/whatsapp` route sharing the email app's
-three-pane skeleton and automation-overlay pattern (`AutomationView` host with
-chat / settings / digest-dashboard / analytics features), so muscle memory and
-components (QuickFilters, LabelChip, TaskCaptureModal) transfer.
+| 7 | **Companion** | Mobile PWA chat with genUI queue/draft cards; approve-&-send as the only send |
+| 8 | **Build notes** | Color semantics + component reuse map — the implementation checklist |
 
 ---
 
@@ -342,8 +354,8 @@ components (QuickFilters, LabelChip, TaskCaptureModal) transfer.
 |---|---|---|
 | Periskope, TimelinesAI, Cooby | WhatsApp shared inboxes / CRM syncers for teams | Team-inbox economics, generic AI, no founder-personal triage, and none can see your ERP ledger, tasks, calendar or email while drafting |
 | WATI / Interakt / BSP suites | Cloud-API marketing + support bots | Campaign/bot-first, not inbox-management; nothing for the founder's own thread list |
-| whatsapp-mcp and kin | Agent bridges | Right instinct (agent runs your WhatsApp), no store, no triage discipline, no HITL, no trust ledger |
-| **Us** | The founder's whole company (CRM/ERP/tasks/email/calendar/memory) standing behind every WhatsApp reply, with email-grade triage doctrine | The moat is the context graph + the already-earned trust patterns, not any single feature |
+| WhatsApp MCP bridges | Agent access to WhatsApp | Right instinct, wrong transport (unofficial) and no store, no triage discipline, no HITL, no trust ledger |
+| **Us** | The founder's whole company (CRM/ERP/tasks/email/calendar/memory) standing behind every WhatsApp reply, with email-grade triage doctrine, on the official API | The moat is the context graph + the already-earned trust patterns, not any single feature |
 
 ---
 
@@ -351,35 +363,37 @@ components (QuickFilters, LabelChip, TaskCaptureModal) transfer.
 
 | # | Risk / question | Position |
 |---|---|---|
-| R1 | **Lane B ban risk** (unofficial protocol; bans are permanent) | Opt-in with explicit in-UI consent; personal number only; read-mostly; rate-guarded sends; never the company line. Revisit if Meta expands coexistence to personal numbers |
-| R2 | **Label API coverage** in coexistence is partial/evolving | Design assumes import-once + local ownership as the floor; two-way sync where the API allows; `sync_state` per label keeps the UI honest |
-| R3 | **24 h window + template pricing** on Lane A | Auto-replies are session messages (free, inside window); proactive nudges outside the window need approved templates — the nudge composer must know which regime it's in and show it |
-| R4 | **Privacy: this pipes personal life through LLMs** | Family/personal categories are hands-off by default (surface, never draft, never auto-handle); per-category AI opt-out; all processing through the gateway's existing BYOK/routing; audit log |
-| R5 | **India DPDP / consent** for storing counterparty messages | Same posture as email (we store our own correspondence); document retention policy; deletion honored via reconcile pass |
-| R6 | **Group consent optics** (summarizing communities) | Summaries are private to the founder — no content leaves; broadcast sends always human-approved |
-| R7 | **Meta platform churn** (coexistence is new) | Transport isolated behind the provider seam; worst case Lane A degrades to standard Cloud API (no history) and Lane B carries history |
-| R8 | Where does `wa_bridge` run? | Sidecar container in the compose stack (Go, whatsmeow), speaking signed webhooks to ingestion — wacli's architecture, service-ified. Decide build-vs-embed at W1 |
+| R1 | **Label API coverage** in coexistence is partial/evolving | Import-once + local ownership is the floor; two-way sync where the API allows; `sync_state` per label keeps the UI honest |
+| R2 | **24 h window + template pricing** | Auto-replies are session messages (free, inside window); proactive nudges outside the window use the approved template library; regime + cost are ambient UI (thread pill, rule cards, draft cards) |
+| R3 | **Privacy: business chats pipe through LLMs** | Family & personal category is hands-off by default (surface, never draft, never auto-handle); per-category AI opt-out; all processing through the gateway's existing BYOK/routing; audit log |
+| R4 | **India DPDP / consent** for storing counterparty messages | Same posture as email (we store our own correspondence); document retention policy; deletion honored via reconcile pass |
+| R5 | **Group consent optics** (summarizing groups) | Summaries are private to the founder — no content leaves; broadcast sends always human-approved |
+| R6 | **Meta platform churn** (coexistence is new; history/label sync phases may change) | All Meta specifics behind the provider seam; worst case degrade to standard Cloud API (no history import) without touching triage/AI layers |
+| R7 | **The personal SIM stays unmanaged in v1** | Accepted consequence of official-only. Practical mitigation: business traffic migrates to the business number over time (the Business app makes this natural); revisit only if Meta opens an official personal-number path |
+| R8 | **Coexistence availability** (region/tier gating by Meta/BSP) | Verify eligibility for our WABA early in W0 — it's the plan's only hard external dependency; fallback is standard Cloud API onboarding with forward-only history |
 
 ---
 
 ## 10. Suggested phasing
 
-- **W0 — Pipe + store (no AI):** `wa_bridge` sidecar (Lane B, personal or test
-  number) → `wa_accounts/chats/messages/media` + upsert + FTS; read-only
-  three-pane UI; Connect screen. *Exit: founder reads & searches all WhatsApp
-  history in the control plane.*
-- **W1 — Official lane + send:** Cloud API + coexistence onboarding (Embedded
-  Signup), history import, label import, webhook mirroring; send with HITL;
-  message → task capture. *Exit: company number lives in both the phone app and
-  CommandCenter; replies sent from the dashboard.*
+- **W0 — Pipe + store (no AI):** Cloud API onboarding via Embedded Signup +
+  coexistence; webhook ingestion → queue → idempotent upsert into
+  `wa_accounts/chats/messages/media`; history + label import with observable
+  progress; FTS; read-only chat UI + Connect screen. *Exit: the founder reads
+  and searches the company number's WhatsApp in the control plane.*
+- **W1 — Send + hand-offs:** session-window-aware sends with HITL; template
+  library bootstrap + approval tracking; message → task capture; contact ↔
+  Zoho/Odoo entity linking. *Exit: replies sent from the dashboard; every chat
+  shows its CRM context.*
 - **W2 — Triage brain:** classifier + chat status + categories-as-policy +
   reply queue dashboard + digest section + auto-handled ledger. *Exit: the
   founder stops opening the phone app to find out what matters.*
 - **W3 — Voice + automation:** drafting with WhatsApp voice profile +
   multilingual replies; standing rules (office hours, order-status
-  answer-from-Odoo, payment cadence); commitment/waiting-on extraction +
-  nudges. *Exit: ≥50% of routine asks auto-handled with 0 corrections/wk.*
-- **W4 — Companion + groups:** `wa.*` agent tools in control-plane chat + mobile
+  answer-from-Odoo, payment cadence via templates); commitment/waiting-on
+  extraction + nudges. *Exit: ≥50% of routine asks auto-handled with 0
+  corrections/wk.*
+- **W4 — Companion + groups:** `wa_*` agent tools in control-plane chat + mobile
   PWA; group summaries + broadcast-with-approval; media OCR + voice-note
   transcription; Focus Shield / WhatsApp windows. *Exit: a full day managed
   from the companion without opening WhatsApp.*

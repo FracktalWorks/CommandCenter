@@ -1,0 +1,452 @@
+<meta charset="utf-8">
+<title>WhatsApp Message Manager — UI mockups</title>
+<style>
+  /* Control-plane dark tokens (globals.css) + WhatsApp green accent */
+  :root{
+    --bg:hsl(220 13% 8%); --card:hsl(220 13% 10%); --card2:hsl(220 13% 12%);
+    --sec:hsl(220 13% 14%); --border:hsl(220 13% 16%); --border2:hsl(220 13% 22%);
+    --fg:hsl(210 40% 98%); --mut:hsl(215 20% 65%); --mut2:hsl(215 15% 45%);
+    --pri:hsl(198 89% 50%); --pri-d:hsl(198 89% 14%);
+    --ok:hsl(142 76% 47%); --warn:hsl(47 96% 53%); --bad:hsl(0 63% 60%);
+    --gold:hsl(43 85% 55%); --gold-d:hsl(43 60% 14%);
+    --wa:hsl(142 70% 49%); --wa-d:hsl(142 60% 12%);
+    --vio:hsl(262 70% 66%); --vio-d:hsl(262 50% 15%);
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--fg);font:13px/1.45 -apple-system,'Segoe UI',Inter,Roboto,sans-serif;padding:32px 20px 80px}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:22px;margin-bottom:4px}
+  .sub{color:var(--mut);margin-bottom:36px;max-width:780px}
+  .mock{margin-bottom:56px}
+  .mock h2{font-size:15px;color:var(--pri);margin-bottom:2px}
+  .mock .note{color:var(--mut);font-size:12px;margin-bottom:14px;max-width:780px}
+  .frame{background:var(--card);border:1px solid var(--border2);border-radius:14px;overflow:hidden;box-shadow:0 12px 40px rgba(0,0,0,.45)}
+  .row{display:flex;gap:24px;flex-wrap:wrap;align-items:flex-start}
+  .ann{flex:1;min-width:230px;color:var(--mut);font-size:12px}
+  .ann li{margin-bottom:8px;list-style:none;padding-left:22px;position:relative}
+  .ann b{color:var(--fg)}
+  .ann .n{position:absolute;left:0;top:0;width:15px;height:15px;border-radius:50%;background:var(--pri);color:var(--bg);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .tag{position:absolute;width:14px;height:14px;border-radius:50%;background:var(--pri);color:var(--bg);font-size:9px;font-weight:700;display:flex;align-items:center;justify-content:center;z-index:9;box-shadow:0 0 0 3px hsl(198 89% 50% / .25)}
+  .pill{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2px 9px;font-size:10.5px;font-weight:600}
+  .meter{height:5px;border-radius:99px;background:var(--sec);overflow:hidden}
+  .meter i{display:block;height:100%;border-radius:99px}
+  .chk{width:13px;height:13px;border-radius:50%;border:1.4px solid var(--mut2);display:inline-block;flex:none}
+  .chk.on{background:var(--ok);border-color:var(--ok);position:relative}
+  .chk.on:after{content:"✓";position:absolute;inset:0;color:var(--bg);font-size:9px;font-weight:800;display:flex;align-items:center;justify-content:center}
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;background:var(--pri);color:var(--bg)}
+  .btn.ghost{background:var(--sec);color:var(--mut)}
+  .btn.wa{background:var(--wa);color:var(--bg)}
+  kbd{border:1px solid var(--border2);border-radius:4px;padding:0 4px;font-size:9px;color:var(--mut)}
+  .qrow{display:flex;align-items:center;gap:10px;padding:9px 12px;border-bottom:1px solid var(--border);font-size:11.5px}
+  .qrow:last-child{border-bottom:0}
+  .av{width:28px;height:28px;border-radius:50%;background:var(--sec);display:flex;align-items:center;justify-content:center;font-size:12px;flex:none}
+  .bub{max-width:78%;border-radius:11px;padding:7px 11px;font-size:11.5px;margin-bottom:6px;position:relative}
+  .bub.in{background:var(--card2);border:1px solid var(--border)}
+  .bub.out{background:var(--wa-d);border:1px solid hsl(142 70% 49% / .35);margin-left:auto}
+  .bub .t{display:block;font-size:8.5px;color:var(--mut2);text-align:right;margin-top:2px}
+</style>
+<div class="wrap">
+  <h1>WhatsApp Message Manager</h1>
+  <p class="sub">UI mockups for <code>whatsapp_message_manager.md</code> — the email playbook
+  (triage → categories → drafts → digest → rules) applied to the founder's real inbox: WhatsApp.
+  Visual language matches the control plane (cyan = primary/AI, <b style="color:var(--wa)">WhatsApp green</b> = channel/outbound,
+  gold = VIP/commitments, violet = groups). Seven screens: connect, dashboard, conversation + copilot,
+  categories, rules, digest, companion chat.</p>
+
+  <!-- ════════ MOCK 1 · CONNECT ════════ -->
+  <div class="mock">
+    <h2>1 · Connect — two honest paths onto one pipeline</h2>
+    <p class="note">Both paths land in the same message store; everything downstream (triage, drafts, digest) is path-agnostic. The trade-offs are stated in the UI, not buried in docs.</p>
+    <div class="row">
+      <div class="frame" style="width:760px;flex:none;position:relative;padding:18px">
+        <b style="font-size:14px">Connect WhatsApp</b>
+        <div style="color:var(--mut);font-size:11px;margin:2px 0 14px">Pick how CommandCenter reaches your number. You can run both — e.g. Business API for the company line, linked-device for your personal SIM.</div>
+        <div style="display:flex;gap:14px">
+          <!-- Path A -->
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border2);border-radius:12px;padding:14px;position:relative">
+            <div class="tag" style="right:12px;top:12px">1</div>
+            <span class="pill" style="background:var(--wa-d);color:var(--wa)">Linked device · QR pair</span>
+            <div style="display:flex;gap:12px;margin-top:12px">
+              <div style="width:92px;height:92px;flex:none;border-radius:8px;background:
+                repeating-conic-gradient(var(--fg) 0 25%,var(--card) 0 50%) 0 0/18px 18px;border:6px solid var(--fg);opacity:.9"></div>
+              <div style="font-size:10.5px;color:var(--mut)">
+                Scan from <b style="color:var(--fg)">WhatsApp → Linked devices</b> — same pairing as WhatsApp Web.
+                Works with personal <i>and</i> WhatsApp Business app. Full history backfill (best-effort), all chats &amp; groups, media.
+                <div style="margin-top:6px"><span class="pill" style="background:var(--sec);color:var(--warn)">⚠ unofficial (whatsmeow) · ban risk</span></div>
+              </div>
+            </div>
+            <div style="margin-top:10px;font-size:10px;color:var(--mut2)">Read: everything · Send: everything (rate-guarded) · Labels: read/write via app-state</div>
+          </div>
+          <!-- Path B -->
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border2);border-radius:12px;padding:14px;position:relative">
+            <div class="tag" style="right:12px;top:12px">2</div>
+            <span class="pill" style="background:var(--pri-d);color:var(--pri)">WhatsApp Business Cloud API · coexistence</span>
+            <div style="font-size:10.5px;color:var(--mut);margin-top:12px">
+              Meta's official path. Embedded Signup links your <b style="color:var(--fg)">existing WhatsApp Business app number</b> —
+              the app keeps working on your phone; the API mirrors it.
+              <ul style="list-style:none;margin-top:8px;font-size:10px">
+                <li>✓ 6 months of chat history synced on onboarding</li>
+                <li>✓ Real-time webhooks for both directions (incl. messages you send from the phone)</li>
+                <li>✓ ToS-compliant, no ban risk · template messages past 24 h window</li>
+                <li>△ Business-app labels stay on the phone — we mirror them as categories</li>
+              </ul>
+            </div>
+            <div style="margin-top:8px"><span class="btn" style="font-size:11px">Start Embedded Signup →</span></div>
+          </div>
+        </div>
+        <!-- status strip -->
+        <div class="tag" style="left:12px;bottom:46px">3</div>
+        <div style="display:flex;gap:16px;margin-top:14px;background:var(--sec);border-radius:9px;padding:9px 12px;font-size:10.5px;color:var(--mut)">
+          <span><b style="color:var(--wa)">●</b> +91 98··· 210 <b style="color:var(--fg)">personal</b> · linked-device · synced 2 min ago</span>
+          <span><b style="color:var(--pri)">●</b> +91 80··· 442 <b style="color:var(--fg)">Fracktal Works</b> · Cloud API coexistence · webhooks healthy</span>
+          <span style="margin-left:auto;color:var(--ok)">history: 14,208 msgs · 312 chats</span>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Linked-device path</b> (wacli / whatsmeow model) — QR pair as a WhatsApp Web device, mirror to our store. Richest access, but third-party: the ban risk is shown, not hidden, and it's the fallback — not the default — for the business number.</li>
+        <li><span class="n">2</span><b>Official path</b> — Cloud API with <b>coexistence</b>, so the Business app on the phone keeps working and its number gains automation. This is the recommended lane for the company line.</li>
+        <li><span class="n">3</span><b>Accounts, plural</b> — a founder runs a personal SIM and a business line; both feed one inbox, tagged by account, with per-account policies (personal defaults to draft-only, never auto-send).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 2 · DASHBOARD ════════ -->
+  <div class="mock">
+    <h2>2 · WhatsApp dashboard — the reply queue, not the chat list</h2>
+    <p class="note">Mirrors the email dashboard: a ranked "needs reply" queue plus what the AI already handled. You process obligations, not 312 unread chats.</p>
+    <div class="row">
+      <div class="frame" style="width:820px;flex:none;position:relative">
+        <!-- header -->
+        <div style="display:flex;align-items:center;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border)">
+          <b style="font-size:13px">💬 WhatsApp</b>
+          <span class="pill" style="background:var(--wa-d);color:var(--wa)">● 2 numbers live</span>
+          <span style="margin-left:auto;font-size:10.5px;color:var(--mut)">Tue 9:04 · <b style="color:var(--fg)">Email window in 26 min</b></span>
+        </div>
+        <!-- stat strip -->
+        <div class="tag" style="left:200px;top:56px">1</div>
+        <div style="display:flex;gap:10px;padding:10px 14px;border-bottom:1px solid var(--border)">
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:8px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--bad)">7</div><div style="font-size:9.5px;color:var(--mut)">needs reply</div></div>
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:8px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--gold)">3</div><div style="font-size:9.5px;color:var(--mut)">commitments due</div></div>
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:8px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--pri)">5</div><div style="font-size:9.5px;color:var(--mut)">waiting on them</div></div>
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:8px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--ok)">23</div><div style="font-size:9.5px;color:var(--mut)">auto-handled ✓</div></div>
+          <div style="flex:1;background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:8px;text-align:center"><div style="font-size:17px;font-weight:800;color:var(--mut2)">184</div><div style="font-size:9.5px;color:var(--mut)">muted as noise</div></div>
+        </div>
+        <!-- category chips -->
+        <div class="tag" style="left:12px;top:116px">2</div>
+        <div style="display:flex;gap:6px;padding:9px 14px;border-bottom:1px solid var(--border);flex-wrap:wrap">
+          <span class="pill" style="background:var(--sec);color:var(--fg);border:1px solid var(--border2)">All · 7</span>
+          <span class="pill" style="background:var(--gold-d);color:var(--gold)">★ VIP · 2</span>
+          <span class="pill" style="background:var(--wa-d);color:var(--wa)">🏷 Customers · 3</span>
+          <span class="pill" style="background:var(--sec);color:var(--warn)">🏷 Pending payment · 1</span>
+          <span class="pill" style="background:var(--vio-d);color:var(--vio)">👥 Dealer groups · 1</span>
+          <span class="pill" style="background:var(--sec);color:var(--mut)">Team · 0</span>
+          <span class="pill" style="background:var(--sec);color:var(--mut)">Vendors · 0</span>
+          <span class="pill" style="background:var(--sec);color:var(--mut2)">🏷 = WhatsApp Business label, synced</span>
+        </div>
+        <!-- queue -->
+        <div class="tag" style="left:12px;top:170px">3</div>
+        <div class="qrow" style="background:hsl(0 63% 60% / .06)">
+          <span class="av">🏭</span>
+          <div style="flex:1;min-width:0"><b>Rajesh — Meher Prototyping</b>
+            <span class="pill" style="background:var(--gold-d);color:var(--gold);margin-left:6px">★ VIP</span>
+            <span class="pill" style="background:var(--sec);color:var(--warn);margin-left:4px">🏷 Pending payment</span>
+            <div style="color:var(--mut);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">"PO attached. Can you confirm the Falcon build volume by <b style="color:var(--bad)">today</b>?" · 📎 PO_4417.pdf</div></div>
+          <span style="font-size:9.5px;color:var(--bad);flex:none">⏱ 2h ago</span>
+          <span class="pill" style="background:var(--pri);color:var(--bg);flex:none">✍️ Draft ready</span>
+        </div>
+        <div class="qrow">
+          <span class="av">🧑‍🔧</span>
+          <div style="flex:1;min-width:0"><b>Sandeep · service escalation</b>
+            <span class="pill" style="background:var(--wa-d);color:var(--wa);margin-left:6px">🏷 Customers</span>
+            <div style="color:var(--mut);font-size:10.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis">3 msgs + 2 photos — nozzle jam on the Julia Pro, line down since morning</div></div>
+          <span style="font-size:9.5px;color:var(--mut);flex:none">4h</span>
+          <span class="pill" style="background:var(--pri);color:var(--bg);flex:none">✍️</span>
+          <span class="pill" style="background:var(--sec);color:var(--mut);flex:none">→ ClickUp</span>
+        </div>
+        <div class="qrow">
+          <span class="av" style="background:var(--vio-d)">👥</span>
+          <div style="flex:1;min-width:0"><b>Dealer Network — South</b>
+            <span class="pill" style="background:var(--vio-d);color:var(--vio);margin-left:6px">group · 47 msgs</span>
+            <div style="color:var(--mut);font-size:10.5px">AI: <i>"Chennai dealer asks margin structure for edu bundles — <b style="color:var(--fg)">you were @mentioned</b>; rest is chatter."</i></div></div>
+          <span style="font-size:9.5px;color:var(--mut);flex:none">1h</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri);flex:none">Reply to the one thing</span>
+        </div>
+        <div class="qrow">
+          <span class="av">👤</span>
+          <div style="flex:1;min-width:0"><b>Amma</b>
+            <span class="pill" style="background:var(--gold-d);color:var(--gold);margin-left:6px">★ Family</span>
+            <div style="color:var(--mut);font-size:10.5px">"Coming Sunday?" · <i style="color:var(--mut2)">AI stays out of family — no draft, just surfaced</i></div></div>
+          <span style="font-size:9.5px;color:var(--mut);flex:none">26m</span>
+          <span class="pill" style="background:var(--sec);color:var(--mut);flex:none">open ↗</span>
+        </div>
+        <!-- waiting-on strip -->
+        <div class="tag" style="left:12px;top:436px">4</div>
+        <div style="padding:10px 14px;border-top:1px solid var(--border)">
+          <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px">WAITING ON THEM · nudge drafts one tap away</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap">
+            <span class="pill" style="background:var(--sec);color:var(--mut)">Ankit · quote revision · 3d <b style="color:var(--pri)">✍️ nudge</b></span>
+            <span class="pill" style="background:var(--sec);color:var(--mut)">CNC vendor · sample photos · 5d <b style="color:var(--pri)">✍️ nudge</b></span>
+            <span class="pill" style="background:var(--sec);color:var(--mut)">Logistics · AWB no. · 1d <b style="color:var(--pri)">✍️ nudge</b></span>
+          </div>
+        </div>
+        <!-- auto-handled -->
+        <div class="tag" style="left:12px;bottom:44px">5</div>
+        <div style="padding:10px 14px;border-top:1px solid var(--border);font-size:10.5px;color:var(--mut)">
+          <b style="color:var(--ok)">✓ Handled for you today:</b> 9 order-status queries answered from Odoo · 6 price-list requests sent the July PDF · 5 "received, will revert" holding replies (office-hours rule) · 3 spam blocked — <span style="color:var(--pri)">review log ↗</span>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Obligations, not unreads</b> — the five numbers that matter: what needs you, what you promised, what you're owed, what the AI already did, what it muted. Unread count is deliberately absent.</li>
+        <li><span class="n">2</span><b>Categories are the filter row</b> — 🏷 chips are two-way synced WhatsApp Business labels; VIP/Family/Noise are ours. Click-through scopes the queue, same as the email dashboard.</li>
+        <li><span class="n">3</span><b>Ranked queue</b> — priority = sender importance × intent (payment/PO/service-down) × age × deadline language. Every row carries its next action: a ready draft, a task hand-off, or "open".</li>
+        <li><span class="n">4</span><b>Waiting-on strip</b> — commitments <i>they</i> made, aged, with one-tap nudge drafts (email's per-thread Nudge, ported).</li>
+        <li><span class="n">5</span><b>Auto-handled log</b> — trust is built by showing the work: every auto-reply is listed, reviewable, and one click from "never do this again".</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 3 · CONVERSATION + COPILOT ════════ -->
+  <div class="mock">
+    <h2>3 · Conversation — chat on the left, the whole company on the right</h2>
+    <p class="note">The thread looks like WhatsApp; the copilot column is why it lives here and not on your phone: CRM, ERP, tasks and email context for the person you're talking to, plus a draft in your voice.</p>
+    <div class="row">
+      <div class="frame" style="width:820px;flex:none;position:relative;display:flex">
+        <!-- thread -->
+        <div style="flex:1.4;border-right:1px solid var(--border);display:flex;flex-direction:column">
+          <div style="display:flex;align-items:center;gap:9px;padding:10px 14px;border-bottom:1px solid var(--border)">
+            <span class="av">🏭</span><div><b>Rajesh — Meher Prototyping</b>
+            <div style="font-size:9.5px;color:var(--mut)">+91 99··· 388 · <span style="color:var(--gold)">★ VIP</span> · 🏷 Pending payment · business line</div></div>
+            <span style="margin-left:auto;font-size:9.5px;color:var(--mut)">translate: <b style="color:var(--pri)">auto</b></span>
+          </div>
+          <div style="padding:12px 14px;flex:1;background:radial-gradient(ellipse at 50% 0%,hsl(220 13% 11%),hsl(220 13% 9%))">
+            <div class="bub in">Sir, PO attached for 2 more Falcons 🙏 <div style="margin-top:5px;background:var(--sec);border-radius:7px;padding:6px 9px;font-size:10.5px">📎 PO_4417.pdf · 214 KB</div><span class="t">7:58</span></div>
+            <div class="bub in">Can you confirm the build volume by today? Client demo tomorrow morning.<span class="t">8:01</span></div>
+            <div class="tag" style="left:14px;top:196px">1</div>
+            <div style="background:var(--card2);border:1px dashed var(--border2);border-radius:9px;padding:8px 11px;font-size:10.5px;color:var(--mut);margin:10px 0">
+              🤖 <b style="color:var(--fg)">AI read the PO:</b> 2 × Falcon 150, ₹11.4 L, delivery Bengaluru, NET-30 — but their last invoice (₹3.2 L) is <b style="color:var(--warn)">18 days overdue</b>. Draft below confirms specs and nudges the payment, gently.
+            </div>
+            <div class="bub out">Confirmed — Falcon 150 build volume is 1500 × 800 × 800 mm, ships with the enclosure. You're set for the demo. 👍<span class="t">draft · not sent</span></div>
+          </div>
+          <!-- composer -->
+          <div class="tag" style="left:14px;bottom:74px">2</div>
+          <div style="border-top:1px solid var(--border);padding:10px 14px">
+            <div style="background:var(--card2);border:1px solid hsl(198 89% 50% / .4);border-radius:10px;padding:9px 11px;font-size:11.5px">
+              Confirmed — build volume is 1500 × 800 × 800 mm… <i style="color:var(--mut)">Also, gentle flag: invoice FW-2291 is pending — could you have accounts take a look?</i>
+              <div style="display:flex;gap:6px;margin-top:8px;align-items:center">
+                <span class="pill" style="background:var(--pri-d);color:var(--pri)">✦ your voice · 92%</span>
+                <span class="pill" style="background:var(--sec);color:var(--mut)">shorter</span>
+                <span class="pill" style="background:var(--sec);color:var(--mut)">drop the payment ask</span>
+                <span class="pill" style="background:var(--sec);color:var(--mut)">हिन्दी</span>
+                <span class="btn wa" style="margin-left:auto;font-size:11px">Send ▸</span>
+              </div>
+            </div>
+          </div>
+        </div>
+        <!-- context rail -->
+        <div style="flex:1;padding:12px;font-size:11px;position:relative">
+          <div class="tag" style="right:12px;top:12px">3</div>
+          <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px">WHO IS THIS</div>
+          <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px;margin-bottom:8px">
+            <b>Meher Prototyping</b> · customer since 2023<div style="color:var(--mut);font-size:10px;margin-top:2px">Zoho: ₹38 L lifetime · deal "Falcon ×2" <b style="color:var(--warn)">Proposal</b><br>Odoo: inv FW-2291 <b style="color:var(--warn)">₹3.2 L · 18d overdue</b></div>
+          </div>
+          <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin:10px 0 6px">CROSS-CHANNEL</div>
+          <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px;margin-bottom:8px;color:var(--mut);font-size:10.5px">
+            ✉️ Email (Jul 14): sent Falcon quote v3<br>📞 Note (Jul 18): "wants edu discount"<br>💬 This thread: PO received today
+          </div>
+          <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin:10px 0 6px">OPEN LOOPS</div>
+          <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px;margin-bottom:8px;font-size:10.5px">
+            <span class="chk"></span> ClickUp: "Falcon demo unit QA" · due Fri<br>
+            <span style="color:var(--gold)">★ You promised:</span> "installation by month-end" (Jul 12)
+          </div>
+          <div class="tag" style="right:12px;bottom:46px">4</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-top:10px">
+            <span class="pill" style="background:var(--sec);color:var(--fg)">＋ task</span>
+            <span class="pill" style="background:var(--sec);color:var(--fg)">＋ CRM note</span>
+            <span class="pill" style="background:var(--sec);color:var(--fg)">summarize thread</span>
+            <span class="pill" style="background:var(--sec);color:var(--fg)">remind me if silent 2d</span>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Attachments get read</b> — POs, invoices, screenshots and voice notes are parsed (OCR/transcription) and folded into the suggested action. The AI noticed the overdue invoice <i>before you replied yes to more credit</i>.</li>
+        <li><span class="n">2</span><b>Drafts in your voice</b> — the email app's learned writing-style profile extends to WhatsApp register (shorter, emoji-tolerant, per-relationship formality). One-tap variants; हिन्दी/Kannada toggle for the dealer network. Nothing sends itself on a VIP thread.</li>
+        <li><span class="n">3</span><b>The moat</b> — Zoho + Odoo + ClickUp + email context beside the chat. WhatsApp on the phone can never tell you the sender owes ₹3.2 L.</li>
+        <li><span class="n">4</span><b>Chat → system of record</b> — one tap turns a message into a ClickUp task or CRM note (approval-gated, like all outward writes), or arms a silence-triggered reminder.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 4 · CATEGORIES ════════ -->
+  <div class="mock">
+    <h2>4 · Categories — WhatsApp Business labels, upgraded with policies</h2>
+    <p class="note">Business-app labels sync two-way and become <i>policy carriers</i>: each category decides notification, auto-reply, AI-draft and escalation behaviour. Senders inherit; the AI proposes; you confirm.</p>
+    <div class="row">
+      <div class="frame" style="width:780px;flex:none;position:relative;padding:14px">
+        <div style="display:flex;align-items:center;margin-bottom:10px">
+          <b style="font-size:13px">Categories &amp; senders</b>
+          <span class="pill" style="background:var(--wa-d);color:var(--wa);margin-left:8px">🏷 5 labels synced from WhatsApp Business</span>
+          <span style="margin-left:auto;font-size:10px;color:var(--mut)">312 chats · 289 categorized · <b style="color:var(--warn)">23 need a home</b></span>
+        </div>
+        <!-- table head -->
+        <div style="display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.2fr;gap:8px;font-size:9.5px;color:var(--mut2);font-weight:700;letter-spacing:.05em;padding:0 10px 6px">
+          <span>CATEGORY</span><span>NOTIFY</span><span>AUTO-REPLY</span><span>AI DRAFTS</span><span>ESCALATE IF UNANSWERED</span>
+        </div>
+        <div class="tag" style="left:12px;top:96px">1</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px 10px;display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.2fr;gap:8px;font-size:11px;align-items:center;margin-bottom:6px">
+          <span><b style="color:var(--gold)">★ VIP</b> <span style="color:var(--mut2);font-size:9.5px">14 people · ours</span></span>
+          <span class="pill" style="background:var(--sec);color:var(--fg)">instant</span>
+          <span style="color:var(--mut2)">never</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">always ready</span>
+          <span class="pill" style="background:var(--sec);color:var(--bad)">2 h → push</span>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px 10px;display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.2fr;gap:8px;font-size:11px;align-items:center;margin-bottom:6px">
+          <span><b style="color:var(--wa)">🏷 New customer</b> <span style="color:var(--mut2);font-size:9.5px">synced label</span></span>
+          <span class="pill" style="background:var(--sec);color:var(--fg)">digest</span>
+          <span class="pill" style="background:var(--wa-d);color:var(--wa)">greet + price list</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">on intent</span>
+          <span class="pill" style="background:var(--sec);color:var(--warn)">24 h → queue top</span>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px 10px;display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.2fr;gap:8px;font-size:11px;align-items:center;margin-bottom:6px">
+          <span><b style="color:var(--warn)">🏷 Pending payment</b> <span style="color:var(--mut2);font-size:9.5px">synced label</span></span>
+          <span class="pill" style="background:var(--sec);color:var(--fg)">instant</span>
+          <span style="color:var(--mut2)">never</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">always + Odoo status</span>
+          <span class="pill" style="background:var(--sec);color:var(--bad)">4 h → push</span>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px 10px;display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.2fr;gap:8px;font-size:11px;align-items:center;margin-bottom:6px">
+          <span><b style="color:var(--vio)">👥 Dealer groups</b> <span style="color:var(--mut2);font-size:9.5px">18 groups · ours</span></span>
+          <span class="pill" style="background:var(--sec);color:var(--fg)">@mention only</span>
+          <span style="color:var(--mut2)">never</span>
+          <span class="pill" style="background:var(--pri-d);color:var(--pri)">daily summary</span>
+          <span style="color:var(--mut2)">—</span>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:9px;padding:9px 10px;display:grid;grid-template-columns:1.5fr 1fr 1fr 1fr 1.2fr;gap:8px;font-size:11px;align-items:center;margin-bottom:10px">
+          <span><b style="color:var(--mut)">🔇 Noise</b> <span style="color:var(--mut2);font-size:9.5px">promos, forwards, 112 chats</span></span>
+          <span style="color:var(--mut2)">never</span>
+          <span style="color:var(--mut2)">never</span>
+          <span style="color:var(--mut2)">—</span>
+          <span style="color:var(--mut2)">weekly one-liner in digest</span>
+        </div>
+        <!-- triage strip -->
+        <div class="tag" style="left:12px;bottom:64px">2</div>
+        <div style="border-top:1px solid var(--border);padding-top:10px">
+          <div style="color:var(--mut2);font-size:9.5px;font-weight:700;letter-spacing:.06em;margin-bottom:6px">AI SUGGESTIONS — 23 UNCATEGORIZED</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:10.5px">
+            <span class="pill" style="background:var(--sec);color:var(--fg)">"3D Hubs BLR" → 👥 Dealer groups? <b style="color:var(--ok)">✓</b> <b style="color:var(--mut2)">✕</b></span>
+            <span class="pill" style="background:var(--sec);color:var(--fg)">+91 63··· (asked for quote ×2) → 🏷 New customer? <b style="color:var(--ok)">✓</b> <b style="color:var(--mut2)">✕</b></span>
+            <span class="pill" style="background:var(--sec);color:var(--fg)">"Insurance offers" → 🔇 Noise? <b style="color:var(--ok)">✓</b> <b style="color:var(--mut2)">✕</b></span>
+            <span class="pill" style="background:var(--pri-d);color:var(--pri)">accept all 23 →</span>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Category = policy, not just a color</b> — each row answers: when do I hear about it, what may the AI say alone, when does silence escalate. 🏷 rows write back to the phone's Business labels, so field staff see the same truth.</li>
+        <li><span class="n">2</span><b>Auto-learn with consent</b> — the classifier proposes homes for new senders from message content + CRM matching (phone number ↔ Zoho contact). Accept-all for the lazy path; every acceptance becomes a learned rule, visible on the Rules screen.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 5 · RULES ════════ -->
+  <div class="mock">
+    <h2>5 · Rules — every standing behaviour on one screen</h2>
+    <p class="note">The email app's "one rules screen" pattern: hand-written policies with their learned refinements nested underneath, plus the office-hours responder. Nothing the system does is unexplained.</p>
+    <div class="row">
+      <div class="frame" style="width:720px;flex:none;position:relative;padding:14px">
+        <b style="font-size:13px">Standing rules</b>
+        <div class="tag" style="left:12px;top:44px">1</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:10px">
+          <div style="display:flex;align-items:center;gap:8px"><b>🌙 Office hours</b><span class="pill" style="background:var(--wa-d);color:var(--wa)">auto-reply on</span><span style="margin-left:auto;font-size:9.5px;color:var(--mut)">Mon–Sat · 19:00 → 09:00</span></div>
+          <div style="font-size:10.5px;color:var(--mut);margin-top:4px">"Thanks for reaching Fracktal Works — we're offline. Urgent service issues: reply <b style="color:var(--fg)">URGENT</b> and we'll page the on-call engineer."</div>
+          <div style="font-size:10px;color:var(--mut2);margin-top:6px;border-top:1px dashed var(--border);padding-top:6px">↳ learned: URGENT replies paged you 3× this month · 2 were real — <span style="color:var(--pri)">keep / tune</span></div>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:8px">
+          <div style="display:flex;align-items:center;gap:8px"><b>📦 Order status asks</b><span class="pill" style="background:var(--wa-d);color:var(--wa)">auto-answer from Odoo</span></div>
+          <div style="font-size:10.5px;color:var(--mut);margin-top:4px">If a 🏷 Customer asks where an order is → answer with live Odoo status + AWB link. No approval needed (read-only answer).</div>
+          <div style="font-size:10px;color:var(--mut2);margin-top:6px;border-top:1px dashed var(--border);padding-top:6px">↳ learned: "kab tak" / "when dispatch" / "tracking?" all mean this · 41 handled this month, 0 corrections</div>
+        </div>
+        <div class="tag" style="left:12px;top:262px">2</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:8px">
+          <div style="display:flex;align-items:center;gap:8px"><b>💰 Payment chase cadence</b><span class="pill" style="background:var(--pri-d);color:var(--pri)">drafts only — you send</span></div>
+          <div style="font-size:10.5px;color:var(--mut);margin-top:4px">Invoice overdue 7d → polite draft · 14d → firmer + accounts CC'd via email · 21d → escalation draft to you with the full ledger. Tone learned from your past chases.</div>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-top:8px">
+          <div style="display:flex;align-items:center;gap:8px"><b>🛡 Hard guardrails</b><span class="pill" style="background:var(--sec);color:var(--bad)">not editable by AI</span></div>
+          <div style="font-size:10.5px;color:var(--mut);margin-top:4px">Never auto-send to ★ VIP or Family · never send prices not in the July list · never promise a delivery date · max 20 auto-replies/hour · every send logged to the audit trail · personal number = drafts only, always.</div>
+        </div>
+        <div class="tag" style="left:12px;bottom:20px">3</div>
+        <div style="font-size:10.5px;color:var(--mut);margin-top:10px">＋ New rule in plain language: <i style="color:var(--fg)">"When a dealer asks for the edu-bundle deck, send the latest PDF from Drive and label them Edu-pipeline"</i> — <span style="color:var(--pri)">compile to rule ✦</span></div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Rules own their learnings</b> — refinements the classifier picks up nest under the human rule that spawned them, with honest stats (41 handled, 0 corrections) so trust is earned, not asked for.</li>
+        <li><span class="n">2</span><b>Autonomy ladder</b> — read-only answers (order status) can be fully automatic; anything that commits money, dates or reputation stays drafts-only. The ladder is per-rule and visible.</li>
+        <li><span class="n">3</span><b>Plain-language rule compiler</b> — say it like you'd tell an EA; the system shows you the compiled rule for approval before it goes live.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 6 · DIGEST ════════ -->
+  <div class="mock">
+    <h2>6 · Daily digest — WhatsApp joins the morning brief</h2>
+    <p class="note">The 7:30 digest the email app already sends grows a WhatsApp section — same projection-of-aggregates pattern. Groups arrive pre-summarized; the noise arrives as one number, not 184 pings.</p>
+    <div class="row">
+      <div class="frame" style="width:520px;flex:none;position:relative;padding:16px">
+        <b style="font-size:14px">☀ Tuesday brief — WhatsApp</b>
+        <div style="font-size:10px;color:var(--mut);margin-bottom:12px">since yesterday 19:00 · 2 numbers · 241 messages processed</div>
+        <div class="tag" style="left:14px;top:66px">1</div>
+        <div style="background:hsl(0 63% 60% / .07);border:1px solid hsl(0 63% 60% / .3);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:11px">
+          <b style="color:var(--bad)">Needs you first (3)</b>
+          <div style="color:var(--mut);margin-top:4px">• Rajesh (VIP, ₹11.4 L PO) — confirm build volume <b style="color:var(--bad)">today</b> · draft ready<br>• Julia Pro line-down at Sandeep's — service ticket drafted → ClickUp<br>• Chennai dealer @mentioned you on edu margins</div>
+        </div>
+        <div class="tag" style="left:14px;top:172px">2</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:11px">
+          <b style="color:var(--gold)">★ Commitment watch</b>
+          <div style="color:var(--mut);margin-top:4px">• You promised Meher an <b style="color:var(--fg)">installation by month-end</b> — 8 days left, no task exists → <span style="color:var(--pri)">create it?</span><br>• You told the IIT lab "quote by Wednesday" — that's tomorrow</div>
+        </div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;margin-bottom:8px;font-size:11px">
+          <b style="color:var(--vio)">👥 Group roll-up</b>
+          <div style="color:var(--mut);margin-top:4px">• <b style="color:var(--fg)">Dealer South</b> (47): edu-bundle margins question, monsoon shipping delays grumble<br>• <b style="color:var(--fg)">Fracktal Team</b> (63): Falcon QA passed ✓, Friday demo confirmed<br>• 14 quiet groups: nothing for you</div>
+        </div>
+        <div class="tag" style="left:14px;bottom:60px">3</div>
+        <div style="background:var(--card2);border:1px solid var(--border);border-radius:10px;padding:10px 12px;font-size:11px">
+          <b style="color:var(--ok)">✓ Handled · 23</b> <span style="color:var(--mut)">9 order-status · 6 price lists · 5 holding replies · 3 spam</span>
+          <div style="color:var(--mut2);font-size:10px;margin-top:3px">Muted: 184 msgs across Noise · sampled-checked, 0 misfiled</div>
+        </div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <span class="btn" style="flex:1;justify-content:center">Open reply queue (7)</span>
+          <span class="btn ghost" style="flex:1;justify-content:center">Clear in 10 min ▸</span>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Triaged, not listed</b> — the digest opens with the ≤3 things that actually need the founder, each with its prepared next action attached.</li>
+        <li><span class="n">2</span><b>Commitment watch</b> — promises are extracted from <i>your own outbound messages</i> (email + WhatsApp) and tracked against tasks and the calendar. The system notices the promise that never became work.</li>
+        <li><span class="n">3</span><b>The trust ledger</b> — what was handled and what was muted, with sampling honesty. This line is what lets you <i>not</i> open WhatsApp 40× a day.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ════════ MOCK 7 · COMPANION CHAT ════════ -->
+  <div class="mock">
+    <h2>7 · AI companion — run WhatsApp by talking, anywhere</h2>
+    <p class="note">The existing Control-Plane chat (and its mobile PWA) gains a WhatsApp toolset — the "companion app" is the same assistant, holding the same drafts, approvals and context. Nothing here is a new surface to learn.</p>
+    <div class="row">
+      <div class="frame" style="width:400px;flex:none;position:relative;padding:14px">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px"><b style="font-size:13px">✦ Assistant</b><span class="pill" style="background:var(--wa-d);color:var(--wa)">wa tools on</span><span style="margin-left:auto;font-size:9.5px;color:var(--mut)">mobile PWA</span></div>
+        <div class="bub out" style="max-width:88%">What did I miss on WhatsApp during the board meeting?<span class="t">14:02</span></div>
+        <div class="bub in" style="max-width:92%">3 things worth your time: Rajesh confirmed the PO (draft reply ready), a new lead from the IIT-M lab asked for a Falcon quote, and the CNC vendor finally sent the sample photos you chased. 41 other messages were routine — handled or held. <span class="t">14:02</span></div>
+        <div class="tag" style="left:14px;top:196px">1</div>
+        <div class="bub out" style="max-width:88%">Reply to Rajesh — confirm specs, and ask about the overdue invoice but keep it warm.<span class="t">14:03</span></div>
+        <div class="bub in" style="max-width:92%">Draft: <i>"Confirmed — 1500×800×800 mm, enclosure included, you're set for tomorrow. One small thing — could accounts look at FW-2291 when they get a chance? 🙏"</i>
+          <div style="display:flex;gap:6px;margin-top:7px"><span class="pill" style="background:var(--wa);color:var(--bg)">Send ▸</span><span class="pill" style="background:var(--sec);color:var(--mut)">edit</span><span class="pill" style="background:var(--sec);color:var(--mut)">warmer</span></div><span class="t">14:03</span></div>
+        <div class="tag" style="left:14px;top:346px">2</div>
+        <div class="bub out" style="max-width:88%">Summarize what the dealer network is saying about the monsoon delays, and draft a broadcast update.<span class="t">14:05</span></div>
+        <div class="bub in" style="max-width:92%">Across 4 dealer groups: 11 mentions of shipment slips, mostly Chennai/Kochi routes, sentiment is patient-but-tired. Broadcast draft (to 18 groups, needs your approval): <i>"Monsoon update: dispatches running 2–3 days behind on southern routes…"</i>
+          <div style="display:flex;gap:6px;margin-top:7px"><span class="pill" style="background:var(--pri);color:var(--bg)">review + approve</span></div><span class="t">14:05</span></div>
+        <div style="border-top:1px solid var(--border);margin-top:8px;padding-top:8px;font-size:10px;color:var(--mut2)">try: "quote status for IIT-M" · "who am I ignoring?" · "mute Dealer North till Monday"</div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Command, don't scroll</b> — triage-by-conversation from a cab, between meetings. The assistant holds the queue, the drafts and the CRM context; you supply judgment in one sentence.</li>
+        <li><span class="n">2</span><b>One-to-many with a gate</b> — group summarization feeds a broadcast draft; sending to 18 groups is exactly the kind of outward write that always goes through the approval flow.</li>
+      </ul>
+    </div>
+  </div>
+</div>

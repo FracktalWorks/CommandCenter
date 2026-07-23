@@ -1519,17 +1519,23 @@ export async function getRulesHistory(
   return res.history ?? [];
 }
 
-/** Mark a Reply-Zero thread done (done=false reopens it). The backend collapses
- *  the thread's conversation labels and closes any task captured from it — the
- *  dashboard's one-click "this loop is closed". */
+/** Resolve a Reply-Zero thread from the dashboard. Default: mark done (labels
+ *  collapse, captured tasks close). `done: false` reopens. `dismiss: true` is
+ *  the honest third state — "never mind this thread": files it as FYI without
+ *  claiming completion and WITHOUT closing captured tasks. */
 export async function resolveThread(
   accountId: string,
   threadId: string,
-  done = true
+  opts: { done?: boolean; dismiss?: boolean } = {}
 ): Promise<void> {
   await gatewayFetch(`/email/reply-zero/resolve`, {
     method: "POST",
-    body: JSON.stringify({ account_id: accountId, thread_id: threadId, done }),
+    body: JSON.stringify({
+      account_id: accountId,
+      thread_id: threadId,
+      done: opts.done ?? true,
+      dismiss: opts.dismiss ?? false,
+    }),
   });
 }
 

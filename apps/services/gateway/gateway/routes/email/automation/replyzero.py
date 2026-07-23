@@ -1347,6 +1347,10 @@ class ThreadResolveRequest(BaseModel):
     account_id: str
     thread_id: str
     done: bool = True  # True = mark done (resolved); False = reopen
+    # Dismiss ≠ Done: "never mind this thread" without pretending completion.
+    # Files the thread as FYI (not awaiting anything, nothing claimed finished)
+    # and does NOT close tasks captured from it. Overrides ``done``.
+    dismiss: bool = False
 
 
 @router.post("/reply-zero/resolve")
@@ -1365,7 +1369,17 @@ async def resolve_thread(
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         keep_label = "Done"
-        if req.done:
+        if req.dismiss:
+            # A dead loop the user will never answer: file it as FYI. DONE
+            # would lie (nothing was completed — and it would close captured
+            # tasks); leaving it NEEDS_REPLY keeps a zombie in the ledger.
+            keep_label = "FYI"
+            await db.execute(text(
+                "UPDATE email_thread_status SET status = 'FYI', "
+                "reason = 'Dismissed by the user', classified_at = now() "
+                "WHERE account_id = :aid AND thread_id = :tid"
+            ), {"aid": req.account_id, "tid": req.thread_id})
+        elif req.done:
             res = await db.execute(text(
                 "UPDATE email_thread_status SET status = 'DONE', "
                 "classified_at = now() "

@@ -75,8 +75,8 @@ export function CalendarSettings({
         />
       </div>
 
-      <label className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-muted-foreground">Day window</span>
+      <label className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Working hours</span>
         <span className="flex items-center gap-1">
           <input
             type="number"
@@ -97,6 +97,11 @@ export function CalendarSettings({
           />
         </span>
       </label>
+      <p className="mb-2 text-[10px] text-muted-foreground">
+        The grid always shows all 24 hours — these just shade your off-hours and
+        set where the AI planner places work by default. You can still schedule
+        any time.
+      </p>
 
       <label className="mb-2 flex items-center justify-between gap-2">
         <span className="text-muted-foreground">Daily focus capacity (h)</span>

@@ -413,7 +413,7 @@ async def gtd_organize(
     return f"Organized → {_fmt_item(item)}{staged}"
 
 
-def _fmt_plan(plan: dict[str, Any]) -> str:
+def _fmt_project_plan(plan: dict[str, Any]) -> str:
     """Render a proposed project plan compactly for the chat context."""
     out = [f"PROJECT: {plan.get('name', '?')}"]
     if plan.get("description"):
@@ -474,7 +474,7 @@ async def gtd_plan_project(
     """
     plan = await _request("POST", "/tasks/plan", json={
         "name": name, "description": description or None, "target": target})
-    summary = _fmt_plan(plan)
+    summary = _fmt_project_plan(plan)
     if not apply:
         return ("Proposed plan (review with the user, then call gtd_plan_project "
                 "with apply=true to create it):\n\n" + summary)

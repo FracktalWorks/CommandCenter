@@ -18,7 +18,7 @@ import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { UnifiedModel } from "@/app/api/models/all/route";
 import ArtifactViewerModal from "@/components/ArtifactViewerModal";
-import { subscribe as subscribeSidePanel, getOpenDocsForSession } from "@/lib/sidePanelStore";
+import { subscribe as subscribeSidePanel, getOpenDocsForSession, openGenUI } from "@/lib/sidePanelStore";
 import type { FileEntry } from "@/components/ArtifactSidebar";
 import FileUploadButton from "@/components/FileUploadButton";
 import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
@@ -691,7 +691,9 @@ export default function AgentChat({
         const v = value as Record<string, unknown>;
         const reqId = v.request_id ? String(v.request_id) : undefined;
         setConfirmation({
-          id: String(v.id ?? v.request_id ?? Date.now()),
+          // Static fallback id — only one confirmation card renders at a time
+          // (state replace), and Date.now() here trips react-hooks/purity.
+          id: String(v.id ?? v.request_id ?? "confirmation"),
           title: String(v.title ?? "Confirm action"),
           detail: v.detail ? String(v.detail) : undefined,
           context: v.context ? String(v.context) : undefined,
@@ -719,6 +721,45 @@ export default function AgentChat({
               : [],
             allowFreeform: v.allowFreeform !== false,
           });
+        }
+      }
+      // Immersive generative UI (surface:"panel") — auto-open in the side
+      // panel as it arrives, Claude-artifacts style. The transcript keeps a
+      // compact re-open chip (MessageBubble).
+      if (name === "generative_ui" && value && typeof value === "object") {
+        const v = value as Record<string, unknown>;
+        if (v.surface === "panel") {
+          // Stable id (no impure calls in the subscriber): request_id when
+          // blocking, else the title — a same-titled re-emit replaces its
+          // tab, and the transcript chip reopens any specific instance.
+          const id = typeof v.request_id === "string" && v.request_id
+            ? v.request_id
+            : (typeof v.title === "string" && v.title ? v.title : "latest");
+          openGenUI({
+            id,
+            title: typeof v.title === "string" ? v.title : undefined,
+            sessionId,
+            spec: value,
+          });
+        }
+      }
+      // Interaction from a panel-surface generative UI (SidePanelEditor emits
+      // through the global bus — it has no direct line to this component's
+      // send/HITL plumbing).
+      if (name === "genui_panel_action" && value && typeof value === "object") {
+        const v = value as Record<string, unknown>;
+        const message = typeof v.message === "string" ? v.message : "";
+        if (!message) return;
+        const spec = (v.spec && typeof v.spec === "object"
+          ? v.spec : {}) as Record<string, unknown>;
+        const reqId = typeof spec.request_id === "string" ? spec.request_id : "";
+        if (reqId) {
+          postRespondInput(
+            { request_id: reqId, answer: message, was_freeform: true },
+            () => submitText(message),
+          );
+        } else {
+          submitText(message);
         }
       }
     },
@@ -1133,6 +1174,20 @@ export default function AgentChat({
     [submitText]
   );
 
+  /** Resolve a BLOCKING generative-UI interaction (emit_generative_ui with
+   *  hitl:true — the run is parked on a server Future keyed by request_id).
+   *  Resumes the SAME stream via /api/agent/respond-input; on failure falls
+   *  back to sending the answer as a normal message so it's never lost. */
+  const handleGenUiHitl = useCallback(
+    (requestId: string, answer: string) => {
+      postRespondInput(
+        { request_id: requestId, answer, was_freeform: true },
+        () => submitText(answer),
+      );
+    },
+    [postRespondInput, submitText]
+  );
+
   // Stable callbacks for MessageBubble so React.memo can skip re-rendering
   // unchanged messages (per-message closures used to defeat the memoization —
   // every message re-ran ReactMarkdown on every streamed token).
@@ -1526,6 +1581,7 @@ export default function AgentChat({
                   </div>
                 )}
                 <MessageBubble message={msg} sessionId={sessionId} onChoice={handleChoice}
+                  onHitlRespond={handleGenUiHitl}
                   emailContext={emailContext}
                   onFileOpen={handleFileOpen}
                   onResend={handleResend}

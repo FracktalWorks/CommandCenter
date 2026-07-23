@@ -199,6 +199,59 @@ async def run_script(path: str, args: str = "") -> str:
     return f"run_script {path} — {status}\n{body}{tail}"
 
 
+def _commit_repo_changes(root: Path, task: str) -> str | None:
+    """Commit any non-ignored working-tree changes a coding session left behind.
+
+    The agent's workspace IS its git clone (``_resolve_effective_agent_dir``),
+    so edits to TRACKED source — a repo-baked skill under ``skills/*/scripts/``,
+    ``agents.py`` — must become a local commit: the executor's post-run commit
+    scan (``_detect_agent_commits``) registers every local commit as a
+    ``pending_commit`` row for human approval (the push guard blocks direct
+    pushes), and the loader's next ``_pull_latest`` would otherwise stash-drop
+    or hard-reset uncommitted tracked changes into oblivion. The session is
+    instructed to commit its own repo edits; this is the fail-safe for when it
+    doesn't. ``git add -A`` respects the loader-managed ``.gitignore``, so
+    ``agent-data/``, ``inputs/`` and ``outputs/`` are never swept into a commit.
+
+    Returns the short SHA of the created commit, or ``None`` when the workspace
+    is not a git repo, the tree is clean, or any git step fails (best-effort —
+    never raises).
+    """
+    import subprocess  # noqa: PLC0415
+
+    if not (root / ".git").exists():
+        return None
+
+    def _git(*args: str) -> subprocess.CompletedProcess[str]:
+        return subprocess.run(
+            ["git", *args], cwd=str(root),
+            capture_output=True, text=True, timeout=30,
+        )
+
+    try:
+        status = _git("status", "--porcelain")
+        if status.returncode != 0 or not status.stdout.strip():
+            return None
+        _git("add", "-A")
+        if not _git("diff", "--cached", "--name-only").stdout.strip():
+            return None
+        commit_cmd = ["commit", "-m", f"code_task: {task.strip()[:72]}"]
+        if not _git("config", "user.email").stdout.strip():
+            # Clones get the bot identity at clone time; this covers external
+            # workspace_root repos that never went through the loader.
+            commit_cmd = [
+                "-c", "user.name=commandcenter-bot",
+                "-c", "user.email=commandcenter-bot@users.noreply.github.com",
+                *commit_cmd,
+            ]
+        if _git(*commit_cmd).returncode != 0:
+            return None
+        sha = _git("rev-parse", "--short", "HEAD").stdout.strip()
+        return sha or None
+    except Exception:  # noqa: BLE001 — a git hiccup must never fail the tool
+        return None
+
+
 async def code_task(task: str) -> str:
     """Write, edit, run, and test scripts in your workspace via a bounded
     coding session (the platform's coding engine).
@@ -211,6 +264,12 @@ async def code_task(task: str) -> str:
     so scripts accumulate as durable, reusable capability across sessions,
     restarts, and redeploys. To simply re-run an existing script, use the much
     cheaper ``run_script`` instead.
+
+    This also covers your BUILT-IN skills: if one of your repo-baked skill
+    scripts (``skills/*/scripts/``) is broken or needs a change, describe it —
+    the session edits the source in place and the change is committed locally
+    and queued for human approval (it goes live once approved). Workspace
+    scripts under ``agent-data/`` need no approval.
 
     Args:
         task: What to build or change, with enough context to act — inputs,
@@ -245,10 +304,21 @@ async def code_task(task: str) -> str:
         swept = await _sweep_to_blob_store(root, since=started)
     except Exception:
         swept = 0
+    # Fail-safe: commit any repo-source edits the session left uncommitted so
+    # the approval pipeline sees them and the next loader pull can't wipe them.
+    import asyncio  # noqa: PLC0415
+    committed = await asyncio.to_thread(_commit_repo_changes, root, task)
+    commit_note = (
+        f"\n[repo changes committed locally as {committed} — queued for "
+        "human approval before push]" if committed else ""
+    )
     if report is None:
         return (
             f"code_task failed: {error}\n"
             + (f"[{swept} file(s) it wrote were still persisted]" if swept else "")
+            + commit_note
         )
-    tail = f"\n\n[{swept} file(s) persisted to the durable store]" if swept else ""
+    tail = (
+        f"\n\n[{swept} file(s) persisted to the durable store]" if swept else ""
+    ) + commit_note
     return _cap(report) + tail

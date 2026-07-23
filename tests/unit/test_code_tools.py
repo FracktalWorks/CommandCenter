@@ -231,6 +231,104 @@ def test_code_task_failure_still_sweeps(ws, mirrored, monkeypatch):
     assert "still persisted" in out
 
 
+# ── mutability harmonisation: repo-baked skill edits → approval pipeline ────
+
+def _git(root, *args):
+    import subprocess
+    return subprocess.run(
+        ["git", *args], cwd=str(root), capture_output=True, text=True, timeout=30,
+    )
+
+
+@pytest.fixture()
+def git_ws(ws):
+    """Turn the workspace into a mini agent clone: tracked skill + gitignore."""
+    (ws / "skills" / "demo" / "scripts").mkdir(parents=True)
+    (ws / "skills" / "demo" / "scripts" / "tool.py").write_text("print('v1')")
+    (ws / ".gitignore").write_text("outputs/\ninputs/\nagent-data/\n")
+    assert _git(ws, "init").returncode == 0
+    _git(ws, "config", "user.name", "test-bot")
+    _git(ws, "config", "user.email", "test-bot@example.com")
+    _git(ws, "add", "-A")
+    assert _git(ws, "commit", "-m", "baseline").returncode == 0
+    return ws
+
+
+def _commit_count(root) -> int:
+    return int(_git(root, "rev-list", "--count", "HEAD").stdout.strip())
+
+
+def test_code_task_commits_uncommitted_repo_skill_edit(git_ws, mirrored, monkeypatch):
+    """A session that fixes a repo-baked skill but forgets to commit must not
+    leave the clone dirty — dirty tracked files are destroyed by the loader's
+    next pull (stash-drop / hard-reset), and only a LOCAL COMMIT reaches the
+    pending_commit approval inbox."""
+    import orchestrator.code_session as cs
+
+    async def _fix_skill(*, task, workspace, **kw):
+        from pathlib import Path
+        Path(workspace, "skills/demo/scripts/tool.py").write_text("print('v2-fixed')")
+        Path(workspace, "agent-data/SCRIPTS.md").write_text("# scripts")
+        return "Fixed the demo skill."
+
+    monkeypatch.setattr(cs, "run_copilot_code_session", _fix_skill)
+    out = asyncio.run(ct.code_task("fix the demo skill tool.py"))
+    assert "Fixed the demo skill" in out
+    assert "committed locally" in out and "human approval" in out
+    assert _commit_count(git_ws) == 2  # baseline + the fail-safe commit
+    # Tree is clean again — nothing left for a pull to destroy.
+    assert not _git(git_ws, "status", "--porcelain").stdout.strip()
+    # The commit message carries the task for the approval inbox.
+    assert "code_task: fix the demo skill" in _git(git_ws, "log", "-1", "--format=%s").stdout
+    # gitignored runtime state stayed OUT of the commit (blob store owns it)…
+    assert "agent-data" not in _git(git_ws, "show", "--name-only", "HEAD").stdout
+    # …and went through the durability sweep instead.
+    assert "agent-data/SCRIPTS.md" in mirrored
+
+
+def test_code_task_no_commit_when_repo_clean(git_ws, mirrored, monkeypatch):
+    import orchestrator.code_session as cs
+
+    async def _workspace_only(*, task, workspace, **kw):
+        from pathlib import Path
+        Path(workspace, "agent-data/scripts/new.py").write_text("print(1)")
+        return "Made a workspace script."
+
+    monkeypatch.setattr(cs, "run_copilot_code_session", _workspace_only)
+    out = asyncio.run(ct.code_task("make a workspace script"))
+    assert _commit_count(git_ws) == 1  # no empty/noise commit
+    assert "committed locally" not in out
+
+
+def test_code_task_non_git_workspace_skips_commit(ws, mirrored, monkeypatch):
+    import orchestrator.code_session as cs
+
+    async def _ok(*, task, workspace, **kw):
+        return "done"
+
+    monkeypatch.setattr(cs, "run_copilot_code_session", _ok)
+    out = asyncio.run(ct.code_task("anything"))
+    assert "done" in out and "committed locally" not in out
+
+
+def test_harness_contract_covers_both_script_homes():
+    """The coding-session prompt must teach the two-home model and the
+    local-commit-for-approval rule (never push)."""
+    from orchestrator.code_session import _HARNESS_INSTRUCTIONS as h
+    assert "agent-data/scripts/" in h          # workspace home
+    assert "skills/*/scripts/" in h            # repo-baked skill home
+    assert "git commit" in h and "NEVER push" in h
+    assert "human approval" in h
+    assert "Never commit `agent-data/`" in h or "Never commit \\\n`agent-data/`" in h or "agent-data/`, `inputs/`, or `outputs/`" in h
+
+
+def test_addendum_explains_builtin_skill_fixing():
+    from orchestrator._tool_injection import _build_injected_tools_addendum
+    text = _build_injected_tools_addendum()
+    assert "BUILT-IN skills" in text
+    assert "HUMAN APPROVAL" in text
+
+
 # ── platform wiring: floor, addendum, annotations ───────────────────────────
 
 def test_coding_skill_rides_the_core_floor():

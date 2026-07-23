@@ -108,7 +108,56 @@ hardening path for genuinely untrusted code.
 size bound), `code_task` always-sweep on failure, floor/addendum/annotation
 wiring.
 
-## 7. Open follow-ups
+## 7. Harmonisation with agent mutability
+
+The agent's chat workspace **is** its persistent git clone
+(`_resolve_effective_agent_dir` defaults to `LoadedAgent.agent_dir`), which is
+what makes the coding skill and the existing self-mutation machinery one
+system rather than two. There are two kinds of scripts, with different
+governance, and three mutation paths that all converge on the same
+human-approval pipeline:
+
+### Script taxonomy
+
+| | Workspace scripts | Repo-baked skills |
+|---|---|---|
+| Home | `agent-data/scripts/` | `skills/*/scripts/` + `agents.py` |
+| Tracked by | blob store (Postgres) | git (agent repo) |
+| Catalog | `agent-data/SCRIPTS.md` | each skill's `SKILL.md` |
+| Change gate | none (agent's own working memory) | **pending_commit inbox approval** |
+| Loaded as | `run_script` target | MAF tool via `build_agents()` |
+
+### Mutation paths (all → `pending_commit` → human approve → push)
+
+1. **Failure-driven** (`orchestrator/mutation.py`): a run crashes → Docker
+   mutation sandbox fixes the repo, commits locally, row registered. Pre-dates
+   this skill; unchanged.
+2. **Chat-driven** (`code_task`, this spec): the agent notices a built-in
+   skill misbehaving (or the user asks) → the coding session edits
+   `skills/*/scripts/*.py` **in place** and commits locally (contract step 6).
+   The executor's layered post-run commit scan (`_detect_agent_commits`:
+   post-commit-hook queue file → since-SHA scan → 50-commit catch-up) registers
+   every local commit for inbox approval; the loader's pre-push hook blocks any
+   direct push. **Fail-safe:** if the session edits tracked source and forgets
+   to commit, `code_task` itself commits the residue (`_commit_repo_changes`) —
+   necessary because the loader's next `_pull_latest` stash-drops/hard-resets
+   uncommitted tracked changes (they would be silently destroyed, the fix lost).
+   `git add -A` respects the loader-managed `.gitignore`, so `agent-data/`,
+   `inputs/`, `outputs/` never leak into a commit.
+3. **Promotion** (`loader._sync_new_skills`): a `code_task` session (or a
+   human) drops a new script into `skills/<skill>/scripts/` → on the next
+   load the loader auto-wraps it as an async tool in `agents.py`, commits, and
+   registers that commit for approval. This is the graduation path from
+   "durable personal script" to "first-class agent tool": prove it under
+   `agent-data/scripts/` via `run_script`, then ask `code_task` to move it into
+   a skill folder.
+
+So the full loop the user asked for works end-to-end: broken built-in skill →
+`code_task` edits the actual source → local commit → inbox approval → push →
+next `load_agent` pulls it → the fixed tool is live — while unapproved edits
+can never reach `main` and can never be silently lost.
+
+## 8. Open follow-ups
 
 - **BO-7**: move `run_script` execution into the container sandbox when it
   lands; the skill API is already shaped for it (path + args in, capped output

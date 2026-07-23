@@ -38,16 +38,28 @@ workspace is the memory. Follow this contract exactly:
 1. FIRST read `agent-data/SCRIPTS.md` (if it exists) — the manifest of \
 scripts previous sessions created. If the task concerns an existing script, \
 EDIT IT IN PLACE rather than writing a duplicate.
-2. Keep every reusable script under `agent-data/scripts/`. One-off scratch \
-work and generated data/output files go under `outputs/`.
-3. Run what you write. Fix errors until it works or you can explain exactly \
+2. TWO script homes — pick the right one:
+   a. `agent-data/scripts/` — the agent's personal reusable scripts. This is \
+the DEFAULT home for new scripts (not git-tracked; the platform persists them \
+separately).
+   b. Git-TRACKED repo source (`skills/*/scripts/`, `agents.py`, other \
+checked-in code) — the agent's BUILT-IN skills. When the task is to fix or \
+change one of these, edit it in place there; do NOT copy it into agent-data/.
+3. One-off scratch work and generated data/output files go under `outputs/`.
+4. Run what you write. Fix errors until it works or you can explain exactly \
 why it cannot.
-4. Before finishing, update `agent-data/SCRIPTS.md`: one section per script \
-(name, purpose, usage/args, last-changed note). Create the file if missing.
-5. Never touch files outside the working directory. Never commit, push, or \
-install system packages; Python deps go through `uv pip install` into the \
-current venv only when genuinely needed.
-6. End with a concise report: what you created/changed, how to run it, and \
+5. Before finishing, update `agent-data/SCRIPTS.md`: one section per script \
+(name, purpose, usage/args, last-changed note). Create the file if missing. \
+(Workspace scripts only — repo skills are catalogued by their own SKILL.md.)
+6. If you changed git-TRACKED files: `git add` the specific files and \
+`git commit` locally with a clear message (identity is pre-configured). \
+NEVER push and never create a branch — the platform queues every local \
+commit for human approval and pushes it after approval. Never commit \
+`agent-data/`, `inputs/`, or `outputs/` (ignored runtime state).
+7. Never touch files outside the working directory. Never install system \
+packages; Python deps go through `uv pip install` into the current venv only \
+when genuinely needed.
+8. End with a concise report: what you created/changed, how to run it, and \
 the final run's key output.
 """
 

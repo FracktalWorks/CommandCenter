@@ -64,6 +64,7 @@ const AI_SLOW_POST_PATHS = new Set([
   "rules/run-message",
   "rules/patterns/review",
   "assistant/writing-style/generate",
+  "voice-profile/sample",
   "messages/summaries",
   "senders/categorize",
   "follow-ups/scan",

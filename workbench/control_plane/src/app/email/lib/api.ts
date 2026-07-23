@@ -5,6 +5,7 @@ import {
   RecentTestResult, ColdSender, KnowledgeEntry,
   LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
   RuleGuidance, MessageTimeline,
+  VoiceProfile, VoiceProfilePreview, VoiceProfileBuildStatus,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -1676,6 +1677,97 @@ export async function updateKnowledge(
 
 export async function deleteKnowledge(id: string): Promise<void> {
   await gatewayFetch(`/email/knowledge/${id}`, { method: "DELETE" });
+}
+
+/** Approve a suggested knowledge entry so it starts feeding drafts. */
+export async function approveKnowledge(id: string): Promise<void> {
+  await gatewayFetch(`/email/knowledge/${id}/approve`, { method: "POST" });
+}
+
+// ── Assistant: voice profile ────────────────────────────────────────────────
+
+export async function getVoiceProfile(
+  accountId: string
+): Promise<VoiceProfile> {
+  return gatewayFetch<VoiceProfile>(
+    `/email/voice-profile?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
+export async function previewVoiceProfile(params: {
+  accountId: string;
+  startDate?: string; // YYYY-MM-DD, inclusive
+  endDate?: string; // YYYY-MM-DD, inclusive
+  sources: string[]; // 'sent' and/or 'drafts'
+}): Promise<VoiceProfilePreview> {
+  const q = new URLSearchParams({
+    account_id: params.accountId,
+    sources: params.sources.join(","),
+  });
+  if (params.startDate) q.set("start_date", params.startDate);
+  if (params.endDate) q.set("end_date", params.endDate);
+  return gatewayFetch<VoiceProfilePreview>(
+    `/email/voice-profile/preview?${q.toString()}`
+  );
+}
+
+export async function buildVoiceProfile(params: {
+  accountId: string;
+  startDate?: string;
+  endDate?: string;
+  sources: string[];
+  extractKnowledge: boolean;
+}): Promise<{ scheduled: boolean }> {
+  return gatewayFetch("/email/voice-profile/build", {
+    method: "POST",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      start_date: params.startDate,
+      end_date: params.endDate,
+      sources: params.sources,
+      extract_knowledge: params.extractKnowledge,
+    }),
+  });
+}
+
+export async function getVoiceProfileStatus(
+  accountId: string
+): Promise<VoiceProfileBuildStatus> {
+  return gatewayFetch<VoiceProfileBuildStatus>(
+    `/email/voice-profile/status?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
+export async function saveVoiceProfile(params: {
+  accountId: string;
+  enabled?: boolean;
+  styleGuide?: string;
+}): Promise<VoiceProfile> {
+  return gatewayFetch<VoiceProfile>("/email/voice-profile", {
+    method: "PUT",
+    body: JSON.stringify({
+      account_id: params.accountId,
+      enabled: params.enabled,
+      style_guide: params.styleGuide,
+    }),
+  });
+}
+
+export async function deleteVoiceProfile(accountId: string): Promise<void> {
+  await gatewayFetch(
+    `/email/voice-profile?account_id=${encodeURIComponent(accountId)}`,
+    { method: "DELETE" }
+  );
+}
+
+export async function sampleVoiceProfile(
+  accountId: string,
+  scenario: string
+): Promise<{ sample: string; scenario: string }> {
+  return gatewayFetch("/email/voice-profile/sample", {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, scenario }),
+  });
 }
 
 export async function listLearnedPatterns(

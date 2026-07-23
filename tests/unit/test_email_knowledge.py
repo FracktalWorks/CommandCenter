@@ -51,11 +51,13 @@ async def test_load_assistant_about_builds_tagged_blocks() -> None:
     settings_res.fetchone.return_value = settings_row
     kb_res = MagicMock()
     kb_res.fetchall.return_value = kb_rows
+    vp_res = MagicMock()  # voice profile: none built
+    vp_res.fetchone.return_value = None
     lp_res = MagicMock()
     lp_res.fetchall.return_value = lp_rows
 
     db = AsyncMock()
-    db.execute.side_effect = [settings_res, kb_res, lp_res]
+    db.execute.side_effect = [settings_res, kb_res, vp_res, lp_res]
 
     about, sig = await m._load_assistant_about(db, "acc-1")
     assert sig == "— Vijay"
@@ -71,10 +73,12 @@ async def test_load_assistant_about_empty_when_unset() -> None:
     settings_res.fetchone.return_value = None
     kb_res = MagicMock()
     kb_res.fetchall.return_value = []
+    vp_res = MagicMock()
+    vp_res.fetchone.return_value = None
     lp_res = MagicMock()
     lp_res.fetchall.return_value = []
     db = AsyncMock()
-    db.execute.side_effect = [settings_res, kb_res, lp_res]
+    db.execute.side_effect = [settings_res, kb_res, vp_res, lp_res]
 
     about, sig = await m._load_assistant_about(db, "acc-1")
     assert about == ""

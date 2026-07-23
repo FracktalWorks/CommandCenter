@@ -76,10 +76,13 @@ async def _load_assistant_about(
     # KB is DRAFTING knowledge; the thread-status classifier (include_kb=False)
     # doesn't need it. Fetch a wider recency window than the budget holds so the
     # relevance ranking has something to reorder — then the top-scoring entries
-    # for THIS email make the 4k budget, not just the newest.
+    # for THIS email make the 4k budget, not just the newest. Only 'active'
+    # entries feed prompts — 'suggested' ones (proposed by the voice-profile
+    # builder) wait for the user's approval.
     kb_rows = (await db.execute(text(
         """SELECT title, content FROM email_knowledge
-           WHERE account_id = :aid ORDER BY updated_at DESC LIMIT 40"""
+           WHERE account_id = :aid AND status = 'active'
+           ORDER BY updated_at DESC LIMIT 40"""
     ), {"aid": account_id})).fetchall() if include_kb else []
 
     parts: list[str] = []
@@ -92,6 +95,15 @@ async def _load_assistant_about(
         )
     if style.strip():
         parts.append(f"<writing_style>\n{style.strip()}\n</writing_style>")
+    # The voice profile built from the user's own past sent/drafted mail —
+    # sits between the explicit writing_style (outranks it) and the
+    # auto-derived learned_writing_style (advisory).
+    from gateway.routes.email.automation.voice_profile import (  # noqa: PLC0415
+        load_voice_profile_block,
+    )
+    vp_block = await load_voice_profile_block(db, account_id)
+    if vp_block:
+        parts.append(vp_block)
     # Auto-derived from the user's draft edits — advisory, lower priority than an
     # explicit writing_style.
     if learned_style.strip():
@@ -469,13 +481,19 @@ async def list_knowledge(
     db = await _get_db()
     try:
         await _assert_account_owner(db, account_id, user.email or "anonymous")
+        # Suggested entries (voice-profile candidates awaiting review) first,
+        # so they surface for approval instead of sinking below the fold.
         rows = (await db.execute(text(
-            """SELECT id, title, content, updated_at FROM email_knowledge
-               WHERE account_id = :aid ORDER BY updated_at DESC"""
+            """SELECT id, title, content, source, status, updated_at
+               FROM email_knowledge
+               WHERE account_id = :aid
+               ORDER BY (status = 'suggested') DESC, updated_at DESC"""
         ), {"aid": account_id})).fetchall()
         return {"entries": [
             {"id": str(r.id), "account_id": account_id, "title": r.title,
              "content": r.content,
+             "source": getattr(r, "source", None) or "manual",
+             "status": getattr(r, "status", None) or "active",
              "updated_at": r.updated_at.isoformat() if r.updated_at else None}
             for r in rows
         ]}
@@ -493,11 +511,16 @@ async def create_knowledge(
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
         kid = str(uuid4())
+        # A user-authored save is manual + active — including when it lands on
+        # a title the voice-profile builder had only 'suggested': re-authoring
+        # it IS the approval.
         await db.execute(text(
-            """INSERT INTO email_knowledge (id, account_id, title, content)
-               VALUES (:id, :aid, :title, :content)
+            """INSERT INTO email_knowledge
+                 (id, account_id, title, content, source, status)
+               VALUES (:id, :aid, :title, :content, 'manual', 'active')
                ON CONFLICT (account_id, title) DO UPDATE SET
-                 content = EXCLUDED.content, updated_at = now()"""
+                 content = EXCLUDED.content, source = 'manual',
+                 status = 'active', updated_at = now()"""
         ), {"id": kid, "aid": req.account_id, "title": req.title,
             "content": req.content})
         await db.commit()

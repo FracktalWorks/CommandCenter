@@ -796,6 +796,12 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     # Present in BOTH the full and compact directive variants, so the
     # idempotency guard holds whichever one a given agent/sub-agent receives.
     _UI_DIRECTIVE_MARKER = "Rich UI by default"
+    # Heads both the full and compact Copilot addendum → guards re-injection.
+    _ADDENDUM_MARKER = "## CommandCenter Platform Tools"
+    # Present in BOTH output-discipline variants (the load_design_system
+    # pointer) and vanishingly unlikely in a MAF agent's own instructions →
+    # a safe idempotency marker for the native-MAF append below.
+    _OUTPUT_DISCIPLINE_MARKER = "load_design_system"
 
     for agent in agents:
         injected = False
@@ -871,9 +877,21 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                     opts = getattr(agent, "_default_options", None)
                     if isinstance(opts, dict):
                         existing_sys = opts.get("system_message")
-                        if isinstance(existing_sys, dict):
+                        # Idempotency guard (parity with the MAF path): a second
+                        # injection on the SAME agent object must not append a
+                        # duplicate addendum — that would bloat the prompt and
+                        # break the KV-cache stability this module is built for.
+                        _existing_txt = (
+                            existing_sys.get("content")
+                            if isinstance(existing_sys, dict)
+                            else existing_sys if isinstance(existing_sys, str)
+                            else ""
+                        ) or ""
+                        if _ADDENDUM_MARKER in _existing_txt:
+                            pass
+                        elif isinstance(existing_sys, dict):
                             # Preserve mode:'append'; extend content field.
-                            existing_sys["content"] = (existing_sys.get("content") or "") + addendum
+                            existing_sys["content"] = _existing_txt + addendum
                         elif isinstance(existing_sys, str):
                             opts["system_message"] = {"mode": "append", "content": existing_sys + addendum}
                         else:
@@ -947,9 +965,19 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                 try:
                     _prev2 = _do.get("instructions") or ""
                     if _emit_injected and _UI_DIRECTIVE_MARKER not in _prev2:
+                        _prev2 = _prev2 + "\n\n" + _ui_first_directive(
+                            compact=is_sub_agent,
+                        )
+                        _do["instructions"] = _prev2
+                    # Output discipline (files under outputs/ + the on-demand
+                    # design pointer) — the Copilot path gets this in the
+                    # addendum; native MAF agents need the same at system-prompt
+                    # level so they know where files go and to load the design
+                    # system before a report. Marker-guarded for idempotency.
+                    if _OUTPUT_DISCIPLINE_MARKER not in _prev2:
                         _do["instructions"] = (
                             _prev2 + "\n\n"
-                            + _ui_first_directive(compact=is_sub_agent)
+                            + _build_output_discipline_block(compact=is_sub_agent)
                         )
                 except Exception:  # noqa: BLE001
                     pass
@@ -977,14 +1005,19 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                 # a writable string `instructions` attr if present; best-effort.
                 try:
                     _instr = getattr(agent, "instructions", None)
-                    if (
-                        _emit_injected and isinstance(_instr, str)
-                        and _UI_DIRECTIVE_MARKER not in _instr
-                    ):
-                        agent.instructions = (
-                            _instr + "\n\n"
-                            + _ui_first_directive(compact=is_sub_agent)
-                        )
+                    if isinstance(_instr, str):
+                        if _emit_injected and _UI_DIRECTIVE_MARKER not in _instr:
+                            _instr = _instr + "\n\n" + _ui_first_directive(
+                                compact=is_sub_agent,
+                            )
+                            agent.instructions = _instr
+                        if _OUTPUT_DISCIPLINE_MARKER not in _instr:
+                            agent.instructions = (
+                                _instr + "\n\n"
+                                + _build_output_discipline_block(
+                                    compact=is_sub_agent,
+                                )
+                            )
                 except Exception:  # noqa: BLE001
                     pass
                 continue

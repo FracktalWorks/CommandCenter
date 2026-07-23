@@ -81,9 +81,17 @@ def _script_env() -> dict[str, str]:
     canonical env vars of the integrations this agent declared in its
     ``config.json`` — and that resolved for this run — are passed through
     (``acb_skills.integrations.FIELD_TO_ENV``; the executor injects them into
-    the run env, scoped by a restore token). So a script can use the ClickUp
-    token *its own agent* is entitled to, but never the gateway master key,
-    another agent's integrations, or the DB URL.
+    the run env, scoped by a restore token). So a script gets the ClickUp token
+    *its own agent* declared, but not the gateway master key or the DB URL.
+
+    Concurrency caveat (same honest limit the executor documents for
+    ``_inject_integrations_to_env``): both ``os.environ`` and the declared-list
+    (``_WRITE_ARTIFACT_CONTEXT["integrations"]``) are process-global, so under
+    OVERLAPPING in-process runs of different agents the scoping is best-effort —
+    a concurrent run can transiently widen what a script sees. A true per-run
+    boundary is the Tier-2 container/subprocess env (BO-7); this Tier-0 layer
+    removes permanent accumulation and scopes to the declared set, it is not a
+    hard multi-tenant isolation guarantee.
     """
     env = {
         k: v for k, v in os.environ.items()
@@ -122,27 +130,59 @@ async def _sweep_to_blob_store(
     CLI, or a script's own writes), which bypass the write_artifact mirror.
     Best-effort: any failure leaves the on-disk file intact and is skipped.
     Returns the number of files mirrored.
+
+    Containment: a swept file's REAL (symlink-resolved) path must stay inside
+    *root*. ``rglob`` follows symlinked DIRECTORIES on Python < 3.13, so without
+    this a ``code_task`` session (or script) that drops ``agent-data/x -> /``
+    could smuggle host files — service-account keys, another agent's creds —
+    into this agent's durable, downloadable blob store. The leaf ``is_symlink``
+    check alone misses files reached through a symlinked parent.
+
+    The tree walk + file reads (up to ``_SWEEP_MAX_FILES`` × ``_SWEEP_MAX_BYTES``)
+    run OFF the event loop so a large sweep can't stall every concurrent run.
     """
+    import asyncio  # noqa: PLC0415
+
     cutoff = since - _SWEEP_MTIME_SLACK
-    mirrored = 0
-    for sub in subdirs:
-        base = root / sub
-        if not base.is_dir():
-            continue
-        for p in sorted(base.rglob("*")):
-            if mirrored >= _SWEEP_MAX_FILES:
-                return mirrored
-            try:
-                if not p.is_file() or p.is_symlink():
-                    continue
-                st = p.stat()
-                if st.st_mtime < cutoff or st.st_size > _SWEEP_MAX_BYTES:
-                    continue
-                rel = p.relative_to(root).as_posix()
-                await mirror_to_blob_store(rel, p.read_bytes(), actor="agent")
-                mirrored += 1
-            except Exception:
+
+    def _collect() -> list[tuple[str, bytes]]:
+        root_r = root.resolve()
+        out: list[tuple[str, bytes]] = []
+        for sub in subdirs:
+            base = root / sub
+            if not base.is_dir():
                 continue
+            for p in sorted(base.rglob("*")):
+                if len(out) >= _SWEEP_MAX_FILES:
+                    return out
+                try:
+                    if p.is_symlink() or not p.is_file():
+                        continue
+                    # Real path must remain inside the workspace (blocks a
+                    # symlinked-directory escape rglob would otherwise follow).
+                    try:
+                        p.resolve().relative_to(root_r)
+                    except ValueError:
+                        continue
+                    st = p.stat()
+                    if st.st_mtime < cutoff or st.st_size > _SWEEP_MAX_BYTES:
+                        continue
+                    out.append((p.relative_to(root).as_posix(), p.read_bytes()))
+                except Exception:  # noqa: BLE001
+                    continue
+        return out
+
+    try:
+        collected = await asyncio.to_thread(_collect)
+    except Exception:  # noqa: BLE001
+        return 0
+    mirrored = 0
+    for rel, data in collected:
+        try:
+            await mirror_to_blob_store(rel, data, actor="agent")
+            mirrored += 1
+        except Exception:  # noqa: BLE001
+            continue
     return mirrored
 
 
@@ -241,8 +281,11 @@ def _commit_repo_changes(root: Path, task: str) -> str | None:
     pushes), and the loader's next ``_pull_latest`` would otherwise stash-drop
     or hard-reset uncommitted tracked changes into oblivion. The session is
     instructed to commit its own repo edits; this is the fail-safe for when it
-    doesn't. ``git add -A`` respects the loader-managed ``.gitignore``, so
-    ``agent-data/``, ``inputs/`` and ``outputs/`` are never swept into a commit.
+    doesn't. The runtime workspace dirs (``agent-data/``, ``inputs/``,
+    ``outputs/``) are explicitly UNSTAGED after ``git add -A`` — so a secret a
+    script wrote under ``agent-data/`` can never land in a commit even for an
+    external ``workspace_root`` repo that never received the loader-managed
+    ``.gitignore`` (the blob store, not git, is their durable home anyway).
 
     Returns the short SHA of the created commit, or ``None`` when the workspace
     is not a git repo, the tree is clean, or any git step fails (best-effort —
@@ -264,6 +307,11 @@ def _commit_repo_changes(root: Path, task: str) -> str | None:
         if status.returncode != 0 or not status.stdout.strip():
             return None
         _git("add", "-A")
+        # Belt-and-suspenders: never commit runtime state, regardless of
+        # whether this clone carries the loader's .gitignore. These dirs are
+        # blob-store durable; committing them would both leak (a script's
+        # secrets) and bloat the approval diff.
+        _git("reset", "-q", "--", "agent-data", "inputs", "outputs")
         if not _git("diff", "--cached", "--name-only").stdout.strip():
             return None
         commit_cmd = ["commit", "-m", f"code_task: {task.strip()[:72]}"]

@@ -14,7 +14,9 @@ import {
   CheckSquare,
   ExternalLink,
   Loader2,
+  Mail,
   Play,
+  Plus,
   RefreshCw,
   Sparkles,
   Trash2,
@@ -22,6 +24,7 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import MarkdownMessage from "@/components/MarkdownMessage";
+import FollowupEmailModal from "../../components/FollowupEmailModal";
 import {
   approveAction,
   approveAllActions,
@@ -33,9 +36,15 @@ import {
   getNote,
   listActions,
   rejectAction,
+  saveAttendees,
   summarize,
 } from "../../lib/api";
-import type { ActionItem, MeetingDetail, MeetingEvent } from "../../lib/types";
+import type {
+  ActionItem,
+  Attendee,
+  MeetingDetail,
+  MeetingEvent,
+} from "../../lib/types";
 
 const SPEAKER_COLORS = [
   "text-primary",
@@ -66,6 +75,9 @@ export default function MeetingPage({
   const [summarizing, setSummarizing] = useState(false);
   const [actioning, setActioning] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [showEmail, setShowEmail] = useState(false);
+  const [addName, setAddName] = useState("");
+  const [addEmail, setAddEmail] = useState("");
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const refresh = useCallback(async () => {
@@ -127,6 +139,26 @@ export default function MeetingPage({
   function flashToast(msg: string) {
     setToast(msg);
     setTimeout(() => setToast(null), 4000);
+  }
+
+  async function persistAttendees(next: Attendee[]) {
+    if (!meeting) return;
+    setMeeting({ ...meeting, attendees: next });
+    try {
+      await saveAttendees(id, next);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+      await refresh();
+    }
+  }
+
+  function addAttendee() {
+    const name = addName.trim();
+    const email = addEmail.trim();
+    if (!name && !email) return;
+    void persistAttendees([...(meeting?.attendees ?? []), { name, email }]);
+    setAddName("");
+    setAddEmail("");
   }
 
   async function onApprove(actionId: string) {
@@ -202,6 +234,16 @@ export default function MeetingPage({
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {notesMd && (
+            <button
+              onClick={() => setShowEmail(true)}
+              className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+            >
+              <span className="flex items-center gap-1.5">
+                <Mail className="w-4 h-4" /> Follow-up
+              </span>
+            </button>
+          )}
           {meeting && meeting.segments.length > 0 && (
             <button
               onClick={onSummarize}
@@ -260,6 +302,56 @@ export default function MeetingPage({
               className="w-full"
             />
           ) : null}
+
+          {meeting && (
+            <div className="flex flex-wrap items-center gap-2">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
+                Attendees
+              </span>
+              {meeting.attendees.map((a, i) => (
+                <span
+                  key={`${a.email}-${i}`}
+                  className="inline-flex items-center gap-1 rounded-full bg-secondary px-2 py-1 text-xs text-foreground"
+                  title={a.email}
+                >
+                  {a.name || a.email}
+                  <button
+                    onClick={() =>
+                      persistAttendees(
+                        meeting.attendees.filter((_, j) => j !== i)
+                      )
+                    }
+                    className="text-muted-foreground hover:text-destructive"
+                    aria-label="Remove attendee"
+                  >
+                    <X className="w-3 h-3" />
+                  </button>
+                </span>
+              ))}
+              <span className="inline-flex items-center gap-1">
+                <input
+                  value={addName}
+                  onChange={(e) => setAddName(e.target.value)}
+                  placeholder="Name"
+                  className="w-20 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <input
+                  value={addEmail}
+                  onChange={(e) => setAddEmail(e.target.value)}
+                  onKeyDown={(e) => e.key === "Enter" && addAttendee()}
+                  placeholder="email@…"
+                  className="w-32 rounded-md border border-border bg-background px-2 py-1 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                />
+                <button
+                  onClick={addAttendee}
+                  className="p-1 rounded-md border border-border text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+                  aria-label="Add attendee"
+                >
+                  <Plus className="w-3.5 h-3.5" />
+                </button>
+              </span>
+            </div>
+          )}
 
           {busy && (
             <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
@@ -471,6 +563,17 @@ export default function MeetingPage({
           </div>
         </div>
       </div>
+
+      {showEmail && (
+        <FollowupEmailModal
+          meetingId={id}
+          onClose={() => setShowEmail(false)}
+          onSent={(msg) => {
+            setShowEmail(false);
+            flashToast(msg);
+          }}
+        />
+      )}
     </div>
   );
 }

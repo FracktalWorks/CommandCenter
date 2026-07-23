@@ -54,12 +54,31 @@ export interface SummaryRun {
   finished_at: string | null;
 }
 
+export interface Attendee {
+  name: string;
+  email: string;
+}
+
 export interface MeetingDetail extends MeetingListItem {
   transcript_source: string | null;
   summary_md: string | null;
+  attendees: Attendee[];
   recordings: Recording[];
   segments: Segment[];
   runs: SummaryRun[];
+}
+
+export interface EmailDraft {
+  to: string[];
+  subject: string;
+  body_text: string;
+}
+
+export interface EmailAccount {
+  id: string;
+  email_address: string;
+  label: string;
+  is_default: boolean;
 }
 
 export interface ActionItem {

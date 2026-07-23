@@ -2,6 +2,9 @@
 
 import type {
   ActionItem,
+  Attendee,
+  EmailAccount,
+  EmailDraft,
   MeetingDetail,
   MeetingListItem,
   NoteDoc,
@@ -183,6 +186,59 @@ export async function summarize(
 /** SSE URL for the pipeline progress stream (open with `new EventSource`). */
 export function eventsUrl(meetingId: string): string {
   return `/api/notes/meetings/${meetingId}/events`;
+}
+
+// ── Attendees + follow-up email ─────────────────────────────────────────────
+
+export async function saveAttendees(
+  meetingId: string,
+  attendees: Attendee[]
+): Promise<Attendee[]> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/attendees`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ attendees }),
+    })
+  );
+}
+
+export async function draftFollowupEmail(
+  meetingId: string
+): Promise<EmailDraft> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/share/email/draft`, {
+      method: "POST",
+    })
+  );
+}
+
+export async function listEmailAccounts(): Promise<EmailAccount[]> {
+  return json(await fetch(`/api/email/accounts`, { cache: "no-store" }));
+}
+
+export async function sendEmail(payload: {
+  account_id: string;
+  to: string[];
+  subject: string;
+  body_text: string;
+}): Promise<unknown> {
+  const res = await fetch(`/api/email/send`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+  if (!res.ok) {
+    let detail = `${res.status}`;
+    try {
+      const b = await res.json();
+      detail = b?.detail ?? b?.error ?? detail;
+    } catch {
+      /* non-JSON */
+    }
+    throw new Error(String(detail));
+  }
+  return res.json().catch(() => ({}));
 }
 
 export function formatClock(s: number): string {

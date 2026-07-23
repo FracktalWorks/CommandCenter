@@ -74,9 +74,15 @@ class MeetingListItem(BaseModel):
     created_at: str | None = None
 
 
+class Attendee(BaseModel):
+    name: str = ""
+    email: str = ""
+
+
 class MeetingDetail(MeetingListItem):
     transcript_source: str | None = None
     summary_md: str | None = None
+    attendees: list[Attendee] = []
     recordings: list[RecordingModel] = []
     segments: list[SegmentModel] = []
     runs: list[SummaryRunModel] = []

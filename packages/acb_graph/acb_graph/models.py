@@ -182,6 +182,9 @@ class Meeting(Base):
     template_key: Mapped[str | None] = mapped_column(Text)
     summary_json: Mapped[dict | None] = mapped_column(JSONB)
     summary_md: Mapped[str | None] = mapped_column(Text)
+    # External attendees as [{name, email}] (infra/postgres/96_note_taker_attendees.sql);
+    # distinct from attendee_ids (org person refs).
+    attendees: Mapped[list | None] = mapped_column(JSONB, server_default="[]")
     created_at: Mapped[datetime] = _created_at()
 
 

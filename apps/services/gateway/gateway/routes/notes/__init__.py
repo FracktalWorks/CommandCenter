@@ -9,6 +9,7 @@ from gateway.routes.notes import actions as _actions  # noqa: F401
 from gateway.routes.notes import events as _events  # noqa: F401
 from gateway.routes.notes import meetings as _meetings  # noqa: F401
 from gateway.routes.notes import recordings as _recordings  # noqa: F401
+from gateway.routes.notes import share as _share  # noqa: F401
 from gateway.routes.notes import summaries as _summaries  # noqa: F401
 from gateway.routes.notes.core import router
 

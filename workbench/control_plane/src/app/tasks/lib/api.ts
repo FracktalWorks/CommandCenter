@@ -615,6 +615,43 @@ export async function apiEstimateStats(): Promise<EstimateStats> {
   };
 }
 
+// ── Per-day Focus-OS state (★ One Thing + tomorrow-seeds) ────────────────────
+// Persisted server-side (mig 92) so the AI planner / chat agent / digest can
+// see the user's committed priority and it syncs across devices. localStorage
+// (focusPrefs.ts) stays the instant cache; these sync it to the source of truth.
+
+export interface DayState {
+  day: string;
+  oneThingId: string | null;
+  seedIds: string[];
+}
+
+export async function apiGetDayState(day: string): Promise<DayState> {
+  const r = await gatewayFetch<Raw>(
+    `/calendar/day-state?day=${encodeURIComponent(day)}`,
+  );
+  return {
+    day: String(r.day ?? day),
+    oneThingId: r.one_thing_id ? String(r.one_thing_id) : null,
+    seedIds: Array.isArray(r.seed_ids) ? r.seed_ids.map(String) : [],
+  };
+}
+
+/** Partial upsert — only the provided fields change. Pass oneThingId: "" to
+ *  clear the One Thing. */
+export async function apiSetDayState(
+  day: string,
+  patch: { oneThingId?: string | null; seedIds?: string[] },
+): Promise<void> {
+  const body: Raw = { day };
+  if (patch.oneThingId !== undefined) body.one_thing_id = patch.oneThingId ?? "";
+  if (patch.seedIds !== undefined) body.seed_ids = patch.seedIds;
+  await gatewayFetch<Raw>(`/calendar/day-state`, {
+    method: "PUT",
+    body: JSON.stringify(body),
+  });
+}
+
 /** Archive (hide from active views) or un-archive a task. */
 export async function apiArchiveItem(
   id: string,

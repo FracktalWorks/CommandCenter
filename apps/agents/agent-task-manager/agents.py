@@ -57,14 +57,20 @@ try:
         gtd_capture,
         gtd_capture_many,
         gtd_clarify,
+        gtd_day_digest,
+        gtd_estimate_stats,
         gtd_inbox_insights,
         gtd_list,
         gtd_list_projects,
         gtd_list_schedule,
         gtd_organize,
         gtd_people,
+        gtd_plan_day,
         gtd_plan_project,
+        gtd_replan_day,
+        gtd_rollover,
         gtd_schedule,
+        gtd_set_one_thing,
         gtd_sync,
         gtd_unschedule,
         gtd_update,
@@ -74,6 +80,9 @@ try:
         gtd_accounts, gtd_people, gtd_inbox_insights, gtd_clarify,
         gtd_organize, gtd_update, gtd_sync, gtd_plan_project,
         gtd_schedule, gtd_unschedule, gtd_list_schedule,
+        # AI day-management (planner over chat) — calendar_ai_review.md §4.2/4.4
+        gtd_plan_day, gtd_replan_day, gtd_rollover, gtd_day_digest,
+        gtd_estimate_stats, gtd_set_one_thing,
     ]
 except ImportError:
     # skill-task-gtd not installed yet — agent still boots.

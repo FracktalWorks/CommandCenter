@@ -150,13 +150,18 @@ export function buildTaskAssistantPersona(opts: {
   }
   calLines.push(
     `${unsched} unscheduled next action${unsched === 1 ? "" : "s"} could be ` +
-      "timeboxed. To plan / reorganize / replan the day, use " +
-      "gtd_schedule(item_id, start, end) and gtd_unschedule(item_id); read " +
-      "the grid with gtd_list_schedule(from, to). Respect the working window, " +
-      "capacity and energy windows; never double-book an existing block; " +
-      "leave the user's buffer between blocks. When reorganizing several " +
-      "blocks, STATE the proposed schedule first and apply it only after the " +
-      "user confirms.",
+      "timeboxed. To manage the day with AI, PREFER the whole-day planner " +
+      "tools (the server does the geometry — no double-booking, no overflow): " +
+      "gtd_plan_day(apply, energy_note) fills the day from Next Actions; " +
+      "gtd_replan_day(apply) reorganizes the rest of today when the user fell " +
+      "behind; gtd_rollover(apply) pulls overdue blocks forward; " +
+      "gtd_day_digest() is a quick 'how's my day' snapshot; " +
+      "gtd_set_one_thing(item_id) sets the protected ★ priority. Always " +
+      "propose first (apply=false), then apply only after the user confirms. " +
+      "For a single explicit move use gtd_schedule(item_id, start, end) / " +
+      "gtd_unschedule(item_id); read the grid with gtd_list_schedule(from, " +
+      "to). Never move a 🔒 fixed block; respect the working window, capacity, " +
+      "energy windows and buffer.",
   );
   parts.push(calLines.join("\n"));
 

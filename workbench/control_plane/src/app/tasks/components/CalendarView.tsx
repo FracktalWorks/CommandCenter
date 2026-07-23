@@ -43,6 +43,8 @@ import {
   apiRollover,
   apiReplan,
   apiEstimateStats,
+  apiGetDayState,
+  apiSetDayState,
   type TaskSettings,
   type EnergyWindow,
   type DayPlanResult,
@@ -235,9 +237,38 @@ export function CalendarView() {
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [now]);
   const handleToggleOneThing = (id: string) => {
+    const prev = oneThingIdFor(new Date());
     toggleOneThing(new Date(), id);
-    setOneThingId((cur) => (cur === id ? null : id));
+    const nextId = prev === id ? null : id;
+    setOneThingId(nextId);
+    // Sync to the server so the AI planner / chat agent / digest see it, and it
+    // follows the user across devices. Best-effort — the local cache already
+    // reflects it; a transient failure reconciles on next load.
+    void apiSetDayState(dayKey(new Date()), { oneThingId: nextId ?? "" }).catch(
+      () => {},
+    );
   };
+  // Hydrate the ★ One Thing from the server once on open (server is the source
+  // of truth; reconcile the local cache so a cross-device change is reflected).
+  useEffect(() => {
+    let alive = true;
+    void apiGetDayState(dayKey(new Date()))
+      .then((s) => {
+        if (!alive) return;
+        const localId = oneThingIdFor(new Date());
+        if (s.oneThingId && s.oneThingId !== localId) {
+          saveFocusPrefs({
+            oneThing: { date: dayKey(new Date()), itemId: s.oneThingId },
+          });
+          setOneThingId(s.oneThingId);
+        }
+      })
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // once per mount — the clock-tick effect handles midnight rollover
+  }, []);
   const oneThingItem = items.find((i) => i.id === oneThingId) ?? null;
 
   // project outcome lookup — the outcome ribbon on blocks (§4.7).
@@ -871,7 +902,12 @@ export function CalendarView() {
           onClose={() => {
             setStartupOpen(false);
             setStartupOffered(false);
-            setOneThingId(oneThingIdFor(new Date()));
+            const committed = oneThingIdFor(new Date());
+            setOneThingId(committed);
+            // sync the ritual's One-Thing commit to the server for the planner
+            void apiSetDayState(dayKey(new Date()), {
+              oneThingId: committed ?? "",
+            }).catch(() => {});
           }}
         />
       )}
@@ -1162,10 +1198,13 @@ function EndOfDayReview({
     return [...out, ...pool].slice(0, 6);
   })();
   const closeDay = () => {
+    const tomorrow = dayKey(addDays(now, 1));
     saveFocusPrefs({
-      seeds: { date: dayKey(addDays(now, 1)), ids: seedIds },
+      seeds: { date: tomorrow, ids: seedIds },
       dayClosedOn: dayKey(now),
     });
+    // Persist tomorrow's seeds so the morning digest / planner can pre-load them.
+    void apiSetDayState(tomorrow, { seedIds }).catch(() => {});
     onCloseDay();
   };
   const dateLabel = now.toLocaleDateString(undefined, {

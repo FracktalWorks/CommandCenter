@@ -578,7 +578,172 @@ async def gtd_list_schedule(from_iso: str, to_iso: str) -> str:
         s = (i.get("scheduled_start") or i.get("due_at") or "")[:16].replace(
             "T", " ")
         en = (i.get("scheduled_end") or "")[11:16]
+        # 🔒 = FIXED (a meeting) — never move it; ✓ = already done.
+        mark = ""
+        if i.get("flexible") is False:
+            mark = " 🔒FIXED"
+        elif i.get("disposition") == "DONE":
+            mark = " ✓done"
         lines.append(
-            f"• {s}{('-' + en) if en else ''}  {i.get('title', '?')} "
+            f"• {s}{('-' + en) if en else ''}  {i.get('title', '?')}{mark} "
             f"(id: {i.get('id', '')})")
-    return "Scheduled:\n" + "\n".join(lines)
+    return ("Scheduled (🔒 = fixed, never move it):\n" + "\n".join(lines))
+
+
+# ── AI day planning (the planner, callable by chat) ──────────────────────────
+# These wrap the gateway's server-side planner: the LLM makes the judgment,
+# deterministic code does the geometry (can't overlap / overflow the day). The
+# agent PROPOSES first (apply=False) and only writes after the user confirms
+# (apply=True). The ★ One Thing is honoured automatically.
+
+
+def _fmt_plan(plan: dict[str, Any], applied: bool) -> str:
+    blocks = plan.get("blocks") or []
+    if not blocks:
+        return plan.get("notes") or "Nothing to schedule."
+    head = ("Applied — your calendar is updated:" if applied
+            else "Proposed plan (tell me to apply it to commit):")
+    lines = [head]
+    for b in blocks:
+        s = (b.get("start") or "")[11:16]
+        e = (b.get("end") or "")[11:16]
+        rat = b.get("rationale") or ""
+        star = "★ " if rat.startswith("★") else ""
+        lines.append(
+            f"• {s}-{e} {star}{b.get('title', '?')}"
+            + (f" — {rat.lstrip('★ ')}" if rat else ""))
+    unplaced = plan.get("unplaced") or []
+    if unplaced:
+        lines.append(
+            f"Didn't fit ({len(unplaced)}): "
+            + ", ".join(u.get("title", "?") for u in unplaced[:5])
+            + (" …" if len(unplaced) > 5 else ""))
+    if plan.get("notes"):
+        lines.append(plan["notes"])
+    return "\n".join(lines)
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_plan_day(apply: bool = False, energy_note: str = "") -> str:
+    """Plan the user's day with AI — pick which unscheduled next actions to do
+    today, in what order, fit to energy windows, packed within capacity around
+    existing blocks. The ★ One Thing is protected automatically. Reversible.
+
+    Propose first, then apply after the user agrees.
+
+    Args:
+        apply: False = propose only (default); True = write the blocks to the
+            calendar. Only pass True after the user has confirmed the plan.
+        energy_note: optional free text about the user's state, e.g. "low
+            energy, lots of meetings" — steers which work is chosen.
+    """
+    plan = await _request(
+        "POST", "/tasks/calendar/plan-today",
+        json={"apply": bool(apply), "energy_note": energy_note or None})
+    return _fmt_plan(plan or {}, applied=bool(apply))
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_replan_day(apply: bool = False) -> str:
+    """Reorganize the REST of today when the user fell behind — repack today's
+    flexible, not-yet-done blocks from now onward, around fixed meetings and
+    what's already done. Reversible. Propose first, apply after the user agrees.
+
+    Args:
+        apply: False = propose only (default); True = commit the new times.
+    """
+    plan = await _request(
+        "POST", "/tasks/calendar/replan-today", json={"apply": bool(apply)})
+    return _fmt_plan(plan or {}, applied=bool(apply))
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_rollover(apply: bool = False) -> str:
+    """Roll overdue-but-incomplete time-blocks forward into today's open slots
+    (deadline-aware, nearest-due first). Reversible. Propose first, apply after
+    the user agrees.
+
+    Args:
+        apply: False = propose only (default); True = commit the moves.
+    """
+    plan = await _request(
+        "POST", "/tasks/calendar/rollover-today", json={"apply": bool(apply)})
+    return _fmt_plan(plan or {}, applied=bool(apply))
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_day_digest() -> str:
+    """A quick snapshot of the user's day — what's scheduled, how much is
+    unscheduled, what's overdue, the ★ One Thing, and estimate accuracy. Use it
+    to open a morning check-in or answer "how's my day looking?" (read-only)."""
+    d = await _request("GET", "/tasks/calendar/day-summary")
+    if not d:
+        return "Couldn't read the day summary."
+    lines = [f"Day summary for {d.get('day', 'today')}:"]
+    one = d.get("one_thing")
+    if one and one.get("title"):
+        lines.append(f"★ One Thing: {one['title']}")
+    sched = d.get("scheduled") or []
+    active = [b for b in sched if not b.get("done")]
+    done = [b for b in sched if b.get("done")]
+    if active:
+        lines.append(f"{len(active)} block(s) still to do today:")
+        for b in active[:8]:
+            s = (b.get("start") or "")[11:16]
+            e = (b.get("end") or "")[11:16]
+            mark = " 🔒" if b.get("fixed") else ""
+            lines.append(f"• {s}-{e}{mark} {b.get('title', '?')}")
+    else:
+        lines.append("Nothing left scheduled today.")
+    if done:
+        lines.append(f"{len(done)} already done today. 🎉")
+    if d.get("overdue_count"):
+        lines.append(
+            f"⚠ {d['overdue_count']} overdue block(s) — offer to roll them over "
+            "(gtd_rollover).")
+    if d.get("unscheduled_count"):
+        lines.append(
+            f"{d['unscheduled_count']} unscheduled next action(s) — offer to "
+            "plan the day (gtd_plan_day).")
+    op = d.get("estimate_over_pct")
+    if op is not None and abs(op) >= 5:
+        lines.append(
+            f"Heads up: tasks run ~{op:+d}% vs estimate — plans are padded.")
+    return "\n".join(lines)
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_estimate_stats() -> str:
+    """How accurate the user's time estimates are (planned vs actual over recent
+    timed blocks) — answers "am I good at estimating?" (read-only)."""
+    d = await _request("GET", "/tasks/calendar/estimate-stats")
+    if not d or not d.get("samples"):
+        return ("Not enough timed tasks yet to judge estimate accuracy — use "
+                "Focus/Start on blocks to build the signal.")
+    op = int(d.get("over_pct") or 0)
+    verdict = ("right on your estimates" if abs(op) < 5
+               else f"{op:+d}% vs estimate "
+               + ("(you under-estimate)" if op > 0 else "(you over-estimate)"))
+    return (f"Over {d['samples']} timed tasks you run {verdict}. "
+            "The planner pads durations to match.")
+
+
+@_annotate_risk(idempotent=True)
+async def gtd_set_one_thing(item_id: str = "", date: str = "") -> str:
+    """Set (or clear) the user's ★ One Thing — the single most important task for
+    a day. The planner then protects it (first, in a peak-energy window, never
+    dropped). Empty item_id clears it.
+
+    Args:
+        item_id: the item's full UUID; empty string clears the One Thing.
+        date: LOCAL day YYYY-MM-DD; empty = today (the server's default day).
+    """
+    from datetime import datetime, timezone
+    day = date.strip() or datetime.now(timezone.utc).astimezone().strftime(
+        "%Y-%m-%d")
+    await _request(
+        "PUT", "/tasks/calendar/day-state",
+        json={"day": day, "one_thing_id": item_id.strip()})
+    if not item_id.strip():
+        return f"Cleared the One Thing for {day}."
+    return f"Set the One Thing for {day}. The planner will protect it."

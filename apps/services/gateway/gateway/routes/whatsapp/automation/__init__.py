@@ -7,4 +7,8 @@ routes it defines register on the shared ``core.router``.
 """
 from __future__ import annotations
 
-from gateway.routes.whatsapp.automation import intent, replyzero  # noqa: F401
+from gateway.routes.whatsapp.automation import (  # noqa: F401
+    categories,
+    intent,
+    replyzero,
+)

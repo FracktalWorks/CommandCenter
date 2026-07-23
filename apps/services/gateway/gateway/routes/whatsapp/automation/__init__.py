@@ -10,6 +10,7 @@ from __future__ import annotations
 from gateway.routes.whatsapp.automation import (  # noqa: F401
     categories,
     commitments,
+    drafting,
     intent,
     replyzero,
     rules,

@@ -1137,7 +1137,7 @@ function AgentTile({
         <div className="flex w-16 shrink-0 items-center justify-center self-stretch border-r border-border/60 bg-background/40">
           <BreathingCharacter
             char={characterForAgent(agent.name, avatarLibraryId)}
-            box={56}
+            box={62}
             fallback={
               <AgentAvatar
                 libraryId={avatarLibraryId}
@@ -1555,7 +1555,7 @@ function AgentSidePanel({
             <div className="flex w-24 shrink-0 items-center justify-center self-stretch border-r border-border/60 bg-background/40 py-4">
               <BreathingCharacter
                 char={characterForAgent(agent.name, avatarLibraryId)}
-                box={76}
+                box={92}
                 fallback={
                   <AgentAvatar
                     libraryId={avatarLibraryId}

@@ -1,4 +1,5 @@
--- 93_gtd_planning_prefs.sql — the "how should the AI organize my day" prefs
+-- 97_gtd_planning_prefs.sql — the "how should the AI organize my day" prefs
+-- (renumbered 93→97 to resolve a duplicate-prefix collision on main; additive)
 -- (spec: calendar_ai_review.md §4; calendar_focus_os.md). The planner used to
 -- fill the day wall-to-wall with focus work; these make it plan like a human —
 -- with a configurable philosophy, breaks between long focus runs, and an

@@ -182,6 +182,29 @@ def test_sweep_mirrors_only_changed_small_files(ws, mirrored):
     }
 
 
+def test_sweep_does_not_follow_symlinked_dir_out_of_workspace(ws, mirrored, tmp_path):
+    """A symlinked directory pointing outside the workspace must NOT let the
+    sweep mirror host files into the durable store (rglob follows symlinked
+    dirs on py<3.13; the resolved-path containment check blocks it)."""
+    secret_dir = tmp_path.parent / "outside_secrets"
+    secret_dir.mkdir(exist_ok=True)
+    (secret_dir / "service_account.json").write_text('{"private_key":"LEAK"}')
+    # Agent (or a code_task session) drops a symlink under agent-data/.
+    link = ws / "agent-data" / "escape"
+    try:
+        link.symlink_to(secret_dir, target_is_directory=True)
+    except (OSError, NotImplementedError):
+        import pytest
+        pytest.skip("symlinks unsupported on this platform")
+    (ws / "outputs" / "legit.txt").write_text("ok")
+
+    n = asyncio.run(ct._sweep_to_blob_store(ws, since=time.time() - 5))
+    # The legit in-workspace file is mirrored; the symlinked-out secret is NOT.
+    assert "outputs/legit.txt" in mirrored
+    assert not any("service_account" in m or "escape" in m for m in mirrored)
+    assert n == 1
+
+
 # ── code_task: skill-layer behaviour around the engine ──────────────────────
 
 def test_code_task_without_workspace(monkeypatch):
@@ -406,6 +429,35 @@ def test_code_task_non_git_workspace_skips_commit(ws, mirrored, monkeypatch):
     monkeypatch.setattr(cs, "run_copilot_code_session", _ok)
     out = asyncio.run(ct.code_task("anything"))
     assert "done" in out and "committed locally" not in out
+
+
+def test_commit_never_stages_runtime_dirs_even_without_gitignore(ws, mirrored, monkeypatch):
+    """External workspace_root repos may lack the loader's .gitignore. A secret
+    a script wrote under agent-data/ must STILL never land in the commit — the
+    explicit unstage of agent-data/inputs/outputs is the guarantee."""
+    import orchestrator.code_session as cs
+
+    # Git repo with NO .gitignore.
+    (ws / "skills").mkdir()
+    (ws / "skills" / "tool.py").write_text("print('v1')")
+    assert _git(ws, "init").returncode == 0
+    _git(ws, "config", "user.name", "t")
+    _git(ws, "config", "user.email", "t@e.com")
+    _git(ws, "add", "-A")
+    _git(ws, "commit", "-m", "baseline")
+
+    async def _sess(*, task, workspace, **kw):
+        from pathlib import Path
+        Path(workspace, "skills/tool.py").write_text("print('v2')")   # tracked edit
+        Path(workspace, "agent-data/leaked_token.txt").write_text("sk-SECRET")
+        return "changed"
+
+    monkeypatch.setattr(cs, "run_copilot_code_session", _sess)
+    asyncio.run(ct.code_task("change the tool"))
+    committed = _git(ws, "show", "--name-only", "HEAD").stdout
+    assert "skills/tool.py" in committed        # the real edit is committed…
+    assert "agent-data" not in committed        # …the secret is NOT
+    assert "leaked_token" not in committed
 
 
 def test_harness_contract_covers_both_script_homes():

@@ -95,3 +95,43 @@ def test_sub_agent_maf_gets_compact_directive():
     # Compact variant (single paragraph, no markdown header).
     assert "Rich UI by default:" in instr
     assert "### Rich UI by default" not in instr
+
+
+def test_native_maf_gets_output_discipline_parity():
+    """Cross-runtime parity: native MAF agents must also learn where files go
+    (outputs/) and to load the design system before a report — the Copilot path
+    gets this in the addendum; the MAF path was missing it."""
+    agent = _FakeMafAgent()
+    ti._inject_agent_tools([agent])
+    instr = agent.default_options["instructions"]
+    assert "load_design_system" in instr          # design pointer reaches MAF
+    assert "outputs/" in instr                     # file-discipline rule
+    # Idempotent — a second injection doesn't duplicate the block.
+    ti._inject_agent_tools([agent])
+    assert agent.default_options["instructions"].count("load_design_system") == 1
+
+
+# ── Copilot addendum idempotency (parity with the MAF path) ─────────────────
+
+class _FakeCopilotAgent:
+    """GitHubCopilotAgent shape: tools in _tools, system_message in
+    _default_options. No default_options dict (that's the MAF branch)."""
+
+    def __init__(self) -> None:
+        self.name = "copilot-agent"
+        self._tools: list = []
+        self._default_options = {"system_message": {"mode": "append", "content": "Base."}}
+
+
+def test_copilot_addendum_injection_is_idempotent(monkeypatch):
+    # Avoid the optional normalize_tools dependency path issue by allowing the
+    # real injection to run; it degrades gracefully if agent_framework is absent.
+    agent = _FakeCopilotAgent()
+    ti._inject_agent_tools([agent])
+    content1 = agent._default_options["system_message"]["content"]
+    assert "CommandCenter Platform Tools" in content1
+    ti._inject_agent_tools([agent])
+    content2 = agent._default_options["system_message"]["content"]
+    # Second injection must NOT append a duplicate addendum.
+    assert content2.count("## CommandCenter Platform Tools") == 1
+    assert content2 == content1

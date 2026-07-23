@@ -51,7 +51,12 @@ say "Applying migrations to db '$PG_DB' as '$PG_USER' (container: $PG_CONTAINER)
 # initdb on first boot) and contain statements that aren't re-runnable.
 shopt -s nullglob
 applied=0
-for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]_*.sql | sort); do
+# Match 2-OR-MORE-digit numeric prefixes (NN_ … NNN_) and apply in NUMERIC
+# order. `sort -V` (version sort) is essential now that 3-digit numbers exist:
+# plain lexical `sort` puts "100_" BEFORE "99_", which would run a later
+# migration before an earlier one. The 2-digit scheme filled up at 99, so
+# migrations continue at 100+.
+for f in $(ls "$MIGRATIONS_DIR"/[0-9][0-9]*_*.sql | sort -V); do
   base="$(basename "$f")"
   case "$base" in
     00_*|01_*) continue ;;  # init-only, skip

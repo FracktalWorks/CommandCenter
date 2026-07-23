@@ -35,8 +35,12 @@ function buildFixPrompt(
  * The "Improve Rules" dialog. For an existing rule / "None" it PERSISTS a
  * learned classification pattern (so the same sender matches/skips that rule
  * next time — inbox-zero parity). For "New rule" it hands off to the AI chat.
+ *
+ * Exported so ANY surface that shows a categorization (mailbox row context
+ * menu, the Cleaner's sender rows) can open the same correction flow — one
+ * dialog, one learning path, reachable where the mistake is seen.
  */
-function FixDialog({
+export function FixDialog({
   accountId,
   email,
   current,

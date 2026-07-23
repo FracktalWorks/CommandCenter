@@ -6,13 +6,14 @@ import {
   Reply, ReplyAll, Forward, MailOpen, Mail, Tag,
   Paperclip, Star, AlertTriangle, ChevronRight, Loader2, Check, X,
   MessagesSquare, RefreshCw, Minus, Plus,
-  ListChecks, Clock, AlarmClockOff,
+  ListChecks, Clock, AlarmClockOff, MessageCircle,
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { timeLabel } from "../lib/utils";
 import { useEmailStore, isRealFolder } from "../lib/emailStore";
 import { LabelChip, ColorSwatch, LabelColorGrid } from "./LabelChip";
 import { presetForLabel } from "../lib/labelColors";
+import { FixDialog } from "./automation/ai-settings/fixDialog";
 import { useViewMode } from "@/components/ViewModeProvider";
 
 interface EmailListProps {
@@ -133,6 +134,9 @@ export function EmailList({
       syncStatus[selectedAccountId] === "processing"
     : false;
   const [ctx, setCtx] = useState<CtxState | null>(null);
+  // "Fix category…" from the row context menu — the same Improve-Rules dialog
+  // the AI-Settings Test/History tabs use, reachable from anywhere mail shows.
+  const [fixTarget, setFixTarget] = useState<Email | null>(null);
 
   // ── Bulk selection ──
   // Held in the store so the desktop unified toolbar shares it; aliased to the
@@ -617,6 +621,24 @@ export function EmailList({
           onDelete={() => deleteEmail(ctx.email.id)}
           onBulkUpdate={(u) => bulkUpdate(u)}
           onBulkDelete={bulkDelete}
+          onFix={() => setFixTarget(ctx.email)}
+        />
+      )}
+
+      {fixTarget && (
+        <FixDialog
+          accountId={fixTarget.accountId}
+          email={{
+            subject: fixTarget.subject || "",
+            from: fixTarget.from?.email || "",
+          }}
+          current={{
+            matched: (fixTarget.categories?.length ?? 0) > 0,
+            ruleName: fixTarget.categories?.[0] ?? null,
+          }}
+          messageId={fixTarget.id}
+          onReran={() => useEmailStore.getState().fetchEmails()}
+          onClose={() => setFixTarget(null)}
         />
       )}
     </div>
@@ -639,6 +661,7 @@ function ContextMenu({
   onDelete,
   onBulkUpdate,
   onBulkDelete,
+  onFix,
 }: {
   ctx: CtxState;
   folders: { key: string; label: string }[];
@@ -660,6 +683,7 @@ function ContextMenu({
     updates: Partial<Pick<Email, "isRead" | "isStarred" | "isFlagged" | "folder">>
   ) => void;
   onBulkDelete: () => void;
+  onFix: () => void;
 }) {
   const { email, bulk, count = 1 } = ctx;
   const hasCategories = bulk || (email.categories?.length ?? 0) > 0;
@@ -701,6 +725,11 @@ function ContextMenu({
             <CtxItem icon={Reply} label="Reply" onClick={() => run(() => onReply("reply"))} />
             <CtxItem icon={ReplyAll} label="Reply All" onClick={() => run(() => onReply("reply-all"))} />
             <CtxItem icon={Forward} label="Forward" onClick={() => run(() => onReply("forward"))} />
+            <CtxItem
+              icon={MessageCircle}
+              label="Fix category…"
+              onClick={() => run(onFix)}
+            />
             <CtxDivider />
           </>
         )}

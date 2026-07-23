@@ -15,6 +15,7 @@ import {
 import { SenderStat, NewsletterStatus, SenderStatus, Email } from "../../lib/types";
 import { chipColors } from "../../lib/labelColors";
 import { useEmailStore } from "../../lib/emailStore";
+import { FixDialog } from "./ai-settings/fixDialog";
 import { useViewMode } from "@/components/ViewModeProvider";
 
 interface BulkUnsubscribeViewProps {
@@ -149,6 +150,10 @@ export function BulkUnsubscribeView({
   const [filter, setFilter] = useState("");
   // Category filter (derived from per-message rule labels). "all" = every sender.
   const [categoryTab, setCategoryTab] = useState<string>("all");
+  // Right-click a sender's identity/chips → the same Improve-Rules dialog the
+  // rest of the app uses (fix the categorization where the mistake is seen).
+  const [fixSender, setFixSender] =
+    useState<{ email: string; category: string | null } | null>(null);
   // "Archive old mail" age sweep (folded in from the old Archiver).
   const [olderThan, setOlderThan] = useState(30);
   const [onlyRead, setOnlyRead] = useState(true);
@@ -1206,7 +1211,17 @@ export function BulkUnsubscribeView({
                       <ChevronRight size={13} />
                     )}
                   </button>
-                  <div className="flex-1 min-w-0">
+                  <div
+                    className="flex-1 min-w-0"
+                    title="Right-click to fix this sender's categorization"
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setFixSender({
+                        email: s.email,
+                        category: (s.categories || [])[0] ?? null,
+                      });
+                    }}
+                  >
                     <div className="flex items-center gap-2">
                       <span className="text-xs font-medium text-foreground truncate">
                         {s.name || s.email}
@@ -1507,6 +1522,19 @@ export function BulkUnsubscribeView({
           Archive old mail
         </button>
       </div>
+
+      {fixSender && accountId && (
+        <FixDialog
+          accountId={accountId}
+          email={{ subject: "", from: fixSender.email }}
+          current={{
+            matched: !!fixSender.category,
+            ruleName: fixSender.category,
+          }}
+          onReran={load}
+          onClose={() => setFixSender(null)}
+        />
+      )}
     </div>
   );
 }

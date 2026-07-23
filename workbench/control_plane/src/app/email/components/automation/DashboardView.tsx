@@ -14,7 +14,7 @@
 import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
-  Settings2, Hourglass, ExternalLink, Clock, CheckCheck,
+  Settings2, Hourglass, ExternalLink, Clock, CheckCheck, XCircle,
 } from "lucide-react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
 import { DigestData, DigestThread } from "../../lib/types";
@@ -88,6 +88,12 @@ export function DashboardView({ accountId, onOpenEmail }: DashboardViewProps) {
   const markDone = (t: DigestThread) => {
     if (!accountId) return;
     dropThread("backlog", t.thread_id, resolveThread(accountId, t.thread_id));
+  };
+
+  const dismiss = (t: DigestThread) => {
+    if (!accountId) return;
+    dropThread("backlog", t.thread_id,
+      resolveThread(accountId, t.thread_id, { dismiss: true }));
   };
 
   const snoozeDay = (t: DigestThread) => {
@@ -213,6 +219,12 @@ export function DashboardView({ accountId, onOpenEmail }: DashboardViewProps) {
                                 <Clock size={12} />
                               </RowBtn>
                             )}
+                            <RowBtn
+                              title="Dismiss — never mind this thread (files it as FYI without claiming it's done)"
+                              onClick={() => dismiss(b)}
+                            >
+                              <XCircle size={12} />
+                            </RowBtn>
                           </>
                         }
                       />

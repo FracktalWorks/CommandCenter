@@ -59,6 +59,10 @@ commit for human approval and pushes it after approval. Never commit \
 7. Never touch files outside the working directory. Never install system \
 packages; Python deps go through `uv pip install` into the current venv only \
 when genuinely needed.
+7b. Integration credentials: if the task lists available integrations, \
+scripts must read their env vars with `os.getenv` at RUN time. NEVER \
+hard-code, print, log, or write a credential value into any file — scripts \
+must degrade with a clear message when a var is unset.
 8. End with a concise report: what you created/changed, how to run it, and \
 the final run's key output.
 """

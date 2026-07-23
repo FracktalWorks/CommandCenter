@@ -68,12 +68,36 @@ def _workspace_root() -> Path | None:
     return Path(root) if root else None
 
 
+def _declared_integrations() -> list[str]:
+    raw = _WRITE_ARTIFACT_CONTEXT.get("integrations")
+    return [s for s in raw if isinstance(s, str)] if isinstance(raw, list) else []
+
+
 def _script_env() -> dict[str, str]:
-    """Minimal, secret-free environment for script subprocesses."""
+    """Minimal environment for script subprocesses: base allowlist + exactly
+    the agent's DECLARED integrations' credentials.
+
+    The base allowlist is secret-free (deny-pattern on top). On top of it, the
+    canonical env vars of the integrations this agent declared in its
+    ``config.json`` — and that resolved for this run — are passed through
+    (``acb_skills.integrations.FIELD_TO_ENV``; the executor injects them into
+    the run env, scoped by a restore token). So a script can use the ClickUp
+    token *its own agent* is entitled to, but never the gateway master key,
+    another agent's integrations, or the DB URL.
+    """
     env = {
         k: v for k, v in os.environ.items()
         if k in _ENV_ALLOW and not _ENV_DENY_RE.search(k)
     }
+    declared = _declared_integrations()
+    if declared:
+        try:
+            from acb_skills.integrations import env_var_names  # noqa: PLC0415
+            for var in env_var_names(declared):
+                if var in os.environ:
+                    env[var] = os.environ[var]
+        except ImportError:
+            pass
     env.setdefault("PYTHONUNBUFFERED", "1")
     return env
 
@@ -300,8 +324,30 @@ async def code_task(task: str) -> str:
             "code_task unavailable: the coding engine (orchestrator runtime) "
             "is not importable in this environment."
         )
+    # Tell the session which integrations its scripts may use (env var NAMES
+    # only — values flow through the scoped run env, never through the prompt).
+    session_task = task
+    declared = _declared_integrations()
+    if declared:
+        try:
+            from acb_skills.integrations import FIELD_TO_ENV  # noqa: PLC0415
+            lines = [
+                f"- {svc}: " + ", ".join(v for _, v in FIELD_TO_ENV.get(svc, []))
+                for svc in declared
+            ]
+            session_task = (
+                task
+                + "\n\n[Platform] This agent's declared integrations are "
+                "available to scripts via these environment variables (set at "
+                "run time; read with os.getenv, never hard-code values):\n"
+                + "\n".join(lines)
+            )
+        except ImportError:
+            pass
     try:
-        report = await run_copilot_code_session(task=task, workspace=str(root))
+        report = await run_copilot_code_session(
+            task=session_task, workspace=str(root),
+        )
     except Exception as exc:
         report = None
         error = f"{type(exc).__name__}: {exc}"

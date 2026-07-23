@@ -157,7 +157,37 @@ So the full loop the user asked for works end-to-end: broken built-in skill →
 next `load_agent` pulls it → the fixed tool is live — while unapproved edits
 can never reach `main` and can never be silently lost.
 
-## 8. Open follow-ups
+## 8. Integrations: declared-only credential pass-through
+
+Scripts often exist precisely to call an external service the platform already
+holds credentials for (ClickUp, Zoho CRM, Gmail, SerpAPI, …). Blanket
+scrubbing would make the skill useless for that; blanket pass-through would
+leak the platform's whole secret surface into arbitrary code. The rule is the
+same one the rest of the platform already enforces: **an agent's scripts get
+exactly the integrations that agent declared — nothing else.**
+
+- `config.json: integrations` / `optional_integrations` → resolved by the
+  Integration Registry per run; the executor injects the canonical env vars
+  run-scoped (`_inject_integrations_to_env`, B6 Tier-0 restore token) and now
+  also publishes the resolved service names into the tool context.
+- `code_tools._script_env` grants the subprocess the base allowlist **plus
+  exactly those services' env vars** (via the shared
+  `acb_skills.integrations.FIELD_TO_ENV` mapping — single source of truth with
+  the executor's injection, keeping "what the run has" ≡ "what a script may
+  see"). Undeclared integrations, the gateway master key, and the DB URL stay
+  scrubbed. Sub-agents get *their own* declared set, not the parent's.
+- **Discoverability:** the injected `list_integrations()` tool (core floor,
+  read-only) reports resolved services + the env-var *names* scripts can read,
+  and declared-but-unavailable services with the reason — never values. The
+  `code_task` session prompt names the same vars, and the harness forbids
+  hard-coding, printing, or persisting credential values.
+- On-the-fly skills against an integration therefore need no key handling at
+  all: the agent checks `list_integrations`, `code_task` writes a script that
+  `os.getenv`s the canonical vars, and `run_script` reuses it forever. A new
+  service still onboards through the registry (resolver + `FIELD_TO_ENV` entry
+  + declaration in the agent's config) — never by pasting keys into scripts.
+
+## 9. Open follow-ups
 
 - **BO-7**: move `run_script` execution into the container sandbox when it
   lands; the skill API is already shaped for it (path + args in, capped output

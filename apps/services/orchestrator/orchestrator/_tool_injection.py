@@ -48,8 +48,9 @@ _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
     "save_note", "recall_notes",         # cross-session working memory
     # Coding skill (agent_coding_skill.md): every MAF agent can author scripts
     # via a bounded Copilot session (code_task) and cheaply re-run the durable
-    # scripts it accumulated (run_script). Workspace-jailed + env-scrubbed.
-    "run_script", "code_task",
+    # scripts it accumulated (run_script). Workspace-jailed + env-scrubbed;
+    # list_integrations shows what a script may reach (names, never values).
+    "run_script", "code_task", "list_integrations",
     # Inter-agent delegation (multi_agent_orchestration.md Phase 0.1): the
     # floor previously guaranteed every tool an agent needs to work ALONE and
     # not one it needs to HAND OFF — a scope that omitted call_agent silently
@@ -322,7 +323,9 @@ def _build_injected_tools_addendum(
                 "(agent-data/scripts/*.py|.sh) directly, cheap; "
                 "code_task(task) — bounded coding session that writes/edits/"
                 "tests scripts in your workspace (check agent-data/SCRIPTS.md "
-                "first; prefer run_script for re-runs)"
+                "first; prefer run_script for re-runs); "
+                "list_integrations() — which platform integrations your "
+                "scripts can use (env var names, values injected at run time)"
             )
         if _want("save_note", "recall_notes"):
             parts.append(
@@ -437,6 +440,7 @@ When your built-in tools can't do something, WRITE A PROGRAM for it — and keep
 - **code_task(task)** — Delegate a coding job to the platform's coding engine: it writes, edits, runs, and debugs scripts inside YOUR workspace in one bounded session. Describe what to build (inputs, expected output, and the existing script's name if changing one). It follows the script contract: reusable scripts live under ``agent-data/scripts/``, the catalog lives in ``agent-data/SCRIPTS.md``, and existing scripts are edited in place rather than duplicated. Scripts persist durably — they survive restarts and redeploys, so a capability you build once stays yours.
 - **run_script(path, args?)** — Execute a script that already exists (e.g. ``agent-data/scripts/report.py``, ``.py`` or ``.sh``) and get its output. No reasoning step — much faster and cheaper than code_task. Check ``recall_notes("SCRIPTS.md")`` for your script catalog.
 This also covers your BUILT-IN skills: if one of your repo-baked skill scripts (under ``skills/``) misbehaves, call ``code_task`` describing the problem — it fixes the source in place, and the change is committed locally and queued for HUMAN APPROVAL in the inbox (live once approved). Workspace scripts under ``agent-data/`` need no approval.
+- **list_integrations()** — See which platform integrations (ClickUp, Zoho CRM, Gmail, SerpAPI, …) are configured for you and the env-var NAMES your scripts can read for each (e.g. ``CLICKUP_API_TOKEN`` via ``os.getenv``). Call this BEFORE writing a script against an external service: scripts receive exactly your declared integrations' credentials at run time — nothing else — so never hard-code keys or ask the user to paste one. If an integration you need is listed as unavailable, tell the user what needs configuring.
 Workflow: need a new capability → ``code_task``; repeat a known job → ``run_script``; small tweak to an existing script → ``code_task`` naming the script. Files a script writes under ``outputs/`` are persisted and appear in the Files panel automatically.
 """)
     if _want("save_note", "recall_notes"):
@@ -662,6 +666,14 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
         from acb_skills.code_tools import code_task  # noqa: PLC0415
         from acb_skills.code_tools import run_script
         _all_tools = _all_tools + [run_script, code_task]
+    except ImportError:
+        pass
+
+    # Integration discoverability — which registry services resolved for this
+    # run and which env vars a script may read for each (names, never values).
+    try:
+        from acb_skills.integration_tools import list_integrations  # noqa: PLC0415
+        _all_tools = _all_tools + [list_integrations]
     except ImportError:
         pass
 

@@ -210,6 +210,51 @@ def _google_sheets(s: Any) -> dict[str, Any]:
     return {"type": "service_account", "sa_json_path": sa_path}
 
 
+# Canonical credential-dict-field → env-var mapping per service. Single source
+# of truth shared by the executor's run-scoped env injection
+# (``_inject_integrations_to_env``) and the coding skill's script-subprocess
+# env (``code_tools._script_env``): whatever the executor exports for a run is
+# exactly what a declared integration's scripts may read.
+FIELD_TO_ENV: dict[str, list[tuple[str, str]]] = {
+    "zoho-crm": [
+        ("client_id",     "ZOHO_CLIENT_ID"),
+        ("client_secret", "ZOHO_CLIENT_SECRET"),
+        ("refresh_token", "ZOHO_REFRESH_TOKEN"),
+        ("api_domain",    "ZOHO_API_DOMAIN"),
+        ("accounts_url",  "ZOHO_ACCOUNTS_URL"),
+        ("region",        "ZOHO_REGION"),
+    ],
+    "clickup": [
+        ("api_token",    "CLICKUP_API_TOKEN"),
+        ("workspace_id", "CLICKUP_WORKSPACE_ID"),
+    ],
+    "apollo":        [("api_key", "APOLLO_API_KEY")],
+    "serpapi":       [("api_key", "SERPAPI_API_KEY")],
+    "apify":         [("api_token", "APIFY_API_TOKEN")],
+    "anymailfinder": [("api_key", "ANYMAILFINDER_API_KEY")],
+    "instantly":     [("api_key", "INSTANTLY_API_KEY")],
+    "gmail":         [("sa_json_path", "GMAIL_SA_JSON_PATH"), ("default_user", "GMAIL_DEFAULT_USER")],
+    "gmail-send":    [("sa_json_path", "GMAIL_SA_JSON_PATH"), ("default_user", "GMAIL_DEFAULT_USER")],
+    "smtp":          [("host", "SMTP_HOST"), ("username", "SMTP_USERNAME"), ("password", "SMTP_PASSWORD")],
+    "google-maps":   [("api_key", "GOOGLE_MAPS_API_KEY")],
+    "google-sheets": [("sa_json_path", "GOOGLE_SHEETS_SA_JSON_PATH")],
+    "litellm":       [("base_url", "LITELLM_BASE_URL"), ("api_key", "LITELLM_API_KEY")],
+}
+
+
+def env_var_names(services: list[str] | tuple[str, ...]) -> set[str]:
+    """The canonical env-var names belonging to *services* (unknown → ignored).
+
+    Used to grant a script subprocess exactly its agent's DECLARED
+    integrations' credentials — never the whole environment.
+    """
+    names: set[str] = set()
+    for service in services or []:
+        for _field, env_var in FIELD_TO_ENV.get(service, []):
+            names.add(env_var)
+    return names
+
+
 # Master registry: service-name → resolver
 _REGISTRY: dict[str, Any] = {
     "zoho-crm":      _zoho_crm,

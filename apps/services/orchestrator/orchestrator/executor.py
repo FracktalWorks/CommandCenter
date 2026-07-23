@@ -643,11 +643,14 @@ async def _run_sub_agent_streaming(
             try:
                 from acb_skills.write_artifact import \
                     _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
-                for _k in ("workspace_root", "session_id"):
+                for _k in ("workspace_root", "session_id", "integrations"):
                     _saved_artifact_ctx[_k] = _WRITE_ARTIFACT_CONTEXT.get(
                         _k, ""
                     )
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _sub_agent_dir
+                # The sub-agent's scripts get ITS declared integrations, not
+                # the parent's (same scoping as the env injection above).
+                _WRITE_ARTIFACT_CONTEXT["integrations"] = sorted(integrations)
                 # session_id stays as orchestrator's so download URLs
                 # resolve correctly in the parent chat window.
             except Exception:  # noqa: BLE001
@@ -1487,6 +1490,13 @@ async def run_agent(
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_agent_dir
+                # Declared+resolved integrations for this run — read by
+                # list_integrations (discoverability) and code_tools
+                # (_script_env grants a script exactly these creds).
+                _WRITE_ARTIFACT_CONTEXT["integrations"] = sorted(integrations)
+                _WRITE_ARTIFACT_CONTEXT["integration_warnings"] = dict(
+                    integration_warnings
+                )
                 _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
                     getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
                 )
@@ -1974,6 +1984,13 @@ async def run_agent_stream(
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
+                # Declared+resolved integrations for this run — read by
+                # list_integrations (discoverability) and code_tools
+                # (_script_env grants a script exactly these creds).
+                _WRITE_ARTIFACT_CONTEXT["integrations"] = sorted(integrations)
+                _WRITE_ARTIFACT_CONTEXT["integration_warnings"] = dict(
+                    integration_warnings
+                )
                 _WRITE_ARTIFACT_CONTEXT["gateway_url"] = str(
                     getattr(settings, "gateway_base_url", "http://127.0.0.1:8000")
                 )
@@ -3875,37 +3892,16 @@ def _inject_integrations_to_env(
     """
     import os  # noqa: PLC0415
 
-    _FIELD_TO_ENV: dict[str, list[tuple[str, str]]] = {
-        # (integration_name): [(field_in_dict, ENV_VAR_NAME), ...]
-        "zoho-crm": [
-            ("client_id",     "ZOHO_CLIENT_ID"),
-            ("client_secret", "ZOHO_CLIENT_SECRET"),
-            ("refresh_token", "ZOHO_REFRESH_TOKEN"),
-            ("api_domain",    "ZOHO_API_DOMAIN"),
-            ("accounts_url",  "ZOHO_ACCOUNTS_URL"),
-            ("region",        "ZOHO_REGION"),
-        ],
-        "clickup": [
-            ("api_token",   "CLICKUP_API_TOKEN"),
-            ("workspace_id", "CLICKUP_WORKSPACE_ID"),
-        ],
-        "apollo":        [("api_key", "APOLLO_API_KEY")],
-        "serpapi":       [("api_key", "SERPAPI_API_KEY")],
-        "apify":         [("api_token", "APIFY_API_TOKEN")],
-        "anymailfinder": [("api_key", "ANYMAILFINDER_API_KEY")],
-        "instantly":     [("api_key", "INSTANTLY_API_KEY")],
-        "gmail":         [("sa_json_path", "GMAIL_SA_JSON_PATH"), ("default_user", "GMAIL_DEFAULT_USER")],
-        "gmail-send":    [("sa_json_path", "GMAIL_SA_JSON_PATH"), ("default_user", "GMAIL_DEFAULT_USER")],
-        "smtp":          [("host", "SMTP_HOST"), ("username", "SMTP_USERNAME"), ("password", "SMTP_PASSWORD")],
-        "google-sheets": [("sa_json_path", "GOOGLE_SHEETS_SA_JSON_PATH")],
-        "litellm":       [("base_url", "LITELLM_BASE_URL"), ("api_key", "LITELLM_API_KEY")],
-    }
+    # Canonical mapping now lives in acb_skills.integrations.FIELD_TO_ENV —
+    # shared with code_tools._script_env so a declared integration's scripts
+    # see exactly the vars this function exports (agent_coding_skill.md §9).
+    from acb_skills.integrations import FIELD_TO_ENV  # noqa: PLC0415
 
     token: IntegrationEnvToken = {}
     for service, creds in integrations.items():
         if not isinstance(creds, dict):
             continue
-        for field, env_var in _FIELD_TO_ENV.get(service, []):
+        for field, env_var in FIELD_TO_ENV.get(service, []):
             val = creds.get(field, "")
             # Gateway .env wins: never overwrite an already-present var, and
             # don't record it in the token (so teardown won't delete an

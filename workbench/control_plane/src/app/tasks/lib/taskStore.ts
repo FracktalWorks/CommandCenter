@@ -2024,6 +2024,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     breakMins: 10,
     lunchStartHour: null,
     lunchEndHour: null,
+    dayTemplates: [],
   },
 
   updateSettings: async (patch) => {

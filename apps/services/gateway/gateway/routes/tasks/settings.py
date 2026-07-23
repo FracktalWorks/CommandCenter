@@ -136,6 +136,9 @@ class GtdSettingsModel(BaseModel):
     break_mins: int = 10
     lunch_start_hour: int | None = None
     lunch_end_hour: int | None = None
+    # Recurring day-templates (migration 94): flexible block/focus windows —
+    # [{days:[0..6], start_hour, end_hour, kind:'block'|'focus', label, theme}].
+    day_templates: list[dict] = []
 
 
 class GtdSettingsPatch(BaseModel):
@@ -163,6 +166,7 @@ class GtdSettingsPatch(BaseModel):
     break_mins: int | None = None
     lunch_start_hour: int | None = None
     lunch_end_hour: int | None = None
+    day_templates: list[dict] | None = None
 
 
 async def gtd_models(db: Any, user_id: str) -> dict[str, str]:
@@ -277,7 +281,52 @@ async def _load(db: Any, user_id: str) -> GtdSettingsModel:
         break_mins=_int_or(getattr(row, "break_mins", None), 10),
         lunch_start_hour=_int_or_none(getattr(row, "lunch_start_hour", None)),
         lunch_end_hour=_int_or_none(getattr(row, "lunch_end_hour", None)),
+        day_templates=_day_templates(getattr(row, "day_templates", None)),
     )
+
+
+def _day_templates(val: Any) -> list[dict]:
+    """Normalize the stored recurring windows (JSONB list, or JSON string) →
+    clean [{days,start_hour,end_hour,kind,label,theme}]. Drops anything
+    malformed; caps the list so the prompt/geometry stay bounded."""
+    import json
+    if isinstance(val, str):
+        try:
+            val = json.loads(val)
+        except ValueError:
+            return []
+    if not isinstance(val, list):
+        return []
+    out: list[dict] = []
+    for t in val:
+        if not isinstance(t, dict):
+            continue
+        try:
+            s, e = int(t.get("start_hour")), int(t.get("end_hour"))
+        except (TypeError, ValueError):
+            continue
+        if not (0 <= s < e <= 24):
+            continue
+        days: list[int] = []
+        for d in (t.get("days") or []):
+            try:
+                di = int(d)
+            except (TypeError, ValueError):
+                continue
+            if 0 <= di <= 6:
+                days.append(di)
+        kind = "block" if str(t.get("kind")) == "block" else "focus"
+        out.append({
+            "days": sorted(set(days)),
+            "start_hour": s,
+            "end_hour": e,
+            "kind": kind,
+            "label": str(t.get("label") or "").strip()[:40],
+            "theme": str(t.get("theme") or "").strip().lower()[:40],
+        })
+        if len(out) >= 40:
+            break
+    return out
 
 
 def _int_or(v: Any, default: int) -> int:
@@ -463,7 +512,11 @@ async def put_gtd_settings(
             if not stages:
                 stages = list(DEFAULT_WORKFLOW_STAGES)
             fields["workflow_stages"] = json.dumps(stages)
-        _jsonb_cols = {"workflow_stages", "status_stage_map", "energy_windows"}
+        _jsonb_cols = {"workflow_stages", "status_stage_map", "energy_windows",
+                       "day_templates"}
+        if "day_templates" in fields:
+            fields["day_templates"] = json.dumps(
+                _day_templates(fields["day_templates"]))
         if "status_stage_map" in fields:
             # Normalize keys (lower/trim) + drop empties; JSON-encode for JSONB.
             raw = fields["status_stage_map"] or {}

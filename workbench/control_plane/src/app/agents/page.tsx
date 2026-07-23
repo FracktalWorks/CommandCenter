@@ -40,6 +40,7 @@ import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 import FilterPills from "@/components/FilterPills";
 import { AgentAvatar, useAgentAvatars, notifyAgentAvatarsChanged } from "@/components/AgentAvatar";
+import BreathingCharacter, { characterForAgent } from "@/components/BreathingCharacter";
 import {
   CHARACTER_LIBRARY,
   LIBRARY_IDS,
@@ -1529,17 +1530,26 @@ function AgentSidePanel({
 
   return (
     <div className="flex flex-col h-full">
-      {/* Header — hidden in compact (mobile) mode since the wrapper provides its own */}
+      {/* Header — hidden in compact (mobile) mode since the wrapper provides its own.
+          Two columns: the agent's CHARACTER (breathing, full height) on the left,
+          identity/info on the right — the persona fronts the settings panel. */}
       {!compact && (
-        <div className="flex items-start justify-between p-5 border-b border-border shrink-0">
-          <div className="flex items-start gap-3">
-            <AgentAvatar
-              libraryId={avatarLibraryId}
-              size={36}
-              className="mt-0.5"
-              fallback={<Icon size={36} className={`${color} mt-0.5 shrink-0`} />}
-            />
-            <div>
+        <div className="flex items-stretch justify-between border-b border-border shrink-0">
+          <div className="flex items-stretch gap-0 min-w-0 flex-1">
+            <div className="flex w-24 shrink-0 items-center justify-center self-stretch border-r border-border/60 bg-background/40 py-4">
+              <BreathingCharacter
+                char={characterForAgent(agent.name, avatarLibraryId)}
+                box={76}
+                fallback={
+                  <AgentAvatar
+                    libraryId={avatarLibraryId}
+                    size={48}
+                    fallback={<Icon size={40} className={`${color} shrink-0`} />}
+                  />
+                }
+              />
+            </div>
+            <div className="min-w-0 flex-1 p-5">
               <div className="font-semibold text-foreground text-base">{agent.display_name || agent.name}</div>
               {agent.display_name ? (
                 <div className="text-[11px] text-muted-foreground font-mono mt-0.5">{agent.name}</div>
@@ -1562,7 +1572,7 @@ function AgentSidePanel({
               </div>
             </div>
           </div>
-          <button onClick={onClose} className="text-muted-foreground hover:text-foreground p-1 rounded transition-colors">
+          <button onClick={onClose} className="self-start m-3 text-muted-foreground hover:text-foreground p-1 rounded transition-colors">
             <X className="w-4 h-4" />
           </button>
         </div>

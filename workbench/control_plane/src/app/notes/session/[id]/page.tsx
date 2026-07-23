@@ -31,6 +31,11 @@ export default function SessionPage({
   const [error, setError] = useState<string | null>(null);
   const [scratch, setScratch] = useState("");
   const scratchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  type Cap = { text: string; speaker: number | null };
+  const [captions, setCaptions] = useState<Cap[]>([]);
+  const [interim, setInterim] = useState<Cap | null>(null);
+  const [liveOff, setLiveOff] = useState(false);
+  const capEndRef = useRef<HTMLDivElement>(null);
 
   const draw = useCallback(() => {
     const canvas = canvasRef.current;
@@ -83,8 +88,16 @@ export default function SessionPage({
     return () => recorderRef.current?.cancel();
   }, []);
 
+  // Keep the live caption feed pinned to the newest line.
+  useEffect(() => {
+    capEndRef.current?.scrollIntoView({ block: "end" });
+  }, [captions, interim]);
+
   async function begin() {
     setError(null);
+    setCaptions([]);
+    setInterim(null);
+    setLiveOff(false);
     const rec = new MeetingRecorder(id, {
       onState: (s) => setPhase(s),
       onElapsed: (sec) => setElapsed(sec),
@@ -95,6 +108,18 @@ export default function SessionPage({
         if (arr.length > BARS) arr.shift();
       },
       onError: (m) => setError(m),
+      onCaption: (c) => {
+        if (c.isFinal) {
+          setCaptions((prev) => [
+            ...prev.slice(-60),
+            { text: c.text, speaker: c.speaker },
+          ]);
+          setInterim(null);
+        } else {
+          setInterim({ text: c.text, speaker: c.speaker });
+        }
+      },
+      onLiveUnavailable: () => setLiveOff(true),
     });
     recorderRef.current = rec;
     try {
@@ -213,6 +238,45 @@ export default function SessionPage({
                   ? `Uploading… ${backlog} chunk${backlog > 1 ? "s" : ""} pending`
                   : "Recording"}
             </p>
+
+            {!liveOff && (captions.length > 0 || interim) && (
+              <div className="w-full max-w-2xl">
+                <div className="flex items-center gap-1.5 mb-2">
+                  <span className="w-1.5 h-1.5 rounded-full bg-primary animate-pulse" />
+                  <span className="text-[10px] uppercase tracking-wide text-primary font-semibold">
+                    Live captions
+                  </span>
+                </div>
+                <div className="rounded-xl border border-border bg-card p-3 max-h-44 overflow-y-auto space-y-1.5">
+                  {captions.slice(-8).map((c, i) => (
+                    <p
+                      key={i}
+                      className="text-sm text-foreground leading-snug"
+                    >
+                      {c.speaker != null && (
+                        <span className="text-primary font-semibold mr-1.5">
+                          S{c.speaker + 1}
+                        </span>
+                      )}
+                      {c.text}
+                    </p>
+                  ))}
+                  {interim && (
+                    <p className="text-sm text-muted-foreground leading-snug">
+                      {interim.speaker != null && (
+                        <span className="text-primary/60 font-semibold mr-1.5">
+                          S{interim.speaker + 1}
+                        </span>
+                      )}
+                      {interim.text}
+                      <span className="inline-block w-1 h-4 bg-primary/70 ml-0.5 align-text-bottom animate-pulse" />
+                    </p>
+                  )}
+                  <div ref={capEndRef} />
+                </div>
+              </div>
+            )}
+
             <div className="flex items-center gap-4">
               <button
                 onClick={() =>

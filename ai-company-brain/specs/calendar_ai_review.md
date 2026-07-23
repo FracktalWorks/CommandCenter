@@ -148,3 +148,35 @@ set, so "undo that" works in chat exactly like the toast does in the UI.
   rule, ★ One Thing (client-side read) with protect instruction, energy
   windows, done-today tally, buffer + propose-before-apply guidance for
   multi-block changes.
+
+## 6. Built (recommendations 4.1–4.4 — chat can now manage the day)
+
+**Status: SHIPPED** on this branch. "Manage my day with AI via chat" now works.
+
+- **4.1 Day state persisted server-side** — migration `92_gtd_day_state.sql`
+  (`user_id, day, one_thing_id, seed_ids`) + `GET/PUT /calendar/day-state`.
+  The client (`focusPrefs` + `apiGet/SetDayState`) keeps localStorage as the
+  instant cache and syncs the ★ One Thing (toggle, ritual commit) and
+  tomorrow-seeds (shutdown) through to the server, hydrating on calendar open.
+  Server-side AI now sees the One Thing everywhere.
+- **Planner is One-Thing-aware** — `_compute_day_plan` orders the One Thing
+  first, prefers a peak window, and never drops it for capacity; the LLM
+  ranking prompt gets an explicit One-Thing rule. Reads it from `day_state`.
+- **4.2 Agent-facing planner endpoints** — `POST /calendar/{plan,replan,
+  rollover}-today` build the day window from stored settings+tz (no client
+  geometry), reuse the exact planner cores, and APPLY on `apply=true`. Plus a
+  cheap no-LLM `GET /calendar/day-summary` for the digest.
+- **4.3 Context gaps closed** — `gtd_list_schedule` now marks 🔒 fixed / ✓ done
+  rows.
+- **4.4 Chat tools** — `gtd_plan_day`, `gtd_replan_day`, `gtd_rollover`
+  (propose→confirm→apply), `gtd_day_digest` (morning check-in),
+  `gtd_estimate_stats`, `gtd_set_one_thing`. Registered in
+  `agent-task-manager`; `instructions.md` + the persona document the
+  propose-before-apply workflow and the never-move-a-🔒-block rule.
+
+**Still open (future):** chat-side undo parity (§4.5 — chat-applied plans
+don't yet record a revert set the way the UI's toast does), interruption
+triage / deadline-risk / NL-timeboxing as dedicated flows (the primitives
+now exist), and a *scheduled* morning-digest trigger (the digest tool exists;
+firing it automatically needs a cron/persona trigger). `schema.generated.sql`
+regenerates on deploy (it already lags `gtd_rollover_log`).

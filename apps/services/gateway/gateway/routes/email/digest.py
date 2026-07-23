@@ -106,14 +106,73 @@ async def _digest_top_senders(
             for r in rows[:8]]
 
 
-async def _digest_needs_reply(db: Any, account_id: str) -> int:
-    """Threads the user actually owes a reply on — the Reply Zero classification
-    (email_thread_status), the SAME source analytics._backlog reads. Never the
-    old heuristic that counted every inbox-tailed thread all-time."""
+# A thread whose LAST message sits in trash/junk is not an open loop — the user
+# disposed of it. Counting it as "awaiting your reply" was a live lie (a trashed
+# sick-leave thread sat in the backlog). NULL folder (unmirrored) stays counted.
+_LIVE_THREAD = ("NOT EXISTS (SELECT 1 FROM email_messages tem "
+                "WHERE tem.id = ts.last_message_id "
+                "AND LOWER(COALESCE(tem.folder, '')) IN ('trash', 'junk'))")
+
+
+async def _digest_status_count(db: Any, account_id: str, status: str) -> int:
+    """Count live threads in one Reply Zero status — the SAME classification
+    (email_thread_status) analytics._backlog reads. Never the old heuristic
+    that counted every inbox-tailed thread all-time."""
     return (await db.execute(text(
-        """SELECT COUNT(*) FROM email_thread_status
-           WHERE account_id = :aid AND status = 'NEEDS_REPLY'"""
+        f"""SELECT COUNT(*) FROM email_thread_status ts
+            WHERE ts.account_id = :aid AND ts.status = '{status}'
+              AND {_LIVE_THREAD}"""
     ), {"aid": account_id})).scalar() or 0
+
+
+async def _digest_needs_reply(db: Any, account_id: str) -> int:
+    """Threads the user actually owes a reply on."""
+    return await _digest_status_count(db, account_id, "NEEDS_REPLY")
+
+
+async def _digest_thread_list(
+    db: Any, account_id: str, status: str, limit: int,
+) -> list[dict[str, Any]]:
+    """Live threads in one status, OLDEST first (aging is the point of a brief),
+    with enough identity for the dashboard to open the thread: thread_id, the
+    last message id, and the counterparty (sender of the last message, or its
+    first recipient when the last message is the user's own — the person being
+    waited on)."""
+    rows = (await db.execute(text(
+        f"""SELECT ts.thread_id, ts.last_message_id, em.subject,
+                   em.from_address->>'name'  AS from_name,
+                   em.from_address->>'email' AS from_email,
+                   em.to_addresses->0->>'name'  AS to_name,
+                   em.to_addresses->0->>'email' AS to_email,
+                   GREATEST(0, EXTRACT(DAY FROM now() - ts.last_message_at))::int
+                     AS age_days
+            FROM email_thread_status ts
+            LEFT JOIN email_messages em ON ts.last_message_id = em.id
+            WHERE ts.account_id = :aid AND ts.status = '{status}'
+              AND ts.last_message_at IS NOT NULL
+              AND {_LIVE_THREAD}
+            ORDER BY ts.last_message_at ASC
+            LIMIT :lim"""
+    ), {"aid": account_id, "lim": limit})).fetchall()
+    self_row = (await db.execute(text(
+        "SELECT LOWER(email_address) AS self FROM email_accounts "
+        "WHERE id = :aid"), {"aid": account_id})).fetchone()
+    self_email = (getattr(self_row, "self", "") or "") if self_row else ""
+
+    out: list[dict[str, Any]] = []
+    for r in rows:
+        ours = (r.from_email or "").lower() == self_email
+        who = ((r.to_name or r.to_email) if ours
+               else (r.from_name or r.from_email)) or ""
+        out.append({
+            "subject": (r.subject or "(no subject)"),
+            "age_days": r.age_days,
+            "thread_id": r.thread_id,
+            "message_id": (str(r.last_message_id)
+                           if r.last_message_id else None),
+            "who": who,
+        })
+    return out
 
 
 async def _digest_backlog_aging(
@@ -122,36 +181,38 @@ async def _digest_backlog_aging(
     """The oldest threads still awaiting the user's reply — the Reply Zero
     backlog, aged. A daily brief's job isn't "N new emails"; it's "these are the
     ones going stale". Reads the SAME email_thread_status the classifier owns."""
-    rows = (await db.execute(text(
-        """SELECT ts.thread_id, em.subject,
-                  GREATEST(0, EXTRACT(DAY FROM now() - ts.last_message_at))::int
-                    AS age_days
-           FROM email_thread_status ts
-           LEFT JOIN email_messages em ON ts.last_message_id = em.id
-           WHERE ts.account_id = :aid AND ts.status = 'NEEDS_REPLY'
-             AND ts.last_message_at IS NOT NULL
-           ORDER BY ts.last_message_at ASC
-           LIMIT :lim"""
-    ), {"aid": account_id, "lim": limit})).fetchall()
-    return [{"subject": (r.subject or "(no subject)"), "age_days": r.age_days}
-            for r in rows]
+    return await _digest_thread_list(db, account_id, "NEEDS_REPLY", limit)
+
+
+async def _digest_awaiting(
+    db: Any, account_id: str, limit: int = 5,
+) -> list[dict[str, Any]]:
+    """Who the user is WAITING ON — AWAITING threads (the user replied, the
+    other side owes the next move), longest-waiting first. The other half of
+    the ledger; the digest used to show only the user's debts, never their
+    receivables."""
+    return await _digest_thread_list(db, account_id, "AWAITING", limit)
 
 
 async def _digest_commitments(
     db: Any, account_id: str, horizon_days: int = 3, limit: int = 8,
+    *, include_undated: bool = False,
 ) -> list[dict[str, Any]]:
     """Open commitments (GTD tasks captured from a sent reply on this account)
     that are due within the horizon or already overdue — the "loops I promised
     to close" half of the brief. Linked via gtd_items.origin.thread/account_id
-    (see tasks/email_link.py). Best-effort: the tasks feature may be absent, and
-    a digest must never fail because of it."""
+    (see tasks/email_link.py). ``include_undated`` (dashboard) adds the open
+    promises with NO due date — 3 of the 4 live commitments had none and were
+    invisible to the horizon filter. Best-effort: the tasks feature may be
+    absent, and a digest must never fail because of it."""
     try:
         # ``:aid`` binds ONCE, against the uuid column. The json text on the
         # other side compares to ``ea.id::text`` — binding the same parameter in
         # both a uuid and a text context makes Postgres deduce uuid for it and
         # fail with "operator does not exist: text = uuid" on every call.
         rows = (await db.execute(text(
-            """SELECT gi.title,
+            """SELECT gi.id AS task_id, gi.title,
+                      gi.origin->>'thread_id' AS thread_id,
                       to_char(gi.due_at, 'Mon DD') AS due_label,
                       (gi.due_at < now()) AS overdue
                FROM gtd_items gi
@@ -159,12 +220,14 @@ async def _digest_commitments(
                WHERE gi.user_id = ea.user_id
                  AND gi.origin->>'account_id' = ea.id::text
                  AND gi.disposition NOT IN ('DONE', 'TRASH')
-                 AND gi.due_at IS NOT NULL
-                 AND gi.due_at <= now()
-                     + make_interval(days => :horizon)
-               ORDER BY gi.due_at ASC
+                 AND ((gi.due_at IS NOT NULL
+                       AND gi.due_at <= now()
+                           + make_interval(days => :horizon))
+                      OR (:undated AND gi.due_at IS NULL))
+               ORDER BY gi.due_at ASC NULLS LAST
                LIMIT :lim"""
-        ), {"aid": account_id, "horizon": horizon_days, "lim": limit})).fetchall()
+        ), {"aid": account_id, "horizon": horizon_days, "lim": limit,
+            "undated": include_undated})).fetchall()
     except Exception as exc:  # noqa: BLE001
         # Best-effort must leave the SESSION usable, not just return []: a
         # failed query aborts the transaction, and without a rollback every
@@ -177,7 +240,8 @@ async def _digest_commitments(
         _log.warning("email.digest_commitments_failed", error=str(exc))
         return []
     return [{"title": (r.title or "(untitled)"), "due": r.due_label,
-             "overdue": bool(r.overdue)} for r in rows]
+             "overdue": bool(r.overdue), "task_id": str(r.task_id),
+             "thread_id": r.thread_id} for r in rows]
 
 
 def _digest_is_empty(digest: dict) -> bool:
@@ -199,10 +263,19 @@ def _age_phrase(days: int) -> str:
     return f"{days} days"
 
 
+def _due_phrase(c: dict) -> str:
+    """"overdue Jul 20" / "due Jul 25" / "no due date" — undated commitments
+    (most of them, live) must still render instead of being dropped."""
+    if not c.get("due"):
+        return "no due date"
+    return f"{'overdue' if c.get('overdue') else 'due'} {c['due']}"
+
+
 def _render_digest_markdown(
     period: str, totals: dict, needs: int,
     by_category: list[dict], top_senders: list[dict],
     backlog: list[dict] | None = None, commitments: list[dict] | None = None,
+    awaiting: list[dict] | None = None,
 ) -> str:
     lines = [
         f"# Inbox digest — last {period}",
@@ -213,13 +286,18 @@ def _render_digest_markdown(
     ]
     if commitments:
         lines += ["", "## Commitments due"]
-        lines += [
-            f"- {c['title']} — {'overdue' if c['overdue'] else 'due'} {c['due']}"
-            for c in commitments]
+        lines += [f"- {c['title']} — {_due_phrase(c)}" for c in commitments]
     if backlog:
         lines += ["", "## Awaiting your reply (oldest first)"]
         lines += [f"- {b['subject']} — waiting {_age_phrase(b['age_days'])}"
                   for b in backlog]
+    if awaiting:
+        lines += ["", "## Waiting on them (longest first)"]
+        lines += [
+            f"- {b['subject']}"
+            + (f" — {b['who']}" if b.get("who") else "")
+            + f" — waiting {_age_phrase(b['age_days'])}"
+            for b in awaiting]
     lines += ["", "## By category"]
     lines += [f"- **{c['category']}**: {c['count']}"
               for c in by_category] or ["- (none)"]
@@ -239,6 +317,7 @@ def _render_digest_html(
     period: str, totals: dict, needs: int,
     by_category: list[dict], top_senders: list[dict],
     backlog: list[dict] | None = None, commitments: list[dict] | None = None,
+    awaiting: list[dict] | None = None,
 ) -> str:
     """A simple, self-contained HTML body so the emailed digest renders as more
     than a wall of Markdown asterisks in a mail client."""
@@ -261,14 +340,23 @@ def _render_digest_html(
     if commitments:
         items = [
             (f"{_esc(c['title'])} — "
-             f"<span style='color:{'#c0392b' if c['overdue'] else '#666'}'>"
-             f"{'overdue' if c['overdue'] else 'due'} {_esc(c['due'])}</span>")
+             f"<span style='color:"
+             f"{'#c0392b' if c.get('overdue') and c.get('due') else '#666'}'>"
+             f"{_esc(_due_phrase(c))}</span>")
             for c in commitments]
         action += _h3("Commitments due") + _ul(items)
     if backlog:
         items = [f"{_esc(b['subject'])} — <span style='color:#666'>waiting "
                  f"{_esc(_age_phrase(b['age_days']))}</span>" for b in backlog]
         action += _h3("Awaiting your reply") + _ul(items)
+    if awaiting:
+        items = [
+            f"{_esc(b['subject'])}"
+            + (f" — {_esc(b['who'])}" if b.get("who") else "")
+            + (f" — <span style='color:#666'>waiting "
+               f"{_esc(_age_phrase(b['age_days']))}</span>")
+            for b in awaiting]
+        action += _h3("Waiting on them") + _ul(items)
     return (
         "<div style='font-family:-apple-system,Segoe UI,Roboto,sans-serif;"
         "max-width:560px;color:#1a1a1a'>"
@@ -287,15 +375,21 @@ def _render_digest_html(
 
 async def _generate_digest(
     db: Any, account_id: str, period_days: int,
-    categories: list[str] | None = None,
+    categories: list[str] | None = None, *, full: bool = False,
 ) -> dict:
     """Build an inbox digest for the window by COMPOSING the shared aggregates
-    above (totals, category breakdown, top senders, needs-reply). Deterministic
-    (no LLM). Returns both a Markdown and an HTML body.
+    above (totals, category breakdown, top senders, needs-reply, awaiting,
+    commitments). Deterministic (no LLM). Returns both a Markdown and an HTML
+    body.
 
     `categories` (optional) restricts the category breakdown to the selected
     sender categories ("Cold Emails" maps to the "Cold Email" category); empty
     or None includes everything.
+
+    ``full`` is the DASHBOARD projection: same computation, bigger caps (the
+    in-app view lists every open loop with ids for navigation) plus undated
+    commitments. The scheduled EMAIL keeps the small caps — a brief, not a
+    ledger. One computation, two projections.
     """
     params: dict[str, Any] = {"aid": account_id, "days": period_days}
     self_row = (await db.execute(text(
@@ -328,11 +422,19 @@ async def _generate_digest(
     top_senders = await _digest_top_senders(db, params)
     needs = await _digest_needs_reply(db, account_id)
     totals["needs_reply"] = needs
-    # The two "act on this" sections that turn a summary into a daily brief:
-    # what's going stale (aging Reply-Zero backlog) and what I promised to do
-    # (commitments due). Independent of the digest's category window.
-    backlog = await _digest_backlog_aging(db, account_id)
-    commitments = await _digest_commitments(db, account_id)
+    totals["awaiting"] = await _digest_status_count(db, account_id, "AWAITING")
+    # The "act on this" sections that turn a summary into a daily brief: what's
+    # going stale (aging Reply-Zero backlog), who owes US the next move
+    # (awaiting), and what I promised to do (commitments). Independent of the
+    # digest's category window.
+    list_cap = 50 if full else 5
+    backlog = await _digest_backlog_aging(db, account_id, list_cap)
+    awaiting = await _digest_awaiting(db, account_id, list_cap)
+    commitments = await _digest_commitments(
+        db, account_id,
+        horizon_days=365 if full else 3,
+        limit=50 if full else 8,
+        include_undated=full)
 
     period = ("day" if period_days <= 1
               else ("week" if period_days <= 7 else f"{period_days} days"))
@@ -342,13 +444,14 @@ async def _generate_digest(
         "by_category": by_category,
         "top_senders": top_senders,
         "backlog": backlog,
+        "awaiting": awaiting,
         "commitments": commitments,
         "markdown": _render_digest_markdown(
             period, totals, needs, by_category, top_senders,
-            backlog, commitments),
+            backlog, commitments, awaiting),
         "html": _render_digest_html(
             period, totals, needs, by_category, top_senders,
-            backlog, commitments),
+            backlog, commitments, awaiting),
     }
 
 
@@ -375,7 +478,9 @@ async def get_digest(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         days = 7 if period == "week" else 1
         cats = await _configured_categories(db, account_id)
-        return await _generate_digest(db, account_id, days, cats)
+        # The in-app view is the DASHBOARD projection: full lists + ids so
+        # every row can open its thread. The scheduled email keeps small caps.
+        return await _generate_digest(db, account_id, days, cats, full=True)
     finally:
         await db.close()
 

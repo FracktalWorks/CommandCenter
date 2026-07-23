@@ -1519,6 +1519,20 @@ export async function getRulesHistory(
   return res.history ?? [];
 }
 
+/** Mark a Reply-Zero thread done (done=false reopens it). The backend collapses
+ *  the thread's conversation labels and closes any task captured from it — the
+ *  dashboard's one-click "this loop is closed". */
+export async function resolveThread(
+  accountId: string,
+  threadId: string,
+  done = true
+): Promise<void> {
+  await gatewayFetch(`/email/reply-zero/resolve`, {
+    method: "POST",
+    body: JSON.stringify({ account_id: accountId, thread_id: threadId, done }),
+  });
+}
+
 /** Snooze (or, with until=null, un-snooze) a conversation. Applies to the whole
  *  thread; it reappears in the inbox on its own once the time passes. */
 export async function snoozeEmail(

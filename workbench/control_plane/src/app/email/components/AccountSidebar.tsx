@@ -5,7 +5,7 @@ import {
   Inbox, Send, FileText, Trash2, Star, Archive, Tag,
   Plus, ChevronDown, ChevronRight, Check,
   ShieldAlert, Folder, Mails, MailMinus, Sparkles,
-  BarChart3, Zap, Newspaper, MessageSquare, Clock,
+  BarChart3, Zap, LayoutDashboard, MessageSquare, Clock,
 } from "lucide-react";
 import { EmailAccount, EmailFolder, AutomationFeature } from "../lib/types";
 
@@ -37,7 +37,7 @@ const AUTOMATION_ITEMS: {
   icon: React.ElementType;
 }[] = [
   { key: "chat", label: "Chat", icon: MessageSquare },
-  { key: "digest", label: "Digest", icon: Newspaper },
+  { key: "digest", label: "Dashboard", icon: LayoutDashboard },
   { key: "unsubscribe", label: "Email Cleaner", icon: MailMinus },
   { key: "ai-settings", label: "AI Settings", icon: Sparkles },
   { key: "analytics", label: "Analytics", icon: BarChart3 },

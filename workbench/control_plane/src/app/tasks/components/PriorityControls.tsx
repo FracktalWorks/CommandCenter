@@ -195,20 +195,21 @@ export function SuggestionBadge({
   compact?: boolean;
 }) {
   const updateItem = useTaskStore((s) => s.updateItem);
-  const openFocus = useTaskStore((s) => s.openFocus);
   const openSchedule = useTaskStore((s) => s.openSchedule);
   const openEliminate = useTaskStore((s) => s.openEliminate);
+  const openDelegate = useTaskStore((s) => s.openDelegate);
   const sug = modeSuggestion(item, urgentWindowHours);
   if (!sug || sug.mode === "do") return null;
   const mode = sug.mode as Exclude<ActionMode, "do">;
   const badge = SUGGESTION_BADGE[mode];
   const Icon = MODE_ICON[mode];
-  // The nudge now ACTS: "Schedule?" opens the schedule popup, "Eliminate?" the
-  // eliminate popup; a delegate nudge still opens the task (delegate lives there).
+  // Every nudge ACTS in place: "Schedule?" opens the calendar popup,
+  // "Eliminate?" the Someday-or-delete popup, and "Delegate?" the eligible-
+  // people picker (which promotes a LOCAL task to ClickUp when needed).
   const act = () => {
     if (mode === "schedule") openSchedule(item.id);
     else if (mode === "drop") openEliminate(item.id);
-    else openFocus(item.id);
+    else openDelegate(item.id);
   };
   // Plain nudge ("Delegate?"), no name. A delegate nudge fires on tasks that are
   // MINE (NEXT + isMine), so item.assignee is me — naming it would read

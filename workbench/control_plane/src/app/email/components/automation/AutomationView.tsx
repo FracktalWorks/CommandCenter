@@ -1,12 +1,12 @@
 "use client";
 
 import {
-  ArrowLeft, Sparkles, MailMinus, BarChart3, Newspaper,
+  ArrowLeft, Sparkles, MailMinus, BarChart3, LayoutDashboard,
   MessageSquare,
 } from "lucide-react";
 import { AutomationFeature } from "../../lib/types";
 import { AISettingsView } from "./AISettingsView";
-import { DigestView } from "./DigestView";
+import { DashboardView } from "./DashboardView";
 import { BulkUnsubscribeView } from "./BulkUnsubscribeView";
 import { AnalyticsView } from "./AnalyticsView";
 
@@ -20,6 +20,8 @@ interface AutomationViewProps {
    *  Analytics reports problems whose fix lives on another screen; making the
    *  user retrace their steps through the sidebar is how a finding gets lost. */
   onNavigate?: (feature: AutomationFeature) => void;
+  /** Open a message in the mailbox reading pane (dashboard row navigation). */
+  onOpenEmail?: (messageId: string) => void;
 }
 
 const META: Record<
@@ -39,9 +41,11 @@ const META: Record<
     icon: Sparkles,
   },
   digest: {
-    title: "Digest",
-    subtitle: "Inbox summary — view or email it",
-    icon: Newspaper,
+    // The feature KEY stays "digest" (routing/state churn for zero gain); the
+    // surface is the mailbox dashboard — open loops, promises, and traffic.
+    title: "Dashboard",
+    subtitle: "Open loops, commitments & daily traffic — act from here",
+    icon: LayoutDashboard,
   },
   unsubscribe: {
     title: "Email Cleaner",
@@ -62,6 +66,7 @@ export function AutomationView({
   onClose,
   onArchived,
   onNavigate,
+  onOpenEmail,
 }: AutomationViewProps) {
   const meta = META[feature];
   const Icon = meta.icon;
@@ -95,7 +100,9 @@ export function AutomationView({
         {feature === "ai-settings" && (
           <AISettingsView accountId={accountId} selectedEmailId={selectedEmailId} />
         )}
-        {feature === "digest" && <DigestView accountId={accountId} />}
+        {feature === "digest" && (
+          <DashboardView accountId={accountId} onOpenEmail={onOpenEmail} />
+        )}
         {feature === "unsubscribe" && (
           <BulkUnsubscribeView accountId={accountId} onArchived={onArchived} />
         )}

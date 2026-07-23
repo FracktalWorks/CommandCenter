@@ -5,6 +5,7 @@ register their routes on the shared ``router`` as an import side effect.
 Spec: ai-company-brain/specs/note_taker_app.md §3.7.
 """
 
+from gateway.routes.notes import actions as _actions  # noqa: F401
 from gateway.routes.notes import events as _events  # noqa: F401
 from gateway.routes.notes import meetings as _meetings  # noqa: F401
 from gateway.routes.notes import recordings as _recordings  # noqa: F401

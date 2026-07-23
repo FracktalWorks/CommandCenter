@@ -143,6 +143,35 @@ export async function listActions(meetingId: string): Promise<ActionItem[]> {
   );
 }
 
+export async function approveAction(
+  actionId: string
+): Promise<{ action_id: string; status: string; resulting_task_id: string | null }> {
+  return json(
+    await fetch(`/api/notes/actions/${actionId}/approve`, { method: "POST" })
+  );
+}
+
+export async function rejectAction(
+  actionId: string
+): Promise<{ action_id: string; status: string }> {
+  return json(
+    await fetch(`/api/notes/actions/${actionId}/reject`, { method: "POST" })
+  );
+}
+
+export async function approveAllActions(
+  meetingId: string,
+  minConfidence = 0.8
+): Promise<{ created: string[] }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/actions/approve-all`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ min_confidence: minConfidence }),
+    })
+  );
+}
+
 export async function summarize(
   meetingId: string
 ): Promise<{ run_id: string; status: string }> {

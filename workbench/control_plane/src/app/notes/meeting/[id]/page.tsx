@@ -10,15 +10,21 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
+  Check,
   CheckSquare,
+  ExternalLink,
   Loader2,
   Play,
   RefreshCw,
   Sparkles,
   Trash2,
+  X,
 } from "lucide-react";
+import Link from "next/link";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import {
+  approveAction,
+  approveAllActions,
   audioUrl,
   deleteMeeting,
   eventsUrl,
@@ -26,6 +32,7 @@ import {
   getMeeting,
   getNote,
   listActions,
+  rejectAction,
   summarize,
 } from "../../lib/api";
 import type { ActionItem, MeetingDetail, MeetingEvent } from "../../lib/types";
@@ -57,6 +64,8 @@ export default function MeetingPage({
   const [progress, setProgress] = useState<MeetingEvent | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [summarizing, setSummarizing] = useState(false);
+  const [actioning, setActioning] = useState<string | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const refresh = useCallback(async () => {
@@ -112,6 +121,53 @@ export default function MeetingPage({
     if (audioRef.current) {
       audioRef.current.currentTime = s;
       void audioRef.current.play();
+    }
+  }
+
+  function flashToast(msg: string) {
+    setToast(msg);
+    setTimeout(() => setToast(null), 4000);
+  }
+
+  async function onApprove(actionId: string) {
+    setActioning(actionId);
+    try {
+      await approveAction(actionId);
+      await refresh();
+      flashToast("Task created — view in Tasks");
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setActioning(null);
+    }
+  }
+
+  async function onReject(actionId: string) {
+    setActioning(actionId);
+    try {
+      await rejectAction(actionId);
+      await refresh();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setActioning(null);
+    }
+  }
+
+  async function onApproveAll() {
+    setActioning("all");
+    try {
+      const { created } = await approveAllActions(id, 0.8);
+      await refresh();
+      flashToast(
+        created.length
+          ? `${created.length} task${created.length > 1 ? "s" : ""} created — view in Tasks`
+          : "No draft items at 80%+ confidence"
+      );
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setActioning(null);
     }
   }
 
@@ -185,6 +241,13 @@ export default function MeetingPage({
           {error && (
             <div className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive">
               {error}
+            </div>
+          )}
+
+          {toast && (
+            <div className="rounded-lg bg-success/10 px-3 py-2 text-sm text-success flex items-center gap-2">
+              <Check className="w-4 h-4" />
+              {toast}
             </div>
           )}
 
@@ -301,42 +364,106 @@ export default function MeetingPage({
 
               {actions.length > 0 && (
                 <div>
-                  <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
-                    <CheckSquare className="w-4 h-4" />
-                    Action items
-                    <span className="text-[10px] text-muted-foreground font-normal">
-                      (approve → task coming next)
-                    </span>
-                  </h2>
-                  <div className="space-y-2">
-                    {actions.map((a) => (
-                      <div
-                        key={a.id}
-                        className="rounded-lg border border-border bg-card p-3"
+                  <div className="flex items-center justify-between mb-2">
+                    <h2 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
+                      <CheckSquare className="w-4 h-4" />
+                      Action items
+                    </h2>
+                    {actions.some(
+                      (a) => a.status === "draft" && a.confidence >= 0.8
+                    ) && (
+                      <button
+                        onClick={onApproveAll}
+                        disabled={actioning !== null}
+                        className="text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
                       >
-                        <p className="text-sm text-foreground">
-                          {a.description}
-                        </p>
-                        <div className="flex items-center gap-2 mt-1.5">
-                          <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
-                            <div
-                              className="h-full bg-primary"
-                              style={{
-                                width: `${Math.round(a.confidence * 100)}%`,
-                              }}
-                            />
-                          </div>
-                          <span className="text-[10px] text-muted-foreground shrink-0">
-                            {Math.round(a.confidence * 100)}% confident
-                          </span>
-                          {a.due_hint && (
-                            <span className="text-[10px] text-warning shrink-0">
-                              {a.due_hint}
+                        Approve all ≥80%
+                      </button>
+                    )}
+                  </div>
+                  <div className="space-y-2">
+                    {actions.map((a) => {
+                      const busy = actioning === a.id || actioning === "all";
+                      return (
+                        <div
+                          key={a.id}
+                          className={`rounded-lg border p-3 tech-transition ${
+                            a.status === "created"
+                              ? "border-success/30 bg-success/5"
+                              : a.status === "rejected"
+                                ? "border-border bg-card opacity-50"
+                                : "border-border bg-card"
+                          }`}
+                        >
+                          <p
+                            className={`text-sm ${a.status === "rejected" ? "line-through text-muted-foreground" : "text-foreground"}`}
+                          >
+                            {a.description}
+                          </p>
+                          <div className="flex items-center gap-2 mt-1.5">
+                            <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
+                              <div
+                                className="h-full bg-primary"
+                                style={{
+                                  width: `${Math.round(a.confidence * 100)}%`,
+                                }}
+                              />
+                            </div>
+                            <span className="text-[10px] text-muted-foreground shrink-0">
+                              {Math.round(a.confidence * 100)}%
                             </span>
-                          )}
+                            {a.due_hint && (
+                              <span className="text-[10px] text-warning shrink-0">
+                                {a.due_hint}
+                              </span>
+                            )}
+                          </div>
+                          <div className="flex items-center gap-2 mt-2">
+                            {a.status === "draft" && (
+                              <>
+                                <button
+                                  onClick={() => onApprove(a.id)}
+                                  disabled={busy}
+                                  className="flex-1 flex items-center justify-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-1 text-xs hover:bg-primary/20 tech-transition disabled:opacity-60"
+                                >
+                                  {busy ? (
+                                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                                  ) : (
+                                    <Check className="w-3.5 h-3.5" />
+                                  )}
+                                  Approve → Task
+                                </button>
+                                <button
+                                  onClick={() => onReject(a.id)}
+                                  disabled={busy}
+                                  className="flex items-center justify-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/30 tech-transition disabled:opacity-60"
+                                >
+                                  <X className="w-3.5 h-3.5" />
+                                </button>
+                              </>
+                            )}
+                            {a.status === "created" && (
+                              <Link
+                                href={
+                                  a.resulting_task_id
+                                    ? `/tasks?item=${a.resulting_task_id}`
+                                    : "/tasks"
+                                }
+                                className="flex items-center gap-1 text-xs text-success hover:underline"
+                              >
+                                <Check className="w-3.5 h-3.5" /> In Tasks
+                                <ExternalLink className="w-3 h-3" />
+                              </Link>
+                            )}
+                            {a.status === "rejected" && (
+                              <span className="text-xs text-muted-foreground">
+                                Rejected
+                              </span>
+                            )}
+                          </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 </div>
               )}

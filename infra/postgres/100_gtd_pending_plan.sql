@@ -1,5 +1,9 @@
--- 97_gtd_pending_plan.sql — the AI planner's reviewed-plan token (spec:
+-- 100_gtd_pending_plan.sql — the AI planner's reviewed-plan token (spec:
 -- calendar_ai_review.md; review finding R1/S1).
+-- (renumbered 97 → 100: 97 collided with 97_gtd_planning_prefs.sql, and the
+--  2-digit space was full. The runner now numeric-sorts and accepts 3-digit
+--  prefixes. This ALTER depends only on 92 and is idempotent, so moving it
+--  later changes nothing at apply time.)
 --
 -- What: a per-(user, LOCAL day) stash of the plan the agent last PROPOSED via
 --   the chat tools (gtd_plan_day / gtd_replan_day / gtd_rollover). The agent

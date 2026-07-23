@@ -41,6 +41,7 @@ import {
 import { useTaskStore } from "../lib/taskStore";
 import { GtdItem } from "../lib/types";
 import { blocksForDay, startOfDay, type Block } from "../lib/scheduling";
+import { fmtClock } from "./calendar/shared";
 import {
   loadFocusPrefs,
   saveFocusPrefs,
@@ -59,9 +60,6 @@ const BREAK_KINDS: { key: string; label: string; icon: typeof Wind }[] = [
   { key: "stretch", label: "Stretch", icon: StretchHorizontal },
   { key: "coffee", label: "Coffee", icon: Coffee },
 ];
-
-const fmtClock = (d: Date) =>
-  d.toLocaleTimeString(undefined, { hour: "numeric", minute: "2-digit" });
 
 /** mm:ss for the big countdown. */
 function fmtTimer(totalSec: number): string {

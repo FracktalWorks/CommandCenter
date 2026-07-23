@@ -173,7 +173,7 @@ class Meeting(Base):
     )
     transcript: Mapped[str | None] = mapped_column(Text)
     transcript_source: Mapped[str | None] = mapped_column(Text)
-    # Note Taker app fields (infra/postgres/94_note_taker.sql)
+    # Note Taker app fields (infra/postgres/95_note_taker.sql)
     title: Mapped[str | None] = mapped_column(Text)
     status: Mapped[str] = mapped_column(Text, server_default="draft", nullable=False)
     language: Mapped[str | None] = mapped_column(Text)
@@ -295,7 +295,7 @@ class ActionItem(Base):
     confidence: Mapped[float] = mapped_column(server_default="0.0", nullable=False)
     status: Mapped[str] = mapped_column(Text, server_default="draft", nullable=False)
     resulting_task_id: Mapped[UUID | None] = mapped_column(PgUUID(as_uuid=True), ForeignKey("task.id"))
-    # Note Taker grounding (infra/postgres/94_note_taker.sql)
+    # Note Taker grounding (infra/postgres/95_note_taker.sql)
     segment_ids: Mapped[list[UUID]] = mapped_column(
         ARRAY(PgUUID(as_uuid=True)), server_default="{}", nullable=False
     )

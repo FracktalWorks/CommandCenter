@@ -1,7 +1,7 @@
 # AI Note Taker App — Architecture & Product Plan
 
 > **Product:** CommandCenter · **Feature:** AI Note Taker app (`/notes`) · **Updated:** 2026-07-23 · **Version:** 0.1 (architecture — proposed)
-> **Status:** 🔄 slice 0 built (2026-07-23) — migration `94_note_taker.sql` (validated against a clean PG16+pgvector chain run), `packages/acb_stt` (Groq/OpenAI/Deepgram BYOK providers + registry, unit-tested), gateway `routes/notes/` (meeting CRUD, upload → background transcription pipeline, audio playback), Next proxy, and the `/notes` library + meeting-detail shell replacing the `ComingSoon` stub. **Resume point: slice 1 — the browser recorder (MediaRecorder chunked upload), SSE progress, and notes generation (§6).** The `meeting`/`action_item` tables from `01_schema.sql` L91–111 are now active.
+> **Status:** 🔄 slice 0 built (2026-07-23) — migration `95_note_taker.sql` (validated against a clean PG16+pgvector chain run), `packages/acb_stt` (Groq/OpenAI/Deepgram BYOK providers + registry, unit-tested), gateway `routes/notes/` (meeting CRUD, upload → background transcription pipeline, audio playback), Next proxy, and the `/notes` library + meeting-detail shell replacing the `ComingSoon` stub. **Resume point: slice 1 — the browser recorder (MediaRecorder chunked upload), SSE progress, and notes generation (§6).** The `meeting`/`action_item` tables from `01_schema.sql` L91–111 are now active.
 > **Sibling docs:** [`note_taker_research_2026-07.md`](note_taker_research_2026-07.md) — the evidence base (Meetily deep dive, landscape survey, ASR/diarization SOTA, browser-capture facts). Read it for *why*; this doc is *what and how*.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape, provider-layer thinking, HITL philosophy) and `gateway/routes/tasks/capture_email.py` (the Email→Task capture pattern this app mirrors as Meeting→Task).
 
@@ -80,7 +80,7 @@ Full evidence in [`note_taker_research_2026-07.md`](note_taker_research_2026-07.
 | Self-host STT worker | `apps/services/transcription/` — optional FastAPI service (compose profile `stt`): faster-whisper + diarization + VAD; OpenAI-compatible `/v1/audio/transcriptions` plus a richer `/transcribe_diarized` | deployed service (optional) |
 | Live-captions service | (slice 4) WhisperLiveKit container in `infra/docker-compose.yml` profile `stt-live` — bought, not built | deployed service (optional) |
 | Agent skill | `apps/skills/skill-notes/` — `list_meetings`, `get_meeting_notes`, `search_transcripts`, `summarize_meeting`, `extract_action_items` over the `/notes` API (mirrors `skill-task-gtd`) | skill |
-| Migration | `infra/postgres/94_note_taker.sql` (next free number after 93) + ORM additions in `packages/acb_graph/acb_graph/models.py` | schema |
+| Migration | `infra/postgres/95_note_taker.sql` (next free number after 93) + ORM additions in `packages/acb_graph/acb_graph/models.py` | schema |
 
 Everything stays in this monorepo. The optional services are compose profiles, not separate repos — Meetily's costliest lesson was making users operate multiple moving parts; ours ship as `--profile stt` and are invisible when a cloud STT key is configured instead.
 
@@ -164,7 +164,7 @@ Port of Meetily's best asset onto our stack — no new LLM plumbing:
 - **Grounding contract:** every decision and action item must cite segment ids; the extraction schema is `{description, owner_hint, due_hint, segment_ids[], confidence}`. Items land as `action_item` rows in `draft` — nothing becomes a task without a human (§3.9). Owner hints resolve against org people the same way email capture resolves assignees.
 - **`summary_run` job table** (Meetily's `summary_processes`, generalized): status, stage, chunk progress, error, result, `result_backup` auto-restored if a regeneration fails or is cancelled.
 
-### 3.6 Data model (migration `94_note_taker.sql`)
+### 3.6 Data model (migration `95_note_taker.sql`)
 
 Reuse and extend — the core tables have existed since `01_schema.sql`:
 

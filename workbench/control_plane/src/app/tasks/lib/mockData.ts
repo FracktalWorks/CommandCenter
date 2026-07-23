@@ -185,7 +185,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     nextAction: "Read the diff and leave review comments on PR #214",
     disposition: "NEXT", context: "@computer", energy: "high",
     timeEstimateMins: 45, projectId: "p1", isMine: true,
-    important: true,
+    important: true, deepWork: true,
     createdAt: iso(-30), updatedAt: iso(-4),
   },
   {
@@ -220,7 +220,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     nextAction: "Sketch the 5-step section headings in the draft doc",
     disposition: "NEXT", context: "@computer", energy: "medium",
     timeEstimateMins: 30, projectId: "p4", isMine: true,
-    leveraged: true,
+    leveraged: true, deepWork: true,
     createdAt: iso(-10), updatedAt: iso(-10),
   },
   {

@@ -71,6 +71,8 @@ export interface ClarifyProposal {
    *  is a short why shown next to the toggles. */
   important?: boolean;
   leveraged?: boolean;
+  /** needs an unbroken flow state — creative/build/design/write/strategy */
+  deepWork?: boolean;
   weightReason?: string;
   /** a likely-existing PM-tool (ClickUp) task this inbox capture may duplicate
    *  — set only on a fresh inbox clarify (server proposal, token-free lexical

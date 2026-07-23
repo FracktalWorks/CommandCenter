@@ -82,6 +82,7 @@ function mapItem(raw: Raw): GtdItem {
     isTwoMinute: Boolean(raw.is_two_minute),
     important: Boolean(raw.important),
     leveraged: Boolean(raw.leveraged),
+    deepWork: Boolean(raw.deep_work),
     keptMine: Boolean(raw.kept_mine),
     projectId: raw.project_id ? String(raw.project_id) : undefined,
     isMine: Boolean(raw.is_mine ?? true),
@@ -481,6 +482,7 @@ export async function apiPatchItem(
     is_mine?: boolean;
     important?: boolean;
     leveraged?: boolean;
+    deep_work?: boolean;
     kept_mine?: boolean;
   }
 ): Promise<GtdItem> {
@@ -997,6 +999,22 @@ export interface TaskSettings {
   /** optional protected lunch window (local hours); null = no protected lunch. */
   lunchStartHour: number | null;
   lunchEndHour: number | null;
+  /** recurring windows: block (protected) or focus (themed). Flexible ideal-week. */
+  dayTemplates: DayTemplate[];
+}
+
+/** A recurring calendar window (migration 94). Snake-keyed to match the wire
+ *  shape (like EnergyWindow) so it needs no per-field mapping. */
+export interface DayTemplate {
+  /** weekday numbers 0=Sun … 6=Sat; empty = every day. */
+  days: number[];
+  start_hour: number;
+  end_hour: number;
+  /** block = protected (no tasks); focus = preferred for a kind of work. */
+  kind: "block" | "focus";
+  label: string;
+  /** for focus windows: the kind of work ("deep", "calls", "meetings", …). */
+  theme: string;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -1037,6 +1055,9 @@ function mapSettings(r: Raw): TaskSettings {
     lunchStartHour:
       r.lunch_start_hour == null ? null : Number(r.lunch_start_hour),
     lunchEndHour: r.lunch_end_hour == null ? null : Number(r.lunch_end_hour),
+    dayTemplates: Array.isArray(r.day_templates)
+      ? (r.day_templates as DayTemplate[])
+      : [],
   };
 }
 
@@ -1087,6 +1108,8 @@ export async function updateTaskSettings(
     body.lunch_start_hour = patch.lunchStartHour;
   if (patch.lunchEndHour !== undefined)
     body.lunch_end_hour = patch.lunchEndHour;
+  if (patch.dayTemplates !== undefined)
+    body.day_templates = patch.dayTemplates;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",
@@ -1255,6 +1278,7 @@ export async function apiClarifyPropose(
     dueDate: r.due_date ? String(r.due_date) : undefined,
     important: Boolean(r.important),
     leveraged: Boolean(r.leveraged),
+    deepWork: Boolean(r.deep_work),
     weightReason: r.leveraged
       ? "Looks high-leverage — a potential 100x outcome."
       : r.important

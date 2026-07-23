@@ -8,7 +8,10 @@ import {
 import {
   type TaskSettings,
   type EnergyWindow,
+  type DayTemplate,
 } from "../../lib/api";
+
+const DOW_LABELS = ["S", "M", "T", "W", "T", "F", "S"]; // 0=Sun … 6=Sat
 
 
 // ── Settings popover (day window, capacity, buffer, energy windows) ──────────
@@ -276,6 +279,152 @@ export function CalendarSettings({
           ))}
         </div>
       )}
+
+      {/* Recurring windows — block out habits, reserve times for a kind of work.
+          Flexible: add/edit/remove freely. */}
+      {(() => {
+        const tpls = settings.dayTemplates ?? [];
+        const setTpls = (next: DayTemplate[]) =>
+          onChange({ dayTemplates: next });
+        const patch = (i: number, p: Partial<DayTemplate>) =>
+          setTpls(tpls.map((t, idx) => (idx === i ? { ...t, ...p } : t)));
+        const toggleDay = (i: number, d: number) => {
+          const cur = tpls[i].days ?? [];
+          patch(i, {
+            days: cur.includes(d)
+              ? cur.filter((x) => x !== d)
+              : [...cur, d].sort((a, b) => a - b),
+          });
+        };
+        return (
+          <div className="mt-3 border-t border-border pt-2">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="font-medium text-foreground">
+                Recurring windows
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setTpls([
+                    ...tpls,
+                    {
+                      days: [],
+                      start_hour: 12,
+                      end_hour: 13,
+                      kind: "block",
+                      label: "",
+                      theme: "",
+                    },
+                  ])
+                }
+                className="inline-flex items-center gap-0.5 text-primary hover:underline"
+              >
+                <Plus className="h-3 w-3" /> Add
+              </button>
+            </div>
+            <p className="mb-1.5 text-[10px] text-muted-foreground">
+              <b className="text-foreground">Block</b> = protected time, no tasks
+              (lunch, gym, family). <b className="text-foreground">Focus</b> =
+              reserve for a kind of work (deep work, calls, meetings).
+            </p>
+            {tpls.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground/70">None set.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {tpls.map((t, i) => (
+                  <div
+                    key={i}
+                    className="rounded-md border border-border bg-background/50 p-2"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={t.kind}
+                        onChange={(e) =>
+                          patch(i, { kind: e.target.value as DayTemplate["kind"] })
+                        }
+                        className="rounded border border-border bg-background px-1 py-0.5 text-foreground"
+                      >
+                        <option value="block">Block</option>
+                        <option value="focus">Focus</option>
+                      </select>
+                      <input
+                        value={t.label}
+                        onChange={(e) => patch(i, { label: e.target.value })}
+                        placeholder={t.kind === "block" ? "Lunch, Gym…" : "Deep work…"}
+                        className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-foreground focus:border-primary/50 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTpls(tpls.filter((_, idx) => idx !== i))
+                        }
+                        aria-label="Remove window"
+                        className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={t.start_hour}
+                        onChange={(e) =>
+                          patch(i, { start_hour: num(e.target.value, 9) })
+                        }
+                        className={`w-11 ${inputCls}`}
+                      />
+                      <span className="text-muted-foreground">–</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={t.end_hour}
+                        onChange={(e) =>
+                          patch(i, { end_hour: num(e.target.value, 10) })
+                        }
+                        className={`w-11 ${inputCls}`}
+                      />
+                      {t.kind === "focus" && (
+                        <input
+                          value={t.theme}
+                          onChange={(e) => patch(i, { theme: e.target.value })}
+                          placeholder="theme: calls, deep…"
+                          className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground focus:border-primary/50 focus:outline-none"
+                        />
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      {DOW_LABELS.map((d, di) => {
+                        const on = (t.days ?? []).includes(di);
+                        return (
+                          <button
+                            key={di}
+                            type="button"
+                            onClick={() => toggleDay(i, di)}
+                            className={[
+                              "h-5 w-5 rounded text-[10px] font-medium",
+                              on
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-secondary text-muted-foreground hover:text-foreground",
+                            ].join(" ")}
+                          >
+                            {d}
+                          </button>
+                        );
+                      })}
+                      <span className="ml-1 text-[10px] text-muted-foreground/70">
+                        {(t.days ?? []).length === 0 ? "every day" : ""}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

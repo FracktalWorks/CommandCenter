@@ -496,10 +496,26 @@ proof that the email vertical's shape was a *channel* shape all along.
   → chat-status → surfaces in `/streams`, the queue and the digest. The frontend
   stream counts light up from this automatically (no UI change needed).
 
-**Tests:** 83 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W3 — automation engine — BUILT (deterministic core, backend).**
+- `automation/rules.py`: `decide_action` — the pure auto-reply autonomy ladder
+  (answer_from_system / holding_reply / draft / none) with `requires_approval` +
+  `via_template`, enforcing the hard guardrails first (VIP + Family never
+  auto-send; Family hands off; social/spam muted). `/whatsapp/rules/preview`
+  dry-runs it over needs-reply chats — what WOULD happen, no sends.
+- `102_whatsapp_commitments.sql` + `automation/commitments.py`: promises tracked
+  both ways. `extract_commitment` is pure + conservative (a promise verb is
+  required), Hinglish/curly-quote tolerant, with a verbatim due hint;
+  `apply_commitments` runs in the on_new_messages pipeline (watermarked on
+  `commitment_checked_at`), tagging ours (digest watch) vs theirs (chase).
+  `/whatsapp/commitments` lists them.
+- `digest.py`: the brief now carries the commitment watch (our open promises,
+  with a "never became a task" flag) + a waiting-on count.
+
+**Tests:** 137 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist, post-sync registry, route helpers (signature/window/regime), templates,
-capture, context, Reply Zero, intent (21 cases), categories, digest, hook wiring.
-All new code `ruff`-clean.
+capture, context, Reply Zero, intent (21 cases), categories, digest + hook
+wiring, the auto-reply ladder (12), and commitment extraction (15). All new code
+`ruff`-clean.
 
 **Not yet validated in this environment:** the numbered migrations (99–101) need
 `scripts/apply_migrations.sh` against a running Postgres; the Next.js frontend

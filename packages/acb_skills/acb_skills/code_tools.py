@@ -50,6 +50,12 @@ _OUTPUT_CAP = 8000  # chars of combined stdout/stderr returned to the model
 # store is for scripts/reports, not gigabyte artifacts).
 _SWEEP_MAX_BYTES = 2_000_000
 _SWEEP_MAX_FILES = 200
+# Kernel file timestamps come from a COARSE clock that can lag time.time() by
+# a few ms — a file written right after the cutoff was captured can carry an
+# mtime just BEFORE it and be missed by the sweep (seen live on CI). The
+# cutoff is therefore slackened; re-mirroring a file modified moments before
+# the run is harmless (the mirror is an idempotent write-through).
+_SWEEP_MTIME_SLACK = 2.0
 
 # Env allowlist for script subprocesses, plus a deny-pattern so nothing
 # secret-shaped leaks even through allowed names.
@@ -93,6 +99,7 @@ async def _sweep_to_blob_store(
     Best-effort: any failure leaves the on-disk file intact and is skipped.
     Returns the number of files mirrored.
     """
+    cutoff = since - _SWEEP_MTIME_SLACK
     mirrored = 0
     for sub in subdirs:
         base = root / sub
@@ -105,7 +112,7 @@ async def _sweep_to_blob_store(
                 if not p.is_file() or p.is_symlink():
                     continue
                 st = p.stat()
-                if st.st_mtime < since or st.st_size > _SWEEP_MAX_BYTES:
+                if st.st_mtime < cutoff or st.st_size > _SWEEP_MAX_BYTES:
                     continue
                 rel = p.relative_to(root).as_posix()
                 await mirror_to_blob_store(rel, p.read_bytes(), actor="agent")

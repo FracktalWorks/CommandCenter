@@ -84,7 +84,7 @@ function AgentPickerCard({
       <div className="flex w-16 shrink-0 items-center justify-center self-stretch border-r border-border/60 bg-background/40 group-hover:bg-primary/5 tech-transition">
         <BreathingCharacter
           char={char}
-          box={52}
+          box={60}
           fallback={
             <AgentAvatar
               libraryId={avatarId}

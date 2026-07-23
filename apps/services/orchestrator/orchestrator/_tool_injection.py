@@ -41,6 +41,7 @@ _log = get_logger("orchestrator.tool_injection")
 _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
     "web_search", "fetch_page",          # web access
     "write_artifact", "share_artifact",  # file writing / delivery
+    "emit_generative_ui",                # rich/interactive HITL UI (genui_2)
     "manage_todo_list",                  # task tracking panel
     "ask_questions",                     # HITL clarification
     "run_diagnostics", "get_errors",     # code / file error checking

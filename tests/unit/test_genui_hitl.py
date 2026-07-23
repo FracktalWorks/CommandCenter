@@ -106,3 +106,22 @@ def test_no_active_run_cleans_up_pending_registry(monkeypatch):
     assert set(executor._pending_user_input) == before, (
         "a failed emit must not leak a parked future"
     )
+
+
+def test_parked_genui_suppresses_copilot_stall_detector(queue: asyncio.Queue):
+    """While a blocking genUI awaits the user, the Copilot stall detector's
+    HITL suppression must engage (it reads the same pending registry)."""
+    from orchestrator import copilot_agent
+
+    async def _run():
+        task = asyncio.ensure_future(wa.emit_generative_ui(
+            '{"type":"template","hitl":true,'
+            '"props":{"name":"formCard","data":{"fields":[]}}}'
+        ))
+        ev = await asyncio.wait_for(queue.get(), timeout=2)
+        suppressed = copilot_agent._hitl_pending()
+        executor.resolve_user_input(ev["value"]["request_id"], "done")
+        await task
+        return suppressed
+
+    assert asyncio.run(_run()) is True

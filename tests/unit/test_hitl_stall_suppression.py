@@ -70,3 +70,32 @@ def test_stall_branch_grants_tool_in_flight_grace():
     # TOOL_EXECUTION_* and injected EXTERNAL_TOOL_*), start and completion.
     assert src.count("_tools_in_flight.add(") >= 2
     assert src.count("_tools_in_flight.discard(") >= 2
+
+
+# ── Blocking generative UI (generative_ui_2 Phase 1) ────────────────────────
+# emit_generative_ui(hitl:true) parks the turn exactly like ask_questions, so
+# every HITL suppression/exemption surface must recognise it on BOTH runtimes.
+
+
+def test_emit_generative_ui_is_a_blocking_hitl_tool():
+    from acb_skills.ask_tools import is_hitl_blocking_tool
+    assert is_hitl_blocking_tool("emit_generative_ui")
+
+
+def test_tier2_shim_exempts_blocking_genui_from_per_tool_timeout():
+    import inspect
+    src = inspect.getsource(executor)
+    assert '"emit_generative_ui"' in src, (
+        "emit_generative_ui missing from the per-tool timeout exemption — a "
+        "blocking form would be cancelled at 300s mid-fill on the batch path"
+    )
+
+
+def test_tier1_watchdog_recognises_blocking_genui_events():
+    """The native-MAF idle watchdog must grant the HITL budget (3600s) while a
+    generative_ui event carrying a request_id is pending — not the 600s
+    tool-open budget."""
+    import inspect
+    src = inspect.getsource(executor.run_agent_stream)
+    assert "_is_hitl_event" in src
+    assert '"generative_ui"' in src and "request_id" in src

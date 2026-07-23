@@ -2245,6 +2245,26 @@ async def run_agent_stream(
                             "confirmation_requested",
                             "user_input_requested",
                         )
+
+                        def _is_hitl_event(ev: dict[str, Any]) -> bool:
+                            """True when *ev* parks the run awaiting the user.
+
+                            Besides the dedicated HITL card events, a
+                            ``generative_ui`` event whose spec carries a
+                            ``request_id`` is a BLOCKING emit_generative_ui
+                            (hitl:true) — the tool is parked on a Future, so
+                            the idle watchdog must grant the 3600s HITL budget,
+                            not the 600s tool-open one.
+                            """
+                            name = ev.get("name")
+                            if name in _hitl_names:
+                                return True
+                            if name == "generative_ui":
+                                val = ev.get("value")
+                                return isinstance(val, dict) and bool(
+                                    val.get("request_id")
+                                )
+                            return False
                         # Idle budgets + tier-selection now come from the shared
                         # WatchdogPolicy (see idle-watchdog block below).
                         _tools_open = 0
@@ -2303,7 +2323,7 @@ async def run_agent_stream(
                                     _qev = None
                                 while _qev is not None:
                                     _n_emitted = True
-                                    if _qev.get("name") in _hitl_names:
+                                    if _is_hitl_event(_qev):
                                         _hitl_pending = True
                                     yield _sse(_qev)
                                     _qev = (
@@ -2406,7 +2426,7 @@ async def run_agent_stream(
                                 _qev = _nq.get_nowait()
                                 if _qev:
                                     _n_emitted = True
-                                    if _qev.get("name") in _hitl_names:
+                                    if _is_hitl_event(_qev):
                                         _hitl_pending = True
                                     yield _sse(_qev)
                     # Drain any events that landed as the stream closed.
@@ -3174,6 +3194,7 @@ async def run_agent_stream(
                             "ask_questions",
                             "ask_user",
                             "request_confirmation",
+                            "emit_generative_ui",  # blocks when hitl:true
                         ):
                             # Long-running by design: sub-agent delegation has
                             # its own watchdog, and the blocking HITL tools

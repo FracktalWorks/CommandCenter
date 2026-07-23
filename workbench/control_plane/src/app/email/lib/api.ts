@@ -1145,6 +1145,32 @@ export async function deleteRule(id: string): Promise<void> {
   await gatewayFetch(`/email/rules/${id}`, { method: "DELETE" });
 }
 
+/** Everything ELSE that acts on the mailbox, for the Rules screen's
+ *  "Also acting on your mail" section: cold-email blocker mode, the Cleaner's
+ *  sender-disposition counts, and the provider-native inbox rules (read-only;
+ *  `managed` marks the ones the Cleaner created as block filters). */
+export interface RulePolicies {
+  cold_email_blocker: string; // OFF | LABEL | ARCHIVE
+  dispositions: Record<string, number>; // APPROVED | UNSUBSCRIBED | AUTO_ARCHIVED
+  filters_active: number;
+  provider_rules: {
+    id: string;
+    name: string;
+    enabled: boolean;
+    from_addresses: string[];
+    summary: string[];
+    managed: boolean;
+  }[];
+  /** False when the provider has no readable rules (no scope / MSA / IMAP). */
+  provider_rules_supported: boolean;
+}
+
+export async function getRulePolicies(accountId: string): Promise<RulePolicies> {
+  return gatewayFetch(
+    `/email/rules/policies?account_id=${encodeURIComponent(accountId)}`
+  );
+}
+
 // ── Draft attachments (email-assistant workspace) ───────────────────────────
 
 export interface EmailArtifact {

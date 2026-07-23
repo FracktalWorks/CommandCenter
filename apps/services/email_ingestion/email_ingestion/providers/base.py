@@ -412,6 +412,19 @@ class BaseEmailProvider(ABC):
         filters; an already-missing filter is ignored."""
         return None
 
+    async def list_filters(self) -> list[dict[str, Any]]:
+        """The provider-native inbox rules/filters, read-only, as plain dicts:
+
+        ``{id, name, enabled, from_addresses: [str], summary: [str]}``
+
+        ``summary`` is a list of human tokens describing conditions beyond the
+        sender plus the rule's actions (e.g. ``["subject contains 'invoice'",
+        "move to folder", "mark read"]``). Used to DISPLAY upstream rules in the
+        app's rules screen — never to mutate them. Default: empty, for
+        providers with no filter concept or no read scope.
+        """
+        return []
+
     async def list_labels(self) -> list[dict[str, str | None]]:
         """User-applicable labels/categories as ``{name, color}`` dicts.
 

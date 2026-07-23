@@ -6,17 +6,20 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
-  Check, ChevronDown, ChevronRight, Copy, FolderOpen, FolderPlus,
+  Check, ChevronDown, ChevronRight, Cloud, Copy, FolderOpen, FolderPlus,
   History as HistoryIcon, Inbox, Loader2, MoreHorizontal, MoreVertical,
-  Paperclip, Pencil, Play, Plus, Sparkles, Tag, Trash2, Upload, Wand2, X, Zap,
+  Paperclip, Pencil, Play, Plus, Shield, Sparkles, Tag, Trash2, Upload, Wand2,
+  X, Zap,
 } from "lucide-react";
 import {
   createEmailFolder, createRule, deleteRule, deleteRulePattern, generateRules,
-  installPresetRules, listEmailArtifacts, listRulePatterns, listRules,
-  processPastEmails, processPastEstimate, reviewRulePatterns, updateRule,
-  uploadEmailArtifacts,
+  getRulePolicies, installPresetRules, listEmailArtifacts, listRulePatterns,
+  listRules, processPastEmails, processPastEstimate, reviewRulePatterns,
+  updateRule, uploadEmailArtifacts,
 } from "../../../lib/api";
-import type { EmailArtifact, ProcessPastEstimate } from "../../../lib/api";
+import type {
+  EmailArtifact, ProcessPastEstimate, RulePolicies,
+} from "../../../lib/api";
 import {
   AutomationRule, LearnedRulePattern, RuleAction, RuleActionAttachment,
   RuleActionType,
@@ -274,12 +277,17 @@ export function RulesTab({
   // only the view is unified. Same rows as Settings → Learned patterns.
   const [patterns, setPatterns] = useState<LearnedRulePattern[]>([]);
   const [patternBusy, setPatternBusy] = useState(false);
+  // Everything ELSE acting on the mailbox (cold blocker, sender dispositions,
+  // provider-native inbox rules) — displayed read-only below the rule list so
+  // one screen answers "why did this email move?".
+  const [policies, setPolicies] = useState<RulePolicies | null>(null);
   const setPendingChatPrompt = useEmailStore((s) => s.setPendingChatPrompt);
 
   const loadPatterns = useCallback(() => {
     if (!accountId) return;
     // Best-effort: the rule list must render even if the pattern fetch fails.
     listRulePatterns(accountId).then(setPatterns).catch(() => {});
+    getRulePolicies(accountId).then(setPolicies).catch(() => {});
   }, [accountId]);
 
   const reviewPattern = async (id: string, approve: boolean) => {
@@ -646,6 +654,140 @@ export function RulesTab({
             </div>
           </div>
         ))}
+
+        {/* ── Also acting on your mail ─────────────────────────────────────
+            The standing policies OUTSIDE the AI rules: the cold-email blocker
+            (a Settings toggle that screens unmatched mail), the Cleaner's
+            per-sender dispositions, and the provider-native inbox rules —
+            including the block filters the Cleaner created upstream. Read-only
+            here; each is managed on its own screen. Shown so this tab answers
+            "why did this email move?" for every mechanism that exists. */}
+        {policies && rules.length > 0 && (
+          <div className="pt-3 mt-2 border-t border-border space-y-2">
+            <div>
+              <h5 className="text-[11px] font-semibold text-foreground">
+                Also acting on your mail
+              </h5>
+              <p className="text-[10px] text-muted-foreground leading-snug">
+                Standing policies outside the rules above — managed in
+                Settings and the Email Cleaner.
+              </p>
+            </div>
+            <div className="flex items-center gap-2.5 bg-card border border-border rounded-xl px-4 py-2.5">
+              <Shield
+                size={14}
+                className={
+                  policies.cold_email_blocker === "OFF"
+                    ? "text-muted-foreground"
+                    : "text-primary"
+                }
+              />
+              <div className="flex-1 min-w-0 text-xs">
+                <span className="font-medium text-foreground">
+                  Cold Email Blocker
+                </span>
+                <span className="text-[11px] text-muted-foreground ml-2">
+                  {policies.cold_email_blocker === "OFF"
+                    ? "Off"
+                    : policies.cold_email_blocker === "ARCHIVE"
+                      ? "Screens mail no rule matched · archives cold email"
+                      : "Screens mail no rule matched · labels cold email"}
+                </span>
+              </div>
+              <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                Settings tab
+              </span>
+            </div>
+            {Object.values(policies.dispositions).some((n) => n > 0) && (
+              <div className="flex items-center gap-2.5 bg-card border border-border rounded-xl px-4 py-2.5">
+                <Inbox size={14} className="text-muted-foreground" />
+                <div className="flex-1 min-w-0 text-xs">
+                  <span className="font-medium text-foreground">
+                    Sender dispositions
+                  </span>
+                  <span className="text-[11px] text-muted-foreground ml-2">
+                    {[
+                      policies.dispositions.AUTO_ARCHIVED &&
+                        `${policies.dispositions.AUTO_ARCHIVED} auto-archived`,
+                      policies.dispositions.UNSUBSCRIBED &&
+                        `${policies.dispositions.UNSUBSCRIBED} unsubscribed`,
+                      policies.dispositions.APPROVED &&
+                        `${policies.dispositions.APPROVED} approved`,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                    {policies.filters_active > 0 &&
+                      ` · ${policies.filters_active} enforced upstream`}
+                  </span>
+                </div>
+                <span className="text-[10px] text-muted-foreground flex-shrink-0">
+                  Email Cleaner
+                </span>
+              </div>
+            )}
+            {policies.provider_rules_supported &&
+              policies.provider_rules.length > 0 && (
+                <details className="bg-card border border-border rounded-xl px-4 py-2.5">
+                  <summary className="cursor-pointer select-none text-xs flex items-center gap-2.5 text-foreground hover:text-primary transition-colors">
+                    <Cloud size={14} className="text-muted-foreground" />
+                    <span className="font-medium">
+                      {policies.provider_rules.length === 1
+                        ? "1 inbox rule at your mail provider"
+                        : `${policies.provider_rules.length} inbox rules at your mail provider`}
+                    </span>
+                    <span className="text-[11px] text-muted-foreground font-normal">
+                      — run upstream, before mail ever syncs here
+                    </span>
+                  </summary>
+                  <div className="mt-2 space-y-1.5">
+                    {policies.provider_rules.map((r) => (
+                      <div
+                        key={r.id}
+                        className="rounded-lg border border-border/60 px-3 py-2 text-xs"
+                      >
+                        <div className="flex items-center gap-2">
+                          <span
+                            className={
+                              r.enabled
+                                ? "text-foreground font-medium"
+                                : "text-muted-foreground line-through"
+                            }
+                          >
+                            {r.name || "(unnamed rule)"}
+                          </span>
+                          {r.managed && (
+                            <span
+                              title="Created by the Email Cleaner when this sender was blocked"
+                              className="text-[9px] px-1.5 py-0.5 rounded-md bg-sky-500/15 text-sky-400"
+                            >
+                              Email Cleaner
+                            </span>
+                          )}
+                          {!r.enabled && (
+                            <span className="text-[9px] px-1.5 py-0.5 rounded-md bg-muted text-muted-foreground">
+                              disabled
+                            </span>
+                          )}
+                        </div>
+                        {(r.from_addresses.length > 0 ||
+                          r.summary.length > 0) && (
+                          <div className="mt-0.5 text-[11px] text-muted-foreground break-words">
+                            {r.from_addresses.length > 0 && (
+                              <>From {r.from_addresses.join(", ")}</>
+                            )}
+                            {r.from_addresses.length > 0 &&
+                              r.summary.length > 0 &&
+                              " → "}
+                            {r.summary.join(" · ")}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </details>
+              )}
+          </div>
+        )}
       </div>
     </div>
   );

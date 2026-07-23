@@ -818,6 +818,52 @@ class OutlookProvider(BaseEmailProvider):
         if resp.status_code not in (200, 204, 403, 404):
             resp.raise_for_status()
 
+    async def list_filters(self) -> list[dict[str, Any]]:
+        """Read the Inbox message rules for display in the app's rules screen.
+
+        Same scope caveat as ``create_filter``: consumer (MSA) accounts or a
+        missing ``MailboxSettings.ReadWrite`` scope make ``/messageRules``
+        403/404 — degrade to an empty list rather than failing the caller."""
+        client = await self._get_client()
+        resp = await client.get("/me/mailFolders/inbox/messageRules")
+        if resp.status_code in (403, 404):
+            return []
+        resp.raise_for_status()
+        out: list[dict[str, Any]] = []
+        for r in resp.json().get("value", []):
+            conds = r.get("conditions") or {}
+            froms = [
+                (a.get("emailAddress") or {}).get("address", "")
+                for a in conds.get("fromAddresses") or []
+            ]
+            summary: list[str] = []
+            for phrase in conds.get("subjectContains") or []:
+                summary.append(f"subject contains “{phrase}”")
+            for phrase in conds.get("senderContains") or []:
+                summary.append(f"sender contains “{phrase}”")
+            acts = r.get("actions") or {}
+            if acts.get("moveToFolder"):
+                summary.append("move to folder")
+            if acts.get("delete"):
+                summary.append("delete")
+            if acts.get("assignCategories"):
+                summary.append(
+                    "label: " + ", ".join(acts["assignCategories"]))
+            if acts.get("forwardTo"):
+                summary.append("forward")
+            if acts.get("markAsRead"):
+                summary.append("mark read")
+            if acts.get("markImportance"):
+                summary.append(f"importance: {acts['markImportance']}")
+            out.append({
+                "id": r.get("id", ""),
+                "name": r.get("displayName", ""),
+                "enabled": bool(r.get("isEnabled", True)),
+                "from_addresses": [f for f in froms if f],
+                "summary": summary,
+            })
+        return out
+
     # ── Labels (Outlook categories) ──────────────────────────────────────
 
     async def list_labels(self) -> list[dict[str, str | None]]:

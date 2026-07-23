@@ -15,6 +15,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
   Settings2, Hourglass, ExternalLink, Clock, CheckCheck, XCircle,
+  AlertTriangle, ChevronRight,
 } from "lucide-react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
 import { DigestData, DigestThread } from "../../lib/types";
@@ -24,9 +25,15 @@ interface DashboardViewProps {
   accountId: string | null;
   /** Open a message in the mailbox reading pane (closes the dashboard). */
   onOpenEmail?: (messageId: string) => void;
+  /** Filter the mailbox by a category label (category chip click-through). */
+  onFilterLabel?: (label: string) => void;
+  /** Filter the mailbox by a sender address (noisy-sender click-through). */
+  onFilterSender?: (email: string) => void;
 }
 
-export function DashboardView({ accountId, onOpenEmail }: DashboardViewProps) {
+export function DashboardView({
+  accountId, onOpenEmail, onFilterLabel, onFilterSender,
+}: DashboardViewProps) {
   const [period, setPeriod] = useState<"day" | "week">("day");
   const [data, setData] = useState<DigestData | null>(null);
   const [loading, setLoading] = useState(true);
@@ -190,6 +197,12 @@ export function DashboardView({ accountId, onOpenEmail }: DashboardViewProps) {
               <div className="bg-card border border-border rounded-xl p-4">
                 <h3 className="text-xs font-semibold text-foreground mb-3 flex items-center gap-1.5">
                   <Reply size={13} className="text-primary" /> Needs your reply
+                  <span
+                    className="text-[10px] font-normal text-muted-foreground"
+                    title="Ranked by urgency — importance and unread lift a thread above older ones"
+                  >
+                    · by priority
+                  </span>
                   <CountBadge n={t!.needs_reply} />
                 </h3>
                 {!data.backlog?.length ? (
@@ -291,15 +304,34 @@ export function DashboardView({ accountId, onOpenEmail }: DashboardViewProps) {
                     <p className="text-xs text-muted-foreground">No mail in this period.</p>
                   )}
                   {data.by_category.map((c) => (
-                    <div
+                    <button
                       key={c.category}
-                      className="flex items-center justify-between text-xs"
+                      onClick={() => onFilterLabel?.(c.category)}
+                      disabled={!onFilterLabel}
+                      title={
+                        onFilterLabel
+                          ? `Show ${c.category} mail in the inbox`
+                          : undefined
+                      }
+                      className={`group flex items-center justify-between text-xs w-full rounded px-1.5 py-0.5 -mx-1.5 ${
+                        onFilterLabel
+                          ? "hover:bg-secondary cursor-pointer"
+                          : "cursor-default"
+                      }`}
                     >
-                      <span className="text-foreground">{c.category}</span>
+                      <span className="text-foreground flex items-center gap-1">
+                        {c.category}
+                        {onFilterLabel && (
+                          <ChevronRight
+                            size={11}
+                            className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity"
+                          />
+                        )}
+                      </span>
                       <span className="text-muted-foreground tabular-nums">
                         {c.count}
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -314,15 +346,34 @@ export function DashboardView({ accountId, onOpenEmail }: DashboardViewProps) {
                     <p className="text-xs text-muted-foreground">No senders.</p>
                   )}
                   {data.top_senders.map((s) => (
-                    <div
+                    <button
                       key={s.email}
-                      className="flex items-center justify-between text-xs gap-2"
+                      onClick={() => onFilterSender?.(s.email)}
+                      disabled={!onFilterSender}
+                      title={
+                        onFilterSender
+                          ? `Show mail from ${s.name || s.email}`
+                          : undefined
+                      }
+                      className={`group flex items-center justify-between text-xs gap-2 w-full rounded px-1.5 py-0.5 -mx-1.5 ${
+                        onFilterSender
+                          ? "hover:bg-secondary cursor-pointer"
+                          : "cursor-default"
+                      }`}
                     >
-                      <span className="text-foreground truncate">{s.name}</span>
+                      <span className="text-foreground truncate flex items-center gap-1 min-w-0">
+                        <span className="truncate">{s.name || s.email}</span>
+                        {onFilterSender && (
+                          <ChevronRight
+                            size={11}
+                            className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                          />
+                        )}
+                      </span>
                       <span className="text-muted-foreground tabular-nums flex-shrink-0">
                         {s.count}
                       </span>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -360,10 +411,27 @@ function ThreadRow({
       role={openable ? "button" : undefined}
       title={openable ? "Open this conversation" : undefined}
     >
-      <span className="text-foreground truncate flex-1 min-w-0">
+      {row.important && (
+        <AlertTriangle
+          size={11}
+          className="text-amber-500 flex-shrink-0"
+          aria-label="High importance"
+        />
+      )}
+      {row.unread && !row.important && (
+        <span
+          className="w-1.5 h-1.5 rounded-full bg-primary flex-shrink-0"
+          aria-label="Unread"
+        />
+      )}
+      <span
+        className={`truncate flex-1 min-w-0 ${
+          row.unread ? "text-foreground font-medium" : "text-foreground"
+        }`}
+      >
         {row.subject}
         {row.who && (
-          <span className="text-muted-foreground"> — {row.who}</span>
+          <span className="text-muted-foreground font-normal"> — {row.who}</span>
         )}
       </span>
       <span

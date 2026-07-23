@@ -22,6 +22,10 @@ interface AutomationViewProps {
   onNavigate?: (feature: AutomationFeature) => void;
   /** Open a message in the mailbox reading pane (dashboard row navigation). */
   onOpenEmail?: (messageId: string) => void;
+  /** Filter the mailbox by a category label (dashboard category click-through). */
+  onFilterLabel?: (label: string) => void;
+  /** Filter the mailbox by a sender (dashboard noisy-sender click-through). */
+  onFilterSender?: (email: string) => void;
 }
 
 const META: Record<
@@ -67,6 +71,8 @@ export function AutomationView({
   onArchived,
   onNavigate,
   onOpenEmail,
+  onFilterLabel,
+  onFilterSender,
 }: AutomationViewProps) {
   const meta = META[feature];
   const Icon = meta.icon;
@@ -101,7 +107,12 @@ export function AutomationView({
           <AISettingsView accountId={accountId} selectedEmailId={selectedEmailId} />
         )}
         {feature === "digest" && (
-          <DashboardView accountId={accountId} onOpenEmail={onOpenEmail} />
+          <DashboardView
+            accountId={accountId}
+            onOpenEmail={onOpenEmail}
+            onFilterLabel={onFilterLabel}
+            onFilterSender={onFilterSender}
+          />
         )}
         {feature === "unsubscribe" && (
           <BulkUnsubscribeView accountId={accountId} onArchived={onArchived} />

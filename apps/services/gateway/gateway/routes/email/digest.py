@@ -130,20 +130,44 @@ async def _digest_needs_reply(db: Any, account_id: str) -> int:
     return await _digest_status_count(db, account_id, "NEEDS_REPLY")
 
 
+# Priority ordering for the needs-reply queue. Oldest-first is right for a
+# brief ("what's going stale"), but on the live dashboard it buries a
+# high-importance thread from this morning under a two-month-old dead loop —
+# the exact "surfaces dead loops" complaint. This deterministic score (no
+# per-load LLM cost) lifts important + unanswered mail: high importance and
+# unread each weigh more than age, but age still climbs (capped) so genuinely
+# old threads keep surfacing. Returned `importance`/`unread` let the UI show WHY
+# a row ranks where it does.
+_PRIORITY_SCORE = (
+    "(CASE WHEN LOWER(COALESCE(em.importance, '')) = 'high' THEN 100 ELSE 0 END"
+    " + CASE WHEN em.is_read = false THEN 25 ELSE 0 END"
+    " + LEAST(GREATEST(0, EXTRACT(DAY FROM now() - ts.last_message_at)), 30))"
+)
+
+
 async def _digest_thread_list(
     db: Any, account_id: str, status: str, limit: int,
+    *, prioritized: bool = False,
 ) -> list[dict[str, Any]]:
-    """Live threads in one status, OLDEST first (aging is the point of a brief),
-    with enough identity for the dashboard to open the thread: thread_id, the
-    last message id, and the counterparty (sender of the last message, or its
-    first recipient when the last message is the user's own — the person being
-    waited on)."""
+    """Live threads in one status, with enough identity for the dashboard to
+    open the thread: thread_id, the last message id, and the counterparty
+    (sender of the last message, or its first recipient when the last message is
+    the user's own — the person being waited on).
+
+    ``prioritized`` (the dashboard's needs-reply queue) orders by an urgency
+    score — importance + unread + capped age — instead of pure age, so the row
+    you should act on first is on top. Everything else stays OLDEST first
+    (aging is the point of a brief / of "who's kept me waiting longest")."""
+    order = (f"{_PRIORITY_SCORE} DESC, ts.last_message_at ASC"
+             if prioritized else "ts.last_message_at ASC")
     rows = (await db.execute(text(
         f"""SELECT ts.thread_id, ts.last_message_id, em.subject,
                    em.from_address->>'name'  AS from_name,
                    em.from_address->>'email' AS from_email,
                    em.to_addresses->0->>'name'  AS to_name,
                    em.to_addresses->0->>'email' AS to_email,
+                   LOWER(COALESCE(em.importance, '')) = 'high' AS high,
+                   em.is_read AS is_read,
                    GREATEST(0, EXTRACT(DAY FROM now() - ts.last_message_at))::int
                      AS age_days
             FROM email_thread_status ts
@@ -151,7 +175,7 @@ async def _digest_thread_list(
             WHERE ts.account_id = :aid AND ts.status = '{status}'
               AND ts.last_message_at IS NOT NULL
               AND {_LIVE_THREAD}
-            ORDER BY ts.last_message_at ASC
+            ORDER BY {order}
             LIMIT :lim"""
     ), {"aid": account_id, "lim": limit})).fetchall()
     self_row = (await db.execute(text(
@@ -171,17 +195,22 @@ async def _digest_thread_list(
             "message_id": (str(r.last_message_id)
                            if r.last_message_id else None),
             "who": who,
+            "important": bool(r.high),
+            "unread": (r.is_read is False),
         })
     return out
 
 
 async def _digest_backlog_aging(
-    db: Any, account_id: str, limit: int = 5,
+    db: Any, account_id: str, limit: int = 5, *, prioritized: bool = False,
 ) -> list[dict[str, Any]]:
-    """The oldest threads still awaiting the user's reply — the Reply Zero
-    backlog, aged. A daily brief's job isn't "N new emails"; it's "these are the
-    ones going stale". Reads the SAME email_thread_status the classifier owns."""
-    return await _digest_thread_list(db, account_id, "NEEDS_REPLY", limit)
+    """The threads still awaiting the user's reply — the Reply Zero backlog.
+    A brief wants them aged (``prioritized=False`` → oldest first, "what's going
+    stale"); the live dashboard wants them ranked by urgency
+    (``prioritized=True``). Reads the SAME email_thread_status the classifier
+    owns."""
+    return await _digest_thread_list(
+        db, account_id, "NEEDS_REPLY", limit, prioritized=prioritized)
 
 
 async def _digest_awaiting(
@@ -428,7 +457,10 @@ async def _generate_digest(
     # (awaiting), and what I promised to do (commitments). Independent of the
     # digest's category window.
     list_cap = 50 if full else 5
-    backlog = await _digest_backlog_aging(db, account_id, list_cap)
+    # Dashboard ranks the reply queue by urgency (act first); the emailed brief
+    # keeps it oldest-first (what's going stale).
+    backlog = await _digest_backlog_aging(
+        db, account_id, list_cap, prioritized=full)
     awaiting = await _digest_awaiting(db, account_id, list_cap)
     commitments = await _digest_commitments(
         db, account_id,

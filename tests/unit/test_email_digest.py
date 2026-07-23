@@ -171,7 +171,8 @@ def _one_shot_db(rows: list):
 def _thread_row(**over):
     base = dict(thread_id="t1", last_message_id="m1", subject="Invoice?",
                 from_name="Ada", from_email="ada@x.com",
-                to_name=None, to_email=None, age_days=5)
+                to_name=None, to_email=None, age_days=5,
+                high=False, is_read=True)
     base.update(over)
     return SimpleNamespace(**base)
 
@@ -191,11 +192,26 @@ async def test_backlog_aging_reads_needs_reply_oldest_first() -> None:
     out = await m.digest._digest_backlog_aging(db, "acc-1")
     sql = str(db.execute.call_args_list[0][0][0])
     assert "status = 'NEEDS_REPLY'" in sql
-    assert "ORDER BY ts.last_message_at ASC" in sql   # oldest first
+    assert "ORDER BY ts.last_message_at ASC" in sql   # oldest first (the brief)
     # Rows carry identity for the dashboard: the thread AND its last message,
-    # plus WHO the loop is with (sender, since the last message is theirs).
+    # plus WHO the loop is with (sender, since the last message is theirs), and
+    # the priority signals the dashboard badges.
     assert out == [{"subject": "Invoice?", "age_days": 5, "thread_id": "t1",
-                    "message_id": "m1", "who": "Ada"}]
+                    "message_id": "m1", "who": "Ada",
+                    "important": False, "unread": False}]
+
+
+async def test_dashboard_backlog_ranks_by_priority_not_age() -> None:
+    # The live dashboard (prioritized=True) orders the reply queue by an urgency
+    # score — importance + unread + capped age — so an important unread thread
+    # from today outranks an ancient dead loop. The emailed brief stays
+    # oldest-first (asserted above).
+    db = _thread_list_db([_thread_row(high=True, is_read=False)])
+    out = await m.digest._digest_backlog_aging(db, "acc-1", prioritized=True)
+    sql = str(db.execute.call_args_list[0][0][0])
+    assert "importance" in sql.lower() and "DESC" in sql
+    assert "ORDER BY ts.last_message_at ASC" not in sql  # not the plain-age order
+    assert out[0]["important"] is True and out[0]["unread"] is True
 
 
 async def test_thread_lists_ignore_trashed_threads() -> None:

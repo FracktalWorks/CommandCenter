@@ -707,6 +707,20 @@ export default function EmailPage() {
               useEmailStore.getState().openEmailById(id);
               setAutomationFeature(null);
             }}
+            onFilterLabel={(label) => {
+              // Category chip → the inbox filtered to that label (same path a
+              // label chip in the list uses), dropping back to the mailbox.
+              useEmailStore.getState().selectLabel(label);
+              setAutomationFeature(null);
+            }}
+            onFilterSender={(email) => {
+              // Noisy-sender row → the mailbox filtered to that sender, so the
+              // user can triage/unsubscribe from the actual mail.
+              useEmailStore
+                .getState()
+                .setSearchFilters([{ kind: "from", value: email }]);
+              setAutomationFeature(null);
+            }}
           />
         </div>
       ) : (

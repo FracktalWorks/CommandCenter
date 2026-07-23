@@ -12,6 +12,7 @@ import {
   ArrowLeft,
   Check,
   CheckSquare,
+  Clock,
   ExternalLink,
   Loader2,
   Mail,
@@ -21,6 +22,7 @@ import {
   RefreshCw,
   Sparkles,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -97,6 +99,9 @@ export default function MeetingPage({
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
   const [scratch, setScratch] = useState("");
+  const [tab, setTab] = useState<"summary" | "transcript" | "actions" | "ask">(
+    "summary"
+  );
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [savingSpeaker, setSavingSpeaker] = useState(false);
@@ -165,14 +170,19 @@ export default function MeetingPage({
   }
 
   function jumpToSegment(segmentId: string) {
-    const seg = meeting?.segments.find((x) => x.id === segmentId);
-    const el = document.getElementById(`seg-${segmentId}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (el) {
-      el.classList.add("ring-1", "ring-primary");
-      setTimeout(() => el.classList.remove("ring-1", "ring-primary"), 1600);
-    }
-    if (seg) seekTo(seg.start_s);
+    // A citation can be clicked from any tab — switch to the transcript first,
+    // then scroll once the panel has mounted.
+    setTab("transcript");
+    setTimeout(() => {
+      const seg = meeting?.segments.find((x) => x.id === segmentId);
+      const el = document.getElementById(`seg-${segmentId}`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (el) {
+        el.classList.add("ring-1", "ring-primary");
+        setTimeout(() => el.classList.remove("ring-1", "ring-primary"), 1600);
+      }
+      if (seg) seekTo(seg.start_s);
+    }, 60);
   }
 
   function flashToast(msg: string) {
@@ -241,6 +251,8 @@ export default function MeetingPage({
         .filter((x): x is string => !!x)
     )
   );
+  const chipCls =
+    "inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground";
 
   async function onApprove(actionId: string) {
     setActioning(actionId);
@@ -384,6 +396,41 @@ export default function MeetingPage({
             />
           ) : null}
 
+          {/* At-a-glance meta strip */}
+          {meeting && (meeting.duration_s != null || meeting.transcript_source) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {meeting.created_at && (
+                <span className={chipCls}>
+                  {new Date(meeting.created_at).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+              )}
+              {meeting.duration_s != null && (
+                <span className={chipCls}>
+                  <Clock className="w-3 h-3" />
+                  {formatClock(meeting.duration_s)}
+                </span>
+              )}
+              {speakerLabels.length > 0 && (
+                <span className={chipCls}>
+                  <Users className="w-3 h-3" />
+                  {speakerLabels.length} speaker
+                  {speakerLabels.length > 1 ? "s" : ""}
+                </span>
+              )}
+              {meeting.language && (
+                <span className={`${chipCls} capitalize`}>{meeting.language}</span>
+              )}
+              {meeting.transcript_source && (
+                <span className={`${chipCls} font-mono !text-[10px] text-muted-foreground`}>
+                  {meeting.transcript_source}
+                </span>
+              )}
+            </div>
+          )}
+
           {meeting && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -472,21 +519,52 @@ export default function MeetingPage({
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-            {/* Transcript */}
-            <div>
-              <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-2 flex-wrap">
-                Transcript
-                {speakerLabels.length > 0 && (
-                  <span className="text-[10px] text-muted-foreground font-normal">
-                    · {speakerLabels.length} speaker
-                    {speakerLabels.length > 1 ? "s" : ""}
-                    {speakerLabels.every((l) => speakerNames[l])
-                      ? ""
-                      : " — click a name to label them"}
-                  </span>
+          {/* Tabbed workspace — the summary is the hero */}
+          <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
+            {(
+              [
+                ["summary", "Summary"],
+                ["transcript", "Transcript"],
+                ["actions", "Actions"],
+                ["ask", "Ask"],
+              ] as const
+            ).map(([tid, label]) => (
+              <button
+                key={tid}
+                onClick={() => setTab(tid)}
+                className={`relative px-3 py-2 text-sm whitespace-nowrap tech-transition ${
+                  tab === tid
+                    ? "text-primary font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  {label}
+                  {tid === "actions" && actions.length > 0 && (
+                    <span className="text-[10px] rounded-full bg-secondary px-1.5 py-0.5 text-muted-foreground">
+                      {actions.length}
+                    </span>
+                  )}
+                </span>
+                {tab === tid && (
+                  <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
                 )}
-              </h2>
+              </button>
+            ))}
+          </div>
+
+          <div className="pt-4">
+            {/* Transcript */}
+            {tab === "transcript" && (
+            <div>
+              {speakerLabels.length > 0 &&
+                !speakerLabels.every((l) => speakerNames[l]) && (
+                  <p className="text-[11px] text-muted-foreground mb-2">
+                    {speakerLabels.length} speaker
+                    {speakerLabels.length > 1 ? "s" : ""} — click a name to label
+                    them.
+                  </p>
+                )}
               {meeting && meeting.segments.length > 0 ? (
                 <div className="rounded-xl border border-border bg-card divide-y divide-border max-h-[70vh] overflow-y-auto">
                   {meeting.segments.map((seg) => (
@@ -538,9 +616,11 @@ export default function MeetingPage({
                 </p>
               )}
             </div>
+            )}
 
-            {/* Notes + action items */}
-            <div className="space-y-4">
+            {/* Summary — the generated notes (hero) + your steering notes */}
+            {tab === "summary" && (
+            <div className="max-w-3xl space-y-4">
               <div>
                 <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
                   Your notes
@@ -578,8 +658,12 @@ export default function MeetingPage({
                   </div>
                 )}
               </div>
+            </div>
+            )}
 
-              {actions.length > 0 && (
+            {/* Actions */}
+            {tab === "actions" &&
+              (actions.length > 0 ? (
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h2 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
@@ -683,12 +767,23 @@ export default function MeetingPage({
                     })}
                   </div>
                 </div>
-              )}
+              ) : (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  {busy
+                    ? "Action items appear once notes are generated."
+                    : "No action items yet."}
+                </p>
+              ))}
 
-              {meeting && meeting.segments.length > 0 && (
+            {/* Ask the meeting */}
+            {tab === "ask" &&
+              (meeting && meeting.segments.length > 0 ? (
                 <AskPanel meetingId={id} onCite={jumpToSegment} />
-              )}
-            </div>
+              ) : (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  Ask becomes available once there&apos;s a transcript.
+                </p>
+              ))}
           </div>
         </div>
       </div>

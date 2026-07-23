@@ -48,6 +48,8 @@ export function TimeGrid({
   now,
   dayStart,
   dayEnd,
+  workStart,
+  workEnd,
   energyWindows,
   oneThingId,
   outcomeById,
@@ -66,8 +68,14 @@ export function TimeGrid({
   days: Date[];
   items: GtdItem[];
   now: Date;
+  /** Grid extent — always the full day (0…24), Google-Calendar style. */
   dayStart: number;
   dayEnd: number;
+  /** The user's working window — not a wall, just a soft zone: the off-hours
+   *  outside it are shaded, and it's the default the AI planner / auto-place
+   *  fills. You can still drag / tap / resize anywhere in the 24h grid. */
+  workStart: number;
+  workEnd: number;
   energyWindows: EnergyWindow[];
   /** today's ★ One Thing (gold, protected-feeling) — null when unset. */
   oneThingId: string | null;
@@ -307,6 +315,28 @@ export function TimeGrid({
                   className="border-b border-border/60"
                 />
               ))}
+
+              {/* off-hours shade — the hours OUTSIDE your working window read
+                  dimmer so the day has a natural shape (Google-Calendar style),
+                  but they're still live: tap / drag / resize a block into the
+                  early morning or late night whenever you want to. */}
+              {workStart > dayStart && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 top-0 bg-muted/25"
+                  style={{ height: (workStart - dayStart) * HOUR_PX }}
+                />
+              )}
+              {workEnd < dayEnd && (
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-x-0 bg-muted/25"
+                  style={{
+                    top: (workEnd - dayStart) * HOUR_PX,
+                    height: (dayEnd - workEnd) * HOUR_PX,
+                  }}
+                />
+              )}
 
               {/* energy windows — peak/trough tint the planner places work into */}
               {energyWindows.map((w, wi) => {

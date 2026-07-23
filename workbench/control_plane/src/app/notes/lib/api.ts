@@ -59,6 +59,56 @@ export async function getMeeting(id: string): Promise<MeetingDetail> {
   return json(await fetch(`/api/notes/meetings/${id}`, { cache: "no-store" }));
 }
 
+// ── Live recording (chunked capture) ────────────────────────────────────────
+
+export async function startRecording(
+  meetingId: string,
+  channel: string,
+  mime: string
+): Promise<{ recording_id: string }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/recordings/start`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ channel, mime }),
+    })
+  );
+}
+
+export async function uploadChunk(
+  meetingId: string,
+  recordingId: string,
+  seq: number,
+  blob: Blob
+): Promise<void> {
+  const res = await fetch(
+    `/api/notes/meetings/${meetingId}/recordings/${recordingId}/chunk?seq=${seq}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/octet-stream" },
+      body: blob,
+    }
+  );
+  if (!res.ok) throw new Error(`chunk ${seq} failed: ${res.status}`);
+}
+
+export async function completeRecording(
+  meetingId: string,
+  recordingId: string,
+  durationS: number
+): Promise<{ run_id: string; status: string }> {
+  return json(
+    await fetch(
+      `/api/notes/meetings/${meetingId}/recordings/${recordingId}/complete`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ duration_s: durationS }),
+      }
+    )
+  );
+}
+
 export async function deleteMeeting(id: string): Promise<void> {
   const res = await fetch(`/api/notes/meetings/${id}`, { method: "DELETE" });
   if (!res.ok && res.status !== 204) throw new Error(`${res.status}`);

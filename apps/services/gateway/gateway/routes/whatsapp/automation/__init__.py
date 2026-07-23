@@ -11,4 +11,5 @@ from gateway.routes.whatsapp.automation import (  # noqa: F401
     categories,
     intent,
     replyzero,
+    rules,
 )

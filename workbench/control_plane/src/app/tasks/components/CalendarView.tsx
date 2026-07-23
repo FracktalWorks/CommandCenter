@@ -82,17 +82,13 @@ export function CalendarView() {
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadDone = useTaskStore((s) => s.loadDone);
   const settings = useTaskStore((s) => s.settings);
-  // Full-day (24h) mode — for entrepreneurs who work whenever, not 9-to-5. When
-  // on, the grid, manual scheduling AND the AI planner span 0–24 instead of the
-  // working-hours window. Persisted client-side; resolved in an effect (SSR).
-  const [fullDay, setFullDay] = useState(false);
-  // The plannable day window + capacity come from the user's calendar prefs so
-  // the grid and the AI planner agree; sane defaults when unset. Full-day mode
-  // overrides the window to the whole 24 hours.
-  const dayStart = fullDay ? 0 : settings.dayStartHour ?? DAY_START_HOUR;
-  const dayEnd = fullDay
-    ? 24
-    : Math.max(dayStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
+  // ONE grid, like Google Calendar: it always renders the full 24 hours, so you
+  // can view and schedule at any hour (no working-vs-24h toggle). The user's
+  // WORKING HOURS aren't a wall — they're a soft zone: shaded on the grid, and
+  // the default window the AI planner / auto-place fills. Direct manipulation
+  // (tap a slot, drag, resize) works across all 24h.
+  const workStart = settings.dayStartHour ?? DAY_START_HOUR;
+  const workEnd = Math.max(workStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
   const capacityTarget = settings.dailyCapacityMins ?? SOFT_CAPACITY_MINS;
   const energyWindows = settings.energyWindows ?? [];
   const updateSettings = useTaskStore((s) => s.updateSettings);
@@ -131,27 +127,18 @@ export function CalendarView() {
     setOneThingId(oneThingIdFor(new Date(), prefs));
     setStartupOffered(prefs.startupDoneOn !== dayKey());
     setDayClosed(prefs.dayClosedOn === dayKey());
-    setFullDay(!!prefs.fullDayGrid);
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [now]);
-  const toggleFullDay = () => {
-    setFullDay((v) => {
-      const next = !v;
-      saveFocusPrefs({ fullDayGrid: next });
-      return next;
-    });
-  };
-  // Auto-scroll the day/week grid to the current hour when full-day (0–24) is
-  // on, so it doesn't strand the user at midnight. Runs when full-day / mode
-  // changes (not every clock tick).
+  // The 24h grid is tall, so on open (and when switching to day/week) scroll to
+  // ~1h before the current time — you land where the action is, not at midnight.
   const gridScrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    if (!fullDay || mode === "month") return;
+    if (mode === "month") return;
     const el = gridScrollRef.current;
     if (!el) return;
     const h = new Date().getHours();
     el.scrollTop = Math.max(0, (h - 1) * HOUR_PX);
-  }, [fullDay, mode]);
+  }, [mode]);
   const handleToggleOneThing = (id: string) => {
     const prev = oneThingIdFor(new Date());
     toggleOneThing(new Date(), id);
@@ -280,8 +267,8 @@ export function CalendarView() {
         blocksForDay(items, day).filter((b) => b.item.id !== item.id),
         day,
         mins,
-        dayStart,
-        dayEnd,
+        workStart,
+        workEnd,
       );
     const end = new Date(start.getTime() + mins * 60000);
     applySchedule(label, [
@@ -400,9 +387,9 @@ export function CalendarView() {
     setRolling(true);
     const today = startOfDay(new Date());
     const s = new Date(today);
-    s.setHours(dayStart, 0, 0, 0);
+    s.setHours(workStart, 0, 0, 0);
     const e = new Date(today);
-    e.setHours(dayEnd, 0, 0, 0);
+    e.setHours(workEnd, 0, 0, 0);
     try {
       const res = await apiRollover({
         day_start: s.toISOString(),
@@ -536,26 +523,6 @@ export function CalendarView() {
             <Wand2 className="h-3.5 w-3.5" />
             <span className="hidden sm:inline">Plan my day</span>
           </button>
-          {mode !== "month" && (
-            <button
-              type="button"
-              onClick={toggleFullDay}
-              aria-pressed={fullDay}
-              title={
-                fullDay
-                  ? "Showing all 24 hours — click for working hours only"
-                  : "Show the full 24-hour day (schedule any time, day or night)"
-              }
-              className={[
-                "tech-transition rounded-md px-2 py-1 text-[12px] font-medium",
-                fullDay
-                  ? "bg-primary/10 text-primary"
-                  : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-              ].join(" ")}
-            >
-              24h
-            </button>
-          )}
           <button
             type="button"
             onClick={() => setSettingsOpen((v) => !v)}
@@ -685,8 +652,10 @@ export function CalendarView() {
               days={days}
               items={items}
               now={now}
-              dayStart={dayStart}
-              dayEnd={dayEnd}
+              dayStart={0}
+              dayEnd={24}
+              workStart={workStart}
+              workEnd={workEnd}
               energyWindows={energyWindows}
               oneThingId={oneThingId}
               outcomeById={outcomeById}
@@ -762,7 +731,7 @@ export function CalendarView() {
           items={items}
           dueSoon={dueSoon}
           urgentWindowHours={settings.urgentWindowHours}
-          dayEndHour={dayEnd}
+          dayEndHour={workEnd}
           onSchedule={(t, at) => {
             schedule(t, sheet.day, at);
             setSheet(null);
@@ -803,8 +772,8 @@ export function CalendarView() {
           target={
             planMode === "replan" || mode !== "day" ? startOfDay(now) : anchor
           }
-          dayStart={dayStart}
-          dayEnd={dayEnd}
+          dayStart={workStart}
+          dayEnd={workEnd}
           capacityMins={capacityTarget}
           bufferMins={settings.bufferMins ?? 0}
           energyWindows={energyWindows}

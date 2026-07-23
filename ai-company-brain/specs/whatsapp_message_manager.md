@@ -481,16 +481,34 @@ proof that the email vertical's shape was a *channel* shape all along.
 - Frontend: window-aware composer (text / template picker), Details drawer,
   per-message capture affordance.
 
-**Tests:** 42 backend unit tests (`pytest -k whatsapp`) — webhook parser,
-persist, post-sync registry, route helpers (signature/window/regime), templates,
-capture, context. All `ruff`-clean.
+**W2 — triage brain — BUILT (backend, wired end-to-end).**
+- `automation/replyzero.py`: the Reply Zero chat-status classifier
+  (NEEDS_REPLY/AWAITING/FYI/DONE, DM vs group @mention) + `classify_chats` hook.
+- `automation/intent.py`: a deterministic Hinglish-aware intent classifier
+  (order_status/quote/payment/service/scheduling/social/spam) + the
+  `on_new_messages` hook (idempotent via the `rules_processed_at` watermark).
+- `101_whatsapp_categories.sql` + `automation/categories.py`: categories as
+  policy carriers (notify/auto-reply/draft/escalate) with the default set
+  (Family hands-off, Noise silent) + list/bootstrap/patch route.
+- `digest.py`: the `/whatsapp/digest` projection (≤3 needs-you + calm counts).
+- `scheduler_hooks.py` + `main.py`: the hooks are registered at startup and the
+  webhook fires them, so an inbound message now flows webhook → persist → intent
+  → chat-status → surfaces in `/streams`, the queue and the digest. The frontend
+  stream counts light up from this automatically (no UI change needed).
 
-**Not yet validated in this environment:** the numbered migrations need
+**Tests:** 83 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+persist, post-sync registry, route helpers (signature/window/regime), templates,
+capture, context, Reply Zero, intent (21 cases), categories, digest, hook wiring.
+All new code `ruff`-clean.
+
+**Not yet validated in this environment:** the numbered migrations (99–101) need
 `scripts/apply_migrations.sh` against a running Postgres; the Next.js frontend
 needs `npm ci && npm run build` (the control-plane `node_modules` isn't
 installed here — the code mirrors the known-good email proxy/page patterns).
 
-**Next (W1 remainder → W2):** Embedded Signup onboarding UI + real coexistence
-history import; route outbound sends through the Action Broker approval queue;
-then W2's classifier + chat-status (Reply Zero) + categories-as-policy + the
-digest section registering the `post_sync` hooks that are currently no-ops.
+**Next (W2 frontend → W3):** the Categories + Rules settings screens and a
+digest view in the UI (backend ready); LLM refinement layered onto the
+deterministic intent/status classifiers; drafting with a WhatsApp voice profile +
+multilingual replies; standing rules (office hours, answer-from-Odoo, payment
+cadence) on top of the categories-as-policy engine; Embedded Signup onboarding UI
++ real coexistence history import; routing sends through the Action Broker.

@@ -601,6 +601,24 @@ export async function apiReplan(req: PlanDayRequest): Promise<DayPlanResult> {
   );
 }
 
+/** The AGENT-facing day planner (server-side geometry — no client windows).
+ *  Used by the chat tool cards' "Apply" button so a plan the assistant proposed
+ *  in chat can be committed with one click, via the exact endpoint the agent
+ *  itself would call with apply=true. */
+export async function apiAgentPlanToday(
+  kind: "plan-today" | "replan-today" | "rollover-today",
+  energyNote?: string,
+): Promise<{ blocks?: unknown[]; notes?: string } | undefined> {
+  return gatewayFetch(`/calendar/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(
+      kind === "plan-today"
+        ? { apply: true, energy_note: energyNote || null }
+        : { apply: true },
+    ),
+  });
+}
+
 /** Learned-estimate accuracy over recent TIMED blocks (actual vs planned) — the
  *  end-of-day review's "you run X% over" signal. `overPct` > 0 = under-estimates. */
 export interface EstimateStats {

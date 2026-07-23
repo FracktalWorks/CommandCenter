@@ -211,6 +211,10 @@ class DayPlan(BaseModel):
     notes: str | None = None
     used_mins: int
     capacity_mins: int
+    # True only when this call actually wrote the blocks to the calendar (an
+    # apply that replayed a reviewed proposal). Propose responses stay False so
+    # the chat renderer never claims "applied" for a plan it only proposed.
+    applied: bool = False
 
 
 def _parse_iso(s: str | None) -> datetime | None:
@@ -1150,7 +1154,7 @@ async def _build_agent_request(
 
 async def _apply_plan_blocks(db: Any, uid: str, plan: DayPlan) -> None:
     """Write a proposed plan's blocks to the calendar (scheduled_start/end).
-    The agent calls this only AFTER the user confirms (persona rule)."""
+    Only reached via the apply path, which replays a plan the user reviewed."""
     for b in plan.blocks:
         s, e = _parse_iso(b.start), _parse_iso(b.end)
         if not s or not e:
@@ -1160,6 +1164,85 @@ async def _apply_plan_blocks(db: Any, uid: str, plan: DayPlan) -> None:
                  " updated_at = now() WHERE id = :id AND user_id = :uid"),
             {"s": s, "e": e, "id": b.item_id, "uid": uid})
     await db.commit()
+
+
+# ── Reviewed-plan gate (R1/S1) ───────────────────────────────────────────────
+# The agent's "apply" must only ever commit the exact plan the user reviewed.
+# Propose stashes the computed plan on the day-state row; apply replays it and
+# clears it. So a caller-supplied apply=true can't write a freshly-recomputed
+# plan the user never saw, and an apply with nothing pending safely degrades to
+# a propose. The confirmation gate lives in the server, not just the persona.
+_PENDING_TTL = timedelta(minutes=30)
+
+
+async def _store_pending_plan(
+    db: Any, uid: str, local_day: date, kind: str, plan: DayPlan, now: datetime,
+) -> None:
+    payload = json.dumps(
+        {"kind": kind, "at": now.isoformat(), "plan": plan.model_dump()})
+    await db.execute(
+        text("INSERT INTO gtd_day_state (user_id, day, pending_plan) "
+             "VALUES (:uid, :day, CAST(:p AS jsonb)) "
+             "ON CONFLICT (user_id, day) DO UPDATE SET "
+             "pending_plan = CAST(:p AS jsonb), updated_at = now()"),
+        {"uid": uid, "day": local_day, "p": payload})
+    await db.commit()
+
+
+async def _take_pending_plan(
+    db: Any, uid: str, local_day: date, kind: str, now: datetime,
+) -> DayPlan | None:
+    """Return the plan the user last PROPOSED for this day+kind and clear it —
+    but only if it's fresh (< TTL). None ⇒ nothing to apply (propose first)."""
+    row = (await db.execute(
+        text("SELECT pending_plan FROM gtd_day_state "
+             "WHERE user_id = :uid AND day = :day"),
+        {"uid": uid, "day": local_day})).first()
+    raw = getattr(row, "pending_plan", None) if row else None
+    if not raw:
+        return None
+    data = raw if isinstance(raw, dict) else json.loads(raw)
+    if data.get("kind") != kind:
+        return None
+    at = _parse_iso(data.get("at"))
+    if not at or now - at > _PENDING_TTL:
+        return None
+    await db.execute(
+        text("UPDATE gtd_day_state SET pending_plan = NULL, updated_at = now() "
+             "WHERE user_id = :uid AND day = :day"),
+        {"uid": uid, "day": local_day})
+    await db.commit()
+    try:
+        return DayPlan(**data["plan"])
+    except Exception:
+        return None
+
+
+async def _resolve_agent_plan(
+    db: Any, uid: str, local_day: date, kind: str, apply: bool,
+    fresh: DayPlan, now: datetime,
+) -> DayPlan:
+    """Shared propose/apply resolution for the *-today endpoints.
+    - propose (apply=false): stash `fresh`, return it (applied=False).
+    - apply (apply=true): replay the stored proposal verbatim and clear it;
+      if none is pending, fall back to proposing `fresh` (never a blind write).
+    """
+    if not apply:
+        if fresh.blocks:
+            await _store_pending_plan(db, uid, local_day, kind, fresh, now)
+        return fresh
+    reviewed = await _take_pending_plan(db, uid, local_day, kind, now)
+    if reviewed is None:
+        # Nothing was proposed (or it went stale) — don't write blind. Propose
+        # this fresh plan instead so the user gets to review before it commits.
+        if fresh.blocks:
+            await _store_pending_plan(db, uid, local_day, kind, fresh, now)
+        fresh.notes = ((fresh.notes + " ") if fresh.notes else "") + (
+            "Proposed — nothing was pending to apply. Confirm to commit it.")
+        return fresh
+    await _apply_plan_blocks(db, uid, reviewed)
+    reviewed.applied = True
+    return reviewed
 
 
 @router.post("/calendar/plan-today", response_model=DayPlan)
@@ -1176,9 +1259,8 @@ async def plan_today(
             db, uid, req.date, req.energy_note)
         one = await _one_thing_for(db, uid, local_day)
         plan = await _compute_day_plan(db, uid, win_start, win_end, pdr, now, one)
-        if req.apply and plan.blocks:
-            await _apply_plan_blocks(db, uid, plan)
-        return plan
+        return await _resolve_agent_plan(
+            db, uid, local_day, "plan", req.apply, plan, now)
     finally:
         await db.close()
 
@@ -1188,17 +1270,17 @@ async def replan_today(
     req: AgentPlanRequest, user: UserContext = Depends(get_current_user),
 ):
     """AGENT entry point for 'replan the rest of my day' — deterministic repack
-    of today's flexible, not-yet-done blocks around fixed ones; applies on
-    `apply`."""
+    of today's flexible, not-yet-done blocks around fixed ones. Proposes first;
+    `apply` replays the reviewed proposal (see _resolve_agent_plan)."""
     uid = _uid(user)
+    now = datetime.now(UTC)
     db = await _get_db()
     try:
-        pdr, _ws, _we, _tz, _day = await _build_agent_request(
+        pdr, _ws, _we, _tz, local_day = await _build_agent_request(
             db, uid, req.date, None)
         plan = await replan_day(pdr, user)
-        if req.apply and plan.blocks:
-            await _apply_plan_blocks(db, uid, plan)
-        return plan
+        return await _resolve_agent_plan(
+            db, uid, local_day, "replan", req.apply, plan, now)
     finally:
         await db.close()
 
@@ -1208,16 +1290,17 @@ async def rollover_today(
     req: AgentPlanRequest, user: UserContext = Depends(get_current_user),
 ):
     """AGENT entry point for roll-over — pull overdue-incomplete blocks into
-    today's open slots (deadline-aware); applies on `apply`."""
+    today's open slots (deadline-aware). Proposes first; `apply` replays the
+    reviewed proposal (see _resolve_agent_plan)."""
     uid = _uid(user)
+    now = datetime.now(UTC)
     db = await _get_db()
     try:
-        pdr, _ws, _we, _tz, _day = await _build_agent_request(
+        pdr, _ws, _we, _tz, local_day = await _build_agent_request(
             db, uid, req.date, None)
         plan = await rollover_day(pdr, user)
-        if req.apply and plan.blocks:
-            await _apply_plan_blocks(db, uid, plan)
-        return plan
+        return await _resolve_agent_plan(
+            db, uid, local_day, "rollover", req.apply, plan, now)
     finally:
         await db.close()
 

@@ -468,8 +468,11 @@ CLEANUP_CATEGORIES = (
 # mail stamped with an old name is still categorized and must not resurface as
 # uncategorized.
 CONVERSATION_LABELS_LOWER = frozenset({
-    "reply", "awaiting reply", "fyi", "done", "follow-up",
-    "to reply", "actioned",
+    "needs reply", "awaiting reply", "fyi", "done", "follow-up",
+    # Legacy names still present on provider-side messages the reconciler
+    # hasn't replaced yet ("Reply"/"To Reply" → "Needs Reply", "Actioned" →
+    # "Done") — kept so old-labelled mail doesn't read as uncategorized.
+    "reply", "to reply", "actioned",
 })
 KNOWN_LABELS_LOWER: list[str] = (
     [c.lower() for c in CLEANUP_CATEGORIES] + sorted(CONVERSATION_LABELS_LOWER)
@@ -503,6 +506,14 @@ UNCATEGORIZED_SQL = (
     "NOT EXISTS (SELECT 1 FROM unnest(COALESCE(em.categories, '{}')) AS c"
     " WHERE LOWER(TRIM(c)) = ANY(:known_labels))"
 )
+
+# "Uncategorized" is a STATE — the absence of any known label — never a label
+# itself. It must not be writable as a category anywhere: not by a rule's LABEL
+# action (an AI-resolved {{...}} label could produce it), not by the manual
+# label endpoint, not synced in from the provider. Every category writer checks
+# this set; letting it through would turn the indicator into a real provider
+# category that then reads as "categorized" forever.
+RESERVED_INDICATORS = frozenset({"uncategorized"})
 
 
 def folder_scope(

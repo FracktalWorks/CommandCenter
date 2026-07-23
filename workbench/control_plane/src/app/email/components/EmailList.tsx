@@ -138,6 +138,18 @@ export function EmailList({
   // the AI-Settings Test/History tabs use, reachable from anywhere mail shows.
   const [fixTarget, setFixTarget] = useState<Email | null>(null);
 
+  // Uncategorized pill click → attempt recategorization, then branch on WHY it
+  // failed: "no rule matched" from a healthy classifier is a rules gap, so the
+  // Fix dialog opens and the miss becomes a learned pattern or a new rule. An
+  // unavailable classifier is a backend fault — the store already put it in the
+  // error banner, and offering to "fix the rules" for it would be lying about
+  // where the problem is. A transport error (null) likewise stays a banner.
+  const recategorize = async (email: Email) => {
+    if (!selectedAccountId || testRunningIds.includes(email.id)) return;
+    const res = await runTestOnMessage(selectedAccountId, email.id, false);
+    if (res && !res.matched && !res.unavailable) setFixTarget(email);
+  };
+
   // ── Bulk selection ──
   // Held in the store so the desktop unified toolbar shares it; aliased to the
   // local names the rows / select-all / context-menu code below already use.
@@ -510,7 +522,7 @@ export function EmailList({
                     When an email has NO category (rules haven't run or the
                     agent couldn't categorize it), show an "Uncategorized" pill
                     so it's visible as needing attention — clicking it reruns
-                    the rules on just this email (applies matches). */}
+                    the rules on just this email; a no-match opens Fix. */}
                 {email.categories.length > 0 ? (
                   <div className="flex flex-wrap gap-1 mt-0.5">
                     {email.categories.slice(0, 3).map((label) => (
@@ -535,21 +547,17 @@ export function EmailList({
                       title={
                         testRunningIds.includes(email.id)
                           ? "Re-running rules…"
-                          : "Uncategorized — click to re-run rules on this email"
+                          : "Uncategorized — click to re-run rules; if none match, you can fix the rules"
                       }
                       onClick={(e) => {
                         e.stopPropagation();
                         e.preventDefault();
-                        if (selectedAccountId && !testRunningIds.includes(email.id)) {
-                          runTestOnMessage(selectedAccountId, email.id, false);
-                        }
+                        recategorize(email);
                       }}
                       onKeyDown={(e) => {
                         if (e.key === "Enter" || e.key === " ") {
                           e.preventDefault();
-                          if (selectedAccountId && !testRunningIds.includes(email.id)) {
-                            runTestOnMessage(selectedAccountId, email.id, false);
-                          }
+                          recategorize(email);
                         }
                       }}
                       className="inline-flex items-center gap-1 rounded-full font-medium text-[11px] px-2 py-0.5 border border-dashed border-border text-muted-foreground hover:bg-secondary/60 cursor-pointer transition-colors"

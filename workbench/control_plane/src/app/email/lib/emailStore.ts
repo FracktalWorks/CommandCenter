@@ -271,9 +271,12 @@ interface EmailState {
   /** Checkbox multi-selection in the list, shared with the unified toolbar so
    *  bulk actions can live in the page-level bar instead of inside EmailList. */
   selectedIds: Set<string>;
-  /** Transient command from the unified toolbar to the open email viewer
-   *  (reply/forward/block/download), consumed and cleared by EmailDetail. */
-  viewerCommand: "reply" | "reply-all" | "forward" | "block" | "download" | null;
+  /** Transient command from the unified toolbar (or the dashboard) to the open
+   *  email viewer, consumed and cleared by EmailDetail. "reply-ai" opens the
+   *  reply composer AND kicks off an AI draft — the dashboard's draft-from-row. */
+  viewerCommand:
+    | "reply" | "reply-all" | "forward" | "block" | "download" | "reply-ai"
+    | null;
 
   // UI
   composeOpen: boolean;

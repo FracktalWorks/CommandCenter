@@ -15,7 +15,7 @@ import { useEffect, useState, useCallback } from "react";
 import {
   Loader2, Send, Mail, MailOpen, Reply, Paperclip, Check, Newspaper,
   Settings2, Hourglass, ExternalLink, Clock, CheckCheck, XCircle,
-  AlertTriangle, ChevronRight,
+  AlertTriangle, ChevronRight, PenLine,
 } from "lucide-react";
 import { getDigest, resolveThread, sendDigest, snoozeEmail } from "../../lib/api";
 import { DigestData, DigestThread } from "../../lib/types";
@@ -29,10 +29,12 @@ interface DashboardViewProps {
   onFilterLabel?: (label: string) => void;
   /** Filter the mailbox by a sender address (noisy-sender click-through). */
   onFilterSender?: (email: string) => void;
+  /** Open a thread and start an AI-drafted reply (the ✍️ row action). */
+  onDraftReply?: (messageId: string) => void;
 }
 
 export function DashboardView({
-  accountId, onOpenEmail, onFilterLabel, onFilterSender,
+  accountId, onOpenEmail, onFilterLabel, onFilterSender, onDraftReply,
 }: DashboardViewProps) {
   const [period, setPeriod] = useState<"day" | "week">("day");
   const [data, setData] = useState<DigestData | null>(null);
@@ -218,6 +220,14 @@ export function DashboardView({
                         onOpen={onOpenEmail}
                         actions={
                           <>
+                            {b.message_id && onDraftReply && (
+                              <RowBtn
+                                title="Draft a reply with AI — opens the thread with a draft ready"
+                                onClick={() => onDraftReply(b.message_id!)}
+                              >
+                                <PenLine size={12} />
+                              </RowBtn>
+                            )}
                             <RowBtn
                               title="Mark done — this loop is closed"
                               onClick={() => markDone(b)}

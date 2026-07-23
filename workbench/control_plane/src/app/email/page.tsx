@@ -721,6 +721,17 @@ export default function EmailPage() {
                 .setSearchFilters([{ kind: "from", value: email }]);
               setAutomationFeature(null);
             }}
+            onDraftReply={async (id) => {
+              // ✍️ on a needs-reply row: open the thread, then hand the viewer a
+              // "reply-ai" command so it opens the composer AND drafts a reply.
+              // openEmailById is awaited so the message is loaded before the
+              // command fires (the viewer binds its reply handler to the open
+              // message). openEmailById clears viewerCommand, so it must be set
+              // after the await, not before.
+              await useEmailStore.getState().openEmailById(id);
+              setAutomationFeature(null);
+              useEmailStore.getState().setViewerCommand("reply-ai");
+            }}
           />
         </div>
       ) : (

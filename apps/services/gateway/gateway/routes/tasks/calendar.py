@@ -236,8 +236,12 @@ def _free_intervals(
     if now > start:
         start = now.replace(second=0, microsecond=0)
         rem = start.minute % 15
-        if rem or now.second or now.microsecond:
-            start += timedelta(minutes=(15 - rem) if rem else 0)
+        if rem:
+            start += timedelta(minutes=15 - rem)
+        elif now.second or now.microsecond:
+            # On a 15-min mark but mid-minute → ceil to the NEXT mark. (Adding 0
+            # here left `start` behind `now`, booking free time in the past.)
+            start += timedelta(minutes=15)
         start = max(start, win_start)
     if start >= win_end:
         return []
@@ -759,7 +763,10 @@ async def _compute_day_plan(
             continue
         is_one_thing = c["id"] == one_thing_id
         dur = max(5, round(c["estimate_mins"] * pad))
-        if req.capacity_mins and used + dur > req.capacity_mins and not is_one_thing:
+        # capacity_mins is always set (default 360); 0 legitimately means "no
+        # focus work today", so gate on the overflow alone — the old truthiness
+        # check treated 0 as "unlimited" and packed the entire day.
+        if used + dur > req.capacity_mins and not is_one_thing:
             unplaced.append(PlanUnplaced(
                 item_id=c["id"], title=c["title"],
                 reason="Over your daily focus capacity"))
@@ -1100,8 +1107,17 @@ def _day_window(
     for a LOCAL day from the user's stored calendar prefs — the server-side
     equivalent of what the browser computes and sends."""
     from gateway.routes.tasks.settings import _energy_windows
-    ds = int(getattr(row, "day_start_hour", None) or 7) if row else 7
-    de = int(getattr(row, "day_end_hour", None) or 22) if row else 22
+
+    # 0 is a legitimate stored value (midnight day-start for the "plan across
+    # all 24h" case, zero capacity = "no focus work today"). Guard on
+    # `is not None`, never `or`, which silently rewrites 0 to the default —
+    # matching settings._int_or and the nightly rollover job below.
+    def _pref(attr: str, default: int) -> int:
+        v = getattr(row, attr, None) if row else None
+        return int(v) if v is not None else default
+
+    ds = _pref("day_start_hour", 7)
+    de = _pref("day_end_hour", 22)
     win_start = _local_dt(local_day, ds, tz)
     win_end = _local_dt(local_day, max(ds + 1, de), tz)
     ews: list[EnergyWindowReq] = []
@@ -1111,8 +1127,8 @@ def _day_window(
         if we > ws:
             ews.append(EnergyWindowReq(
                 start=ws.isoformat(), end=we.isoformat(), energy=w["energy"]))
-    capacity = int(getattr(row, "daily_capacity_mins", None) or 360) if row else 360
-    buffer = int(getattr(row, "buffer_mins", None) or 0) if row else 0
+    capacity = _pref("daily_capacity_mins", 360)
+    buffer = _pref("buffer_mins", 0)
     return win_start, win_end, ews, capacity, buffer
 
 

@@ -6,7 +6,7 @@ mappers used by the meetings/recordings/pipeline modules. Mirrors
 
 Canonical store: the ``meeting`` / ``meeting_recording`` / ``transcript_segment``
 / ``meeting_note`` / ``summary_run`` / ``action_item`` tables
-(``infra/postgres/01_schema.sql`` + ``94_note_taker.sql``; spec:
+(``infra/postgres/01_schema.sql`` + ``95_note_taker.sql``; spec:
 ai-company-brain/specs/note_taker_app.md §3.6).
 """
 

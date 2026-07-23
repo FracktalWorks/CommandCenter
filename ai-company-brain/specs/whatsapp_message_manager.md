@@ -454,3 +454,43 @@ the principle→screen→prior-art map, color-as-signal legend, and a component 
 Each phase lands behind the existing patterns (provider seam, hook registry,
 rules quintet, HITL) so nothing here forks the architecture — WhatsApp is the
 proof that the email vertical's shape was a *channel* shape all along.
+
+---
+
+## 11. Build status (2026-07-23)
+
+**W0 — pipe + store — BUILT.**
+- `infra/postgres/99_whatsapp.sql`: `wa_accounts / wa_chats / wa_messages /
+  wa_media / wa_contacts / wa_labels / wa_chat_status / wa_sync_log` + FTS.
+- `apps/services/whatsapp_ingestion/`: provider seam (normalized dataclasses,
+  `WhatsAppCloudProvider`, `parse_webhook` total parser, factory), the
+  idempotent `persist` path, and the `post_sync` hook registry.
+- `apps/services/gateway/gateway/routes/whatsapp/`: accounts, chats + `/streams`
+  counts, messages + FTS search, window-aware send, and the public webhook
+  (verify + receive → persist → hooks); registered in `main.py`.
+- `workbench/control_plane/src/app/whatsapp/`: the calm read surface (streams
+  nav, quiet queue, conversation) + the `/api/whatsapp` proxy + nav entry.
+
+**W1 — send + hand-offs — BUILT (send/templates/capture/context).**
+- `infra/postgres/100_whatsapp_templates.sql` + `transport/templates.py`: the
+  approved template library (list / upsert / bootstrap default set).
+- `transport/capture.py`: `/whatsapp/capture-task` — message → GTD inbox item,
+  idempotent on `origin.wa_message_id`.
+- `transport/context.py`: `/whatsapp/chats/{id}/context` — contact + entity ref
+  + open loops + stats (live Zoho/Odoo fields deferred, degrades honestly).
+- Frontend: window-aware composer (text / template picker), Details drawer,
+  per-message capture affordance.
+
+**Tests:** 42 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+persist, post-sync registry, route helpers (signature/window/regime), templates,
+capture, context. All `ruff`-clean.
+
+**Not yet validated in this environment:** the numbered migrations need
+`scripts/apply_migrations.sh` against a running Postgres; the Next.js frontend
+needs `npm ci && npm run build` (the control-plane `node_modules` isn't
+installed here — the code mirrors the known-good email proxy/page patterns).
+
+**Next (W1 remainder → W2):** Embedded Signup onboarding UI + real coexistence
+history import; route outbound sends through the Action Broker approval queue;
+then W2's classifier + chat-status (Reply Zero) + categories-as-policy + the
+digest section registering the `post_sync` hooks that are currently no-ops.

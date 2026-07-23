@@ -29,7 +29,8 @@ import { getMessageFacets, MessageFacets } from "../lib/api";
 const CHIPS: { label: string; facet: string; f: SearchFilter }[] = [
   { label: "Unread", facet: "unread", f: { kind: "unread", value: "" } },
   // Conversation-status labels the reply pipeline writes to em.categories.
-  { label: "Needs reply", facet: "reply", f: { kind: "tag", value: "Reply" } },
+  { label: "Needs reply", facet: "needs reply",
+    f: { kind: "tag", value: "Needs Reply" } },
   { label: "Awaiting", facet: "awaiting reply",
     f: { kind: "tag", value: "Awaiting Reply" } },
   { label: "Follow-up", facet: "follow-up",

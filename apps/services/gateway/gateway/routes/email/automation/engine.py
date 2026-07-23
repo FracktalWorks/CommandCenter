@@ -418,7 +418,7 @@ async def _llm_pick_rules(
 # straggler rule that predates the "To Reply"→"Reply" / "Actioned"→"Done" rename
 # is still recognised as a conversation rule (and thus still gated / never pinned).
 _CONVERSATION_SYSTEM_KEYS = {"REPLY", "AWAITING_REPLY", "FYI", "DONE",
-                             "TO_REPLY", "ACTIONED"}
+                             "TO_REPLY", "ACTIONED", "NEEDS_REPLY"}
 
 # Senders that never expect a reply (inbox-zero's NO_REPLY_PREFIXES + a few
 # obvious extras). Matched as a case-insensitive prefix of the full address.

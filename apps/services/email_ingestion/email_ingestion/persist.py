@@ -136,6 +136,19 @@ _ATTACHMENT_INSERT = """INSERT INTO email_attachments
      ON CONFLICT (message_id, provider_attachment_id) DO NOTHING"""
 
 
+# Renamed conversation-status labels, canonicalised AT INGEST. On a
+# categories-authoritative provider (Outlook) the mirror is overwritten from the
+# provider every sync, so a one-time DB rewrite alone would be resurrected by
+# the old category still sitting on provider messages — mapping here makes the
+# rename stick while the reconciler replaces provider-side labels over time.
+_RENAMED_LABELS = {"Reply": "Needs Reply", "To Reply": "Needs Reply",
+                   "Actioned": "Done"}
+
+
+def _canon_categories(cats: Any) -> list:
+    return [_RENAMED_LABELS.get(c, c) for c in (cats or [])]
+
+
 def _message_params(account_id: str, msg: Any) -> dict[str, Any]:
     """Bind params for one message row. Attribute access is duck-typed so both the
     provider :class:`EmailMessage` dataclass and the gateway's message model work;
@@ -148,7 +161,7 @@ def _message_params(account_id: str, msg: Any) -> dict[str, Any]:
         "thread_id": msg.thread_id,
         "folder": msg.folder or "INBOX",
         "labels": msg.labels,
-        "categories": getattr(msg, "categories", []) or [],
+        "categories": _canon_categories(getattr(msg, "categories", [])),
         # Opt-in flag guarding the ON CONFLICT categories replace (see above).
         # Bound for the insert-only path too — the param must exist either way.
         "categories_authoritative": bool(

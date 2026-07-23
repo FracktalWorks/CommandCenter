@@ -181,7 +181,7 @@ async def list_rules(
 # category_action values: "label" | "label_archive" | "move_folder"
 # (on Outlook "move_folder" expands to LABEL + MOVE_FOLDER)
 _PRESET_RULES: list[dict[str, Any]] = [
-    {"name": "Reply", "instructions": "Emails I need to respond to.",
+    {"name": "Needs Reply", "instructions": "Emails I need to respond to.",
      "run_on_threads": True, "category_action": "label",
      "extra": [{"type": "DRAFT_EMAIL"}]},
     {"name": "Awaiting Reply", "run_on_threads": True,
@@ -274,9 +274,15 @@ async def _seed_preset_rules(
         {r["name"].lower() for r in await _load_rules(db, account_id)}
         if skip_existing else set()
     )
+    # Renamed presets: an account still carrying the OLD rule name must not get
+    # the new-name preset installed beside it (two conversation rules for one
+    # status). Migration 92 renames stored rules, but 'Add defaults' has to be
+    # safe on an un-migrated account too.
+    legacy = {"needs reply": {"reply", "to reply"}, "done": {"actioned"}}
     installed: list[str] = []
     for p in _PRESET_RULES:
-        if p["name"].lower() in existing:
+        key = p["name"].lower()
+        if key in existing or existing & legacy.get(key, set()):
             continue
         rid = str(uuid4())
         await db.execute(text(
@@ -425,7 +431,8 @@ async def sync_draft_reply_action(db: Any, account_id: str, enabled: bool) -> bo
     target = next(
         (r for r in rules
          if (r.get("system_type") or "").upper() in ("REPLY", "TO_REPLY")
-         or (r.get("name") or "").strip().lower() in ("reply", "to reply")),
+         or (r.get("name") or "").strip().lower()
+         in ("needs reply", "reply", "to reply")),
         None,
     )
     if not target:

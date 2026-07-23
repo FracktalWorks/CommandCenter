@@ -35,13 +35,13 @@ type PresetRule = Omit<AutomationRule, "account_id">;
 
 const PRESET_RULES: PresetRule[] = [
   {
-    name: "Reply",
+    name: "Needs Reply",
     instructions: "Emails I need to respond to.",
     enabled: true,
     automated: true,
     run_on_threads: true,
     conditional_operator: "AND",
-    actions: [{ type: "LABEL", label: "Reply" }, { type: "DRAFT_EMAIL" }],
+    actions: [{ type: "LABEL", label: "Needs Reply" }, { type: "DRAFT_EMAIL" }],
   },
   {
     name: "Awaiting Reply",

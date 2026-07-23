@@ -13,11 +13,11 @@ _actions_for_preset = m.automation.rules._actions_for_preset
 def test_preset_set_matches_inbox_zero_system_rules() -> None:
     names = [p["name"] for p in m._PRESET_RULES]
     assert names == [
-        "Reply", "Awaiting Reply", "Done", "FYI", "Newsletter",
+        "Needs Reply", "Awaiting Reply", "Done", "FYI", "Newsletter",
         "Marketing", "Calendar", "Receipt", "Notification", "Cold Email",
     ]
-    # Reply drafts a reply; FYI/Reply run on threads.
-    reply = next(p for p in m._PRESET_RULES if p["name"] == "Reply")
+    # Needs Reply drafts a reply; FYI/Needs Reply run on threads.
+    reply = next(p for p in m._PRESET_RULES if p["name"] == "Needs Reply")
     assert reply["run_on_threads"] is True
     actions = _actions_for_preset(reply, "gmail")
     assert any(a["type"] == "DRAFT_EMAIL" for a in actions)
@@ -89,6 +89,9 @@ def _db_with_provider(provider: str = "gmail", patterns=None) -> AsyncMock:
 
 
 async def test_install_presets_creates_only_missing() -> None:
+    # The existing rule carries the LEGACY name ("Reply", pre-mig-92): the
+    # renamed "Needs Reply" preset must still be skipped, not installed beside
+    # it — two conversation rules for one status would double-classify.
     db = _db_with_provider()
     user = SimpleNamespace(email="u@example.com")
     with patch.object(m.automation.rules, "_get_db", AsyncMock(return_value=db)), \
@@ -97,7 +100,7 @@ async def test_install_presets_creates_only_missing() -> None:
                          AsyncMock(return_value=[{"name": "Reply"}])), \
             patch.object(m.automation.rules, "_replace_actions", AsyncMock()):
         res = await m.install_preset_rules(account_id="acc-1", user=user)
-    assert "Reply" not in res["installed"]   # already present → skipped
+    assert "Needs Reply" not in res["installed"]   # legacy alias → skipped
     assert "FYI" in res["installed"]
     assert len(res["installed"]) == 9
     assert res["total_presets"] == 10

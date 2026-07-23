@@ -405,7 +405,7 @@ async def _categories(db: Any, scope: str, params: dict[str, Any],
     # above "DONE 69". Mirrors _THREAD_STATUS_MAP in replyzero.py; if a status
     # is added there and not here it simply shows under its raw name rather
     # than silently merging into the wrong bucket.
-    status_label = ("CASE ts.status WHEN 'NEEDS_REPLY' THEN 'Reply' "
+    status_label = ("CASE ts.status WHEN 'NEEDS_REPLY' THEN 'Needs Reply' "
                     "WHEN 'AWAITING' THEN 'Awaiting Reply' "
                     "WHEN 'DONE' THEN 'Done' ELSE ts.status END")
     rows = (await db.execute(text(

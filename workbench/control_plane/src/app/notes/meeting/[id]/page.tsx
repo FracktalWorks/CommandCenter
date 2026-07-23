@@ -39,10 +39,12 @@ import {
   getMeeting,
   getNote,
   listActions,
+  listTemplates,
   rejectAction,
   saveAttendees,
   saveScratchNotes,
   saveSpeakerNames,
+  setMeetingTemplate,
   summarize,
 } from "../../lib/api";
 import type {
@@ -105,6 +107,7 @@ export default function MeetingPage({
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
   const [savingSpeaker, setSavingSpeaker] = useState(false);
+  const [templates, setTemplates] = useState<{ key: string; label: string }[]>([]);
   const scratchLoaded = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -133,6 +136,12 @@ export default function MeetingPage({
     void refresh();
   }, [refresh]);
 
+  useEffect(() => {
+    listTemplates()
+      .then(setTemplates)
+      .catch(() => {});
+  }, []);
+
   // Live pipeline progress over SSE. On every state change (and on terminal),
   // refetch the detail so transcript/notes/actions stay in step.
   useEffect(() => {
@@ -153,6 +162,22 @@ export default function MeetingPage({
   async function onSummarize() {
     setSummarizing(true);
     try {
+      await summarize(id);
+      await refresh();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
+  // Switch the notes template and regenerate through the new lens.
+  async function onPickTemplate(key: string) {
+    if (!meeting || key === (meeting.template_key ?? "standard_meeting")) return;
+    setMeeting({ ...meeting, template_key: key });
+    setSummarizing(true);
+    try {
+      await setMeetingTemplate(id, key);
       await summarize(id);
       await refresh();
     } catch (e) {
@@ -621,6 +646,30 @@ export default function MeetingPage({
             {/* Summary — the generated notes (hero) + your steering notes */}
             {tab === "summary" && (
             <div className="max-w-3xl space-y-4">
+              {meeting && meeting.segments.length > 0 && templates.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground">
+                    Notes template
+                  </span>
+                  <select
+                    value={meeting.template_key ?? "standard_meeting"}
+                    onChange={(e) => void onPickTemplate(e.target.value)}
+                    disabled={summarizing || busy}
+                    className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+                  >
+                    {templates.map((t) => (
+                      <option key={t.key} value={t.key}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                  {notesMd && (
+                    <span className="text-[10px] text-muted-foreground">
+                      changing regenerates the notes
+                    </span>
+                  )}
+                </div>
+              )}
               <div>
                 <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
                   Your notes

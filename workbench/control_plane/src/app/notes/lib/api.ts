@@ -183,6 +183,24 @@ export async function summarize(
   );
 }
 
+export async function listTemplates(): Promise<
+  { key: string; label: string }[]
+> {
+  return json(await fetch(`/api/notes/templates`, { cache: "no-store" }));
+}
+
+export async function setMeetingTemplate(
+  meetingId: string,
+  templateKey: string
+): Promise<void> {
+  const res = await fetch(`/api/notes/meetings/${meetingId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ template_key: templateKey }),
+  });
+  if (!res.ok) throw new Error(`${res.status}`);
+}
+
 export async function saveScratchNotes(
   meetingId: string,
   scratchNotes: string

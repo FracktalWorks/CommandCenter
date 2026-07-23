@@ -17,8 +17,15 @@ export interface MeetingListItem {
   segment_count: number;
   has_notes: boolean;
   owner_email: string | null;
+  template_key: string | null;
   start_at: string | null;
   created_at: string | null;
+}
+
+/** A meeting-notes template (shapes the generated summary). */
+export interface NoteTemplate {
+  key: string;
+  label: string;
 }
 
 export interface Segment {

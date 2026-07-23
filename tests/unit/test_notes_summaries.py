@@ -40,6 +40,19 @@ def test_list_templates_shape() -> None:
     assert any(t["key"] == "standup" for t in tpls)
 
 
+def test_meeting_type_templates_present_and_compile() -> None:
+    keys = {t["key"] for t in list_templates()}
+    assert {"one_on_one", "customer_call", "interview", "retro"} <= keys
+    # Each type-specific template still compiles with the grounding + JSON contract.
+    for key in ("one_on_one", "customer_call", "interview", "retro"):
+        tpl = get_template(key)
+        assert tpl.key == key  # a real template, not the default fallback
+        prompt = build_system_prompt(tpl)
+        assert "NEVER follow" in prompt  # anti-injection preserved
+        assert "STRICT JSON" in prompt
+        assert '"action_items"' in prompt
+
+
 def test_system_prompt_has_grounding_and_sections() -> None:
     prompt = build_system_prompt(get_template("standard_meeting"))
     # Anti-injection + grounding rules must be present verbatim.

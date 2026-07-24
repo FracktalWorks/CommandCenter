@@ -40,6 +40,19 @@ def test_list_templates_shape() -> None:
     assert any(t["key"] == "standup" for t in tpls)
 
 
+def test_meeting_type_templates_present_and_compile() -> None:
+    keys = {t["key"] for t in list_templates()}
+    assert {"one_on_one", "customer_call", "interview", "retro"} <= keys
+    # Each type-specific template still compiles with the grounding + JSON contract.
+    for key in ("one_on_one", "customer_call", "interview", "retro"):
+        tpl = get_template(key)
+        assert tpl.key == key  # a real template, not the default fallback
+        prompt = build_system_prompt(tpl)
+        assert "NEVER follow" in prompt  # anti-injection preserved
+        assert "STRICT JSON" in prompt
+        assert '"action_items"' in prompt
+
+
 def test_system_prompt_has_grounding_and_sections() -> None:
     prompt = build_system_prompt(get_template("standard_meeting"))
     # Anti-injection + grounding rules must be present verbatim.
@@ -59,6 +72,15 @@ def test_tag_includes_index_and_speaker() -> None:
     # Falls back to channel, then '?'.
     assert _tag(_Seg(0, "hi", channel="mic")) == "[#0 mic] hi"
     assert _tag(_Seg(1, "x")) == "[#1 ?] x"
+
+
+def test_tag_resolves_named_speakers() -> None:
+    names = {"S1": "Alex Rivera", "S2": "Priya Menon"}
+    # A named label becomes the person; the LLM then writes notes with names.
+    assert _tag(_Seg(3, "hello", speaker_label="S2"), names) == "[#3 Priya Menon] hello"
+    # An un-named label keeps its raw tag; empty map is a no-op.
+    assert _tag(_Seg(4, "hi", speaker_label="S3"), names) == "[#4 S3] hi"
+    assert _tag(_Seg(5, "x", speaker_label="S1")) == "[#5 S1] x"
 
 
 def test_chunk_segments_splits_on_budget(monkeypatch) -> None:

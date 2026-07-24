@@ -12,14 +12,17 @@ import {
   ArrowLeft,
   Check,
   CheckSquare,
+  Clock,
   ExternalLink,
   Loader2,
   Mail,
+  Pencil,
   Play,
   Plus,
   RefreshCw,
   Sparkles,
   Trash2,
+  Users,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -36,9 +39,12 @@ import {
   getMeeting,
   getNote,
   listActions,
+  listTemplates,
   rejectAction,
   saveAttendees,
   saveScratchNotes,
+  saveSpeakerNames,
+  setMeetingTemplate,
   summarize,
 } from "../../lib/api";
 import type {
@@ -62,6 +68,20 @@ function speakerColor(label: string | null): string {
   return SPEAKER_COLORS[(isNaN(n) ? 0 : n - 1) % SPEAKER_COLORS.length];
 }
 
+const SPEAKER_AV = [
+  "bg-primary/15 text-primary",
+  "bg-accent/15 text-accent",
+  "bg-success/15 text-success",
+  "bg-warning/15 text-warning",
+  "bg-destructive/15 text-destructive",
+];
+
+function speakerAv(label: string | null): string {
+  if (!label) return "bg-muted text-muted-foreground";
+  const n = parseInt(label.replace(/\D/g, ""), 10);
+  return SPEAKER_AV[(isNaN(n) ? 0 : n - 1) % SPEAKER_AV.length];
+}
+
 export default function MeetingPage({
   params,
 }: {
@@ -81,6 +101,13 @@ export default function MeetingPage({
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
   const [scratch, setScratch] = useState("");
+  const [tab, setTab] = useState<"summary" | "transcript" | "actions" | "ask">(
+    "summary"
+  );
+  const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
+  const [nameDraft, setNameDraft] = useState("");
+  const [savingSpeaker, setSavingSpeaker] = useState(false);
+  const [templates, setTemplates] = useState<{ key: string; label: string }[]>([]);
   const scratchLoaded = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -108,6 +135,12 @@ export default function MeetingPage({
   useEffect(() => {
     void refresh();
   }, [refresh]);
+
+  useEffect(() => {
+    listTemplates()
+      .then(setTemplates)
+      .catch(() => {});
+  }, []);
 
   // Live pipeline progress over SSE. On every state change (and on terminal),
   // refetch the detail so transcript/notes/actions stay in step.
@@ -138,6 +171,22 @@ export default function MeetingPage({
     }
   }
 
+  // Switch the notes template and regenerate through the new lens.
+  async function onPickTemplate(key: string) {
+    if (!meeting || key === (meeting.template_key ?? "standard_meeting")) return;
+    setMeeting({ ...meeting, template_key: key });
+    setSummarizing(true);
+    try {
+      await setMeetingTemplate(id, key);
+      await summarize(id);
+      await refresh();
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSummarizing(false);
+    }
+  }
+
   function seekTo(s: number) {
     if (audioRef.current) {
       audioRef.current.currentTime = s;
@@ -146,14 +195,19 @@ export default function MeetingPage({
   }
 
   function jumpToSegment(segmentId: string) {
-    const seg = meeting?.segments.find((x) => x.id === segmentId);
-    const el = document.getElementById(`seg-${segmentId}`);
-    el?.scrollIntoView({ behavior: "smooth", block: "center" });
-    if (el) {
-      el.classList.add("ring-1", "ring-primary");
-      setTimeout(() => el.classList.remove("ring-1", "ring-primary"), 1600);
-    }
-    if (seg) seekTo(seg.start_s);
+    // A citation can be clicked from any tab — switch to the transcript first,
+    // then scroll once the panel has mounted.
+    setTab("transcript");
+    setTimeout(() => {
+      const seg = meeting?.segments.find((x) => x.id === segmentId);
+      const el = document.getElementById(`seg-${segmentId}`);
+      el?.scrollIntoView({ behavior: "smooth", block: "center" });
+      if (el) {
+        el.classList.add("ring-1", "ring-primary");
+        setTimeout(() => el.classList.remove("ring-1", "ring-primary"), 1600);
+      }
+      if (seg) seekTo(seg.start_s);
+    }, 60);
   }
 
   function flashToast(msg: string) {
@@ -180,6 +234,50 @@ export default function MeetingPage({
     setAddName("");
     setAddEmail("");
   }
+
+  const speakerNames = meeting?.speaker_names ?? {};
+  function displayName(label: string | null): string {
+    if (!label) return "";
+    return speakerNames[label] || label;
+  }
+  function initials(s: string): string {
+    const p = s.trim().split(/\s+/).filter(Boolean);
+    if (p.length >= 2) return (p[0][0] + p[1][0]).toUpperCase();
+    return (s.trim().slice(0, 2) || "?").toUpperCase();
+  }
+  function openRename(label: string) {
+    setEditingSpeaker(label);
+    setNameDraft(speakerNames[label] ?? "");
+  }
+  async function saveSpeaker() {
+    if (!editingSpeaker || !meeting) return;
+    const label = editingSpeaker;
+    const name = nameDraft.trim();
+    setSavingSpeaker(true);
+    try {
+      const next: Record<string, string> = { ...speakerNames };
+      if (name) next[label] = name;
+      else delete next[label];
+      const saved = await saveSpeakerNames(id, next);
+      setMeeting({ ...meeting, speaker_names: saved });
+      setEditingSpeaker(null);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setSavingSpeaker(false);
+    }
+  }
+
+  // Distinct diarized speakers present in the transcript.
+  const speakerLabels = Array.from(
+    new Set(
+      (meeting?.segments ?? [])
+        .map((s) => s.speaker_label)
+        .filter((x): x is string => !!x)
+    )
+  );
+  const chipCls =
+    "inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground";
 
   async function onApprove(actionId: string) {
     setActioning(actionId);
@@ -323,6 +421,41 @@ export default function MeetingPage({
             />
           ) : null}
 
+          {/* At-a-glance meta strip */}
+          {meeting && (meeting.duration_s != null || meeting.transcript_source) && (
+            <div className="flex flex-wrap items-center gap-2">
+              {meeting.created_at && (
+                <span className={chipCls}>
+                  {new Date(meeting.created_at).toLocaleDateString(undefined, {
+                    month: "short",
+                    day: "numeric",
+                  })}
+                </span>
+              )}
+              {meeting.duration_s != null && (
+                <span className={chipCls}>
+                  <Clock className="w-3 h-3" />
+                  {formatClock(meeting.duration_s)}
+                </span>
+              )}
+              {speakerLabels.length > 0 && (
+                <span className={chipCls}>
+                  <Users className="w-3 h-3" />
+                  {speakerLabels.length} speaker
+                  {speakerLabels.length > 1 ? "s" : ""}
+                </span>
+              )}
+              {meeting.language && (
+                <span className={`${chipCls} capitalize`}>{meeting.language}</span>
+              )}
+              {meeting.transcript_source && (
+                <span className={`${chipCls} font-mono !text-[10px] text-muted-foreground`}>
+                  {meeting.transcript_source}
+                </span>
+              )}
+            </div>
+          )}
+
           {meeting && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
@@ -411,12 +544,52 @@ export default function MeetingPage({
             </div>
           )}
 
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
+          {/* Tabbed workspace — the summary is the hero */}
+          <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
+            {(
+              [
+                ["summary", "Summary"],
+                ["transcript", "Transcript"],
+                ["actions", "Actions"],
+                ["ask", "Ask"],
+              ] as const
+            ).map(([tid, label]) => (
+              <button
+                key={tid}
+                onClick={() => setTab(tid)}
+                className={`relative px-3 py-2 text-sm whitespace-nowrap tech-transition ${
+                  tab === tid
+                    ? "text-primary font-semibold"
+                    : "text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <span className="flex items-center gap-1.5">
+                  {label}
+                  {tid === "actions" && actions.length > 0 && (
+                    <span className="text-[10px] rounded-full bg-secondary px-1.5 py-0.5 text-muted-foreground">
+                      {actions.length}
+                    </span>
+                  )}
+                </span>
+                {tab === tid && (
+                  <span className="absolute inset-x-2 -bottom-px h-0.5 rounded-full bg-primary" />
+                )}
+              </button>
+            ))}
+          </div>
+
+          <div className="pt-4">
             {/* Transcript */}
+            {tab === "transcript" && (
             <div>
-              <h2 className="text-sm font-semibold text-foreground mb-2">
-                Transcript
-              </h2>
+              {speakerLabels.length > 0 &&
+                !speakerLabels.every((l) => speakerNames[l]) && (
+                  <p className="text-[11px] text-muted-foreground mb-2">
+                    {speakerLabels.length} speaker
+                    {speakerLabels.length > 1 ? "s" : ""} — click a name to label
+                    them.
+                  </p>
+                )}
               {meeting && meeting.segments.length > 0 ? (
                 <div className="rounded-xl border border-border bg-card divide-y divide-border max-h-[70vh] overflow-y-auto">
                   {meeting.segments.map((seg) => (
@@ -434,14 +607,29 @@ export default function MeetingPage({
                         {formatClock(seg.start_s)}
                       </button>
                       <div className="min-w-0">
-                        {(seg.speaker_label || seg.channel) && (
-                          <span
-                            className={`text-[10px] font-semibold uppercase tracking-wide ${speakerColor(seg.speaker_label)}`}
+                        {seg.speaker_label ? (
+                          <button
+                            onClick={() => openRename(seg.speaker_label!)}
+                            className="group inline-flex items-center gap-1.5 mb-0.5"
+                            title="Click to name this speaker"
                           >
-                            {seg.speaker_label ??
-                              (seg.channel === "mic" ? "You" : seg.channel)}
+                            <span
+                              className={`w-4 h-4 rounded-full grid place-items-center text-[8px] font-bold ${speakerAv(seg.speaker_label)}`}
+                            >
+                              {initials(displayName(seg.speaker_label))}
+                            </span>
+                            <span
+                              className={`text-[10px] font-semibold uppercase tracking-wide ${speakerColor(seg.speaker_label)}`}
+                            >
+                              {displayName(seg.speaker_label)}
+                            </span>
+                            <Pencil className="w-2.5 h-2.5 text-muted-foreground opacity-0 group-hover:opacity-100 tech-transition" />
+                          </button>
+                        ) : seg.channel ? (
+                          <span className="text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
+                            {seg.channel === "mic" ? "You" : seg.channel}
                           </span>
-                        )}
+                        ) : null}
                         <p className="text-sm text-foreground">{seg.text}</p>
                       </div>
                     </div>
@@ -453,9 +641,35 @@ export default function MeetingPage({
                 </p>
               )}
             </div>
+            )}
 
-            {/* Notes + action items */}
-            <div className="space-y-4">
+            {/* Summary — the generated notes (hero) + your steering notes */}
+            {tab === "summary" && (
+            <div className="max-w-3xl space-y-4">
+              {meeting && meeting.segments.length > 0 && templates.length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap">
+                  <span className="text-xs text-muted-foreground">
+                    Notes template
+                  </span>
+                  <select
+                    value={meeting.template_key ?? "standard_meeting"}
+                    onChange={(e) => void onPickTemplate(e.target.value)}
+                    disabled={summarizing || busy}
+                    className="rounded-lg border border-border bg-card px-2 py-1 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring disabled:opacity-60"
+                  >
+                    {templates.map((t) => (
+                      <option key={t.key} value={t.key}>
+                        {t.label}
+                      </option>
+                    ))}
+                  </select>
+                  {notesMd && (
+                    <span className="text-[10px] text-muted-foreground">
+                      changing regenerates the notes
+                    </span>
+                  )}
+                </div>
+              )}
               <div>
                 <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
                   Your notes
@@ -493,8 +707,12 @@ export default function MeetingPage({
                   </div>
                 )}
               </div>
+            </div>
+            )}
 
-              {actions.length > 0 && (
+            {/* Actions */}
+            {tab === "actions" &&
+              (actions.length > 0 ? (
                 <div>
                   <div className="flex items-center justify-between mb-2">
                     <h2 className="text-sm font-semibold text-foreground flex items-center gap-1.5">
@@ -598,12 +816,23 @@ export default function MeetingPage({
                     })}
                   </div>
                 </div>
-              )}
+              ) : (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  {busy
+                    ? "Action items appear once notes are generated."
+                    : "No action items yet."}
+                </p>
+              ))}
 
-              {meeting && meeting.segments.length > 0 && (
+            {/* Ask the meeting */}
+            {tab === "ask" &&
+              (meeting && meeting.segments.length > 0 ? (
                 <AskPanel meetingId={id} onCite={jumpToSegment} />
-              )}
-            </div>
+              ) : (
+                <p className="text-sm text-muted-foreground py-8 text-center">
+                  Ask becomes available once there&apos;s a transcript.
+                </p>
+              ))}
           </div>
         </div>
       </div>
@@ -617,6 +846,95 @@ export default function MeetingPage({
             flashToast(msg);
           }}
         />
+      )}
+
+      {editingSpeaker && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-background/70 p-4"
+          onClick={() => setEditingSpeaker(null)}
+        >
+          <div
+            className="w-full max-w-sm rounded-xl border border-border bg-card shadow-xl p-4"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-2">
+              <span
+                className={`w-6 h-6 rounded-full grid place-items-center text-[10px] font-bold ${speakerAv(editingSpeaker)}`}
+              >
+                {initials(displayName(editingSpeaker))}
+              </span>
+              <h2 className="text-sm font-semibold text-foreground">
+                Name this speaker
+              </h2>
+            </div>
+            <p className="text-[11px] text-muted-foreground mt-1.5">
+              Renames{" "}
+              <span className="font-mono text-foreground">{editingSpeaker}</span>{" "}
+              across the transcript, notes, action owners &amp; the follow-up
+              email. Regenerate notes to apply names there.
+            </p>
+            <input
+              autoFocus
+              value={nameDraft}
+              onChange={(e) => setNameDraft(e.target.value)}
+              onKeyDown={(e) => e.key === "Enter" && void saveSpeaker()}
+              placeholder="e.g. Alex Rivera"
+              className="w-full mt-3 rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+            />
+            {meeting && meeting.attendees.some((a) => a.name.trim()) && (
+              <div className="mt-2">
+                <p className="text-[10px] text-muted-foreground mb-1">
+                  From attendees
+                </p>
+                <div className="flex flex-wrap gap-1.5">
+                  {meeting.attendees
+                    .filter((a) => a.name.trim())
+                    .map((a, i) => (
+                      <button
+                        key={`${a.name}-${i}`}
+                        onClick={() => setNameDraft(a.name)}
+                        className="rounded-full bg-secondary px-2.5 py-1 text-xs text-foreground hover:bg-primary/10 hover:text-primary tech-transition"
+                      >
+                        {a.name}
+                      </button>
+                    ))}
+                </div>
+              </div>
+            )}
+            <div className="flex items-center gap-2 mt-4">
+              <button
+                onClick={() => void saveSpeaker()}
+                disabled={savingSpeaker}
+                className="flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 tech-transition"
+              >
+                {savingSpeaker ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Check className="w-3.5 h-3.5" />
+                )}
+                Save
+              </button>
+              {speakerNames[editingSpeaker] && (
+                <button
+                  onClick={() => {
+                    setNameDraft("");
+                    void saveSpeaker();
+                  }}
+                  disabled={savingSpeaker}
+                  className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/30 tech-transition disabled:opacity-50"
+                >
+                  Clear name
+                </button>
+              )}
+              <button
+                onClick={() => setEditingSpeaker(null)}
+                className="rounded-lg border border-border px-3 py-2 text-xs text-muted-foreground hover:text-foreground tech-transition ml-auto"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );

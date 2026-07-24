@@ -9,6 +9,7 @@
  */
 
 import { completeRecording, startRecording, uploadChunk } from "./api";
+import { DeepgramLive, type LiveCaption } from "./live";
 
 export type RecorderState = "idle" | "recording" | "paused" | "finalizing";
 
@@ -19,6 +20,10 @@ export interface RecorderCallbacks {
   /** Count of blobs captured but not yet acked by the server. */
   onBacklog?: (pending: number) => void;
   onError?: (message: string) => void;
+  /** A live caption arrived (Deepgram streaming) — best-effort, may never fire. */
+  onCaption?: (c: LiveCaption) => void;
+  /** Live captions aren't available; recording continues via the batch path. */
+  onLiveUnavailable?: (reason: string) => void;
 }
 
 /** Pick the best MediaRecorder mime the browser supports (Chromium/FF → webm,
@@ -50,6 +55,13 @@ export class MeetingRecorder {
   private rafId = 0;
   private recordingId = "";
   private mime = "audio/webm";
+
+  // Live captions (Deepgram streaming) — additive; failures never affect the
+  // chunked-upload / batch path below.
+  private live: DeepgramLive | null = null;
+  private liveNode: ScriptProcessorNode | null = null;
+  private liveSource: MediaStreamAudioSourceNode | null = null;
+  private liveSink: GainNode | null = null;
 
   private seq = 0;
   private queue: { seq: number; blob: Blob }[] = [];
@@ -97,6 +109,47 @@ export class MeetingRecorder {
     this.startedAt = Date.now();
     this.timerId = setInterval(() => this.cb.onElapsed?.(this.elapsed()), 250);
     this.cb.onState?.("recording");
+
+    // Attach live captions without blocking the recording start — if the token
+    // or socket isn't available, the batch path is unaffected.
+    void this.setupLive();
+  }
+
+  /** Best-effort live captions: tap the audio graph and stream PCM to Deepgram. */
+  private async setupLive(): Promise<void> {
+    if (!this.audioCtx || !this.stream || this.stopping) return;
+    const live = new DeepgramLive({
+      onCaption: (c) => this.cb.onCaption?.(c),
+      onUnavailable: (r) => this.cb.onLiveUnavailable?.(r),
+    });
+    const ok = await live.start();
+    if (!ok || this.stopping || !this.audioCtx || !this.stream) {
+      live.stop();
+      return;
+    }
+    this.live = live;
+    try {
+      const ctx = this.audioCtx;
+      const source = ctx.createMediaStreamSource(this.stream);
+      const node = ctx.createScriptProcessor(4096, 1, 1);
+      const sink = ctx.createGain();
+      sink.gain.value = 0; // never play the mic back through the speakers
+      node.onaudioprocess = (e) => {
+        // Only stream while actually recording (not paused).
+        if (this.recorder?.state !== "recording") return;
+        this.live?.send(e.inputBuffer.getChannelData(0), ctx.sampleRate);
+      };
+      source.connect(node);
+      node.connect(sink);
+      sink.connect(ctx.destination);
+      this.liveSource = source;
+      this.liveNode = node;
+      this.liveSink = sink;
+    } catch (e) {
+      this.cb.onLiveUnavailable?.(String(e instanceof Error ? e.message : e));
+      live.stop();
+      this.live = null;
+    }
   }
 
   pause(): void {
@@ -225,6 +278,20 @@ export class MeetingRecorder {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = 0;
     this.analyser = null;
+    // Tear down the live path before the context closes.
+    try {
+      if (this.liveNode) this.liveNode.onaudioprocess = null;
+      this.liveNode?.disconnect();
+      this.liveSource?.disconnect();
+      this.liveSink?.disconnect();
+    } catch {
+      /* nodes already detached */
+    }
+    this.liveNode = null;
+    this.liveSource = null;
+    this.liveSink = null;
+    this.live?.stop();
+    this.live = null;
     void this.audioCtx?.close().catch(() => {});
     this.audioCtx = null;
     this.stream?.getTracks().forEach((t) => t.stop());

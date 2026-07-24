@@ -189,6 +189,10 @@ class Meeting(Base):
     # signals (infra/postgres/99_note_taker_slice2.sql). Distinct from the
     # generated meeting_note output.
     scratch_notes: Mapped[str | None] = mapped_column(Text)
+    # Human names for diarized speakers, {"S1": "Alex Rivera", …}
+    # (infra/postgres/101_note_taker_speaker_names.sql). Resolved at display and
+    # prompt time; the raw segment labels are never rewritten.
+    speaker_names: Mapped[dict | None] = mapped_column(JSONB, server_default="{}")
     created_at: Mapped[datetime] = _created_at()
 
 

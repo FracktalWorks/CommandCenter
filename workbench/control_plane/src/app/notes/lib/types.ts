@@ -17,8 +17,15 @@ export interface MeetingListItem {
   segment_count: number;
   has_notes: boolean;
   owner_email: string | null;
+  template_key: string | null;
   start_at: string | null;
   created_at: string | null;
+}
+
+/** A meeting-notes template (shapes the generated summary). */
+export interface NoteTemplate {
+  key: string;
+  label: string;
 }
 
 export interface Segment {
@@ -64,6 +71,8 @@ export interface MeetingDetail extends MeetingListItem {
   summary_md: string | null;
   scratch_notes: string | null;
   attendees: Attendee[];
+  /** Human names for diarized speaker labels, e.g. { "S1": "Alex Rivera" }. */
+  speaker_names: Record<string, string>;
   recordings: Recording[];
   segments: Segment[];
   runs: SummaryRun[];

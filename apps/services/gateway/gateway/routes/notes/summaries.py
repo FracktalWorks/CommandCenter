@@ -54,8 +54,10 @@ def _model(role: str) -> str:
     )
 
 
-def _tag(seg: Any) -> str:
-    who = seg.speaker_label or seg.channel or "?"
+def _tag(seg: Any, names: dict[str, str] | None = None) -> str:
+    # Resolve a diarized label (S1/S2) to a real name when the user has named
+    # the speaker, so the LLM writes notes/actions with people, not "S1".
+    who = (names or {}).get(seg.speaker_label) or seg.speaker_label or seg.channel or "?"
     return f"[#{seg.idx} {who}] {seg.text}"
 
 
@@ -130,7 +132,10 @@ def _scratch_block(scratch: str) -> str:
     )
 
 
-async def _map_reduce(segs: list[Any], template, model: str, scratch: str = "") -> dict | None:
+async def _map_reduce(
+    segs: list[Any], template, model: str, scratch: str = "",
+    names: dict[str, str] | None = None,
+) -> dict | None:
     chunks = _chunk_segments(segs)
     dropped = 0
     if len(chunks) > _MAX_CHUNKS:
@@ -140,7 +145,7 @@ async def _map_reduce(segs: list[Any], template, model: str, scratch: str = "") 
 
     partials: list[dict] = []
     for i, chunk in enumerate(chunks):
-        data = "\n".join(_tag(s) for s in chunk)
+        data = "\n".join(_tag(s, names) for s in chunk)
         part = await _llm_json(
             _MAP_SYSTEM,
             f"CHUNK {i + 1}/{len(chunks)} (DATA):\n{data}",
@@ -173,8 +178,11 @@ async def _map_reduce(segs: list[Any], template, model: str, scratch: str = "") 
     )
 
 
-async def _single_pass(segs: list[Any], template, model: str, scratch: str = "") -> dict | None:
-    data = "\n".join(_tag(s) for s in segs)
+async def _single_pass(
+    segs: list[Any], template, model: str, scratch: str = "",
+    names: dict[str, str] | None = None,
+) -> dict | None:
+    data = "\n".join(_tag(s, names) for s in segs)
     return await _llm_json(
         build_system_prompt(template),
         f"TRANSCRIPT (DATA):\n{data}" + _scratch_block(scratch),
@@ -200,7 +208,10 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
         async with await _get_db() as db:
             m = (
                 await db.execute(
-                    text("SELECT template_key, scratch_notes FROM meeting WHERE id = :id"),
+                    text(
+                        "SELECT template_key, scratch_notes, speaker_names "
+                        "FROM meeting WHERE id = :id"
+                    ),
                     {"id": meeting_id},
                 )
             ).fetchone()
@@ -227,6 +238,7 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
 
         template = get_template(m.template_key if m else None)
         scratch = (m.scratch_notes or "") if m else ""
+        names = (m.speaker_names if m and isinstance(m.speaker_names, dict) else {})
         model = _model("meeting_summary")
         total_chars = sum(len(_tag(s)) for s in segs)
         chunk_total = max(1, (total_chars // _PASS_CHARS) + 1)
@@ -238,9 +250,9 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
             await db.commit()
 
         if total_chars <= _PASS_CHARS:
-            data = await _single_pass(segs, template, model, scratch)
+            data = await _single_pass(segs, template, model, scratch, names)
         else:
-            data = await _map_reduce(segs, template, model, scratch)
+            data = await _map_reduce(segs, template, model, scratch, names)
         if not data:
             raise RuntimeError("LLM produced no usable notes")
 

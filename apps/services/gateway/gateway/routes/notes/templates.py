@@ -89,7 +89,150 @@ _STANDUP = Template(
     ),
 )
 
-TEMPLATES: dict[str, Template] = {t.key: t for t in (_STANDARD, _STANDUP)}
+_ONE_ON_ONE = Template(
+    key="one_on_one",
+    label="1:1",
+    sections=(
+        Section(
+            "overview", "Overview",
+            "1-2 sentences: whose 1:1 this is (manager / report if inferable) and "
+            "the main themes. No preamble.",
+        ),
+        Section(
+            "discussion", "Discussion",
+            "Group by theme with '### <theme>' headings. Typical themes: work & "
+            "project updates, FEEDBACK exchanged (attribute the direction — what "
+            "the manager raised vs. what the report raised), growth & career, "
+            "workload & wellbeing. Tight bullets; omit small talk.",
+        ),
+        Section(
+            "decisions", "Agreements",
+            "Anything the two agreed to change — priorities, scope, a new way of "
+            "working. One bullet each. 'None reached in this meeting.' if none.",
+        ),
+        Section(
+            "action_items", "Action items",
+            "Commitments by EITHER person, '<owner> — <action>' + any due date. "
+            "Only what the transcript supports; never invent an owner.",
+        ),
+        Section(
+            "open_questions", "To revisit",
+            "Unresolved concerns or topics to pick up in the next 1:1. Empty if "
+            "none.",
+        ),
+    ),
+)
+
+_CUSTOMER_CALL = Template(
+    key="customer_call",
+    label="Customer / sales call",
+    sections=(
+        Section(
+            "overview", "Overview",
+            "1-2 sentences: the customer or account, the call's purpose, and the "
+            "headline outcome (e.g. moving to a POC, at risk, closed).",
+        ),
+        Section(
+            "discussion", "Discussion",
+            "'### <topic>' headings covering: the customer's context & goals, "
+            "pain points, requirements / asks, product fit & gaps, and any "
+            "pricing or commercial discussion. Attribute who said what.",
+        ),
+        Section(
+            "decisions", "Agreements",
+            "Commitments or agreements from EITHER side — next steps agreed, "
+            "terms, scope. 'None reached in this meeting.' if none.",
+        ),
+        Section(
+            "action_items", "Action items",
+            "Follow-ups we or they committed to, '<owner> — <action>' + due. "
+            "Clearly flag anything owed TO the customer.",
+        ),
+        Section(
+            "open_questions", "Risks & open questions",
+            "Open objections, unknowns, or blockers to the deal moving forward.",
+        ),
+    ),
+)
+
+_INTERVIEW = Template(
+    key="interview",
+    label="Interview",
+    sections=(
+        Section(
+            "overview", "Overview",
+            "1-2 sentences: the role and (if named) the candidate. State the "
+            "interviewer's overall lean ONLY if they clearly expressed one; "
+            "otherwise omit it — never infer a hire/no-hire the transcript "
+            "doesn't state.",
+        ),
+        Section(
+            "discussion", "Signals",
+            "'### <competency>' headings for each area probed (e.g. technical "
+            "depth, problem-solving, communication, experience, values). Under "
+            "each, specific evidence from the transcript — both strengths and "
+            "concerns. Paraphrase; don't fabricate quotes.",
+        ),
+        Section(
+            "decisions", "Process decisions",
+            "Any hiring-process decision actually stated — advance, reject, "
+            "request a follow-up round. 'None stated.' if the interviewer did "
+            "not commit.",
+        ),
+        Section(
+            "action_items", "Action items",
+            "Follow-ups — take-home, references, scheduling, questions to pass to "
+            "later rounds. '<owner> — <action>'.",
+        ),
+        Section(
+            "open_questions", "To probe further",
+            "Unresolved concerns worth digging into in later rounds.",
+        ),
+    ),
+)
+
+_RETRO = Template(
+    key="retro",
+    label="Retrospective",
+    sections=(
+        Section(
+            "overview", "Overview",
+            "1 sentence: the period or sprint being retro'd and the overall mood.",
+        ),
+        Section(
+            "discussion", "Retro",
+            "Exactly three '### ' headings — 'What went well', \"What didn't\", "
+            "and 'Ideas & experiments'. Bullets under each, attributed where the "
+            "transcript makes it clear who raised it.",
+        ),
+        Section(
+            "decisions", "Changes to adopt",
+            "Process changes or experiments the team agreed to try. 'None agreed.'"
+            " if none.",
+        ),
+        Section(
+            "action_items", "Action items",
+            "Owned improvements or experiments, '<owner> — <action>' + when to "
+            "review it. Only what the transcript supports.",
+        ),
+        Section(
+            "open_questions", "Parked",
+            "Unresolved tensions or topics deliberately deferred.",
+        ),
+    ),
+)
+
+TEMPLATES: dict[str, Template] = {
+    t.key: t
+    for t in (
+        _STANDARD,
+        _STANDUP,
+        _ONE_ON_ONE,
+        _CUSTOMER_CALL,
+        _INTERVIEW,
+        _RETRO,
+    )
+}
 DEFAULT_TEMPLATE_KEY = "standard_meeting"
 
 

@@ -8,6 +8,7 @@ import type {
   WaChat,
   WaChatContext,
   WaMessage,
+  WaRulePreview,
   WaStreams,
   WaTemplate,
 } from "./types";
@@ -142,4 +143,11 @@ export function updateCategory(
   >
 ) {
   return sendJSON<WaCategory>(`categories/${categoryId}`, "PATCH", patch);
+}
+
+export function fetchRulesPreview(accountId: string): Promise<WaRulePreview> {
+  return getJSON<WaRulePreview>(
+    `rules/preview?account_id=${encodeURIComponent(accountId)}`,
+    { items: [], summary: {} }
+  );
 }

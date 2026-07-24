@@ -80,6 +80,22 @@ export const NOTIFY_POLICIES = ["instant", "digest", "mention_only", "never"];
 export const AUTO_REPLY_POLICIES = ["never", "holding", "answer_from_system"];
 export const DRAFT_POLICIES = ["always", "on_intent", "never"];
 
+export type WaRulePreviewItem = {
+  chat_id: string;
+  name: string;
+  intent: string | null;
+  category: string | null;
+  action: string; // answer_from_system | holding_reply | draft | none
+  reason: string;
+  requires_approval: boolean;
+  via_template: boolean;
+};
+
+export type WaRulePreview = {
+  items: WaRulePreviewItem[];
+  summary: Record<string, number>;
+};
+
 export type WaEntityRef = { system: string; kind: string; id: string };
 
 export type WaOpenLoop = {

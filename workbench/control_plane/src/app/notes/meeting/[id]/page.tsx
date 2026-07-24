@@ -41,6 +41,7 @@ import {
   listActions,
   listTemplates,
   rejectAction,
+  retranscribe,
   saveAttendees,
   saveScratchNotes,
   saveSpeakerNames,
@@ -108,6 +109,7 @@ export default function MeetingPage({
   const [nameDraft, setNameDraft] = useState("");
   const [savingSpeaker, setSavingSpeaker] = useState(false);
   const [templates, setTemplates] = useState<{ key: string; label: string }[]>([]);
+  const [retranscribing, setRetranscribing] = useState(false);
   const scratchLoaded = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
@@ -168,6 +170,21 @@ export default function MeetingPage({
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       setSummarizing(false);
+    }
+  }
+
+  // Re-run transcription on the existing recording with the current STT model
+  // (e.g. after switching to Deepgram to get named speakers).
+  async function onRetranscribe() {
+    setRetranscribing(true);
+    setError(null);
+    try {
+      await retranscribe(id);
+      await refresh(); // status → processing; live progress takes over
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setRetranscribing(false);
     }
   }
 
@@ -278,7 +295,6 @@ export default function MeetingPage({
   );
   const chipCls =
     "inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground";
-
   async function onApprove(actionId: string) {
     setActioning(actionId);
     try {
@@ -326,6 +342,14 @@ export default function MeetingPage({
   const busy =
     meeting?.status === "processing" ||
     progress?.runs.some((r) => r.status === "queued" || r.status === "running");
+
+  // Diarization is only real when the STT model is Deepgram; Whisper returns no
+  // speakers. Surface that so "no named speakers" isn't a silent mystery.
+  const diarized = speakerLabels.length > 0;
+  const sttModel = meeting?.transcript_source ?? "";
+  const canDiarize = sttModel.startsWith("deepgram/");
+  const showDiarizeHint =
+    !!meeting && meeting.segments.length > 0 && !diarized && !canDiarize && !busy;
 
   return (
     <div className="flex flex-col h-full">
@@ -582,6 +606,41 @@ export default function MeetingPage({
             {/* Transcript */}
             {tab === "transcript" && (
             <div>
+              {showDiarizeHint && (
+                <div className="mb-3 rounded-xl border border-amber-500/30 bg-amber-500/5 p-3">
+                  <div className="flex items-start gap-2.5">
+                    <Users className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+                    <div className="min-w-0 space-y-2">
+                      <p className="text-xs text-foreground">
+                        <span className="font-semibold">
+                          Speakers aren&apos;t separated.
+                        </span>{" "}
+                        Your current transcription model doesn&apos;t identify who
+                        said what. Switch to a Deepgram model in{" "}
+                        <Link
+                          href="/settings/models"
+                          className="text-primary underline underline-offset-2"
+                        >
+                          Settings → Models
+                        </Link>
+                        , then re-transcribe to label each speaker.
+                      </p>
+                      <button
+                        onClick={() => void onRetranscribe()}
+                        disabled={retranscribing || busy}
+                        className="inline-flex items-center gap-1.5 rounded-lg border border-border bg-card px-2.5 py-1 text-xs font-medium text-foreground hover:bg-muted tech-transition disabled:opacity-60"
+                      >
+                        {retranscribing ? (
+                          <Loader2 className="w-3 h-3 animate-spin" />
+                        ) : (
+                          <RefreshCw className="w-3 h-3" />
+                        )}
+                        Re-transcribe
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              )}
               {speakerLabels.length > 0 &&
                 !speakerLabels.every((l) => speakerNames[l]) && (
                   <p className="text-[11px] text-muted-foreground mb-2">

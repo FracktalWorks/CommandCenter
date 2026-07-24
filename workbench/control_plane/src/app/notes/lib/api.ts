@@ -183,6 +183,16 @@ export async function summarize(
   );
 }
 
+export async function retranscribe(
+  meetingId: string
+): Promise<{ recording_id: string; run_id: string; status: string }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/retranscribe`, {
+      method: "POST",
+    })
+  );
+}
+
 export async function listTemplates(): Promise<
   { key: string; label: string }[]
 > {

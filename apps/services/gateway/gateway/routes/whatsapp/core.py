@@ -115,7 +115,8 @@ def _instantiate_provider(name: str, creds: dict[str, Any]):
 
 
 async def _provider_for_account(db: Any, account_id: str):
-    """Load + decrypt creds and build the Cloud API provider for an account.
+    """Load + decrypt creds and build the account's provider (cloud_api OR the
+    whatsmeow bridge, per the ``provider`` column).
 
     Returns ``(provider, store, row)`` or raises 404. Unscoped (no user filter) —
     the callers are the send path (already user-scoped upstream) and background
@@ -123,7 +124,7 @@ async def _provider_for_account(db: Any, account_id: str):
     """
     from sqlalchemy import text
     row = (await db.execute(
-        text("""SELECT credentials_encrypted, phone_number_id
+        text("""SELECT credentials_encrypted, phone_number_id, provider
                 FROM wa_accounts WHERE id = :id"""),
         {"id": account_id},
     )).fetchone()
@@ -132,5 +133,6 @@ async def _provider_for_account(db: Any, account_id: str):
     from acb_llm.key_store import get_key_store
     store = get_key_store()
     creds = json.loads(store.decrypt(row.credentials_encrypted))
-    provider = _instantiate_provider("cloud_api", creds)
+    provider = _instantiate_provider(
+        getattr(row, "provider", None) or "cloud_api", creds)
     return provider, store, row

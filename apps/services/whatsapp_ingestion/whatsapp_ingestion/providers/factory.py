@@ -1,9 +1,15 @@
 """Single name→class factory for WhatsApp providers.
 
 Mirrors ``email_ingestion.providers.factory.build_provider`` so the gateway's
-provider adapter is identical in shape. Only ``cloud_api`` exists — unofficial
-transports are out of scope by design (see the spec §3) — but the seam is kept
-so the gateway never imports a concrete provider directly.
+provider adapter is identical in shape. Two transports share the same normalized
+store + AI brain:
+
+* ``cloud_api`` — the official Meta WhatsApp Business Cloud API.
+* ``whatsmeow`` — a personal number paired by QR through the local whatsmeow
+  bridge service (unofficial multi-device). ``BridgeProvider`` only speaks HTTP
+  to that bridge; the WhatsApp session lives there, never in the gateway.
+
+The gateway never imports a concrete provider directly — it names one here.
 """
 
 from __future__ import annotations
@@ -11,9 +17,13 @@ from __future__ import annotations
 from typing import Any
 
 from whatsapp_ingestion.providers.base import BaseWhatsAppProvider
+from whatsapp_ingestion.providers.bridge import BridgeProvider
 from whatsapp_ingestion.providers.cloud_api import WhatsAppCloudProvider
 
-_PROVIDERS = {"cloud_api": WhatsAppCloudProvider}
+_PROVIDERS = {
+    "cloud_api": WhatsAppCloudProvider,
+    "whatsmeow": BridgeProvider,
+}
 
 
 def build_provider(name: str, credentials: dict[str, Any]) -> BaseWhatsAppProvider:

@@ -121,6 +121,7 @@ const KNOWN_DOMAINS: Record<string, string> = {
   "gmail-oauth":     "mail.google.com",
   "microsoft-oauth": "outlook.office.com",
   "clickup":         "clickup.com",
+  "whatsapp":        "whatsapp.com",
   "smtp":            "",
   "github":          "github.com",
   "serpapi":         "serpapi.com",
@@ -544,6 +545,138 @@ function ClickUpConnector({ onChange }: { onChange?: () => void }) {
   );
 }
 
+// ---------------------------------------------------------------------------
+// WhatsApp — multi-account connector (wa_accounts, per-number encrypted tokens).
+// Like ClickUp it's special-cased away from the env-var CredentialForm. Unlike
+// ClickUp, connecting is a guided WIZARD in the app (Embedded Signup / live
+// credential test), so this panel just LISTS the connected numbers, disconnects
+// them, and links out to the wizard.
+// ---------------------------------------------------------------------------
+
+interface WaAccountLite {
+  id: string;
+  display_name: string;
+  phone_number: string;
+  quality_rating?: string | null;
+  is_default?: boolean;
+}
+
+function WhatsAppConnector({ onChange }: { onChange?: () => void }) {
+  const [accounts, setAccounts] = useState<WaAccountLite[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [err, setErr] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    setLoading(true);
+    try {
+      const r = await fetch("/api/whatsapp/accounts");
+      const d = r.ok ? await r.json() : [];
+      setAccounts(Array.isArray(d) ? d : []);
+    } catch {
+      /* non-fatal */
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  const disconnect = async (id: string) => {
+    if (
+      !confirm(
+        "Disconnect this WhatsApp number? Its chats stay stored, but no new " +
+          "messages will sync until you reconnect.",
+      )
+    )
+      return;
+    setBusy(id);
+    setErr(null);
+    try {
+      const r = await fetch(`/api/whatsapp/accounts/${id}`, { method: "DELETE" });
+      if (!r.ok) throw new Error();
+      await load();
+      onChange?.();
+    } catch {
+      setErr("Disconnect failed");
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <div className="text-[10px] text-muted-foreground uppercase tracking-wider mb-1.5">
+          Connected numbers
+        </div>
+        {loading ? (
+          <div className="flex items-center gap-2 text-xs text-muted-foreground">
+            <Loader2 className="w-3.5 h-3.5 animate-spin" /> Loading…
+          </div>
+        ) : accounts.length === 0 ? (
+          <div className="rounded-lg border border-border p-3 text-xs text-muted-foreground">
+            No WhatsApp numbers connected yet.
+          </div>
+        ) : (
+          <div className="space-y-2">
+            {accounts.map((a) => (
+              <div
+                key={a.id}
+                className="flex items-center gap-3 rounded-lg border border-border p-2.5"
+              >
+                <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-[11px] font-bold text-emerald-500">
+                  {(a.display_name || a.phone_number || "WA")
+                    .slice(0, 2)
+                    .toUpperCase()}
+                </span>
+                <div className="min-w-0 flex-1">
+                  <div className="truncate text-sm font-medium">
+                    {a.display_name || a.phone_number}
+                  </div>
+                  <div className="truncate text-[11px] text-muted-foreground">
+                    {a.phone_number}
+                    {a.is_default ? " · default" : ""}
+                    {a.quality_rating
+                      ? ` · ${a.quality_rating.toLowerCase()}`
+                      : ""}
+                  </div>
+                </div>
+                <button
+                  onClick={() => void disconnect(a.id)}
+                  disabled={busy === a.id}
+                  className="shrink-0 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:text-red-500 disabled:opacity-40"
+                >
+                  {busy === a.id ? (
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                  ) : (
+                    "Disconnect"
+                  )}
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+        {err && <div className="mt-2 text-[11px] text-red-500">{err}</div>}
+      </div>
+
+      <a
+        href="/whatsapp/connect"
+        className="flex items-center justify-center gap-1.5 rounded-lg bg-primary py-2 text-xs font-medium text-primary-foreground hover:opacity-90"
+      >
+        <Plus className="w-3.5 h-3.5" /> Connect a number
+      </a>
+      <p className="text-[10.5px] text-muted-foreground/70">
+        Connecting opens the guided wizard in the WhatsApp app (one-click Embedded
+        Signup, or paste your credentials). Numbers are stored per-account,
+        encrypted at rest.
+      </p>
+    </div>
+  );
+}
+
 function ApiSidePanel({ api, agents, onClose, onRefresh }: {
   api: ApiEntry; agents: AgentEntry[]; onClose: () => void; onRefresh: () => void;
 }) {
@@ -631,6 +764,10 @@ function ApiSidePanel({ api, agents, onClose, onRefresh }: {
           // ClickUp uses the multi-account System-B connector (task_accounts),
           // not the single-token credential form.
           <ClickUpConnector onChange={onRefresh} />
+        ) : api.service === "whatsapp" ? (
+          // WhatsApp is multi-account too (wa_accounts); connecting is a guided
+          // wizard in the app, so the panel just lists + disconnects numbers.
+          <WhatsAppConnector onChange={onRefresh} />
         ) : mode === "info" ? (
           <div className="space-y-4">
             {api.instructions && (
@@ -963,13 +1100,14 @@ function ApisTab() {
   const fetchAll = useCallback(async () => {
     setLoading(true);
     try {
-      // ClickUp's "connected" state comes from task_accounts (System B,
-      // multi-account), NOT provider_keys — so override its status from the
-      // real count of connected workspaces.
-      const [sRes, aRes, cuRes] = await Promise.all([
+      // ClickUp + WhatsApp are multi-account (their "connected" state comes from
+      // task_accounts / wa_accounts, NOT provider_keys) — override each from its
+      // real connected count.
+      const [sRes, aRes, cuRes, waRes] = await Promise.all([
         fetch("/api/integrations/status"),
         fetch("/api/agent/list"),
         fetch("/api/tasks/accounts").catch(() => null),
+        fetch("/api/whatsapp/accounts").catch(() => null),
       ]);
       const [sData, aData] = await Promise.all([sRes.json(), aRes.json()]);
       let clickupCount = 0;
@@ -979,12 +1117,19 @@ function ApisTab() {
           (a: { provider?: string }) => a.provider === "clickup",
         ).length;
       }
+      let whatsappCount = 0;
+      if (waRes && waRes.ok) {
+        const accts = await waRes.json().catch(() => []);
+        whatsappCount = Array.isArray(accts) ? accts.length : 0;
+      }
       setApis(
         (Array.isArray(sData) ? sData : []).map((a: ApiEntry) => {
           const base = { ...a, category: a.category ?? "custom" };
-          return a.service === "clickup"
-            ? { ...base, configured: clickupCount > 0 }
-            : base;
+          if (a.service === "clickup")
+            return { ...base, configured: clickupCount > 0 };
+          if (a.service === "whatsapp")
+            return { ...base, configured: whatsappCount > 0 };
+          return base;
         }),
       );
       setAgents(Array.isArray(aData) ? aData : []);

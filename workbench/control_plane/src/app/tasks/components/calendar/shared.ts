@@ -16,6 +16,26 @@ export const HOUR_PX = 46; // vertical pixels per hour on the time grid
 export const SOFT_CAPACITY_MINS = 6 * 60; // default "booked > 6h" flag
 export const DOW = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 
+/** The planner's built-in philosophy, used when the user hasn't set their own.
+ *  MIRROR of DEFAULT_PLANNING_PROMPT in the gateway (routes/tasks/calendar.py) —
+ *  shown in Settings so "leave blank" is not a mystery. Keep the two in sync. */
+export const DEFAULT_PLANNING_PROMPT =
+  "Plan my day like a thoughtful human, not a task-cramming machine. Leave " +
+  "breathing room — do NOT try to fill every free minute; a calmer, well-paced " +
+  "day that actually gets done beats an over-packed one. Front-load the " +
+  "hardest / deepest work into my peak-energy windows, and batch similar tasks " +
+  "together (calls with calls, admin with admin) to avoid context-switching. " +
+  "Protect focus for the most important thing. Respect any constraints or mood " +
+  "I give for today.";
+
+/** "7" → "7 AM", "0" → "12 AM", "12" → "12 PM", "24" → "12 AM" (end-of-day). */
+export const hourLabel = (h: number): string => {
+  const x = ((h % 24) + 24) % 24;
+  if (x === 0) return "12 AM";
+  if (x === 12) return "12 PM";
+  return x < 12 ? `${x} AM` : `${x - 12} PM`;
+};
+
 // ── drag-and-drop / resize ───────────────────────────────────────────────────
 export const SNAP_MINS = 15; // blocks snap to a quarter-hour
 export const DRAG_TYPE = "application/x-cc-cal";

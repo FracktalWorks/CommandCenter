@@ -279,6 +279,14 @@ class Settings(BaseSettings):
     # run. Reuses email_embedding_model (one embedder for the whole app).
     task_semantic_match_enabled: bool = False
 
+    # WhatsApp semantic search (spec §W10) — embed each message (body +
+    # voice-note transcript) into wa_message_embeddings (pgvector) and blend
+    # cosine similarity with the full-text rank on the hybrid=true path of
+    # /whatsapp/search. OFF by default: lexical FTS is complete on its own and
+    # embedding history costs tokens + a background sweep. Turn on once migration
+    # 111 has run. Reuses email_embedding_model/dim (one embedder for the app).
+    whatsapp_semantic_search_enabled: bool = False
+
 
 @lru_cache(maxsize=1)
 def get_settings() -> Settings:

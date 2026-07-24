@@ -64,15 +64,28 @@ async def _live_account_ids() -> list[str]:
         await db.close()
 
 
+async def _embed_account(account_id: str) -> int:
+    """Backfill a bounded batch of message embeddings for one account (own db).
+    No-op (0) when ``whatsapp_semantic_search_enabled`` is off (W10)."""
+    from gateway.routes.whatsapp.core import _get_db
+    from whatsapp_ingestion.wa_embeddings import embed_pending_messages
+    db = await _get_db()
+    try:
+        return await embed_pending_messages(db, account_id)
+    finally:
+        await db.close()
+
+
 async def run_enrichment_cycle() -> dict[str, int]:
-    """One sweep: summarize stale groups + transcribe pending voice for every
-    live account. A per-account failure is logged, never fatal to the sweep.
-    Returns ``{accounts, summarized, transcribed}``."""
+    """One sweep for every live account: summarize stale groups, transcribe
+    pending voice, and backfill message embeddings. Each pass is independently
+    gated + bounded, and a per-account failure is logged, never fatal to the
+    sweep. Returns ``{accounts, summarized, transcribed, embedded}``."""
     from gateway.routes.whatsapp.automation.groups import summarize_stale_groups
     from gateway.routes.whatsapp.automation.transcription import transcribe_pending
 
     accounts = await _live_account_ids()
-    summarized = transcribed = 0
+    summarized = transcribed = embedded = 0
     for aid in accounts:
         try:
             summarized += await summarize_stale_groups(aid)
@@ -84,10 +97,15 @@ async def run_enrichment_cycle() -> dict[str, int]:
         except Exception as exc:
             _log.warning("whatsapp.enrichment.transcribe_failed",
                          account_id=aid, error=str(exc)[:200])
+        try:
+            embedded += await _embed_account(aid)
+        except Exception as exc:
+            _log.warning("whatsapp.enrichment.embed_failed",
+                         account_id=aid, error=str(exc)[:200])
     _log.info("whatsapp.enrichment.cycle_done", accounts=len(accounts),
-              summarized=summarized, transcribed=transcribed)
+              summarized=summarized, transcribed=transcribed, embedded=embedded)
     return {"accounts": len(accounts), "summarized": summarized,
-            "transcribed": transcribed}
+            "transcribed": transcribed, "embedded": embedded}
 
 
 async def _loop(interval_secs: int) -> None:

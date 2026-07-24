@@ -242,9 +242,13 @@ async def read_whatsapp_chat(chat_id: str, limit: int = 20) -> str:
 
 
 async def search_whatsapp(query: str, account_id: str | None = None) -> str:
-    """Full-text search across the founder's WhatsApp history (message bodies AND
-    voice-note transcripts). Returns matches with their chat_id + message_id."""
-    params: dict[str, Any] = {"q": query}
+    """Search the founder's WhatsApp history by meaning AND keyword (message
+    bodies AND voice-note transcripts). Returns matches with chat_id + message_id.
+    Semantic re-ranking applies when it's enabled; otherwise this is pure
+    keyword search (recall is identical either way)."""
+    # hybrid re-ranks by semantic closeness when enabled, and falls back to pure
+    # lexical otherwise — so passing it is always safe.
+    params: dict[str, Any] = {"q": query, "hybrid": "true"}
     if account_id:
         params["account_id"] = account_id
     msgs = await _get("/whatsapp/search", params)

@@ -524,11 +524,36 @@ proof that the email vertical's shape was a *channel* shape all along.
   (that tap is the human in the loop); automation and one-to-many go through
   approval.
 
-**Tests:** 150 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W4 — companion + groups — BUILT (group intelligence + waiting-on nudge).**
+- `108_whatsapp_group_summaries.sql` + `automation/groups.py`: "groups become one
+  paragraph" (value V4). One cached AI summary per group chat — what was
+  discussed, sentiment, whether the founder was addressed, and the ≤5 points
+  worth their eye. Pure builder + parser (validates the sentiment enum, clamps
+  key-points, rejects an empty summary); `summarize_group` OR-s the model's
+  `mentions_you` with a deterministic @mention check so a direct address is never
+  missed, and carries the drafting doctrines (transcript-as-DATA,
+  sentinel-on-failure). `summarize_stale_groups` is a bounded (20/pass),
+  watermarked (`covered_through`) schedule/digest trigger, never the hot webhook
+  path. Routes: `POST /groups/{id}/summarize`, `GET /groups/summaries`.
+- **Waiting-on nudge drafts (W4.2) — completes the "no dropped promises" loop.**
+  The theirs-direction commitments (what they owe us) become one-tap chases.
+  `commitments.py` gains a pure `build_nudge_messages` (gentle/warm register,
+  conversation-as-DATA, NO_DRAFT sentinel) and `draft_nudge` (loads the 'theirs'
+  commitment + a short thread excerpt, reuses the Devanagari language detector,
+  sentinel-on-failure); `POST /commitments/{id}/nudge` returns a DRAFT the
+  founder reviews and sends through the existing composer (which owns the 24h
+  window / template logic — the nudge seam never sends). The `digest` now
+  surfaces the waiting-on *list* (each with its nudge id), and the per-chat
+  `context` rail carries the chat's open waiting-on commitments. The Details
+  drawer renders a "Waiting on them" section with a "✦ Nudge" chip that drafts
+  and drops the text into the composer.
+
+**Tests:** 145 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist, post-sync registry, route helpers (signature/window/regime), templates,
-capture, context, Reply Zero, intent (21 cases), categories, digest + hook
-wiring, the auto-reply ladder (12), and commitment extraction (15). All new code
-`ruff`-clean.
+capture, context, Reply Zero, intent (20 cases), categories, digest + hook
+wiring, the auto-reply ladder (12), commitment extraction + nudge drafting (24),
+and group intelligence (13 — builder/parser/summarize orchestration). All new
+code `ruff`-clean; the frontend `next build` compiles the new drawer surface.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
@@ -577,10 +602,11 @@ consumes it through the shared layer — never a bespoke WhatsApp-only client.
 Until then the vertical is fully functional; these rules simply fall through to a
 normal draft.
 
-**Next (buildable now, no CRM/ERP dep):** group intelligence (per-group AI
-summaries); voice-note transcription + document OCR (media understanding);
-waiting-on nudge drafts (completing the commitments loop); the `wa_*` AI
-companion toolset for the control-plane chat; semantic search over history.
+**Next (buildable now, no CRM/ERP dep):** voice-note transcription + document
+OCR (media understanding); the `wa_*` AI companion toolset for the control-plane
+chat (`wa_summarize_group`, `wa_draft_reply`, `wa_query` as MAF tools); semantic
+search over history (pgvector embeddings on `wa_messages`, already indexed for
+FTS). ~~group intelligence~~ and ~~waiting-on nudge drafts~~ are now BUILT (W4).
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

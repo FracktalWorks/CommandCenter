@@ -48,6 +48,15 @@ class OpenLoop(BaseModel):
     kind: str              # 'captured' (from this chat) | 'commitment'
 
 
+class WaitingOnLoop(BaseModel):
+    """A promise THEY made in this chat, still open — the drawer offers a
+    one-tap AI nudge draft for each (W4.2). ``id`` is the wa_commitment id the
+    nudge endpoint keys on."""
+    id: str
+    text: str
+    due_hint: str | None = None
+
+
 class ContextStats(BaseModel):
     message_count: int = 0
     first_seen: str | None = None
@@ -58,6 +67,8 @@ class ChatContextModel(BaseModel):
     chat_id: str
     contact: ContextContact | None = None
     open_loops: list[OpenLoop] = []
+    # Promises they owe us in this chat — each nudgeable by id (W4.2).
+    waiting_on: list[WaitingOnLoop] = []
     stats: ContextStats = ContextStats()
     # Live CRM/ERP fields (deal stage, overdue invoices) — filled in a later
     # phase. Null in W1; the entity ref above is what the UI deep-links on.
@@ -146,6 +157,19 @@ async def chat_context(
             for r in loop_rows
         ]
 
+        # Waiting on them: open promises they made in this chat, nudgeable (W4.2).
+        waiting_rows = (await db.execute(
+            text("""SELECT id, text, due_hint FROM wa_commitments
+                    WHERE chat_id = :cid AND direction = 'theirs'
+                      AND status = 'open'
+                    ORDER BY created_at DESC LIMIT 5"""),
+            {"cid": chat_id},
+        )).fetchall()
+        waiting_on = [
+            WaitingOnLoop(id=str(r.id), text=r.text, due_hint=r.due_hint)
+            for r in waiting_rows
+        ]
+
         stat_row = (await db.execute(
             text("""SELECT COUNT(*) AS n, MIN(sent_at) AS first_at,
                            MAX(sent_at) AS last_at
@@ -161,7 +185,8 @@ async def chat_context(
         )
 
         return ChatContextModel(
-            chat_id=chat_id, contact=contact, open_loops=open_loops, stats=stats,
+            chat_id=chat_id, contact=contact, open_loops=open_loops,
+            waiting_on=waiting_on, stats=stats,
         )
     finally:
         await db.close()

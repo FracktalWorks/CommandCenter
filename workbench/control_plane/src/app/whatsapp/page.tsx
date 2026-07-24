@@ -22,6 +22,7 @@ import {
 } from "lucide-react";
 import {
   captureTask,
+  draftNudge,
   fetchAccounts,
   fetchChats,
   fetchContext,
@@ -40,6 +41,7 @@ import {
   type WaMessage,
   type WaStreams,
   type WaTemplate,
+  type WaWaitingOn,
 } from "./lib/types";
 
 function relTime(iso: string | null): string {
@@ -464,12 +466,20 @@ function Conversation({
         </div>
       </div>
 
-      {showDetails && <DetailsDrawer context={context} />}
+      {showDetails && (
+        <DetailsDrawer context={context} onUseDraft={(t) => setText(t)} />
+      )}
     </div>
   );
 }
 
-function DetailsDrawer({ context }: { context: WaChatContext | null }) {
+function DetailsDrawer({
+  context,
+  onUseDraft,
+}: {
+  context: WaChatContext | null;
+  onUseDraft: (text: string) => void;
+}) {
   return (
     <div className="w-60 shrink-0 overflow-y-auto border-l border-border bg-muted/20 p-4 text-[11px]">
       <div className="mb-2 text-[12px] font-semibold">Details</div>
@@ -518,6 +528,18 @@ function DetailsDrawer({ context }: { context: WaChatContext | null }) {
               </ul>
             )}
           </div>
+          {context.waiting_on.length > 0 && (
+            <div>
+              <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
+                WAITING ON THEM
+              </div>
+              <ul className="space-y-2">
+                {context.waiting_on.map((w) => (
+                  <WaitingOnRow key={w.id} item={w} onUseDraft={onUseDraft} />
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
               HISTORY
@@ -529,6 +551,61 @@ function DetailsDrawer({ context }: { context: WaChatContext | null }) {
         </div>
       )}
     </div>
+  );
+}
+
+function WaitingOnRow({
+  item,
+  onUseDraft,
+}: {
+  item: WaWaitingOn;
+  onUseDraft: (text: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const doNudge = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const res = await draftNudge(item.id);
+    setBusy(false);
+    if (res.ok && res.data) {
+      setDraft(res.data.nudge_text);
+      onUseDraft(res.data.nudge_text); // drops it into the composer, if open
+    } else {
+      setError(res.error ?? "couldn't draft a nudge");
+    }
+  }, [busy, item.id, onUseDraft]);
+
+  return (
+    <li className="leading-snug">
+      <div className="text-foreground/90">
+        {item.text}
+        {item.due_hint && (
+          <span className="text-muted-foreground"> · {item.due_hint}</span>
+        )}
+      </div>
+      <button
+        onClick={doNudge}
+        disabled={busy}
+        className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        ) : (
+          <Sparkles className="h-2.5 w-2.5" />
+        )}
+        Nudge
+      </button>
+      {draft && (
+        <div className="mt-1 rounded-md border border-border bg-background px-2 py-1 text-[10.5px] text-foreground/80">
+          {draft}
+        </div>
+      )}
+      {error && <div className="mt-1 text-[10px] text-red-500">{error}</div>}
+    </li>
   );
 }
 

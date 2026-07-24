@@ -105,6 +105,13 @@ export type WaOpenLoop = {
   kind: string;
 };
 
+// A promise they owe us in this chat — nudgeable by id (W4.2).
+export type WaWaitingOn = {
+  id: string;
+  text: string;
+  due_hint: string | null;
+};
+
 export type WaChatContext = {
   chat_id: string;
   contact: {
@@ -114,6 +121,7 @@ export type WaChatContext = {
     entity: WaEntityRef | null;
   } | null;
   open_loops: WaOpenLoop[];
+  waiting_on: WaWaitingOn[];
   stats: { message_count: number; first_seen: string | null; last_seen: string | null };
   crm: Record<string, unknown> | null;
 };

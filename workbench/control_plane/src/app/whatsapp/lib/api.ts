@@ -119,6 +119,16 @@ export function generateDraft(chatId: string) {
   );
 }
 
+// Draft a gentle nudge to chase a commitment the other party owes us (W4.2).
+export function draftNudge(commitmentId: string) {
+  return postJSON<{
+    commitment_id: string;
+    chat_id: string;
+    nudge_text: string;
+    language: string;
+  }>(`commitments/${commitmentId}/nudge`, {});
+}
+
 export function fetchCategories(accountId: string): Promise<WaCategory[]> {
   return getJSON<WaCategory[]>(
     `categories?account_id=${encodeURIComponent(accountId)}`,

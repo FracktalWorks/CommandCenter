@@ -79,6 +79,14 @@ export type WaCategory = {
   sort_order: number;
 };
 
+export type WaSavedReply = {
+  id: string;
+  title: string;
+  body: string;
+  shortcut: string | null;
+  sort_order: number;
+};
+
 export const NOTIFY_POLICIES = ["instant", "digest", "mention_only", "never"];
 export const AUTO_REPLY_POLICIES = ["never", "holding", "answer_from_system"];
 export const DRAFT_POLICIES = ["always", "on_intent", "never"];

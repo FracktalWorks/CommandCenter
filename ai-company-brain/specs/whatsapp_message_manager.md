@@ -616,7 +616,36 @@ screen (headline tiles + waited-longest list + intent bars + busiest list, with 
 7/30-day toggle) hangs off a new "Pulse" nav entry. No migration, no LLM — honest
 projection of what the pipeline already wrote.
 
-**Tests:** 185 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W8 — saved replies / quick snippets — BUILT (an inbox staple).** The answers a
+founder types ten times a day (price list, address, GST number, catalogue link).
+`110_whatsapp_saved_replies.sql` adds `wa_saved_replies` (title, body, optional
+`/shortcut` with a partial unique index per account). `transport/saved_replies.py`
+is plain account-scoped CRUD (`GET/POST/PATCH/DELETE /whatsapp/saved-replies`);
+`normalize_shortcut` is pure (lowercased, single leading `/`, `[a-z0-9_]`, empty →
+None) and the shortcut-collision surfaces as a 409. **Distinct from templates** —
+a saved reply is a free-form snippet dropped into the composer INSIDE the 24h
+window, where a template is the Meta-approved message required once it closes. A
+`/whatsapp/settings/replies` CRUD screen manages them; the composer gains a
+"⚡ Saved" picker (appends the snippet to the draft) beside "Suggest reply". The
+partial unique index (NULLs coexist, duplicate shortcut rejected) was verified on
+real Postgres 16.
+
+**W9 — background enrichment scheduler — BUILT (makes W4.1 + W4.3 autonomous).**
+Group summaries and voice transcription were built as bounded, watermarked batch
+passes but only ran on-demand — WhatsApp had no background loop (it's
+webhook-driven). `whatsapp/scheduler.py` adds ONE lightweight loop that
+periodically sweeps every live account through `summarize_stale_groups` +
+`transcribe_pending`, wired into the gateway lifespan (start on boot, cancel on
+shutdown) alongside the email/tasks schedulers. **Cost-gated OFF unless
+`WHATSAPP_ENRICHMENT=1`** (each cycle can call the LLM and STT); interval via
+`WHATSAPP_ENRICHMENT_INTERVAL_SECS` (default 900s, min 120s). Both passes are
+per-pass bounded and only touch stale/pending rows, so a caught-up account does
+no work, and a per-account failure is logged, never fatal to the sweep. The pure
+gate (`enrichment_enabled`) + interval clamp (`resolve_interval`) + the
+single-cycle sweep (`run_enrichment_cycle`, with per-account error resilience)
+are unit-tested; the on-demand routes keep working regardless of the flag.
+
+**Tests:** 206 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
@@ -625,16 +654,20 @@ status lifecycle, watermark reset, sentinel-on-failure), group intelligence
 (13 — builder/parser/summarize orchestration), the companion agent (9 — tool
 surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
 formatting; `build_agents()` constructs the MAF agent with all 13 tools), chat
-snooze (12 — the pure wake-time validator + route registration), and Pulse
-(8 — median/percentile/response-time folds + route registration). All new code
-`ruff`-clean; the frontend `next build` compiles the new snooze + Pulse surfaces,
-and `uv sync` installs the new agent workspace member cleanly.
+snooze (12 — the pure wake-time validator + route registration), Pulse
+(8 — median/percentile/response-time folds + route registration), saved
+replies (15 — the pure shortcut normalizer + route registration), and the
+enrichment scheduler (6 — the pure gate/interval helpers + cycle sweep with
+per-account error resilience). All new code `ruff`-clean; the frontend
+`next build` compiles the snooze + Pulse + saved-reply surfaces, the gateway app
+imports cleanly with the scheduler wired into the lifespan, and `uv sync`
+installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
 apply_migrations.sh → smoke`); the sandbox can't reach that VPS, so the branch is
 the deployable artifact. What WAS validated here:
-- **Migrations 102–109 against a real Postgres 16** (initdb'd local cluster, not
+- **Migrations 102–110 against a real Postgres 16** (initdb'd local cluster, not
   Docker — the daemon is unavailable here). Fresh apply is clean; re-apply is
   fully idempotent (all `IF NOT EXISTS`, zero errors) — safe for
   `apply_migrations.sh` on every deploy. A functional smoke test seeded a full
@@ -645,7 +678,9 @@ the deployable artifact. What WAS validated here:
   `credentials_encrypted` NOT NULL fired as designed. The **W6 snooze SQL** was
   functionally verified on the same cluster: the queue filter hides a snoozed chat
   and the "Snoozed" stream surfaces it; a new INBOUND message clears the snooze
-  via the `recompute_chat_status` CASE while an OUTBOUND reply does not. **Caveat
+  via the `recompute_chat_status` CASE while an OUTBOUND reply does not. The **W8
+  saved-replies** partial unique index was verified too: two NULL shortcuts
+  coexist on one account while a duplicate `/shortcut` is rejected. **Caveat
   closed.**
 - **Frontend `next build` PASSES.** `npm ci` FAILS on a PRE-EXISTING lockfile
   drift (package-lock is missing `@emnapi/*` platform deps — unrelated to
@@ -686,11 +721,11 @@ understanding sibling of voice transcription (`wa_media.ocr_text` is already
 provisioned) — deferred pending a vision-model tier, since the codebase has no
 LLM-vision precedent yet; semantic search over history (pgvector embeddings on
 `wa_messages`, already indexed for FTS); scheduler wiring for the bounded batch
-triggers (`summarize_stale_groups`, `transcribe_pending`) so groups/voice
-auto-refresh in production; saved replies / quick snippets in the composer.
 ~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note transcription~~,
-the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~, and ~~Pulse analytics~~ are
-now BUILT (W4.1–W7).
+the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~, ~~Pulse analytics~~,
+~~saved replies~~, and the ~~batch-trigger scheduler wiring~~ are now BUILT
+(W4.1–W9). To activate autonomous group/voice enrichment in production, set
+`WHATSAPP_ENRICHMENT=1` (cost-gated off by default).
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

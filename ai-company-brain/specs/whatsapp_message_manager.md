@@ -645,7 +645,49 @@ gate (`enrichment_enabled`) + interval clamp (`resolve_interval`) + the
 single-cycle sweep (`run_enrichment_cycle`, with per-account error resilience)
 are unit-tested; the on-demand routes keep working regardless of the flag.
 
-**Tests:** 206 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W10 — semantic search over history — BUILT (reuses the proven email/mem0
+embedder).** Find a chat by MEANING, not just keywords — and because the embedded
+text is the message body PLUS its voice-note transcript, a spoken "kal AWB bhej
+dunga" is findable too. Faithfully mirrors the email vertical's Phase-2 embeddings
+(migration 73): `111_whatsapp_embeddings.sql` adds `wa_message_embeddings`
+(pgvector `vector(1536)`, ivfflat cosine, per-row model + content_hash);
+`whatsapp_ingestion/wa_embeddings.py` embeds a bounded batch through the LiteLLM
+gateway's `/v1/embeddings` (the SAME path mem0 + email use — **no new infra**, the
+concern that deferred OCR does not apply here), gated by
+`whatsapp_semantic_search_enabled` (reusing `email_embedding_model`). `/whatsapp/
+search?hybrid=true` keeps recall LEXICAL (every FTS match returned) and only
+RE-ORDERS by `0.5·ts_rank + 0.5·cosine`, so a keyword hit is never dropped and an
+unembedded message still ranks on its lexical score. The enrichment sweep (W9)
+also backfills embeddings per account (no-op when the flag is off), and the
+companion agent's `search_whatsapp` passes `hybrid=true` so it benefits
+automatically. The Python `content_hash` was verified byte-for-byte against the
+SQL predicate on real Postgres 16 — including the trailing-newline case that once
+thrashed the email version — so the sweep never re-embeds a settled message.
+(pgvector isn't installed on the sandbox cluster, so the vector DDL itself rides
+on migration 73's prod-proven equivalence.)
+
+**W11 — Connect-a-number onboarding wizard — BUILT (the app becomes usable).**
+Everything above assumes a connected WhatsApp Business number; the connect flow
+was a DISABLED "Embedded Signup" button, so registration meant a hand-rolled API
+call. W11 replaces it with a guided, VERIFIABLE wizard at `/whatsapp/connect`:
+(1) prerequisites with links to the exact Meta pages, (2) the webhook Callback URL
++ Verify token to paste into Meta → Configuration (copy buttons; the URL from
+`WHATSAPP_PUBLIC_URL` or a domain field), (3) a credentials form with a **"Test
+connection"** that calls Meta's Graph API for real — a new provider
+`get_phone_number_profile()` GETs the phone-number id, so a 200 proves the token
+works and shows the verified name / number / quality rating, and **Connect is
+gated on a successful test** so a broken token is never saved — and (4) a done
+screen. `POST /whatsapp/accounts/verify` (never writes; returns Meta's own error
+cleaned up via the pure `friendly_meta_error`) and `GET /whatsapp/connection/info`
+back it. Honest by design: it names what Meta actually requires rather than faking
+a one-click flow the platform can't deliver without app review. **To go live in
+production, set three env vars:** `WHATSAPP_APP_SECRET` (webhook HMAC),
+`WHATSAPP_VERIFY_TOKEN` (or use the wizard's per-account token), and
+`WHATSAPP_PUBLIC_URL` (so the wizard shows the real Callback URL). Historical
+backfill still awaits coexistence/Embedded-Signup; the inbox starts fresh from
+connection.
+
+**Tests:** 223 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
@@ -656,12 +698,15 @@ surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
 formatting; `build_agents()` constructs the MAF agent with all 13 tools), chat
 snooze (12 — the pure wake-time validator + route registration), Pulse
 (8 — median/percentile/response-time folds + route registration), saved
-replies (15 — the pure shortcut normalizer + route registration), and the
+replies (15 — the pure shortcut normalizer + route registration), the
 enrichment scheduler (6 — the pure gate/interval helpers + cycle sweep with
-per-account error resilience). All new code `ruff`-clean; the frontend
-`next build` compiles the snooze + Pulse + saved-reply surfaces, the gateway app
-imports cleanly with the scheduler wired into the lifespan, and `uv sync`
-installs the new agent workspace member cleanly.
+per-account error resilience), semantic search (7 — the pure embed-text /
+content_hash helpers + the disabled-by-default query gate), and the connect
+wizard (10 — the pure Meta-error extractor, the verify route with a mocked
+provider, and the connection-info route). All new code `ruff`-clean; the frontend
+`next build` compiles the snooze + Pulse + saved-reply + connect surfaces, the
+gateway app imports cleanly with the scheduler wired into the lifespan, and
+`uv sync` installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
@@ -680,8 +725,13 @@ the deployable artifact. What WAS validated here:
   and the "Snoozed" stream surfaces it; a new INBOUND message clears the snooze
   via the `recompute_chat_status` CASE while an OUTBOUND reply does not. The **W8
   saved-replies** partial unique index was verified too: two NULL shortcuts
-  coexist on one account while a duplicate `/shortcut` is rejected. **Caveat
-  closed.**
+  coexist on one account while a duplicate `/shortcut` is rejected. For **W10**,
+  the Python `content_hash` was proven byte-for-byte equal to the SQL predicate
+  (`encode(sha256(convert_to(...)))`) on the same cluster, including a body with a
+  trailing newline — the exact case that once thrashed the email embedder. The
+  vector DDL (migration 111) could not run locally (pgvector isn't installed on
+  the sandbox cluster) and rides on migration 73's prod-proven equivalence — the
+  one open item. **Caveat closed** (bar the pgvector DDL, noted).
 - **Frontend `next build` PASSES.** `npm ci` FAILS on a PRE-EXISTING lockfile
   drift (package-lock is missing `@emnapi/*` platform deps — unrelated to
   WhatsApp; nothing here touches package.json/lock), so I validated via
@@ -723,9 +773,12 @@ LLM-vision precedent yet; semantic search over history (pgvector embeddings on
 `wa_messages`, already indexed for FTS); scheduler wiring for the bounded batch
 ~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note transcription~~,
 the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~, ~~Pulse analytics~~,
-~~saved replies~~, and the ~~batch-trigger scheduler wiring~~ are now BUILT
-(W4.1–W9). To activate autonomous group/voice enrichment in production, set
-`WHATSAPP_ENRICHMENT=1` (cost-gated off by default).
+~~saved replies~~, the ~~batch-trigger scheduler wiring~~, and ~~semantic search~~
+are now BUILT (W4.1–W10). To activate in production: `WHATSAPP_ENRICHMENT=1`
+turns on the autonomous group/voice/embedding sweep, and
+`whatsapp_semantic_search_enabled=true` turns on hybrid semantic ranking — both
+cost-gated off by default. A frontend WhatsApp search UI (the hybrid route is
+consumed by the companion agent today) is the remaining surface.
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

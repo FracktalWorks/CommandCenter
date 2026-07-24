@@ -43,15 +43,20 @@ async def test_cycle_sweeps_every_account_and_totals(monkeypatch) -> None:
         seen.append(f"tx:{aid}")
         return 3
 
+    async def _embed(aid):
+        seen.append(f"emb:{aid}")
+        return 1
+
     monkeypatch.setattr(sched, "_live_account_ids", _accounts)
+    monkeypatch.setattr(sched, "_embed_account", _embed)
     monkeypatch.setattr(
         "gateway.routes.whatsapp.automation.groups.summarize_stale_groups", _sum)
     monkeypatch.setattr(
         "gateway.routes.whatsapp.automation.transcription.transcribe_pending", _tx)
 
     out = await sched.run_enrichment_cycle()
-    assert out == {"accounts": 2, "summarized": 4, "transcribed": 6}
-    assert seen == ["sum:a1", "tx:a1", "sum:a2", "tx:a2"]
+    assert out == {"accounts": 2, "summarized": 4, "transcribed": 6, "embedded": 2}
+    assert seen == ["sum:a1", "tx:a1", "emb:a1", "sum:a2", "tx:a2", "emb:a2"]
 
 
 async def test_cycle_resilient_to_per_account_failure(monkeypatch) -> None:
@@ -66,7 +71,11 @@ async def test_cycle_resilient_to_per_account_failure(monkeypatch) -> None:
     async def _tx(aid):
         return 1
 
+    async def _embed(aid):
+        return 0
+
     monkeypatch.setattr(sched, "_live_account_ids", _accounts)
+    monkeypatch.setattr(sched, "_embed_account", _embed)
     monkeypatch.setattr(
         "gateway.routes.whatsapp.automation.groups.summarize_stale_groups", _sum)
     monkeypatch.setattr(
@@ -74,7 +83,7 @@ async def test_cycle_resilient_to_per_account_failure(monkeypatch) -> None:
 
     out = await sched.run_enrichment_cycle()
     # 'bad' groups raised but was caught; both accounts still transcribed.
-    assert out == {"accounts": 2, "summarized": 1, "transcribed": 2}
+    assert out == {"accounts": 2, "summarized": 1, "transcribed": 2, "embedded": 0}
 
 
 async def test_start_returns_false_when_disabled(monkeypatch) -> None:

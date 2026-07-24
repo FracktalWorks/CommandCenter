@@ -130,6 +130,29 @@ class WhatsAppCloudProvider(BaseWhatsAppProvider):
             bin_resp.raise_for_status()
             return bin_resp.content, mime_type
 
+    async def get_phone_number_profile(self) -> dict[str, Any]:
+        """Verify the token + fetch the number's public profile (a Graph GET on
+        the phone_number_id). Backs the connect flow's 'test connection': a 200
+        proves the token can act for this number and returns its display name /
+        number / quality rating. Raises ``httpx.HTTPStatusError`` on a Meta error
+        (bad token, wrong id) so the caller can surface Meta's own message.
+        """
+        url = f"{_GRAPH_BASE}/{self.graph_version}/{self.phone_number_id}"
+        params = {
+            "fields": (
+                "display_phone_number,verified_name,quality_rating,"
+                "code_verification_status,platform_type"
+            )
+        }
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.get(
+                url,
+                headers={"Authorization": f"Bearer {self.access_token}"},
+                params=params,
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def mark_read(self, wa_message_id: str) -> None:
         payload = {
             "messaging_product": "whatsapp",

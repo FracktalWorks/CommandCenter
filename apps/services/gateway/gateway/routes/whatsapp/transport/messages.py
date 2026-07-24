@@ -71,18 +71,33 @@ async def list_messages(
         await db.close()
 
 
+# The tsvector expression — byte-for-byte identical to migration 102's
+# ``idx_wa_messages_fts`` (simple config, body + transcript + sender name) so the
+# GIN index is used, not a seq scan. Kept in one place: match + rank share it.
+_WA_FTS = (
+    "to_tsvector('simple', "
+    "coalesce(m.body_text, '') || ' ' || "
+    "coalesce(m.transcript_text, '') || ' ' || "
+    "coalesce(m.sender->>'name', ''))"
+)
+
+
 @router.get("/search", response_model=list[WhatsAppMessageModel])
 async def search_messages(
     q: str = Query(..., min_length=1),
     account_id: str | None = None,
     limit: int = Query(50, le=200),
+    hybrid: bool = Query(
+        False, description="Blend semantic (vector) similarity into the ranking"),
     user: UserContext = Depends(get_current_user),
 ):
     """Full-text search across the user's WhatsApp history.
 
-    The tsvector expression is byte-for-byte identical to migration 102's
-    ``idx_wa_messages_fts`` (simple config, body + transcript + sender name) so
-    the GIN index is actually used instead of a sequential scan.
+    Recall is always LEXICAL (every FTS match is returned). ``hybrid=true``
+    re-ORDERS the matches by blending the lexical rank with cosine similarity to
+    the query's embedding (W10) — so a keyword hit is never dropped, and semantic
+    closeness only re-ranks. Requires ``whatsapp_semantic_search_enabled``; if the
+    query can't be embedded (flag off / embed error), it falls through to lexical.
     """
     db = await _get_db()
     try:
@@ -94,19 +109,39 @@ async def search_messages(
             scope += " AND id = :aid"
             params["aid"] = account_id
         scope += ")"
+
+        join_sql = ""
+        order_sql = "m.sent_at DESC NULLS LAST"
+        if hybrid:
+            qvec = None
+            try:
+                from whatsapp_ingestion.wa_embeddings import embed_query
+                qvec = await embed_query(q)
+            except Exception:
+                qvec = None
+            if qvec is not None:
+                params["qvec"] = "[" + ",".join(f"{x:.7f}" for x in qvec) + "]"
+                # 0.5·lexical (capped to 1) + 0.5·cosine. A message with no
+                # embedding yet (sim NULL → 0) still ranks on its lexical score,
+                # so unembedded history is never hidden.
+                join_sql = ("LEFT JOIN wa_message_embeddings e "
+                            "ON e.message_id = m.id")
+                order_sql = (
+                    f"(LEAST(ts_rank_cd({_WA_FTS}, "
+                    "plainto_tsquery('simple', :q)), 1.0) * 0.5"
+                    " + COALESCE(1 - (e.embedding <=> CAST(:qvec AS vector)), 0)"
+                    " * 0.5) DESC, m.sent_at DESC NULLS LAST")
+
         rows = (await db.execute(
             text(f"""SELECT m.id, m.chat_id, m.wa_message_id, m.direction, m.kind,
                             m.sender, m.body_text, m.transcript_text,
                             m.quoted_wa_message_id, m.categories, m.intent,
                             m.send_regime, m.sent_at
                      FROM wa_messages m
+                     {join_sql}
                      WHERE {scope}
-                       AND to_tsvector('simple',
-                             coalesce(m.body_text, '') || ' ' ||
-                             coalesce(m.transcript_text, '') || ' ' ||
-                             coalesce(m.sender->>'name', ''))
-                           @@ plainto_tsquery('simple', :q)
-                     ORDER BY m.sent_at DESC NULLS LAST
+                       AND {_WA_FTS} @@ plainto_tsquery('simple', :q)
+                     ORDER BY {order_sql}
                      LIMIT :limit"""),
             params,
         )).fetchall()

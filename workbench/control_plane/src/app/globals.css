@@ -223,6 +223,14 @@ body {
 .min-safe-bottom {
   min-height: calc(env(safe-area-inset-bottom, 0px) + 44px);
 }
+/* Clearance for the FIXED mobile bottom-nav bar (AppShell): its content
+   (~3.5rem) PLUS the device safe-area inset — the bar carries pb-safe, so
+   its real height grows by the inset on iPhones. A bare pb-14 covered only
+   the content, and the bottom ~30px of every page (e.g. the email
+   composer's action row) hid under the bar. */
+.pb-nav {
+  padding-bottom: calc(3.5rem + env(safe-area-inset-bottom, 0px));
+}
 
 @keyframes chat-shimmer {
   0%   { background-position: 200% 0; }

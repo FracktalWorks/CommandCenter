@@ -42,6 +42,15 @@ def _emb_model() -> str:
     return os.environ.get("SHERPA_EMB_MODEL", "")
 
 
+def _threshold() -> float:
+    """Clustering merge threshold (cosine distance). Tune per deployment via
+    SHERPA_DIAR_THRESHOLD — higher merges more (fewer speakers)."""
+    try:
+        return float(os.environ.get("SHERPA_DIAR_THRESHOLD", "0.7"))
+    except ValueError:
+        return 0.7
+
+
 def available() -> bool:
     """True when local diarization is switched on AND actually runnable."""
     if not enabled():
@@ -101,7 +110,9 @@ def _speaker_turns(samples, num_speakers: int | None) -> list[tuple[float, float
             # -1 → auto speaker count via the threshold (meetings are 2–6 people);
             # a caller-supplied count pins it when known.
             num_clusters=num_speakers if (num_speakers and num_speakers > 0) else -1,
-            threshold=0.5,
+            # Cosine-distance merge threshold. 0.7 correctly recovered speaker
+            # count in testing where 0.5 over-split; env-tunable per deployment.
+            threshold=_threshold(),
         ),
         min_duration_on=0.3,
         min_duration_off=0.5,

@@ -64,6 +64,22 @@ export type WaTemplate = {
   cost_hint: string | null;
 };
 
+export type WaCategory = {
+  id: string;
+  name: string;
+  icon: string | null;
+  wa_label_id: string | null;
+  notify_policy: string; // instant | digest | mention_only | never
+  auto_reply_policy: string; // never | holding | answer_from_system
+  draft_policy: string; // always | on_intent | never
+  escalate_after_mins: number | null;
+  sort_order: number;
+};
+
+export const NOTIFY_POLICIES = ["instant", "digest", "mention_only", "never"];
+export const AUTO_REPLY_POLICIES = ["never", "holding", "answer_from_system"];
+export const DRAFT_POLICIES = ["always", "on_intent", "never"];
+
 export type WaEntityRef = { system: string; kind: string; id: string };
 
 export type WaOpenLoop = {

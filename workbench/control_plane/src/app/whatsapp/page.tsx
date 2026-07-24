@@ -9,6 +9,7 @@
 // never as more always-on chrome on the queue.
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import {
   Loader2,
   MessageCircle,
@@ -16,6 +17,7 @@ import {
   Plus,
   Search,
   Send,
+  Settings,
   Sparkles,
 } from "lucide-react";
 import {
@@ -150,7 +152,13 @@ export default function WhatsAppPage() {
             </button>
           );
         })}
-        <div className="mt-auto flex items-center gap-2 border-t border-border pt-3">
+        <Link
+          href="/whatsapp/settings/categories"
+          className="mt-auto flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
+        >
+          <Settings className="h-3.5 w-3.5" /> Categories
+        </Link>
+        <div className="flex items-center gap-2 border-t border-border pt-3">
           <span
             className="flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-white"
             style={{ background: accounts[0].avatar_color || "#25D366" }}

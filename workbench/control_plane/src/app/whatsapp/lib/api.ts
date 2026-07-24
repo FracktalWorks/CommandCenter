@@ -4,6 +4,7 @@
 
 import type {
   WaAccount,
+  WaCategory,
   WaChat,
   WaChatContext,
   WaMessage,
@@ -21,13 +22,14 @@ async function getJSON<T>(path: string, fallback: T): Promise<T> {
   }
 }
 
-async function postJSON<T>(
+async function sendJSON<T>(
   path: string,
+  method: "POST" | "PATCH",
   body: unknown
 ): Promise<{ ok: boolean; data: T | null; error?: string }> {
   try {
     const res = await fetch(`/api/whatsapp/${path}`, {
-      method: "POST",
+      method,
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
@@ -41,6 +43,10 @@ async function postJSON<T>(
   } catch {
     return { ok: false, data: null, error: "network error" };
   }
+}
+
+function postJSON<T>(path: string, body: unknown) {
+  return sendJSON<T>(path, "POST", body);
 }
 
 export function fetchAccounts(): Promise<WaAccount[]> {
@@ -110,4 +116,30 @@ export function generateDraft(chatId: string) {
     `chats/${chatId}/draft`,
     {}
   );
+}
+
+export function fetchCategories(accountId: string): Promise<WaCategory[]> {
+  return getJSON<WaCategory[]>(
+    `categories?account_id=${encodeURIComponent(accountId)}`,
+    []
+  );
+}
+
+export function bootstrapCategories(accountId: string) {
+  return postJSON<WaCategory[]>(
+    `accounts/${accountId}/categories/bootstrap`,
+    {}
+  );
+}
+
+export function updateCategory(
+  categoryId: string,
+  patch: Partial<
+    Pick<
+      WaCategory,
+      "notify_policy" | "auto_reply_policy" | "draft_policy" | "escalate_after_mins"
+    >
+  >
+) {
+  return sendJSON<WaCategory>(`categories/${categoryId}`, "PATCH", patch);
 }

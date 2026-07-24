@@ -2,17 +2,25 @@
 
 /**
  * /notes/session/[id] — the live recording screen (spec §5.1: "studio, not
- * form"). Mic capture → chunked upload; on stop the pipeline transcribes and
- * writes notes, and we hand off to the meeting detail view.
+ * form"). This is now a VIEW onto the global recording store (recordingStore.ts)
+ * rather than the owner of the recorder: the capture lives in AppShell so it
+ * survives navigation and collapses into the RecordingDock when you leave.
+ * Mic capture → chunked upload; on stop the pipeline transcribes and writes
+ * notes, and we hand off to the meeting detail view.
  */
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { ArrowLeft, Loader2, Mic, Pause, Play, Square } from "lucide-react";
-import { MeetingRecorder, type RecorderState } from "../../lib/recorder";
-import { formatClock, saveScratchNotes } from "../../lib/api";
+import {
+  LEVEL_BARS,
+  isActive,
+  levelBuffer,
+  useRecordingStore,
+} from "../../lib/recordingStore";
+import { formatClock, getMeeting, saveScratchNotes } from "../../lib/api";
 
-const BARS = 48;
+const BARS = LEVEL_BARS;
 
 export default function SessionPage({
   params,
@@ -21,20 +29,31 @@ export default function SessionPage({
 }) {
   const { id } = use(params);
   const router = useRouter();
-  const recorderRef = useRef<MeetingRecorder | null>(null);
-  const levelsRef = useRef<number[]>(new Array(BARS).fill(0));
   const canvasRef = useRef<HTMLCanvasElement>(null);
 
-  const [phase, setPhase] = useState<"ready" | RecorderState>("ready");
-  const [elapsed, setElapsed] = useState(0);
-  const [backlog, setBacklog] = useState(0);
-  const [error, setError] = useState<string | null>(null);
+  // Recording state lives in the global store (survives navigation).
+  const meetingId = useRecordingStore((s) => s.meetingId);
+  const phase = useRecordingStore((s) => s.phase);
+  const elapsed = useRecordingStore((s) => s.elapsed);
+  const backlog = useRecordingStore((s) => s.backlog);
+  const error = useRecordingStore((s) => s.error);
+  const captions = useRecordingStore((s) => s.captions);
+  const interim = useRecordingStore((s) => s.interim);
+  const liveOff = useRecordingStore((s) => s.liveOff);
+  const startRec = useRecordingStore((s) => s.start);
+  const pauseRec = useRecordingStore((s) => s.pause);
+  const resumeRec = useRecordingStore((s) => s.resume);
+  const stopRec = useRecordingStore((s) => s.stop);
+  const cancelRec = useRecordingStore((s) => s.cancel);
+  const setTitle = useRecordingStore((s) => s.setTitle);
+
+  const isThis = meetingId === id;
+  const active = isActive(phase);
+  // A recording is running for a DIFFERENT meeting — don't clobber it.
+  const otherActive = active && meetingId !== null && meetingId !== id;
+
   const [scratch, setScratch] = useState("");
   const scratchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  type Cap = { text: string; speaker: number | null };
-  const [captions, setCaptions] = useState<Cap[]>([]);
-  const [interim, setInterim] = useState<Cap | null>(null);
-  const [liveOff, setLiveOff] = useState(false);
   const capEndRef = useRef<HTMLDivElement>(null);
 
   const draw = useCallback(() => {
@@ -58,9 +77,8 @@ export default function SessionPage({
     ctx.fillStyle = `hsl(${primary})`;
     const gap = 3;
     const bw = (w - gap * (BARS - 1)) / BARS;
-    const levels = levelsRef.current;
     for (let i = 0; i < BARS; i++) {
-      const lvl = levels[i] ?? 0;
+      const lvl = levelBuffer[i] ?? 0;
       const bh = Math.max(2, lvl * h);
       const x = i * (bw + gap);
       const y = (h - bh) / 2;
@@ -72,9 +90,9 @@ export default function SessionPage({
     ctx.globalAlpha = 1;
   }, []);
 
-  // Redraw loop while active.
+  // Redraw loop while this meeting is actively capturing.
   useEffect(() => {
-    if (phase !== "recording" && phase !== "paused") return;
+    if (!isThis || (phase !== "recording" && phase !== "paused")) return;
     let raf = 0;
     const loop = () => {
       draw();
@@ -82,11 +100,7 @@ export default function SessionPage({
     };
     loop();
     return () => cancelAnimationFrame(raf);
-  }, [phase, draw]);
-
-  useEffect(() => {
-    return () => recorderRef.current?.cancel();
-  }, []);
+  }, [isThis, phase, draw]);
 
   // Keep the live caption feed pinned to the newest line.
   useEffect(() => {
@@ -94,91 +108,61 @@ export default function SessionPage({
   }, [captions, interim]);
 
   async function begin() {
-    setError(null);
-    setCaptions([]);
-    setInterim(null);
-    setLiveOff(false);
-    const rec = new MeetingRecorder(id, {
-      onState: (s) => setPhase(s),
-      onElapsed: (sec) => setElapsed(sec),
-      onBacklog: (n) => setBacklog(n),
-      onLevel: (lvl) => {
-        const arr = levelsRef.current;
-        arr.push(lvl);
-        if (arr.length > BARS) arr.shift();
-      },
-      onError: (m) => setError(m),
-      onCaption: (c) => {
-        if (c.isFinal) {
-          setCaptions((prev) => [
-            ...prev.slice(-60),
-            { text: c.text, speaker: c.speaker },
-          ]);
-          setInterim(null);
-        } else {
-          setInterim({ text: c.text, speaker: c.speaker });
-        }
-      },
-      onLiveUnavailable: () => setLiveOff(true),
-    });
-    recorderRef.current = rec;
-    try {
-      await rec.start();
-    } catch (e) {
-      const msg = String(e instanceof Error ? e.message : e);
-      setError(
-        msg.includes("Permission") || msg.toLowerCase().includes("denied")
-          ? "Microphone access was denied. Allow the mic in your browser and try again."
-          : `Could not start recording: ${msg}`
-      );
-      setPhase("ready");
-    }
+    await startRec(id);
+    // Best-effort: pull the meeting's title so the dock can label it.
+    void getMeeting(id)
+      .then((m) => m.title && setTitle(m.title))
+      .catch(() => {});
   }
 
   async function finish() {
     try {
-      // Flush any pending jot before we hand off to the notes view.
       if (scratchTimer.current) clearTimeout(scratchTimer.current);
       if (scratch.trim()) await saveScratchNotes(id, scratch).catch(() => {});
-      await recorderRef.current?.stop();
+      await stopRec();
       router.push(`/notes/meeting/${id}`);
     } catch (e) {
-      setError(String(e instanceof Error ? e.message : e));
+      // Error surfaces via the store; still hand off to the detail view.
+      router.push(`/notes/meeting/${id}`);
+      void e;
     }
   }
 
   function discard() {
-    recorderRef.current?.cancel();
+    cancelRec();
     router.push("/notes");
   }
 
   function onScratchChange(v: string) {
     setScratch(v);
     if (scratchTimer.current) clearTimeout(scratchTimer.current);
-    // Debounced autosave — the jotting shouldn't fire a request per keystroke.
     scratchTimer.current = setTimeout(() => {
       void saveScratchNotes(id, v).catch(() => {});
     }, 800);
   }
 
-  const isLive = phase === "recording" || phase === "paused";
+  const isLive = isThis && (phase === "recording" || phase === "paused");
+  const finalizing = isThis && phase === "finalizing";
 
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
         <button
-          onClick={() => (isLive ? discard() : router.push("/notes"))}
+          onClick={() => router.push("/notes")}
           className="p-2 rounded-lg border border-border text-muted-foreground hover:bg-secondary tech-transition"
           aria-label="Back"
+          title={isLive ? "Recording keeps running — it'll follow you" : "Back"}
         >
           <ArrowLeft className="w-4 h-4" />
         </button>
         <div>
           <h1 className="text-base sm:text-lg font-bold text-foreground">
-            {phase === "finalizing" ? "Finishing up…" : "New recording"}
+            {finalizing ? "Finishing up…" : "New recording"}
           </h1>
           <p className="text-xs text-muted-foreground mt-0.5">
-            This conversation is being recorded and transcribed.
+            {isLive
+              ? "Recording — leave this page and it keeps going in the dock."
+              : "This conversation is being recorded and transcribed."}
           </p>
         </div>
       </div>
@@ -190,7 +174,27 @@ export default function SessionPage({
           </div>
         )}
 
-        {phase === "ready" && (
+        {otherActive && (
+          <div className="flex flex-col items-center gap-4 text-center max-w-md">
+            <div className="w-16 h-16 rounded-full bg-warning/10 flex items-center justify-center">
+              <Mic className="w-7 h-7 text-warning" />
+            </div>
+            <p className="text-sm text-foreground font-semibold">
+              Another recording is in progress
+            </p>
+            <p className="text-xs text-muted-foreground">
+              Finish or stop it before starting a new one.
+            </p>
+            <button
+              onClick={() => router.push(`/notes/session/${meetingId}`)}
+              className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+            >
+              Go to the active recording
+            </button>
+          </div>
+        )}
+
+        {!otherActive && !active && (
           <div className="flex flex-col items-center gap-6 text-center max-w-md">
             <div className="w-20 h-20 rounded-full bg-primary/10 flex items-center justify-center">
               <Mic className="w-9 h-9 text-primary" />
@@ -280,9 +284,7 @@ export default function SessionPage({
             <div className="flex items-center gap-4">
               <button
                 onClick={() =>
-                  phase === "recording"
-                    ? recorderRef.current?.pause()
-                    : recorderRef.current?.resume()
+                  phase === "recording" ? pauseRec() : resumeRec()
                 }
                 className="p-4 rounded-full border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 tech-transition"
                 aria-label={phase === "recording" ? "Pause" : "Resume"}
@@ -300,6 +302,14 @@ export default function SessionPage({
               >
                 <Square className="w-7 h-7 fill-current" />
               </button>
+              <button
+                onClick={discard}
+                className="p-4 rounded-full border border-border text-muted-foreground hover:text-destructive hover:border-destructive/40 tech-transition"
+                aria-label="Discard recording"
+                title="Discard — throw this recording away"
+              >
+                <span className="text-xs font-medium px-1">Discard</span>
+              </button>
             </div>
             <textarea
               value={scratch}
@@ -311,7 +321,7 @@ export default function SessionPage({
           </>
         )}
 
-        {phase === "finalizing" && (
+        {finalizing && (
           <div className="flex flex-col items-center gap-3 text-muted-foreground">
             <Loader2 className="w-8 h-8 animate-spin text-primary" />
             <p className="text-sm">

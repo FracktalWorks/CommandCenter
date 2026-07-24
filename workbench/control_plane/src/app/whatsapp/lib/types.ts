@@ -17,12 +17,23 @@ export type WaAccount = {
   is_default: boolean;
 };
 
-// Connect wizard (W11).
+// Connect wizard (W11) + Embedded Signup (W12).
 export type WaConnectionInfo = {
   webhook_url: string;
   webhook_path: string;
   verify_token: string;
   base_configured: boolean;
+  embedded_signup: boolean;
+  fb_app_id: string;
+  es_config_id: string;
+  graph_version: string;
+};
+
+export type WaEmbeddedResult = {
+  account_id: string;
+  display_name: string;
+  phone_number: string;
+  subscribed: boolean;
 };
 
 export type WaVerifyResult = {

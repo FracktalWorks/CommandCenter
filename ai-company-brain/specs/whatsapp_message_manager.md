@@ -687,7 +687,26 @@ production, set three env vars:** `WHATSAPP_APP_SECRET` (webhook HMAC),
 backfill still awaits coexistence/Embedded-Signup; the inbox starts fresh from
 connection.
 
-**Tests:** 223 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W12 — Embedded Signup one-click connect — BUILT (the top-tier UX).** The
+genuine best onboarding: **"Continue with Facebook"** → pick your number in
+Meta's popup → done, with **zero copy-pasting**. The connect page now fetches
+`connection/info` and, when the Meta app is Embedded-Signup-configured
+(`WHATSAPP_APP_ID` + `WHATSAPP_ES_CONFIG_ID`), leads with the one-click card and
+offers the W11 manual wizard as a secondary path; otherwise it goes straight to
+the wizard (which hints how to unlock one-click). The button loads the Facebook
+JS SDK, calls `FB.login` with the ES `config_id` (`response_type: code`), and a
+`message`-event listener captures the `phone_number_id`/`waba_id` the user picks;
+those go to `POST /whatsapp/connect/embedded`, which **exchanges the code for a
+token server-side** (the App Secret never touches the browser), verifies the
+number, **subscribes the app to the WABA so webhooks flow**, and stores the
+account via a `persist_account` helper shared with the manual path. Graceful
+degradation is the design: it's honest one-click when Meta allows it, honest
+guided-manual when it doesn't. This does need the Meta app to have Embedded
+Signup access (Tech-Provider / app review) to actually run — so it's wired
+correctly and unit-tested, but its live end-to-end path can only be exercised
+against a configured app.
+
+**Tests:** 227 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
@@ -706,7 +725,10 @@ wizard (10 — the pure Meta-error extractor, the verify route with a mocked
 provider, and the connection-info route). All new code `ruff`-clean; the frontend
 `next build` compiles the snooze + Pulse + saved-reply + connect surfaces, the
 gateway app imports cleanly with the scheduler wired into the lifespan, and
-`uv sync` installs the new agent workspace member cleanly.
+`uv sync` installs the new agent workspace member cleanly. The connect wizard
+count grows to 24 with W12's Embedded Signup (the ES config flags on
+`connection/info`, the "not configured" guard, and a fully-mocked happy path
+through code-exchange → verify → subscribe → persist).
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →

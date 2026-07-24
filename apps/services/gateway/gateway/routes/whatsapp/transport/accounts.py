@@ -70,57 +70,81 @@ async def list_accounts(user: UserContext = Depends(get_current_user)):
         await db.close()
 
 
-@router.post("/accounts", response_model=WhatsAppAccountModel, status_code=201)
-async def create_account(
-    req: CreateAccountRequest, user: UserContext = Depends(get_current_user),
-):
-    """Register a WhatsApp Business number after Embedded Signup completes."""
-    if not req.credentials.get("access_token"):
-        raise HTTPException(status_code=400, detail="credentials.access_token required")
+async def persist_account(
+    db: Any,
+    *,
+    user_id: str,
+    phone_number: str,
+    phone_number_id: str,
+    waba_id: str | None,
+    display_name: str,
+    credentials: dict[str, Any],
+    webhook_verify_token: str | None,
+) -> Any:
+    """Encrypt the credentials + insert a wa_account, returning the row. Shared by
+    the manual create route AND the Embedded Signup flow (W12) so both write the
+    number the same way. Raises 409 if this user already connected the number.
+    Caller owns the transaction (commit)."""
+    if not credentials.get("access_token"):
+        raise HTTPException(status_code=400, detail="access_token required")
 
-    # The provider needs phone_number_id in its creds; fold it in so the stored
-    # blob is self-contained (the Cloud API provider reads it from there).
-    creds = dict(req.credentials)
-    creds.setdefault("phone_number_id", req.phone_number_id)
-    creds.setdefault("waba_id", req.waba_id)
+    # The provider reads phone_number_id/waba_id from the creds blob — fold them
+    # in so the stored blob is self-contained.
+    creds = dict(credentials)
+    creds.setdefault("phone_number_id", phone_number_id)
+    creds.setdefault("waba_id", waba_id)
 
     from acb_llm.key_store import get_key_store
     store = get_key_store()
     encrypted = store.encrypt(json.dumps(creds))
 
+    existing = (await db.execute(
+        text("""SELECT id FROM wa_accounts
+                WHERE user_id = :uid AND phone_number_id = :pnid"""),
+        {"uid": user_id, "pnid": phone_number_id},
+    )).fetchone()
+    if existing:
+        raise HTTPException(status_code=409, detail="Number already connected")
+
+    # First account for this user becomes the default.
+    is_first = (await db.execute(
+        text("SELECT COUNT(*) FROM wa_accounts WHERE user_id = :uid"),
+        {"uid": user_id},
+    )).scalar() == 0
+
+    return (await db.execute(
+        text("""INSERT INTO wa_accounts
+                  (id, user_id, phone_number, phone_number_id, waba_id,
+                   display_name, credentials_encrypted, webhook_verify_token,
+                   sync_status, is_default)
+                VALUES
+                  (:id, :uid, :phone, :pnid, :waba, :name, :creds, :verify,
+                   'importing', :is_default)
+                RETURNING id, phone_number, phone_number_id, waba_id,
+                          display_name, avatar_color, sync_status, sync_error,
+                          history_import_phase, quality_rating, last_synced_at,
+                          is_default"""),
+        {"id": str(uuid4()), "uid": user_id,
+         "phone": phone_number, "pnid": phone_number_id,
+         "waba": waba_id, "name": display_name, "creds": encrypted,
+         "verify": webhook_verify_token, "is_default": is_first},
+    )).fetchone()
+
+
+@router.post("/accounts", response_model=WhatsAppAccountModel, status_code=201)
+async def create_account(
+    req: CreateAccountRequest, user: UserContext = Depends(get_current_user),
+):
+    """Register a WhatsApp Business number (the manual / guided-wizard path)."""
     db = await _get_db()
     try:
-        existing = (await db.execute(
-            text("""SELECT id FROM wa_accounts
-                    WHERE user_id = :uid AND phone_number_id = :pnid"""),
-            {"uid": user.email or "anonymous", "pnid": req.phone_number_id},
-        )).fetchone()
-        if existing:
-            raise HTTPException(status_code=409, detail="Number already connected")
-
-        # First account for this user becomes the default.
-        is_first = (await db.execute(
-            text("SELECT COUNT(*) FROM wa_accounts WHERE user_id = :uid"),
-            {"uid": user.email or "anonymous"},
-        )).scalar() == 0
-
-        row = (await db.execute(
-            text("""INSERT INTO wa_accounts
-                      (id, user_id, phone_number, phone_number_id, waba_id,
-                       display_name, credentials_encrypted, webhook_verify_token,
-                       sync_status, is_default)
-                    VALUES
-                      (:id, :uid, :phone, :pnid, :waba, :name, :creds, :verify,
-                       'importing', :is_default)
-                    RETURNING id, phone_number, phone_number_id, waba_id,
-                              display_name, avatar_color, sync_status, sync_error,
-                              history_import_phase, quality_rating, last_synced_at,
-                              is_default"""),
-            {"id": str(uuid4()), "uid": user.email or "anonymous",
-             "phone": req.phone_number, "pnid": req.phone_number_id,
-             "waba": req.waba_id, "name": req.display_name, "creds": encrypted,
-             "verify": req.webhook_verify_token, "is_default": is_first},
-        )).fetchone()
+        row = await persist_account(
+            db, user_id=user.email or "anonymous",
+            phone_number=req.phone_number, phone_number_id=req.phone_number_id,
+            waba_id=req.waba_id, display_name=req.display_name,
+            credentials=req.credentials,
+            webhook_verify_token=req.webhook_verify_token,
+        )
         await db.commit()
         return _account_model(row)
     finally:

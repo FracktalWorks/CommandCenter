@@ -7,7 +7,7 @@
 // token. Honest by design: it names exactly what Meta requires and never fakes a
 // one-click flow the platform can't actually deliver without app review.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   ArrowLeft,
@@ -17,11 +17,13 @@ import {
   Copy,
   ExternalLink,
   Loader2,
+  LogIn,
   MessageCircle,
   ShieldCheck,
 } from "lucide-react";
 import {
   createAccount,
+  embeddedSignup,
   fetchConnectionInfo,
   verifyConnection,
 } from "../lib/api";
@@ -29,9 +31,25 @@ import type { WaConnectionInfo, WaVerifyResult } from "../lib/types";
 
 const STEPS = ["Prerequisites", "Webhook", "Credentials", "Done"];
 
+type ConnectMode = "loading" | "choose" | "manual" | "done";
+
 export default function ConnectPage() {
   const router = useRouter();
+  const [info, setInfo] = useState<WaConnectionInfo | null>(null);
+  const [mode, setMode] = useState<ConnectMode>("loading");
   const [step, setStep] = useState(0);
+
+  useEffect(() => {
+    fetchConnectionInfo().then((i) => {
+      setInfo(i);
+      sessionStorage.setItem("wa_verify_token", i.verify_token);
+      // One-click when the Meta app is Embedded-Signup-configured; else the
+      // guided manual wizard.
+      setMode(i.embedded_signup ? "choose" : "manual");
+    });
+  }, []);
+
+  const goInbox = () => router.push("/whatsapp");
 
   return (
     <div className="mx-auto flex min-h-full max-w-2xl flex-col p-6">
@@ -49,21 +67,226 @@ export default function ConnectPage() {
         </div>
       </div>
 
-      <Stepper step={step} />
+      {mode === "loading" && (
+        <div className="mt-10 flex justify-center text-muted-foreground">
+          <Loader2 className="h-5 w-5 animate-spin" />
+        </div>
+      )}
 
-      <div className="mt-6 flex-1">
-        {step === 0 && <StepPrereqs onNext={() => setStep(1)} />}
-        {step === 1 && (
-          <StepWebhook onBack={() => setStep(0)} onNext={() => setStep(2)} />
-        )}
-        {step === 2 && (
-          <StepCredentials
-            onBack={() => setStep(1)}
-            onConnected={() => setStep(3)}
-          />
-        )}
-        {step === 3 && <StepDone onGo={() => router.push("/whatsapp")} />}
+      {mode === "choose" && info && (
+        <ChooseConnect
+          info={info}
+          onManual={() => {
+            setStep(0);
+            setMode("manual");
+          }}
+          onDone={() => setMode("done")}
+        />
+      )}
+
+      {mode === "manual" && (
+        <>
+          <Stepper step={step} />
+          <div className="mt-6 flex-1">
+            {step === 0 && (
+              <StepPrereqs
+                showOneClickHint={info?.embedded_signup === false}
+                onNext={() => setStep(1)}
+              />
+            )}
+            {step === 1 && (
+              <StepWebhook
+                info={info}
+                onBack={() => setStep(0)}
+                onNext={() => setStep(2)}
+              />
+            )}
+            {step === 2 && (
+              <StepCredentials
+                onBack={() => setStep(1)}
+                onConnected={() => setMode("done")}
+              />
+            )}
+          </div>
+        </>
+      )}
+
+      {mode === "done" && (
+        <div className="mt-6">
+          <StepDone onGo={goInbox} />
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Chooser + Embedded Signup (W12) ───────────────────────────────────────────
+
+type FbLoginResponse = { authResponse?: { code?: string } | null };
+type FbWindow = Window & {
+  FB?: {
+    init: (opts: Record<string, unknown>) => void;
+    login: (cb: (r: FbLoginResponse) => void, opts: Record<string, unknown>) => void;
+  };
+  fbAsyncInit?: () => void;
+};
+
+function ChooseConnect({
+  info,
+  onManual,
+  onDone,
+}: {
+  info: WaConnectionInfo;
+  onManual: () => void;
+  onDone: () => void;
+}) {
+  return (
+    <Card>
+      <h2 className="text-[14px] font-semibold">Connect in one click</h2>
+      <p className="mt-1 text-[12.5px] text-muted-foreground">
+        Log in with Facebook, pick your WhatsApp Business number, and you&apos;re
+        done — no copy-pasting IDs or tokens. We finish the setup (token exchange
+        and webhook subscription) for you.
+      </p>
+      <div className="mt-4">
+        <EmbeddedSignupButton info={info} onDone={onDone} />
       </div>
+      <div className="my-4 flex items-center gap-3 text-[10.5px] text-muted-foreground/70">
+        <div className="h-px flex-1 bg-border" /> OR
+        <div className="h-px flex-1 bg-border" />
+      </div>
+      <button
+        onClick={onManual}
+        className="w-full rounded-lg border border-border px-3 py-2 text-[12.5px] font-semibold text-muted-foreground hover:text-foreground"
+      >
+        Set up manually with my own credentials
+      </button>
+    </Card>
+  );
+}
+
+function EmbeddedSignupButton({
+  info,
+  onDone,
+}: {
+  info: WaConnectionInfo;
+  onDone: () => void;
+}) {
+  const [ready, setReady] = useState(false);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const sessionInfo = useRef<{ phone_number_id?: string; waba_id?: string }>({});
+
+  // Load + init the Facebook JS SDK once.
+  useEffect(() => {
+    const w = window as unknown as FbWindow;
+    const init = () => {
+      if (!w.FB) return;
+      w.FB.init({
+        appId: info.fb_app_id,
+        autoLogAppEvents: true,
+        xfbml: true,
+        version: info.graph_version,
+      });
+      setReady(true);
+    };
+    if (w.FB) {
+      init();
+      return;
+    }
+    w.fbAsyncInit = init;
+    if (!document.getElementById("wa-fb-sdk")) {
+      const s = document.createElement("script");
+      s.id = "wa-fb-sdk";
+      s.src = "https://connect.facebook.net/en_US/sdk.js";
+      s.async = true;
+      s.defer = true;
+      s.crossOrigin = "anonymous";
+      document.body.appendChild(s);
+    }
+  }, [info.fb_app_id, info.graph_version]);
+
+  // Capture the WABA + phone number the user picks in the popup.
+  useEffect(() => {
+    const onMessage = (ev: MessageEvent) => {
+      try {
+        if (!/facebook\.com$/.test(new URL(ev.origin).hostname)) return;
+      } catch {
+        return;
+      }
+      try {
+        const data =
+          typeof ev.data === "string" ? JSON.parse(ev.data) : ev.data;
+        if (data?.type === "WA_EMBEDDED_SIGNUP" && data?.data) {
+          sessionInfo.current = {
+            phone_number_id: data.data.phone_number_id,
+            waba_id: data.data.waba_id,
+          };
+        }
+      } catch {
+        /* not our message */
+      }
+    };
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, []);
+
+  const launch = useCallback(() => {
+    const w = window as unknown as FbWindow;
+    if (!w.FB || busy) return;
+    setError(null);
+    w.FB.login(
+      (resp: FbLoginResponse) => {
+        const code = resp?.authResponse?.code;
+        const si = sessionInfo.current;
+        if (!code || !si.phone_number_id) {
+          setError("Signup was cancelled, or no number was selected.");
+          return;
+        }
+        setBusy(true);
+        embeddedSignup({
+          code,
+          phone_number_id: si.phone_number_id,
+          waba_id: si.waba_id ?? null,
+        }).then((res) => {
+          setBusy(false);
+          if (res.ok) onDone();
+          else setError(res.error ?? "Couldn't finish connecting.");
+        });
+      },
+      {
+        config_id: info.es_config_id,
+        response_type: "code",
+        override_default_response_type: true,
+        extras: { setup: {}, featureType: "", sessionInfoVersion: "3" },
+      }
+    );
+  }, [busy, info.es_config_id, onDone]);
+
+  return (
+    <div>
+      <button
+        onClick={launch}
+        disabled={!ready || busy}
+        className="flex w-full items-center justify-center gap-2 rounded-lg bg-[#1877F2] px-4 py-2.5 text-[13px] font-semibold text-white hover:opacity-95 disabled:opacity-60"
+      >
+        {busy ? (
+          <Loader2 className="h-4 w-4 animate-spin" />
+        ) : (
+          <LogIn className="h-4 w-4" />
+        )}
+        Continue with Facebook
+      </button>
+      {!ready && !error && (
+        <p className="mt-2 text-center text-[10.5px] text-muted-foreground">
+          Loading Facebook…
+        </p>
+      )}
+      {error && (
+        <div className="mt-2 rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] text-red-500">
+          {error}
+        </div>
+      )}
     </div>
   );
 }
@@ -110,7 +333,13 @@ function Stepper({ step }: { step: number }) {
 
 // ── Step 1: prerequisites ─────────────────────────────────────────────────────
 
-function StepPrereqs({ onNext }: { onNext: () => void }) {
+function StepPrereqs({
+  onNext,
+  showOneClickHint,
+}: {
+  onNext: () => void;
+  showOneClickHint?: boolean;
+}) {
   const items = [
     {
       title: "A Meta app with WhatsApp",
@@ -139,6 +368,13 @@ function StepPrereqs({ onNext }: { onNext: () => void }) {
         here. We&apos;ll test them against Meta before saving, so you never store a
         broken token.
       </p>
+      {showOneClickHint && (
+        <div className="mt-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">
+          Tip: set <code>WHATSAPP_APP_ID</code> and{" "}
+          <code>WHATSAPP_ES_CONFIG_ID</code> on the server to unlock the one-click
+          &ldquo;Continue with Facebook&rdquo; flow instead of this manual setup.
+        </div>
+      )}
       <ol className="mt-4 space-y-3">
         {items.map((it, i) => (
           <li key={it.title} className="flex gap-3">
@@ -172,22 +408,15 @@ function StepPrereqs({ onNext }: { onNext: () => void }) {
 // ── Step 2: webhook ───────────────────────────────────────────────────────────
 
 function StepWebhook({
+  info,
   onBack,
   onNext,
 }: {
+  info: WaConnectionInfo | null;
   onBack: () => void;
   onNext: () => void;
 }) {
-  const [info, setInfo] = useState<WaConnectionInfo | null>(null);
   const [domain, setDomain] = useState("");
-
-  useEffect(() => {
-    fetchConnectionInfo().then((i) => {
-      setInfo(i);
-      // stash the verify token so step 3 can save it onto the account
-      sessionStorage.setItem("wa_verify_token", i.verify_token);
-    });
-  }, []);
 
   const webhookUrl =
     info?.base_configured && info.webhook_url

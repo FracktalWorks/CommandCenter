@@ -308,6 +308,52 @@ async def complete_recording(
     return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
 
 
+@router.post("/meetings/{meeting_id}/retranscribe", status_code=202)
+async def retranscribe(
+    meeting_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Re-run transcription on the meeting's existing recording with the CURRENT
+    STT model — e.g. after switching the STT tier to Deepgram in Settings to get
+    named speakers. Replaces this recording's segments and re-chains notes."""
+    async with await _get_db() as db:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id, channel FROM meeting_recording WHERE meeting_id=:id"
+                ),
+                {"id": meeting_id},
+            )
+        ).fetchall()
+        if not rows:
+            raise HTTPException(
+                status_code=404, detail="no recording to re-transcribe"
+            )
+        # Prefer the same recording the audio player serves (mixed > upload > …).
+        order = {"mixed": 0, "upload": 1, "mic": 2, "system": 3}
+        best = sorted(rows, key=lambda r: order.get(r.channel, 9))[0]
+        recording_id = str(best.id)
+        run_row = (
+            await db.execute(
+                text(
+                    "INSERT INTO summary_run (meeting_id, kind, status, stage) "
+                    "VALUES (:mid, 'transcribe', 'queued', 'queued') RETURNING id"
+                ),
+                {"mid": meeting_id},
+            )
+        ).fetchone()
+        await db.execute(
+            text("UPDATE meeting SET status='processing' WHERE id=:id"),
+            {"id": meeting_id},
+        )
+        await db.commit()
+
+    run_id = str(run_row.id)
+    _log.info("notes.retranscribe", meeting_id=meeting_id, recording_id=recording_id)
+    _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
+    return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
+
+
 @router.get("/meetings/{meeting_id}/audio")
 async def get_audio(
     meeting_id: str,

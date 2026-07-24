@@ -31,13 +31,18 @@ export async function listMeetings(query?: string): Promise<MeetingListItem[]> {
 
 export async function createMeeting(
   title?: string,
-  platform: string = "upload"
+  platform: string = "upload",
+  templateKey?: string
 ): Promise<MeetingListItem> {
   return json(
     await fetch("/api/notes/meetings", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ title: title || null, platform }),
+      body: JSON.stringify({
+        title: title || null,
+        platform,
+        template_key: templateKey || null,
+      }),
     })
   );
 }
@@ -180,6 +185,16 @@ export async function summarize(
 ): Promise<{ run_id: string; status: string }> {
   return json(
     await fetch(`/api/notes/meetings/${meetingId}/summarize`, { method: "POST" })
+  );
+}
+
+export async function retranscribe(
+  meetingId: string
+): Promise<{ recording_id: string; run_id: string; status: string }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/retranscribe`, {
+      method: "POST",
+    })
   );
 }
 

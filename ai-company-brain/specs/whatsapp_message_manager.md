@@ -536,10 +536,14 @@ the deployable artifact. What WAS validated here:
   `EXPLAIN` confirms the FTS query uses `idx_wa_messages_fts` (Bitmap Index Scan,
   not a seq scan) — the tsvector expression matches the index byte-for-byte. The
   `credentials_encrypted` NOT NULL fired as designed. **Caveat closed.**
-- **Frontend:** `npm ci` FAILS on a PRE-EXISTING lockfile drift (package-lock is
-  missing `@emnapi/*` platform deps — unrelated to WhatsApp; nothing here touches
-  package.json/lock). Validated my code via `npm install` + `next build` instead.
-  The lockfile drift is a separate deploy blocker worth fixing on its own.
+- **Frontend `next build` PASSES.** `npm ci` FAILS on a PRE-EXISTING lockfile
+  drift (package-lock is missing `@emnapi/*` platform deps — unrelated to
+  WhatsApp; nothing here touches package.json/lock), so I validated via
+  `npm install` + `npm run build`: the production build compiles the whole app
+  including `/whatsapp` (prerendered static) and `/api/whatsapp/[...path]`
+  (dynamic) — my TSX/TS typechecks and builds under real Next 16. **Caveat
+  closed.** The lockfile drift is a separate deploy blocker worth fixing on its
+  own (it would break CI's `npm ci`), but it is out of scope for this branch.
 
 **Next (W2 frontend → W3):** the Categories + Rules settings screens and a
 digest view in the UI (backend ready); LLM refinement layered onto the

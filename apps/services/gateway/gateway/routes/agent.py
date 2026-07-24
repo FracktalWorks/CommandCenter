@@ -92,6 +92,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "task-manager",
         "apis-config",
         "email-assistant",
+        "whatsapp-assistant",
     ]
 )
 
@@ -144,6 +145,25 @@ _AGENT_REGISTRY: list[dict] = [
         # the BYOK LiteLLM tiers (tier-balanced → deepseek). Keep this "maf".
         "agent_runtime": "maf",
         "local_path": "apps/agents/agent-email-assistant",
+        "integrations": [],
+        "optional_integrations": [],
+    },
+    {
+        "name": "whatsapp-assistant",
+        "description": (
+            "WhatsApp Assistant — briefs and triages a WhatsApp Business inbox, "
+            "summarizes groups, transcribes voice notes, and drafts replies and "
+            "follow-up nudges in the founder's voice. Drafts only; never sends."
+        ),
+        "tags": ["whatsapp", "messaging", "triage", "drafting", "apps"],
+        "status": "live",
+        # whatsapp-assistant is a MAF agent (apps/agents/agent-whatsapp-assistant:
+        # agents.py build_agents() + config.json "runtime": "maf"). Like the
+        # email-assistant it must stay "maf" — labelling it github-copilot routes
+        # it through the Copilot SDK and fails with a 402 instead of using the
+        # BYOK LiteLLM tiers.
+        "agent_runtime": "maf",
+        "local_path": "apps/agents/agent-whatsapp-assistant",
         "integrations": [],
         "optional_integrations": [],
     },

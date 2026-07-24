@@ -565,14 +565,36 @@ proof that the email vertical's shape was a *channel* shape all along.
   (already covers `transcript_text`) and shows in the thread bubble, with a
   one-tap "Transcribe" chip on untranscribed inbound voice notes.
 
-**Tests:** 156 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W5 — companion agent — BUILT (the "companion AI" headline).**
+`apps/agents/agent-whatsapp-assistant` is a MAF agent (structure mirrors
+agent-email-assistant: `agents.py` `build_agents()` + `config.json`
+`runtime: "maf"`, registered in the gateway allowlist + `_AGENT_REGISTRY`). It
+gives the founder conversational command of the vertical — every tool is a thin,
+user-scoped wrapper over the `/whatsapp/*` routes, so it inherits their
+guarantees. 13 tools: read/triage (`list_whatsapp_accounts`, `whatsapp_brief`,
+`list_whatsapp_chats`, `read_whatsapp_chat`, `search_whatsapp`,
+`whatsapp_waiting_on`, `whatsapp_my_commitments`, `whatsapp_chat_context`),
+understanding (`summarize_whatsapp_group`, `list_whatsapp_group_summaries`,
+`transcribe_whatsapp_voice_note`), and drafting
+(`draft_whatsapp_reply`, `draft_waiting_on_nudge`). **DOCTRINE: the companion
+DRAFTS, the founder SENDS** — there is deliberately NO send tool, so the worst it
+can do is prepare words the founder reviews (a free-form reply is the founder's
+own tap; one-to-many goes through the broker). Tools carry `chat_id` /
+`message_id` / `commitment_id` forward so a `commitment_id` from `whatsapp_brief`
+feeds `draft_waiting_on_nudge` in one flow. Runs on the BYOK LiteLLM tier
+(`tier-balanced`), never native Copilot.
+
+**Tests:** 165 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
 extraction + nudge drafting (24), voice-note transcription (11 — predicate,
-status lifecycle, watermark reset, sentinel-on-failure),
-and group intelligence (13 — builder/parser/summarize orchestration). All new
-code `ruff`-clean; the frontend `next build` compiles the new drawer surface.
+status lifecycle, watermark reset, sentinel-on-failure), group intelligence
+(13 — builder/parser/summarize orchestration), and the companion agent (9 —
+tool surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
+formatting; `build_agents()` constructs the MAF agent with all 13 tools). All new
+code `ruff`-clean; the frontend `next build` compiles the new drawer surface, and
+`uv sync` installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
@@ -623,11 +645,11 @@ normal draft.
 
 **Next (buildable now, no CRM/ERP dep):** document/image OCR (the media-
 understanding sibling of voice transcription — `wa_media.ocr_text` is already
-provisioned); the `wa_*` AI companion toolset for the control-plane chat
-(`wa_summarize_group`, `wa_draft_reply`, `wa_query` as MAF tools); semantic
-search over history (pgvector embeddings on `wa_messages`, already indexed for
-FTS). ~~group intelligence~~, ~~waiting-on nudge drafts~~, and ~~voice-note
-transcription~~ are now BUILT (W4.1–W4.3).
+provisioned); semantic search over history (pgvector embeddings on `wa_messages`,
+already indexed for FTS); scheduler wiring for the two bounded batch triggers
+(`summarize_stale_groups`, `transcribe_pending`) so groups/voice auto-refresh in
+production. ~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note
+transcription~~, and the ~~`wa_*` AI companion toolset~~ are now BUILT (W4.1–W5).
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

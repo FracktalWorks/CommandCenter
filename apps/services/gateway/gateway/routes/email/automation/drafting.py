@@ -853,6 +853,9 @@ async def _llm_draft_reply(
     # via _is_no_draft and exact-equality history logging stays consistent.
     if _is_no_draft(body):
         return DRAFT_NO_DRAFT_SENTINEL
+    # Salutation guarantee: the prompt asks for a greeting, but a model that
+    # skips it ships an abrupt, informal-reading draft — so enforce it here.
+    body = _ensure_salutation(body, email.get("from_name") or "")
     # The signature is NOT appended here — it is added at send time
     # (signature.build_signed_bodies) as an HTML block with a plain-text
     # fallback, so it renders as HTML and never doubles up in the compose box.
@@ -893,7 +896,11 @@ async def _llm_compose_assist(
             "new asks, or change the meaning.\n"
             if improving
             else "- DRAFT a new email body from the owner's instruction and "
-            "context. Ground every fact in the instruction/context; never invent "
+            "context. START with a greeting on its own line that addresses the "
+            "RECIPIENT by name — 'Dear <name>,' for a formal email or 'Hi "
+            "<first name>,' for a casual one (a polite 'Hello,' if no name is "
+            "known) — then a blank line, then the message. Ground every fact in "
+            "the instruction/context; never invent "
             "specifics — if something is missing, keep it open or ask.\n"
         )
         sys_prompt = (
@@ -969,6 +976,10 @@ async def _llm_compose_assist(
         return (current_body or "").strip() or DRAFT_NO_DRAFT_SENTINEL
     if _is_no_draft(body):
         return DRAFT_NO_DRAFT_SENTINEL
+    # Salutation guarantee — but only on a FRESH draft. When improving the
+    # owner's own text, a greeting they chose not to write must stay absent.
+    if not improving:
+        body = _ensure_salutation(body, _recipient_greeting_name(recipient))
     # Signature appended at send time (signature.build_signed_bodies), not here.
     return body
 
@@ -1049,6 +1060,71 @@ def _clean_draft_body(body: str) -> str:
         _log.info("email.draft_quote_stripped", chars=len(quoted))
         return main.strip()
     return cleaned
+
+
+# Openers that mark the first line as ALREADY a salutation. Word-anchored so
+# "Hi Alice," / "Dear Dr. Rao," / "Good morning," match but a body-first line
+# like "Higher volumes are possible" does not.
+_GREETING_START_RE = re.compile(
+    r"^(dear|hi|hello|hey|greetings|respected|"
+    r"good\s+(morning|afternoon|evening|day)|"
+    r"namaste|hola|bonjour|salut|hallo|ciao)\b",
+    re.IGNORECASE,
+)
+
+_HONORIFIC_RE = re.compile(r"^(mr|mrs|ms|mx|dr|prof|er)\.?$", re.IGNORECASE)
+
+
+def _salutation_name(recipient_name: str) -> str:
+    """The name to greet with: the first name normally, '<honorific> <surname>'
+    (e.g. 'Dr. Rao') when the display name leads with an honorific, '' when
+    there is no usable name (empty, or a bare email address)."""
+    name = (recipient_name or "").strip().strip('"').strip("'")
+    if not name or "@" in name:
+        return ""
+    tokens = [t.strip(",;:") for t in name.split()]
+    tokens = [t for t in tokens if t]
+    if not tokens:
+        return ""
+    if len(tokens) >= 2 and _HONORIFIC_RE.match(tokens[0]):
+        return f"{tokens[0]} {tokens[-1]}"
+    return tokens[0]
+
+
+def _ensure_salutation(body: str, recipient_name: str = "") -> str:
+    """Guarantee a drafted email OPENS with a salutation line.
+
+    The drafters are instructed to start with a greeting, but a model
+    sometimes jumps straight into the message, which reads abrupt and too
+    informal. When the first line doesn't look like a greeting, prepend a
+    polite one addressing the recipient ('Dear <name>,' — 'Hello,' when no
+    name is known). Deliberately lenient about what counts as an existing
+    greeting — any recognised opener word, or a short line ending in ','
+    or ':' (which covers greetings in other languages) — so a salutation
+    the model DID write is never doubled."""
+    stripped = (body or "").lstrip()
+    if not stripped:
+        return body
+    first = stripped.splitlines()[0].strip()
+    if _GREETING_START_RE.match(first):
+        return body
+    if len(first) <= 60 and first.endswith((",", ":")):
+        return body
+    name = _salutation_name(recipient_name)
+    greeting = f"Dear {name}," if name else "Hello,"
+    return f"{greeting}\n\n{stripped}"
+
+
+def _recipient_greeting_name(recipient: str) -> str:
+    """Display name of the first recipient in a 'Name <addr>' / bare-address
+    string — '' when only an address is known, so the greeting stays 'Hello,'."""
+    r = (recipient or "").strip()
+    if not r:
+        return ""
+    name = r.split("<")[0].strip().strip('"').strip("'").rstrip(",")
+    if not name or "@" in name:
+        return ""
+    return name
 
 
 async def _draft_via_maf_agent(

@@ -182,6 +182,19 @@ export function DigestSettingsDialog({
               onChange={(v) => set({ digest_send_to_email: v })}
             />
           </div>
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <span className="text-xs text-foreground">AI morning brief</span>
+              <p className="text-[11px] text-muted-foreground leading-snug">
+                One AI sentence atop the dashboard and digest naming what&apos;s
+                most pressing. Costs a model call each time it&apos;s built.
+              </p>
+            </div>
+            <Toggle
+              enabled={s.morning_brief_enabled ?? false}
+              onChange={(v) => set({ morning_brief_enabled: v })}
+            />
+          </div>
           {err && (
             <div className="text-[11px] text-destructive bg-destructive/10 rounded-md px-2 py-1.5">
               {err}

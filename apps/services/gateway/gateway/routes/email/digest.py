@@ -16,6 +16,7 @@ from gateway.routes.email.automation.senders import canonical_cleanup_category
 from gateway.routes.email.core import (
     _assert_account_owner,
     _get_db,
+    _llm_json,
     _log,
     provider_session,
     router,
@@ -304,11 +305,15 @@ def _render_digest_markdown(
     period: str, totals: dict, needs: int,
     by_category: list[dict], top_senders: list[dict],
     backlog: list[dict] | None = None, commitments: list[dict] | None = None,
-    awaiting: list[dict] | None = None,
+    awaiting: list[dict] | None = None, brief: str = "",
 ) -> str:
     lines = [
         f"# Inbox digest — last {period}",
         "",
+    ]
+    if brief:
+        lines += [f"_{brief}_", ""]
+    lines += [
         f"**{totals['inbox']}** new in inbox · **{totals['unread']}** unread · "
         f"**{needs}** threads awaiting your reply · "
         f"**{totals['attachments']}** with attachments",
@@ -346,7 +351,7 @@ def _render_digest_html(
     period: str, totals: dict, needs: int,
     by_category: list[dict], top_senders: list[dict],
     backlog: list[dict] | None = None, commitments: list[dict] | None = None,
-    awaiting: list[dict] | None = None,
+    awaiting: list[dict] | None = None, brief: str = "",
 ) -> str:
     """A simple, self-contained HTML body so the emailed digest renders as more
     than a wall of Markdown asterisks in a mail client."""
@@ -390,7 +395,9 @@ def _render_digest_html(
         "<div style='font-family:-apple-system,Segoe UI,Roboto,sans-serif;"
         "max-width:560px;color:#1a1a1a'>"
         f"<h2 style='margin:0 0 4px'>Inbox digest — last {_esc(period)}</h2>"
-        "<p style='font-size:15px;margin:8px 0 16px'>"
+        + (f"<p style='font-size:14px;font-style:italic;color:#444;"
+           f"margin:6px 0 12px'>{_esc(brief)}</p>" if brief else "")
+        + "<p style='font-size:15px;margin:8px 0 16px'>"
         f"<b>{totals['inbox']}</b> new in inbox &middot; "
         f"<b>{totals['unread']}</b> unread &middot; "
         f"<b>{needs}</b> awaiting your reply &middot; "
@@ -400,6 +407,66 @@ def _render_digest_html(
         f"{_h3('Noisy senders you never answer')}{senders}"
         "</div>"
     )
+
+
+async def _digest_brief(
+    db: Any, account_id: str, backlog: list[dict], commitments: list[dict],
+) -> str:
+    """The opt-in "morning brief": ONE LLM sentence naming what actually needs
+    attention today, from the top needs-reply threads + due commitments (the
+    data already on the dashboard — no new query). Best-effort: any failure
+    (flag off, nothing pressing, model error) returns "" and the dashboard just
+    omits the line. Reads the per-account opt-in flag; costs a model call, so it
+    never runs unless the user turned it on."""
+    try:
+        row = (await db.execute(text(
+            "SELECT morning_brief_enabled FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+    except Exception as exc:  # noqa: BLE001 — column absent pre-migration, etc.
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _log.warning("email.digest_brief_flag_failed", error=str(exc)[:200])
+        return ""
+    if not row or not getattr(row, "morning_brief_enabled", False):
+        return ""
+    if not backlog and not commitments:
+        return ""
+    reply_lines = "\n".join(
+        f"- {b.get('subject', '')}"
+        + (f" (from {b['who']})" if b.get("who") else "")
+        + (f", waiting {b['age_days']}d" if b.get("age_days") else "")
+        for b in backlog[:6])
+    due_lines = "\n".join(
+        f"- {c.get('title', '')}" + (f" ({_due_phrase(c)})" if c.get("due") else "")
+        for c in commitments[:6])
+    user_prompt = (
+        "Needs a reply:\n" + (reply_lines or "- (none)")
+        + "\n\nCommitments due:\n" + (due_lines or "- (none)"))
+    try:
+        data, _content, _used = await _llm_json(
+            "tier-fast",
+            [{"role": "system", "content": (
+                "You write ONE short sentence orienting someone to their inbox "
+                "for the day — what's most pressing and who it's with. Name 1-3 "
+                "specific items (a person or subject), newest-pressing first. No "
+                "greeting, no preamble, under 25 words. "
+                'Respond ONLY JSON {"brief": "<sentence>"}.')},
+             {"role": "user", "content": user_prompt}],
+            max_tokens=160,
+        )
+        if isinstance(data, dict):
+            return str(data.get("brief", "")).strip()[:280]
+        return ""
+    except Exception as exc:  # noqa: BLE001
+        try:
+            await db.rollback()
+        except Exception:  # noqa: BLE001
+            pass
+        _log.warning("email.digest_brief_failed", error=str(exc)[:200])
+        return ""
 
 
 async def _generate_digest(
@@ -468,6 +535,10 @@ async def _generate_digest(
         limit=50 if full else 8,
         include_undated=full)
 
+    # Opt-in one-liner (off by default → returns "" with no model call). Built
+    # from the sections above, so it costs one call and no extra query.
+    brief = await _digest_brief(db, account_id, backlog, commitments)
+
     period = ("day" if period_days <= 1
               else ("week" if period_days <= 7 else f"{period_days} days"))
     return {
@@ -478,12 +549,13 @@ async def _generate_digest(
         "backlog": backlog,
         "awaiting": awaiting,
         "commitments": commitments,
+        "brief": brief,
         "markdown": _render_digest_markdown(
             period, totals, needs, by_category, top_senders,
-            backlog, commitments, awaiting),
+            backlog, commitments, awaiting, brief),
         "html": _render_digest_html(
             period, totals, needs, by_category, top_senders,
-            backlog, commitments, awaiting),
+            backlog, commitments, awaiting, brief),
     }
 
 

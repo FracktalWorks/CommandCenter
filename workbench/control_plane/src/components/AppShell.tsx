@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles } from "lucide-react";
+import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -266,6 +266,9 @@ function MobileBottomNavInner({
   const isChatPage = pathname?.startsWith("/chat") ?? false;
   const isEmailPage = pathname?.startsWith("/email") ?? false;
   const isTasksPage = pathname?.startsWith("/tasks") ?? false;
+  // Notes actions live on the library page; the meeting/session sub-pages have
+  // their own in-view controls, so scope the context tabs to the list.
+  const isNotesPage = pathname === "/notes";
 
   // Tasks: the bottom bar reflects which GTD section you're in. The page emits
   // `cc-tasks-section` whenever the active view changes.
@@ -364,6 +367,26 @@ function MobileBottomNavInner({
               onClick={() => dispatchNav("tasks-assistant")}
               icon={Sparkles}
               label="Assistant"
+            />
+          </>
+        )}
+        {isNotesPage && (
+          <>
+            <TaskTab
+              onClick={() => dispatchNav("notes-record")}
+              icon={Mic}
+              label="Record"
+              accent
+            />
+            <TaskTab
+              onClick={() => dispatchNav("notes-upload")}
+              icon={Upload}
+              label="Upload"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("notes-glossary")}
+              icon={BookMarked}
+              label="Glossary"
             />
           </>
         )}

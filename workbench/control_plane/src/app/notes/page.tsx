@@ -95,7 +95,7 @@ export default function NotesPage() {
     }
   }
 
-  async function onRecord() {
+  const onRecord = useCallback(async () => {
     setError(null);
     try {
       const meeting = await createMeeting(undefined, "in_person", templateKey);
@@ -103,7 +103,19 @@ export default function NotesPage() {
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     }
-  }
+  }, [router, templateKey]);
+
+  // Mobile bottom-nav context tabs (AppShell dispatches these on /notes).
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const tab = (e as CustomEvent<string>).detail;
+      if (tab === "notes-record") void onRecord();
+      else if (tab === "notes-upload") fileInput.current?.click();
+      else if (tab === "notes-glossary") setShowGlossary(true);
+    };
+    window.addEventListener("cc-mobile-nav", handler);
+    return () => window.removeEventListener("cc-mobile-nav", handler);
+  }, [onRecord]);
 
   return (
     <div className="flex flex-col h-full">

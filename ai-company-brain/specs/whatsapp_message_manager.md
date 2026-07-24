@@ -516,8 +516,15 @@ proof that the email vertical's shape was a *channel* shape all along.
   two doctrines — conversation-as-DATA and sentinel-on-failure (NO_DRAFT / LLM
   error → no fabricated draft). Cached in wa_ai_drafts; generate/get routes. The
   composer gains a "✦ Suggest reply" chip (AI at the point of writing).
+- `automation/outbound.py`: the approval-gated broadcast composer.
+  `/whatsapp/broadcast` never sends directly — it routes ONE Action Broker
+  proposal at SUGGEST authority (→ NEEDS_APPROVAL) and asserts the gating held;
+  the real sends live only in the registered `whatsapp.broadcast` handler
+  (broker non-negotiable #4). The founder's own explicit reply stays direct
+  (that tap is the human in the loop); automation and one-to-many go through
+  approval.
 
-**Tests:** 146 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**Tests:** 150 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist, post-sync registry, route helpers (signature/window/regime), templates,
 capture, context, Reply Zero, intent (21 cases), categories, digest + hook
 wiring, the auto-reply ladder (12), and commitment extraction (15). All new code

@@ -99,6 +99,27 @@ export type WaRulePreview = {
   summary: Record<string, number>;
 };
 
+// WhatsApp Pulse — the founder's "am I keeping up?" projection (W7).
+export type WaPulse = {
+  window_days: number;
+  inbound: number;
+  outbound: number;
+  active_chats: number;
+  response: {
+    replied: number;
+    median_minutes: number | null;
+    p90_minutes: number | null;
+  };
+  waiting_longest: {
+    chat_id: string;
+    name: string;
+    waited_hours: number;
+    snippet: string;
+  }[];
+  by_intent: { key: string; count: number }[];
+  busiest: { chat_id: string; name: string; count: number }[];
+};
+
 export type WaEntityRef = { system: string; kind: string; id: string };
 
 export type WaOpenLoop = {

@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  Activity,
   Clock,
   Loader2,
   MessageCircle,
@@ -206,6 +207,12 @@ export default function WhatsAppPage() {
           <div className="px-2 py-1 text-[10px] font-bold tracking-wider text-muted-foreground/70">
             AUTOMATION
           </div>
+          <Link
+            href="/whatsapp/insights"
+            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
+          >
+            <Activity className="h-3.5 w-3.5" /> Pulse
+          </Link>
           <Link
             href="/whatsapp/settings/categories"
             className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"

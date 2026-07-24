@@ -602,7 +602,21 @@ surfaces them; the conversation header gains a Snooze menu (Later today / This
 evening / Tomorrow 9am / Next week) and a one-tap "wake". An OUTBOUND reply never
 wakes a snooze.
 
-**Tests:** 177 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W7 — Pulse (analytics / insights) — BUILT (the founder-CEO's "am I keeping
+up?").** A read-only projection (`pulse.py`, alongside `digest.py`) over the
+classified store: `GET /whatsapp/pulse?days=` returns the typical reply time
+(median + p90 minutes from each answered inbound to the founder's next outbound),
+how many they replied to, in/out volume + active chats, **who has waited longest**
+(open NEEDS_REPLY, not snoozed, oldest first), inbound load **by intent**, and the
+**busiest chats** over the window. The aggregation maths (`median`, `percentile`
+nearest-rank, `summarize_response_times` — drops negatives/None, robust to
+outliers) is pure and unit-tested; the reply-latency pull is a bounded LATERAL
+next-outbound join, all validated on real Postgres 16. A calm `/whatsapp/insights`
+screen (headline tiles + waited-longest list + intent bars + busiest list, with a
+7/30-day toggle) hangs off a new "Pulse" nav entry. No migration, no LLM — honest
+projection of what the pipeline already wrote.
+
+**Tests:** 185 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
@@ -610,10 +624,11 @@ extraction + nudge drafting (24), voice-note transcription (11 — predicate,
 status lifecycle, watermark reset, sentinel-on-failure), group intelligence
 (13 — builder/parser/summarize orchestration), the companion agent (9 — tool
 surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
-formatting; `build_agents()` constructs the MAF agent with all 13 tools), and
-chat snooze (12 — the pure wake-time validator + route registration). All new
-code `ruff`-clean; the frontend `next build` compiles the new snooze surface, and
-`uv sync` installs the new agent workspace member cleanly.
+formatting; `build_agents()` constructs the MAF agent with all 13 tools), chat
+snooze (12 — the pure wake-time validator + route registration), and Pulse
+(8 — median/percentile/response-time folds + route registration). All new code
+`ruff`-clean; the frontend `next build` compiles the new snooze + Pulse surfaces,
+and `uv sync` installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
@@ -666,13 +681,16 @@ consumes it through the shared layer — never a bespoke WhatsApp-only client.
 Until then the vertical is fully functional; these rules simply fall through to a
 normal draft.
 
-**Next (buildable now, no CRM/ERP dep):** document/image OCR (the media-
-understanding sibling of voice transcription — `wa_media.ocr_text` is already
-provisioned); semantic search over history (pgvector embeddings on `wa_messages`,
-already indexed for FTS); scheduler wiring for the two bounded batch triggers
-(`summarize_stale_groups`, `transcribe_pending`) so groups/voice auto-refresh in
-production. ~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note
-transcription~~, and the ~~`wa_*` AI companion toolset~~ are now BUILT (W4.1–W5).
+**Next (buildable now, no CRM/ERP dep):** document/image OCR — the media-
+understanding sibling of voice transcription (`wa_media.ocr_text` is already
+provisioned) — deferred pending a vision-model tier, since the codebase has no
+LLM-vision precedent yet; semantic search over history (pgvector embeddings on
+`wa_messages`, already indexed for FTS); scheduler wiring for the bounded batch
+triggers (`summarize_stale_groups`, `transcribe_pending`) so groups/voice
+auto-refresh in production; saved replies / quick snippets in the composer.
+~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note transcription~~,
+the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~, and ~~Pulse analytics~~ are
+now BUILT (W4.1–W7).
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

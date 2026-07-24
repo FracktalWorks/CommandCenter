@@ -8,6 +8,7 @@ import type {
   WaChat,
   WaChatContext,
   WaMessage,
+  WaPulse,
   WaRulePreview,
   WaStreams,
   WaTemplate,
@@ -184,5 +185,21 @@ export function fetchRulesPreview(accountId: string): Promise<WaRulePreview> {
   return getJSON<WaRulePreview>(
     `rules/preview?account_id=${encodeURIComponent(accountId)}`,
     { items: [], summary: {} }
+  );
+}
+
+export function fetchPulse(accountId: string, days = 7): Promise<WaPulse> {
+  return getJSON<WaPulse>(
+    `pulse?account_id=${encodeURIComponent(accountId)}&days=${days}`,
+    {
+      window_days: days,
+      inbound: 0,
+      outbound: 0,
+      active_chats: 0,
+      response: { replied: 0, median_minutes: null, p90_minutes: null },
+      waiting_longest: [],
+      by_intent: [],
+      busiest: [],
+    }
   );
 }

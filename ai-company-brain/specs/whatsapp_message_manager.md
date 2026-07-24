@@ -560,9 +560,31 @@ needs-reply queue — summary tiles + per-chat "would do / why", no sends). Both
 reachable from an AUTOMATION nav section and confirmed by a real `next build`.
 A PATCH verb was added to the `/api/whatsapp` proxy.
 
-**Next (integration-bound):** wire `answer_from_system` to live Odoo
+**Deferred — CRM/ERP integrations (Zoho CRM + Odoo), noted for later.**
+Neither is a first-class platform integration yet (no Odoo client exists; the
+`odoo_id`/`zoho_id` columns in `acb_graph` are reserved slots, not live sync).
+The WhatsApp seams that would consume them are already in place and degrade
+honestly without them:
+- **Chat context rail** (`transport/context.py`) resolves the contact's CRM/ERP
+  entity via a stable `<system>:<kind>:<id>` `entity_ref`; the live deal/invoice
+  fetch is the deferred half.
+- **`answer_from_system`** (the auto-reply ladder in `automation/rules.py`)
+  already *decides* to answer order-status from Odoo (`system_source=
+  "odoo_order_status"`); only the fetch is stubbed.
+The correct sequencing is **platform Zoho/Odoo integration first** (an ingestion
+source/agent alongside the existing ClickUp/Zoho references), *then* WhatsApp
+consumes it through the shared layer — never a bespoke WhatsApp-only client.
+Until then the vertical is fully functional; these rules simply fall through to a
+normal draft.
+
+**Next (buildable now, no CRM/ERP dep):** group intelligence (per-group AI
+summaries); voice-note transcription + document OCR (media understanding);
+waiting-on nudge drafts (completing the commitments loop); the `wa_*` AI
+companion toolset for the control-plane chat; semantic search over history.
+
+**Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history
 import; an LLM refinement layered onto the deterministic intent/status
 classifiers for the ambiguous tail; the single-reply auto-send executor
-(reusing the broker handler seam). These need the Odoo/Meta integrations or a
-running stack to validate end-to-end.
+(reusing the broker handler seam). These need the Zoho/Odoo/Meta integrations or
+a running stack to validate end-to-end.

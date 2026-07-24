@@ -11,6 +11,7 @@ from gateway.routes.whatsapp.automation import (  # noqa: F401
     categories,
     commitments,
     drafting,
+    groups,
     intent,
     outbound,
     replyzero,

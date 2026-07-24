@@ -205,9 +205,9 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _log.warning("gateway.email_sync_skipped", error=str(exc))
 
     # Wire the WhatsApp post-sync callbacks (intent classification + Reply Zero
-    # chat status) into the ingestion registry. WhatsApp is webhook-driven, so
-    # there is no background scheduler to start — the webhook receiver fires the
-    # hooks after each batch; this just makes them non-no-ops.
+    # chat status) into the ingestion registry. WhatsApp triage is webhook-driven,
+    # so the webhook receiver fires these hooks after each batch; this just makes
+    # them non-no-ops.
     try:
         from gateway.routes.whatsapp.scheduler_hooks import (
             register_whatsapp_post_sync_hooks,
@@ -216,6 +216,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         _log.info("gateway.whatsapp_hooks_started")
     except Exception as exc:
         _log.warning("gateway.whatsapp_hooks_skipped", error=str(exc))
+
+    # Start the WhatsApp enrichment loop (group summaries + voice transcription).
+    # These are LLM/STT passes, so it is cost-gated OFF unless WHATSAPP_ENRICHMENT
+    # is set; the on-demand routes work regardless.
+    try:
+        from gateway.routes.whatsapp.scheduler import start_whatsapp_enrichment
+        started = await start_whatsapp_enrichment()
+        _log.info("gateway.whatsapp_enrichment", started=started)
+    except Exception as exc:
+        _log.warning("gateway.whatsapp_enrichment_skipped", error=str(exc))
 
     # Start background Tasks (GTD) provider-sync scheduler — one loop per
     # sync-enabled ClickUp/PM workspace keeps the agent's project/task/people
@@ -268,6 +278,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         from gateway.routes.tasks.calendar import stop_auto_rollover
         await stop_auto_rollover()
+    except Exception:
+        pass
+
+    # Stop the WhatsApp enrichment loop
+    try:
+        from gateway.routes.whatsapp.scheduler import stop_whatsapp_enrichment
+        await stop_whatsapp_enrichment()
     except Exception:
         pass
 

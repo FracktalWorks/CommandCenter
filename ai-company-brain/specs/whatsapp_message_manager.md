@@ -630,7 +630,22 @@ window, where a template is the Meta-approved message required once it closes. A
 partial unique index (NULLs coexist, duplicate shortcut rejected) was verified on
 real Postgres 16.
 
-**Tests:** 200 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W9 — background enrichment scheduler — BUILT (makes W4.1 + W4.3 autonomous).**
+Group summaries and voice transcription were built as bounded, watermarked batch
+passes but only ran on-demand — WhatsApp had no background loop (it's
+webhook-driven). `whatsapp/scheduler.py` adds ONE lightweight loop that
+periodically sweeps every live account through `summarize_stale_groups` +
+`transcribe_pending`, wired into the gateway lifespan (start on boot, cancel on
+shutdown) alongside the email/tasks schedulers. **Cost-gated OFF unless
+`WHATSAPP_ENRICHMENT=1`** (each cycle can call the LLM and STT); interval via
+`WHATSAPP_ENRICHMENT_INTERVAL_SECS` (default 900s, min 120s). Both passes are
+per-pass bounded and only touch stale/pending rows, so a caught-up account does
+no work, and a per-account failure is logged, never fatal to the sweep. The pure
+gate (`enrichment_enabled`) + interval clamp (`resolve_interval`) + the
+single-cycle sweep (`run_enrichment_cycle`, with per-account error resilience)
+are unit-tested; the on-demand routes keep working regardless of the flag.
+
+**Tests:** 206 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
@@ -640,10 +655,13 @@ status lifecycle, watermark reset, sentinel-on-failure), group intelligence
 surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
 formatting; `build_agents()` constructs the MAF agent with all 13 tools), chat
 snooze (12 — the pure wake-time validator + route registration), Pulse
-(8 — median/percentile/response-time folds + route registration), and saved
-replies (15 — the pure shortcut normalizer + route registration). All new code
-`ruff`-clean; the frontend `next build` compiles the snooze + Pulse + saved-reply
-surfaces, and `uv sync` installs the new agent workspace member cleanly.
+(8 — median/percentile/response-time folds + route registration), saved
+replies (15 — the pure shortcut normalizer + route registration), and the
+enrichment scheduler (6 — the pure gate/interval helpers + cycle sweep with
+per-account error resilience). All new code `ruff`-clean; the frontend
+`next build` compiles the snooze + Pulse + saved-reply surfaces, the gateway app
+imports cleanly with the scheduler wired into the lifespan, and `uv sync`
+installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
@@ -703,10 +721,11 @@ understanding sibling of voice transcription (`wa_media.ocr_text` is already
 provisioned) — deferred pending a vision-model tier, since the codebase has no
 LLM-vision precedent yet; semantic search over history (pgvector embeddings on
 `wa_messages`, already indexed for FTS); scheduler wiring for the bounded batch
-triggers (`summarize_stale_groups`, `transcribe_pending`) so groups/voice
-auto-refresh in production. ~~group intelligence~~, ~~waiting-on nudge drafts~~,
-~~voice-note transcription~~, the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~,
-~~Pulse analytics~~, and ~~saved replies~~ are now BUILT (W4.1–W8).
+~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note transcription~~,
+the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~, ~~Pulse analytics~~,
+~~saved replies~~, and the ~~batch-trigger scheduler wiring~~ are now BUILT
+(W4.1–W9). To activate autonomous group/voice enrichment in production, set
+`WHATSAPP_ENRICHMENT=1` (cost-gated off by default).
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

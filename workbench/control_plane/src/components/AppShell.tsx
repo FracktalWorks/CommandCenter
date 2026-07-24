@@ -119,8 +119,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
           </div>
         </header>
 
-        {/* Page content — pb-safe protects bottom content from iOS rounded corners */}
-        <main className="flex-1 min-h-0 overflow-y-auto pb-14">{children}</main>
+        {/* Page content — pb-nav reserves the fixed bottom bar's FULL height
+            (content + safe-area inset), so nothing hides under it */}
+        <main className="flex-1 min-h-0 overflow-y-auto pb-nav">{children}</main>
 
         {/* Bottom navigation bar — fixed at viewport bottom, never scrolls. pb-safe lifts it above the iOS home indicator */}
         <div className="fixed bottom-0 inset-x-0 z-50 border-t border-border bg-card/90 backdrop-blur pb-safe">

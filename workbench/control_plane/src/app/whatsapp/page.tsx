@@ -12,6 +12,8 @@ import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
+  Check,
+  ChevronsUpDown,
   Clock,
   Loader2,
   MessageCircle,
@@ -116,26 +118,34 @@ export default function WhatsAppPage() {
     all: 0,
     snoozed: 0,
   });
+  const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [activeStream, setActiveStream] = useState("needs_reply");
   const [chats, setChats] = useState<WaChat[]>([]);
   const [selectedChat, setSelectedChat] = useState<WaChat | null>(null);
   const [messages, setMessages] = useState<WaMessage[]>([]);
 
-  // Initial load: accounts + stream counts.
+  // Initial load: accounts (pick the default number as active).
   useEffect(() => {
     (async () => {
       const accs = await fetchAccounts();
       setAccounts(accs);
-      if (accs.length) setStreams(await fetchStreams());
+      if (accs.length) {
+        setActiveAccountId(accs.find((a) => a.is_default)?.id ?? accs[0].id);
+      }
       setLoading(false);
     })();
   }, []);
 
-  // Reload the chat list whenever the active stream changes.
+  // Stream counts follow the active number.
+  useEffect(() => {
+    if (activeAccountId) fetchStreams(activeAccountId).then(setStreams);
+  }, [activeAccountId]);
+
+  // Reload the chat list whenever the active stream OR number changes.
   const loadChats = useCallback(async () => {
-    if (!accounts.length) return;
-    setChats(await fetchChats(activeStream));
-  }, [accounts.length, activeStream]);
+    if (!activeAccountId) return;
+    setChats(await fetchChats(activeStream, activeAccountId));
+  }, [activeAccountId, activeStream]);
 
   useEffect(() => {
     loadChats();
@@ -150,13 +160,20 @@ export default function WhatsAppPage() {
     if (selectedChat) setMessages(await fetchMessages(selectedChat.id));
   }, [selectedChat]);
 
+  // Switch the active number: drop the open chat and let the effects reload.
+  const switchAccount = useCallback((id: string) => {
+    setActiveAccountId(id);
+    setSelectedChat(null);
+    setActiveStream("needs_reply");
+  }, []);
+
   // After a snooze/unsnooze the chat leaves (or joins) the current stream —
   // drop the selection and refresh the counts + list.
   const refreshTriage = useCallback(async () => {
     setSelectedChat(null);
-    setStreams(await fetchStreams());
+    if (activeAccountId) setStreams(await fetchStreams(activeAccountId));
     await loadChats();
-  }, [loadChats]);
+  }, [activeAccountId, loadChats]);
 
   if (loading) {
     return (
@@ -168,6 +185,8 @@ export default function WhatsAppPage() {
 
   if (!accounts.length) return <ConnectEmptyState />;
 
+  const activeAccount =
+    accounts.find((a) => a.id === activeAccountId) ?? accounts[0];
   const streamCount = (key: string) =>
     (streams as unknown as Record<string, number>)[key] ?? 0;
 
@@ -235,18 +254,11 @@ export default function WhatsAppPage() {
             ⚖ Rules preview
           </Link>
         </div>
-        <div className="flex items-center gap-2 border-t border-border pt-3">
-          <span
-            className="flex h-6 w-6 items-center justify-center rounded-full text-[9px] font-bold text-white"
-            style={{ background: accounts[0].avatar_color || "#25D366" }}
-          >
-            {initials(accounts[0].display_name, "WA")}
-          </span>
-          <div className="min-w-0 text-[10px]">
-            <div className="truncate font-semibold">{accounts[0].display_name}</div>
-            <div className="text-emerald-500">● live</div>
-          </div>
-        </div>
+        <AccountSwitcher
+          accounts={accounts}
+          active={activeAccount}
+          onSwitch={switchAccount}
+        />
       </nav>
 
       {/* ── Conversation list (quiet rows) ────────────────────────── */}
@@ -287,7 +299,7 @@ export default function WhatsAppPage() {
           <Conversation
             chat={selectedChat}
             messages={messages}
-            accountId={accounts[0].id}
+            accountId={activeAccount.id}
             onReload={reloadMessages}
             onTriageChange={refreshTriage}
           />
@@ -297,6 +309,83 @@ export default function WhatsAppPage() {
           </div>
         )}
       </div>
+    </div>
+  );
+}
+
+function AccountSwitcher({
+  accounts,
+  active,
+  onSwitch,
+}: {
+  accounts: WaAccount[];
+  active: WaAccount;
+  onSwitch: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="relative border-t border-border pt-3">
+      {open && (
+        <div className="absolute bottom-full left-0 mb-2 w-full overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+          {accounts.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => {
+                onSwitch(a.id);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-muted/50 ${
+                a.id === active.id ? "bg-muted/40" : ""
+              }`}
+            >
+              <span
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                style={{ background: a.avatar_color || "#25D366" }}
+              >
+                {initials(a.display_name, "WA")}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[11px] font-semibold">
+                  {a.display_name || a.phone_number}
+                </div>
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {a.phone_number}
+                </div>
+              </div>
+              {a.id === active.id && (
+                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+              )}
+            </button>
+          ))}
+          <Link
+            href="/whatsapp/connect"
+            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-emerald-600 hover:bg-muted/50"
+          >
+            <Plus className="h-3.5 w-3.5" /> Connect another number
+          </Link>
+        </div>
+      )}
+      <button
+        onClick={() => setOpen((v) => !v)}
+        className="flex w-full items-center gap-2"
+      >
+        <span
+          className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+          style={{ background: active.avatar_color || "#25D366" }}
+        >
+          {initials(active.display_name, "WA")}
+        </span>
+        <div className="min-w-0 flex-1 text-left text-[10px]">
+          <div className="truncate font-semibold">
+            {active.display_name || active.phone_number}
+          </div>
+          <div className="text-emerald-500">
+            ● live
+            {accounts.length > 1 ? ` · ${accounts.length} numbers` : ""}
+          </div>
+        </div>
+        <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+      </button>
     </div>
   );
 }

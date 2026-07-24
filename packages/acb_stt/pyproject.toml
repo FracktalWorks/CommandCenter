@@ -9,6 +9,16 @@ dependencies = [
     "acb-llm",
 ]
 
+[project.optional-dependencies]
+# Free, CPU-only self-hosted diarization (sherpa-onnx pyannote segmentation +
+# speaker embeddings). Optional so the default install stays lean — enable with
+# NOTES_LOCAL_DIARIZATION=1 + provisioned ONNX models. numpy decodes the ffmpeg
+# PCM stream. See acb_stt/local_diarization.py.
+local-diar = [
+    "sherpa-onnx>=1.10",
+    "numpy>=1.24",
+]
+
 [build-system]
 requires = ["hatchling"]
 build-backend = "hatchling.build"

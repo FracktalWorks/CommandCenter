@@ -1,0 +1,591 @@
+<meta charset="utf-8">
+<title>WhatsApp Message Manager — UI mockups v3</title>
+<style>
+  /* ── Control-plane dark tokens, used with restraint (calm-inbox pass) ────────
+     One accent (cyan). WhatsApp green ONLY on send / outbound. A single red dot
+     = "needs you". Everything else greyscale until it earns attention. ───────── */
+  :root{
+    --bg:hsl(220 14% 7%); --panel:hsl(220 13% 9.5%); --panel2:hsl(220 13% 12%);
+    --thread:hsl(220 14% 8.5%);
+    --line:hsl(220 12% 15%); --line2:hsl(220 12% 20%);
+    --fg:hsl(210 30% 96%); --mut:hsl(215 14% 58%); --mut2:hsl(215 12% 40%);
+    --pri:hsl(198 89% 52%); --pri-d:hsl(198 80% 13%);
+    --wa:hsl(142 64% 46%); --wa-d:hsl(142 45% 12%);
+    --red:hsl(0 66% 60%); --amber:hsl(41 90% 56%); --gold:hsl(43 80% 58%);
+    --r:11px; --r-sm:8px;
+  }
+  *{box-sizing:border-box;margin:0}
+  body{background:var(--bg);color:var(--fg);font:13px/1.5 -apple-system,'Segoe UI',Inter,Roboto,sans-serif;padding:38px 22px 100px;-webkit-font-smoothing:antialiased}
+  .wrap{max-width:1180px;margin:0 auto}
+  h1{font-size:23px;letter-spacing:-.015em;margin-bottom:6px;font-weight:650}
+  .sub{color:var(--mut);margin-bottom:20px;max-width:760px;font-size:12.5px}
+  .principles{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:26px;max-width:940px}
+  .principles span{font-size:11px;color:var(--mut);background:var(--panel);border:1px solid var(--line);border-radius:7px;padding:5px 10px}
+  .principles span b{color:var(--fg);font-weight:600}
+  .toc{display:flex;gap:6px;flex-wrap:wrap;margin-bottom:44px}
+  .toc a{color:var(--mut);text-decoration:none;font-size:11px;border:1px solid var(--line2);border-radius:999px;padding:3px 12px}
+  .toc a b{color:var(--pri)}
+  .mock{margin-bottom:70px}
+  .mock h2{font-size:16px;margin-bottom:4px;letter-spacing:-.01em;font-weight:600}
+  .mock h2 em{color:var(--mut2);font-style:normal;font-weight:400}
+  .mock .note{color:var(--mut);font-size:12px;margin-bottom:18px;max-width:800px}
+  .row{display:flex;gap:28px;flex-wrap:wrap;align-items:flex-start}
+
+  .frame{background:var(--bg);border:1px solid var(--line2);border-radius:14px;overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,.55);flex:none;position:relative}
+  .chrome{display:flex;align-items:center;gap:7px;height:36px;padding:0 14px;background:var(--panel);border-bottom:1px solid var(--line)}
+  .chrome i{width:9px;height:9px;border-radius:50%;background:var(--line2);display:inline-block}
+  .chrome .url{margin-left:10px;font-size:10.5px;color:var(--mut2);font-style:normal}
+
+  .app{display:flex;height:520px}
+  /* icon rail */
+  .rail{width:52px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:12px 0;display:flex;flex-direction:column;align-items:center;gap:6px}
+  .rail .i{width:34px;height:34px;border-radius:9px;display:flex;align-items:center;justify-content:center;font-size:15px;color:var(--mut2);filter:grayscale(1) opacity(.7)}
+  .rail .i.on{background:var(--wa-d);filter:none;box-shadow:inset 0 0 0 1px hsl(142 64% 46% / .3)}
+  /* streams nav = the single spine */
+  .streams{width:214px;flex:none;background:var(--panel);border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column}
+  .streams .sh{font-size:9.5px;font-weight:700;letter-spacing:.08em;color:var(--mut2);padding:0 8px;margin:16px 0 4px}
+  .streams .sh:first-child{margin-top:2px}
+  .sv{display:flex;align-items:center;gap:9px;border-radius:8px;padding:7px 9px;font-size:12.5px;color:var(--mut);cursor:default}
+  .sv .nm{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .sv .ct{font-size:11px;color:var(--mut2);font-variant-numeric:tabular-nums}
+  .sv.on{background:var(--panel2);color:var(--fg);font-weight:600;box-shadow:inset 2px 0 0 var(--pri)}
+  .sv.on .ct{color:var(--pri);font-weight:700}
+  .sv.mutec{color:var(--mut2)}
+  .acct{margin-top:auto;display:flex;align-items:center;gap:8px;padding:8px 9px;border-top:1px solid var(--line);margin-top:14px;padding-top:12px}
+
+  /* list pane */
+  .list{flex:1;min-width:0;display:flex;flex-direction:column;background:var(--bg)}
+  .lhead{display:flex;align-items:center;height:52px;padding:0 18px;border-bottom:1px solid var(--line)}
+  .lhead b{font-size:14px;font-weight:600}
+  .lrow{display:flex;align-items:center;gap:13px;padding:0 18px;height:64px;border-bottom:1px solid var(--line);position:relative}
+  .lrow.sel{background:var(--panel)}
+  .lrow.hov{background:var(--panel2)}
+  .av{width:34px;height:34px;border-radius:50%;display:flex;align-items:center;justify-content:center;font-size:11.5px;font-weight:700;color:hsl(0 0% 100% / .92);flex:none}
+  .lb{flex:1;min-width:0}
+  .lb .nm{font-size:13px;color:var(--fg);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .lb .nm.reply{font-weight:650}
+  .lb .pv{font-size:11.5px;color:var(--mut);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px}
+  .lmeta{flex:none;display:flex;flex-direction:column;align-items:flex-end;gap:7px;text-align:right}
+  .lmeta .tm{font-size:10px;color:var(--mut2);font-variant-numeric:tabular-nums}
+  .rdot{width:8px;height:8px;border-radius:50%;background:var(--red);flex:none}
+  .hovacts{display:flex;gap:4px}
+  .hovacts .a{width:26px;height:26px;border-radius:7px;background:var(--panel2);border:1px solid var(--line2);display:flex;align-items:center;justify-content:center;font-size:12px;color:var(--mut)}
+  .hovacts .a.p{background:var(--pri);border-color:var(--pri);color:var(--bg)}
+
+  /* thread pane */
+  .thread{width:376px;flex:none;border-left:1px solid var(--line);display:flex;flex-direction:column;background:var(--thread)}
+  .thead{display:flex;align-items:center;gap:10px;height:52px;padding:0 16px;border-bottom:1px solid var(--line)}
+  .tbody{flex:1;padding:16px;overflow:hidden}
+  .bub{max-width:82%;border-radius:13px;padding:8px 12px;font-size:12px;margin-bottom:8px;line-height:1.5}
+  .bub.in{background:var(--panel2);border-bottom-left-radius:4px}
+  .bub.out{background:var(--wa-d);border:1px solid hsl(142 64% 46% / .25);margin-left:auto;border-bottom-right-radius:4px}
+  .bub .t{display:block;font-size:8.5px;color:var(--mut2);text-align:right;margin-top:3px}
+  .daydiv{text-align:center;font-size:9px;font-weight:700;letter-spacing:.07em;color:var(--mut2);margin:6px 0 12px}
+  .composer{border-top:1px solid var(--line);padding:12px 14px}
+
+  /* generic bits */
+  .btn{display:inline-flex;align-items:center;gap:6px;border-radius:8px;padding:7px 14px;font-size:11.5px;font-weight:600;background:var(--pri);color:var(--bg);cursor:default}
+  .btn.g{background:var(--panel2);color:var(--mut);box-shadow:inset 0 0 0 1px var(--line2)}
+  .btn.wa{background:var(--wa);color:hsl(0 0% 100%)}
+  .btn.sm{padding:4px 10px;font-size:10.5px}
+  .chip{display:inline-flex;align-items:center;gap:5px;border-radius:999px;padding:2.5px 9px;font-size:10px;font-weight:600;background:var(--panel2);color:var(--mut);box-shadow:inset 0 0 0 1px var(--line2)}
+  .chip.q{background:transparent;box-shadow:none;color:var(--mut2);padding:2.5px 4px}
+  .star{color:var(--gold);font-size:11px}
+  kbd{border:1px solid var(--line2);border-radius:4px;padding:0 4px;font-size:9px;color:var(--mut2)}
+  .tag{position:absolute;width:16px;height:16px;border-radius:50%;background:var(--pri);color:var(--bg);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center;z-index:9;box-shadow:0 0 0 3px hsl(198 89% 52% / .25)}
+
+  .ann{flex:1;min-width:250px;color:var(--mut);font-size:12px;padding-top:4px}
+  .ann li{margin-bottom:11px;list-style:none;padding-left:24px;position:relative;line-height:1.5}
+  .ann b{color:var(--fg)}
+  .ann .n{position:absolute;left:0;top:1px;width:16px;height:16px;border-radius:50%;background:var(--pri);color:var(--bg);font-size:9.5px;font-weight:700;display:flex;align-items:center;justify-content:center}
+  .ann .was{color:var(--mut2);font-style:italic}
+
+  table.spec{border-collapse:collapse;width:100%;font-size:11px}
+  table.spec th{text-align:left;font-size:9.5px;color:var(--mut2);letter-spacing:.06em;font-weight:700;padding:7px 11px;border-bottom:1px solid var(--line2)}
+  table.spec td{padding:8px 11px;border-bottom:1px solid var(--line);color:var(--mut);vertical-align:top}
+  table.spec td b{color:var(--fg)}
+  .sw{width:12px;height:12px;border-radius:3px;display:inline-block;vertical-align:-1px;margin-right:6px}
+</style>
+<div class="wrap">
+  <h1>WhatsApp Message Manager — UI mockups <span style="color:var(--mut2);font-weight:400">v3 · calm pass</span></h1>
+  <p class="sub">Official <b style="color:var(--wa)">WhatsApp Business Cloud API</b> only. Rebuilt around a single
+  organizing spine after a prior-art study of Cooby, HEY, Superhuman, Rasayel, WATI and Chatwoot — the tools whose
+  reviews say "clean, near-zero training", and the ones whose reviews say "cluttered, steep learning curve".</p>
+  <div class="principles">
+    <span><b>One spine:</b> triage streams in the nav — no stat wall, no chip cloud</span>
+    <span><b>Quiet rows:</b> name · one line · time · one dot; actions on hover</span>
+    <span><b>Two panes default;</b> context is an on-demand drawer</span>
+    <span><b>AI in the composer,</b> not a column</span>
+    <span><b>One accent;</b> greyscale until it matters</span>
+    <span><b>24 h window</b> = a quiet status, not a banner</span>
+  </div>
+  <div class="toc">
+    <a href="#m1"><b>1</b> Connect</a><a href="#m2"><b>2</b> The queue</a><a href="#m3"><b>3</b> Conversation</a>
+    <a href="#m4"><b>4</b> Categories</a><a href="#m5"><b>5</b> Rules</a><a href="#m6"><b>6</b> Digest</a>
+    <a href="#m7"><b>7</b> Companion</a><a href="#m8"><b>8</b> Build notes</a>
+  </div>
+
+  <!-- ═══════════ 1 · CONNECT ═══════════ -->
+  <div class="mock" id="m1">
+    <h2>1 · Connect <em>— Embedded Signup, coexistence, nothing hidden</em></h2>
+    <p class="note">One official path, four honest steps. Import is observable, and the capability card states the
+    24 h window / template / label caveats up front so nothing downstream feels broken.</p>
+    <div class="row">
+      <div class="frame" style="width:800px">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">commandcenter.fracktal.works/whatsapp/connect</span></div>
+        <div style="display:flex">
+          <div style="width:262px;flex:none;border-right:1px solid var(--line);padding:22px 20px">
+            <b style="font-size:14px">Connect WhatsApp Business</b>
+            <div style="font-size:10.5px;color:var(--mut);margin:4px 0 22px">Official Meta Cloud API · your phone app keeps working</div>
+            <div style="display:flex;flex-direction:column;gap:2px;font-size:11.5px">
+              <div style="display:flex;gap:11px;align-items:flex-start"><span style="color:var(--wa)">✓</span><div style="padding-bottom:15px"><b>Confirm your number</b><div style="font-size:10px;color:var(--mut2)">+91 80··· 442</div></div></div>
+              <div style="display:flex;gap:11px;align-items:flex-start"><span style="color:var(--wa)">✓</span><div style="padding-bottom:15px"><b>Meta Embedded Signup</b><div style="font-size:10px;color:var(--mut2)">WABA linked · consent given</div></div></div>
+              <div style="display:flex;gap:11px;align-items:flex-start"><span style="color:var(--pri)">◗</span><div style="padding-bottom:15px"><b style="color:var(--pri)">Import history &amp; labels</b><div style="font-size:10px;color:var(--mut2)">running — read-only</div></div></div>
+              <div style="display:flex;gap:11px;align-items:flex-start"><span style="color:var(--mut2)">○</span><div><b style="color:var(--mut2)">Review category policies</b></div></div>
+            </div>
+          </div>
+          <div style="flex:1;padding:22px 24px">
+            <div style="display:flex;align-items:center;gap:12px">
+              <span class="av" style="width:38px;height:38px;background:hsl(142 40% 32%)">FW</span>
+              <div style="flex:1"><b style="font-size:13px">Fracktal Works</b>
+                <div style="font-size:10.5px;color:var(--mut);margin-top:1px">+91 80··· 442 · verified · quality <b style="color:var(--wa)">High</b></div></div>
+              <span class="chip"><span class="rdot" style="background:var(--wa);width:6px;height:6px"></span> live</span>
+            </div>
+            <div class="tag" style="right:24px;top:118px">1</div>
+            <div style="margin-top:18px">
+              <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--mut);margin-bottom:6px"><span>Importing 6 months of history</span><span style="color:var(--mut2)">phase 2 of 3 · ~4 min</span></div>
+              <div style="height:4px;border-radius:99px;background:var(--panel2);overflow:hidden"><i style="display:block;height:100%;width:68%;background:var(--pri);border-radius:99px"></i></div>
+              <div style="display:flex;gap:20px;margin-top:12px;font-size:11px;color:var(--mut)">
+                <span><b style="color:var(--fg);font-size:14px">9,412</b> &nbsp;messages</span>
+                <span><b style="color:var(--fg);font-size:14px">241</b> &nbsp;chats · 18 groups</span>
+                <span><b style="color:var(--fg);font-size:14px">5</b> &nbsp;labels 🏷</span>
+              </div>
+            </div>
+            <div class="tag" style="right:24px;top:250px">2</div>
+            <div style="background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px;margin-top:20px;font-size:10.5px;color:var(--mut);line-height:1.85">
+              <b style="color:var(--fg);font-size:11px">What this connection does — and doesn't</b><br>
+              ✓ Mirrors every message both ways, even ones typed on the phone &nbsp;·&nbsp; ✓ Free-form replies inside each 24 h window<br>
+              ✓ Approved templates outside it <span style="color:var(--mut2)">(priced, logged)</span> &nbsp;·&nbsp; ✓ Media in &amp; out<br>
+              △ Labels imported now, mirrored where the API allows &nbsp;·&nbsp; ✗ Personal SIMs — business numbers only
+            </div>
+            <div style="margin-top:20px"><span class="btn">Continue → policies</span></div>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Import is a fact, not a spinner</b> — phased counts, because Meta delivers history in phases. Contact↔CRM resolution runs during import so the queue is smart on day one.</li>
+        <li><span class="n">2</span><b>The capability card ends future surprises</b> — window, pricing and label limits stated in plain product language before anything is switched on. <span class="was">v2 spread this across colored sub-panels; now it's one quiet block.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 2 · THE QUEUE ═══════════ -->
+  <div class="mock" id="m2">
+    <h2>2 · The queue <em>— one spine: triage streams + quiet rows</em></h2>
+    <p class="note">The whole home screen is two panes. The five numbers that were stat cards are now stream counts in
+    the nav (same data, clickable, calm). Rows are near-textual; the one that needs you carries a single red dot;
+    hovering a row reveals its actions. No chip row, no pills, no resident buttons.</p>
+    <div class="row">
+      <div class="frame" style="width:900px">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">commandcenter.fracktal.works/whatsapp</span></div>
+        <div class="app" style="height:480px">
+          <div class="rail">
+            <span class="i">💬</span><span class="i">✉️</span><span class="i on">🟢</span>
+            <span class="i">☑️</span><span class="i">📅</span><span class="i" style="margin-top:auto">⚙️</span>
+          </div>
+          <!-- the single spine -->
+          <div class="tag" style="left:60px;top:60px">1</div>
+          <div class="streams">
+            <div class="sh">TRIAGE</div>
+            <div class="sv on">✦ <span class="nm">Needs reply</span> <span class="ct">7</span></div>
+            <div class="sv">⏳ <span class="nm">Waiting on them</span> <span class="ct">5</span></div>
+            <div class="sv">☾ <span class="nm">Snoozed</span> <span class="ct">2</span></div>
+            <div class="sh">PEOPLE</div>
+            <div class="sv"><span class="star">★</span> <span class="nm">VIP</span> <span class="ct">2</span></div>
+            <div class="sv">👥 <span class="nm">Groups</span> <span class="ct">18</span></div>
+            <div class="sv">🏷 <span class="nm">Customers</span> <span class="ct">·</span></div>
+            <div class="sv">🏷 <span class="nm">Pending payment</span> <span class="ct">1</span></div>
+            <div class="sv">👤 <span class="nm">Family</span> <span class="ct">·</span></div>
+            <div class="sh">DONE &amp; QUIET</div>
+            <div class="sv mutec">✓ <span class="nm">Handled today</span> <span class="ct">23</span></div>
+            <div class="sv mutec">🔇 <span class="nm">Noise</span> <span class="ct">184</span></div>
+            <div class="acct"><span class="av" style="width:24px;height:24px;font-size:8.5px;background:hsl(142 40% 32%)">FW</span>
+              <div style="min-width:0;font-size:10px"><div style="color:var(--fg);font-weight:600">Fracktal Works</div><div style="color:var(--wa)">● live</div></div></div>
+          </div>
+          <!-- quiet list -->
+          <div class="list">
+            <div class="lhead"><b>Needs reply</b><span style="color:var(--mut2);font-size:11px;margin-left:8px">7</span>
+              <span style="margin-left:auto;font-size:11px;color:var(--mut)"><kbd>J</kbd><kbd>K</kbd> move · <kbd>R</kbd> reply · <kbd>⌘K</kbd></span></div>
+            <div class="tag" style="left:290px;top:118px">2</div>
+            <div class="lrow sel">
+              <span class="av" style="background:hsl(16 55% 42%)">RM</span>
+              <div class="lb"><div class="nm reply"><span class="star">★</span> Rajesh · Meher Prototyping</div>
+                <div class="pv">PO attached — confirm Falcon build volume by today · 📎 read: 2 × Falcon 150, ₹11.4 L</div></div>
+              <div class="lmeta"><span class="tm">2 h</span><span class="rdot"></span></div>
+            </div>
+            <!-- hover state demonstrates revealed actions -->
+            <div class="tag" style="left:290px;top:182px">3</div>
+            <div class="lrow hov">
+              <span class="av" style="background:hsl(210 40% 40%)">SK</span>
+              <div class="lb"><div class="nm reply">Sandeep Kulkarni</div>
+                <div class="pv">Nozzle jam on the Julia Pro — production stopped since morning · 📷 2 photos</div></div>
+              <div class="lmeta"><div class="hovacts"><span class="a p">✍</span><span class="a">☾</span><span class="a">✓</span></div></div>
+            </div>
+            <div class="lrow">
+              <span class="av" style="background:hsl(262 38% 46%)">DS</span>
+              <div class="lb"><div class="nm reply">Dealer Network — South</div>
+                <div class="pv">You were @mentioned: Chennai dealer asks the edu-bundle margin structure — rest is chatter</div></div>
+              <div class="lmeta"><span class="tm">1 h</span><span class="rdot"></span></div>
+            </div>
+            <div class="lrow">
+              <span class="av" style="background:hsl(330 34% 44%)">IM</span>
+              <div class="lb"><div class="nm reply">Dr. Iyer · IIT-M lab</div>
+                <div class="pv">Asked for a Falcon quote — greeting + price list already sent; the quote needs you</div></div>
+              <div class="lmeta"><span class="tm">26 m</span><span class="rdot"></span></div>
+            </div>
+            <div class="lrow">
+              <span class="av" style="background:hsl(190 34% 38%)">AT</span>
+              <div class="lb"><div class="nm">Ankit · Twin Tech</div>
+                <div class="pv">Re: revised quote — "let me check with my team and revert"</div></div>
+              <div class="lmeta"><span class="tm">3 h</span></div>
+            </div>
+            <div class="lrow">
+              <span class="av" style="background:hsl(48 40% 40%)">PV</span>
+              <div class="lb"><div class="nm">Priya · Vendor (CNC)</div>
+                <div class="pv">Sample photos attached — is the tolerance acceptable?</div></div>
+              <div class="lmeta"><span class="tm">5 h</span></div>
+            </div>
+            <div class="tag" style="left:290px;bottom:14px">4</div>
+            <div style="margin-top:auto;padding:11px 18px;border-top:1px solid var(--line);font-size:11px;color:var(--mut);display:flex;align-items:center;gap:8px">
+              <span style="color:var(--wa)">✓</span> 23 handled today · 184 muted as noise
+              <span style="margin-left:auto"><span class="btn g sm">Clear the queue in 10 min ▸</span></span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>The nav is the only organizer</b> — triage streams with counts, exactly one active. This single column replaces v2's five stat cards <em>and</em> its category chip row. The hero number is just the active stream's count. <span class="was">(HEY's destinations · Cooby's tabs · Rasayel's saved views.)</span></li>
+        <li><span class="n">2</span><b>A row is scannable in half a second</b> — avatar, name, one line, time, and at most a single red dot for "needs you". VIP is a small ★, nothing more. Because you're <em>inside</em> a stream, rows don't re-state the category. <span class="was">v2 rows carried 3–4 filled pills + 2 buttons each.</span></li>
+        <li><span class="n">3</span><b>Actions are revealed, not resident</b> — hovering (or <kbd>R</kbd>/<kbd>E</kbd>/<kbd>⌘K</kbd>) surfaces reply · snooze · done. The whole row-button cluster disappears until you want it. <span class="was">(Superhuman: an inbox with almost no visible buttons.)</span></li>
+        <li><span class="n">4</span><b>Automation stays a quiet footer</b> — the trust ledger is one line, and the deliberate exit is "clear the queue in 10 min", which drops into a focused triage session (a WhatsApp window on the calendar).</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 3 · CONVERSATION ═══════════ -->
+  <div class="mock" id="m3">
+    <h2>3 · Conversation <em>— list + thread; context and AI on demand</em></h2>
+    <p class="note">Two working panes. The AI draft is one affordance above the composer, not a column. The 24 h window is
+    a quiet header status. The company context — the moat — lives in a drawer you open with one tap (shown open here),
+    not a permanent busy rail.</p>
+    <div class="row">
+      <div class="frame" style="width:900px">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">commandcenter.fracktal.works/whatsapp/chat/meher</span></div>
+        <div class="app" style="height:500px">
+          <!-- compact list -->
+          <div style="width:230px;flex:none;background:var(--panel);border-right:1px solid var(--line);display:flex;flex-direction:column">
+            <div class="lhead" style="height:46px;padding:0 14px"><b style="font-size:12px">Needs reply · 7</b></div>
+            <div style="padding:0 12px">
+              <div class="lrow sel" style="padding:0;height:56px;border:0;gap:10px"><span class="av" style="width:30px;height:30px;font-size:10px;background:hsl(16 55% 42%)">RM</span>
+                <div class="lb"><div class="nm reply" style="font-size:12px"><span class="star">★</span> Rajesh · Meher</div><div class="pv" style="font-size:10.5px">confirm build volume…</div></div><span class="rdot"></span></div>
+              <div class="lrow" style="padding:0;height:56px;border:0;gap:10px"><span class="av" style="width:30px;height:30px;font-size:10px;background:hsl(210 40% 40%)">SK</span>
+                <div class="lb"><div class="nm reply" style="font-size:12px">Sandeep K.</div><div class="pv" style="font-size:10.5px">nozzle jam · 2 photos</div></div><span class="rdot"></span></div>
+              <div class="lrow" style="padding:0;height:56px;border:0;gap:10px"><span class="av" style="width:30px;height:30px;font-size:10px;background:hsl(262 38% 46%)">DS</span>
+                <div class="lb"><div class="nm reply" style="font-size:12px">Dealer South</div><div class="pv" style="font-size:10.5px">@you · edu margins</div></div><span class="rdot"></span></div>
+              <div class="lrow" style="padding:0;height:56px;border:0;gap:10px"><span class="av" style="width:30px;height:30px;font-size:10px;background:hsl(330 34% 44%)">IM</span>
+                <div class="lb"><div class="nm reply" style="font-size:12px">Dr. Iyer · IIT-M</div><div class="pv" style="font-size:10.5px">quote request</div></div><span class="rdot"></span></div>
+            </div>
+          </div>
+          <!-- thread -->
+          <div class="list" style="background:var(--thread)">
+            <div class="thead">
+              <span class="av" style="width:30px;height:30px;font-size:10px;background:hsl(16 55% 42%)">RM</span>
+              <div><b style="font-size:13px">Rajesh Mehta</b> <span style="font-size:10px;color:var(--mut2)">· Meher Prototyping · <span class="star">★</span> VIP</span></div>
+              <div class="tag" style="right:250px;top:64px">1</div>
+              <span class="chip" style="margin-left:auto"><span class="rdot" style="background:var(--wa);width:6px;height:6px"></span> session open · 21 h</span>
+              <div class="tag" style="right:14px;top:64px">4</div>
+              <span class="btn g sm" style="margin-left:8px">Details ▸</span>
+            </div>
+            <div class="tbody">
+              <div class="daydiv">TODAY</div>
+              <div class="bub in">Sir, PO attached for 2 more Falcons 🙏
+                <div style="display:flex;gap:9px;align-items:center;background:var(--panel);border:1px solid var(--line2);border-radius:9px;padding:7px 10px;margin-top:7px">
+                  <span style="font-size:15px">📄</span><div style="flex:1"><b style="font-size:10.5px">PO_4417.pdf</b><div style="font-size:9px;color:var(--mut2)">214 KB</div></div></div>
+                <span class="t">7:58</span></div>
+              <div class="bub in">Can you confirm the build volume by today? Client demo tomorrow.<span class="t">8:01</span></div>
+              <div class="tag" style="left:200px;top:250px">2</div>
+              <div style="display:flex;gap:8px;background:var(--panel);border:1px solid var(--line2);border-left:2px solid var(--amber);border-radius:9px;padding:9px 11px;margin:12px 0;font-size:10.5px;color:var(--mut);line-height:1.5">
+                <span>⚠️</span><div><b style="color:var(--fg)">Before you confirm more credit —</b> invoice FW-2291 (₹3.2 L) is 18 days overdue. The draft nudges it, gently.</div></div>
+            </div>
+            <!-- composer with one AI affordance -->
+            <div class="tag" style="left:16px;bottom:96px">3</div>
+            <div class="composer">
+              <div style="display:flex;align-items:center;gap:7px;margin-bottom:8px">
+                <span class="chip" style="background:var(--pri-d);color:var(--pri);box-shadow:inset 0 0 0 1px hsl(198 89% 52% / .3)">✦ Suggested reply</span>
+                <span style="font-size:10px;color:var(--mut2)">your WhatsApp voice · tap to insert, or</span>
+                <span class="chip q">shorter</span><span class="chip q">हिन्दी</span>
+              </div>
+              <div style="background:var(--panel);border:1px solid var(--line2);border-radius:10px;padding:9px 12px;font-size:11.5px;color:var(--fg);line-height:1.5">
+                Confirmed, Rajesh — build volume is 1500 × 800 × 800 mm, enclosure included. Set for tomorrow 👍 One small thing — could accounts glance at FW-2291 when they can? 🙏
+                <div style="display:flex;align-items:center;margin-top:9px">
+                  <span style="font-size:9.5px;color:var(--mut2)"><kbd>⌘↵</kbd> send · <kbd>/</kbd> template</span>
+                  <span class="btn wa sm" style="margin-left:auto">Send ▸</span></div>
+              </div>
+            </div>
+          </div>
+          <!-- context drawer (on demand — shown open) -->
+          <div class="tag" style="right:216px;top:60px">5</div>
+          <div style="width:236px;flex:none;border-left:1px solid var(--line);background:var(--panel);display:flex;flex-direction:column">
+            <div style="display:flex;align-items:center;height:52px;padding:0 14px;border-bottom:1px solid var(--line);font-size:11px;color:var(--mut)">
+              <b style="color:var(--fg);font-size:12px">Details</b>
+              <span style="margin-left:auto;color:var(--mut2)">✕</span></div>
+            <div style="padding:14px;font-size:11px">
+              <div style="display:flex;gap:8px;margin-bottom:6px"><b style="font-size:11.5px">Meher Prototyping</b></div>
+              <div style="color:var(--mut);line-height:1.7;font-size:10.5px">Customer since 2023 · ₹38 L lifetime<br>
+                Zoho deal <b style="color:var(--fg)">Falcon ×2</b> · Proposal<br>
+                Odoo · <b style="color:var(--amber)">FW-2291 ₹3.2 L · 18 d overdue</b></div>
+              <div style="height:1px;background:var(--line);margin:13px 0"></div>
+              <div style="font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--mut2);margin-bottom:6px">OPEN LOOPS</div>
+              <div style="color:var(--mut);line-height:1.7;font-size:10.5px">☐ ClickUp · Falcon demo QA · Fri<br>
+                <span class="star">★</span> you promised: install by month-end</div>
+              <div style="height:1px;background:var(--line);margin:13px 0"></div>
+              <div style="font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--mut2);margin-bottom:6px">CROSS-CHANNEL <span style="color:var(--mut2);font-weight:400">▾</span></div>
+              <div style="color:var(--mut2);line-height:1.7;font-size:10.5px">✉️ Jul 14 · quote v3 sent<br>📞 Jul 18 · wants edu discount</div>
+            </div>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>The 24 h window is ambient</b> — a small header chip ("session open · 21 h"), not a banner. When free-form is blocked the composer swaps to a <kbd>/</kbd> template picker (WATI's Templates-vs-snippets distinction). <span class="was">Nobody is surprised by pricing mid-reply.</span></li>
+        <li><span class="n">2</span><b>Attachments become one quiet insight</b> — the PO is parsed and its one consequence (overdue invoice) is raised inline. <span class="was">v2 stamped three bright chips onto the message; the value was the same, the noise wasn't.</span></li>
+        <li><span class="n">3</span><b>AI is a single affordance in the composer</b> — one "✦ Suggested reply" chip, two quiet variants, an explicit green Send. No AI column. <span class="was">(SleekFlow / WATI / Shortwave all put AI at the point of writing.)</span></li>
+        <li><span class="n">4</span><b>Context is a toggle</b> — "Details ▸" opens the drawer; by default the view is two panes and calm.</li>
+        <li><span class="n">5</span><b>The drawer is one panel, accordion'd</b> — only Contact + Open loops expanded; cross-channel history collapsed. The moat is here when you want it, invisible when you don't. <span class="was">v2 stacked three always-on cards + four buttons.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 4 · CATEGORIES ═══════════ -->
+  <div class="mock" id="m4">
+    <h2>4 · Categories <em>— a settings surface, so depth is allowed (you navigated here on purpose)</em></h2>
+    <p class="note">Off the working screen. Each category imported from the Business app (🏷) or local carries the policy
+    that makes the queue calm: notify, auto-reply, drafts, escalation. Muted table, one accent, generous rows.</p>
+    <div class="row">
+      <div class="frame" style="width:820px">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">commandcenter.fracktal.works/whatsapp/settings/categories</span></div>
+        <div style="padding:18px 20px">
+          <div style="display:flex;align-items:center;margin-bottom:14px">
+            <b style="font-size:14px">Categories</b>
+            <span style="font-size:10.5px;color:var(--mut2);margin-left:10px">5 synced from WhatsApp Business · 4 local · <b style="color:var(--amber)">23 uncategorized</b></span>
+            <span class="btn g sm" style="margin-left:auto">+ New</span>
+          </div>
+          <table class="spec">
+            <tr><th style="width:28%">CATEGORY</th><th>NOTIFY</th><th>AUTO-REPLY</th><th>AI DRAFTS</th><th>ESCALATE</th></tr>
+            <tr><td><span class="star">★</span> <b>VIP</b> <span style="color:var(--mut2)">· 14 · local</span></td><td>Instant</td><td style="color:var(--mut2)">Never</td><td><b style="color:var(--fg)">Always ready</b></td><td>2 h → push</td></tr>
+            <tr><td>🏷 <b>New customer</b> <span style="color:var(--mut2)">· synced</span></td><td>Digest</td><td><b style="color:var(--fg)">Greet + price list</b></td><td>On intent</td><td>24 h → top</td></tr>
+            <tr><td>🏷 <b>Pending payment</b> <span style="color:var(--mut2)">· synced</span></td><td>Instant</td><td style="color:var(--mut2)">Never</td><td><b style="color:var(--fg)">+ Odoo status</b></td><td>4 h → push</td></tr>
+            <tr><td>👥 <b>Dealer groups</b> <span style="color:var(--mut2)">· 18 · local</span></td><td>@mention only</td><td style="color:var(--mut2)">Never</td><td>Daily summary</td><td style="color:var(--mut2)">—</td></tr>
+            <tr><td>👤 <b>Family &amp; personal</b> <span style="color:var(--mut2)">· local</span></td><td>Instant</td><td style="color:var(--mut2)">Never</td><td style="color:var(--mut2)"><b>AI hands off</b></td><td style="color:var(--mut2)">—</td></tr>
+            <tr><td>🔇 <b>Noise</b> <span style="color:var(--mut2)">· 112</span></td><td style="color:var(--mut2)">Never</td><td style="color:var(--mut2)">Never</td><td style="color:var(--mut2)">—</td><td style="color:var(--mut2)">weekly line</td></tr>
+          </table>
+          <div class="tag" style="left:16px;top:96px">1</div>
+          <div class="tag" style="left:16px;bottom:56px">2</div>
+          <div style="margin-top:16px;background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:12px 14px">
+            <div style="font-size:9.5px;font-weight:700;letter-spacing:.07em;color:var(--mut2);margin-bottom:9px">AI SUGGESTS HOMES FOR 23 UNCATEGORIZED</div>
+            <div style="display:flex;flex-direction:column;gap:7px;font-size:11px">
+              <div style="display:flex;align-items:center;gap:8px"><span style="flex:1">"3D Hubs BLR" → <b style="color:var(--fg)">Dealer groups</b></span><span class="btn sm">Accept</span><span style="color:var(--mut2)">Skip</span></div>
+              <div style="display:flex;align-items:center;gap:8px"><span style="flex:1">+91 63··· <span style="color:var(--mut2)">(asked for a quote ×2)</span> → <b style="color:var(--fg)">New customer</b></span><span class="btn sm">Accept</span><span style="color:var(--mut2)">Skip</span></div>
+            </div>
+            <div style="margin-top:10px;font-size:10.5px;color:var(--pri)">Accept all 23 →</div>
+          </div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>A category is a policy row</b> — four columns answer when you hear about it, what the AI may say alone, when a draft is prepared, when silence escalates. Only the <em>meaningful</em> cell is bright; defaults stay grey, so the eye lands on what's unusual. Family reads "AI hands off" — the trust line.</li>
+        <li><span class="n">2</span><b>Uncategorized is a state being drained</b> — evidence-backed suggestions with a single Accept, and accept-all for the lazy path. Density is fine here: you came to this screen to do settings.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 5 · RULES ═══════════ -->
+  <div class="mock" id="m5">
+    <h2>5 · Rules <em>— every standing behaviour, its evidence, its limits</em></h2>
+    <p class="note">Also a settings surface. Rule cards with honest stats and nested learnings; the autonomy ladder is
+    visible per rule; hard guardrails are their own, un-editable card. One quiet accent for the "on" state.</p>
+    <div class="row">
+      <div class="frame" style="width:820px">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">commandcenter.fracktal.works/whatsapp/settings/rules</span></div>
+        <div style="padding:18px 20px">
+          <div style="display:flex;align-items:center;margin-bottom:14px"><b style="font-size:14px">Standing rules</b>
+            <span style="margin-left:auto;font-size:10.5px;color:var(--mut2)">4 active · 87 actions this month · 0 corrections</span></div>
+          <div style="display:flex;flex-direction:column;gap:10px">
+            <div style="background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px">
+              <div style="display:flex;align-items:center;gap:9px"><b style="font-size:12.5px">📦 Order-status asks</b>
+                <span class="chip" style="color:var(--wa)">auto-answer · read-only</span>
+                <span style="margin-left:auto;font-size:10px;color:var(--mut2)">on</span></div>
+              <div style="font-size:11px;color:var(--mut);margin-top:6px">A customer asks where an order is → live Odoo status + AWB link. Read-only, so it runs on its own.</div>
+              <div style="font-size:10px;color:var(--mut2);margin-top:9px;border-top:1px solid var(--line);padding-top:8px">↳ learned: "kab tak" · "when dispatch" · "tracking?" → this rule &nbsp; <b style="color:var(--wa)">41 handled · 0 corrections</b></div>
+            </div>
+            <div style="background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px">
+              <div style="display:flex;align-items:center;gap:9px"><b style="font-size:12.5px">💰 Payment-chase cadence</b>
+                <span class="chip" style="color:var(--pri)">drafts only — you send</span>
+                <span style="margin-left:auto;font-size:10px;color:var(--mut2)">on</span></div>
+              <div style="font-size:11px;color:var(--mut);margin-top:6px">Overdue 7 d → polite draft · 14 d → firmer + accounts CC'd via email · 21 d → escalation pack. Outside the window it uses the approved <i>payment_reminder</i> template <span style="color:var(--mut2)">(cost shown before send)</span>.</div>
+            </div>
+            <div style="background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:13px 15px">
+              <div style="display:flex;align-items:center;gap:9px"><b style="font-size:12.5px">🌙 Office hours</b>
+                <span class="chip" style="color:var(--wa)">auto-reply</span>
+                <span style="margin-left:auto;font-size:10px;color:var(--mut2)">on</span></div>
+              <div style="font-size:11px;color:var(--mut);margin-top:6px">Mon–Sat 19:00→09:00 · "We're offline — urgent service issues, reply URGENT to page the on-call engineer."</div>
+            </div>
+            <div class="tag" style="right:16px;top:250px">1</div>
+            <div style="background:var(--bg);border:1px solid hsl(0 66% 60% / .28);border-radius:var(--r);padding:13px 15px">
+              <div style="display:flex;align-items:center;gap:9px"><b style="font-size:12.5px">🛡 Hard guardrails</b>
+                <span class="chip" style="color:var(--red)">not AI-editable</span></div>
+              <div style="font-size:11px;color:var(--mut);margin-top:6px;line-height:1.65">Never auto-send to ★ VIP or Family · no prices outside the published list · never promise a delivery date · ≤ 20 auto-replies/hour · templates only from the approved set · every send in the audit log.</div>
+            </div>
+          </div>
+          <div class="tag" style="left:16px;bottom:48px">2</div>
+          <div style="margin-top:12px;display:flex;gap:10px;align-items:center;background:var(--panel);border:1px dashed var(--line2);border-radius:var(--r);padding:11px 14px">
+            <span style="color:var(--pri)">✦</span>
+            <span style="flex:1;font-size:11px;color:var(--mut);font-style:italic">"When a dealer asks for the edu-bundle deck, send the latest PDF and label them Edu-pipeline"</span>
+            <span class="btn sm">Compile to rule</span></div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>The autonomy ladder is visible and bounded</b> — read-only answers run free; anything touching money, dates or reputation is drafts-only; the guardrails card is the floor the AI can't move. Stats ("41 handled · 0 corrections") are how autonomy is earned, not asked for.</li>
+        <li><span class="n">2</span><b>Rules are written in plain language</b> — describe it like briefing an EA; the compiled rule is shown for approval before it goes live.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 6 · DIGEST ═══════════ -->
+  <div class="mock" id="m6">
+    <h2>6 · Digest <em>— the same brief, calmer</em></h2>
+    <p class="note">One computation, two renderings (email + in-app). Leads with the ≤3 that need the founder, each with
+    its prepared action. Sections are separated by space and weight, not by six colored panels.</p>
+    <div class="row">
+      <div class="frame" style="width:540px">
+        <div class="chrome"><i></i><i></i><i></i><span class="url">7:30 morning brief · whatsapp</span></div>
+        <div style="padding:20px 22px">
+          <b style="font-size:15px">☀ Tuesday — WhatsApp</b>
+          <div style="font-size:10.5px;color:var(--mut2);margin-bottom:20px">since 19:00 · 241 messages · 1 number</div>
+
+          <div class="tag" style="left:22px;top:106px">1</div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--red);margin-bottom:9px">NEEDS YOU FIRST · 3</div>
+          <div style="display:flex;flex-direction:column;gap:11px;font-size:11.5px;color:var(--mut);line-height:1.5">
+            <div><b style="color:var(--fg)"><span class="star">★</span> Rajesh</b> · ₹11.4 L PO — confirm build volume <b style="color:var(--fg)">today</b> &nbsp;<span style="color:var(--pri)">draft ready →</span></div>
+            <div><b style="color:var(--fg)">Sandeep</b> · Julia Pro line down &nbsp;<span style="color:var(--pri)">ticket drafted → ClickUp</span></div>
+            <div><b style="color:var(--fg)">Dealer South</b> · @you on edu margins &nbsp;<span style="color:var(--pri)">reply →</span></div>
+          </div>
+
+          <div style="height:1px;background:var(--line);margin:18px 0"></div>
+          <div class="tag" style="left:22px;top:270px">2</div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--gold);margin-bottom:9px">★ COMMITMENT WATCH</div>
+          <div style="font-size:11.5px;color:var(--mut);line-height:1.6">
+            You promised Meher <b style="color:var(--fg)">installation by month-end</b> — 8 days left, no task exists &nbsp;<span style="color:var(--pri)">create it →</span><br>
+            You told IIT-M <b style="color:var(--fg)">"quote by Wednesday"</b> — that's tomorrow</div>
+
+          <div style="height:1px;background:var(--line);margin:18px 0"></div>
+          <div style="font-size:10px;font-weight:700;letter-spacing:.06em;color:var(--mut2);margin-bottom:9px">👥 GROUPS &nbsp;·&nbsp; ✓ HANDLED</div>
+          <div style="font-size:11px;color:var(--mut);line-height:1.65">
+            <b style="color:var(--fg)">Dealer South</b> (47) — edu-margin question · monsoon shipping grumbles<br>
+            <b style="color:var(--fg)">Team</b> (63) — Falcon QA passed · Friday demo confirmed<br>
+            <span style="color:var(--mut2)">14 quiet groups · nothing for you</span><br>
+            <span style="color:var(--wa)">✓</span> 23 auto-handled · 184 muted, sample-checked</div>
+
+          <div style="display:flex;gap:9px;margin-top:20px">
+            <span class="btn" style="flex:1;justify-content:center">Open the queue · 7</span>
+            <span class="btn g" style="flex:1;justify-content:center">Clear in 10 min ▸</span></div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>Three items, each with its action</b> — the digest's whole job is to end the doom-scroll, so it leads with decisions.</li>
+        <li><span class="n">2</span><b>Commitments watched both ways</b> — promises extracted from the founder's own outbound, reconciled against tasks; the one that never became work gets a one-tap fix. <span class="was">Sections divide by whitespace + a single label color, not six filled cards.</span></li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 7 · COMPANION ═══════════ -->
+  <div class="mock" id="m7">
+    <h2>7 · Companion <em>— the same assistant, on the phone</em></h2>
+    <p class="note">The control-plane chat (mobile PWA) with the <code>wa_*</code> toolset. The queue and drafts render as
+    quiet inline cards; the only send is an explicit approve.</p>
+    <div class="row">
+      <div class="frame" style="width:320px;border-radius:30px">
+        <div style="display:flex;justify-content:space-between;padding:11px 20px 2px;font-size:9px;color:var(--mut2)"><span>14:02</span><span>𝗹𝗹𝗹 ᯤ 🔋</span></div>
+        <div style="padding:10px 15px 20px">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:14px"><b style="font-size:13px">✦ Assistant</b>
+            <span class="chip" style="color:var(--wa)">wa</span></div>
+          <div class="bub out" style="max-width:86%">What did I miss during the board meeting?<span class="t">14:02</span></div>
+          <div class="bub in" style="max-width:92%">3 worth your time — 41 others were routine.<span class="t">14:02</span></div>
+          <div class="tag" style="left:16px;top:180px">1</div>
+          <div style="background:var(--panel);border:1px solid var(--line);border-radius:12px;padding:11px 13px;margin:2px 0 11px;font-size:11px">
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 0"><span class="av" style="width:22px;height:22px;font-size:8px;background:hsl(16 55% 42%)">RM</span><span style="flex:1"><span class="star">★</span> Rajesh — PO, needs specs today</span><span class="rdot"></span></div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 0;border-top:1px solid var(--line)"><span class="av" style="width:22px;height:22px;font-size:8px;background:hsl(330 34% 44%)">IM</span><span style="flex:1">IIT-M — new quote request</span></div>
+            <div style="display:flex;align-items:center;gap:9px;padding:5px 0;border-top:1px solid var(--line)"><span class="av" style="width:22px;height:22px;font-size:8px;background:hsl(48 40% 40%)">PV</span><span style="flex:1">CNC vendor — sample photos in</span></div>
+          </div>
+          <div class="bub out" style="max-width:86%">Reply to Rajesh — confirm specs, keep the payment ask warm.<span class="t">14:03</span></div>
+          <div class="tag" style="left:16px;top:388px">2</div>
+          <div style="background:var(--panel);border:1px solid hsl(198 89% 52% / .3);border-radius:12px;padding:11px 13px;margin-top:2px;font-size:10.5px">
+            <div style="font-size:9px;font-weight:700;letter-spacing:.06em;color:var(--pri);margin-bottom:6px">DRAFT → RAJESH · session open</div>
+            <i style="color:var(--mut);line-height:1.5">"Confirmed — 1500×800×800 mm, enclosure included. Set for tomorrow 👍 Could accounts glance at FW-2291 when they can? 🙏"</i>
+            <div style="display:flex;gap:7px;margin-top:9px"><span class="btn wa sm">Approve &amp; send</span><span class="btn g sm">Edit</span></div></div>
+          <div style="margin-top:12px;font-size:9.5px;color:var(--mut2);border-top:1px solid var(--line);padding-top:9px;line-height:1.6">try · "who am I ignoring?" · "summarize dealer chatter on monsoon delays" · "mute Dealer North till Monday"</div>
+        </div>
+      </div>
+      <ul class="ann">
+        <li><span class="n">1</span><b>GenUI cards, not text walls</b> — the queue renders as one card with the same quiet-row grammar as the desktop list. Triage from a cab in a few taps. <span class="was">(Control-plane genUI template library.)</span></li>
+        <li><span class="n">2</span><b>Approve &amp; send is the only send</b> — the draft card carries the window state and the HITL gate. The assistant holds the context; you supply one sentence of judgement.</li>
+      </ul>
+    </div>
+  </div>
+
+  <!-- ═══════════ 8 · BUILD NOTES ═══════════ -->
+  <div class="mock" id="m8">
+    <h2>8 · Build notes <em>— principles applied, tokens, component map</em></h2>
+    <p class="note">The implementation checklist for <code>src/app/whatsapp/</code>, plus the prior-art principle each
+    screen is built on so the calm survives contact with feature requests.</p>
+    <div class="row">
+      <div class="frame" style="width:820px;padding:18px 20px">
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:.07em;color:var(--mut2);margin-bottom:10px">CALM PRINCIPLES → WHERE THEY LAND (prior art)</div>
+        <table class="spec" style="margin-bottom:20px">
+          <tr><th style="width:34%">PRINCIPLE</th><th>APPLIED IN</th><th>FROM</th></tr>
+          <tr><td><b>One organizing spine</b></td><td>triage streams nav replaces stats + chips (screen 2)</td><td>HEY · Cooby · Rasayel</td></tr>
+          <tr><td><b>One triage number</b></td><td>active stream's count; no KPI strip on the working screen</td><td>Superhuman · HEY</td></tr>
+          <tr><td><b>Quiet rows, hover actions</b></td><td>name · line · time · one dot (screens 2, 3, 7)</td><td>Superhuman · WATI · Cooby</td></tr>
+          <tr><td><b>Two panes; context on demand</b></td><td>"Details ▸" drawer, accordion'd (screen 3)</td><td>Missive · Front · Chatwoot</td></tr>
+          <tr><td><b>AI at the point of writing</b></td><td>one "Suggested reply" chip, no AI column (screen 3)</td><td>SleekFlow · Shortwave · WATI</td></tr>
+          <tr><td><b>Window = quiet status</b></td><td>header chip + <kbd>/</kbd> template picker (screen 3)</td><td>TimelinesAI · WATI</td></tr>
+          <tr><td><b>Depth only when navigated-to</b></td><td>categories &amp; rules are settings surfaces (4, 5)</td><td>progressive disclosure</td></tr>
+          <tr><td><b>One accent, greyscale rest</b></td><td>cyan = active/AI; green = send only; red dot = needs you</td><td>Superhuman</td></tr>
+        </table>
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:.07em;color:var(--mut2);margin-bottom:8px">COLOR — USED ONLY AS SIGNAL</div>
+        <div style="display:flex;gap:18px;flex-wrap:wrap;font-size:10.5px;color:var(--mut);margin-bottom:20px">
+          <span><i class="sw" style="background:var(--pri)"></i>cyan — active stream · primary · AI</span>
+          <span><i class="sw" style="background:var(--wa)"></i>green — send &amp; outbound only</span>
+          <span><i class="sw" style="background:var(--red)"></i>red dot — needs you</span>
+          <span><i class="sw" style="background:var(--gold)"></i>gold ★ — VIP (glyph, not fill)</span>
+          <span><i class="sw" style="background:var(--amber)"></i>amber — payment aging (in context)</span>
+          <span><i class="sw" style="background:var(--mut2)"></i>grey — everything else, until it matters</span>
+        </div>
+        <div style="font-size:9.5px;font-weight:700;letter-spacing:.07em;color:var(--mut2);margin-bottom:8px">COMPONENT MAP</div>
+        <table class="spec">
+          <tr><th style="width:26%">ELEMENT</th><th style="width:40%">REUSE FROM EMAIL / CONTROL PLANE</th><th>NEW WORK</th></tr>
+          <tr><td><b>Streams nav</b></td><td>email `QuickFilters` logic → vertical `AccountSidebar` shape</td><td>stream-with-count nav item, single-active</td></tr>
+          <tr><td><b>Quiet list rows</b></td><td>Dashboard reply-queue row → stripped to text + dot</td><td>hover-action affordance, `J/K/R/E` keys</td></tr>
+          <tr><td><b>Thread + bubbles</b></td><td>`ConversationView` patterns</td><td>bubble renderer, media card, day divider</td></tr>
+          <tr><td><b>Composer + AI chip</b></td><td>`ComposerAI` (voice, variants)</td><td>window-mode swap, `/` template picker</td></tr>
+          <tr><td><b>Details drawer</b></td><td>genUI person/deal cards</td><td>accordion drawer, per-phone CRM/ERP fetch</td></tr>
+          <tr><td><b>Categories / Rules</b></td><td>`RulesTab` cards + senders table</td><td>policy columns; autonomy-ladder chip</td></tr>
+          <tr><td><b>Digest</b></td><td>`digest.py` projection + `DashboardView`</td><td>WhatsApp section</td></tr>
+          <tr><td><b>Companion cards</b></td><td>control-plane chat + genUI library + HITL</td><td>`wa_*` agent toolset</td></tr>
+          <tr><td><b>Connect</b></td><td>OAuth/onboarding modal patterns</td><td>Embedded Signup, import progress, capability card</td></tr>
+        </table>
+      </div>
+      <ul class="ann">
+        <li><span class="n"> </span><b>The one rule that keeps it calm:</b> every new feature must land in the nav (a new stream), in a settings surface, or as a hover/drawer affordance — <em>never</em> as another always-on element on the queue or the thread. That single constraint is what the cluttered tools (Periskope, Interakt, Gallabox) violated, per their own reviews.</li>
+      </ul>
+    </div>
+  </div>
+</div>

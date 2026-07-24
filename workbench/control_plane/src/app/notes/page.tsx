@@ -11,6 +11,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
   AudioLines,
+  BookMarked,
   Clock,
   FileAudio,
   Loader2,
@@ -19,8 +20,15 @@ import {
   Upload,
   Users,
 } from "lucide-react";
-import { createMeeting, formatClock, listMeetings, uploadRecording } from "./lib/api";
-import type { MeetingListItem } from "./lib/types";
+import {
+  createMeeting,
+  formatClock,
+  listMeetings,
+  listTemplates,
+  uploadRecording,
+} from "./lib/api";
+import GlossaryModal from "./components/GlossaryModal";
+import type { MeetingListItem, NoteTemplate } from "./lib/types";
 
 const STATUS_META: Record<
   string,
@@ -40,6 +48,9 @@ export default function NotesPage() {
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
+  const [showGlossary, setShowGlossary] = useState(false);
+  const [templates, setTemplates] = useState<NoteTemplate[]>([]);
+  const [templateKey, setTemplateKey] = useState("standard_meeting");
   const fileInput = useRef<HTMLInputElement>(null);
 
   const refresh = useCallback(async (q?: string) => {
@@ -55,6 +66,9 @@ export default function NotesPage() {
 
   useEffect(() => {
     void refresh();
+    void listTemplates()
+      .then(setTemplates)
+      .catch(() => {}); // picker is optional; creation defaults to standard
   }, [refresh]);
 
   // Poll while anything is still transcribing so statuses stay live.
@@ -68,12 +82,26 @@ export default function NotesPage() {
     setUploading(true);
     setError(null);
     try {
-      const meeting = await createMeeting(file.name.replace(/\.[^.]+$/, ""));
+      const meeting = await createMeeting(
+        file.name.replace(/\.[^.]+$/, ""),
+        "upload",
+        templateKey
+      );
       await uploadRecording(meeting.id, file);
       router.push(`/notes/meeting/${meeting.id}`);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
       setUploading(false);
+    }
+  }
+
+  async function onRecord() {
+    setError(null);
+    try {
+      const meeting = await createMeeting(undefined, "in_person", templateKey);
+      router.push(`/notes/session/${meeting.id}`);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
     }
   }
 
@@ -88,16 +116,38 @@ export default function NotesPage() {
         </div>
         <div className="flex items-center gap-2">
           <button
-            className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground tech-transition cursor-not-allowed opacity-60"
-            title="Live recording arrives in the next slice — upload a file for now"
-            disabled
+            onClick={() => setShowGlossary(true)}
+            className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+            title="Glossary — teach transcription your jargon"
+            aria-label="Glossary"
+          >
+            <BookMarked className="w-4 h-4" />
+          </button>
+          {templates.length > 0 && (
+            <select
+              value={templateKey}
+              onChange={(e) => setTemplateKey(e.target.value)}
+              title="Notes template — shapes the summary for this meeting type"
+              aria-label="Notes template"
+              className="rounded-lg border border-border bg-card px-2 py-2 text-sm text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring tech-transition"
+            >
+              {templates.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          )}
+          <button
+            onClick={onRecord}
+            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
           >
             <span className="flex items-center gap-1.5">
               <Mic className="w-4 h-4" /> Record
             </span>
           </button>
           <button
-            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-60"
+            className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
           >
@@ -107,7 +157,7 @@ export default function NotesPage() {
               ) : (
                 <Upload className="w-4 h-4" />
               )}
-              {uploading ? "Uploading…" : "Upload recording"}
+              {uploading ? "Uploading…" : "Upload"}
             </span>
           </button>
           <input
@@ -215,6 +265,8 @@ export default function NotesPage() {
           )}
         </div>
       </div>
+
+      {showGlossary && <GlossaryModal onClose={() => setShowGlossary(false)} />}
     </div>
   );
 }

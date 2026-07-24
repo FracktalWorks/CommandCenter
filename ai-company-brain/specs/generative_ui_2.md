@@ -1,6 +1,6 @@
 # Generative UI 2.0 — Immersive HITL UI for Agents
 
-**Status:** Phase 1 shipped 2026-07-23 · **Owner:** Vijay
+**Status:** Phase 1 + proactive/cross-runtime parity (§7) shipped 2026-07-23 · **Owner:** Vijay
 **Scope:** how agents generate rich, interactive, on-brand UI — inline in chat AND
 as immersive side-panel views — with first-class human-in-the-loop interaction.
 
@@ -136,3 +136,62 @@ pattern, delete the bespoke HTML.
 - **Cleanup backlog:** migrate genUI primitive hardcoded hexes
   (`ICON_TONE`, badge/callout classes, `TONE_COLOR`) to semantic tokens;
   DESIGN_SYSTEM rule says never raw hex.
+
+## 7. Adoption & cross-runtime parity — SHIPPED 2026-07-23
+
+Phase 1 gave agents the *ability* to render UI; agents still weren't *reaching
+for it*. A review found two root causes, both on the prompting side (the emit
+path and the frontend render are fully runtime-agnostic — one shared
+`queue.put({CUSTOM, generative_ui})` via `resolve_run_queue(session_id)`,
+rendered on payload alone in `GenerativeUINode`/`renderTemplate`, so nothing
+was wrong with *creation*):
+
+1. **No answer-time nudge.** The "reach for it eagerly" guidance lived only in
+   the tool docstring (a weak signal the model consults *after* deciding to look
+   at tools) and, at system-prompt level, buried mid-addendum among ~15 other
+   tools. Nothing told the model, at answer time, to convert a data/status/
+   comparison/choice reply into UI.
+2. **Native MAF agents saw NONE of it.** `_build_injected_tools_addendum`
+   (which carries the genUI guidance + `design.md`) is applied ONLY on the
+   GitHub-Copilot `_tools` branch of `_inject_agent_tools`. Native MAF agents
+   (e.g. `email-assistant`, which explicitly scopes in `emit_generative_ui`)
+   got the tool + its docstring + at most the delegation registry — no addendum,
+   no design language. So the strongest UI agent-type had the weakest guidance.
+
+**Fix — a proactive "Rich UI by default" directive delivered to BOTH runtimes**
+(`_ui_first_directive`, `_tool_injection.py`):
+- Static, byte-stable (KV-cache safe), gated on the agent actually carrying
+  `emit_generative_ui`.
+- **Template-first ordering** is the token-thrift lever: it names the 11
+  templates as the cheapest + on-brand-by-construction path (data only), the
+  component tree next, and custom HTML as the costly last resort (with the
+  `--cc-*` token hook for when it's unavoidable). This directly answers "don't
+  burn tokens on custom generation" and "use the proper design language."
+- **Placement:** leads the Copilot addendum (full + compact) instead of being
+  buried; and — the parity fix — is appended to native-MAF agents' instructions
+  (both the `default_options` and `agent.tools` shapes), marker-guarded for
+  idempotency. So MAF and Copilot agents now get the same answer-time rule.
+- Pick/set flows are steered to `formCard`/`optionPicker` + `"hitl":true`.
+
+**Design language — now on demand for ALL agents (shipped 2026-07-23).** The
+full ~16 KB `design.md` used to be pasted inline into every *Copilot* agent's
+prompt every turn (and never reached MAF at all). It is now a tool,
+`load_design_system()` (`acb_skills/design_tools.py`), on the core floor for
+both runtimes:
+- The inline `_design_md_section()` injection is removed; the addendum carries
+  only a cheap POINTER ("### Design language — load on demand"). Net effect:
+  ~16 KB off every Copilot prompt, and MAF agents finally have design access.
+- Agents call it only for the HEAVY cases — a full-page HTML/Markdown report or
+  bespoke custom-HTML `emit_generative_ui` card. Named templates stay on-brand
+  by construction (no call), and the `--cc-*` tokens named in the UI directive
+  cover simple custom HTML. `design.md` gained YAML front matter (`when_to_use`,
+  `summary`) documenting the trigger; the tool strips it and returns the body.
+- Coverage: `tests/unit/test_design_tools.py` (real doc, front-matter strip,
+  floor + read-only annotation) and a drift-eval guard
+  (`test_design_system_is_on_demand_not_inlined`) that fails if the whole doc
+  is ever re-inlined.
+
+Coverage locked by `evals/trajectories/test_tool_addendum_drift_trajectory.py`
+(directive leads both addenda, template-before-html ordering, gated on the tool)
+and `tests/unit/test_genui_proactive_directive.py` (native-MAF instructions
+injection, idempotency, compact-vs-full variant, byte-stability).

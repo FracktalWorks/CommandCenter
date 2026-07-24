@@ -42,10 +42,16 @@ _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
     "web_search", "fetch_page",          # web access
     "write_artifact", "share_artifact",  # file writing / delivery
     "emit_generative_ui",                # rich/interactive HITL UI (genui_2)
+    "load_design_system",                # on-demand design language (genui_2 §7)
     "manage_todo_list",                  # task tracking panel
     "ask_questions",                     # HITL clarification
     "run_diagnostics", "get_errors",     # code / file error checking
     "save_note", "recall_notes",         # cross-session working memory
+    # Coding skill (agent_coding_skill.md): every MAF agent can author scripts
+    # via a bounded Copilot session (code_task) and cheaply re-run the durable
+    # scripts it accumulated (run_script). Workspace-jailed + env-scrubbed;
+    # list_integrations shows what a script may reach (names, never values).
+    "run_script", "code_task", "list_integrations",
     # Inter-agent delegation (multi_agent_orchestration.md Phase 0.1): the
     # floor previously guaranteed every tool an agent needs to work ALONE and
     # not one it needs to HAND OFF — a scope that omitted call_agent silently
@@ -72,44 +78,6 @@ def _resolve_injected_scope(tool_scope: list[str] | None) -> set[str] | None:
     return set(tool_scope) | set(_CORE_STANDARD_TOOL_NAMES)
 
 
-@functools.lru_cache(maxsize=1)
-def _load_design_md() -> str:
-    """Return the Command Center DESIGN.md, cached for the process lifetime.
-
-    The design system is static (ships in acb_skills), so caching keeps the
-    system-prompt prefix byte-stable across turns for KV-cache hits. Injected
-    into every agent so any Markdown/HTML/generative-UI it produces follows the
-    Command Center design language. Returns "" if the file is missing (fail
-    open — never block agent load on a missing design doc).
-    """
-    try:
-        from pathlib import Path  # noqa: PLC0415
-
-        import acb_skills  # noqa: PLC0415
-
-        design_path = Path(acb_skills.__file__).parent / "design.md"
-        return design_path.read_text(encoding="utf-8", errors="replace").strip()
-    except Exception:  # noqa: BLE001
-        return ""
-
-
-def _design_md_section() -> str:
-    """The full DESIGN.md wrapped as a system-prompt section (or "" if absent).
-
-    Kept separate from :func:`_load_design_md` so the raw doc is reusable and the
-    section wrapper stays out of the cache key. Byte-stable across turns because
-    the underlying loader is cached.
-    """
-    design = _load_design_md()
-    if not design:
-        return ""
-    return (
-        "### Command Center design language (DESIGN.md)\n"
-        "Follow this for every document, report, and UI you generate:\n\n"
-        f"{design}"
-    )
-
-
 def _build_output_discipline_block(*, compact: bool = False) -> str:
     """The 'all generated files live under outputs/' + design-language rule.
 
@@ -118,8 +86,9 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
          (logical subfolders encouraged), for both MAF and Copilot agents. This
          keeps the workspace tidy and, crucially, persistent: ``outputs/`` is the
          durable, redeploy-surviving home for deliverables.
-      2. Design language — a pointer to the injected DESIGN.md so any document,
-         report, or UI matches the Command Center look.
+      2. Design language — a pointer to the on-demand design system
+         (``load_design_system()``) so any heavier document, report, or custom
+         HTML matches the Command Center look.
     """
     if compact:
         return (
@@ -127,8 +96,10 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
             "content directly; do NOT build files with shell heredocs / echo / "
             "printf / base64 (fragile quoting truncates large writes). Put "
             "every file under outputs/ (logical subfolders, e.g. "
-            "outputs/reports/); never the working-dir root. Markdown/HTML you "
-            "produce must follow the injected Command Center DESIGN.md."
+            "outputs/reports/); never the working-dir root. For a full-page "
+            "report or bespoke custom HTML, call load_design_system() first to "
+            "match the Command Center look (named genUI templates are already "
+            "on-brand)."
         )
     return (
         "### Output discipline (REQUIRED)\n"
@@ -149,8 +120,60 @@ def _build_output_discipline_block(*, compact: bool = False) -> str:
         "you made.\n"
         "- Prefer Markdown (`.md`) for written deliverables and HTML (`.html`) "
         "for rich/interactive reports — both get a live preview in the side "
-        "panel. Any Markdown, HTML, or generative UI you produce MUST follow "
-        "the **Command Center DESIGN.md** included below."
+        "panel. Before writing a full-page report or bespoke custom HTML, call "
+        "**`load_design_system()`** to load the Command Center design language "
+        "and follow it (named `emit_generative_ui` templates are already "
+        "on-brand and need no extra step)."
+    )
+
+
+def _ui_first_directive(*, compact: bool = False) -> str:
+    """The proactive 'render UI by default' rule (generative_ui_2 Phase 2).
+
+    Static, byte-stable text delivered at the SYSTEM-PROMPT level to BOTH
+    runtimes (Copilot via the addendum, native MAF via an instructions append)
+    so the model actually REACHES FOR ``emit_generative_ui`` at answer time —
+    the tool's own docstring alone was too weak a signal, and MAF agents never
+    saw the addendum's genUI guidance at all. Template-first ordering keeps it
+    token-cheap and on-brand by construction (custom HTML is the costly last
+    resort). Gate rendering on the agent actually having ``emit_generative_ui``.
+    """
+    if compact:
+        return (
+            "Rich UI by default: when the answer is data / a metric / a status "
+            "/ a comparison / steps / a choice / a value to set, call "
+            "emit_generative_ui with a named TEMPLATE (supply data only — "
+            "on-brand and cheapest: weatherCard, statDashboard, barChart, "
+            "sparkTrend, comparison, progressTracker, recipeCard, flightStatus, "
+            "trainStatus, formCard, optionPicker) rather than describing it in "
+            "prose; use a component tree for simple structured data and custom "
+            "html only as a last resort; pair any pick/set with \"hitl\":true. "
+            "Skip UI only for a trivial one-liner or a long narrative."
+        )
+    return (
+        "### Rich UI by default for structured answers "
+        "(call emit_generative_ui)\n"
+        "Before you answer in prose, ask: is the reply data, numbers/metrics, "
+        "a status, a comparison, steps or a checklist, or a value the user "
+        "should pick or set? If yes, RENDER it — a card is clearer than a "
+        "paragraph and can be interactive. This is expected behaviour, not "
+        "decoration. Pick the CHEAPEST mode that fits (which also keeps you "
+        "on-brand):\n"
+        "- **Template first** — `{\"type\":\"template\",\"props\":{\"name\":…,"
+        "\"data\":{…}}}`. You supply DATA ONLY; fonts, colours, Lucide icons, "
+        "motion and light/dark are built in and correct every time. Names: "
+        "weatherCard, statDashboard, barChart, sparkTrend, comparison, "
+        "progressTracker, recipeCard, flightStatus, trainStatus, formCard, "
+        "optionPicker.\n"
+        "- **Component tree** next — cards / tables / keyValue / badges / "
+        "callouts / buttons / icons for simple structured data.\n"
+        "- **Custom html LAST** — only when nothing above fits; it costs the "
+        "most tokens and you must match the brand yourself via the `--cc-*` "
+        "CSS variables. Never hand-roll HTML for something a template covers.\n"
+        "When the user must choose or set something, use formCard / "
+        "optionPicker (or buttons) with top-level `\"hitl\":true` so their "
+        "answer returns to you in the same turn. Skip UI only for a trivial "
+        "one-liner or a long narrative explanation."
     )
 
 
@@ -272,6 +295,10 @@ def _build_injected_tools_addendum(
             "## CommandCenter Platform Tools",
             _build_output_discipline_block(compact=True),
         ]
+        # Proactive UI rule first — it changes how the agent ANSWERS, so it
+        # leads (Phase 2). Gated: only agents that actually have the tool.
+        if _want("emit_generative_ui"):
+            parts.append(_ui_first_directive(compact=True))
         if _has_delegation:
             parts.append(
                 "call_agent(name,msg), call_agents_parallel(tasks), "
@@ -312,6 +339,16 @@ def _build_injected_tools_addendum(
             parts.append(
                 "install_dependency(packages) — install Python package(s) into the agent venv at runtime"
             )
+        if _want("run_script", "code_task"):
+            parts.append(
+                "run_script(path,args?) — run a saved workspace script "
+                "(agent-data/scripts/*.py|.sh) directly, cheap; "
+                "code_task(task) — bounded coding session that writes/edits/"
+                "tests scripts in your workspace (check agent-data/SCRIPTS.md "
+                "first; prefer run_script for re-runs); "
+                "list_integrations() — which platform integrations your "
+                "scripts can use (env var names, values injected at run time)"
+            )
         if _want("save_note", "recall_notes"):
             parts.append(
                 "save_note(path,fact), recall_notes(path,query?) — repo-scoped working memory"
@@ -334,6 +371,11 @@ def _build_injected_tools_addendum(
 ---
 ## CommandCenter Platform Tools (injected at runtime)
 """]
+    # Proactive UI rule leads the addendum — it governs how the agent ANSWERS
+    # (render vs. prose), so it must be prominent, not buried among tool specs
+    # (Phase 2). Gated so a scoped-out agent isn't told to use a tool it lacks.
+    if _want("emit_generative_ui"):
+        sections.append(_ui_first_directive())
     if _has_delegation:
         sections.append(f"""### Inter-agent delegation
 - **call_agent(agent_name, message)** — Delegate to another agent; waits for its response.
@@ -419,6 +461,15 @@ Workspace folders visible in the Files Viewer: **outputs/** (default for generat
         sections.append("""### Runtime dependencies
 - **install_dependency(packages)** — Install Python package(s) into the agent runtime so your imports/tools work.  Use this when you hit a ``ModuleNotFoundError`` or know a task needs a package that isn't installed.  Pass space- or comma-separated specs, e.g. ``"pandas openpyxl"`` or ``"requests==2.31.0"`` (plain names + optional version; no flags/URLs).  Installs into the shared agent venv via ``uv``; the package is importable immediately.  Prefer this over shell ``pip install`` (the venv has no pip).
 """)
+    if _want("run_script", "code_task"):
+        sections.append("""### Coding skill (durable scripts)
+When your built-in tools can't do something, WRITE A PROGRAM for it — and keep it, so next time is instant.
+- **code_task(task)** — Delegate a coding job to the platform's coding engine: it writes, edits, runs, and debugs scripts inside YOUR workspace in one bounded session. Describe what to build (inputs, expected output, and the existing script's name if changing one). It follows the script contract: reusable scripts live under ``agent-data/scripts/``, the catalog lives in ``agent-data/SCRIPTS.md``, and existing scripts are edited in place rather than duplicated. Scripts persist durably — they survive restarts and redeploys, so a capability you build once stays yours.
+- **run_script(path, args?)** — Execute a script that already exists (e.g. ``agent-data/scripts/report.py``, ``.py`` or ``.sh``) and get its output. No reasoning step — much faster and cheaper than code_task. Check ``recall_notes("SCRIPTS.md")`` for your script catalog.
+This also covers your BUILT-IN skills: if one of your repo-baked skill scripts (under ``skills/``) misbehaves, call ``code_task`` describing the problem — it fixes the source in place, and the change is committed locally and queued for HUMAN APPROVAL in the inbox (live once approved). Workspace scripts under ``agent-data/`` need no approval.
+- **list_integrations()** — See which platform integrations (ClickUp, Zoho CRM, Gmail, SerpAPI, …) are configured for you and the env-var NAMES your scripts can read for each (e.g. ``CLICKUP_API_TOKEN`` via ``os.getenv``). Call this BEFORE writing a script against an external service: scripts receive exactly your declared integrations' credentials at run time — nothing else — so never hard-code keys or ask the user to paste one. If an integration you need is listed as unavailable, tell the user what needs configuring.
+Workflow: need a new capability → ``code_task``; repeat a known job → ``run_script``; small tweak to an existing script → ``code_task`` naming the script. Files a script writes under ``outputs/`` are persisted and appear in the Files panel automatically.
+""")
     if _want("save_note", "recall_notes"):
         sections.append("""### Working memory (repo-scoped notes)
 - **save_note(path, fact)** — Append a dated bullet to a markdown notes file under ``agent-data/``.  Your canonical working memory is ``agent-data/NOTES.md`` — read it at session start with ``recall_notes("NOTES.md")``.
@@ -450,7 +501,8 @@ To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..
 - **By default, do NOT push** — direct pushes are blocked and the commit queues for human approval in the Control Plane inbox.
 - **If the user explicitly tells you to push (e.g. "commit and push") in this conversation**, then after committing run `git push --no-verify origin HEAD`. The `--no-verify` flag is required to bypass the approval hook. That commit is then recorded as already-approved — the user does not need to approve it again on the Agents page.
 
-{_design_md_section()}
+### Design language — load on demand
+Named `emit_generative_ui` templates are already on-brand (supply data only), and the `--cc-*` CSS tokens above cover simple custom HTML. For anything HEAVIER — a full-page HTML or Markdown **report**, or a bespoke custom-HTML `emit_generative_ui` card — call **`load_design_system()`** FIRST to load the Command Center design system (palette tokens, typography, spacing, motion, dark/light, and the `cc-report` block kit), then follow it. Don't guess the styling for a report; load it.
 ---""")
     return "\n".join(sections)
 
@@ -635,6 +687,33 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     except ImportError:
         pass
 
+    # Coding skill — code_task (bounded Copilot coding session that authors /
+    # edits scripts under agent-data/scripts/) + run_script (zero-LLM re-run of
+    # a saved script). Scripts are blob-store durable across restarts/redeploys.
+    try:
+        from acb_skills.code_tools import code_task  # noqa: PLC0415
+        from acb_skills.code_tools import run_script
+        _all_tools = _all_tools + [run_script, code_task]
+    except ImportError:
+        pass
+
+    # Integration discoverability — which registry services resolved for this
+    # run and which env vars a script may read for each (names, never values).
+    try:
+        from acb_skills.integration_tools import list_integrations  # noqa: PLC0415
+        _all_tools = _all_tools + [list_integrations]
+    except ImportError:
+        pass
+
+    # On-demand design system — the full ~16KB design.md is no longer injected
+    # into every prompt; agents load it only when writing a heavy report or
+    # bespoke custom HTML (generative_ui_2 §7).
+    try:
+        from acb_skills.design_tools import load_design_system  # noqa: PLC0415
+        _all_tools = _all_tools + [load_design_system]
+    except ImportError:
+        pass
+
     # Repo-scoped notes — agents maintain durable working memory.
     try:
         from acb_skills.note_tools import save_note  # noqa: PLC0415
@@ -703,6 +782,26 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
         "approve_all"
     ):
         _extra_tools = [_gate_injected_tool(fn) for fn in _extra_tools]
+
+    # Whether emit_generative_ui actually landed in this agent's toolset — the
+    # gate above wraps the callables but functools.wraps preserves __name__.
+    # Native MAF agents get NONE of the Copilot addendum (which is where the
+    # proactive UI rule + genUI guidance live for Copilot), so when they DO
+    # carry the tool we append the same directive to their instructions —
+    # otherwise a MAF agent has the tool but no system-prompt nudge to use it
+    # (generative_ui_2 Phase 2).
+    _emit_injected = any(
+        getattr(fn, "__name__", "") == "emit_generative_ui" for fn in _extra_tools
+    )
+    # Present in BOTH the full and compact directive variants, so the
+    # idempotency guard holds whichever one a given agent/sub-agent receives.
+    _UI_DIRECTIVE_MARKER = "Rich UI by default"
+    # Heads both the full and compact Copilot addendum → guards re-injection.
+    _ADDENDUM_MARKER = "## CommandCenter Platform Tools"
+    # Present in BOTH output-discipline variants (the load_design_system
+    # pointer) and vanishingly unlikely in a MAF agent's own instructions →
+    # a safe idempotency marker for the native-MAF append below.
+    _OUTPUT_DISCIPLINE_MARKER = "load_design_system"
 
     for agent in agents:
         injected = False
@@ -778,9 +877,21 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                     opts = getattr(agent, "_default_options", None)
                     if isinstance(opts, dict):
                         existing_sys = opts.get("system_message")
-                        if isinstance(existing_sys, dict):
+                        # Idempotency guard (parity with the MAF path): a second
+                        # injection on the SAME agent object must not append a
+                        # duplicate addendum — that would bloat the prompt and
+                        # break the KV-cache stability this module is built for.
+                        _existing_txt = (
+                            existing_sys.get("content")
+                            if isinstance(existing_sys, dict)
+                            else existing_sys if isinstance(existing_sys, str)
+                            else ""
+                        ) or ""
+                        if _ADDENDUM_MARKER in _existing_txt:
+                            pass
+                        elif isinstance(existing_sys, dict):
                             # Preserve mode:'append'; extend content field.
-                            existing_sys["content"] = (existing_sys.get("content") or "") + addendum
+                            existing_sys["content"] = _existing_txt + addendum
                         elif isinstance(existing_sys, str):
                             opts["system_message"] = {"mode": "append", "content": existing_sys + addendum}
                         else:
@@ -846,6 +957,30 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                             )
                     except Exception:
                         pass
+                # Proactive UI rule for native MAF agents (Phase 2): they never
+                # receive the Copilot addendum, so without this a MAF agent that
+                # carries emit_generative_ui (e.g. email-assistant) has zero
+                # system-prompt guidance to render UI. Static + marker-guarded =
+                # byte-stable across turns (KV cache safe).
+                try:
+                    _prev2 = _do.get("instructions") or ""
+                    if _emit_injected and _UI_DIRECTIVE_MARKER not in _prev2:
+                        _prev2 = _prev2 + "\n\n" + _ui_first_directive(
+                            compact=is_sub_agent,
+                        )
+                        _do["instructions"] = _prev2
+                    # Output discipline (files under outputs/ + the on-demand
+                    # design pointer) — the Copilot path gets this in the
+                    # addendum; native MAF agents need the same at system-prompt
+                    # level so they know where files go and to load the design
+                    # system before a report. Marker-guarded for idempotency.
+                    if _OUTPUT_DISCIPLINE_MARKER not in _prev2:
+                        _do["instructions"] = (
+                            _prev2 + "\n\n"
+                            + _build_output_discipline_block(compact=is_sub_agent)
+                        )
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
         except Exception as _exc:  # noqa: BLE001
             _log.warning(
@@ -866,6 +1001,25 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
                 for fn in _extra_tools:
                     if fn.__name__ not in existing_names:
                         agent.tools.append(fn)
+                # Proactive UI rule for this MAF shape too (Phase 2) — append to
+                # a writable string `instructions` attr if present; best-effort.
+                try:
+                    _instr = getattr(agent, "instructions", None)
+                    if isinstance(_instr, str):
+                        if _emit_injected and _UI_DIRECTIVE_MARKER not in _instr:
+                            _instr = _instr + "\n\n" + _ui_first_directive(
+                                compact=is_sub_agent,
+                            )
+                            agent.instructions = _instr
+                        if _OUTPUT_DISCIPLINE_MARKER not in _instr:
+                            agent.instructions = (
+                                _instr + "\n\n"
+                                + _build_output_discipline_block(
+                                    compact=is_sub_agent,
+                                )
+                            )
+                except Exception:  # noqa: BLE001
+                    pass
                 continue
         except Exception as _exc:  # noqa: BLE001
             _log.warning(

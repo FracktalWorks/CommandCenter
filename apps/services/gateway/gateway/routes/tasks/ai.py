@@ -658,7 +658,14 @@ async def _llm_propose(
         "   `leveraged`: true ONLY for the rare, asymmetric 100x-upside task — "
         "an investor conversation, a grant, a key hire, a pivotal partnership "
         "or intro, fundraising. It's about UPSIDE and it is SCARCE — most "
-        "tasks are false. When unsure, false.\n\n"
+        "tasks are false. When unsure, false.\n"
+        "6. `deep_work`: true when doing this WELL requires an unbroken FLOW "
+        "state — creative, design, writing, coding/building, architecture, "
+        "strategy, hard research. These need a long uninterrupted block in a "
+        "peak-energy window (flow takes ~15 minutes to enter and one "
+        "interruption to lose), so the planner treats them differently. "
+        "Administrative, reactive, communication, and errand-like work is "
+        "false. Independent of important/leveraged.\n\n"
         "Rules: next_action is PHYSICAL and visible ('Call Sanjay re: quote', "
         "not 'handle quote'). Only delegate to a person in the list. Give a "
         "one-sentence `rationale`. Do not invent projects or people.\n"
@@ -682,6 +689,7 @@ async def _llm_propose(
         '"complexity": "single"|"subtasks"|"project", '
         '"subtasks": [str], "is_vague": bool, "suggested_title": str|null, '
         '"due_date": str|null, "important": bool, "leveraged": bool, '
+        '"deep_work": bool, '
         '"confidence": "low"|"medium"|"high", "rationale": str}'
     )
     guidance = (user_context or "").strip()
@@ -803,6 +811,7 @@ async def _llm_propose(
     # item just carries False/False harmlessly.
     core["important"] = bool(actionable and data.get("important"))
     core["leveraged"] = bool(actionable and data.get("leveraged"))
+    core["deep_work"] = bool(actionable and data.get("deep_work"))
     return core
 
 
@@ -845,7 +854,8 @@ def propose_with_llm(
     }
     for k in ("outcome", "context", "energy", "time_estimate_mins",
               "suggested_assignee", "complexity", "subtasks", "is_vague",
-              "suggested_title", "due_date", "important", "leveraged"):
+              "suggested_title", "due_date", "important", "leveraged",
+              "deep_work"):
         if k in llm_core:
             merged[k] = llm_core[k]
 

@@ -54,15 +54,21 @@ _TOOLS: list = []
 try:
     from skill_task_gtd import (
         gtd_accounts,
+        gtd_add_subtasks,
+        gtd_archive,
         gtd_capture,
         gtd_capture_many,
         gtd_clarify,
+        gtd_complete,
         gtd_day_digest,
+        gtd_delegate,
+        gtd_detail,
         gtd_estimate_stats,
         gtd_inbox_insights,
         gtd_list,
         gtd_list_projects,
         gtd_list_schedule,
+        gtd_move,
         gtd_organize,
         gtd_people,
         gtd_plan_day,
@@ -71,6 +77,8 @@ try:
         gtd_rollover,
         gtd_schedule,
         gtd_set_one_thing,
+        gtd_set_stage,
+        gtd_subtasks,
         gtd_sync,
         gtd_unschedule,
         gtd_update,
@@ -80,6 +88,10 @@ try:
         gtd_accounts, gtd_people, gtd_inbox_insights, gtd_clarify,
         gtd_organize, gtd_update, gtd_sync, gtd_plan_project,
         gtd_schedule, gtd_unschedule, gtd_list_schedule,
+        # Manage existing tasks — the app's full action surface over chat
+        # (complete/reopen, buckets, stage, delegate, subtasks, archive, detail)
+        gtd_complete, gtd_move, gtd_detail, gtd_set_stage, gtd_delegate,
+        gtd_subtasks, gtd_add_subtasks, gtd_archive,
         # AI day-management (planner over chat) — calendar_ai_review.md §4.2/4.4
         gtd_plan_day, gtd_replan_day, gtd_rollover, gtd_day_digest,
         gtd_estimate_stats, gtd_set_one_thing,

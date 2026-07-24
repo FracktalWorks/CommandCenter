@@ -12,7 +12,7 @@ import uuid
 from pathlib import Path
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, File, Form, HTTPException, UploadFile
+from fastapi import Depends, File, Form, HTTPException, Request, UploadFile
 from fastapi.responses import FileResponse
 from gateway.routes.notes.core import (
     _get_db,
@@ -21,6 +21,7 @@ from gateway.routes.notes.core import (
     router,
 )
 from gateway.routes.notes.pipeline import run_transcription
+from pydantic import BaseModel
 from sqlalchemy import text
 
 _ALLOWED_EXT = {".webm", ".mp3", ".wav", ".m4a", ".mp4", ".ogg", ".oga", ".flac", ".aac"}
@@ -31,16 +32,32 @@ _EXT_MIME = {
     ".m4a": "audio/mp4", ".mp4": "audio/mp4", ".ogg": "audio/ogg",
     ".oga": "audio/ogg", ".flac": "audio/flac", ".aac": "audio/aac",
 }
+# Container → file extension for live MediaRecorder streams (Chromium/Firefox
+# emit webm/opus; Safari emits mp4/aac). Feature-detected client-side.
+_MIME_EXT = {
+    "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/mp4": ".mp4",
+    "audio/mpeg": ".mp3", "audio/wav": ".wav",
+}
 
 # Keep strong refs to in-flight pipeline tasks — a bare create_task() result
 # can be garbage-collected mid-run.
 _PIPELINE_TASKS: set[asyncio.Task] = set()
+
+# In-memory per-recording append cursor (last seq written). A live recording has
+# a single writer (one browser tab) uploading chunks strictly in order, so this
+# gives idempotent, gap-checked appends without a DB round-trip per chunk. A
+# gateway restart mid-recording abandons the recording — acceptable for capture.
+_REC_SEQ: dict[str, int] = {}
 
 
 def _spawn_pipeline(coro) -> None:
     task = asyncio.create_task(coro)
     _PIPELINE_TASKS.add(task)
     task.add_done_callback(_PIPELINE_TASKS.discard)
+
+
+def _base_mime(mime: str) -> str:
+    return (mime or "").split(";", 1)[0].strip().lower()
 
 
 @router.post("/meetings/{meeting_id}/upload", status_code=202)
@@ -121,6 +138,218 @@ async def upload_recording(
         "notes.recording_uploaded",
         meeting_id=meeting_id, recording_id=recording_id, bytes=len(content), mime=mime,
     )
+    _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
+    return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
+
+
+# ── Live recording (chunked MediaRecorder append) ────────────────────────────
+
+class StartRecordingRequest(BaseModel):
+    channel: str = "mic"
+    mime: str = "audio/webm"
+
+
+class CompleteRecordingRequest(BaseModel):
+    duration_s: float | None = None
+
+
+@router.post("/meetings/{meeting_id}/recordings/start", status_code=201)
+async def start_recording(
+    meeting_id: str,
+    body: StartRecordingRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Open a live recording: create the row + empty file, mark the meeting
+    'recording'. The client then streams MediaRecorder chunks to ``/chunk`` and
+    finalizes with ``/complete``."""
+    if body.channel not in ("mic", "system", "mixed"):
+        raise HTTPException(status_code=400, detail="invalid channel")
+    base = _base_mime(body.mime)
+    ext = _MIME_EXT.get(base)
+    if ext is None:
+        raise HTTPException(status_code=400, detail=f"unsupported recording mime: {base}")
+
+    recording_id = str(uuid.uuid4())
+    rel_path = f"{meeting_id}/{recording_id}{ext}"
+    dest = media_dir() / rel_path
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    dest.touch()
+
+    async with await _get_db() as db:
+        meeting = (
+            await db.execute(text("SELECT id FROM meeting WHERE id=:id"), {"id": meeting_id})
+        ).fetchone()
+        if meeting is None:
+            dest.unlink(missing_ok=True)
+            raise HTTPException(status_code=404, detail="meeting not found")
+        await db.execute(
+            text(
+                "INSERT INTO meeting_recording (id, meeting_id, channel, "
+                "artifact_path, mime, byte_size) VALUES "
+                "(:id, :mid, :channel, :path, :mime, 0)"
+            ),
+            {"id": recording_id, "mid": meeting_id, "channel": body.channel,
+             "path": rel_path, "mime": base},
+        )
+        await db.execute(
+            text("UPDATE meeting SET status='recording' WHERE id=:id"),
+            {"id": meeting_id},
+        )
+        await db.commit()
+    _REC_SEQ[recording_id] = -1
+    _log.info("notes.recording_started", meeting_id=meeting_id, recording_id=recording_id)
+    return {"recording_id": recording_id}
+
+
+async def _recording_path(recording_id: str, meeting_id: str):
+    async with await _get_db() as db:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT artifact_path FROM meeting_recording "
+                    "WHERE id=:id AND meeting_id=:mid"
+                ),
+                {"id": recording_id, "mid": meeting_id},
+            )
+        ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="recording not found")
+    return media_dir() / row.artifact_path
+
+
+@router.post("/meetings/{meeting_id}/recordings/{recording_id}/chunk")
+async def append_chunk(
+    meeting_id: str,
+    recording_id: str,
+    request: Request,
+    seq: int,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Append one ordered MediaRecorder blob to the recording file.
+
+    Idempotent + gap-checked via the in-memory cursor: a re-sent chunk (ack
+    lost) is a no-op; an out-of-order chunk is rejected so the client can
+    resync. The concatenation of a single MediaRecorder session's timeslice
+    blobs is a valid container, so ordered append reconstructs the file."""
+    data = await request.body()
+    if not data:
+        raise HTTPException(status_code=400, detail="empty chunk")
+    path = await _recording_path(recording_id, meeting_id)
+
+    last = _REC_SEQ.get(recording_id)
+    if last is None:
+        # Cursor lost (gateway restart) but row exists — resume from file size.
+        last = -1 if not path.exists() else 0
+        _REC_SEQ[recording_id] = last
+    if seq <= last:
+        return {"ok": True, "duplicate": True, "seq": last}
+    if seq != last + 1:
+        raise HTTPException(
+            status_code=409, detail=f"out-of-order chunk: expected {last + 1}, got {seq}"
+        )
+    if path.stat().st_size + len(data) > _MAX_UPLOAD_BYTES:
+        raise HTTPException(status_code=413, detail="recording exceeds size limit")
+
+    with path.open("ab") as f:
+        f.write(data)
+    _REC_SEQ[recording_id] = seq
+    return {"ok": True, "seq": seq}
+
+
+@router.post("/meetings/{meeting_id}/recordings/{recording_id}/complete", status_code=202)
+async def complete_recording(
+    meeting_id: str,
+    recording_id: str,
+    body: CompleteRecordingRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Finalize a live recording and start transcription."""
+    path = await _recording_path(recording_id, meeting_id)
+    size = path.stat().st_size if path.exists() else 0
+    _REC_SEQ.pop(recording_id, None)
+    if size == 0:
+        async with await _get_db() as db:
+            await db.execute(
+                text("UPDATE meeting SET status='failed' WHERE id=:id"),
+                {"id": meeting_id},
+            )
+            await db.commit()
+        raise HTTPException(status_code=400, detail="no audio was recorded")
+
+    async with await _get_db() as db:
+        await db.execute(
+            text(
+                "UPDATE meeting_recording SET byte_size=:size, duration_s=:dur "
+                "WHERE id=:id"
+            ),
+            {"size": size, "dur": body.duration_s, "id": recording_id},
+        )
+        run_row = (
+            await db.execute(
+                text(
+                    "INSERT INTO summary_run (meeting_id, kind, status, stage) "
+                    "VALUES (:mid, 'transcribe', 'queued', 'queued') RETURNING id"
+                ),
+                {"mid": meeting_id},
+            )
+        ).fetchone()
+        await db.execute(
+            text("UPDATE meeting SET status='processing', end_at=now() WHERE id=:id"),
+            {"id": meeting_id},
+        )
+        await db.commit()
+
+    run_id = str(run_row.id)
+    _log.info(
+        "notes.recording_completed",
+        meeting_id=meeting_id, recording_id=recording_id, bytes=size,
+    )
+    _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
+    return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
+
+
+@router.post("/meetings/{meeting_id}/retranscribe", status_code=202)
+async def retranscribe(
+    meeting_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Re-run transcription on the meeting's existing recording with the CURRENT
+    STT model — e.g. after switching the STT tier to Deepgram in Settings to get
+    named speakers. Replaces this recording's segments and re-chains notes."""
+    async with await _get_db() as db:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id, channel FROM meeting_recording WHERE meeting_id=:id"
+                ),
+                {"id": meeting_id},
+            )
+        ).fetchall()
+        if not rows:
+            raise HTTPException(
+                status_code=404, detail="no recording to re-transcribe"
+            )
+        # Prefer the same recording the audio player serves (mixed > upload > …).
+        order = {"mixed": 0, "upload": 1, "mic": 2, "system": 3}
+        best = sorted(rows, key=lambda r: order.get(r.channel, 9))[0]
+        recording_id = str(best.id)
+        run_row = (
+            await db.execute(
+                text(
+                    "INSERT INTO summary_run (meeting_id, kind, status, stage) "
+                    "VALUES (:mid, 'transcribe', 'queued', 'queued') RETURNING id"
+                ),
+                {"mid": meeting_id},
+            )
+        ).fetchone()
+        await db.execute(
+            text("UPDATE meeting SET status='processing' WHERE id=:id"),
+            {"id": meeting_id},
+        )
+        await db.commit()
+
+    run_id = str(run_row.id)
+    _log.info("notes.retranscribe", meeting_id=meeting_id, recording_id=recording_id)
     _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
     return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
 

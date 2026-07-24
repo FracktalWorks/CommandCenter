@@ -1,0 +1,149 @@
+"""Official Meta WhatsApp Business Cloud API provider (Graph API).
+
+The only WhatsApp transport in the product. Sends (free-form text inside the 24h
+window, approved templates outside it) and media download go through the Graph
+API with a bearer token from the encrypted account credentials.
+
+Credentials dict (decrypted from ``wa_accounts.credentials_encrypted``)::
+
+    {"access_token": "<system-user token>", "phone_number_id": "...",
+     "waba_id": "...", "graph_version": "v21.0"}
+"""
+
+from __future__ import annotations
+
+import logging
+from typing import Any
+
+import httpx
+
+from whatsapp_ingestion.providers.base import BaseWhatsAppProvider
+
+logger = logging.getLogger(__name__)
+
+_DEFAULT_GRAPH_VERSION = "v21.0"
+_GRAPH_BASE = "https://graph.facebook.com"
+_TIMEOUT = httpx.Timeout(30.0)
+
+
+class WhatsAppCloudProvider(BaseWhatsAppProvider):
+    """WhatsApp Business Cloud API client."""
+
+    def __init__(self, credentials: dict[str, Any]):
+        super().__init__(credentials)
+        self.access_token: str = credentials.get("access_token", "") or ""
+        self.phone_number_id: str = credentials.get("phone_number_id", "") or ""
+        self.graph_version: str = (
+            credentials.get("graph_version") or _DEFAULT_GRAPH_VERSION
+        )
+        if not self.access_token or not self.phone_number_id:
+            raise ValueError(
+                "WhatsApp Cloud credentials need access_token + phone_number_id"
+            )
+
+    @property
+    def _messages_url(self) -> str:
+        return (
+            f"{_GRAPH_BASE}/{self.graph_version}/"
+            f"{self.phone_number_id}/messages"
+        )
+
+    def _headers(self) -> dict[str, str]:
+        return {
+            "Authorization": f"Bearer {self.access_token}",
+            "Content-Type": "application/json",
+        }
+
+    async def _post_message(self, payload: dict[str, Any]) -> str:
+        """POST to the messages endpoint and return the Meta message id."""
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            resp = await client.post(
+                self._messages_url, headers=self._headers(), json=payload
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        try:
+            return data["messages"][0]["id"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise RuntimeError(
+                f"unexpected send response shape: {data!r}"
+            ) from exc
+
+    async def send_text(
+        self,
+        to_wa_id: str,
+        body: str,
+        *,
+        reply_to_wa_message_id: str | None = None,
+    ) -> str:
+        payload: dict[str, Any] = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_wa_id,
+            "type": "text",
+            "text": {"preview_url": True, "body": body},
+        }
+        if reply_to_wa_message_id:
+            payload["context"] = {"message_id": reply_to_wa_message_id}
+        return await self._post_message(payload)
+
+    async def send_template(
+        self,
+        to_wa_id: str,
+        template_name: str,
+        language: str,
+        *,
+        components: list[dict[str, Any]] | None = None,
+    ) -> str:
+        template: dict[str, Any] = {
+            "name": template_name,
+            "language": {"code": language},
+        }
+        if components:
+            template["components"] = components
+        payload = {
+            "messaging_product": "whatsapp",
+            "recipient_type": "individual",
+            "to": to_wa_id,
+            "type": "template",
+            "template": template,
+        }
+        return await self._post_message(payload)
+
+    async def download_media(self, wa_media_id: str) -> tuple[bytes, str]:
+        """Two hops: resolve the media id to a short-lived URL, then GET it."""
+        async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+            meta_resp = await client.get(
+                f"{_GRAPH_BASE}/{self.graph_version}/{wa_media_id}",
+                headers={"Authorization": f"Bearer {self.access_token}"},
+            )
+            meta_resp.raise_for_status()
+            meta = meta_resp.json()
+            url = meta.get("url")
+            mime_type = meta.get("mime_type") or "application/octet-stream"
+            if not url:
+                raise RuntimeError(f"media {wa_media_id} has no url: {meta!r}")
+            # The media URL still requires the bearer token.
+            bin_resp = await client.get(
+                url, headers={"Authorization": f"Bearer {self.access_token}"}
+            )
+            bin_resp.raise_for_status()
+            return bin_resp.content, mime_type
+
+    async def mark_read(self, wa_message_id: str) -> None:
+        payload = {
+            "messaging_product": "whatsapp",
+            "status": "read",
+            "message_id": wa_message_id,
+        }
+        try:
+            async with httpx.AsyncClient(timeout=_TIMEOUT) as client:
+                resp = await client.post(
+                    self._messages_url, headers=self._headers(), json=payload
+                )
+                resp.raise_for_status()
+        except Exception as exc:
+            logger.warning(
+                "whatsapp.mark_read_failed id=%s error=%s",
+                wa_message_id, str(exc)[:120],
+            )

@@ -82,6 +82,7 @@ function mapItem(raw: Raw): GtdItem {
     isTwoMinute: Boolean(raw.is_two_minute),
     important: Boolean(raw.important),
     leveraged: Boolean(raw.leveraged),
+    deepWork: Boolean(raw.deep_work),
     keptMine: Boolean(raw.kept_mine),
     projectId: raw.project_id ? String(raw.project_id) : undefined,
     isMine: Boolean(raw.is_mine ?? true),
@@ -481,6 +482,7 @@ export async function apiPatchItem(
     is_mine?: boolean;
     important?: boolean;
     leveraged?: boolean;
+    deep_work?: boolean;
     kept_mine?: boolean;
   }
 ): Promise<GtdItem> {
@@ -597,6 +599,24 @@ export async function apiReplan(req: PlanDayRequest): Promise<DayPlanResult> {
       body: JSON.stringify(req),
     }),
   );
+}
+
+/** The AGENT-facing day planner (server-side geometry — no client windows).
+ *  Used by the chat tool cards' "Apply" button so a plan the assistant proposed
+ *  in chat can be committed with one click, via the exact endpoint the agent
+ *  itself would call with apply=true. */
+export async function apiAgentPlanToday(
+  kind: "plan-today" | "replan-today" | "rollover-today",
+  energyNote?: string,
+): Promise<{ blocks?: unknown[]; notes?: string } | undefined> {
+  return gatewayFetch(`/calendar/${kind}`, {
+    method: "POST",
+    body: JSON.stringify(
+      kind === "plan-today"
+        ? { apply: true, energy_note: energyNote || null }
+        : { apply: true },
+    ),
+  });
 }
 
 /** Learned-estimate accuracy over recent TIMED blocks (actual vs planned) — the
@@ -987,6 +1007,32 @@ export interface TaskSettings {
   timezone: string;
   /** auto-roll incomplete past blocks into today, once per local day. */
   autoRollover: boolean;
+  // Planning prefs (migration 93) — "how should the AI organize my day".
+  /** standing instruction the LLM planner obeys every run ("" → server default). */
+  planningPrompt: string;
+  /** insert a break after this many continuous focus minutes (0 = off). */
+  maxFocusRunMins: number;
+  /** the length of that inserted break. */
+  breakMins: number;
+  /** optional protected lunch window (local hours); null = no protected lunch. */
+  lunchStartHour: number | null;
+  lunchEndHour: number | null;
+  /** recurring windows: block (protected) or focus (themed). Flexible ideal-week. */
+  dayTemplates: DayTemplate[];
+}
+
+/** A recurring calendar window (migration 94). Snake-keyed to match the wire
+ *  shape (like EnergyWindow) so it needs no per-field mapping. */
+export interface DayTemplate {
+  /** weekday numbers 0=Sun … 6=Sat; empty = every day. */
+  days: number[];
+  start_hour: number;
+  end_hour: number;
+  /** block = protected (no tasks); focus = preferred for a kind of work. */
+  kind: "block" | "focus";
+  label: string;
+  /** for focus windows: the kind of work ("deep", "calls", "meetings", …). */
+  theme: string;
 }
 
 function mapSettings(r: Raw): TaskSettings {
@@ -1021,6 +1067,15 @@ function mapSettings(r: Raw): TaskSettings {
       : [],
     timezone: String(r.timezone ?? "UTC"),
     autoRollover: r.auto_rollover !== false,
+    planningPrompt: String(r.planning_prompt ?? ""),
+    maxFocusRunMins: Number(r.max_focus_run_mins ?? 90),
+    breakMins: Number(r.break_mins ?? 10),
+    lunchStartHour:
+      r.lunch_start_hour == null ? null : Number(r.lunch_start_hour),
+    lunchEndHour: r.lunch_end_hour == null ? null : Number(r.lunch_end_hour),
+    dayTemplates: Array.isArray(r.day_templates)
+      ? (r.day_templates as DayTemplate[])
+      : [],
   };
 }
 
@@ -1062,6 +1117,17 @@ export async function updateTaskSettings(
     body.energy_windows = patch.energyWindows;
   if (patch.timezone !== undefined) body.timezone = patch.timezone;
   if (patch.autoRollover !== undefined) body.auto_rollover = patch.autoRollover;
+  if (patch.planningPrompt !== undefined)
+    body.planning_prompt = patch.planningPrompt;
+  if (patch.maxFocusRunMins !== undefined)
+    body.max_focus_run_mins = patch.maxFocusRunMins;
+  if (patch.breakMins !== undefined) body.break_mins = patch.breakMins;
+  if (patch.lunchStartHour !== undefined)
+    body.lunch_start_hour = patch.lunchStartHour;
+  if (patch.lunchEndHour !== undefined)
+    body.lunch_end_hour = patch.lunchEndHour;
+  if (patch.dayTemplates !== undefined)
+    body.day_templates = patch.dayTemplates;
   return mapSettings(
     await gatewayFetch<Raw>(`/settings`, {
       method: "PUT",
@@ -1230,6 +1296,7 @@ export async function apiClarifyPropose(
     dueDate: r.due_date ? String(r.due_date) : undefined,
     important: Boolean(r.important),
     leveraged: Boolean(r.leveraged),
+    deepWork: Boolean(r.deep_work),
     weightReason: r.leveraged
       ? "Looks high-leverage — a potential 100x outcome."
       : r.important

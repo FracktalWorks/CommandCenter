@@ -135,9 +135,10 @@ export function PlanDayPanel({
           </button>
         </div>
 
-        {/* The energy note steers the LLM ranking — which only runs in "plan"
-            mode. Replan/rollover are deterministic repacks server-side, so
-            showing the input there would be a lie (the note is ignored). */}
+        {/* The per-run note steers the LLM ranking (plan mode only — replan/
+            rollover are deterministic repacks that ignore it). Broader than
+            energy: today's mood, constraints or a theme for the day. Your
+            standing planning philosophy (Settings) applies on top of this. */}
         {!isReplan && (
           <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
             <input
@@ -146,7 +147,7 @@ export function PlanDayPanel({
               onKeyDown={(e) => {
                 if (e.key === "Enter") void run(note);
               }}
-              placeholder="How's your energy? e.g. “low energy, lots of meetings”"
+              placeholder="Anything for today? e.g. “low energy”, “calls only”, “deep work”, “free after 3pm”"
               className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
             />
             <button

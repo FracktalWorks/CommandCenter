@@ -8,7 +8,10 @@ import {
 import {
   type TaskSettings,
   type EnergyWindow,
+  type DayTemplate,
 } from "../../lib/api";
+
+const DOW_LABELS = ["S", "M", "T", "W", "T", "F", "S"]; // 0=Sun … 6=Sat
 
 
 // ── Settings popover (day window, capacity, buffer, energy windows) ──────────
@@ -32,8 +35,20 @@ export function CalendarSettings({
     });
   const inputCls =
     "rounded border border-border bg-background px-1 py-0.5 text-right text-foreground focus:border-primary/50 focus:outline-none";
+  // One shared section-heading style so the popover reads as grouped sections
+  // ("When you work", "Breaks & protected time", …) instead of a flat wall.
+  const sectionCls =
+    "mb-1.5 mt-3 border-t border-border pt-2 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground/80";
+  // Lunch is "on" only when a valid window is stored (end > start); we toggle it
+  // off by storing 0–0 rather than nulling (the settings PUT is additive).
+  const lunchOn =
+    settings.lunchStartHour != null &&
+    settings.lunchEndHour != null &&
+    settings.lunchEndHour > settings.lunchStartHour;
+  const DEFAULT_PROMPT_HINT =
+    "e.g. Leave breathing room — don't cram every minute. Front-load deep work in the morning, batch calls in the afternoon, protect time to think.";
   return (
-    <div className="absolute right-0 top-full z-30 mt-2 w-72 rounded-lg border border-border bg-card p-3 text-[12px] shadow-xl">
+    <div className="absolute right-0 top-full z-30 mt-2 max-h-[80vh] w-80 overflow-y-auto rounded-lg border border-border bg-card p-3 text-[12px] shadow-xl">
       <div className="mb-2 flex items-center justify-between">
         <span className="font-semibold text-foreground">Calendar settings</span>
         <button
@@ -46,8 +61,27 @@ export function CalendarSettings({
         </button>
       </div>
 
-      <label className="mb-2 flex items-center justify-between gap-2">
-        <span className="text-muted-foreground">Day window</span>
+      {/* How the AI plans your day — the standing planning philosophy. */}
+      <div className="mb-3 rounded-md border border-primary/20 bg-primary/[0.04] p-2">
+        <label className="mb-1 block font-medium text-foreground">
+          How should the AI plan your day?
+        </label>
+        <p className="mb-1.5 text-[10px] text-muted-foreground">
+          A standing instruction the planner follows every time. Leave blank for
+          a sensible, humane default.
+        </p>
+        <textarea
+          value={settings.planningPrompt ?? ""}
+          onChange={(e) => onChange({ planningPrompt: e.target.value })}
+          placeholder={DEFAULT_PROMPT_HINT}
+          rows={4}
+          className="w-full resize-y rounded border border-border bg-background px-2 py-1.5 text-[11px] leading-snug text-foreground focus:border-primary/50 focus:outline-none"
+        />
+      </div>
+
+      <p className={sectionCls}>When you work</p>
+      <label className="mb-1 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Working hours</span>
         <span className="flex items-center gap-1">
           <input
             type="number"
@@ -68,6 +102,11 @@ export function CalendarSettings({
           />
         </span>
       </label>
+      <p className="mb-2 text-[10px] text-muted-foreground">
+        The grid always shows all 24 hours — these just shade your off-hours and
+        set where the AI planner places work by default. You can still schedule
+        any time.
+      </p>
 
       <label className="mb-2 flex items-center justify-between gap-2">
         <span className="text-muted-foreground">Daily focus capacity (h)</span>
@@ -84,7 +123,7 @@ export function CalendarSettings({
         />
       </label>
 
-      <label className="mb-3 flex items-center justify-between gap-2">
+      <label className="mb-2 flex items-center justify-between gap-2">
         <span className="text-muted-foreground">Buffer between blocks (min)</span>
         <input
           type="number"
@@ -97,6 +136,86 @@ export function CalendarSettings({
         />
       </label>
 
+      {/* Breaks — so the day isn't wall-to-wall focus work. */}
+      <p className={sectionCls}>Breaks &amp; protected time</p>
+      <label className="mb-2 flex items-center justify-between gap-2">
+        <span className="min-w-0 text-muted-foreground">
+          Break after focus run (min, 0 = off)
+        </span>
+        <input
+          type="number"
+          min={0}
+          max={240}
+          step={15}
+          value={settings.maxFocusRunMins}
+          onChange={(e) => onChange({ maxFocusRunMins: num(e.target.value, 90) })}
+          className={`w-14 ${inputCls}`}
+        />
+      </label>
+      <label className="mb-2 flex items-center justify-between gap-2">
+        <span className="text-muted-foreground">Break length (min)</span>
+        <input
+          type="number"
+          min={5}
+          max={60}
+          step={5}
+          value={settings.breakMins}
+          onChange={(e) => onChange({ breakMins: num(e.target.value, 10) })}
+          className={`w-14 ${inputCls}`}
+        />
+      </label>
+
+      {/* Protected lunch — the planner won't book over it. */}
+      <label className="mb-2 flex cursor-pointer items-center justify-between gap-2">
+        <span className="min-w-0 text-muted-foreground">Protect a lunch break</span>
+        <input
+          type="checkbox"
+          checked={lunchOn}
+          onChange={(e) =>
+            onChange(
+              e.target.checked
+                ? { lunchStartHour: 13, lunchEndHour: 14 }
+                : { lunchStartHour: 0, lunchEndHour: 0 },
+            )
+          }
+          className="h-4 w-4 shrink-0 accent-primary"
+        />
+      </label>
+      {lunchOn && (
+        <label className="mb-3 flex items-center justify-between gap-2 pl-2">
+          <span className="text-muted-foreground">Lunch window</span>
+          <span className="flex items-center gap-1">
+            <input
+              type="number"
+              min={0}
+              max={23}
+              value={settings.lunchStartHour ?? 13}
+              onChange={(e) =>
+                onChange({ lunchStartHour: num(e.target.value, 13) })
+              }
+              className={`w-12 ${inputCls}`}
+            />
+            <span className="text-muted-foreground">–</span>
+            <input
+              type="number"
+              min={1}
+              max={24}
+              value={settings.lunchEndHour ?? 14}
+              onChange={(e) =>
+                onChange({ lunchEndHour: num(e.target.value, 14) })
+              }
+              className={`w-12 ${inputCls}`}
+            />
+          </span>
+        </label>
+      )}
+      <p className="mb-2 text-[10px] text-muted-foreground">
+        Lunch is the quick preset. For other daily protected time (gym, school
+        run, family), add a Recurring&nbsp;→&nbsp;<b className="text-foreground">Block</b>{" "}
+        below — same idea, on the days you choose.
+      </p>
+
+      <p className={sectionCls}>Automation</p>
       <label className="mb-3 flex cursor-pointer items-center justify-between gap-2">
         <span className="min-w-0 text-muted-foreground">
           Auto roll-over overdue tasks daily
@@ -109,6 +228,7 @@ export function CalendarSettings({
         />
       </label>
 
+      <p className={sectionCls}>Energy &amp; themed time</p>
       <div className="mb-1 flex items-center justify-between">
         <span className="font-medium text-foreground">Energy windows</span>
         <button
@@ -127,7 +247,10 @@ export function CalendarSettings({
         </button>
       </div>
       <p className="mb-1.5 text-[10px] text-muted-foreground">
-        The planner puts high-energy work in peak windows, admin in low ones.
+        When you&apos;re sharp vs tired: the planner puts high-energy work in
+        peak windows, admin in low ones. (To reserve a time for a{" "}
+        <i>kind</i> of work — calls, deep work — use a Recurring&nbsp;→&nbsp;Focus
+        window below instead.)
       </p>
       {wins.length === 0 ? (
         <p className="text-[11px] text-muted-foreground/70">None set.</p>
@@ -177,6 +300,152 @@ export function CalendarSettings({
           ))}
         </div>
       )}
+
+      {/* Recurring windows — block out habits, reserve times for a kind of work.
+          Flexible: add/edit/remove freely. */}
+      {(() => {
+        const tpls = settings.dayTemplates ?? [];
+        const setTpls = (next: DayTemplate[]) =>
+          onChange({ dayTemplates: next });
+        const patch = (i: number, p: Partial<DayTemplate>) =>
+          setTpls(tpls.map((t, idx) => (idx === i ? { ...t, ...p } : t)));
+        const toggleDay = (i: number, d: number) => {
+          const cur = tpls[i].days ?? [];
+          patch(i, {
+            days: cur.includes(d)
+              ? cur.filter((x) => x !== d)
+              : [...cur, d].sort((a, b) => a - b),
+          });
+        };
+        return (
+          <div className="mt-3 border-t border-border pt-2">
+            <div className="mb-1 flex items-center justify-between">
+              <span className="font-medium text-foreground">
+                Recurring windows
+              </span>
+              <button
+                type="button"
+                onClick={() =>
+                  setTpls([
+                    ...tpls,
+                    {
+                      days: [],
+                      start_hour: 12,
+                      end_hour: 13,
+                      kind: "block",
+                      label: "",
+                      theme: "",
+                    },
+                  ])
+                }
+                className="inline-flex items-center gap-0.5 text-primary hover:underline"
+              >
+                <Plus className="h-3 w-3" /> Add
+              </button>
+            </div>
+            <p className="mb-1.5 text-[10px] text-muted-foreground">
+              <b className="text-foreground">Block</b> = protected time, no tasks
+              (lunch, gym, family). <b className="text-foreground">Focus</b> =
+              reserve for a kind of work (deep work, calls, meetings).
+            </p>
+            {tpls.length === 0 ? (
+              <p className="text-[11px] text-muted-foreground/70">None set.</p>
+            ) : (
+              <div className="flex flex-col gap-2">
+                {tpls.map((t, i) => (
+                  <div
+                    key={i}
+                    className="rounded-md border border-border bg-background/50 p-2"
+                  >
+                    <div className="flex items-center gap-1.5">
+                      <select
+                        value={t.kind}
+                        onChange={(e) =>
+                          patch(i, { kind: e.target.value as DayTemplate["kind"] })
+                        }
+                        className="rounded border border-border bg-background px-1 py-0.5 text-foreground"
+                      >
+                        <option value="block">Block</option>
+                        <option value="focus">Focus</option>
+                      </select>
+                      <input
+                        value={t.label}
+                        onChange={(e) => patch(i, { label: e.target.value })}
+                        placeholder={t.kind === "block" ? "Lunch, Gym…" : "Deep work…"}
+                        className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-foreground focus:border-primary/50 focus:outline-none"
+                      />
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setTpls(tpls.filter((_, idx) => idx !== i))
+                        }
+                        aria-label="Remove window"
+                        className="rounded p-0.5 text-muted-foreground hover:text-destructive"
+                      >
+                        <Trash2 className="h-3 w-3" />
+                      </button>
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      <input
+                        type="number"
+                        min={0}
+                        max={23}
+                        value={t.start_hour}
+                        onChange={(e) =>
+                          patch(i, { start_hour: num(e.target.value, 9) })
+                        }
+                        className={`w-11 ${inputCls}`}
+                      />
+                      <span className="text-muted-foreground">–</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={24}
+                        value={t.end_hour}
+                        onChange={(e) =>
+                          patch(i, { end_hour: num(e.target.value, 10) })
+                        }
+                        className={`w-11 ${inputCls}`}
+                      />
+                      {t.kind === "focus" && (
+                        <input
+                          value={t.theme}
+                          onChange={(e) => patch(i, { theme: e.target.value })}
+                          placeholder="theme: calls, deep…"
+                          className="min-w-0 flex-1 rounded border border-border bg-background px-1.5 py-0.5 text-[11px] text-foreground focus:border-primary/50 focus:outline-none"
+                        />
+                      )}
+                    </div>
+                    <div className="mt-1.5 flex items-center gap-1">
+                      {DOW_LABELS.map((d, di) => {
+                        const on = (t.days ?? []).includes(di);
+                        return (
+                          <button
+                            key={di}
+                            type="button"
+                            onClick={() => toggleDay(i, di)}
+                            className={[
+                              "h-5 w-5 rounded text-[10px] font-medium",
+                              on
+                                ? "bg-primary text-primary-foreground"
+                                : "bg-secondary text-muted-foreground hover:text-foreground",
+                            ].join(" ")}
+                          >
+                            {d}
+                          </button>
+                        );
+                      })}
+                      <span className="ml-1 text-[10px] text-muted-foreground/70">
+                        {(t.days ?? []).length === 0 ? "every day" : ""}
+                      </span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }

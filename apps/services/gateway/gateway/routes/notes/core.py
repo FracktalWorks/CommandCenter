@@ -70,13 +70,23 @@ class MeetingListItem(BaseModel):
     segment_count: int = 0
     has_notes: bool = False
     owner_email: str | None = None
+    template_key: str | None = None
     start_at: str | None = None
     created_at: str | None = None
+
+
+class Attendee(BaseModel):
+    name: str = ""
+    email: str = ""
 
 
 class MeetingDetail(MeetingListItem):
     transcript_source: str | None = None
     summary_md: str | None = None
+    scratch_notes: str | None = None
+    attendees: list[Attendee] = []
+    # Human names for diarized speaker labels, {"S1": "Alex Rivera", …}.
+    speaker_names: dict[str, str] = {}
     recordings: list[RecordingModel] = []
     segments: list[SegmentModel] = []
     runs: list[SummaryRunModel] = []
@@ -170,6 +180,8 @@ def row_to_list_item(r: Any) -> MeetingListItem:
         language=r.language, duration_s=r.duration_s,
         segment_count=getattr(r, "segment_count", 0) or 0,
         has_notes=bool(getattr(r, "has_notes", False)),
-        owner_email=r.owner_email, start_at=_iso(r.start_at),
+        owner_email=r.owner_email,
+        template_key=getattr(r, "template_key", None),
+        start_at=_iso(r.start_at),
         created_at=_iso(r.created_at),
     )

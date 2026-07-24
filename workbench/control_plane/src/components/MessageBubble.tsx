@@ -10,6 +10,7 @@ import MessageActionBar from "@/components/MessageActionBar";
 import GenerativeUIPanel from "@/components/GenerativeUIPanel";
 import ArtifactCard, { type ArtifactMeta } from "@/components/ArtifactCard";
 import EmailToolCards from "@/components/email/EmailToolCards";
+import TaskToolCards from "@/components/tasks/TaskToolCards";
 import GenerativeUINode from "@/components/GenerativeUINode";
 import ErrorCard from "@/components/ChatErrorCard";
 import { DismissableCard } from "@/components/ToolCardShell";
@@ -346,6 +347,10 @@ function MessageBubble({
         accountId={emailContext?.accountId}
         emailId={emailContext?.emailId}
       />
+      {/* Inline task-manager cards (clickable task lists, plan Apply, action
+          confirmations). Inert unless the message contains gtd_* tool calls,
+          so this renders in both the chat app and the Tasks assistant rail. */}
+      <TaskToolCards toolEvents={dedupedToolEvents} />
       <GenerativeUIPanel
         agentState={message.agentState}
         customEvents={message.customEvents}

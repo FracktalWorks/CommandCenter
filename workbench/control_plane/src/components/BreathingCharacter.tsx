@@ -11,8 +11,8 @@
  * resolves to no character at all.
  *
  * The sprite frames carry a lot of transparent padding, so the sprite renders
- * ~1.35x the box and is clipped (overflow hidden) — the character reads much
- * bigger without cropping.
+ * ~1.8x the box and is clipped (overflow hidden) — the character reads much
+ * bigger inside the same frame without the card growing.
  *
  * Styles are injected once into document.head (id-guarded) so any number of
  * instances share one <style>. Respects prefers-reduced-motion.
@@ -61,7 +61,7 @@ export default function BreathingCharacter({
   libraryId,
   char,
   box,
-  scale = 1.35,
+  scale = 1.8,
   className,
   fallback = null,
 }: {

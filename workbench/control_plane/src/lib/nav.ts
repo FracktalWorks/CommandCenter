@@ -47,6 +47,12 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "AI-powered inbox",
       },
       {
+        href: "/whatsapp",
+        label: "WhatsApp",
+        icon: "MessageSquare",
+        note: "AI-powered WhatsApp inbox",
+      },
+      {
         href: "/memory",
         label: "Memories",
         icon: "Brain",

@@ -17,6 +17,8 @@ dependencies = [
     "acb-auth",
     "orchestrator",
     "email-ingestion",
+    "whatsapp-ingestion",
+    "action-broker",
     # Résumé ingestion (Task Manager HR): PDF + DOCX text extraction.
     "pymupdf>=1.24",
     "python-docx>=1.1",

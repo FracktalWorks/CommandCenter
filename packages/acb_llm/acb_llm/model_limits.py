@@ -182,6 +182,20 @@ MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "together_ai/Qwen/Qwen2.5-72B-Instruct-Turbo":      {"label": "Qwen 2.5 72B (Together)",   "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 4096, "desc": "Alibaba Qwen 72B via Together AI"},
     "together_ai/mistralai/Mistral-7B-Instruct-v0.3":   {"label": "Mistral 7B (Together)",     "vision": False, "audio": False, "reasoning": False, "context_window": 32768, "max_output": 4096, "desc": "Mistral 7B via Together AI"},
     "together_ai/deepseek-ai/DeepSeek-R1":              {"label": "DeepSeek-R1 (Together)",    "vision": False, "audio": False, "reasoning": True,  "context_window": 131_072, "max_output": 8192, "desc": "DeepSeek reasoning via Together AI"},
+
+    # ── Speech-to-text (transcription) models ─────────────────────────────
+    # Routed through litellm.atranscription, not chat completions.
+    # ``transcription: True`` marks them so the Settings UI offers them for the
+    # STT tier (Note Taker) and keeps them out of the chat-tier pickers;
+    # ``audio: True`` = they consume audio input. context_window / max_output
+    # do not apply to a transcription endpoint, so they stay 0.
+    "groq/whisper-large-v3-turbo":   {"label": "Whisper Large v3 Turbo (Groq)", "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Fast multilingual transcription on Groq — the default STT model. No named speakers."},
+    "groq/whisper-large-v3":         {"label": "Whisper Large v3 (Groq)",       "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Highest-accuracy Whisper on Groq — multilingual. No named speakers."},
+    "openai/whisper-1":              {"label": "Whisper (OpenAI)",              "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "OpenAI's hosted Whisper — reliable multilingual transcription. No named speakers."},
+    "openai/gpt-4o-transcribe":      {"label": "GPT-4o Transcribe",             "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "OpenAI's latest speech-to-text — higher accuracy than Whisper. No named speakers."},
+    "openai/gpt-4o-mini-transcribe": {"label": "GPT-4o Mini Transcribe",        "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Fast, affordable GPT-4o transcription. No named speakers."},
+    "deepgram/nova-3":               {"label": "Deepgram Nova-3",               "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers (diarization) + word timings — best for multi-speaker meetings."},
+    "deepgram/nova-2":               {"label": "Deepgram Nova-2",               "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers (diarization) + word timings — proven meeting transcription."},
 }
 
 

@@ -61,22 +61,26 @@ async function forward(
   try {
     const reqType = req.headers.get("content-type") ?? "";
     const isMultipart = reqType.startsWith("multipart/form-data");
+    // Live-recording chunks arrive as raw binary — pass them through byte-exact
+    // like multipart, not JSON-parsed.
+    const isBinary = reqType.startsWith("application/octet-stream");
+    const rawBody = isMultipart || isBinary;
     const init: RequestInit = {
       method,
       headers: {
         ...(await buildGatewayHeaders()),
         ...(method === "GET" || method === "DELETE"
           ? {}
-          : // Multipart (recording uploads) must pass through byte-exact
-            // with its boundary; everything else is JSON as before.
-            { "Content-Type": isMultipart ? reqType : "application/json" }),
+          : // Multipart / binary must pass through byte-exact (with the
+            // original content-type + boundary); everything else is JSON.
+            { "Content-Type": rawBody ? reqType : "application/json" }),
       },
       // Recording uploads + long transcriptions outlive the tasks proxy's
       // 30s ceiling; audio files are large.
       signal: AbortSignal.timeout(120_000),
     };
     if (method !== "GET" && method !== "DELETE") {
-      if (isMultipart) {
+      if (rawBody) {
         init.body = Buffer.from(await req.arrayBuffer());
       } else {
         const body = await req.json().catch(() => ({}));

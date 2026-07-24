@@ -324,7 +324,8 @@ import {
   type ActionMode,
 } from "./priority";
 
-export type GroupBy = "none" | "context" | "priority" | "mode" | "energy";
+export type GroupBy =
+  | "none" | "context" | "priority" | "mode" | "energy" | "depth";
 
 export interface TaskGroup {
   key: string;
@@ -383,6 +384,21 @@ export function groupItems(
         emoji: MODE_LABEL[m].emoji,
         items: buckets.get(m)!,
       }));
+  }
+
+  if (by === "depth") {
+    // Deep (flow-state) work vs everything else — so a planning pass can see
+    // at a glance which tasks need protected unbroken blocks.
+    const deep = items.filter((i) => i.deepWork);
+    const shallow = items.filter((i) => !i.deepWork);
+    return [
+      ...(deep.length
+        ? [{ key: "deep", label: "Deep work", emoji: "\u{1F30A}", items: deep }]
+        : []),
+      ...(shallow.length
+        ? [{ key: "shallow", label: "Shallow", items: shallow }]
+        : []),
+    ];
   }
 
   if (by === "energy") {

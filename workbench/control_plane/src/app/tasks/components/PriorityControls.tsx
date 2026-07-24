@@ -1,6 +1,6 @@
 "use client";
 
-import { AlertTriangle, Gem, X, Zap } from "lucide-react";
+import { AlertTriangle, Gem, Waves, X, Zap } from "lucide-react";
 import { GtdItem } from "../lib/types";
 import { useTaskStore } from "../lib/taskStore";
 import {
@@ -37,9 +37,13 @@ export function WeightToggles({
   onChange,
   size = "md",
 }: {
-  item: Pick<GtdItem, "important" | "leveraged" | "dueAt">;
+  item: Pick<GtdItem, "important" | "leveraged" | "deepWork" | "dueAt">;
   urgentWindowHours?: number;
-  onChange: (patch: { important?: boolean; leveraged?: boolean }) => void;
+  onChange: (patch: {
+    important?: boolean;
+    leveraged?: boolean;
+    deepWork?: boolean;
+  }) => void;
   size?: "sm" | "md";
 }) {
   const urgent = isUrgent(item, urgentWindowHours);
@@ -62,6 +66,15 @@ export function WeightToggles({
         label="Leveraged"
         title="Rare, asymmetric 100x upside — an investor, a grant, a key hire."
         tone="leveraged"
+        pad={pad}
+      />
+      <FlagToggle
+        active={!!item.deepWork}
+        onClick={() => onChange({ deepWork: !item.deepWork })}
+        icon={Waves}
+        label="Deep work"
+        title="Needs an unbroken flow state — creative, building, writing, strategy. The planner protects a long peak-energy block for it."
+        tone="deep"
         pad={pad}
       />
       {/* Urgent is derived — read-only. Only shown when actually urgent. */}
@@ -101,13 +114,15 @@ function FlagToggle({
   icon: typeof AlertTriangle;
   label: string;
   title: string;
-  tone: "important" | "leveraged";
+  tone: "important" | "leveraged" | "deep";
   pad: string;
 }) {
   const on =
     tone === "important"
       ? "border-amber-500/50 bg-amber-500/10 text-amber-600 dark:text-amber-400"
-      : "border-violet-500/50 bg-violet-500/10 text-violet-600 dark:text-violet-400";
+      : tone === "leveraged"
+        ? "border-violet-500/50 bg-violet-500/10 text-violet-600 dark:text-violet-400"
+        : "border-sky-500/50 bg-sky-500/10 text-sky-600 dark:text-sky-400";
   return (
     <button
       type="button"

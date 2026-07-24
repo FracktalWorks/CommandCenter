@@ -231,10 +231,12 @@ export function ComposePanel({
       {/* Backdrop */}
       <div className="absolute inset-0 bg-black/40" onClick={onClose} />
 
-      {/* Compose window */}
-      <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden">
+      {/* Compose window — height-capped (viewport minus the pt-12 offset and
+          the safe-area inset) with the fields scrolling inside, so the footer
+          with Send/Discard is always on screen, even on short phone viewports. */}
+      <div className="relative w-full max-w-2xl bg-card border border-border rounded-xl shadow-2xl overflow-hidden flex flex-col max-h-[calc(100dvh-5rem-env(safe-area-inset-bottom,0px))] sm:max-h-[85vh]">
         {/* Header */}
-        <div className="flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/50">
+        <div className="shrink-0 flex items-center justify-between px-4 py-3 border-b border-border bg-secondary/50">
           <span className="text-sm font-medium text-foreground">New Message</span>
           <button
             onClick={onClose}
@@ -244,8 +246,8 @@ export function ComposePanel({
           </button>
         </div>
 
-        {/* Fields */}
-        <div className="px-4 py-3 space-y-3">
+        {/* Fields — the scrolling region when the window hits its max height */}
+        <div className="flex-1 min-h-0 overflow-y-auto px-4 py-3 space-y-3">
           {/* To */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground w-8 flex-shrink-0">To:</span>
@@ -350,7 +352,7 @@ export function ComposePanel({
         )}
 
         {/* Footer */}
-        <div className="px-4 py-3 border-t border-border flex items-center justify-between">
+        <div className="shrink-0 px-4 py-3 border-t border-border flex items-center justify-between">
           <div className="flex-1">
             {sendError ? (
               <span className="text-[10px] text-red-500">{sendError}</span>

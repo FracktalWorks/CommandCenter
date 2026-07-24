@@ -61,10 +61,11 @@ const GROUP_LABEL: Record<GroupBy | "", string> = {
   priority: "Priority",
   mode: "Suggestion",
   energy: "Energy",
+  depth: "Work mode",
 };
 
 const GROUP_OPTIONS: (GroupBy | "")[] = [
-  "", "context", "priority", "mode", "energy", "none",
+  "", "context", "priority", "mode", "energy", "depth", "none",
 ];
 
 const ENERGY_VALUES: { value: string; label: string }[] = [

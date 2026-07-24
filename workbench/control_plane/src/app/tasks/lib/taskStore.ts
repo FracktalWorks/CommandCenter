@@ -179,6 +179,8 @@ export interface ItemMetaPatch {
   /** prioritization matrix flags (local overlay; urgent is derived, not here) */
   important?: boolean;
   leveraged?: boolean;
+  /** needs an unbroken flow state (deep/creative/builder work) */
+  deepWork?: boolean;
   /** dismiss the delegate/schedule suggestion ("this one's mine") */
   keptMine?: boolean;
 }
@@ -520,7 +522,7 @@ interface TaskState {
     decision: ClarifyDecision,
     /** the confirmed prioritization flags (from the clarify card's Weight
      *  toggles). Applied as a local overlay alongside the GTD decision. */
-    weight?: { important: boolean; leveraged: boolean },
+    weight?: { important: boolean; leveraged: boolean; deepWork: boolean },
   ) => void;
   /** Skip the current item (leave it in the inbox to process later) and move on. */
   skipToNextInbox: () => void;
@@ -1028,7 +1030,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     // clarified row and (live) patched after organize, independent of the GTD
     // disposition so the golden-eval organize path stays untouched.
     const applyWeight = (i: GtdItem): GtdItem =>
-      weight ? { ...i, important: weight.important, leveraged: weight.leveraged } : i;
+      weight ? { ...i, important: weight.important, leveraged: weight.leveraged, deepWork: weight.deepWork } : i;
     set((s) => {
       const snapshot: UndoSnapshot = {
         items: s.items,
@@ -1123,6 +1125,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               apiPatchItem(id, {
                 important: weight.important,
                 leveraged: weight.leveraged,
+                deep_work: weight.deepWork,
               }),
             )
             .then((updated) =>
@@ -1670,6 +1673,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             patch.important !== undefined ? patch.important : i.important,
           leveraged:
             patch.leveraged !== undefined ? patch.leveraged : i.leveraged,
+          deepWork:
+            patch.deepWork !== undefined ? patch.deepWork : i.deepWork,
           keptMine:
             patch.keptMine !== undefined ? patch.keptMine : i.keptMine,
           updatedAt: new Date().toISOString(),
@@ -1719,6 +1724,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.isMine !== undefined) body.is_mine = patch.isMine;
       if (patch.important !== undefined) body.important = patch.important;
       if (patch.leveraged !== undefined) body.leveraged = patch.leveraged;
+      if (patch.deepWork !== undefined) body.deep_work = patch.deepWork;
       if (patch.keptMine !== undefined) body.kept_mine = patch.keptMine;
       if (Object.keys(body).length) {
         // Swap in the server row (authoritative — e.g. a ClickUp back-sync may
@@ -2019,6 +2025,12 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     energyWindows: [],
     timezone: "UTC",
     autoRollover: true,
+    planningPrompt: "",
+    maxFocusRunMins: 90,
+    breakMins: 10,
+    lunchStartHour: null,
+    lunchEndHour: null,
+    dayTemplates: [],
   },
 
   updateSettings: async (patch) => {

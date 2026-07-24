@@ -10,7 +10,7 @@
 // AppShell). Specs: calendar_timeboxing.md, calendar_focus_os.md,
 // calendar_ai_review.md.
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -53,6 +53,7 @@ import {
   DAY_END_HOUR,
   SOFT_CAPACITY_MINS,
   SNAP_MINS,
+  HOUR_PX,
   addMonths,
   startOfWeek,
   useNow,
@@ -81,10 +82,13 @@ export function CalendarView() {
   const quickDispose = useTaskStore((s) => s.quickDispose);
   const loadDone = useTaskStore((s) => s.loadDone);
   const settings = useTaskStore((s) => s.settings);
-  // The plannable day window + capacity come from the user's calendar prefs so
-  // the grid and the AI planner agree; sane defaults when unset.
-  const dayStart = settings.dayStartHour ?? DAY_START_HOUR;
-  const dayEnd = Math.max(dayStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
+  // ONE grid, like Google Calendar: it always renders the full 24 hours, so you
+  // can view and schedule at any hour (no working-vs-24h toggle). The user's
+  // WORKING HOURS aren't a wall — they're a soft zone: shaded on the grid, and
+  // the default window the AI planner / auto-place fills. Direct manipulation
+  // (tap a slot, drag, resize) works across all 24h.
+  const workStart = settings.dayStartHour ?? DAY_START_HOUR;
+  const workEnd = Math.max(workStart + 1, settings.dayEndHour ?? DAY_END_HOUR);
   const capacityTarget = settings.dailyCapacityMins ?? SOFT_CAPACITY_MINS;
   const energyWindows = settings.energyWindows ?? [];
   const updateSettings = useTaskStore((s) => s.updateSettings);
@@ -125,6 +129,16 @@ export function CalendarView() {
     setDayClosed(prefs.dayClosedOn === dayKey());
     /* eslint-enable react-hooks/set-state-in-effect */
   }, [now]);
+  // The 24h grid is tall, so on open (and when switching to day/week) scroll to
+  // ~1h before the current time — you land where the action is, not at midnight.
+  const gridScrollRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (mode === "month") return;
+    const el = gridScrollRef.current;
+    if (!el) return;
+    const h = new Date().getHours();
+    el.scrollTop = Math.max(0, (h - 1) * HOUR_PX);
+  }, [mode]);
   const handleToggleOneThing = (id: string) => {
     const prev = oneThingIdFor(new Date());
     toggleOneThing(new Date(), id);
@@ -253,8 +267,8 @@ export function CalendarView() {
         blocksForDay(items, day).filter((b) => b.item.id !== item.id),
         day,
         mins,
-        dayStart,
-        dayEnd,
+        workStart,
+        workEnd,
       );
     const end = new Date(start.getTime() + mins * 60000);
     applySchedule(label, [
@@ -373,9 +387,9 @@ export function CalendarView() {
     setRolling(true);
     const today = startOfDay(new Date());
     const s = new Date(today);
-    s.setHours(dayStart, 0, 0, 0);
+    s.setHours(workStart, 0, 0, 0);
     const e = new Date(today);
-    e.setHours(dayEnd, 0, 0, 0);
+    e.setHours(workEnd, 0, 0, 0);
     try {
       const res = await apiRollover({
         day_start: s.toISOString(),
@@ -622,7 +636,7 @@ export function CalendarView() {
       )}
 
       <div className="flex min-h-0 flex-1">
-        <div className="min-w-0 flex-1 overflow-auto">
+        <div ref={gridScrollRef} className="min-w-0 flex-1 overflow-auto">
           {mode === "month" ? (
             <MonthGrid
               anchor={anchor}
@@ -638,8 +652,10 @@ export function CalendarView() {
               days={days}
               items={items}
               now={now}
-              dayStart={dayStart}
-              dayEnd={dayEnd}
+              dayStart={0}
+              dayEnd={24}
+              workStart={workStart}
+              workEnd={workEnd}
               energyWindows={energyWindows}
               oneThingId={oneThingId}
               outcomeById={outcomeById}
@@ -715,7 +731,7 @@ export function CalendarView() {
           items={items}
           dueSoon={dueSoon}
           urgentWindowHours={settings.urgentWindowHours}
-          dayEndHour={dayEnd}
+          dayEndHour={workEnd}
           onSchedule={(t, at) => {
             schedule(t, sheet.day, at);
             setSheet(null);
@@ -756,8 +772,8 @@ export function CalendarView() {
           target={
             planMode === "replan" || mode !== "day" ? startOfDay(now) : anchor
           }
-          dayStart={dayStart}
-          dayEnd={dayEnd}
+          dayStart={workStart}
+          dayEnd={workEnd}
           capacityMins={capacityTarget}
           bufferMins={settings.bufferMins ?? 0}
           energyWindows={energyWindows}

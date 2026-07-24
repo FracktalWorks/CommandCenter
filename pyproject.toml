@@ -73,6 +73,7 @@ ingestion     = { workspace = true }
 reconciler    = { workspace = true }
 action-broker  = { workspace = true }
 email-ingestion = { workspace = true }
+whatsapp-ingestion = { workspace = true }
 skill-task-gtd  = { workspace = true }
 skill-clickup-sync = { workspace = true }
 

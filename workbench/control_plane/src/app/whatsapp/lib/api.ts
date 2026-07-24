@@ -8,6 +8,7 @@ import type {
   WaChat,
   WaChatContext,
   WaConnectionInfo,
+  WaEmbeddedResult,
   WaMessage,
   WaPulse,
   WaRulePreview,
@@ -83,7 +84,22 @@ export function fetchConnectionInfo(): Promise<WaConnectionInfo> {
     webhook_path: "/whatsapp/webhook",
     verify_token: "",
     base_configured: false,
+    embedded_signup: false,
+    fb_app_id: "",
+    es_config_id: "",
+    graph_version: "v21.0",
   });
+}
+
+// Complete Embedded Signup: exchange the FB.login code + selected number for a
+// connected account (W12).
+export function embeddedSignup(input: {
+  code: string;
+  phone_number_id: string;
+  waba_id?: string | null;
+  display_name?: string;
+}) {
+  return postJSON<WaEmbeddedResult>("connect/embedded", input);
 }
 
 // Live-tests credentials against Meta. The route returns 200 with {ok,...} even

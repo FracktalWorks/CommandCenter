@@ -147,6 +147,9 @@ async def get_meeting(
         **base.model_dump(),
         transcript_source=m.transcript_source,
         summary_md=m.summary_md,
+        summary_json=(
+            m.summary_json if isinstance(getattr(m, "summary_json", None), dict) else None
+        ),
         scratch_notes=m.scratch_notes,
         attendees=attendees,
         speaker_names=speaker_names,

@@ -351,6 +351,15 @@ export default function MeetingPage({
   const showDiarizeHint =
     !!meeting && meeting.segments.length > 0 && !diarized && !canDiarize && !busy;
 
+  // Provenance: map a segment id → segment so an action item's segment_ids can
+  // render as clickable "source" chips that jump to the exact transcript moment.
+  const segById = new Map((meeting?.segments ?? []).map((s) => [s.id, s]));
+  // …and by idx, since the structured notes cite decisions by segment index.
+  const segByIdx = new Map((meeting?.segments ?? []).map((s) => [s.idx, s]));
+  const citedDecisions = (meeting?.summary_json?.decisions ?? []).filter(
+    (d) => d && d.text && (d.refs?.length ?? 0) > 0
+  );
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
@@ -766,6 +775,40 @@ export default function MeetingPage({
                   </div>
                 )}
               </div>
+              {citedDecisions.length > 0 && (
+                <div>
+                  <h2 className="text-sm font-semibold text-foreground mb-2 flex items-center gap-1.5">
+                    Decisions
+                    <span className="text-[10px] text-muted-foreground font-normal">
+                      (tap a timestamp to hear it in context)
+                    </span>
+                  </h2>
+                  <div className="rounded-xl border border-border bg-card divide-y divide-border">
+                    {citedDecisions.map((d, i) => (
+                      <div key={i} className="px-4 py-2.5">
+                        <p className="text-sm text-foreground">{d.text}</p>
+                        <div className="flex items-center gap-1.5 mt-1.5 flex-wrap">
+                          {(d.refs ?? []).slice(0, 6).map((idx) => {
+                            const seg = segByIdx.get(idx);
+                            if (!seg) return null;
+                            return (
+                              <button
+                                key={idx}
+                                onClick={() => jumpToSegment(seg.id)}
+                                title="Jump to this moment in the transcript"
+                                className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:text-primary hover:border-primary/30 tech-transition"
+                              >
+                                <Play className="w-2.5 h-2.5" />
+                                {formatClock(seg.start_s)}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
             )}
 
@@ -827,6 +870,27 @@ export default function MeetingPage({
                               </span>
                             )}
                           </div>
+                          {a.segment_ids.length > 0 && (
+                            <div className="flex items-center gap-1.5 mt-2 flex-wrap">
+                              <span className="text-[10px] text-muted-foreground">
+                                From
+                              </span>
+                              {a.segment_ids.slice(0, 5).map((sid) => {
+                                const seg = segById.get(sid);
+                                return (
+                                  <button
+                                    key={sid}
+                                    onClick={() => jumpToSegment(sid)}
+                                    title="Jump to this moment in the transcript"
+                                    className="inline-flex items-center gap-0.5 rounded-md border border-border bg-muted/40 px-1.5 py-0.5 text-[10px] font-mono text-muted-foreground hover:text-primary hover:border-primary/30 tech-transition"
+                                  >
+                                    <Play className="w-2.5 h-2.5" />
+                                    {seg ? formatClock(seg.start_s) : "source"}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          )}
                           <div className="flex items-center gap-2 mt-2">
                             {a.status === "draft" && (
                               <>

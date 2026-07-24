@@ -10,6 +10,7 @@ Spec: ai-company-brain/specs/note_taker_app.md §3.4.
 """
 from acb_stt.base import SttProvider
 from acb_stt.litellm_provider import LiteLLMSTT, normalize_transcription
+from acb_stt.local_diarization import maybe_diarize as maybe_local_diarize
 from acb_stt.registry import resolve_stt_provider
 from acb_stt.types import (
     AudioInput,
@@ -31,6 +32,7 @@ __all__ = [
     "TranscriptResult",
     "TranscriptSegmentData",
     "TranscriptWord",
+    "maybe_local_diarize",
     "normalize_transcription",
     "resolve_stt_provider",
 ]

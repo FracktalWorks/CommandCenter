@@ -56,13 +56,24 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
 
         prompt = await glossary_prompt(owner.owner_email if owner else "")
 
-        from acb_stt import AudioInput, SttOptions, resolve_stt_provider
+        from acb_stt import (
+            AudioInput,
+            SttOptions,
+            maybe_local_diarize,
+            resolve_stt_provider,
+        )
 
         provider = await resolve_stt_provider()
         result = await provider.transcribe(
             AudioInput(data=audio_bytes, filename=path.name, mime=rec.mime),
             SttOptions(diarize=True, prompt=prompt or None),
         )
+        # If the STT model didn't diarize (Whisper) and self-hosted diarization
+        # is switched on, add speaker labels locally with sherpa-onnx. No-op and
+        # fail-safe otherwise — Deepgram already returns speakers, so this is
+        # skipped for it, and any failure leaves the transcript speaker-less
+        # rather than failing the run.
+        result = await maybe_local_diarize(audio_bytes, rec.mime, result)
 
         async with await _get_db() as db:
             # Replace this recording's segments (re-transcription safe).

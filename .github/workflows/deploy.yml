@@ -202,6 +202,53 @@ jobs:
             fi
             uv sync
 
+            # ── [TRIAL] Free local diarization (sherpa-onnx) ──────────────────
+            # Adds free CPU-only speaker separation for Whisper transcripts.
+            # Fully reversible: set LOCAL_DIAR=0 below (or NOTES_LOCAL_DIARIZATION=0
+            # in .env) + redeploy to fall back to the Deepgram/Whisper path. The
+            # app is fail-safe — if any of this is missing it silently no-ops.
+            LOCAL_DIAR="1"
+            MODELS_DIR="$APP_DIR/models/sherpa"
+            SEG_MODEL="$MODELS_DIR/segmentation.onnx"
+            EMB_MODEL="$MODELS_DIR/embedding.onnx"
+            upsert_env() {  # key value — set-or-replace in $ENV_FILE (paths ok)
+              if grep -qE "^$1=" "$ENV_FILE" 2>/dev/null; then
+                sed -i "s|^$1=.*|$1=$2|" "$ENV_FILE"
+              else
+                echo "$1=$2" >> "$ENV_FILE"
+              fi
+            }
+            echo "==> [trial] Local diarization (sherpa-onnx), LOCAL_DIAR=$LOCAL_DIAR"
+            if [ "$LOCAL_DIAR" = "1" ]; then
+              mkdir -p "$MODELS_DIR"
+              command -v ffmpeg >/dev/null || echo "    ! ffmpeg missing — decode will no-op"
+              uv pip install -q 'sherpa-onnx>=1.10' 'numpy>=1.24' \
+                || echo "    ! sherpa-onnx install failed — local diar will no-op"
+              if [ ! -f "$SEG_MODEL" ]; then
+                curl -fsSL -o /tmp/seg.tar.bz2 "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-segmentation-models/sherpa-onnx-pyannote-segmentation-3-0.tar.bz2" \
+                  && tar xjf /tmp/seg.tar.bz2 -C /tmp \
+                  && cp /tmp/sherpa-onnx-pyannote-segmentation-3-0/model.int8.onnx "$SEG_MODEL" \
+                  && echo "    + segmentation model (int8, ~6MB)" || echo "    ! seg download failed"
+              fi
+              if [ ! -f "$EMB_MODEL" ]; then
+                curl -fsSL -o "$EMB_MODEL" "https://github.com/k2-fsa/sherpa-onnx/releases/download/speaker-recongition-models/3dspeaker_speech_campplus_sv_zh-cn_16k-common.onnx" \
+                  && echo "    + speaker-embedding model (CAM++, ~27MB)" || echo "    ! emb download failed"
+              fi
+              if [ -f "$SEG_MODEL" ] && [ -f "$EMB_MODEL" ]; then
+                upsert_env NOTES_LOCAL_DIARIZATION 1
+                upsert_env SHERPA_SEG_MODEL "$SEG_MODEL"
+                upsert_env SHERPA_EMB_MODEL "$EMB_MODEL"
+                grep -qE "^SHERPA_DIAR_THRESHOLD=" "$ENV_FILE" || echo "SHERPA_DIAR_THRESHOLD=0.7" >> "$ENV_FILE"
+                echo "    local diarization ENABLED (Whisper transcripts get free speakers)"
+              else
+                upsert_env NOTES_LOCAL_DIARIZATION 0
+                echo "    models missing — left OFF; Deepgram/Whisper path unaffected"
+              fi
+            else
+              upsert_env NOTES_LOCAL_DIARIZATION 0
+              echo "    LOCAL_DIAR=0 — local diarization OFF"
+            fi
+
             echo "==> Restarting gateway (systemd)"
             sudo systemctl restart acb-gateway
             sleep 3

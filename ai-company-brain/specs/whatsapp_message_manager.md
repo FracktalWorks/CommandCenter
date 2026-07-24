@@ -552,9 +552,17 @@ the deployable artifact. What WAS validated here:
   closed.** The lockfile drift is a separate deploy blocker worth fixing on its
   own (it would break CI's `npm ci`), but it is out of scope for this branch.
 
-**Next (W2 frontend → W3):** the Categories + Rules settings screens and a
-digest view in the UI (backend ready); LLM refinement layered onto the
-deterministic intent/status classifiers; drafting with a WhatsApp voice profile +
-multilingual replies; standing rules (office hours, answer-from-Odoo, payment
-cadence) on top of the categories-as-policy engine; Embedded Signup onboarding UI
-+ real coexistence history import; routing sends through the Action Broker.
+**Frontend settings screens — BUILT (build-validated).** `/whatsapp/settings/
+categories` (the policy table — editable notify/auto-reply/draft dropdowns that
+PATCH optimistically, seed-defaults fallback, guardrail note) and
+`/whatsapp/settings/rules` (the dry-run of the auto-reply engine over the
+needs-reply queue — summary tiles + per-chat "would do / why", no sends). Both
+reachable from an AUTOMATION nav section and confirmed by a real `next build`.
+A PATCH verb was added to the `/api/whatsapp` proxy.
+
+**Next (integration-bound):** wire `answer_from_system` to live Odoo
+order-status; the Embedded Signup onboarding flow + real coexistence history
+import; an LLM refinement layered onto the deterministic intent/status
+classifiers for the ambiguous tail; the single-reply auto-send executor
+(reusing the broker handler seam). These need the Odoo/Meta integrations or a
+running stack to validate end-to-end.

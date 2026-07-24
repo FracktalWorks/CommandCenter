@@ -219,7 +219,7 @@ class AssistantSettingsModel(BaseModel):
     digest_day_of_week: int = 1  # 0=Sun … 6=Sat (used when WEEKLY)
     digest_time_of_day: str = "09:00"  # HH:MM, account-local
     digest_send_to_email: bool = True
-    # Opt-in "morning brief" (migration 96): an LLM one-liner atop the dashboard
+    # Opt-in "morning brief" (migration 107): an LLM one-liner atop the dashboard
     # and the emailed digest. OFF by default — it costs a model call per build.
     morning_brief_enabled: bool = False
     # inbox-zero parity (migration 30)

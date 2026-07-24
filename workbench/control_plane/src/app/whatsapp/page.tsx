@@ -896,18 +896,17 @@ function ConnectEmptyState() {
         <h1 className="text-lg font-semibold">Connect WhatsApp Business</h1>
         <p className="mx-auto mt-2 max-w-sm text-[13px] text-muted-foreground">
           Link your WhatsApp Business number through Meta&apos;s official Cloud
-          API with coexistence — your phone app keeps working, and the last six
-          months of chats sync into your triage queue here.
+          API. A short guided setup tests your credentials against Meta before
+          saving, so you know it works — then messages land in your triage queue.
         </p>
-        <button
-          disabled
-          className="mt-5 cursor-not-allowed rounded-lg bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground opacity-60"
-          title="Embedded Signup requires Meta app configuration"
+        <Link
+          href="/whatsapp/connect"
+          className="mt-5 inline-flex items-center gap-1.5 rounded-lg bg-primary px-4 py-2 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
         >
-          Start Embedded Signup
-        </button>
+          <MessageCircle className="h-4 w-4" /> Connect a number
+        </Link>
         <p className="mt-3 text-[11px] text-muted-foreground/70">
-          Requires a configured Meta app · business numbers only.
+          Official Cloud API · business numbers only · ~15 minutes.
         </p>
       </div>
     </div>

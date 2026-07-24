@@ -17,6 +17,22 @@ export type WaAccount = {
   is_default: boolean;
 };
 
+// Connect wizard (W11).
+export type WaConnectionInfo = {
+  webhook_url: string;
+  webhook_path: string;
+  verify_token: string;
+  base_configured: boolean;
+};
+
+export type WaVerifyResult = {
+  ok: boolean;
+  display_phone_number: string | null;
+  verified_name: string | null;
+  quality_rating: string | null;
+  error: string | null;
+};
+
 export type WaChat = {
   id: string;
   account_id: string;

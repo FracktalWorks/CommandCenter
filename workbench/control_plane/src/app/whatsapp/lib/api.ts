@@ -7,12 +7,14 @@ import type {
   WaCategory,
   WaChat,
   WaChatContext,
+  WaConnectionInfo,
   WaMessage,
   WaPulse,
   WaRulePreview,
   WaSavedReply,
   WaStreams,
   WaTemplate,
+  WaVerifyResult,
 } from "./types";
 
 async function getJSON<T>(path: string, fallback: T): Promise<T> {
@@ -71,6 +73,37 @@ function postJSON<T>(path: string, body: unknown) {
 
 export function fetchAccounts(): Promise<WaAccount[]> {
   return getJSON<WaAccount[]>("accounts", []);
+}
+
+// ── Connect wizard (W11) ─────────────────────────────────────────────────────
+
+export function fetchConnectionInfo(): Promise<WaConnectionInfo> {
+  return getJSON<WaConnectionInfo>("connection/info", {
+    webhook_url: "",
+    webhook_path: "/whatsapp/webhook",
+    verify_token: "",
+    base_configured: false,
+  });
+}
+
+// Live-tests credentials against Meta. The route returns 200 with {ok,...} even
+// on a credential failure, so read `.data.ok`, not the HTTP status.
+export function verifyConnection(input: {
+  phone_number_id: string;
+  access_token: string;
+}) {
+  return postJSON<WaVerifyResult>("accounts/verify", input);
+}
+
+export function createAccount(input: {
+  phone_number: string;
+  phone_number_id: string;
+  waba_id?: string | null;
+  display_name?: string;
+  webhook_verify_token?: string | null;
+  credentials: { access_token: string };
+}) {
+  return postJSON<WaAccount>("accounts", input);
 }
 
 export function fetchStreams(accountId?: string): Promise<WaStreams> {

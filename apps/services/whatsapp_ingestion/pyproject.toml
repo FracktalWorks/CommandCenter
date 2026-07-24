@@ -1,0 +1,20 @@
+[project]
+name = "whatsapp-ingestion"
+version = "0.1.0"
+description = "WhatsApp ingestion service — official Meta WhatsApp Business Cloud API (coexistence)"
+requires-python = ">=3.11"
+dependencies = [
+    "acb-common",
+    "acb-llm",         # credential store / encryption
+    "httpx>=0.27.0",
+    "pydantic>=2.0",
+    "sqlalchemy[asyncio]>=2.0",
+    "asyncpg>=0.29.0",
+]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["whatsapp_ingestion"]

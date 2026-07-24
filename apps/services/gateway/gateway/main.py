@@ -204,6 +204,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.email_sync_skipped", error=str(exc))
 
+    # Wire the WhatsApp post-sync callbacks (intent classification + Reply Zero
+    # chat status) into the ingestion registry. WhatsApp is webhook-driven, so
+    # there is no background scheduler to start — the webhook receiver fires the
+    # hooks after each batch; this just makes them non-no-ops.
+    try:
+        from gateway.routes.whatsapp.scheduler_hooks import (
+            register_whatsapp_post_sync_hooks,
+        )
+        register_whatsapp_post_sync_hooks()
+        _log.info("gateway.whatsapp_hooks_started")
+    except Exception as exc:
+        _log.warning("gateway.whatsapp_hooks_skipped", error=str(exc))
+
     # Start background Tasks (GTD) provider-sync scheduler — one loop per
     # sync-enabled ClickUp/PM workspace keeps the agent's project/task/people
     # picture fresh between visits (routes/tasks/scheduler.py).
@@ -805,6 +818,13 @@ try:
     from gateway.routes.email import router as _email_router
 
     app.include_router(_email_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    from gateway.routes.whatsapp import router as _whatsapp_router
+
+    app.include_router(_whatsapp_router)
 except Exception:  # pragma: no cover
     pass
 

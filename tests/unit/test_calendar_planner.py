@@ -20,7 +20,9 @@ from zoneinfo import ZoneInfo
 
 from gateway.routes.tasks.calendar import (
     _day_window,
+    _expand_templates,
     _free_intervals,
+    _lunch_interval,
     _place_one,
 )
 
@@ -125,3 +127,54 @@ def test_day_window_falls_back_when_prefs_missing():
     win_s, win_e, _ews, capacity, _buf = _day_window(
         row, datetime(2026, 7, 23).date(), ZoneInfo("UTC"))
     assert win_s.hour == 7 and win_e.hour == 22 and capacity == 360
+
+
+# ── reserved time: lunch + recurring blocks are carved OUT of free space ──────
+
+def test_lunch_is_carved_out_of_free_time():
+    win_s, win_e = _dt(9), _dt(17)
+    lunch = _lunch_interval(
+        {"lunch_start_hour": 13, "lunch_end_hour": 14}, win_s, win_e)
+    assert lunch == (_dt(13), _dt(14))
+    free = _free_intervals(win_s, win_e, [lunch], now=_dt(6))
+    # nothing is free during lunch, and there is free time either side
+    for fs, fe in free:
+        assert fe <= _dt(13) or fs >= _dt(14)
+    assert any(fe <= _dt(13) for _fs, fe in free)
+    assert any(fs >= _dt(14) for fs, _fe in free)
+
+
+def test_lunch_off_when_start_equals_end():
+    assert _lunch_interval(
+        {"lunch_start_hour": 0, "lunch_end_hour": 0}, _dt(9), _dt(17)) is None
+
+
+def test_block_template_is_busy_focus_template_is_not():
+    win_s, win_e = _dt(9), _dt(19)
+    tpls = [
+        {"days": [], "start_hour": 17, "end_hour": 18,
+         "kind": "block", "label": "Gym", "theme": ""},
+        {"days": [], "start_hour": 10, "end_hour": 12,
+         "kind": "focus", "label": "Deep", "theme": "deep"},
+    ]
+    blocks, focus, blabels, _flines = _expand_templates(tpls, win_s, win_e)
+    assert (_dt(17), _dt(18)) in blocks       # the gym block is protected
+    assert "Gym" in blabels
+    assert len(focus) == 1 and len(blocks) == 1  # focus is NOT a busy block
+    free = _free_intervals(win_s, win_e, blocks, now=_dt(6))
+    for fs, fe in free:
+        assert fe <= _dt(17) or fs >= _dt(18)   # gym hour stays free of tasks
+
+
+def test_template_day_of_week_filter_skips_other_days():
+    win_s, win_e = _dt(9), _dt(18)
+    js_dow = (win_s.weekday() + 1) % 7          # 0=Sun … 6=Sat
+    other = (js_dow + 1) % 7
+    off = _expand_templates(
+        [{"days": [other], "start_hour": 12, "end_hour": 13,
+          "kind": "block", "label": "X", "theme": ""}], win_s, win_e)[0]
+    assert off == []
+    on = _expand_templates(
+        [{"days": [js_dow], "start_hour": 12, "end_hour": 13,
+          "kind": "block", "label": "X", "theme": ""}], win_s, win_e)[0]
+    assert on == [(_dt(12), _dt(13))]

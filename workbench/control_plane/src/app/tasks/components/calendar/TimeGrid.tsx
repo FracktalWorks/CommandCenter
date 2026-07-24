@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 import {
   type EnergyWindow,
+  type DayTemplate,
 } from "../../lib/api";
 import { GtdItem } from "../../lib/types";
 import {
@@ -35,6 +36,7 @@ import {
   fmtLeft,
   deadlinesForDay,
   layoutBlocks,
+  reservedWindowsForDay,
   type DragPayload,
   type OutcomeById,
 } from "./shared";
@@ -51,6 +53,9 @@ export function TimeGrid({
   workStart,
   workEnd,
   energyWindows,
+  lunchStartHour,
+  lunchEndHour,
+  dayTemplates,
   oneThingId,
   outcomeById,
   onToggleOneThing,
@@ -77,6 +82,11 @@ export function TimeGrid({
   workStart: number;
   workEnd: number;
   energyWindows: EnergyWindow[];
+  /** Protected lunch + recurring windows — drawn as labeled bands so reserved
+   *  time (lunch, hobbies, themed focus) is visible and clearly not filled. */
+  lunchStartHour?: number | null;
+  lunchEndHour?: number | null;
+  dayTemplates?: DayTemplate[];
   /** today's ★ One Thing (gold, protected-feeling) — null when unset. */
   oneThingId: string | null;
   outcomeById: OutcomeById;
@@ -356,6 +366,61 @@ export function TimeGrid({
                     className={`pointer-events-none absolute inset-x-0 ${tone}`}
                     style={{ top: Math.max(0, bandTop), height: bandH }}
                   />
+                );
+              })}
+
+              {/* reserved windows — protected lunch + recurring Block/Focus
+                  windows, drawn as labeled bands so the user SEES the time the
+                  planner won't fill (block) or reserves for a theme (focus).
+                  Non-blocking: you can still tap to schedule here manually. */}
+              {reservedWindowsForDay(
+                day,
+                lunchStartHour,
+                lunchEndHour,
+                dayTemplates,
+              ).map((b, bi) => {
+                const top = (b.startHour - dayStart) * HOUR_PX;
+                const h = (b.endHour - b.startHour) * HOUR_PX;
+                if (h <= 0) return null;
+                const isBlock = b.kind === "block";
+                return (
+                  <div
+                    key={`rb-${bi}`}
+                    aria-hidden
+                    title={
+                      isBlock
+                        ? `${b.label} — protected time, the planner keeps this free of tasks`
+                        : `${b.label} — reserved for this kind of work`
+                    }
+                    className={[
+                      "pointer-events-none absolute inset-x-0 overflow-hidden border-y",
+                      isBlock
+                        ? "border-muted-foreground/20 bg-muted/50"
+                        : "border-primary/20 bg-primary/[0.06]",
+                    ].join(" ")}
+                    style={{
+                      top: Math.max(0, top),
+                      height: h,
+                      ...(isBlock
+                        ? {
+                            backgroundImage:
+                              "repeating-linear-gradient(45deg, transparent, transparent 5px, rgba(128,128,128,0.10) 5px, rgba(128,128,128,0.10) 10px)",
+                          }
+                        : {}),
+                    }}
+                  >
+                    <span
+                      className={[
+                        "absolute left-1 top-0.5 rounded px-1 text-[9px] font-medium",
+                        isBlock
+                          ? "bg-muted text-muted-foreground"
+                          : "bg-primary/15 text-primary",
+                      ].join(" ")}
+                    >
+                      {isBlock ? "🔒 " : "◆ "}
+                      {b.label}
+                    </span>
+                  </div>
                 );
               })}
 

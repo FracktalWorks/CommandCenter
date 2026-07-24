@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import type { GtdItem } from "../../lib/types";
 import type { Block } from "../../lib/scheduling";
-import { layoutBlocks } from "./shared";
+import type { DayTemplate } from "../../lib/api";
+import { layoutBlocks, reservedWindowsForDay } from "./shared";
 
 const item = (id: string): GtdItem =>
   ({ id, title: id, disposition: "NEXT" }) as GtdItem;
@@ -53,5 +54,61 @@ describe("layoutBlocks", () => {
     expect(a.length).toBe(b.length);
     expect(a.every((o) => o.lanes === 2)).toBe(true);
     expect(b.every((o) => o.lanes === 2)).toBe(true);
+  });
+});
+
+describe("reservedWindowsForDay", () => {
+  const tpl = (o: Partial<DayTemplate>): DayTemplate =>
+    ({
+      days: [],
+      start_hour: 9,
+      end_hour: 10,
+      kind: "block",
+      label: "",
+      theme: "",
+      ...o,
+    }) as DayTemplate;
+  const day = new Date(2099, 5, 15);
+  const dow = day.getDay();
+  const otherDow = (dow + 1) % 7;
+
+  it("emits a Lunch block when a valid lunch window is set", () => {
+    const out = reservedWindowsForDay(day, 13, 14, []);
+    expect(out).toEqual([
+      { startHour: 13, endHour: 14, label: "Lunch", kind: "block" },
+    ]);
+  });
+
+  it("omits lunch when unset or zero-length", () => {
+    expect(reservedWindowsForDay(day, undefined, undefined, [])).toEqual([]);
+    expect(reservedWindowsForDay(day, 13, 13, [])).toEqual([]);
+  });
+
+  it("includes an every-day template and labels it", () => {
+    const out = reservedWindowsForDay(day, undefined, undefined, [
+      tpl({ start_hour: 18, end_hour: 19, label: "Gym" }),
+    ]);
+    expect(out).toEqual([
+      { startHour: 18, endHour: 19, label: "Gym", kind: "block" },
+    ]);
+  });
+
+  it("applies the day-of-week filter", () => {
+    const onOther = reservedWindowsForDay(day, undefined, undefined, [
+      tpl({ days: [otherDow], label: "X" }),
+    ]);
+    expect(onOther).toEqual([]);
+    const onThis = reservedWindowsForDay(day, undefined, undefined, [
+      tpl({ days: [dow], start_hour: 8, end_hour: 9, label: "X" }),
+    ]);
+    expect(onThis).toHaveLength(1);
+  });
+
+  it("keeps focus windows as kind 'focus' (not a hard block)", () => {
+    const out = reservedWindowsForDay(day, undefined, undefined, [
+      tpl({ kind: "focus", start_hour: 10, end_hour: 12, theme: "deep", label: "" }),
+    ]);
+    expect(out[0].kind).toBe("focus");
+    expect(out[0].label).toBe("deep");
   });
 });

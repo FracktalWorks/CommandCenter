@@ -460,7 +460,7 @@ proof that the email vertical's shape was a *channel* shape all along.
 ## 11. Build status (2026-07-23)
 
 **W0 — pipe + store — BUILT.**
-- `infra/postgres/99_whatsapp.sql`: `wa_accounts / wa_chats / wa_messages /
+- `infra/postgres/102_whatsapp.sql`: `wa_accounts / wa_chats / wa_messages /
   wa_media / wa_contacts / wa_labels / wa_chat_status / wa_sync_log` + FTS.
 - `apps/services/whatsapp_ingestion/`: provider seam (normalized dataclasses,
   `WhatsAppCloudProvider`, `parse_webhook` total parser, factory), the
@@ -472,7 +472,7 @@ proof that the email vertical's shape was a *channel* shape all along.
   nav, quiet queue, conversation) + the `/api/whatsapp` proxy + nav entry.
 
 **W1 — send + hand-offs — BUILT (send/templates/capture/context).**
-- `infra/postgres/100_whatsapp_templates.sql` + `transport/templates.py`: the
+- `infra/postgres/103_whatsapp_templates.sql` + `transport/templates.py`: the
   approved template library (list / upsert / bootstrap default set).
 - `transport/capture.py`: `/whatsapp/capture-task` — message → GTD inbox item,
   idempotent on `origin.wa_message_id`.
@@ -487,7 +487,7 @@ proof that the email vertical's shape was a *channel* shape all along.
 - `automation/intent.py`: a deterministic Hinglish-aware intent classifier
   (order_status/quote/payment/service/scheduling/social/spam) + the
   `on_new_messages` hook (idempotent via the `rules_processed_at` watermark).
-- `101_whatsapp_categories.sql` + `automation/categories.py`: categories as
+- `104_whatsapp_categories.sql` + `automation/categories.py`: categories as
   policy carriers (notify/auto-reply/draft/escalate) with the default set
   (Family hands-off, Noise silent) + list/bootstrap/patch route.
 - `digest.py`: the `/whatsapp/digest` projection (≤3 needs-you + calm counts).
@@ -502,7 +502,7 @@ proof that the email vertical's shape was a *channel* shape all along.
   `via_template`, enforcing the hard guardrails first (VIP + Family never
   auto-send; Family hands off; social/spam muted). `/whatsapp/rules/preview`
   dry-runs it over needs-reply chats — what WOULD happen, no sends.
-- `102_whatsapp_commitments.sql` + `automation/commitments.py`: promises tracked
+- `105_whatsapp_commitments.sql` + `automation/commitments.py`: promises tracked
   both ways. `extract_commitment` is pure + conservative (a promise verb is
   required), Hinglish/curly-quote tolerant, with a verbatim due hint;
   `apply_commitments` runs in the on_new_messages pipeline (watermarked on
@@ -510,7 +510,7 @@ proof that the email vertical's shape was a *channel* shape all along.
   `/whatsapp/commitments` lists them.
 - `digest.py`: the brief now carries the commitment watch (our open promises,
   with a "never became a task" flag) + a waiting-on count.
-- `103_whatsapp_ai_drafts.sql` + `automation/drafting.py`: AI drafting in the
+- `106_whatsapp_ai_drafts.sql` + `automation/drafting.py`: AI drafting in the
   founder's WhatsApp voice (short/warm/emoji-tolerant, reply in the thread's own
   language via a pure Devanagari-vs-Latin detector), with the email drafter's
   two doctrines — conversation-as-DATA and sentinel-on-failure (NO_DRAFT / LLM
@@ -534,7 +534,7 @@ wiring, the auto-reply ladder (12), and commitment extraction (15). All new code
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
 apply_migrations.sh → smoke`); the sandbox can't reach that VPS, so the branch is
 the deployable artifact. What WAS validated here:
-- **Migrations 99–103 against a real Postgres 16** (initdb'd local cluster, not
+- **Migrations 102–106 against a real Postgres 16** (initdb'd local cluster, not
   Docker — the daemon is unavailable here). Fresh apply is clean; re-apply is
   fully idempotent (all `IF NOT EXISTS`, zero errors) — safe for
   `apply_migrations.sh` on every deploy. A functional smoke test seeded a full

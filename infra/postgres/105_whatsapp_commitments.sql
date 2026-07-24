@@ -1,5 +1,5 @@
 -- ============================================================================
--- 102_whatsapp_commitments.sql — promises tracked both ways (W3)
+-- 105_whatsapp_commitments.sql — promises tracked both ways (W3)
 -- ============================================================================
 -- The "no dropped promises" pillar. A commitment is a future obligation stated
 -- in a message — ours ("I'll send the quote by Friday") or theirs ("will share
@@ -10,7 +10,7 @@
 -- idempotent; wa_messages.commitment_checked_at is the watermark so a message is
 -- scanned once, never re-scanned on webhook redelivery.
 --
--- Idempotent. Depends on 99_whatsapp.sql.
+-- Idempotent. Depends on 102_whatsapp.sql.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS wa_commitments (

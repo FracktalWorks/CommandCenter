@@ -1,5 +1,5 @@
 -- ============================================================================
--- 99_whatsapp.sql — WhatsApp Business channel (vertical #2, after email)
+-- 102_whatsapp.sql — WhatsApp Business channel (vertical #2, after email)
 -- ============================================================================
 -- The W0 foundation for the WhatsApp Message Manager: connected numbers, chats,
 -- messages, media and contacts, plus the per-chat reply-status model that powers

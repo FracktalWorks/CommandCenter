@@ -1,5 +1,5 @@
 -- ============================================================================
--- 100_whatsapp_templates.sql — the approved template library (W1)
+-- 103_whatsapp_templates.sql — the approved template library (W1)
 -- ============================================================================
 -- WhatsApp Cloud API messages sent OUTSIDE the 24h customer-service window must
 -- use a Meta-approved template. This table mirrors those templates so the
@@ -8,7 +8,7 @@
 -- send. Templates are authored/approved in Meta's dashboard; we mirror the
 -- catalog here (and seed a default set on connect).
 --
--- Idempotent. Depends on 99_whatsapp.sql (wa_accounts).
+-- Idempotent. Depends on 102_whatsapp.sql (wa_accounts).
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS wa_templates (

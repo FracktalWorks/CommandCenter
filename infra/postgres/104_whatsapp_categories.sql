@@ -1,5 +1,5 @@
 -- ============================================================================
--- 101_whatsapp_categories.sql — categories as policy carriers (W2)
+-- 104_whatsapp_categories.sql — categories as policy carriers (W2)
 -- ============================================================================
 -- Categories are first-class rows (not just a text label) because in this
 -- product a category CARRIES BEHAVIOUR: it decides how loudly a chat notifies,
@@ -12,7 +12,7 @@
 -- NAME (wa_chats.category / wa_contacts.category), so a rename is a data move,
 -- not a schema change — matching the email vertical's category-as-string model.
 --
--- Idempotent. Depends on 99_whatsapp.sql.
+-- Idempotent. Depends on 102_whatsapp.sql.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS wa_categories (

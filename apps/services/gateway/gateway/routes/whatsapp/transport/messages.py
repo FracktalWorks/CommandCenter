@@ -79,7 +79,7 @@ async def search_messages(
 ):
     """Full-text search across the user's WhatsApp history.
 
-    The tsvector expression is byte-for-byte identical to migration 99's
+    The tsvector expression is byte-for-byte identical to migration 102's
     ``idx_wa_messages_fts`` (simple config, body + transcript + sender name) so
     the GIN index is actually used instead of a sequential scan.
     """

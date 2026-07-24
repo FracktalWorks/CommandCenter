@@ -66,9 +66,23 @@ export interface Attendee {
   email: string;
 }
 
+/** A decision from the structured notes, with the transcript segments (by idx)
+ *  it was grounded in — powers tap-to-verify provenance. */
+export interface SummaryDecision {
+  text: string;
+  refs?: number[];
+}
+
+/** Structured notes JSON (subset the UI reads for provenance). */
+export interface SummaryJson {
+  decisions?: SummaryDecision[];
+}
+
 export interface MeetingDetail extends MeetingListItem {
   transcript_source: string | null;
   summary_md: string | null;
+  /** Structured notes; decisions carry `refs` (source segment indices). */
+  summary_json: SummaryJson | null;
   scratch_notes: string | null;
   attendees: Attendee[];
   /** Human names for diarized speaker labels, e.g. { "S1": "Alex Rivera" }. */

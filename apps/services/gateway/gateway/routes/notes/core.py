@@ -83,6 +83,9 @@ class Attendee(BaseModel):
 class MeetingDetail(MeetingListItem):
     transcript_source: str | None = None
     summary_md: str | None = None
+    # Structured notes (decisions/action_items carry `refs` = source segment
+    # indices) — powers tap-to-verify provenance in the UI.
+    summary_json: dict | None = None
     scratch_notes: str | None = None
     attendees: list[Attendee] = []
     # Human names for diarized speaker labels, {"S1": "Alex Rivera", …}.

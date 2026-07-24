@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles } from "lucide-react";
+import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -33,6 +33,9 @@ import { NAV_SECTIONS } from "@/lib/nav";import { ThemeToggleMenuItem } from "@/
 // in the SHELL so the running timer stays visible across every app in the
 // control plane; renders nothing when no focus session is active.
 import { FocusSession } from "@/app/tasks/components/FocusMode";
+// The note-taker's live recording dock — same shell-level pattern, so an
+// in-progress meeting recording follows the user across every app (spec §5.2).
+import { RecordingDock } from "@/app/notes/components/RecordingDock";
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
 // drawer without AppShell needing to know about sessions or filters.
@@ -80,6 +83,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <Sidebar />
         <main className="flex-1 min-w-0 overflow-auto">{children}</main>
         <FocusSession />
+        <RecordingDock />
 
         {/* Floating "Mobile view" pill — only when desktop is forced on a phone. */}
         {isNarrow && forceDesktop && (
@@ -131,6 +135,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Focus Mode session: full-screen room, or — minimized — a compact
             timer strip that extends the bottom bar upward. */}
         <FocusSession />
+        {/* Live recording dock — sits above the bottom nav (and above the Focus
+            pill when both are up), so the menu bar never clips it. */}
+        <RecordingDock />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (
@@ -259,6 +266,9 @@ function MobileBottomNavInner({
   const isChatPage = pathname?.startsWith("/chat") ?? false;
   const isEmailPage = pathname?.startsWith("/email") ?? false;
   const isTasksPage = pathname?.startsWith("/tasks") ?? false;
+  // Notes actions live on the library page; the meeting/session sub-pages have
+  // their own in-view controls, so scope the context tabs to the list.
+  const isNotesPage = pathname === "/notes";
 
   // Tasks: the bottom bar reflects which GTD section you're in. The page emits
   // `cc-tasks-section` whenever the active view changes.
@@ -357,6 +367,26 @@ function MobileBottomNavInner({
               onClick={() => dispatchNav("tasks-assistant")}
               icon={Sparkles}
               label="Assistant"
+            />
+          </>
+        )}
+        {isNotesPage && (
+          <>
+            <TaskTab
+              onClick={() => dispatchNav("notes-record")}
+              icon={Mic}
+              label="Record"
+              accent
+            />
+            <TaskTab
+              onClick={() => dispatchNav("notes-upload")}
+              icon={Upload}
+              label="Upload"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("notes-glossary")}
+              icon={BookMarked}
+              label="Glossary"
             />
           </>
         )}

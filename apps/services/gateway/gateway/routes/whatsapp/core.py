@@ -61,6 +61,7 @@ class WhatsAppMessageModel(BaseModel):
     kind: str = "text"
     sender_name: str = ""
     body_text: str = ""
+    transcript_text: str | None = None    # voice-note transcription (W4.3)
     quoted_wa_message_id: str | None = None
     categories: list[str] = []
     intent: str | None = None

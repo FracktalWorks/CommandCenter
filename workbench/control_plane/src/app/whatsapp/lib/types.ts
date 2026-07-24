@@ -39,6 +39,7 @@ export type WaMessage = {
   kind: string;
   sender_name: string;
   body_text: string;
+  transcript_text: string | null; // voice-note transcription (W4.3)
   quoted_wa_message_id: string | null;
   categories: string[];
   intent: string | null;

@@ -112,6 +112,14 @@ export function captureTask(messageId: string) {
   );
 }
 
+// Transcribe a voice note on demand and fold it into triage (W4.3).
+export function transcribeMessage(messageId: string) {
+  return postJSON<{ message_id: string; transcript_text: string }>(
+    `messages/${messageId}/transcribe`,
+    {}
+  );
+}
+
 export function generateDraft(chatId: string) {
   return postJSON<{ chat_id: string; draft_text: string; language: string }>(
     `chats/${chatId}/draft`,

@@ -84,8 +84,12 @@ async def apply_intents(db: Any, account_id: str) -> int:
     once, so a message is never reclassified and a redelivered webhook is a
     no-op here. Returns the number of messages processed. Caller owns the txn.
     """
+    # Effective text: a transcribed voice note (transcript_text) is classified
+    # exactly like a typed message when body_text is empty (W4.3).
     rows = (await db.execute(
-        _sql("""SELECT id, body_text FROM wa_messages
+        _sql("""SELECT id,
+                       COALESCE(NULLIF(body_text, ''), transcript_text) AS body_text
+                FROM wa_messages
                 WHERE account_id = :aid AND direction = 'in'
                   AND rules_processed_at IS NULL
                 ORDER BY sent_at ASC NULLS FIRST

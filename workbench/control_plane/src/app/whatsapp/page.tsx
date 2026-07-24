@@ -13,6 +13,7 @@ import Link from "next/link";
 import {
   Loader2,
   MessageCircle,
+  Mic,
   PanelRight,
   Plus,
   Search,
@@ -32,6 +33,7 @@ import {
   generateDraft,
   sendTemplate,
   sendText,
+  transcribeMessage,
 } from "./lib/api";
 import {
   STREAMS,
@@ -379,7 +381,9 @@ function Conversation({
               No messages loaded.
             </div>
           ) : (
-            messages.map((m) => <Bubble key={m.id} msg={m} />)
+            messages.map((m) => (
+              <Bubble key={m.id} msg={m} onReload={onReload} />
+            ))
           )}
         </div>
 
@@ -609,10 +613,18 @@ function WaitingOnRow({
   );
 }
 
-function Bubble({ msg }: { msg: WaMessage }) {
+function Bubble({
+  msg,
+  onReload,
+}: {
+  msg: WaMessage;
+  onReload?: () => Promise<void> | void;
+}) {
   const [captured, setCaptured] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const out = msg.direction === "out";
+  const isVoice = msg.kind === "voice" || msg.kind === "audio";
 
   const doCapture = useCallback(async () => {
     if (busy || captured) return;
@@ -621,6 +633,14 @@ function Bubble({ msg }: { msg: WaMessage }) {
     setBusy(false);
     if (res.ok) setCaptured(true);
   }, [busy, captured, msg.id]);
+
+  const doTranscribe = useCallback(async () => {
+    if (transcribing) return;
+    setTranscribing(true);
+    const res = await transcribeMessage(msg.id);
+    setTranscribing(false);
+    if (res.ok) await onReload?.(); // reloads to show the transcript + new intent
+  }, [transcribing, msg.id, onReload]);
 
   return (
     <div className={`group flex flex-col ${out ? "items-end" : "items-start"}`}>
@@ -631,11 +651,41 @@ function Bubble({ msg }: { msg: WaMessage }) {
             : "rounded-bl-sm border border-border bg-muted"
         }`}
       >
-        {msg.kind !== "text" && (
-          <span className="mr-1 text-muted-foreground">[{msg.kind}]</span>
-        )}
-        {msg.body_text || (
-          <span className="text-muted-foreground">(no text)</span>
+        {isVoice ? (
+          <div>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Mic className="h-3 w-3" /> voice note
+            </span>
+            {msg.transcript_text ? (
+              <div className="mt-1 italic text-foreground/90">
+                “{msg.transcript_text}”
+              </div>
+            ) : (
+              !out && (
+                <button
+                  onClick={doTranscribe}
+                  disabled={transcribing}
+                  className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary disabled:opacity-50"
+                >
+                  {transcribing ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-2.5 w-2.5" />
+                  )}
+                  Transcribe
+                </button>
+              )
+            )}
+          </div>
+        ) : (
+          <>
+            {msg.kind !== "text" && (
+              <span className="mr-1 text-muted-foreground">[{msg.kind}]</span>
+            )}
+            {msg.body_text || (
+              <span className="text-muted-foreground">(no text)</span>
+            )}
+          </>
         )}
         <span className="mt-1 block text-right text-[8.5px] text-muted-foreground/60">
           {relTime(msg.sent_at)}

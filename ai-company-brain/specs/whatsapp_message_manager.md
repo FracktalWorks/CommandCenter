@@ -547,11 +547,30 @@ proof that the email vertical's shape was a *channel* shape all along.
   `context` rail carries the chat's open waiting-on commitments. The Details
   drawer renders a "Waiting on them" section with a "✦ Nudge" chip that drafts
   and drops the text into the composer.
+- **Voice-note transcription (W4.3) — voice notes join the brain.** Dealers live
+  on voice notes; they used to land as a bare `[voice]` with empty `body_text`,
+  invisible to triage/intent/commitments/search. `persist.py` now marks
+  voice/audio media `transcription_status='pending'` at ingest (canonical
+  `is_transcribable` predicate lives in the lower layer). `automation/
+  transcription.py` downloads the audio via the account's Cloud API provider,
+  transcribes it through the platform STT tier (`acb_stt` → LiteLLM), writes
+  `wa_messages.transcript_text`, and RESETS the intent/commitment watermarks so
+  the transcript flows through the SAME deterministic classifiers — a spoken
+  "kal AWB bhej dunga" becomes a real waiting-on commitment. The classifiers now
+  read an effective-text (`COALESCE(NULLIF(body_text,''), transcript_text)`).
+  STT is a network call, so it runs on demand (`POST /messages/{id}/transcribe`)
+  or on a bounded schedule (`transcribe_pending`, 25/pass), never the hot webhook
+  path; download/STT failure marks the media `failed` and returns a sentinel,
+  never a fabricated transcript. The transcript feeds the existing FTS index
+  (already covers `transcript_text`) and shows in the thread bubble, with a
+  one-tap "Transcribe" chip on untranscribed inbound voice notes.
 
-**Tests:** 145 backend unit tests (`pytest -k whatsapp`) — webhook parser,
-persist, post-sync registry, route helpers (signature/window/regime), templates,
-capture, context, Reply Zero, intent (20 cases), categories, digest + hook
-wiring, the auto-reply ladder (12), commitment extraction + nudge drafting (24),
+**Tests:** 156 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+persist (incl. voice→pending), post-sync registry, route helpers (signature/
+window/regime), templates, capture, context, Reply Zero, intent (20 cases),
+categories, digest + hook wiring, the auto-reply ladder (12), commitment
+extraction + nudge drafting (24), voice-note transcription (11 — predicate,
+status lifecycle, watermark reset, sentinel-on-failure),
 and group intelligence (13 — builder/parser/summarize orchestration). All new
 code `ruff`-clean; the frontend `next build` compiles the new drawer surface.
 
@@ -602,11 +621,13 @@ consumes it through the shared layer — never a bespoke WhatsApp-only client.
 Until then the vertical is fully functional; these rules simply fall through to a
 normal draft.
 
-**Next (buildable now, no CRM/ERP dep):** voice-note transcription + document
-OCR (media understanding); the `wa_*` AI companion toolset for the control-plane
-chat (`wa_summarize_group`, `wa_draft_reply`, `wa_query` as MAF tools); semantic
+**Next (buildable now, no CRM/ERP dep):** document/image OCR (the media-
+understanding sibling of voice transcription — `wa_media.ocr_text` is already
+provisioned); the `wa_*` AI companion toolset for the control-plane chat
+(`wa_summarize_group`, `wa_draft_reply`, `wa_query` as MAF tools); semantic
 search over history (pgvector embeddings on `wa_messages`, already indexed for
-FTS). ~~group intelligence~~ and ~~waiting-on nudge drafts~~ are now BUILT (W4).
+FTS). ~~group intelligence~~, ~~waiting-on nudge drafts~~, and ~~voice-note
+transcription~~ are now BUILT (W4.1–W4.3).
 
 **Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history

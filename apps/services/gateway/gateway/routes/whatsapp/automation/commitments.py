@@ -82,8 +82,12 @@ async def apply_commitments(db: Any, account_id: str) -> int:
     """Scan not-yet-checked messages (both directions) for commitments, insert
     the hits, and stamp the watermark on every message scanned. Returns the
     number of commitments found. Caller owns the transaction."""
+    # Effective text falls back to a voice note's transcript so a spoken promise
+    # ("kal AWB bhej dunga") is extracted just like a typed one (W4.3).
     rows = (await db.execute(
-        text("""SELECT id, chat_id, direction, body_text FROM wa_messages
+        text("""SELECT id, chat_id, direction,
+                       COALESCE(NULLIF(body_text, ''), transcript_text) AS body_text
+                FROM wa_messages
                 WHERE account_id = :aid AND commitment_checked_at IS NULL
                 ORDER BY sent_at DESC NULLS LAST
                 LIMIT :lim"""),

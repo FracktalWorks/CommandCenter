@@ -35,6 +35,18 @@ SERVICE_WINDOW = timedelta(hours=24)
 
 MAX_BODY_TEXT_BYTES = 64 * 1024  # WhatsApp bodies are short; cap defensively.
 
+# Media we can turn into text — voice notes (the dominant medium for Indian
+# dealers) and any audio attachment. The canonical predicate lives here (the
+# lower layer) so the ingest path and the gateway transcription pass never drift.
+_VOICE_KINDS = frozenset({"voice", "audio"})
+_AUDIO_MIME_PREFIX = "audio/"
+
+
+def is_transcribable(kind: str | None, mime: str | None) -> bool:
+    """True when a media attachment is a voice note / audio we can transcribe.
+    Pure — used to mark media 'pending' at ingest and to gate the STT pass."""
+    return (kind or "") in _VOICE_KINDS or (mime or "").startswith(_AUDIO_MIME_PREFIX)
+
 
 def service_window_expiry(sent_at: Any) -> Any:
     """The instant the 24h window closes for an inbound message, or None.
@@ -160,12 +172,14 @@ _MESSAGE_INSERT = """INSERT INTO wa_messages
 """
 
 _MEDIA_INSERT = """INSERT INTO wa_media
-    (id, message_id, wa_media_id, mime_type, filename, size_bytes, sha256)
+    (id, message_id, wa_media_id, mime_type, filename, size_bytes, sha256,
+     transcription_status)
   VALUES (
     :id,
     (SELECT id FROM wa_messages
      WHERE account_id = :account_id AND wa_message_id = :wa_message_id),
-    :wa_media_id, :mime_type, :filename, :size_bytes, :sha256)
+    :wa_media_id, :mime_type, :filename, :size_bytes, :sha256,
+    :transcription_status)
   ON CONFLICT DO NOTHING
 """
 
@@ -206,6 +220,13 @@ async def upsert_message(
         text(_MESSAGE_INSERT), _message_params(account_id, chat_id, msg, direction)
     )
     if msg.media and msg.media.wa_media_id:
+        # Voice/audio lands 'pending' so the STT pass can find it; everything
+        # else has no transcription lifecycle (NULL).
+        status = (
+            "pending"
+            if is_transcribable(msg.kind, msg.media.mime_type)
+            else None
+        )
         await db.execute(text(_MEDIA_INSERT), {
             "id": str(uuid4()),
             "account_id": account_id,
@@ -215,6 +236,7 @@ async def upsert_message(
             "filename": msg.media.filename,
             "size_bytes": msg.media.size_bytes,
             "sha256": msg.media.sha256,
+            "transcription_status": status,
         })
 
 

@@ -14,6 +14,7 @@ from gateway.routes.whatsapp import (  # noqa: F401
     automation,
     core,
     digest,
+    pulse,
     transport,
 )
 from gateway.routes.whatsapp.core import router  # noqa: F401

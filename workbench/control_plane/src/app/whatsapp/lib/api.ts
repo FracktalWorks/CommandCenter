@@ -8,6 +8,7 @@ import type {
   WaChat,
   WaChatContext,
   WaMessage,
+  WaPulse,
   WaRulePreview,
   WaStreams,
   WaTemplate,
@@ -61,6 +62,7 @@ export function fetchStreams(accountId?: string): Promise<WaStreams> {
     waiting: 0,
     groups: 0,
     all: 0,
+    snoozed: 0,
   });
 }
 
@@ -112,9 +114,43 @@ export function captureTask(messageId: string) {
   );
 }
 
+// Transcribe a voice note on demand and fold it into triage (W4.3).
+export function transcribeMessage(messageId: string) {
+  return postJSON<{ message_id: string; transcript_text: string }>(
+    `messages/${messageId}/transcribe`,
+    {}
+  );
+}
+
 export function generateDraft(chatId: string) {
   return postJSON<{ chat_id: string; draft_text: string; language: string }>(
     `chats/${chatId}/draft`,
+    {}
+  );
+}
+
+// Draft a gentle nudge to chase a commitment the other party owes us (W4.2).
+export function draftNudge(commitmentId: string) {
+  return postJSON<{
+    commitment_id: string;
+    chat_id: string;
+    nudge_text: string;
+    language: string;
+  }>(`commitments/${commitmentId}/nudge`, {});
+}
+
+// Snooze a chat out of the queue until `until` (ISO-8601); it resurfaces on its
+// own, or immediately if they send a new message (W6).
+export function snoozeChat(chatId: string, until: string) {
+  return postJSON<{ chat_id: string; snoozed_until: string | null }>(
+    `chats/${chatId}/snooze`,
+    { until }
+  );
+}
+
+export function unsnoozeChat(chatId: string) {
+  return postJSON<{ chat_id: string; snoozed_until: string | null }>(
+    `chats/${chatId}/unsnooze`,
     {}
   );
 }
@@ -149,5 +185,21 @@ export function fetchRulesPreview(accountId: string): Promise<WaRulePreview> {
   return getJSON<WaRulePreview>(
     `rules/preview?account_id=${encodeURIComponent(accountId)}`,
     { items: [], summary: {} }
+  );
+}
+
+export function fetchPulse(accountId: string, days = 7): Promise<WaPulse> {
+  return getJSON<WaPulse>(
+    `pulse?account_id=${encodeURIComponent(accountId)}&days=${days}`,
+    {
+      window_days: days,
+      inbound: 0,
+      outbound: 0,
+      active_chats: 0,
+      response: { replied: 0, median_minutes: null, p90_minutes: null },
+      waiting_longest: [],
+      by_intent: [],
+      busiest: [],
+    }
   );
 }

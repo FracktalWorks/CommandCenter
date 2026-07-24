@@ -29,6 +29,7 @@ export type WaChat = {
   last_snippet: string;
   window_open: boolean;
   window_expires_at: string | null;
+  snoozed_until: string | null; // set while snoozed (W6)
 };
 
 export type WaMessage = {
@@ -39,6 +40,7 @@ export type WaMessage = {
   kind: string;
   sender_name: string;
   body_text: string;
+  transcript_text: string | null; // voice-note transcription (W4.3)
   quoted_wa_message_id: string | null;
   categories: string[];
   intent: string | null;
@@ -51,6 +53,7 @@ export type WaStreams = {
   waiting: number;
   groups: number;
   all: number;
+  snoozed: number;
 };
 
 export type WaTemplate = {
@@ -96,6 +99,27 @@ export type WaRulePreview = {
   summary: Record<string, number>;
 };
 
+// WhatsApp Pulse — the founder's "am I keeping up?" projection (W7).
+export type WaPulse = {
+  window_days: number;
+  inbound: number;
+  outbound: number;
+  active_chats: number;
+  response: {
+    replied: number;
+    median_minutes: number | null;
+    p90_minutes: number | null;
+  };
+  waiting_longest: {
+    chat_id: string;
+    name: string;
+    waited_hours: number;
+    snippet: string;
+  }[];
+  by_intent: { key: string; count: number }[];
+  busiest: { chat_id: string; name: string; count: number }[];
+};
+
 export type WaEntityRef = { system: string; kind: string; id: string };
 
 export type WaOpenLoop = {
@@ -103,6 +127,13 @@ export type WaOpenLoop = {
   title: string;
   disposition: string;
   kind: string;
+};
+
+// A promise they owe us in this chat — nudgeable by id (W4.2).
+export type WaWaitingOn = {
+  id: string;
+  text: string;
+  due_hint: string | null;
 };
 
 export type WaChatContext = {
@@ -114,6 +145,7 @@ export type WaChatContext = {
     entity: WaEntityRef | null;
   } | null;
   open_loops: WaOpenLoop[];
+  waiting_on: WaWaitingOn[];
   stats: { message_count: number; first_seen: string | null; last_seen: string | null };
   crm: Record<string, unknown> | null;
 };
@@ -124,4 +156,5 @@ export const STREAMS: { key: string; label: string; icon: string }[] = [
   { key: "waiting", label: "Waiting on them", icon: "⏳" },
   { key: "groups", label: "Groups", icon: "👥" },
   { key: "all", label: "All chats", icon: "💬" },
+  { key: "snoozed", label: "Snoozed", icon: "💤" },
 ];

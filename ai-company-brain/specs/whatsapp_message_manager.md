@@ -524,17 +524,117 @@ proof that the email vertical's shape was a *channel* shape all along.
   (that tap is the human in the loop); automation and one-to-many go through
   approval.
 
-**Tests:** 150 backend unit tests (`pytest -k whatsapp`) — webhook parser,
-persist, post-sync registry, route helpers (signature/window/regime), templates,
-capture, context, Reply Zero, intent (21 cases), categories, digest + hook
-wiring, the auto-reply ladder (12), and commitment extraction (15). All new code
-`ruff`-clean.
+**W4 — companion + groups — BUILT (group intelligence + waiting-on nudge).**
+- `108_whatsapp_group_summaries.sql` + `automation/groups.py`: "groups become one
+  paragraph" (value V4). One cached AI summary per group chat — what was
+  discussed, sentiment, whether the founder was addressed, and the ≤5 points
+  worth their eye. Pure builder + parser (validates the sentiment enum, clamps
+  key-points, rejects an empty summary); `summarize_group` OR-s the model's
+  `mentions_you` with a deterministic @mention check so a direct address is never
+  missed, and carries the drafting doctrines (transcript-as-DATA,
+  sentinel-on-failure). `summarize_stale_groups` is a bounded (20/pass),
+  watermarked (`covered_through`) schedule/digest trigger, never the hot webhook
+  path. Routes: `POST /groups/{id}/summarize`, `GET /groups/summaries`.
+- **Waiting-on nudge drafts (W4.2) — completes the "no dropped promises" loop.**
+  The theirs-direction commitments (what they owe us) become one-tap chases.
+  `commitments.py` gains a pure `build_nudge_messages` (gentle/warm register,
+  conversation-as-DATA, NO_DRAFT sentinel) and `draft_nudge` (loads the 'theirs'
+  commitment + a short thread excerpt, reuses the Devanagari language detector,
+  sentinel-on-failure); `POST /commitments/{id}/nudge` returns a DRAFT the
+  founder reviews and sends through the existing composer (which owns the 24h
+  window / template logic — the nudge seam never sends). The `digest` now
+  surfaces the waiting-on *list* (each with its nudge id), and the per-chat
+  `context` rail carries the chat's open waiting-on commitments. The Details
+  drawer renders a "Waiting on them" section with a "✦ Nudge" chip that drafts
+  and drops the text into the composer.
+- **Voice-note transcription (W4.3) — voice notes join the brain.** Dealers live
+  on voice notes; they used to land as a bare `[voice]` with empty `body_text`,
+  invisible to triage/intent/commitments/search. `persist.py` now marks
+  voice/audio media `transcription_status='pending'` at ingest (canonical
+  `is_transcribable` predicate lives in the lower layer). `automation/
+  transcription.py` downloads the audio via the account's Cloud API provider,
+  transcribes it through the platform STT tier (`acb_stt` → LiteLLM), writes
+  `wa_messages.transcript_text`, and RESETS the intent/commitment watermarks so
+  the transcript flows through the SAME deterministic classifiers — a spoken
+  "kal AWB bhej dunga" becomes a real waiting-on commitment. The classifiers now
+  read an effective-text (`COALESCE(NULLIF(body_text,''), transcript_text)`).
+  STT is a network call, so it runs on demand (`POST /messages/{id}/transcribe`)
+  or on a bounded schedule (`transcribe_pending`, 25/pass), never the hot webhook
+  path; download/STT failure marks the media `failed` and returns a sentinel,
+  never a fabricated transcript. The transcript feeds the existing FTS index
+  (already covers `transcript_text`) and shows in the thread bubble, with a
+  one-tap "Transcribe" chip on untranscribed inbound voice notes.
+
+**W5 — companion agent — BUILT (the "companion AI" headline).**
+`apps/agents/agent-whatsapp-assistant` is a MAF agent (structure mirrors
+agent-email-assistant: `agents.py` `build_agents()` + `config.json`
+`runtime: "maf"`, registered in the gateway allowlist + `_AGENT_REGISTRY`). It
+gives the founder conversational command of the vertical — every tool is a thin,
+user-scoped wrapper over the `/whatsapp/*` routes, so it inherits their
+guarantees. 13 tools: read/triage (`list_whatsapp_accounts`, `whatsapp_brief`,
+`list_whatsapp_chats`, `read_whatsapp_chat`, `search_whatsapp`,
+`whatsapp_waiting_on`, `whatsapp_my_commitments`, `whatsapp_chat_context`),
+understanding (`summarize_whatsapp_group`, `list_whatsapp_group_summaries`,
+`transcribe_whatsapp_voice_note`), and drafting
+(`draft_whatsapp_reply`, `draft_waiting_on_nudge`). **DOCTRINE: the companion
+DRAFTS, the founder SENDS** — there is deliberately NO send tool, so the worst it
+can do is prepare words the founder reviews (a free-form reply is the founder's
+own tap; one-to-many goes through the broker). Tools carry `chat_id` /
+`message_id` / `commitment_id` forward so a `commitment_id` from `whatsapp_brief`
+feeds `draft_waiting_on_nudge` in one flow. Runs on the BYOK LiteLLM tier
+(`tier-balanced`), never native Copilot.
+
+**W6 — chat snooze / remind-me — BUILT (an inbox staple).** Defer a conversation
+out of the triage queue until a chosen time, then let it resurface on its own.
+`109_whatsapp_chat_snooze.sql` adds `wa_chat_status.snoozed_until` (a partial
+index for the handful of snoozed chats). Snooze is an ORTHOGONAL overlay on Reply
+Zero — the chat keeps its real status; the queue reads just filter
+`snoozed_until IS NULL OR snoozed_until <= now()`, so a snooze **auto-expires with
+no batch**. `transport/snooze.py` exposes `POST /chats/{id}/snooze` (pure
+`parse_snooze_until` validates the client-supplied ISO instant — future, sane
+horizon; the browser computes the absolute time in the founder's own tz) and
+`POST /chats/{id}/unsnooze`. A **new inbound message wakes a snoozed chat**: the
+`recompute_chat_status` upsert clears `snoozed_until` via a CASE that fires ONLY
+when *that* chat's last message actually changed and the new one is inbound (a
+blanket clear would defeat snooze, since `classify_chats` sweeps every chat). The
+streams/list/digest all hide snoozed chats and a new **"Snoozed" nav stream**
+surfaces them; the conversation header gains a Snooze menu (Later today / This
+evening / Tomorrow 9am / Next week) and a one-tap "wake". An OUTBOUND reply never
+wakes a snooze.
+
+**W7 — Pulse (analytics / insights) — BUILT (the founder-CEO's "am I keeping
+up?").** A read-only projection (`pulse.py`, alongside `digest.py`) over the
+classified store: `GET /whatsapp/pulse?days=` returns the typical reply time
+(median + p90 minutes from each answered inbound to the founder's next outbound),
+how many they replied to, in/out volume + active chats, **who has waited longest**
+(open NEEDS_REPLY, not snoozed, oldest first), inbound load **by intent**, and the
+**busiest chats** over the window. The aggregation maths (`median`, `percentile`
+nearest-rank, `summarize_response_times` — drops negatives/None, robust to
+outliers) is pure and unit-tested; the reply-latency pull is a bounded LATERAL
+next-outbound join, all validated on real Postgres 16. A calm `/whatsapp/insights`
+screen (headline tiles + waited-longest list + intent bars + busiest list, with a
+7/30-day toggle) hangs off a new "Pulse" nav entry. No migration, no LLM — honest
+projection of what the pipeline already wrote.
+
+**Tests:** 185 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+persist (incl. voice→pending), post-sync registry, route helpers (signature/
+window/regime), templates, capture, context, Reply Zero, intent (20 cases),
+categories, digest + hook wiring, the auto-reply ladder (12), commitment
+extraction + nudge drafting (24), voice-note transcription (11 — predicate,
+status lifecycle, watermark reset, sentinel-on-failure), group intelligence
+(13 — builder/parser/summarize orchestration), the companion agent (9 — tool
+surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
+formatting; `build_agents()` constructs the MAF agent with all 13 tools), chat
+snooze (12 — the pure wake-time validator + route registration), and Pulse
+(8 — median/percentile/response-time folds + route registration). All new code
+`ruff`-clean; the frontend `next build` compiles the new snooze + Pulse surfaces,
+and `uv sync` installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
 apply_migrations.sh → smoke`); the sandbox can't reach that VPS, so the branch is
 the deployable artifact. What WAS validated here:
-- **Migrations 102–106 against a real Postgres 16** (initdb'd local cluster, not
+- **Migrations 102–109 against a real Postgres 16** (initdb'd local cluster, not
   Docker — the daemon is unavailable here). Fresh apply is clean; re-apply is
   fully idempotent (all `IF NOT EXISTS`, zero errors) — safe for
   `apply_migrations.sh` on every deploy. A functional smoke test seeded a full
@@ -542,7 +642,11 @@ the deployable artifact. What WAS validated here:
   last-message join, the digest aggregation, the commitment partial-index query);
   `EXPLAIN` confirms the FTS query uses `idx_wa_messages_fts` (Bitmap Index Scan,
   not a seq scan) — the tsvector expression matches the index byte-for-byte. The
-  `credentials_encrypted` NOT NULL fired as designed. **Caveat closed.**
+  `credentials_encrypted` NOT NULL fired as designed. The **W6 snooze SQL** was
+  functionally verified on the same cluster: the queue filter hides a snoozed chat
+  and the "Snoozed" stream surfaces it; a new INBOUND message clears the snooze
+  via the `recompute_chat_status` CASE while an OUTBOUND reply does not. **Caveat
+  closed.**
 - **Frontend `next build` PASSES.** `npm ci` FAILS on a PRE-EXISTING lockfile
   drift (package-lock is missing `@emnapi/*` platform deps — unrelated to
   WhatsApp; nothing here touches package.json/lock), so I validated via
@@ -560,9 +664,37 @@ needs-reply queue — summary tiles + per-chat "would do / why", no sends). Both
 reachable from an AUTOMATION nav section and confirmed by a real `next build`.
 A PATCH verb was added to the `/api/whatsapp` proxy.
 
-**Next (integration-bound):** wire `answer_from_system` to live Odoo
+**Deferred — CRM/ERP integrations (Zoho CRM + Odoo), noted for later.**
+Neither is a first-class platform integration yet (no Odoo client exists; the
+`odoo_id`/`zoho_id` columns in `acb_graph` are reserved slots, not live sync).
+The WhatsApp seams that would consume them are already in place and degrade
+honestly without them:
+- **Chat context rail** (`transport/context.py`) resolves the contact's CRM/ERP
+  entity via a stable `<system>:<kind>:<id>` `entity_ref`; the live deal/invoice
+  fetch is the deferred half.
+- **`answer_from_system`** (the auto-reply ladder in `automation/rules.py`)
+  already *decides* to answer order-status from Odoo (`system_source=
+  "odoo_order_status"`); only the fetch is stubbed.
+The correct sequencing is **platform Zoho/Odoo integration first** (an ingestion
+source/agent alongside the existing ClickUp/Zoho references), *then* WhatsApp
+consumes it through the shared layer — never a bespoke WhatsApp-only client.
+Until then the vertical is fully functional; these rules simply fall through to a
+normal draft.
+
+**Next (buildable now, no CRM/ERP dep):** document/image OCR — the media-
+understanding sibling of voice transcription (`wa_media.ocr_text` is already
+provisioned) — deferred pending a vision-model tier, since the codebase has no
+LLM-vision precedent yet; semantic search over history (pgvector embeddings on
+`wa_messages`, already indexed for FTS); scheduler wiring for the bounded batch
+triggers (`summarize_stale_groups`, `transcribe_pending`) so groups/voice
+auto-refresh in production; saved replies / quick snippets in the composer.
+~~group intelligence~~, ~~waiting-on nudge drafts~~, ~~voice-note transcription~~,
+the ~~`wa_*` AI companion toolset~~, ~~chat snooze~~, and ~~Pulse analytics~~ are
+now BUILT (W4.1–W7).
+
+**Next (integration-bound, later):** wire `answer_from_system` to live Odoo
 order-status; the Embedded Signup onboarding flow + real coexistence history
 import; an LLM refinement layered onto the deterministic intent/status
 classifiers for the ambiguous tail; the single-reply auto-send executor
-(reusing the broker handler seam). These need the Odoo/Meta integrations or a
-running stack to validate end-to-end.
+(reusing the broker handler seam). These need the Zoho/Odoo/Meta integrations or
+a running stack to validate end-to-end.

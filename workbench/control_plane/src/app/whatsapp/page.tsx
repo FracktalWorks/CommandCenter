@@ -11,8 +11,11 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  Activity,
+  Clock,
   Loader2,
   MessageCircle,
+  Mic,
   PanelRight,
   Plus,
   Search,
@@ -22,6 +25,7 @@ import {
 } from "lucide-react";
 import {
   captureTask,
+  draftNudge,
   fetchAccounts,
   fetchChats,
   fetchContext,
@@ -31,6 +35,9 @@ import {
   generateDraft,
   sendTemplate,
   sendText,
+  snoozeChat,
+  transcribeMessage,
+  unsnoozeChat,
 } from "./lib/api";
 import {
   STREAMS,
@@ -40,6 +47,7 @@ import {
   type WaMessage,
   type WaStreams,
   type WaTemplate,
+  type WaWaitingOn,
 } from "./lib/types";
 
 function relTime(iso: string | null): string {
@@ -52,6 +60,40 @@ function relTime(iso: string | null): string {
   const hrs = Math.round(mins / 60);
   if (hrs < 24) return `${hrs}h`;
   return `${Math.round(hrs / 24)}d`;
+}
+
+// Snooze presets, computed in the founder's own timezone (the browser's), so the
+// server just stores the absolute instant we send.
+function snoozePresets(): { label: string; at: Date }[] {
+  const now = new Date();
+  const laterToday = new Date(now.getTime() + 3 * 3600 * 1000);
+  const evening = new Date(now);
+  evening.setHours(18, 0, 0, 0);
+  if (evening <= now) evening.setDate(evening.getDate() + 1);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  const nextWeek = new Date(now);
+  const daysUntilMonday = (8 - nextWeek.getDay()) % 7 || 7;
+  nextWeek.setDate(nextWeek.getDate() + daysUntilMonday);
+  nextWeek.setHours(9, 0, 0, 0);
+  return [
+    { label: "Later today", at: laterToday },
+    { label: "This evening", at: evening },
+    { label: "Tomorrow 9am", at: tomorrow },
+    { label: "Next week", at: nextWeek },
+  ];
+}
+
+function snoozeLabel(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
 }
 
 function initials(name: string, fallback: string): string {
@@ -69,6 +111,7 @@ export default function WhatsAppPage() {
     waiting: 0,
     groups: 0,
     all: 0,
+    snoozed: 0,
   });
   const [activeStream, setActiveStream] = useState("needs_reply");
   const [chats, setChats] = useState<WaChat[]>([]);
@@ -103,6 +146,14 @@ export default function WhatsAppPage() {
   const reloadMessages = useCallback(async () => {
     if (selectedChat) setMessages(await fetchMessages(selectedChat.id));
   }, [selectedChat]);
+
+  // After a snooze/unsnooze the chat leaves (or joins) the current stream —
+  // drop the selection and refresh the counts + list.
+  const refreshTriage = useCallback(async () => {
+    setSelectedChat(null);
+    setStreams(await fetchStreams());
+    await loadChats();
+  }, [loadChats]);
 
   if (loading) {
     return (
@@ -156,6 +207,12 @@ export default function WhatsAppPage() {
           <div className="px-2 py-1 text-[10px] font-bold tracking-wider text-muted-foreground/70">
             AUTOMATION
           </div>
+          <Link
+            href="/whatsapp/insights"
+            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
+          >
+            <Activity className="h-3.5 w-3.5" /> Pulse
+          </Link>
           <Link
             href="/whatsapp/settings/categories"
             className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
@@ -223,6 +280,7 @@ export default function WhatsAppPage() {
             messages={messages}
             accountId={accounts[0].id}
             onReload={reloadMessages}
+            onTriageChange={refreshTriage}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
@@ -283,11 +341,13 @@ function Conversation({
   messages,
   accountId,
   onReload,
+  onTriageChange,
 }: {
   chat: WaChat;
   messages: WaMessage[];
   accountId: string;
   onReload: () => Promise<void> | void;
+  onTriageChange: () => Promise<void> | void;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -297,6 +357,26 @@ function Conversation({
   const [context, setContext] = useState<WaChatContext | null>(null);
   const [templates, setTemplates] = useState<WaTemplate[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showSnooze, setShowSnooze] = useState(false);
+  const isSnoozed = Boolean(
+    chat.snoozed_until && new Date(chat.snoozed_until) > new Date()
+  );
+
+  const doSnooze = useCallback(
+    async (at: Date) => {
+      setShowSnooze(false);
+      const res = await snoozeChat(chat.id, at.toISOString());
+      if (res.ok) await onTriageChange();
+      else setError(res.error ?? "couldn't snooze");
+    },
+    [chat.id, onTriageChange]
+  );
+
+  const doUnsnooze = useCallback(async () => {
+    const res = await unsnoozeChat(chat.id);
+    if (res.ok) await onTriageChange();
+    else setError(res.error ?? "couldn't unsnooze");
+  }, [chat.id, onTriageChange]);
 
   // Load context + approved templates when the details drawer or picker opens.
   useEffect(() => {
@@ -361,14 +441,53 @@ function Conversation({
               window closed · template only
             </span>
           )}
-          <button
-            onClick={() => setShowDetails((v) => !v)}
-            className={`ml-auto flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
-              showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            <PanelRight className="h-3.5 w-3.5" /> Details
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {isSnoozed ? (
+              <button
+                onClick={doUnsnooze}
+                className="flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground"
+                title={`Snoozed until ${snoozeLabel(chat.snoozed_until)}`}
+              >
+                <Clock className="h-3.5 w-3.5" /> Snoozed ·{" "}
+                {snoozeLabel(chat.snoozed_until)} — wake
+              </button>
+            ) : (
+              <div className="relative">
+                <button
+                  onClick={() => setShowSnooze((v) => !v)}
+                  className={`flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
+                    showSnooze ? "bg-muted text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  <Clock className="h-3.5 w-3.5" /> Snooze
+                </button>
+                {showSnooze && (
+                  <div className="absolute right-0 top-8 z-10 w-40 overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+                    {snoozePresets().map((p) => (
+                      <button
+                        key={p.label}
+                        onClick={() => doSnooze(p.at)}
+                        className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-left text-[11px] last:border-0 hover:bg-muted/50"
+                      >
+                        <span>{p.label}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {snoozeLabel(p.at.toISOString())}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              onClick={() => setShowDetails((v) => !v)}
+              className={`flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
+                showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              <PanelRight className="h-3.5 w-3.5" /> Details
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">
@@ -377,7 +496,9 @@ function Conversation({
               No messages loaded.
             </div>
           ) : (
-            messages.map((m) => <Bubble key={m.id} msg={m} />)
+            messages.map((m) => (
+              <Bubble key={m.id} msg={m} onReload={onReload} />
+            ))
           )}
         </div>
 
@@ -464,12 +585,20 @@ function Conversation({
         </div>
       </div>
 
-      {showDetails && <DetailsDrawer context={context} />}
+      {showDetails && (
+        <DetailsDrawer context={context} onUseDraft={(t) => setText(t)} />
+      )}
     </div>
   );
 }
 
-function DetailsDrawer({ context }: { context: WaChatContext | null }) {
+function DetailsDrawer({
+  context,
+  onUseDraft,
+}: {
+  context: WaChatContext | null;
+  onUseDraft: (text: string) => void;
+}) {
   return (
     <div className="w-60 shrink-0 overflow-y-auto border-l border-border bg-muted/20 p-4 text-[11px]">
       <div className="mb-2 text-[12px] font-semibold">Details</div>
@@ -518,6 +647,18 @@ function DetailsDrawer({ context }: { context: WaChatContext | null }) {
               </ul>
             )}
           </div>
+          {context.waiting_on.length > 0 && (
+            <div>
+              <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
+                WAITING ON THEM
+              </div>
+              <ul className="space-y-2">
+                {context.waiting_on.map((w) => (
+                  <WaitingOnRow key={w.id} item={w} onUseDraft={onUseDraft} />
+                ))}
+              </ul>
+            </div>
+          )}
           <div>
             <div className="mb-1 text-[9px] font-bold tracking-wider text-muted-foreground/70">
               HISTORY
@@ -532,10 +673,73 @@ function DetailsDrawer({ context }: { context: WaChatContext | null }) {
   );
 }
 
-function Bubble({ msg }: { msg: WaMessage }) {
+function WaitingOnRow({
+  item,
+  onUseDraft,
+}: {
+  item: WaWaitingOn;
+  onUseDraft: (text: string) => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [draft, setDraft] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const doNudge = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    setError(null);
+    const res = await draftNudge(item.id);
+    setBusy(false);
+    if (res.ok && res.data) {
+      setDraft(res.data.nudge_text);
+      onUseDraft(res.data.nudge_text); // drops it into the composer, if open
+    } else {
+      setError(res.error ?? "couldn't draft a nudge");
+    }
+  }, [busy, item.id, onUseDraft]);
+
+  return (
+    <li className="leading-snug">
+      <div className="text-foreground/90">
+        {item.text}
+        {item.due_hint && (
+          <span className="text-muted-foreground"> · {item.due_hint}</span>
+        )}
+      </div>
+      <button
+        onClick={doNudge}
+        disabled={busy}
+        className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary disabled:opacity-50"
+      >
+        {busy ? (
+          <Loader2 className="h-2.5 w-2.5 animate-spin" />
+        ) : (
+          <Sparkles className="h-2.5 w-2.5" />
+        )}
+        Nudge
+      </button>
+      {draft && (
+        <div className="mt-1 rounded-md border border-border bg-background px-2 py-1 text-[10.5px] text-foreground/80">
+          {draft}
+        </div>
+      )}
+      {error && <div className="mt-1 text-[10px] text-red-500">{error}</div>}
+    </li>
+  );
+}
+
+function Bubble({
+  msg,
+  onReload,
+}: {
+  msg: WaMessage;
+  onReload?: () => Promise<void> | void;
+}) {
   const [captured, setCaptured] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [transcribing, setTranscribing] = useState(false);
   const out = msg.direction === "out";
+  const isVoice = msg.kind === "voice" || msg.kind === "audio";
 
   const doCapture = useCallback(async () => {
     if (busy || captured) return;
@@ -544,6 +748,14 @@ function Bubble({ msg }: { msg: WaMessage }) {
     setBusy(false);
     if (res.ok) setCaptured(true);
   }, [busy, captured, msg.id]);
+
+  const doTranscribe = useCallback(async () => {
+    if (transcribing) return;
+    setTranscribing(true);
+    const res = await transcribeMessage(msg.id);
+    setTranscribing(false);
+    if (res.ok) await onReload?.(); // reloads to show the transcript + new intent
+  }, [transcribing, msg.id, onReload]);
 
   return (
     <div className={`group flex flex-col ${out ? "items-end" : "items-start"}`}>
@@ -554,11 +766,41 @@ function Bubble({ msg }: { msg: WaMessage }) {
             : "rounded-bl-sm border border-border bg-muted"
         }`}
       >
-        {msg.kind !== "text" && (
-          <span className="mr-1 text-muted-foreground">[{msg.kind}]</span>
-        )}
-        {msg.body_text || (
-          <span className="text-muted-foreground">(no text)</span>
+        {isVoice ? (
+          <div>
+            <span className="flex items-center gap-1 text-muted-foreground">
+              <Mic className="h-3 w-3" /> voice note
+            </span>
+            {msg.transcript_text ? (
+              <div className="mt-1 italic text-foreground/90">
+                “{msg.transcript_text}”
+              </div>
+            ) : (
+              !out && (
+                <button
+                  onClick={doTranscribe}
+                  disabled={transcribing}
+                  className="mt-1 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-semibold text-primary disabled:opacity-50"
+                >
+                  {transcribing ? (
+                    <Loader2 className="h-2.5 w-2.5 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-2.5 w-2.5" />
+                  )}
+                  Transcribe
+                </button>
+              )
+            )}
+          </div>
+        ) : (
+          <>
+            {msg.kind !== "text" && (
+              <span className="mr-1 text-muted-foreground">[{msg.kind}]</span>
+            )}
+            {msg.body_text || (
+              <span className="text-muted-foreground">(no text)</span>
+            )}
+          </>
         )}
         <span className="mt-1 block text-right text-[8.5px] text-muted-foreground/60">
           {relTime(msg.sent_at)}

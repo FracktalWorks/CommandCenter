@@ -25,6 +25,7 @@ members = [
     "agent-email-assistant",
     "agent-orchestrator",
     "agent-task-manager",
+    "agent-whatsapp-assistant",
     "ai-company-brain",
     "email-ingestion",
     "gateway",
@@ -363,6 +364,25 @@ requires-dist = [
     { name = "pytest-asyncio", marker = "extra == 'dev'", specifier = ">=0.24" },
 ]
 provides-extras = ["dev"]
+
+[[package]]
+name = "agent-whatsapp-assistant"
+version = "0.1.0"
+source = { editable = "apps/agents/agent-whatsapp-assistant" }
+dependencies = [
+    { name = "acb-common" },
+    { name = "acb-skills" },
+    { name = "agent-framework-core" },
+    { name = "agent-framework-openai" },
+]
+
+[package.metadata]
+requires-dist = [
+    { name = "acb-common", editable = "packages/acb_common" },
+    { name = "acb-skills", editable = "packages/acb_skills" },
+    { name = "agent-framework-core", specifier = ">=1.8.0" },
+    { name = "agent-framework-openai", specifier = ">=1.7.0" },
+]
 
 [[package]]
 name = "ai-company-brain"

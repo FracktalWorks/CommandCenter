@@ -1,0 +1,35 @@
+{
+  "name": "WhatsApp Assistant",
+  "description": "AI copilot for a WhatsApp Business inbox — briefs, triages, summarizes groups, transcribes voice notes, and drafts replies and follow-up nudges. Drafts only; never sends.",
+  "version": "0.1.0",
+  "author": "CommandCenter",
+  "tags": ["whatsapp", "messaging", "triage", "drafting", "productivity"],
+  "integrations": [],
+  "optional_integrations": [],
+  "runtime": "maf",
+  "icon": "MessageCircle",
+  "category": "apps",
+  "tool_scope": [
+    "ask_questions",
+    "remember",
+    "recall_timeline",
+    "save_memory",
+    "emit_generative_ui",
+    "call_agent"
+  ],
+  "own_tool_scope": [
+    "list_whatsapp_accounts",
+    "whatsapp_brief",
+    "list_whatsapp_chats",
+    "read_whatsapp_chat",
+    "search_whatsapp",
+    "whatsapp_waiting_on",
+    "whatsapp_my_commitments",
+    "whatsapp_chat_context",
+    "summarize_whatsapp_group",
+    "list_whatsapp_group_summaries",
+    "transcribe_whatsapp_voice_note",
+    "draft_whatsapp_reply",
+    "draft_waiting_on_nudge"
+  ]
+}

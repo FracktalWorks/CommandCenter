@@ -26,6 +26,7 @@ def _message_model(row: Any) -> WhatsAppMessageModel:
         kind=row.kind or "text",
         sender_name=(sender or {}).get("name", "") or "",
         body_text=row.body_text or "",
+        transcript_text=getattr(row, "transcript_text", None),
         quoted_wa_message_id=row.quoted_wa_message_id,
         categories=list(row.categories or []),
         intent=row.intent,
@@ -57,8 +58,8 @@ async def list_messages(
         await _assert_chat_owned(db, chat_id, user.email or "anonymous")
         rows = (await db.execute(
             text("""SELECT id, chat_id, wa_message_id, direction, kind, sender,
-                           body_text, quoted_wa_message_id, categories, intent,
-                           send_regime, sent_at
+                           body_text, transcript_text, quoted_wa_message_id,
+                           categories, intent, send_regime, sent_at
                     FROM wa_messages
                     WHERE chat_id = :cid
                     ORDER BY sent_at ASC NULLS FIRST
@@ -95,8 +96,9 @@ async def search_messages(
         scope += ")"
         rows = (await db.execute(
             text(f"""SELECT m.id, m.chat_id, m.wa_message_id, m.direction, m.kind,
-                            m.sender, m.body_text, m.quoted_wa_message_id,
-                            m.categories, m.intent, m.send_regime, m.sent_at
+                            m.sender, m.body_text, m.transcript_text,
+                            m.quoted_wa_message_id, m.categories, m.intent,
+                            m.send_regime, m.sent_at
                      FROM wa_messages m
                      WHERE {scope}
                        AND to_tsvector('simple',

@@ -42,13 +42,23 @@ class CommitmentWatchItem(BaseModel):
     has_task: bool = False               # True once captured to a GTD item
 
 
+class WaitingOnItem(BaseModel):
+    id: str                              # commitment id — the nudge target (W4.2)
+    chat_id: str
+    text: str
+    due_hint: str | None = None
+
+
 class WhatsAppDigestModel(BaseModel):
     needs_you: list[DigestItem] = []      # the ≤N that need the founder first
     counts: DigestCounts = DigestCounts()
     # Promises WE made that are still open — the ones the digest nudges you to
     # turn into tasks (has_task=False is the "never became work" flag).
     commitment_watch: list[CommitmentWatchItem] = []
-    waiting_on_count: int = 0             # promises THEY made, still open
+    # Promises THEY made, still open — the waiting-on strip. Each carries its
+    # commitment id so the founder can one-tap a nudge draft (W4.2).
+    waiting_on: list[WaitingOnItem] = []
+    waiting_on_count: int = 0            # total open (may exceed the shown list)
 
 
 def status_counts(rows: list[Any]) -> DigestCounts:
@@ -113,6 +123,7 @@ async def digest(
                          ORDER BY m.sent_at DESC NULLS LAST LIMIT 1
                      ) lm ON TRUE
                      WHERE s.status = 'NEEDS_REPLY' AND s.account_id {scope}
+                       AND (s.snoozed_until IS NULL OR s.snoozed_until <= now())
                      ORDER BY s.last_message_at DESC NULLS LAST
                      LIMIT 3"""),
             params,
@@ -146,6 +157,23 @@ async def digest(
             for r in watch_rows
         ]
 
+        # Waiting-on strip: what THEY owe us, each nudgeable by id (W4.2).
+        waiting_rows = (await db.execute(
+            text(f"""SELECT k.id, k.chat_id, k.text, k.due_hint
+                     FROM wa_commitments k
+                     WHERE k.direction = 'theirs' AND k.status = 'open'
+                       AND k.account_id {scope}
+                     ORDER BY k.created_at DESC
+                     LIMIT 5"""),
+            params,
+        )).fetchall()
+        waiting_on = [
+            WaitingOnItem(
+                id=str(r.id), chat_id=str(r.chat_id), text=r.text,
+                due_hint=r.due_hint,
+            )
+            for r in waiting_rows
+        ]
         waiting_on_count = int((await db.execute(
             text(f"""SELECT COUNT(*) FROM wa_commitments
                      WHERE direction = 'theirs' AND status = 'open'
@@ -156,6 +184,7 @@ async def digest(
         return WhatsAppDigestModel(
             needs_you=needs_you, counts=counts,
             commitment_watch=commitment_watch,
+            waiting_on=waiting_on,
             waiting_on_count=waiting_on_count,
         )
     finally:

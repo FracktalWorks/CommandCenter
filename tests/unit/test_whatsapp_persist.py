@@ -124,3 +124,34 @@ def test_body_truncation_marks_oversized_text() -> None:
     out = persist._truncate(big, persist.MAX_BODY_TEXT_BYTES)
     assert out.endswith("[truncated]")
     assert persist._truncate(None, 10) is None
+
+
+async def test_voice_media_lands_pending_for_transcription() -> None:
+    db = FakeDB()
+    voice = WhatsAppMessage(
+        wa_message_id="wamid.v", wa_chat_id="91999", sender_wa_id="91999",
+        kind="voice", media=WhatsAppMedia(wa_media_id="V1", mime_type="audio/ogg"),
+        sent_at=_SENT)
+    await persist.upsert_message(db, "acc", "chat-uuid-1", voice, direction="in")
+    media_call = next(c for c in db.calls if "INSERT INTO wa_media" in c[0])
+    assert media_call[1]["transcription_status"] == "pending"
+
+
+async def test_document_media_has_no_transcription_status() -> None:
+    db = FakeDB()
+    doc = WhatsAppMessage(
+        wa_message_id="wamid.d", wa_chat_id="91999", sender_wa_id="91999",
+        kind="document",
+        media=WhatsAppMedia(wa_media_id="D1", mime_type="application/pdf"),
+        sent_at=_SENT)
+    await persist.upsert_message(db, "acc", "chat-uuid-1", doc, direction="in")
+    media_call = next(c for c in db.calls if "INSERT INTO wa_media" in c[0])
+    assert media_call[1]["transcription_status"] is None
+
+
+def test_is_transcribable_predicate() -> None:
+    assert persist.is_transcribable("voice", "audio/ogg") is True
+    assert persist.is_transcribable("audio", None) is True
+    assert persist.is_transcribable("document", "audio/mpeg") is True  # by mime
+    assert persist.is_transcribable("image", "image/jpeg") is False
+    assert persist.is_transcribable("text", None) is False

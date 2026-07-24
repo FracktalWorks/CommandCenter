@@ -523,10 +523,23 @@ capture, context, Reply Zero, intent (21 cases), categories, digest + hook
 wiring, the auto-reply ladder (12), and commitment extraction (15). All new code
 `ruff`-clean.
 
-**Not yet validated in this environment:** the numbered migrations (99–101) need
-`scripts/apply_migrations.sh` against a running Postgres; the Next.js frontend
-needs `npm ci && npm run build` (the control-plane `node_modules` isn't
-installed here — the code mirrors the known-good email proxy/page patterns).
+**Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
+the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
+apply_migrations.sh → smoke`); the sandbox can't reach that VPS, so the branch is
+the deployable artifact. What WAS validated here:
+- **Migrations 99–103 against a real Postgres 16** (initdb'd local cluster, not
+  Docker — the daemon is unavailable here). Fresh apply is clean; re-apply is
+  fully idempotent (all `IF NOT EXISTS`, zero errors) — safe for
+  `apply_migrations.sh` on every deploy. A functional smoke test seeded a full
+  object graph and ran the actual route SQL (the FTS search, the LATERAL
+  last-message join, the digest aggregation, the commitment partial-index query);
+  `EXPLAIN` confirms the FTS query uses `idx_wa_messages_fts` (Bitmap Index Scan,
+  not a seq scan) — the tsvector expression matches the index byte-for-byte. The
+  `credentials_encrypted` NOT NULL fired as designed. **Caveat closed.**
+- **Frontend:** `npm ci` FAILS on a PRE-EXISTING lockfile drift (package-lock is
+  missing `@emnapi/*` platform deps — unrelated to WhatsApp; nothing here touches
+  package.json/lock). Validated my code via `npm install` + `next build` instead.
+  The lockfile drift is a separate deploy blocker worth fixing on its own.
 
 **Next (W2 frontend → W3):** the Categories + Rules settings screens and a
 digest view in the UI (backend ready); LLM refinement layered onto the

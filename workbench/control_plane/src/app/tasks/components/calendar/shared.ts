@@ -5,7 +5,7 @@
 // the rail, the planner panels and Focus Mode all agree on the same math.
 
 import { useEffect, useState } from "react";
-import type { EnergyWindow } from "../../lib/api";
+import type { EnergyWindow, DayTemplate } from "../../lib/api";
 import { startOfDay, addDays, sameDay, type Block } from "../../lib/scheduling";
 import type { GtdItem } from "../../lib/types";
 
@@ -92,6 +92,59 @@ export function deadlinesForDay(items: GtdItem[], day: Date): GtdItem[] {
       i.disposition !== "DONE" &&
       sameDay(new Date(i.dueAt), day),
   );
+}
+
+/** A reserved zone on the grid — protected lunch, or a recurring Block/Focus
+ *  window — shown as a labeled band so "this time is spoken for" is visible. */
+export interface ReservedBand {
+  startHour: number;
+  endHour: number;
+  label: string;
+  /** "block" = no tasks (lunch, gym, family); "focus" = reserved for a kind
+   *  of work (the planner biases matching tasks in, but it's not off-limits). */
+  kind: "block" | "focus";
+}
+
+/** The reserved windows that apply to `day`: the protected lunch plus any
+ *  recurring windows whose day-of-week matches (empty `days` = every day).
+ *  MIRRORS the gateway's _expand_templates / _lunch_interval so the grid shows
+ *  exactly what the AI planner treats as busy (blocks) or themed (focus).
+ *  Weekday is 0=Sun … 6=Sat — matching the settings day-picker. */
+export function reservedWindowsForDay(
+  day: Date,
+  lunchStartHour: number | null | undefined,
+  lunchEndHour: number | null | undefined,
+  dayTemplates: DayTemplate[] | undefined,
+): ReservedBand[] {
+  const out: ReservedBand[] = [];
+  const dow = day.getDay(); // 0=Sun … 6=Sat
+  if (
+    lunchStartHour != null &&
+    lunchEndHour != null &&
+    lunchEndHour > lunchStartHour
+  ) {
+    out.push({
+      startHour: lunchStartHour,
+      endHour: lunchEndHour,
+      label: "Lunch",
+      kind: "block",
+    });
+  }
+  for (const t of dayTemplates ?? []) {
+    const days = t.days ?? [];
+    if (days.length && !days.includes(dow)) continue;
+    const sh = Number(t.start_hour);
+    const eh = Number(t.end_hour);
+    if (!Number.isFinite(sh) || !Number.isFinite(eh) || eh <= sh) continue;
+    const kind = t.kind === "focus" ? "focus" : "block";
+    const label = (
+      t.label ||
+      t.theme ||
+      (kind === "block" ? "Blocked" : "Focus")
+    ).trim();
+    out.push({ startHour: sh, endHour: eh, label, kind });
+  }
+  return out;
 }
 
 /** Assign overlapping blocks to side-by-side lanes (Google-Calendar style) so a

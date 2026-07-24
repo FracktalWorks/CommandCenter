@@ -657,6 +657,9 @@ export function CalendarView() {
               workStart={workStart}
               workEnd={workEnd}
               energyWindows={energyWindows}
+              lunchStartHour={settings.lunchStartHour}
+              lunchEndHour={settings.lunchEndHour}
+              dayTemplates={settings.dayTemplates}
               oneThingId={oneThingId}
               outcomeById={outcomeById}
               onToggleOneThing={handleToggleOneThing}

@@ -1254,7 +1254,7 @@ async def _agent_draft_reply(
     *, use_agent: bool = False, max_agents: int = 2, agent_timeout: float = 90.0,
     follow_up: bool = False, confidence: str = "ALL_EMAILS",
     model: str = "tier-powerful", account_id: str = "",
-    interactive_fallback: bool = False,
+    interactive_fallback: bool = False, extra_instructions: str = "",
 ) -> str:
     """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
     rule actions), run the email-assistant MAF agent first; otherwise — and on any
@@ -1264,8 +1264,14 @@ async def _agent_draft_reply(
     higher tiers instruct the drafter to return the NO_DRAFT sentinel when it
     isn't confident, which the caller treats as "skip this draft".
 
+    ``extra_instructions`` is the USER'S steer for this one draft (the compose
+    box's AI-bar prompt, a nudge preset) — it reaches the drafter as extra
+    instructions alongside the follow-up/confidence ones.
+
     ``model`` is the account's draft-writing model (default the powerful tier)."""
     instructions = _FOLLOW_UP_INSTRUCTION if follow_up else ""
+    if (extra_instructions or "").strip():
+        instructions = (instructions + "\n" + extra_instructions.strip()).strip()
     conf_note = _CONFIDENCE_INSTRUCTIONS.get(confidence or "ALL_EMAILS", "")
     if conf_note:
         instructions = (instructions + "\n" + conf_note).strip()
@@ -1594,11 +1600,15 @@ async def compose_assist(
             # not a separate lighter one). Improve-in-place and forward keep the
             # compose path, now WITH the replied-to body in view.
             if req.mode == "reply" and not (req.body or "").strip():
+                # The user's AI-bar prompt must steer this draft. This path used
+                # to drop req.instruction entirely, so typing an instruction and
+                # hitting Draft on an empty reply changed nothing.
                 draft = await _agent_draft_reply(
                     ctx, about, signature, user.email or "",
                     max_agents=1, agent_timeout=18.0,
                     model=models["draft"], account_id=req.account_id,
                     interactive_fallback=True,
+                    extra_instructions=(req.instruction or "").strip(),
                 )
                 if _is_no_draft(draft):
                     return {"draft": "", "skipped": "low_confidence"}

@@ -293,3 +293,56 @@ async def test_compose_assist_improve_passes_reply_to_body() -> None:
     assert res["draft"] == "improved draft"
     assert calls["reply_to_body"] == "TEMPLATE_BODY"
     assert calls["current_body"] == "my rough draft"
+
+
+async def test_compose_assist_reply_empty_body_passes_user_instruction() -> None:
+    """The AI-bar prompt must steer a draft-from-scratch reply. This path used to
+    drop req.instruction entirely — typing an instruction and hitting Draft on an
+    empty reply changed nothing."""
+    ctx = {"from": "sharma.ashish@manipal.edu", "from_name": "Ashish",
+           "subject": "Re: Evaluation", "body": "TEMPLATE_BODY", "thread": ""}
+    calls: dict = {}
+
+    async def fake_agent_draft(email, *a, **k):
+        calls["kwargs"] = k
+        return "steered draft"
+
+    with patch.object(_drafting, "_get_db", AsyncMock(return_value=AsyncMock())), \
+            patch.object(_drafting, "_assert_account_owner", AsyncMock()), \
+            patch.object(_drafting, "_load_assistant_about",
+                         AsyncMock(return_value=("about", "sig"))), \
+            patch.object(_drafting, "_account_models",
+                         AsyncMock(return_value={"draft": "tier-powerful"})), \
+            patch.object(_drafting, "_build_reply_context",
+                         AsyncMock(return_value=ctx)), \
+            patch.object(_drafting, "_agent_draft_reply", fake_agent_draft):
+        req = _drafting.ComposeAssistRequest(
+            account_id="a", body="", mode="reply", message_id="m1",
+            instruction="ask what happened to the one we already had")
+        res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
+
+    assert res["draft"] == "steered draft"
+    assert calls["kwargs"]["extra_instructions"] == \
+        "ask what happened to the one we already had"
+
+
+async def test_agent_draft_reply_weaves_extra_instructions_into_drafter() -> None:
+    """extra_instructions must reach the underlying drafter's instructions,
+    alongside (not instead of) the follow-up/confidence notes."""
+    calls: dict = {}
+
+    async def fake_orchestrate(email, about, signature, user_email, **k):
+        calls.update(k)
+        return "ok"
+
+    with patch.object(_drafting, "_orchestrate_draft", fake_orchestrate):
+        await _drafting._agent_draft_reply(
+            {"from": "a@x.com", "subject": "s", "body": "b"},
+            "about", "sig", "me@x.com",
+            extra_instructions="mention the discount",
+            confidence="STANDARD",
+        )
+
+    assert "mention the discount" in calls["instructions"]
+    # The confidence gate note still rides along.
+    assert _drafting.DRAFT_NO_DRAFT_SENTINEL in calls["instructions"]

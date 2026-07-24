@@ -107,17 +107,17 @@ export default function NotesPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
-        <div>
+      <div className="flex flex-col gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
           <h1 className="text-base sm:text-lg font-bold text-foreground">Notes</h1>
-          <p className="text-xs text-muted-foreground mt-0.5">
+          <p className="hidden sm:block text-xs text-muted-foreground mt-0.5">
             AI note taker — record meetings, get grounded notes
           </p>
         </div>
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowGlossary(true)}
-            className="p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+            className="shrink-0 p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
             title="Glossary — teach transcription your jargon"
             aria-label="Glossary"
           >
@@ -129,7 +129,7 @@ export default function NotesPage() {
               onChange={(e) => setTemplateKey(e.target.value)}
               title="Notes template — shapes the summary for this meeting type"
               aria-label="Notes template"
-              className="rounded-lg border border-border bg-card px-2 py-2 text-sm text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring tech-transition"
+              className="min-w-0 flex-1 sm:flex-none rounded-lg border border-border bg-card px-2 py-2 text-sm text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring tech-transition"
             >
               {templates.map((t) => (
                 <option key={t.key} value={t.key}>
@@ -140,16 +140,18 @@ export default function NotesPage() {
           )}
           <button
             onClick={onRecord}
-            className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+            className="shrink-0 rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
           >
             <span className="flex items-center gap-1.5">
               <Mic className="w-4 h-4" /> Record
             </span>
           </button>
           <button
-            className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
+            className="shrink-0 rounded-lg border border-border px-2.5 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
+            aria-label={uploading ? "Uploading…" : "Upload a recording"}
+            title="Upload a recording"
           >
             <span className="flex items-center gap-1.5">
               {uploading ? (
@@ -157,7 +159,9 @@ export default function NotesPage() {
               ) : (
                 <Upload className="w-4 h-4" />
               )}
-              {uploading ? "Uploading…" : "Upload"}
+              <span className="hidden sm:inline">
+                {uploading ? "Uploading…" : "Upload"}
+              </span>
             </span>
           </button>
           <input

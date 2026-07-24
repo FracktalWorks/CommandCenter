@@ -61,6 +61,7 @@ export function fetchStreams(accountId?: string): Promise<WaStreams> {
     waiting: 0,
     groups: 0,
     all: 0,
+    snoozed: 0,
   });
 }
 
@@ -135,6 +136,22 @@ export function draftNudge(commitmentId: string) {
     nudge_text: string;
     language: string;
   }>(`commitments/${commitmentId}/nudge`, {});
+}
+
+// Snooze a chat out of the queue until `until` (ISO-8601); it resurfaces on its
+// own, or immediately if they send a new message (W6).
+export function snoozeChat(chatId: string, until: string) {
+  return postJSON<{ chat_id: string; snoozed_until: string | null }>(
+    `chats/${chatId}/snooze`,
+    { until }
+  );
+}
+
+export function unsnoozeChat(chatId: string) {
+  return postJSON<{ chat_id: string; snoozed_until: string | null }>(
+    `chats/${chatId}/unsnooze`,
+    {}
+  );
 }
 
 export function fetchCategories(accountId: string): Promise<WaCategory[]> {

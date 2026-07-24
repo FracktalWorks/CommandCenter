@@ -105,9 +105,21 @@ async def recompute_chat_status(
                   last_message_id = EXCLUDED.last_message_id,
                   last_message_at = EXCLUDED.last_message_at,
                   reason = EXCLUDED.reason,
-                  classified_at = now()"""),
+                  classified_at = now(),
+                  -- A NEW inbound message wakes a snoozed chat: clear the snooze
+                  -- only when THIS chat's last message actually changed and the
+                  -- new one is inbound (classify_chats sweeps every chat, so an
+                  -- unconditional clear would defeat snooze). W6.
+                  snoozed_until = CASE
+                    WHEN wa_chat_status.last_message_id
+                         IS DISTINCT FROM EXCLUDED.last_message_id
+                         AND :last_dir = 'in'
+                    THEN NULL
+                    ELSE wa_chat_status.snoozed_until
+                  END"""),
         {"aid": account_id, "cid": chat_id, "status": status,
-         "lmid": str(last.id), "lmat": last.sent_at, "reason": reason},
+         "lmid": str(last.id), "lmat": last.sent_at, "reason": reason,
+         "last_dir": last.direction or "in"},
     )
     return status
 

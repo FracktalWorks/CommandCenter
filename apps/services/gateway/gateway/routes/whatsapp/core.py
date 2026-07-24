@@ -51,6 +51,7 @@ class WhatsAppChatModel(BaseModel):
     # Whether the 24h free-form window is currently open, and when it closes.
     window_open: bool = False
     window_expires_at: str | None = None
+    snoozed_until: str | None = None    # set while the chat is snoozed (W6)
 
 
 class WhatsAppMessageModel(BaseModel):

@@ -123,6 +123,7 @@ async def digest(
                          ORDER BY m.sent_at DESC NULLS LAST LIMIT 1
                      ) lm ON TRUE
                      WHERE s.status = 'NEEDS_REPLY' AND s.account_id {scope}
+                       AND (s.snoozed_until IS NULL OR s.snoozed_until <= now())
                      ORDER BY s.last_message_at DESC NULLS LAST
                      LIMIT 3"""),
             params,

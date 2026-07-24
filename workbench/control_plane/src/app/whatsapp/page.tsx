@@ -11,6 +11,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import {
+  Clock,
   Loader2,
   MessageCircle,
   Mic,
@@ -33,7 +34,9 @@ import {
   generateDraft,
   sendTemplate,
   sendText,
+  snoozeChat,
   transcribeMessage,
+  unsnoozeChat,
 } from "./lib/api";
 import {
   STREAMS,
@@ -58,6 +61,40 @@ function relTime(iso: string | null): string {
   return `${Math.round(hrs / 24)}d`;
 }
 
+// Snooze presets, computed in the founder's own timezone (the browser's), so the
+// server just stores the absolute instant we send.
+function snoozePresets(): { label: string; at: Date }[] {
+  const now = new Date();
+  const laterToday = new Date(now.getTime() + 3 * 3600 * 1000);
+  const evening = new Date(now);
+  evening.setHours(18, 0, 0, 0);
+  if (evening <= now) evening.setDate(evening.getDate() + 1);
+  const tomorrow = new Date(now);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  tomorrow.setHours(9, 0, 0, 0);
+  const nextWeek = new Date(now);
+  const daysUntilMonday = (8 - nextWeek.getDay()) % 7 || 7;
+  nextWeek.setDate(nextWeek.getDate() + daysUntilMonday);
+  nextWeek.setHours(9, 0, 0, 0);
+  return [
+    { label: "Later today", at: laterToday },
+    { label: "This evening", at: evening },
+    { label: "Tomorrow 9am", at: tomorrow },
+    { label: "Next week", at: nextWeek },
+  ];
+}
+
+function snoozeLabel(iso: string | null): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  return d.toLocaleString([], {
+    weekday: "short",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
 function initials(name: string, fallback: string): string {
   const src = (name || fallback || "?").trim();
   const parts = src.split(/\s+/).filter(Boolean);
@@ -73,6 +110,7 @@ export default function WhatsAppPage() {
     waiting: 0,
     groups: 0,
     all: 0,
+    snoozed: 0,
   });
   const [activeStream, setActiveStream] = useState("needs_reply");
   const [chats, setChats] = useState<WaChat[]>([]);
@@ -107,6 +145,14 @@ export default function WhatsAppPage() {
   const reloadMessages = useCallback(async () => {
     if (selectedChat) setMessages(await fetchMessages(selectedChat.id));
   }, [selectedChat]);
+
+  // After a snooze/unsnooze the chat leaves (or joins) the current stream —
+  // drop the selection and refresh the counts + list.
+  const refreshTriage = useCallback(async () => {
+    setSelectedChat(null);
+    setStreams(await fetchStreams());
+    await loadChats();
+  }, [loadChats]);
 
   if (loading) {
     return (
@@ -227,6 +273,7 @@ export default function WhatsAppPage() {
             messages={messages}
             accountId={accounts[0].id}
             onReload={reloadMessages}
+            onTriageChange={refreshTriage}
           />
         ) : (
           <div className="flex flex-1 items-center justify-center text-[13px] text-muted-foreground">
@@ -287,11 +334,13 @@ function Conversation({
   messages,
   accountId,
   onReload,
+  onTriageChange,
 }: {
   chat: WaChat;
   messages: WaMessage[];
   accountId: string;
   onReload: () => Promise<void> | void;
+  onTriageChange: () => Promise<void> | void;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -301,6 +350,26 @@ function Conversation({
   const [context, setContext] = useState<WaChatContext | null>(null);
   const [templates, setTemplates] = useState<WaTemplate[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [showSnooze, setShowSnooze] = useState(false);
+  const isSnoozed = Boolean(
+    chat.snoozed_until && new Date(chat.snoozed_until) > new Date()
+  );
+
+  const doSnooze = useCallback(
+    async (at: Date) => {
+      setShowSnooze(false);
+      const res = await snoozeChat(chat.id, at.toISOString());
+      if (res.ok) await onTriageChange();
+      else setError(res.error ?? "couldn't snooze");
+    },
+    [chat.id, onTriageChange]
+  );
+
+  const doUnsnooze = useCallback(async () => {
+    const res = await unsnoozeChat(chat.id);
+    if (res.ok) await onTriageChange();
+    else setError(res.error ?? "couldn't unsnooze");
+  }, [chat.id, onTriageChange]);
 
   // Load context + approved templates when the details drawer or picker opens.
   useEffect(() => {
@@ -365,14 +434,53 @@ function Conversation({
               window closed · template only
             </span>
           )}
-          <button
-            onClick={() => setShowDetails((v) => !v)}
-            className={`ml-auto flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
-              showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
-            }`}
-          >
-            <PanelRight className="h-3.5 w-3.5" /> Details
-          </button>
+          <div className="ml-auto flex items-center gap-2">
+            {isSnoozed ? (
+              <button
+                onClick={doUnsnooze}
+                className="flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground"
+                title={`Snoozed until ${snoozeLabel(chat.snoozed_until)}`}
+              >
+                <Clock className="h-3.5 w-3.5" /> Snoozed ·{" "}
+                {snoozeLabel(chat.snoozed_until)} — wake
+              </button>
+            ) : (
+              <div className="relative">
+                <button
+                  onClick={() => setShowSnooze((v) => !v)}
+                  className={`flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
+                    showSnooze ? "bg-muted text-foreground" : "text-muted-foreground"
+                  }`}
+                >
+                  <Clock className="h-3.5 w-3.5" /> Snooze
+                </button>
+                {showSnooze && (
+                  <div className="absolute right-0 top-8 z-10 w-40 overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+                    {snoozePresets().map((p) => (
+                      <button
+                        key={p.label}
+                        onClick={() => doSnooze(p.at)}
+                        className="flex w-full items-center justify-between border-b border-border px-3 py-2 text-left text-[11px] last:border-0 hover:bg-muted/50"
+                      >
+                        <span>{p.label}</span>
+                        <span className="text-[10px] text-muted-foreground">
+                          {snoozeLabel(p.at.toISOString())}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+            <button
+              onClick={() => setShowDetails((v) => !v)}
+              className={`flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] ${
+                showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
+              }`}
+            >
+              <PanelRight className="h-3.5 w-3.5" /> Details
+            </button>
+          </div>
         </div>
 
         <div className="min-h-0 flex-1 space-y-2 overflow-y-auto p-4">

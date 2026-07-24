@@ -29,6 +29,7 @@ export type WaChat = {
   last_snippet: string;
   window_open: boolean;
   window_expires_at: string | null;
+  snoozed_until: string | null; // set while snoozed (W6)
 };
 
 export type WaMessage = {
@@ -52,6 +53,7 @@ export type WaStreams = {
   waiting: number;
   groups: number;
   all: number;
+  snoozed: number;
 };
 
 export type WaTemplate = {
@@ -133,4 +135,5 @@ export const STREAMS: { key: string; label: string; icon: string }[] = [
   { key: "waiting", label: "Waiting on them", icon: "⏳" },
   { key: "groups", label: "Groups", icon: "👥" },
   { key: "all", label: "All chats", icon: "💬" },
+  { key: "snoozed", label: "Snoozed", icon: "💤" },
 ];

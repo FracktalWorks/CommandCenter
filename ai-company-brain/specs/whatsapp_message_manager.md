@@ -584,23 +584,42 @@ own tap; one-to-many goes through the broker). Tools carry `chat_id` /
 feeds `draft_waiting_on_nudge` in one flow. Runs on the BYOK LiteLLM tier
 (`tier-balanced`), never native Copilot.
 
-**Tests:** 165 backend unit tests (`pytest -k whatsapp`) — webhook parser,
+**W6 — chat snooze / remind-me — BUILT (an inbox staple).** Defer a conversation
+out of the triage queue until a chosen time, then let it resurface on its own.
+`109_whatsapp_chat_snooze.sql` adds `wa_chat_status.snoozed_until` (a partial
+index for the handful of snoozed chats). Snooze is an ORTHOGONAL overlay on Reply
+Zero — the chat keeps its real status; the queue reads just filter
+`snoozed_until IS NULL OR snoozed_until <= now()`, so a snooze **auto-expires with
+no batch**. `transport/snooze.py` exposes `POST /chats/{id}/snooze` (pure
+`parse_snooze_until` validates the client-supplied ISO instant — future, sane
+horizon; the browser computes the absolute time in the founder's own tz) and
+`POST /chats/{id}/unsnooze`. A **new inbound message wakes a snoozed chat**: the
+`recompute_chat_status` upsert clears `snoozed_until` via a CASE that fires ONLY
+when *that* chat's last message actually changed and the new one is inbound (a
+blanket clear would defeat snooze, since `classify_chats` sweeps every chat). The
+streams/list/digest all hide snoozed chats and a new **"Snoozed" nav stream**
+surfaces them; the conversation header gains a Snooze menu (Later today / This
+evening / Tomorrow 9am / Next week) and a one-tap "wake". An OUTBOUND reply never
+wakes a snooze.
+
+**Tests:** 177 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),
 categories, digest + hook wiring, the auto-reply ladder (12), commitment
 extraction + nudge drafting (24), voice-note transcription (11 — predicate,
 status lifecycle, watermark reset, sentinel-on-failure), group intelligence
-(13 — builder/parser/summarize orchestration), and the companion agent (9 —
-tool surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
-formatting; `build_agents()` constructs the MAF agent with all 13 tools). All new
-code `ruff`-clean; the frontend `next build` compiles the new drawer surface, and
+(13 — builder/parser/summarize orchestration), the companion agent (9 — tool
+surface, drafts-only doctrine, config/tool drift guard, mocked-gateway
+formatting; `build_agents()` constructs the MAF agent with all 13 tools), and
+chat snooze (12 — the pure wake-time validator + route registration). All new
+code `ruff`-clean; the frontend `next build` compiles the new snooze surface, and
 `uv sync` installs the new agent workspace member cleanly.
 
 **Deploy validation (2026-07-24, this sandbox).** The production deploy runs on
 the Hostinger VPS via `deploy/hostinger/deploy.sh` (`git pull → docker compose →
 apply_migrations.sh → smoke`); the sandbox can't reach that VPS, so the branch is
 the deployable artifact. What WAS validated here:
-- **Migrations 102–106 against a real Postgres 16** (initdb'd local cluster, not
+- **Migrations 102–109 against a real Postgres 16** (initdb'd local cluster, not
   Docker — the daemon is unavailable here). Fresh apply is clean; re-apply is
   fully idempotent (all `IF NOT EXISTS`, zero errors) — safe for
   `apply_migrations.sh` on every deploy. A functional smoke test seeded a full
@@ -608,7 +627,11 @@ the deployable artifact. What WAS validated here:
   last-message join, the digest aggregation, the commitment partial-index query);
   `EXPLAIN` confirms the FTS query uses `idx_wa_messages_fts` (Bitmap Index Scan,
   not a seq scan) — the tsvector expression matches the index byte-for-byte. The
-  `credentials_encrypted` NOT NULL fired as designed. **Caveat closed.**
+  `credentials_encrypted` NOT NULL fired as designed. The **W6 snooze SQL** was
+  functionally verified on the same cluster: the queue filter hides a snoozed chat
+  and the "Snoozed" stream surfaces it; a new INBOUND message clears the snooze
+  via the `recompute_chat_status` CASE while an OUTBOUND reply does not. **Caveat
+  closed.**
 - **Frontend `next build` PASSES.** `npm ci` FAILS on a PRE-EXISTING lockfile
   drift (package-lock is missing `@emnapi/*` platform deps — unrelated to
   WhatsApp; nothing here touches package.json/lock), so I validated via

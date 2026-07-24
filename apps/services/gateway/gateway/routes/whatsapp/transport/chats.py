@@ -22,9 +22,15 @@ _STATUS_STREAMS = {
     "waiting": "AWAITING",
 }
 
+# Snooze overlay (W6): a chat is hidden from every triage stream while its wake
+# time is still in the future, and shown only in the dedicated 'snoozed' stream.
+_NOT_SNOOZED = "(s.snoozed_until IS NULL OR s.snoozed_until <= now())"
+_SNOOZED = "(s.snoozed_until > now())"
+
 
 def _chat_model(row: Any) -> WhatsAppChatModel:
     window_open = bool(getattr(row, "window_open", False))
+    snoozed_until = getattr(row, "snoozed_until", None)
     return WhatsAppChatModel(
         id=str(row.id),
         account_id=str(row.account_id),
@@ -40,6 +46,7 @@ def _chat_model(row: Any) -> WhatsAppChatModel:
             row.service_window_expires_at.isoformat()
             if row.service_window_expires_at else None
         ),
+        snoozed_until=snoozed_until.isoformat() if snoozed_until else None,
     )
 
 
@@ -73,10 +80,11 @@ async def list_streams(
             return int((await db.execute(text(q), params)).scalar() or 0)
 
         counts = {
-            "needs_reply": await _count("s.status = 'NEEDS_REPLY'"),
-            "waiting": await _count("s.status = 'AWAITING'"),
-            "groups": await _count("c.kind = 'group'"),
-            "all": await _count("TRUE"),
+            "needs_reply": await _count(f"s.status = 'NEEDS_REPLY' AND {_NOT_SNOOZED}"),
+            "waiting": await _count(f"s.status = 'AWAITING' AND {_NOT_SNOOZED}"),
+            "groups": await _count(f"c.kind = 'group' AND {_NOT_SNOOZED}"),
+            "all": await _count(_NOT_SNOOZED),
+            "snoozed": await _count(_SNOOZED),
         }
         return counts
     finally:
@@ -101,11 +109,16 @@ async def list_chats(
             params["aid"] = account_id
         where[0] += ")"
 
-        if stream in _STATUS_STREAMS:
-            where.append("s.status = :status")
-            params["status"] = _STATUS_STREAMS[stream]
-        elif stream == "groups":
-            where.append("c.kind = 'group'")
+        if stream == "snoozed":
+            where.append(_SNOOZED)
+        else:
+            # Every non-snoozed stream hides currently-snoozed chats.
+            where.append(_NOT_SNOOZED)
+            if stream in _STATUS_STREAMS:
+                where.append("s.status = :status")
+                params["status"] = _STATUS_STREAMS[stream]
+            elif stream == "groups":
+                where.append("c.kind = 'group'")
         if category:
             where.append("c.category = :category")
             params["category"] = category
@@ -115,7 +128,7 @@ async def list_chats(
             SELECT c.id, c.account_id, c.wa_chat_id, c.kind, c.name, c.category,
                    c.last_message_at, c.service_window_expires_at,
                    (c.service_window_expires_at > now()) AS window_open,
-                   s.status AS status,
+                   s.status AS status, s.snoozed_until AS snoozed_until,
                    lm.body_text AS last_snippet
             FROM wa_chats c
             LEFT JOIN wa_chat_status s

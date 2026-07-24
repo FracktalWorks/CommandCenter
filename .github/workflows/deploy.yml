@@ -221,7 +221,14 @@ jobs:
             echo "==> [trial] Local diarization (sherpa-onnx), LOCAL_DIAR=$LOCAL_DIAR"
             if [ "$LOCAL_DIAR" = "1" ]; then
               mkdir -p "$MODELS_DIR"
-              command -v ffmpeg >/dev/null || echo "    ! ffmpeg missing — decode will no-op"
+              # ffmpeg decodes the meeting audio → 16kHz PCM for sherpa. The VPS
+              # never needed it before (cloud STT decodes server-side), so install
+              # it on demand; without it the diarization pass silently no-ops.
+              if ! command -v ffmpeg >/dev/null; then
+                echo "    installing ffmpeg (needed to decode audio for diarization)…"
+                (sudo apt-get update -qq && sudo DEBIAN_FRONTEND=noninteractive apt-get install -y -qq ffmpeg) >/dev/null 2>&1 \
+                  && echo "    + ffmpeg installed" || echo "    ! ffmpeg install failed — decode will no-op"
+              fi
               uv pip install -q 'sherpa-onnx>=1.10' 'numpy>=1.24' \
                 || echo "    ! sherpa-onnx install failed — local diar will no-op"
               if [ ! -f "$SEG_MODEL" ]; then

@@ -59,6 +59,8 @@ export interface ModelInfo {
   provider: string;
   vision: boolean;
   audio: boolean;
+  /** Speech-to-text model (routed via atranscription) — assignable to the STT tier. */
+  transcription?: boolean;
   reasoning: boolean;
   context_window: number;
   max_output: number;
@@ -79,6 +81,7 @@ export const PROVIDER_COLOURS: Record<string, string> = {
   groq:       "bg-yellow-500/10 text-yellow-600 border-yellow-500/30",
   mistral:    "bg-indigo-500/10 text-indigo-600 border-indigo-500/30",
   together:   "bg-teal-500/10 text-teal-600 border-teal-500/30",
+  deepgram:   "bg-emerald-500/10 text-emerald-600 border-emerald-500/30",
   ollama:     "bg-violet-500/10 text-violet-600 border-violet-500/30",
   vllm:       "bg-violet-500/10 text-violet-600 border-violet-500/30",
   unknown:    "bg-secondary text-muted-foreground border-border",
@@ -94,6 +97,7 @@ export const PROVIDER_ICONS: Record<string, string> = {
   groq:       "⚡",
   mistral:    "🌪",
   together:   "🤝",
+  deepgram:   "🎧",
   ollama:     "🦙",
   vllm:       "⚡",
 };
@@ -203,6 +207,16 @@ export const PROVIDER_GUIDES: Record<string, ProviderGuide> = {
       "Create an account at api.together.ai.",
       "Go to Settings → API Keys.",
       "Copy your key.",
+    ],
+  },
+  deepgram: {
+    description: "Deepgram — speech-to-text for the Note Taker. The only provider here that names speakers (diarization) in multi-speaker meetings.",
+    setup_url: "https://console.deepgram.com/signup",
+    docs_url: "https://developers.deepgram.com/docs",
+    instructions: [
+      "Create an account at console.deepgram.com (free credit included).",
+      "Go to API Keys → Create a New API Key.",
+      "Copy the key, then assign a Deepgram model to the STT tier in the Tiers tab.",
     ],
   },
 };

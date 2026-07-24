@@ -402,6 +402,9 @@ class ProviderKeyStore:
             "mistral":    ("mistral_api_key",     "MISTRAL_API_KEY"),
             "together":   ("together_api_key",    "TOGETHER_API_KEY"),
             "openrouter": ("openrouter_api_key",  "OPENROUTER_API_KEY"),
+            # Speech-to-text provider (Note Taker STT tier). litellm's Deepgram
+            # transcription handler reads DEEPGRAM_API_KEY from the environment.
+            "deepgram":   ("deepgram_api_key",    "DEEPGRAM_API_KEY"),
         }
 
         all_keys = await self.get_all()

@@ -150,6 +150,26 @@ _SETUP_GUIDES: dict[str, dict[str, Any]] = {
         # the generic credential form.
         "env_vars": [],
     },
+    "whatsapp": {
+        "label": "WhatsApp Business",
+        "description": "Manage WhatsApp Business numbers via Meta's official "
+        "Cloud API. Connect one or more numbers — each stored as its own "
+        "per-account encrypted token, so several numbers coexist.",
+        "setup_url": "https://business.facebook.com/wa/manage/",
+        "docs_url": "https://developers.facebook.com/docs/whatsapp/cloud-api",
+        "instructions": (
+            "WhatsApp connects per-number (multi-account) via a guided wizard:\n"
+            "1. Open the WhatsApp app → Connect a number (one-click Embedded "
+            "Signup, or paste your phone-number id + token).\n"
+            "2. The wizard live-tests the credentials against Meta before "
+            "saving. Repeat to add more numbers."
+        ),
+        # NO env_vars: like ClickUp, WhatsApp is multi-account (wa_accounts,
+        # per-account encrypted tokens) via /whatsapp/accounts — not a
+        # process-wide credential. The APIs tab renders a dedicated connector
+        # (list numbers + disconnect + a link to the connect wizard).
+        "env_vars": [],
+    },
     "smtp": {
         "label": "SMTP (email relay)",
         "description": "Generic outbound email via SMTP.",
@@ -324,6 +344,7 @@ _GUIDE_CATEGORIES: dict[str, str] = {
     "gmail":          "email",
     "gmail-send":     "email",
     "clickup":        "productivity",
+    "whatsapp":       "communication",
     "smtp":           "email",
     "serpapi":        "search",
     "apify":          "search",
@@ -383,6 +404,9 @@ def _is_configured(service_name: str, settings: Any) -> bool:
         # server-side env check is deliberately False (never report the legacy
         # global CLICKUP_API_TOKEN as "connected").
         "clickup":       lambda s: False,
+        # WhatsApp is multi-account (wa_accounts) too — the APIs-tab tile
+        # overrides `configured` from the connected-number count on the client.
+        "whatsapp":      lambda s: False,
 
         "smtp":          lambda s: bool(s.smtp_host and s.smtp_username),
         "github":        lambda s: bool(s.github_token),

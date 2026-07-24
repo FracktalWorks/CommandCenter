@@ -706,6 +706,29 @@ Signup access (Tech-Provider / app review) to actually run — so it's wired
 correctly and unit-tested, but its live end-to-end path can only be exercised
 against a configured app.
 
+**W13 — multi-number management — BUILT (parity with the email app).** The queue
+was hardwired to the first account; now an **account switcher** in the nav footer
+lists every connected number (avatar + name + count), switches the active one,
+and links to "Connect another number". The active number scopes the streams,
+chat list, and conversation (`account_id` threaded through
+`fetchStreams`/`fetchChats`/`Conversation`); switching resets the open chat +
+stream and reloads. The default number is selected on load.
+
+**W14 — WhatsApp in the Integrations settings page — BUILT (managed centrally).**
+The integration now appears on `/integrations` as a first-class card, faithfully
+mirroring the **ClickUp** multi-account precedent (both are `wa_accounts`/
+`task_accounts` per-account tokens, not process-wide env keys). Backend: a
+`whatsapp` entry in `_SETUP_GUIDES` (label, docs, no env_vars) + the
+`communication` category + `_is_configured → False` (its connected state is the
+number count). Frontend: `/integrations` overrides `configured` from the real
+`/api/whatsapp/accounts` count (like ClickUp), and a dedicated `WhatsAppConnector`
+side-panel LISTS the connected numbers, DISCONNECTS them
+(`DELETE /whatsapp/accounts/{id}`, which already existed), and links out to the
+in-app connect wizard — so the integration is managed centrally while initiating
+a connection stays in the app (as requested). No new backend lint/test debt (the
+integrations.py registry edit adds zero ruff errors); frontend `next build`
+compiles.
+
 **Tests:** 227 backend unit tests (`pytest -k whatsapp`) — webhook parser,
 persist (incl. voice→pending), post-sync registry, route helpers (signature/
 window/regime), templates, capture, context, Reply Zero, intent (20 cases),

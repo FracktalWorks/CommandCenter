@@ -10,6 +10,7 @@ import type {
   WaMessage,
   WaPulse,
   WaRulePreview,
+  WaSavedReply,
   WaStreams,
   WaTemplate,
 } from "./types";
@@ -44,6 +45,23 @@ async function sendJSON<T>(
     return { ok: true, data };
   } catch {
     return { ok: false, data: null, error: "network error" };
+  }
+}
+
+async function deleteJSON(
+  path: string
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(`/api/whatsapp/${path}`, { method: "DELETE" });
+    if (!res.ok) {
+      const data = (await res.json().catch(() => null)) as {
+        detail?: string;
+      } | null;
+      return { ok: false, error: data?.detail ?? `HTTP ${res.status}` };
+    }
+    return { ok: true };
+  } catch {
+    return { ok: false, error: "network error" };
   }
 }
 
@@ -186,6 +204,33 @@ export function fetchRulesPreview(accountId: string): Promise<WaRulePreview> {
     `rules/preview?account_id=${encodeURIComponent(accountId)}`,
     { items: [], summary: {} }
   );
+}
+
+export function fetchSavedReplies(accountId: string): Promise<WaSavedReply[]> {
+  return getJSON<WaSavedReply[]>(
+    `saved-replies?account_id=${encodeURIComponent(accountId)}`,
+    []
+  );
+}
+
+export function createSavedReply(input: {
+  account_id: string;
+  title: string;
+  body: string;
+  shortcut?: string | null;
+}) {
+  return postJSON<WaSavedReply>("saved-replies", input);
+}
+
+export function updateSavedReply(
+  id: string,
+  patch: Partial<Pick<WaSavedReply, "title" | "body" | "shortcut" | "sort_order">>
+) {
+  return sendJSON<WaSavedReply>(`saved-replies/${id}`, "PATCH", patch);
+}
+
+export function deleteSavedReply(id: string) {
+  return deleteJSON(`saved-replies/${id}`);
 }
 
 export function fetchPulse(accountId: string, days = 7): Promise<WaPulse> {

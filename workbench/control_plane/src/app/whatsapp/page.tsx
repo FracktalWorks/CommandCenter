@@ -22,6 +22,7 @@ import {
   Send,
   Settings,
   Sparkles,
+  Zap,
 } from "lucide-react";
 import {
   captureTask,
@@ -30,6 +31,7 @@ import {
   fetchChats,
   fetchContext,
   fetchMessages,
+  fetchSavedReplies,
   fetchStreams,
   fetchTemplates,
   generateDraft,
@@ -45,6 +47,7 @@ import {
   type WaChat,
   type WaChatContext,
   type WaMessage,
+  type WaSavedReply,
   type WaStreams,
   type WaTemplate,
   type WaWaitingOn,
@@ -214,6 +217,12 @@ export default function WhatsAppPage() {
             <Activity className="h-3.5 w-3.5" /> Pulse
           </Link>
           <Link
+            href="/whatsapp/settings/replies"
+            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
+          >
+            <Zap className="h-3.5 w-3.5" /> Saved replies
+          </Link>
+          <Link
             href="/whatsapp/settings/categories"
             className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
           >
@@ -357,6 +366,8 @@ function Conversation({
   const [context, setContext] = useState<WaChatContext | null>(null);
   const [templates, setTemplates] = useState<WaTemplate[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
+  const [savedReplies, setSavedReplies] = useState<WaSavedReply[]>([]);
+  const [showSaved, setShowSaved] = useState(false);
   const [showSnooze, setShowSnooze] = useState(false);
   const isSnoozed = Boolean(
     chat.snoozed_until && new Date(chat.snoozed_until) > new Date()
@@ -386,6 +397,10 @@ function Conversation({
     if (showTemplates && !templates.length)
       fetchTemplates(accountId).then(setTemplates);
   }, [showTemplates, templates.length, accountId]);
+  useEffect(() => {
+    if (showSaved && !savedReplies.length)
+      fetchSavedReplies(accountId).then(setSavedReplies);
+  }, [showSaved, savedReplies.length, accountId]);
 
   const doSendText = useCallback(async () => {
     if (!text.trim() || sending) return;
@@ -511,18 +526,69 @@ function Conversation({
           )}
           {chat.window_open ? (
             <div>
-              <button
-                onClick={doDraft}
-                disabled={drafting}
-                className="mb-2 inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary disabled:opacity-50"
-              >
-                {drafting ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Sparkles className="h-3 w-3" />
-                )}
-                Suggest reply
-              </button>
+              <div className="mb-2 flex items-center gap-2">
+                <button
+                  onClick={doDraft}
+                  disabled={drafting}
+                  className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-2.5 py-1 text-[11px] font-semibold text-primary disabled:opacity-50"
+                >
+                  {drafting ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Sparkles className="h-3 w-3" />
+                  )}
+                  Suggest reply
+                </button>
+                <div className="relative">
+                  <button
+                    onClick={() => setShowSaved((v) => !v)}
+                    className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-semibold ${
+                      showSaved
+                        ? "bg-muted text-foreground"
+                        : "bg-muted/50 text-muted-foreground"
+                    }`}
+                  >
+                    <Zap className="h-3 w-3" /> Saved
+                  </button>
+                  {showSaved && (
+                    <div className="absolute bottom-8 left-0 z-10 max-h-56 w-72 overflow-y-auto rounded-lg border border-border bg-background shadow-lg">
+                      {savedReplies.length === 0 ? (
+                        <Link
+                          href="/whatsapp/settings/replies"
+                          className="block p-3 text-[11px] text-muted-foreground hover:bg-muted/50"
+                        >
+                          No saved replies yet — add some →
+                        </Link>
+                      ) : (
+                        savedReplies.map((r) => (
+                          <button
+                            key={r.id}
+                            onClick={() => {
+                              setText((t) => (t ? `${t}\n${r.body}` : r.body));
+                              setShowSaved(false);
+                            }}
+                            className="block w-full border-b border-border px-3 py-2 text-left last:border-0 hover:bg-muted/50"
+                          >
+                            <div className="flex items-center gap-1.5">
+                              <span className="text-[12px] font-semibold">
+                                {r.title}
+                              </span>
+                              {r.shortcut && (
+                                <span className="font-mono text-[9.5px] text-muted-foreground">
+                                  {r.shortcut}
+                                </span>
+                              )}
+                            </div>
+                            <div className="truncate text-[11px] text-muted-foreground">
+                              {r.body}
+                            </div>
+                          </button>
+                        ))
+                      )}
+                    </div>
+                  )}
+                </div>
+              </div>
               <div className="flex items-end gap-2">
                 <textarea
                   value={text}

@@ -27,6 +27,7 @@ import {
   listTemplates,
   uploadRecording,
 } from "./lib/api";
+import { useViewMode } from "@/components/ViewModeProvider";
 import GlossaryModal from "./components/GlossaryModal";
 import type { MeetingListItem, NoteTemplate } from "./lib/types";
 
@@ -43,6 +44,7 @@ const STATUS_META: Record<
 
 export default function NotesPage() {
   const router = useRouter();
+  const { isMobile } = useViewMode();
   const [meetings, setMeetings] = useState<MeetingListItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [uploading, setUploading] = useState(false);
@@ -119,14 +121,60 @@ export default function NotesPage() {
 
   return (
     <div className="flex flex-col h-full">
-      <div className="flex flex-col gap-3 px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0 sm:flex-row sm:items-center sm:justify-between">
+      <div
+        className={`flex px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0 gap-3 ${
+          isMobile ? "flex-col" : "flex-row items-center justify-between"
+        }`}
+      >
         <div className="min-w-0">
           <h1 className="text-base sm:text-lg font-bold text-foreground">Notes</h1>
-          <p className="hidden sm:block text-xs text-muted-foreground mt-0.5">
-            AI note taker — record meetings, get grounded notes
-          </p>
+          {!isMobile && (
+            <p className="text-xs text-muted-foreground mt-0.5">
+              AI note taker — record meetings, get grounded notes
+            </p>
+          )}
         </div>
-        <div className="flex items-center gap-2">
+
+        {/* The hidden file input is triggered by the desktop Upload button AND
+            the mobile bottom-nav Upload tab — keep it outside the clusters so
+            it's always in the DOM. */}
+        <input
+          ref={fileInput}
+          type="file"
+          accept="audio/*,.webm,.m4a,.mp4"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0];
+            if (f) void onFilePicked(f);
+            e.target.value = "";
+          }}
+        />
+
+        {/* Mobile: only the template picker — Record / Upload / Glossary are in
+            the bottom nav (thumb-reachable), so the header stays uncluttered. */}
+        {isMobile && templates.length > 0 && (
+          <label className="flex items-center gap-2 rounded-lg border border-border bg-card px-3 py-2">
+            <span className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+              Template
+            </span>
+            <select
+              value={templateKey}
+              onChange={(e) => setTemplateKey(e.target.value)}
+              aria-label="Notes template"
+              className="min-w-0 flex-1 bg-transparent text-sm text-foreground focus:outline-none"
+            >
+              {templates.map((t) => (
+                <option key={t.key} value={t.key}>
+                  {t.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+
+        {/* Desktop: the full action cluster (no bottom nav on desktop). */}
+        {!isMobile && (
+        <div className="flex items-center gap-2 flex-wrap justify-end">
           <button
             onClick={() => setShowGlossary(true)}
             className="shrink-0 p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
@@ -141,7 +189,7 @@ export default function NotesPage() {
               onChange={(e) => setTemplateKey(e.target.value)}
               title="Notes template — shapes the summary for this meeting type"
               aria-label="Notes template"
-              className="min-w-0 flex-1 sm:flex-none rounded-lg border border-border bg-card px-2 py-2 text-sm text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring tech-transition"
+              className="rounded-lg border border-border bg-card px-2 py-2 text-sm text-muted-foreground hover:text-foreground focus:outline-none focus:ring-1 focus:ring-ring tech-transition"
             >
               {templates.map((t) => (
                 <option key={t.key} value={t.key}>
@@ -152,18 +200,16 @@ export default function NotesPage() {
           )}
           <button
             onClick={onRecord}
-            className="shrink-0 rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+            className="shrink-0 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
           >
             <span className="flex items-center gap-1.5">
               <Mic className="w-4 h-4" /> Record
             </span>
           </button>
           <button
-            className="shrink-0 rounded-lg border border-border px-2.5 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
+            className="shrink-0 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
-            aria-label={uploading ? "Uploading…" : "Upload a recording"}
-            title="Upload a recording"
           >
             <span className="flex items-center gap-1.5">
               {uploading ? (
@@ -171,23 +217,11 @@ export default function NotesPage() {
               ) : (
                 <Upload className="w-4 h-4" />
               )}
-              <span className="hidden sm:inline">
-                {uploading ? "Uploading…" : "Upload"}
-              </span>
+              {uploading ? "Uploading…" : "Upload"}
             </span>
           </button>
-          <input
-            ref={fileInput}
-            type="file"
-            accept="audio/*,.webm,.m4a,.mp4"
-            className="hidden"
-            onChange={(e) => {
-              const f = e.target.files?.[0];
-              if (f) void onFilePicked(f);
-              e.target.value = "";
-            }}
-          />
         </div>
+        )}
       </div>
 
       <div className="flex-1 overflow-y-auto">

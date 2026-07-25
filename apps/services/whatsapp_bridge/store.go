@@ -33,10 +33,11 @@ func OpenMetaStore(ctx context.Context, path string) (*MetaStore, error) {
 		jid        TEXT NOT NULL DEFAULT ''
 	);
 	CREATE TABLE IF NOT EXISTS media (
-		media_id  TEXT PRIMARY KEY,
 		account_id TEXT NOT NULL,
+		media_id  TEXT NOT NULL,
 		mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
-		proto     BLOB NOT NULL
+		proto     BLOB NOT NULL,
+		PRIMARY KEY (account_id, media_id)
 	);`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
@@ -54,12 +55,6 @@ func (m *MetaStore) PutSession(ctx context.Context, accountID, jid string) error
 		`INSERT INTO sessions (account_id, jid) VALUES (?, ?)
 		 ON CONFLICT(account_id) DO UPDATE SET jid = excluded.jid`,
 		accountID, jid)
-	return err
-}
-
-// DeleteSession forgets an account (e.g. after logout).
-func (m *MetaStore) DeleteSession(ctx context.Context, accountID string) error {
-	_, err := m.db.ExecContext(ctx, `DELETE FROM sessions WHERE account_id = ?`, accountID)
 	return err
 }
 
@@ -81,29 +76,22 @@ func (m *MetaStore) AllSessions(ctx context.Context) (map[string]string, error) 
 	return out, rows.Err()
 }
 
-// AccountForJID resolves a device JID back to the account that owns it.
-func (m *MetaStore) AccountForJID(ctx context.Context, jid string) (string, bool) {
-	var acc string
-	err := m.db.QueryRowContext(ctx, `SELECT account_id FROM sessions WHERE jid = ?`, jid).Scan(&acc)
-	if err != nil {
-		return "", false
-	}
-	return acc, true
-}
-
 // PutMedia caches a downloadable message proto so /media can fetch it later.
-func (m *MetaStore) PutMedia(ctx context.Context, mediaID, accountID, mime string, proto []byte) error {
+// Keyed by (account_id, media_id): the same group message received by two paired
+// numbers shares a whatsmeow message id, so scoping by account keeps them apart.
+func (m *MetaStore) PutMedia(ctx context.Context, accountID, mediaID, mime string, proto []byte) error {
 	_, err := m.db.ExecContext(ctx,
-		`INSERT INTO media (media_id, account_id, mime_type, proto) VALUES (?, ?, ?, ?)
-		 ON CONFLICT(media_id) DO UPDATE SET proto = excluded.proto, mime_type = excluded.mime_type`,
-		mediaID, accountID, mime, proto)
+		`INSERT INTO media (account_id, media_id, mime_type, proto) VALUES (?, ?, ?, ?)
+		 ON CONFLICT(account_id, media_id) DO UPDATE SET proto = excluded.proto, mime_type = excluded.mime_type`,
+		accountID, mediaID, mime, proto)
 	return err
 }
 
-// GetMedia returns the cached proto + mime for a media_id.
-func (m *MetaStore) GetMedia(ctx context.Context, mediaID string) (proto []byte, mime string, ok bool) {
+// GetMedia returns the cached proto + mime for one account's media_id.
+func (m *MetaStore) GetMedia(ctx context.Context, accountID, mediaID string) (proto []byte, mime string, ok bool) {
 	err := m.db.QueryRowContext(ctx,
-		`SELECT proto, mime_type FROM media WHERE media_id = ?`, mediaID).Scan(&proto, &mime)
+		`SELECT proto, mime_type FROM media WHERE account_id = ? AND media_id = ?`,
+		accountID, mediaID).Scan(&proto, &mime)
 	if err != nil {
 		return nil, "", false
 	}

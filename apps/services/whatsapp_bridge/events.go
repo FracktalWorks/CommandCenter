@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waE2E"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
@@ -50,16 +51,16 @@ func (m *SessionManager) onMessage(s *Session, e *events.Message) {
 	if !e.Info.IsGroup && e.Info.Sender.User != "" {
 		contacts = append(contacts, bridgeContact{
 			WAID:        e.Info.Sender.User,
-			PhoneNumber: "+" + e.Info.Sender.User,
+			PhoneNumber: phoneOf(e.Info.Sender),
 			Name:        e.Info.PushName,
 		})
 	}
 
 	if media != nil {
 		// Cache the message proto so a later /media call can re-download it;
-		// key the media on the message id (one media per message here).
+		// key the media on (account, message id) — one media per message here.
 		if raw, err := proto.Marshal(e.Message); err == nil {
-			_ = m.meta.PutMedia(ctx, e.Info.ID, s.accountID, media.mime, raw)
+			_ = m.meta.PutMedia(ctx, s.accountID, e.Info.ID, media.mime, raw)
 		}
 		msg.Media = &bridgeMedia{
 			WAMediaID: e.Info.ID,
@@ -90,6 +91,17 @@ func chatKindOf(isGroup bool) string {
 		return "group"
 	}
 	return "dm"
+}
+
+// phoneOf returns the "+E.164" phone for a sender, but ONLY when the JID is a
+// real phone-number address. Under WhatsApp's LID addressing the User part is an
+// opaque numeric id, not a phone — prefixing it with "+" would be a bogus number,
+// so we return "" and let the gateway fall back to the push name.
+func phoneOf(jid types.JID) string {
+	if jid.Server == types.DefaultUserServer && jid.User != "" {
+		return "+" + jid.User
+	}
+	return ""
 }
 
 // mediaInfo is the normalized media metadata extracted from a message proto.

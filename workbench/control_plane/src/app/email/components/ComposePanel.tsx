@@ -4,12 +4,14 @@ import { useState, useEffect, useRef } from "react";
 import { X, Loader2, Paperclip } from "lucide-react";
 import { useEmailStore } from "../lib/emailStore";
 import {
-  fileToSendAttachment, composeAssist,
+  fileToSendAttachment,
   type SendAttachment, type ArtifactAttachmentRef,
 } from "../lib/api";
+import { useDraftSession } from "../lib/useDraftSession";
+import { DraftAssistant } from "./DraftAssistant";
 import { splitQuotedText } from "../lib/quoting";
 import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
-import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
+import { ComposerQuote, AiButton } from "./ComposerAI";
 
 interface ComposePanelProps {
   open: boolean;
@@ -65,10 +67,10 @@ export function ComposePanel({
   const [body, setBody] = useState(replyToBody || "");
   const [sending, setSending] = useState(false);
   const [sendError, setSendError] = useState<string | null>(null);
-  // AI draft/improve bar (sparkles button in the footer).
+  // AI draft/refine panel (sparkles button in the footer). The session owns
+  // the live backend steps and the per-round revision history.
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
   const { saveDraft, sendDraft, deleteEmail } = useEmailStore();
   // Gmail-style auto-save: the composed message persists as a Drafts row as you
   // type (draftIdRef holds the local id so repeated saves update it in place).
@@ -78,6 +80,13 @@ export function ComposePanel({
   // Uploaded files (base64) + picked AI artifacts (resolved server-side).
   const [attachments, setAttachments] = useState<SendAttachment[]>([]);
   const [artifacts, setArtifacts] = useState<ArtifactAttachmentRef[]>([]);
+  const ai = useDraftSession({
+    onBody: (next) => {
+      dirty.current = true;
+      setBody(next);
+    },
+    onError: setSendError,
+  });
 
   // A fresh compose session each time the window opens: re-sync fields from the
   // (possibly new) props and forget any prior draft so we don't update it.
@@ -96,6 +105,7 @@ export function ComposePanel({
     setArtifacts(initialArtifacts ?? []);
     setAiOpen(false);
     setAiInstruction("");
+    ai.reset(); // a new compose window starts a fresh drafting session
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -103,41 +113,32 @@ export function ComposePanel({
   const combinedBody = () =>
     quote ? `${body.replace(/\s+$/, "")}\n\n${quote}` : body;
 
-  /** Draft or improve with AI. Operates only on the NEW text — any inline quote
+  /** Draft or refine with AI. Operates only on the NEW text — any inline quote
    *  in the body is split off (and the separate `quote` prop is never sent) so
-   *  the AI never rewrites the trailing email. */
+   *  the AI never rewrites the trailing email. Each run refines the CURRENT
+   *  text, so the panel stays open for as many rounds as the user wants. */
   const runAi = async () => {
-    if (!accountId || aiBusy) return;
+    if (!accountId || ai.busy) return;
     setSendError(null);
-    setAiBusy(true);
-    try {
-      const { main, quoted } = splitQuotedText(body);
-      const toArr = to.split(",").map((s) => s.trim()).filter(Boolean);
-      const res = await composeAssist({
+    const { main, quoted } = splitQuotedText(body);
+    const toArr = to.split(",").map((s) => s.trim()).filter(Boolean);
+    const instruction = aiInstruction.trim();
+    const draft = await ai.run(
+      {
         accountId,
         body: main,
-        instruction: aiInstruction.trim(),
+        instruction,
         mode: replyToMessageId ? "reply" : "new",
         // The local message id lets the drafter load the replied-to thread +
         // direction context (parity with the inline reply's "Draft with AI").
         messageId,
         to: toArr,
         subject,
-      });
-      if (res.draft) {
-        dirty.current = true;
-        // Reattach any inline quote that lived in the body so we don't drop it.
-        setBody(quoted ? `${res.draft.replace(/\s+$/, "")}\n\n${quoted}` : res.draft);
-        setAiOpen(false);
-        setAiInstruction("");
-      } else {
-        setSendError("AI couldn't draft this — try adding a quick instruction.");
-      }
-    } catch (err: any) {
-      setSendError(err?.message || "AI draft failed");
-    } finally {
-      setAiBusy(false);
-    }
+      },
+      { instruction, quote: quoted },
+    );
+    // The bar stays open on success: the next instruction refines this draft.
+    if (draft) setAiInstruction("");
   };
 
   /** Read picked files into base64 and append them to the attachments. */
@@ -341,12 +342,19 @@ export function ComposePanel({
 
         {/* AI draft/improve bar */}
         {aiOpen && (
-          <AiAssistBar
+          <DraftAssistant
             instruction={aiInstruction}
             onInstruction={setAiInstruction}
-            busy={aiBusy}
+            busy={ai.busy}
             hasText={body.trim().length > 0}
+            hasDraft={ai.hasDraft}
+            steps={ai.steps}
+            thinking={ai.thinking}
+            revisions={ai.revisions}
+            activeRevision={ai.activeRevision}
+            elapsedMs={ai.elapsedMs}
             onRun={runAi}
+            onRestore={(id) => ai.restore(id, splitQuotedText(body).quoted)}
             onClose={() => setAiOpen(false)}
           />
         )}

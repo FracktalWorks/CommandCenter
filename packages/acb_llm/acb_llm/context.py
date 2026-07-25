@@ -314,6 +314,89 @@ async def acompletion_with_fallback(
     raise last_exc or RuntimeError("LLM completion failed (no attempts made)")
 
 
+async def acompletion_stream_text(
+    *,
+    model: str,
+    messages: list[dict[str, Any]],
+    max_tokens: int = 1024,
+    temperature: float = 0.2,
+    on_delta: Any = None,
+    **extra: Any,
+) -> tuple[str, str]:
+    """Streaming counterpart of :func:`acompletion_with_fallback` for callers
+    that want the TEXT (not the response object) plus live deltas.
+
+    Fits the input to ``model``'s window, streams the completion, and awaits
+    ``on_delta(kind, text)`` for every chunk — ``kind`` is ``"reasoning"``
+    (reasoning-tier models thinking out loud, e.g. deepseek-reasoner's
+    ``reasoning_content``) or ``"content"`` (answer text). Returns
+    ``(full_content, used_model)``.
+
+    No model-fallback chain here: a streaming caller has usually already
+    surfaced partial output, so silently restarting on another model would
+    duplicate it. On failure the error propagates and the caller decides
+    (drafting falls back to its non-streaming path / neutral template).
+
+    Usage is emitted post-stream via ``litellm.stream_chunk_builder`` so
+    streamed calls stay visible in observability like non-streamed ones.
+    """
+    import litellm as _litellm
+    from litellm import acompletion
+
+    from acb_llm.client import (
+        _emit_usage,
+        _ensure_keys_loaded,
+        ensure_model_registered,
+    )
+
+    _source = _infer_app_source()
+    _litellm.drop_params = True
+    _litellm.suppress_debug_info = True
+    await _ensure_keys_loaded()
+
+    resolved = resolve_underlying_model(model)
+    ensure_model_registered(resolved)
+    fitted, _was_truncated = fit_messages_to_context(
+        messages, model, max_output_tokens=max_tokens,
+    )
+    response = await acompletion(
+        model=resolved, messages=fitted,
+        temperature=temperature, max_tokens=max_tokens,
+        stream=True, **extra,
+    )
+    content_parts: list[str] = []
+    chunks: list[Any] = []
+    async for chunk in response:
+        chunks.append(chunk)
+        try:
+            delta = chunk.choices[0].delta
+        except (AttributeError, IndexError):
+            continue
+        reasoning = getattr(delta, "reasoning_content", None)
+        if reasoning and on_delta is not None:
+            try:
+                await on_delta("reasoning", str(reasoning))
+            except Exception:  # noqa: BLE001 — progress is best-effort
+                pass
+        text_piece = getattr(delta, "content", None)
+        if text_piece:
+            content_parts.append(str(text_piece))
+            if on_delta is not None:
+                try:
+                    await on_delta("content", str(text_piece))
+                except Exception:  # noqa: BLE001
+                    pass
+    # Rebuild a response object from the chunks so usage/cost accounting fires
+    # for streamed calls too. Best-effort — never fail the draft over it.
+    try:
+        rebuilt = _litellm.stream_chunk_builder(chunks, messages=fitted)
+        if rebuilt is not None:
+            _emit_usage(resolved, "", rebuilt, source=_source)
+    except Exception:  # noqa: BLE001
+        pass
+    return "".join(content_parts), resolved
+
+
 # ── Server-side run-context assembler (C2) ──────────────────────────────────
 # The single INPUT-side context builder. Before this, each orchestrator path
 # re-sliced the client-sent history with its own COUNT cap (12/16/20/50 msgs)

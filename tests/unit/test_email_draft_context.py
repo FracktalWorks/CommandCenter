@@ -235,6 +235,7 @@ async def test_compose_assist_reply_empty_body_uses_shared_reply_drafter() -> No
 
     async def fake_agent_draft(email, *a, **k):
         calls["agent_email"] = email
+        calls["agent_kwargs"] = k
         return "drafted from the template"
 
     async def fake_compose(**k):
@@ -246,7 +247,8 @@ async def test_compose_assist_reply_empty_body_uses_shared_reply_drafter() -> No
             patch.object(_drafting, "_load_assistant_about",
                          AsyncMock(return_value=("about", "sig"))), \
             patch.object(_drafting, "_account_models",
-                         AsyncMock(return_value={"draft": "tier-powerful"})), \
+                         AsyncMock(return_value={"draft": "tier-powerful",
+                                                 "compose": "tier-fast"})), \
             patch.object(_drafting, "_build_reply_context",
                          AsyncMock(return_value=ctx)), \
             patch.object(_drafting, "_agent_draft_reply", fake_agent_draft), \
@@ -260,6 +262,9 @@ async def test_compose_assist_reply_empty_body_uses_shared_reply_drafter() -> No
     assert res["draft"] == "drafted from the template"
     assert "compose" not in calls
     assert calls["agent_email"]["body"] == "TEMPLATE_BODY"
+    # Manual "Draft with AI" is interactive → it runs on the account's COMPOSE
+    # model (fast by default), never the background draft model.
+    assert calls["agent_kwargs"]["model"] == "tier-fast"
 
 
 async def test_compose_assist_improve_passes_reply_to_body() -> None:
@@ -280,7 +285,8 @@ async def test_compose_assist_improve_passes_reply_to_body() -> None:
             patch.object(_drafting, "_load_assistant_about",
                          AsyncMock(return_value=("about", "sig"))), \
             patch.object(_drafting, "_account_models",
-                         AsyncMock(return_value={"draft": "tier-powerful"})), \
+                         AsyncMock(return_value={"draft": "tier-powerful",
+                                                 "compose": "tier-fast"})), \
             patch.object(_drafting, "_build_reply_context",
                          AsyncMock(return_value=ctx)), \
             patch.object(_drafting, "_agent_draft_reply", fake_agent_draft), \
@@ -293,6 +299,8 @@ async def test_compose_assist_improve_passes_reply_to_body() -> None:
     assert res["draft"] == "improved draft"
     assert calls["reply_to_body"] == "TEMPLATE_BODY"
     assert calls["current_body"] == "my rough draft"
+    # Interactive improve runs on the compose model too.
+    assert calls["model"] == "tier-fast"
 
 
 async def test_compose_assist_reply_empty_body_passes_user_instruction() -> None:
@@ -312,7 +320,8 @@ async def test_compose_assist_reply_empty_body_passes_user_instruction() -> None
             patch.object(_drafting, "_load_assistant_about",
                          AsyncMock(return_value=("about", "sig"))), \
             patch.object(_drafting, "_account_models",
-                         AsyncMock(return_value={"draft": "tier-powerful"})), \
+                         AsyncMock(return_value={"draft": "tier-powerful",
+                                                 "compose": "tier-fast"})), \
             patch.object(_drafting, "_build_reply_context",
                          AsyncMock(return_value=ctx)), \
             patch.object(_drafting, "_agent_draft_reply", fake_agent_draft):

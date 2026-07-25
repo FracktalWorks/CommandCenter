@@ -2010,7 +2010,7 @@ export async function draftReplySmart(
  * improve in place. For a reply/forward, pass `messageId` so the original thread
  * is loaded as context (never quoted back). Returns the drafted/improved body.
  */
-export async function composeAssist(args: {
+export interface ComposeAssistArgs {
   accountId: string;
   body?: string;
   instruction?: string;
@@ -2018,7 +2018,11 @@ export async function composeAssist(args: {
   messageId?: string;
   to?: string[];
   subject?: string;
-}): Promise<{ draft: string; skipped?: string }> {
+}
+
+export async function composeAssist(
+  args: ComposeAssistArgs
+): Promise<{ draft: string; skipped?: string }> {
   return gatewayFetch("/email/compose-assist", {
     method: "POST",
     body: JSON.stringify({
@@ -2031,6 +2035,107 @@ export async function composeAssist(args: {
       subject: args.subject ?? "",
     }),
   });
+}
+
+/** One structured step event from the drafting backend. */
+export interface ComposeActivityEvent {
+  /** "stage" (context/memory/draft), "qualify", or "consult". */
+  kind?: string;
+  id?: string;
+  status?: "start" | "done" | "failed";
+  detail?: string;
+  /** qualify: what kind of email this is, and how many consults it needs. */
+  emailKind?: string;
+  consults?: number;
+  /** consult: the specialist asked, the question put to it, and its answer. */
+  agent?: string;
+  question?: string;
+  answer?: string;
+}
+
+/** Progress callbacks for the streaming "Draft with AI" (all optional). */
+export interface ComposeAssistStreamHandlers {
+  /** Structured backend steps, for the composer's activity panel. */
+  onActivity?: (event: ComposeActivityEvent) => void;
+  /** Live model output. kind "content" is draft text (append to the body);
+   *  "reasoning" is the model thinking out loud (show, don't insert). */
+  onDelta?: (kind: "reasoning" | "content", text: string) => void;
+}
+
+/**
+ * Streaming variant of {@link composeAssist}: same request, but progress and
+ * draft tokens arrive live over SSE so the composer can narrate what the
+ * backend is doing instead of holding a bare spinner. Resolves with the FINAL
+ * cleaned draft (always prefer it over concatenated deltas). Falls back to the
+ * non-streaming endpoint transparently if the stream can't be opened.
+ */
+export async function composeAssistStream(
+  args: ComposeAssistArgs,
+  handlers: ComposeAssistStreamHandlers = {}
+): Promise<{ draft: string; skipped?: string }> {
+  let res: Response;
+  try {
+    res = await fetch("/api/email/compose-assist/stream", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        account_id: args.accountId,
+        body: args.body ?? "",
+        instruction: args.instruction ?? "",
+        mode: args.mode ?? "new",
+        message_id: args.messageId,
+        to: args.to,
+        subject: args.subject ?? "",
+      }),
+    });
+    if (!res.ok || !res.body) throw new Error(`stream ${res.status}`);
+  } catch {
+    // Older gateway / proxy without the stream route — degrade silently.
+    return composeAssist(args);
+  }
+
+  const reader = res.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let done: { draft: string; skipped?: string } | null = null;
+  let streamError: string | null = null;
+  for (;;) {
+    const { value, done: eof } = await reader.read();
+    if (eof) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop() ?? ""; // keep the trailing partial line
+    for (const line of lines) {
+      if (!line.startsWith("data: ")) continue;
+      let evt: ComposeActivityEvent & {
+        type?: string;
+        text?: string;
+        draft?: string;
+        skipped?: string;
+        error?: string;
+      };
+      try {
+        evt = JSON.parse(line.slice(6));
+      } catch {
+        continue;
+      }
+      if (evt.type === "activity") {
+        const { type: _t, text: _x, draft: _d, ...event } = evt;
+        handlers.onActivity?.(event);
+      } else if (evt.type === "delta" && evt.text) {
+        handlers.onDelta?.(
+          evt.kind === "reasoning" ? "reasoning" : "content",
+          evt.text
+        );
+      } else if (evt.type === "done") {
+        done = { draft: evt.draft ?? "", skipped: evt.skipped };
+      } else if (evt.type === "error") {
+        streamError = evt.error || "draft failed";
+      }
+    }
+  }
+  if (done) return done;
+  throw new Error(streamError ?? "draft stream ended without a result");
 }
 
 // ── Digest ──────────────────────────────────────────────────────────────────

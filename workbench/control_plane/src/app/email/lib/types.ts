@@ -515,9 +515,12 @@ export interface AssistantSettings {
   cold_email_blocker: ColdBlockerMode;
   /** Model for rule evaluation / classification / labeling (default tier-fast). */
   rule_model: string;
-  /** Model for draft writing — replies, follow-ups, DRAFT_EMAIL rule actions
+  /** Model for BACKGROUND draft writing — follow-ups, DRAFT_EMAIL rule actions
    *  (default tier-powerful). */
   draft_model: string;
+  /** Model for MANUAL drafting — the composer's "Draft with AI" button, where
+   *  the user is waiting (default tier-fast). */
+  compose_model: string;
   /** Model the interactive email chat panel uses (default tier-powerful). */
   chat_model: string;
   /** Scheduled inbox-digest cadence. */

@@ -5,8 +5,7 @@
 // intent, and the busiest chats. Calm and honest — no vanity unread counts.
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Clock, Loader2 } from "lucide-react";
+import { Activity, Clock, Loader2 } from "lucide-react";
 import { fetchAccounts, fetchPulse, pickDefaultAccount } from "../lib/api";
 import type { WaPulse } from "../lib/types";
 
@@ -75,14 +74,9 @@ export default function InsightsPage() {
   const maxIntent = Math.max(1, ...pulse.by_intent.map((i) => i.count));
 
   return (
-    <div className="mx-auto max-w-3xl p-6 text-foreground">
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-6 text-foreground">
       <div className="mb-5 flex items-center gap-3">
-        <Link
-          href="/whatsapp"
-          className="flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Queue
-        </Link>
+        <Activity className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Pulse</h1>
         <div className="ml-auto flex items-center gap-1 rounded-lg border border-border p-0.5 text-[11px]">
           {[7, 30].map((d) => (

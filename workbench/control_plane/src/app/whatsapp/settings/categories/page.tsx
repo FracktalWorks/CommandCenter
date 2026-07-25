@@ -6,8 +6,7 @@
 // meaningful cell should draw the eye; defaults stay quiet.
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { Loader2, Tags } from "lucide-react";
 import {
   bootstrapCategories,
   fetchAccounts,
@@ -77,14 +76,9 @@ export default function CategoriesSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-6 text-foreground">
-      <div className="mb-5 flex items-center gap-3">
-        <Link
-          href="/whatsapp"
-          className="flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Queue
-        </Link>
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-6 text-foreground">
+      <div className="mb-5 flex items-center gap-2">
+        <Tags className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Categories</h1>
         <span className="text-[11px] text-muted-foreground">
           labels, upgraded to policy

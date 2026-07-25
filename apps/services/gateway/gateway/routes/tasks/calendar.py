@@ -956,64 +956,27 @@ async def plan_day(
         await db.close()
 
 
-# ── Auto-reschedule / roll-over (P3) ─────────────────────────────────────────
+# ── Roll-over = RETURN unfinished tasks to the unscheduled list ──────────────
+# Overdue-incomplete FLEXIBLE blocks (a fixed meeting is never touched). The
+# manual action + the nightly job both RELEASE these back to the list so the
+# user re-plans them deliberately, rather than the system auto-cramming a day.
 _OVERDUE_WHERE = (
     " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
     " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
     " AND i.disposition NOT IN ('DONE','TRASH')"
-    # never roll a FIXED (meeting) block forward — only task-blocks move
     " AND coalesce(i.flexible, true) = true"
     " AND i.scheduled_start IS NOT NULL AND i.scheduled_end < :now"
 )
-_TODAY_BUSY_WHERE = (
-    " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
-    " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
-    " AND i.disposition NOT IN ('DONE','TRASH')"
-    " AND i.scheduled_start IS NOT NULL"
-    " AND i.scheduled_start < :win_end AND i.scheduled_end > :win_start"
-    " AND i.scheduled_end >= :now"
-)
-
-
-def _pack_rollover(
-    overdue: list[Any], free: list[list[datetime]],
-    windows: list[tuple[datetime, datetime, str]], buffer_mins: int,
-    now: datetime,
-) -> tuple[list[tuple[Any, datetime, datetime, str]], list[Any]]:
-    """Pack overdue-incomplete items into `free` (nearest-due first, preserving
-    each block's duration). Returns (placements=[(item, start, end, note)],
-    unplaced_items). Shared by the endpoint (→ proposal) and the auto-rollover
-    background job (→ applies + logs)."""
-    far = datetime.max.replace(tzinfo=UTC)
-    overdue.sort(key=lambda m: (_parse_iso(m.due_at) or far,
-                                _parse_iso(m.scheduled_start) or now))
-    placements: list[tuple[Any, datetime, datetime, str]] = []
-    unplaced: list[Any] = []
-    for m in overdue:
-        bs = _parse_iso(m.scheduled_start)
-        be = _parse_iso(m.scheduled_end)
-        dur = max(15, int((be - bs).total_seconds() / 60)) if bs and be else 30
-        pref = m.energy if m.energy in _ENERGY else None
-        placed = _place_one(free, dur, pref, windows, buffer_mins)
-        if placed is None:
-            unplaced.append(m)
-            continue
-        s, e = placed
-        due = _parse_iso(m.due_at)
-        note = "Rolled over from " + (bs.strftime("%b %d") if bs else "earlier")
-        if due and due < now:
-            note += " · due date passed"
-        placements.append((m, s, e, note))
-    return placements, unplaced
 
 
 @router.post("/calendar/rollover", response_model=DayPlan)
 async def rollover_day(
     req: PlanDayRequest, user: UserContext = Depends(get_current_user),
 ):
-    """Roll INCOMPLETE past time-blocks forward into the target day's open slots
-    (deadline-aware, nearest-due first). Fixes the 'fell behind → the plan is
-    stale' failure. NO writes: returns a proposal the client applies. §6."""
+    """Return INCOMPLETE past time-blocks to the unscheduled list, so the user
+    can re-plan them (rather than auto-cramming them onto a day). The overdue
+    tasks come back as `evicted` — apply clears their schedule and they land in
+    the unscheduled rail. NO writes here: it's a proposal the client applies."""
     win_start, win_end = _parse_iso(req.day_start), _parse_iso(req.day_end)
     if not win_start or not win_end or win_end <= win_start:
         raise HTTPException(
@@ -1026,55 +989,16 @@ async def rollover_day(
             text(ITEM_SELECT + _OVERDUE_WHERE), {"uid": uid, "now": now},
         )).fetchall()
         overdue = [_row_to_item(r) for r in over_rows]
-        busy_rows = (await db.execute(
-            text(ITEM_SELECT + _TODAY_BUSY_WHERE),
-            {"uid": uid, "win_start": win_start, "win_end": win_end, "now": now},
-        )).fetchall()
-        busy: list[tuple[datetime, datetime]] = []
-        for r in busy_rows:
-            bs = _parse_iso(getattr(r, "scheduled_start", None))
-            be = _parse_iso(getattr(r, "scheduled_end", None))
-            if bs and be and be > bs:
-                busy.append((bs, be))
-
-        _lunch = _lunch_interval(
-            await _planning_prefs(db, uid), win_start, win_end)
-        if _lunch:
-            busy.append(_lunch)
-        _tb, _, _, _ = _expand_templates(
-            await _day_templates(db, uid), win_start, win_end)
-        busy.extend(_tb)
-        free = _free_intervals(win_start, win_end, busy, now)
-        windows: list[tuple[datetime, datetime, str]] = []
-        for w in req.energy_windows:
-            ws, we = _parse_iso(w.start), _parse_iso(w.end)
-            if ws and we and we > ws and w.energy in _ENERGY:
-                windows.append((ws, we, w.energy))
-
-        placements, unplaced_items = _pack_rollover(
-            overdue, free, windows, req.buffer_mins, now)
-        blocks = [
-            PlanBlock(
-                item_id=m.id, title=m.title,
-                start=s.isoformat(), end=e.isoformat(),
-                energy=m.energy if m.energy in _ENERGY else None,
-                rationale=note)
-            for (m, s, e, note) in placements
+        evicted = [
+            PlanUnplaced(item_id=m.id, title=m.title,
+                        reason="Unfinished — back on your list to re-plan")
+            for m in overdue
         ]
-        unplaced = [
-            PlanUnplaced(
-                item_id=m.id, title=m.title,
-                reason="No open slot today — reschedule manually")
-            for m in unplaced_items
-        ]
-        used = sum(
-            int((e - s).total_seconds() / 60) for (_m, s, e, _n) in placements)
-        notes = (f"{len(blocks)} task(s) rolled forward"
-                 + (f", {len(unplaced)} didn't fit" if unplaced else "")
-                 if blocks or unplaced else "Nothing overdue to roll over.")
+        notes = (f"{len(evicted)} unfinished task(s) moved back to your list."
+                 if evicted else "Nothing overdue to move.")
         return DayPlan(
-            blocks=blocks, unplaced=unplaced, notes=notes,
-            used_mins=used, capacity_mins=req.capacity_mins)
+            blocks=[], unplaced=[], evicted=evicted, notes=notes,
+            used_mins=0, capacity_mins=req.capacity_mins)
     finally:
         await db.close()
 
@@ -1268,15 +1192,18 @@ async def _resolve_agent_plan(
     - apply (apply=true): replay the stored proposal verbatim and clear it;
       if none is pending, fall back to proposing `fresh` (never a blind write).
     """
+    # A plan is worth storing/applying if it either PLACES blocks or EVICTS/
+    # RELEASES some (rollover returns only evicted — no blocks).
+    has_changes = bool(fresh.blocks or fresh.evicted)
     if not apply:
-        if fresh.blocks:
+        if has_changes:
             await _store_pending_plan(db, uid, local_day, kind, fresh, now)
         return fresh
     reviewed = await _take_pending_plan(db, uid, local_day, kind, now)
     if reviewed is None:
         # Nothing was proposed (or it went stale) — don't write blind. Propose
         # this fresh plan instead so the user gets to review before it commits.
-        if fresh.blocks:
+        if has_changes:
             await _store_pending_plan(db, uid, local_day, kind, fresh, now)
         fresh.notes = ((fresh.notes + " ") if fresh.notes else "") + (
             "Proposed — nothing was pending to apply. Confirm to commit it.")
@@ -1455,8 +1382,10 @@ def _local_dt(d: date, hour: int, tz: ZoneInfo) -> datetime:
 
 
 async def _rollover_one_user(row: Any) -> None:
-    """Roll one user's overdue blocks into their local today, once per local day.
-    Applies + logs; marks last_rollover_date so it won't re-run until tomorrow."""
+    """Once per local day, RELEASE a user's overdue-incomplete flexible blocks
+    back to their unscheduled list (clear the schedule) so they can re-plan them,
+    instead of auto-cramming them onto today. Logs + marks last_rollover_date so
+    it won't re-run until tomorrow."""
     uid = row.user_id
     try:
         tz = ZoneInfo(row.timezone or "UTC")
@@ -1467,66 +1396,33 @@ async def _rollover_one_user(row: Any) -> None:
     if row.last_rollover_date == local_today:
         return  # already handled this local day
 
-    day_start = int(row.day_start_hour if row.day_start_hour is not None else 7)
-    day_end = int(row.day_end_hour if row.day_end_hour is not None else 22)
-    win_start = _local_dt(local_today, day_start, tz)
-    win_end = _local_dt(local_today, max(day_start + 1, day_end), tz)
-    from gateway.routes.tasks.settings import _energy_windows
-    windows: list[tuple[datetime, datetime, str]] = []
-    for w in _energy_windows(row.energy_windows):
-        ws = _local_dt(local_today, w["start_hour"], tz)
-        we = _local_dt(local_today, w["end_hour"], tz)
-        if we > ws:
-            windows.append((ws, we, w["energy"]))
-
     db = await _get_db()
     try:
         over_rows = (await db.execute(
             text(ITEM_SELECT + _OVERDUE_WHERE), {"uid": uid, "now": now},
         )).fetchall()
         overdue = [_row_to_item(r) for r in over_rows]
-        busy_rows = (await db.execute(
-            text(ITEM_SELECT + _TODAY_BUSY_WHERE),
-            {"uid": uid, "win_start": win_start, "win_end": win_end, "now": now},
-        )).fetchall()
-        busy: list[tuple[datetime, datetime]] = []
-        for r in busy_rows:
-            bs = _parse_iso(getattr(r, "scheduled_start", None))
-            be = _parse_iso(getattr(r, "scheduled_end", None))
-            if bs and be and be > bs:
-                busy.append((bs, be))
-        _lunch = _lunch_interval(
-            await _planning_prefs(db, uid), win_start, win_end)
-        if _lunch:
-            busy.append(_lunch)
-        _tb, _, _, _ = _expand_templates(
-            await _day_templates(db, uid), win_start, win_end)
-        busy.extend(_tb)
-        free = _free_intervals(win_start, win_end, busy, now)
-        buffer_mins = int(row.buffer_mins or 0)
-        placements, _unplaced = _pack_rollover(
-            overdue, free, windows, buffer_mins, now)
-        for m, s, e, _note in placements:
+        for m in overdue:
             await db.execute(
                 text("""UPDATE gtd_items
-                        SET scheduled_start = :s, scheduled_end = :e,
+                        SET scheduled_start = NULL, scheduled_end = NULL,
                             updated_at = now()
                         WHERE id = :id AND user_id = :uid"""),
-                {"s": s, "e": e, "id": m.id, "uid": uid})
+                {"id": m.id, "uid": uid})
             await db.execute(
                 text("""INSERT INTO gtd_rollover_log
                           (user_id, item_id, title, rolled_from, rolled_to)
-                        VALUES (:uid, :id, :title, :frm, :to)"""),
+                        VALUES (:uid, :id, :title, :frm, NULL)"""),
                 {"uid": uid, "id": m.id, "title": m.title,
-                 "frm": _parse_iso(m.scheduled_start), "to": s})
+                 "frm": _parse_iso(m.scheduled_start)})
         await db.execute(
             text("UPDATE gtd_settings SET last_rollover_date = :d "
                  "WHERE user_id = :uid"),
             {"d": local_today, "uid": uid})
         await db.commit()
-        if placements:
-            _log.info("tasks.calendar.rolled_over",
-                      user=str(uid)[:12], count=len(placements))
+        if overdue:
+            _log.info("tasks.calendar.released_overdue",
+                      user=str(uid)[:12], count=len(overdue))
     finally:
         await db.close()
 

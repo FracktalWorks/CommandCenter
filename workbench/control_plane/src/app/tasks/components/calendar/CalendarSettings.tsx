@@ -127,10 +127,11 @@ export function CalendarSettings({
               How should the AI plan your day?
             </label>
             <p className="mb-1.5 text-[10px] text-muted-foreground">
-              A standing instruction the planner follows every time you use{" "}
-              <b className="text-foreground">Plan my day</b>. Leave it blank to
-              use the built-in default. (You can also add a one-off note for a
-              single day right in the Plan my day panel.)
+              A standing instruction the planner follows every time you{" "}
+              <b className="text-foreground">Rebuild my day</b> or{" "}
+              <b className="text-foreground">Fit what&apos;s left</b>. Leave it
+              blank to use the built-in default. (You can also add a one-off note
+              for a single day right in the Rebuild my day panel.)
             </p>
             <textarea
               value={settings.planningPrompt ?? ""}

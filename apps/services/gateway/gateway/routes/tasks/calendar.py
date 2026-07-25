@@ -201,6 +201,9 @@ class PlanBlock(BaseModel):
     # (vs a new task pulled in from the unscheduled list). Lets the UI show
     # "moved" vs "added" and lets apply know a move from an existing block.
     previously_scheduled: bool = False
+    # True when this block was carried over from a PRIOR day (an unfinished task
+    # that was scheduled before today) — swept into today by "Rebuild my day".
+    carried_over: bool = False
 
 
 class PlanUnplaced(BaseModel):
@@ -711,6 +714,18 @@ _TODAY_SCHEDULED_WHERE = (
     " AND i.scheduled_start IS NOT NULL"
     " AND i.scheduled_start >= :day0 AND i.scheduled_start < :day1"
 )
+# Carry-forward: unfinished, movable tasks left scheduled on a PRIOR day. Rebuild
+# my day sweeps these into today (re-placed, or evicted back to the list if they
+# don't fit) so leftovers never get stranded on a dead day. Fixed meetings stay
+# put (rollover/replan never move a 🔒 block).
+_OVERDUE_CARRY_WHERE = (
+    " WHERE i.user_id = :uid AND i.parent_item_id IS NULL"
+    " AND i.archived_at IS NULL AND i.deleted_at IS NULL"
+    " AND i.disposition NOT IN ('DONE','TRASH')"
+    " AND coalesce(i.flexible, true) = true"
+    " AND i.is_mine = true"
+    " AND i.scheduled_start IS NOT NULL AND i.scheduled_start < :day0"
+)
 
 
 async def _replan_core(
@@ -761,6 +776,18 @@ async def _replan_core(
                 busy.append((bs, be))
         elif is_mine:
             movable.append(_row_to_item(r))
+    # Carry-forward (Rebuild only): unfinished movable tasks stranded on a prior
+    # day get swept into today alongside today's own movable blocks. They're
+    # treated exactly like today's movables — re-placed, or evicted back to the
+    # unscheduled list if they no longer fit — so nothing rots on a dead day.
+    carried_ids: set[str] = set()
+    if include_new:
+        carry_rows = (await db.execute(
+            text(ITEM_SELECT + _OVERDUE_CARRY_WHERE),
+            {"uid": uid, "day0": day0})).fetchall()
+        for r in carry_rows:
+            movable.append(_row_to_item(r))
+            carried_ids.add(str(getattr(r, "id", "")))
     movable_ids = {m.id for m in movable}
 
     # Protect lunch + recurring block windows (busy); focus windows bias matching
@@ -877,7 +904,8 @@ async def _replan_core(
             item_id=c["id"], title=c["title"],
             start=s.isoformat(), end=e.isoformat(),
             energy=c["energy"], rationale=rationale,
-            previously_scheduled=was_scheduled))
+            previously_scheduled=was_scheduled,
+            carried_over=c["id"] in carried_ids))
         used += dur
 
     handled = ({b.item_id for b in blocks} | {u.item_id for u in unplaced}
@@ -890,12 +918,15 @@ async def _replan_core(
 
     break_note = (f"{breaks_inserted} break(s) worked in." if breaks_inserted
                   else None)
+    carried_placed = sum(1 for b in blocks if b.carried_over)
+    carry_note = (f"Carried {carried_placed} unfinished task(s) forward from an "
+                  "earlier day." if carried_placed else None)
     evict_note = (f"{len(evicted)} block(s) moved back to your list — not enough "
                   "time." if evicted else None)
     return DayPlan(
         blocks=blocks, unplaced=unplaced, evicted=evicted,
-        notes=_join_notes(notes, lunch_note, template_note, break_note,
-                          evict_note, pad_note),
+        notes=_join_notes(notes, carry_note, lunch_note, template_note,
+                          break_note, evict_note, pad_note),
         used_mins=used, capacity_mins=req.capacity_mins, ranked_by=ranked_by,
         rank_note=(rank_note if ranked_by == "priority" else None))
 

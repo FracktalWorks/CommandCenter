@@ -526,6 +526,8 @@ export interface PlanDayBlock {
   /** true = this block was already on the calendar and is being moved;
    *  false = a new task pulled in from the unscheduled list. */
   previouslyScheduled?: boolean;
+  /** true = an unfinished task carried forward from a PRIOR day. */
+  carriedOver?: boolean;
 }
 export interface PlanDayUnplaced {
   itemId: string;
@@ -567,6 +569,7 @@ function mapDayPlan(r: Raw): DayPlanResult {
       energy: b.energy ? String(b.energy) : undefined,
       rationale: b.rationale ? String(b.rationale) : undefined,
       previouslyScheduled: Boolean(b.previously_scheduled),
+      carriedOver: Boolean(b.carried_over),
     })),
     unplaced: arr(r.unplaced).map((u) => ({
       itemId: String(u.item_id ?? ""),

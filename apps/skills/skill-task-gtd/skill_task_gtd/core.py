@@ -905,9 +905,10 @@ def _fmt_plan(plan: dict[str, Any], applied: bool) -> str:
         e = (b.get("end") or "")[11:16]
         rat = b.get("rationale") or ""
         star = "★ " if rat.startswith("★") else ""
-        moved = " (moved)" if b.get("previously_scheduled") else ""
+        tag = (" (carried over)" if b.get("carried_over")
+               else " (moved)" if b.get("previously_scheduled") else "")
         lines.append(
-            f"• {s}-{e} {star}{_data(b.get('title', '?'))}{moved}"
+            f"• {s}-{e} {star}{_data(b.get('title', '?'))}{tag}"
             + (f" — {_data(rat.lstrip('★ '))}" if rat else ""))
     if evicted:
         # Blocks that no longer fit the time left — back on the unscheduled list.
@@ -929,11 +930,12 @@ def _fmt_plan(plan: dict[str, Any], applied: bool) -> str:
 @_annotate_risk(idempotent=True)
 async def gtd_plan_day(apply: bool = False, energy_note: str = "") -> str:
     """Rebuild the user's day with AI. Reshuffles what's ALREADY on today's
-    calendar (not-done, movable blocks) into the time that's left, trims whatever
-    no longer fits back onto their unscheduled list, AND fills any remaining room
-    with unscheduled next actions — fit to energy windows, within capacity (minus
-    what's already done today), around fixed meetings + protected windows. The
-    ★ One Thing is protected automatically. Reversible.
+    calendar (not-done, movable blocks) into the time that's left, SWEEPS IN any
+    unfinished tasks left over from PRIOR days, trims whatever no longer fits back
+    onto their unscheduled list, AND fills any remaining room with unscheduled
+    next actions — fit to energy windows, within capacity (minus what's already
+    done today), around fixed meetings + protected windows. The ★ One Thing is
+    protected automatically. Reversible.
 
     Propose first, then apply after the user agrees.
 

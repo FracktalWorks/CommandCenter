@@ -108,7 +108,11 @@ export function PlanDayPanel({
     applySchedule(label, changes);
     onClose();
   };
-  const moved = plan?.blocks.filter((b) => b.previouslyScheduled) ?? [];
+  // Carried over from a prior day (unfinished leftovers Rebuild swept in);
+  // Reshuffled = today's own blocks moved; Added = new from the unscheduled list.
+  const carried = plan?.blocks.filter((b) => b.carriedOver) ?? [];
+  const moved =
+    plan?.blocks.filter((b) => b.previouslyScheduled && !b.carriedOver) ?? [];
   const added = plan?.blocks.filter((b) => !b.previouslyScheduled) ?? [];
   const groupHdr =
     "mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0";
@@ -301,16 +305,29 @@ export function PlanDayPanel({
               )}
               {/* Headline: what this plan does, in one line. */}
               <p className="mb-2 text-[11px] text-muted-foreground">
-                {moved.length > 0 && `${moved.length} moved`}
-                {added.length > 0 &&
-                  `${moved.length ? " · " : ""}${added.length} added`}
-                {plan.evicted.length > 0 &&
-                  `${moved.length || added.length ? " · " : ""}${plan.evicted.length} back to list`}
-                {(moved.length || added.length || plan.evicted.length) && " · "}
+                {(() => {
+                  const parts: string[] = [];
+                  if (carried.length) parts.push(`${carried.length} carried over`);
+                  if (moved.length) parts.push(`${moved.length} moved`);
+                  if (added.length) parts.push(`${added.length} added`);
+                  if (plan.evicted.length)
+                    parts.push(`${plan.evicted.length} back to list`);
+                  return parts.length ? parts.join(" · ") + " · " : "";
+                })()}
                 {Math.round((plan.usedMins / 60) * 10) / 10}h of{" "}
                 {Math.round((plan.capacityMins / 60) * 10) / 10}h capacity
               </p>
 
+              {carried.length > 0 && (
+                <>
+                  <p className={`${groupHdr} text-primary`}>
+                    Carried over from earlier ({carried.length})
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {carried.map(renderBlock)}
+                  </div>
+                </>
+              )}
               {moved.length > 0 && (
                 <>
                   <p className={groupHdr}>Reshuffled ({moved.length})</p>

@@ -128,6 +128,14 @@ class Settings(BaseSettings):
         default_factory=lambda: str(Path.home() / ".acb" / "agents")
     )
 
+    # Custom Apps (App Workshop) workspace root — one folder per app slug.
+    # Empty (the default) resolves to {agents_clone_dir}/custom_apps so app
+    # workspaces share the reboot-safe home the agent clones use; override with
+    # CUSTOM_APPS_ROOT to relocate. Resolution lives in
+    # gateway.routes.apps.apps_root() (mirrors how agents_clone_dir consumers
+    # resolve their paths).
+    custom_apps_root: str = ""
+
     # -- Bot git identity (written into every local clone via git config) --
     # Commits and PRs opened by Self_Mutation_Node carry this identity.
     # Create a dedicated GitHub machine user (or use the GitHub App's identity).

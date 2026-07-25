@@ -845,6 +845,15 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    # Custom Apps / App Workshop (docs/app-workshop/README.md) — app CRUD,
+    # workspace files, publish/versions, and the App Runtime API (prefix /apps).
+    from gateway.routes.apps import router as _apps_router
+
+    app.include_router(_apps_router)
+except Exception:  # pragma: no cover
+    pass
+
 # ---------- Health ----------
 
 class Health(BaseModel):

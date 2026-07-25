@@ -1,0 +1,460 @@
+"""Custom Apps routes — shared kernel (RFC: docs/app-workshop/README.md).
+
+The shared ``router``, DB infrastructure, auth gate, and the pure helpers the
+lifecycle/files/publish/runtime layers share: slug generation, workspace path
+containment, the visibility/edit predicates, the AI-budget math, and the
+best-effort audit + activity writers. Mirrors ``routes/tasks/core.py`` (the
+leaf module: it imports nothing from siblings).
+
+Canonical store: the ``apps`` / ``app_*`` tables from
+``infra/postgres/113_custom_apps.sql`` (RFC §4.9). App workspaces live at
+``apps_root()/{slug}`` — git-inited folders holding ``app.json`` (the
+manifest, RFC §4.1) plus the app's source files.
+"""
+
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+import re
+from collections.abc import Collection, Sequence
+from pathlib import Path
+from typing import Any
+
+from acb_auth import UserContext, UserRole, get_current_user
+from acb_common import get_logger, get_settings
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy import text
+
+_log = get_logger("gateway.apps")
+
+router = APIRouter(prefix="/apps", tags=["apps"])
+
+# ── Limits (Phase 0 platform clamps) ─────────────────────────────────────────
+
+MAX_SOURCE_FILE_BYTES = 2 * 1024 * 1024        # per workspace file (read/write)
+MAX_BUNDLE_BYTES = 5 * 1024 * 1024             # published entry-file snapshot
+MAX_STORAGE_VALUE_BYTES = 64 * 1024            # one app_data value (JSON)
+MAX_STORAGE_ROWS_PER_APP = 5000                # total app_data rows per app
+MAX_AI_OUTPUT_TOKENS = 2000                    # cc.ai.complete max_tokens clamp
+DEFAULT_AI_BUDGET_TOKENS = 2_000_000           # monthly tokens when manifest is silent
+MAX_AI_BUDGET_TOKENS = 10_000_000              # manifest ai_budget_tokens ceiling
+
+TABLE_NAME_RE = re.compile(r"^[a-z0-9_]{1,48}$")
+
+# Default manifest scopes for a fresh scaffold (RFC §4.1).
+DEFAULT_SCOPES = ["identity:read", "storage:app", "ai:tier-1"]
+
+# Manifest/request tier vocabulary → the gateway's tier aliases
+# (acb_llm.client._TIER_ALIAS_MAP). Cheapest alias is the fallback.
+AI_TIER_ALIASES = ("tier-fast", "tier-balanced", "tier-powerful")
+_SCOPE_TIER_MAP = {
+    "tier-1": "tier-fast",
+    "tier-2": "tier-balanced",
+    "tier-3": "tier-powerful",
+    "tier-fast": "tier-fast",
+    "tier-balanced": "tier-balanced",
+    "tier-powerful": "tier-powerful",
+}
+DEFAULT_AI_TIER = "tier-fast"
+
+
+# ── DB (shared pooled async engine, same recipe as tasks/core.py) ────────────
+
+_ENGINE = None
+_SESSION_FACTORY = None
+
+
+def _get_session_factory() -> Any:
+    global _ENGINE, _SESSION_FACTORY
+    if _SESSION_FACTORY is None:
+        from sqlalchemy.ext.asyncio import (
+            async_sessionmaker,
+            create_async_engine,
+        )
+        settings = get_settings()
+        db_url = os.environ.get("DATABASE_URL", settings.database_url)
+        if "postgresql+psycopg" in db_url:
+            db_url = db_url.replace("postgresql+psycopg", "postgresql+asyncpg")
+        elif db_url.startswith("postgresql://"):
+            db_url = db_url.replace("postgresql://", "postgresql+asyncpg://")
+        _ENGINE = create_async_engine(
+            db_url, echo=False, pool_pre_ping=True,
+            pool_size=10, max_overflow=20, pool_recycle=1800,
+            connect_args={"timeout": settings.db_connect_timeout},
+        )
+        _SESSION_FACTORY = async_sessionmaker(_ENGINE, expire_on_commit=False)
+    return _SESSION_FACTORY
+
+
+async def _get_db() -> Any:
+    """Return a new async session from the shared, pooled engine."""
+    return _get_session_factory()()
+
+
+# ── Auth gate ────────────────────────────────────────────────────────────────
+
+async def require_app_user(
+    user: UserContext = Depends(get_current_user),
+) -> UserContext:
+    """The package-wide auth dependency: 401 for anonymous callers.
+
+    ``get_current_user`` never rejects — it labels. Every /apps endpoint needs
+    a real principal (an email, or the internal AGENT role) for grants and
+    audit attribution, so an unlabelled caller is refused here.
+    """
+    if not user.email and user.role is not UserRole.AGENT:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    return user
+
+
+def _uid(user: UserContext | None) -> str:
+    return getattr(user, "email", None) or "system:internal"
+
+
+# ── Workspace root ───────────────────────────────────────────────────────────
+
+def apps_root() -> Path:
+    """The Custom Apps workspace root (one subfolder per app slug), created
+    on demand. ``CUSTOM_APPS_ROOT`` overrides; empty falls back to
+    ``{agents_clone_dir}/custom_apps`` (the reboot-safe clone home)."""
+    settings = get_settings()
+    configured = (getattr(settings, "custom_apps_root", "") or "").strip()
+    root = (
+        Path(configured) if configured
+        else Path(settings.agents_clone_dir) / "custom_apps"
+    )
+    root.mkdir(parents=True, exist_ok=True)
+    return root
+
+
+# ── Slugs ────────────────────────────────────────────────────────────────────
+
+SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,46})[a-z0-9]$")
+
+
+def is_valid_slug(slug: str) -> bool:
+    """Lowercase ``[a-z0-9-]``, 3-48 chars, no leading/trailing dash."""
+    return bool(SLUG_RE.fullmatch(slug or ""))
+
+
+def generate_slug(name: str, taken: Collection[str] = ()) -> str:
+    """Derive a valid, unused slug from a display name.
+
+    Non-alphanumerics collapse to single dashes; too-short results are padded
+    with ``-app``; collisions get a ``-2``/``-3``… suffix (trimming the base so
+    the result stays ≤ 48 chars).
+    """
+    base = re.sub(r"[^a-z0-9]+", "-", (name or "").lower()).strip("-")
+    base = re.sub(r"-{2,}", "-", base)[:48].strip("-")
+    if len(base) < 3:
+        base = f"{base}-app".strip("-") if base else "app"
+    taken_set = set(taken)
+    if base not in taken_set:
+        return base
+    for i in range(2, 10_000):
+        suffix = f"-{i}"
+        candidate = f"{base[:48 - len(suffix)].rstrip('-')}{suffix}"
+        if candidate not in taken_set:
+            return candidate
+    raise HTTPException(status_code=409, detail="Could not allocate a slug")
+
+
+# ── Path containment (mirrors workspace.py's _safe_resolve + blocked paths) ──
+
+def resolve_app_file(app_workspace: Path, rel: str) -> Path:
+    """Resolve *rel* inside *app_workspace* or raise 400.
+
+    Refuses absolute paths, ``..`` traversal, and any dot-segment (which blocks
+    ``.git`` and dotfiles wholesale). The final ``resolve()`` follows symlinks,
+    so a link that points outside the workspace fails the containment check
+    even though its literal path looks safe.
+    """
+    clean = (rel or "").replace("\\", "/").strip()
+    if not clean or clean.startswith("/") or Path(clean).is_absolute():
+        raise HTTPException(status_code=400, detail="Invalid path")
+    segments = [s for s in clean.split("/") if s]
+    if not segments or any(s == ".." or s.startswith(".") for s in segments):
+        raise HTTPException(status_code=400, detail="Invalid path")
+    root = app_workspace.resolve()
+    resolved = (root / "/".join(segments)).resolve()
+    if resolved != root and not resolved.is_relative_to(root):
+        raise HTTPException(status_code=400, detail="Path escapes workspace")
+    if resolved == root:
+        raise HTTPException(status_code=400, detail="Invalid path")
+    return resolved
+
+
+# ── Visibility predicates (pure — the tests exercise the full matrix) ────────
+
+def _field(row: Any, name: str) -> Any:
+    if isinstance(row, dict):
+        return row.get(name)
+    return getattr(row, name, None)
+
+
+def can_edit(
+    app_row: Any,
+    user: UserContext | None,
+    grants: Sequence[tuple[str, str]] = (),
+) -> bool:
+    """Owner, or an email grant with role edit/own. AGENTs never edit (Phase 0)."""
+    if user is None:
+        return False
+    email = getattr(user, "email", None)
+    if not email or getattr(user, "role", None) is UserRole.AGENT:
+        return False
+    if _field(app_row, "owner_email") == email:
+        return True
+    return any(
+        subject == email and role in ("edit", "own")
+        for subject, role in grants
+    )
+
+
+def can_view(
+    app_row: Any,
+    user: UserContext | None,
+    grants: Sequence[tuple[str, str]] = (),
+) -> bool:
+    """Editors; anyone when the app is org-visible AND live; email grantees.
+
+    AGENT principals see org+live apps, or apps granted to ``agents:*`` /
+    ``agent:<their id>`` (Phase 0: the wildcard is the practical path).
+    """
+    if user is None:
+        return False
+    if can_edit(app_row, user, grants):
+        return True
+    email = getattr(user, "email", None)
+    org_live = (
+        _field(app_row, "visibility") == "org"
+        and _field(app_row, "status") == "live"
+    )
+    if getattr(user, "role", None) is UserRole.AGENT:
+        return org_live or any(
+            subject in ("agents:*", f"agent:{email}") for subject, _ in grants
+        )
+    if org_live:
+        return True
+    return bool(email) and any(subject == email for subject, _ in grants)
+
+
+def role_for(
+    app_row: Any,
+    user: UserContext | None,
+    grants: Sequence[tuple[str, str]] = (),
+) -> str:
+    """The caller's relationship to a (visible) app: own / edit / use."""
+    email = getattr(user, "email", None) if user else None
+    if email and _field(app_row, "owner_email") == email:
+        return "own"
+    if email:
+        for subject, role in grants:
+            if subject == email and role in ("edit", "own"):
+                return role
+    return "use"
+
+
+# ── Manifest helpers ─────────────────────────────────────────────────────────
+
+def default_manifest(
+    slug: str, name: str, icon: str = "", description: str = "",
+) -> dict[str, Any]:
+    """A fresh scaffold's ``app.json`` (RFC §4.1, runtime T1: static)."""
+    return {
+        "slug": slug,
+        "name": name,
+        "icon": icon,
+        "description": description,
+        "runtime": "static",
+        "entry": "index.html",
+        "run_as": "viewer",
+        "scopes": list(DEFAULT_SCOPES),
+        "storage": {"tables": []},
+    }
+
+
+def read_workspace_manifest(workspace: Path) -> dict[str, Any] | None:
+    """Parse ``{workspace}/app.json``; None when missing/unparseable."""
+    try:
+        raw = (workspace / "app.json").read_text(encoding="utf-8")
+        data = json.loads(raw)
+        return data if isinstance(data, dict) else None
+    except (OSError, ValueError):
+        return None
+
+
+def parse_db_manifest(val: Any) -> dict[str, Any]:
+    if isinstance(val, dict):
+        return val
+    if isinstance(val, str):
+        try:
+            data = json.loads(val)
+            return data if isinstance(data, dict) else {}
+        except ValueError:
+            return {}
+    return {}
+
+
+def manifest_scopes(manifest: dict[str, Any] | None) -> list[str]:
+    scopes = (manifest or {}).get("scopes")
+    if not isinstance(scopes, list):
+        return []
+    return [str(s) for s in scopes if isinstance(s, str) and s.strip()]
+
+
+def scope_set_hash(scopes: Sequence[str]) -> str:
+    """sha256 of the sorted scope set — the re-consent key (RFC §4.8)."""
+    return hashlib.sha256("\n".join(sorted(scopes)).encode("utf-8")).hexdigest()
+
+
+# ── AI tier + budget math (pure) ─────────────────────────────────────────────
+
+def manifest_ai_tier(manifest: dict[str, Any] | None) -> str:
+    """The tier alias the manifest's ``ai:*`` scope grants (default cheapest)."""
+    for scope in manifest_scopes(manifest):
+        if scope.startswith("ai:"):
+            return _SCOPE_TIER_MAP.get(scope[3:].strip(), DEFAULT_AI_TIER)
+    return DEFAULT_AI_TIER
+
+
+def resolve_ai_tier(requested: str | None, manifest: dict[str, Any] | None) -> str:
+    """A request's tier if it names a known alias, else the manifest's."""
+    req = (requested or "").strip()
+    if req in AI_TIER_ALIASES:
+        return req
+    if req in _SCOPE_TIER_MAP:
+        return _SCOPE_TIER_MAP[req]
+    return manifest_ai_tier(manifest)
+
+
+def resolve_ai_budget(manifest: dict[str, Any] | None) -> int:
+    """Monthly token budget: manifest ``ai_budget_tokens`` clamped to the
+    platform ceiling; default when missing/invalid; 0 disables AI."""
+    raw = (manifest or {}).get("ai_budget_tokens", DEFAULT_AI_BUDGET_TOKENS)
+    try:
+        budget = int(raw)
+    except (TypeError, ValueError):
+        budget = DEFAULT_AI_BUDGET_TOKENS
+    return max(0, min(budget, MAX_AI_BUDGET_TOKENS))
+
+
+def check_bundle_size(data: bytes, cap: int = MAX_BUNDLE_BYTES) -> bytes:
+    """Pass *data* through, or raise 413 when it exceeds *cap*."""
+    if len(data) > cap:
+        raise HTTPException(
+            status_code=413,
+            detail=f"Bundle too large ({len(data)} bytes). Maximum is {cap}.",
+        )
+    return data
+
+
+# ── Row loading + gating (shared by every feature module) ────────────────────
+
+async def load_app(db: Any, slug: str) -> Any:
+    return (await db.execute(
+        text("SELECT * FROM apps WHERE slug = :slug"), {"slug": slug},
+    )).fetchone()
+
+
+async def load_grants(db: Any, app_id: str) -> list[tuple[str, str]]:
+    rows = (await db.execute(
+        text("SELECT subject, role FROM app_grants WHERE app_id = :app_id"),
+        {"app_id": app_id},
+    )).fetchall()
+    return [(r.subject, r.role) for r in rows]
+
+
+async def get_app_or_404(
+    db: Any, slug: str, user: UserContext, *, edit: bool = False,
+) -> tuple[Any, list[tuple[str, str]]]:
+    """Load an app + its grants, enforcing view (404) or edit (403) access.
+
+    Non-viewable apps 404 (no existence leak); viewable-but-not-editable hits
+    on an edit-gated endpoint 403.
+    """
+    row = await load_app(db, slug)
+    if row is None:
+        raise HTTPException(status_code=404, detail="App not found")
+    grants = await load_grants(db, str(row.id))
+    if not can_view(row, user, grants):
+        raise HTTPException(status_code=404, detail="App not found")
+    if edit and not can_edit(row, user, grants):
+        raise HTTPException(status_code=403, detail="Edit access required")
+    return row, grants
+
+
+def app_workspace(row: Any) -> Path:
+    return Path(str(_field(row, "workspace_path") or ""))
+
+
+# ── Audit + activity (best-effort — never raise into the request path) ───────
+
+async def record_app_audit(
+    *,
+    app_id: str,
+    user_email: str,
+    kind: str,
+    detail: dict[str, Any] | None = None,
+    app_version: int | None = None,
+    tokens_in: int = 0,
+    tokens_out: int = 0,
+    cost_usd: float = 0.0,
+    model: str = "",
+) -> None:
+    """Append one ``app_audit`` row. Best-effort: opens its own session so a
+    failed audit can neither raise nor poison the caller's transaction."""
+    try:
+        db = await _get_db()
+        try:
+            await db.execute(
+                text(
+                    """INSERT INTO app_audit
+                       (app_id, app_version, user_email, kind, detail,
+                        tokens_in, tokens_out, cost_usd, model)
+                       VALUES (:app_id, :app_version, :user_email, :kind,
+                               :detail::jsonb, :tokens_in, :tokens_out,
+                               :cost_usd, :model)"""
+                ),
+                {
+                    "app_id": app_id,
+                    "app_version": app_version,
+                    "user_email": user_email,
+                    "kind": kind,
+                    "detail": json.dumps(detail or {}, default=str),
+                    "tokens_in": tokens_in,
+                    "tokens_out": tokens_out,
+                    "cost_usd": cost_usd,
+                    "model": model,
+                },
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as exc:
+        _log.warning("apps.audit_failed", kind=kind, error=str(exc)[:160])
+
+
+def publish_app_activity(
+    slug: str, *, user: str | None = None, **fields: Any,
+) -> None:
+    """Publish an app activation to the global activity bus (best-effort).
+
+    Apps are a distinct actor class on the feed: ``kind="app"`` with
+    ``agent="app:<slug>"`` so the observability view shows app activity
+    alongside agent runs (RFC §4.6).
+    """
+    try:
+        from acb_common import publish_activity
+        publish_activity(
+            kind="app", agent=f"app:{slug}", user=user, source="apps",
+            **fields,
+        )
+    except Exception:
+        pass
+
+
+def iso(val: Any) -> str | None:
+    return val.isoformat() if val is not None else None

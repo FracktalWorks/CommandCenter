@@ -118,8 +118,25 @@ function PublishModal({
       if (!res.ok) {
         const body = (await res.json().catch(() => ({}))) as {
           error?: string;
+          detail?: { error?: string; errors?: string[] } | string;
         };
-        setError(body.error ?? `Publish failed (HTTP ${res.status})`);
+        // The platform-contract scan (RFC §4.0) rejects with a FastAPI-wrapped
+        // detail listing each deviation — show them, they name the fix.
+        const detail =
+          typeof body.detail === "object" && body.detail ? body.detail : null;
+        if (detail?.error === "conformance_failed" && detail.errors?.length) {
+          setError(
+            `This app deviates from the platform architecture:\n• ${detail.errors.join(
+              "\n• "
+            )}\nAsk the build chat to fix it — everything goes through window.cc.`
+          );
+          return;
+        }
+        setError(
+          body.error ??
+            (typeof body.detail === "string" ? body.detail : null) ??
+            `Publish failed (HTTP ${res.status})`
+        );
         return;
       }
       onPublished();
@@ -200,8 +217,8 @@ function PublishModal({
         </div>
 
         {error && (
-          <div className="flex items-center gap-1.5 text-xs text-destructive">
-            <X className="w-3.5 h-3.5" /> {error}
+          <div className="flex items-start gap-1.5 text-xs text-destructive whitespace-pre-line">
+            <X className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span>{error}</span>
           </div>
         )}
 

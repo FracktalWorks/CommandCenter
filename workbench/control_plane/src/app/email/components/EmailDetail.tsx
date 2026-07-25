@@ -1173,8 +1173,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 onClose={() => setAiOpen(false)}
               />
             )}
-            <div className="px-4 py-2 bg-secondary/50 border-t border-border flex items-center justify-between gap-2">
-              <span className="text-[10px] truncate">
+            {/* Footer — on phones the labels compress to icons so the full
+                action row (incl. Send) always fits inside the card. */}
+            <div className="px-3 sm:px-4 py-2 bg-secondary/50 border-t border-border flex items-center justify-between gap-2">
+              <span className="text-[10px] truncate min-w-0">
                 {sendErr ? (
                   <span className="text-red-500">{sendErr}</span>
                 ) : draftStatus === "saving" ? (
@@ -1185,7 +1187,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   <span className="text-muted-foreground">Ctrl+Enter to send</span>
                 )}
               </span>
-              <div className="flex gap-2 flex-shrink-0 items-center">
+              <div className="flex gap-1 sm:gap-2 flex-shrink-0 items-center">
                 <AiButton active={aiOpen} onClick={() => setAiOpen((v) => !v)} />
                 <label
                   className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors cursor-pointer flex items-center"
@@ -1211,14 +1213,16 @@ export function EmailDetail({ email }: EmailDetailProps) {
                   }}
                 />
                 <button
-                  className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  className="px-2 sm:px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center gap-1"
                   onClick={popOutToComposer}
                   title="Open in the full composer (Bcc, attachments)"
+                  aria-label="Pop out to full composer"
                 >
-                  Pop out
+                  <ExternalLink size={13} />
+                  <span className="hidden sm:inline">Pop out</span>
                 </button>
                 <button
-                  className="px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+                  className="px-2 sm:px-3 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center gap-1"
                   onClick={() => {
                     // Discard the auto-saved draft too (the X keeps it instead).
                     if (draftIdRef.current) void deleteEmail(draftIdRef.current);
@@ -1226,8 +1230,10 @@ export function EmailDetail({ email }: EmailDetailProps) {
                     resetReplySession();
                   }}
                   title="Discard this draft"
+                  aria-label="Discard this draft"
                 >
-                  Discard
+                  <Trash2 size={13} />
+                  <span className="hidden sm:inline">Discard</span>
                 </button>
                 <button
                   className="px-4 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1.5"

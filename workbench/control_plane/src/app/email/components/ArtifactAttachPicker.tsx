@@ -55,9 +55,12 @@ export function ArtifactAttachPicker({
         type="button"
         onClick={() => setOpen((v) => !v)}
         title="Attach an AI-generated file"
+        aria-label="Attach an AI-generated file"
         className="px-2 py-1 text-xs rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors flex items-center gap-1"
       >
-        <Sparkles size={13} /> AI files
+        {/* Icon-only on phones — composer footers must fit the whole action
+            row (incl. Send) on a narrow screen. */}
+        <Sparkles size={13} /> <span className="hidden sm:inline">AI files</span>
       </button>
       {open && (
         <div className="absolute bottom-full right-0 mb-1.5 w-64 max-h-60 overflow-y-auto rounded-lg border border-border bg-popover shadow-xl z-[70] py-1">

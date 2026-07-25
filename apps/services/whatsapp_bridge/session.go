@@ -44,6 +44,12 @@ type Session struct {
 	mu     sync.RWMutex
 	qr     string // data-URI PNG of the current pairing code, "" once live
 	status string
+
+	// Debounce for the on-link history-sync: WhatsApp delivers the backfill over
+	// several payloads; reset this timer on each, then reclassify once when they
+	// stop arriving.
+	histMu    sync.Mutex
+	histTimer *time.Timer
 }
 
 func (s *Session) snapshot() (status, qr string) {

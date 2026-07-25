@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, MoreHorizontal, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked } from "lucide-react";
+import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -104,25 +104,10 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     <MobileDrawerCtx.Provider
       value={{ isOpen: drawerOpen, open: openDrawer, close: closeDrawer }}
     >
-      <div className="flex flex-col overflow-hidden bg-background" style={{ height: "100dvh" }}>
-        {/* Top app bar — just title + overflow, no hamburger. Safe-area padded for notch */}
-        <header className="flex h-11 shrink-0 items-center border-b border-border bg-card/80 px-2 backdrop-blur pt-safe">
-          {/* Centered title */}
-          <Link href="/" className="absolute left-1/2 -translate-x-1/2 flex items-center gap-2">
-            <span className="flex h-6 w-6 items-center justify-center rounded-md bg-primary text-primary-foreground">
-              <Command size={12} strokeWidth={2.5} />
-            </span>
-            <span className="text-sm font-semibold tracking-tight text-foreground">
-              CommandCenter
-            </span>
-          </Link>
-
-          {/* Overflow menu (desktop toggle + sign out) */}
-          <div className="ml-auto">
-            <OverflowMenu toggleView={toggleView} />
-          </div>
-        </header>
-
+      {/* No top app bar on mobile — every screen is reachable from the bottom
+          nav, so pages get the full viewport. pt-safe on the shell keeps
+          content out of the notch/status bar. */}
+      <div className="flex flex-col overflow-hidden bg-background pt-safe" style={{ height: "100dvh" }}>
         {/* Page content — pb-nav reserves the fixed bottom bar's FULL height
             (content + safe-area inset), so nothing hides under it */}
         <main className="flex-1 min-h-0 overflow-y-auto pb-nav">{children}</main>
@@ -184,10 +169,16 @@ function MobileBottomNavInner({
   const menuContent = (
     <>
       <div className="flex items-center justify-between border-b border-border px-4 py-3">
-        <div>
-          <div className="text-sm font-semibold text-foreground">Menu</div>
-          <div className="text-[11px] text-muted-foreground">CommandCenter</div>
-        </div>
+        {/* Branding doubles as the way home — the mobile shell has no top bar. */}
+        <Link href="/" onClick={close} className="flex items-center gap-2.5">
+          <span className="flex h-7 w-7 items-center justify-center rounded-lg bg-primary text-primary-foreground">
+            <Command size={14} strokeWidth={2.5} />
+          </span>
+          <div>
+            <div className="text-sm font-semibold text-foreground">CommandCenter</div>
+            <div className="text-[11px] text-muted-foreground">Home</div>
+          </div>
+        </Link>
         <button
           onClick={close}
           className="rounded-lg p-1.5 text-muted-foreground hover:bg-secondary"
@@ -421,57 +412,5 @@ function TaskTab({
       <Icon size={accent ? 22 : 20} strokeWidth={active || accent ? 2.4 : 2} />
       <span className="text-[10px] font-medium leading-none">{label}</span>
     </button>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// "..." overflow menu (Desktop toggle + sign out, always accessible)
-// ---------------------------------------------------------------------------
-
-function OverflowMenu({ toggleView }: { toggleView: () => void }) {
-  const [open, setOpen] = useState(false);
-  const { data: session } = useSession();
-
-  return (
-    <div className="relative ml-auto">
-      <button
-        onClick={() => setOpen((v) => !v)}
-        className="rounded-lg p-2 text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-        aria-label="More options"
-      >
-        <MoreHorizontal size={18} />
-      </button>
-
-      {open && (
-        <>
-          <div
-            className="fixed inset-0 z-40"
-            onClick={() => setOpen(false)}
-          />
-          <div className="absolute right-0 top-full mt-1 z-50 w-48 rounded-xl border border-border bg-popover py-1 shadow-lg chat-fade-in tech-glass-subtle">
-            <ThemeToggleMenuItem onClick={() => setOpen(false)} />
-            <button
-              onClick={() => {
-                toggleView();
-                setOpen(false);
-              }}
-              className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-            >
-              <Monitor size={15} className="shrink-0" />
-              Desktop view
-            </button>
-            {session?.user && (
-              <button
-                onClick={() => signOut({ callbackUrl: "/signin" })}
-                className="flex w-full items-center gap-2.5 px-3.5 py-2.5 text-sm text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition"
-              >
-                <LogOut size={15} className="shrink-0" />
-                Sign out
-              </button>
-            )}
-          </div>
-        </>
-      )}
-    </div>
   );
 }

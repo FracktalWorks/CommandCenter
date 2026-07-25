@@ -40,7 +40,10 @@ interface RecordingState {
   interim: Cap | null;
   liveOff: boolean;
 
-  start: (meetingId: string, title?: string | null) => Promise<void>;
+  start: (
+    meetingId: string,
+    opts?: { title?: string | null; deviceId?: string | null }
+  ) => Promise<void>;
   pause: () => void;
   resume: () => void;
   /** Flush + finalize; returns the meeting id to navigate to (or null on error). */
@@ -65,8 +68,9 @@ const IDLE = {
 export const useRecordingStore = create<RecordingState>((set, get) => ({
   ...IDLE,
 
-  start: async (meetingId, title = null) => {
+  start: async (meetingId, opts = {}) => {
     if (recorder) return; // already recording — one session at a time
+    const { title = null, deviceId = null } = opts;
     levelBuffer.length = 0;
     set({ ...IDLE, meetingId, title });
     const rec = new MeetingRecorder(meetingId, {
@@ -89,7 +93,7 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
         }
       },
       onLiveUnavailable: () => set({ liveOff: true }),
-    });
+    }, { deviceId });
     recorder = rec;
     try {
       await rec.start();

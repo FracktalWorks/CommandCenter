@@ -38,6 +38,7 @@ import {
   formatClock,
   getMeeting,
   getNote,
+  identifySpeakers,
   listActions,
   listTemplates,
   rejectAction,
@@ -107,6 +108,7 @@ export default function MeetingPage({
   );
   const [editingSpeaker, setEditingSpeaker] = useState<string | null>(null);
   const [nameDraft, setNameDraft] = useState("");
+  const [identifying, setIdentifying] = useState(false);
   const [savingSpeaker, setSavingSpeaker] = useState(false);
   const [templates, setTemplates] = useState<{ key: string; label: string }[]>([]);
   const [retranscribing, setRetranscribing] = useState(false);
@@ -282,6 +284,25 @@ export default function MeetingPage({
       setError(String(e instanceof Error ? e.message : e));
     } finally {
       setSavingSpeaker(false);
+    }
+  }
+
+  async function onIdentifySpeakers() {
+    if (!meeting || identifying) return;
+    setIdentifying(true);
+    try {
+      const { names, detected } = await identifySpeakers(id);
+      setMeeting({ ...meeting, speaker_names: names });
+      const hits = Object.entries(detected);
+      flashToast(
+        hits.length > 0
+          ? `Named ${hits.map(([, v]) => v).join(", ")} from the conversation`
+          : "No clear self-introductions found — name speakers manually"
+      );
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    } finally {
+      setIdentifying(false);
     }
   }
 
@@ -659,11 +680,26 @@ export default function MeetingPage({
               )}
               {speakerLabels.length > 0 &&
                 !speakerLabels.every((l) => speakerNames[l]) && (
-                  <p className="text-[11px] text-muted-foreground mb-2">
-                    {speakerLabels.length} speaker
-                    {speakerLabels.length > 1 ? "s" : ""} — click a name to label
-                    them.
-                  </p>
+                  <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                    <p className="text-[11px] text-muted-foreground">
+                      {speakerLabels.length} speaker
+                      {speakerLabels.length > 1 ? "s" : ""} — click a name to
+                      label them, or let AI find self-introductions.
+                    </p>
+                    <button
+                      onClick={() => void onIdentifySpeakers()}
+                      disabled={identifying}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-full border border-primary/30 bg-primary/10 px-2.5 py-1 text-[11px] font-medium text-primary hover:bg-primary/20 tech-transition disabled:opacity-60"
+                      title="Detect who's who from lines like “Hi, I'm Priya”"
+                    >
+                      {identifying ? (
+                        <Loader2 className="w-3 h-3 animate-spin" />
+                      ) : (
+                        <Sparkles className="w-3 h-3" />
+                      )}
+                      {identifying ? "Detecting…" : "Auto-detect names"}
+                    </button>
+                  </div>
                 )}
               {meeting && meeting.segments.length > 0 ? (
                 <div className="rounded-xl border border-border bg-card divide-y divide-border max-h-[70vh] overflow-y-auto">

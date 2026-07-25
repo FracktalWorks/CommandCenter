@@ -40,6 +40,15 @@ export interface AppFile {
   modified_at: string;
 }
 
+/** One draft git checkpoint from GET /api/apps/{slug}/checkpoints. */
+export interface Checkpoint {
+  sha: string;
+  message: string;
+  /** ISO timestamp of the checkpoint commit. */
+  at: string;
+  files_changed: number;
+}
+
 /** One immutable published snapshot from GET /api/apps/{slug}/versions. */
 export interface AppVersion {
   version: number;

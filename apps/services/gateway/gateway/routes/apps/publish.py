@@ -37,6 +37,10 @@ from gateway.routes.apps._common import (
     scope_set_hash,
 )
 from gateway.routes.apps._conformance import scan_bundle
+from gateway.routes.apps.durability import (
+    ensure_workspace,
+    sync_workspace_best_effort,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -94,6 +98,7 @@ async def publish_app(
     db = await _get_db()
     try:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
+        await ensure_workspace(db, row)
         data, manifest = await asyncio.get_event_loop().run_in_executor(
             None, _read_entry_bundle, row,
         )
@@ -145,6 +150,9 @@ async def publish_app(
         await db.commit()
     finally:
         await db.close()
+    # Durability: the published draft is the one most worth mirroring
+    # (best-effort — the version row above is already committed).
+    await sync_workspace_best_effort(row)
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="publish",
         app_version=version,
@@ -244,6 +252,7 @@ async def get_app_bundle(
                 raise HTTPException(
                     status_code=403, detail="Edit access required for drafts",
                 )
+            await ensure_workspace(db, row)
             data, _manifest = await asyncio.get_event_loop().run_in_executor(
                 None, _read_entry_bundle, row,
             )

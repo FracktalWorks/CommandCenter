@@ -3,7 +3,9 @@
 Flat listing + text read/write over an app's workspace, containment-guarded by
 ``resolve_app_file`` (traversal, dotfiles, ``.git``, symlink escapes). The
 Workshop's code view and the preview pane's draft fetch ride these; published
-bundles are served from ``app_versions`` instead (see ``publish.py``).
+bundles are served from ``app_versions`` instead (see ``publish.py``). Reads
+resolve the workspace through ``durability.ensure_workspace`` (lazy rehydrate
+from ``app_files``) and writes mirror the file back into that store.
 """
 
 from __future__ import annotations
@@ -12,26 +14,24 @@ import asyncio
 import os
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 from acb_auth import UserContext
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import PlainTextResponse
 from gateway.routes.apps._common import (
     MAX_SOURCE_FILE_BYTES,
+    MAX_WORKSPACE_FILES,
+    WORKSPACE_SKIP_DIRS,
     _get_db,
     _log,
-    app_workspace,
     get_app_or_404,
     require_app_user,
     resolve_app_file,
     router,
 )
+from gateway.routes.apps.durability import ensure_workspace, mirror_app_file
 from pydantic import BaseModel
-
-# Directories never listed (VCS + build/dependency noise — dotdirs are already
-# skipped wholesale, same stance as workspace.py's _EXCLUDED_DIRS).
-_SKIP_DIRS = frozenset({"node_modules", "dist", "build", "__pycache__"})
-_MAX_LIST_FILES = 2000
 
 
 class AppFileEntry(BaseModel):
@@ -53,7 +53,7 @@ def _walk_files(workspace: Path) -> list[AppFileEntry]:
     for dirpath, dirnames, filenames in os.walk(workspace):
         dirnames[:] = sorted(
             d for d in dirnames
-            if not d.startswith(".") and d not in _SKIP_DIRS
+            if not d.startswith(".") and d not in WORKSPACE_SKIP_DIRS
         )
         rel_dir = Path(dirpath).relative_to(workspace)
         for fname in sorted(filenames):
@@ -71,18 +71,21 @@ def _walk_files(workspace: Path) -> list[AppFileEntry]:
                     stat.st_mtime, tz=UTC,
                 ).isoformat(),
             ))
-            if len(entries) >= _MAX_LIST_FILES:
+            if len(entries) >= MAX_WORKSPACE_FILES:
                 return entries
     return entries
 
 
-async def _edit_workspace(slug: str, user: UserContext) -> Path:
+async def _edit_workspace(slug: str, user: UserContext) -> tuple[Any, Path]:
+    """Edit-gated row + workspace path — rehydrated from ``app_files`` first
+    when the on-disk draft is missing (the durability choke point)."""
     db = await _get_db()
     try:
         row, _grants = await get_app_or_404(db, slug, user, edit=True)
+        workspace = await ensure_workspace(db, row)
     finally:
         await db.close()
-    return app_workspace(row)
+    return row, workspace
 
 
 @router.get("/{slug}/files", response_model=list[AppFileEntry])
@@ -90,7 +93,7 @@ async def list_app_files(
     slug: str,
     user: UserContext = Depends(require_app_user),
 ) -> list[AppFileEntry]:
-    workspace = await _edit_workspace(slug, user)
+    _row, workspace = await _edit_workspace(slug, user)
     return await asyncio.get_event_loop().run_in_executor(
         None, _walk_files, workspace,
     )
@@ -102,7 +105,7 @@ async def read_app_file(
     path: str = Query(..., description="Relative path within the workspace"),
     user: UserContext = Depends(require_app_user),
 ) -> PlainTextResponse:
-    workspace = await _edit_workspace(slug, user)
+    _row, workspace = await _edit_workspace(slug, user)
     file_path = resolve_app_file(workspace, path)
     if not file_path.is_file():
         raise HTTPException(status_code=404, detail="File not found")
@@ -138,7 +141,7 @@ async def write_app_file(
             detail=f"Content too large ({len(data)} bytes). "
                    f"Maximum is {MAX_SOURCE_FILE_BYTES}.",
         )
-    workspace = await _edit_workspace(slug, user)
+    row, workspace = await _edit_workspace(slug, user)
     file_path = resolve_app_file(workspace, body.path)
 
     def _write() -> os.stat_result:
@@ -148,6 +151,9 @@ async def write_app_file(
 
     stat = await asyncio.get_event_loop().run_in_executor(None, _write)
     rel = str(file_path.relative_to(workspace.resolve())).replace("\\", "/")
+    # Durability write-through: mirror just this file into app_files
+    # (best-effort — a full reconcile rides POST /{slug}/sync and publish).
+    await mirror_app_file(str(row.id), rel, body.content)
     _log.info("apps.file_written", slug=slug, path=rel, size=stat.st_size)
     return AppFileEntry(
         path=rel,

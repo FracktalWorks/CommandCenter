@@ -57,6 +57,10 @@ export default function AppRunPage({
   const [usage, setUsage] = useState<AppUsage | null>(null);
   const infoRef = useRef<HTMLDivElement | null>(null);
 
+  // "Make live" (rollback) two-step confirm, editors only.
+  const [confirmVersion, setConfirmVersion] = useState<number | null>(null);
+  const [rollbackBusy, setRollbackBusy] = useState(false);
+
   // Broker the app frame's cc.* calls against /api/apps/{slug}/…
   useCcBridge(slug, { mode: "live" });
 
@@ -124,11 +128,47 @@ export default function AppRunPage({
     const onDown = (e: MouseEvent) => {
       if (infoRef.current && !infoRef.current.contains(e.target as Node)) {
         setShowInfo(false);
+        setConfirmVersion(null);
       }
     };
     document.addEventListener("mousedown", onDown);
     return () => document.removeEventListener("mousedown", onDown);
   }, [showInfo]);
+
+  /** Roll the live pointer back to an older published version. */
+  const makeLive = useCallback(
+    async (version: number) => {
+      setRollbackBusy(true);
+      try {
+        const res = await fetch(
+          `/api/apps/${encodeURIComponent(slug)}/rollback`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ version }),
+          }
+        );
+        if (res.ok) {
+          setConfirmVersion(null);
+          // Refetch app meta + live bundle so the badge and frame match.
+          const ares = await fetch(`/api/apps/${encodeURIComponent(slug)}`);
+          if (ares.ok) {
+            const data = (await ares.json()) as { app?: AppMeta };
+            if (data.app) setApp(data.app);
+          }
+          const bres = await fetch(
+            `/api/apps/${encodeURIComponent(slug)}/bundle?version=live`
+          );
+          if (bres.ok) setBundle(await bres.text());
+        }
+      } catch {
+        // Best-effort — leave the confirm strip open so the user can retry.
+      } finally {
+        setRollbackBusy(false);
+      }
+    },
+    [slug]
+  );
 
   const srcDoc = useMemo(
     () => (bundle ? buildAppSrcDoc(bundle, { slug, mode: "live" }) : null),
@@ -239,22 +279,59 @@ export default function AppRunPage({
                     No published versions.
                   </span>
                 ) : (
-                  versions.slice(0, 6).map((v) => (
-                    <div
-                      key={v.version}
-                      className="flex items-center gap-2 text-muted-foreground"
-                    >
-                      <span className="font-mono text-foreground shrink-0">
-                        v{v.version}
-                      </span>
-                      <span className="truncate flex-1">
-                        {v.release_notes || "—"}
-                      </span>
-                      <span className="shrink-0">
-                        {formatDate(v.published_at)}
-                      </span>
-                    </div>
-                  ))
+                  versions.slice(0, 6).map((v) => {
+                    const isCurrent = v.version === app.live_version;
+                    return (
+                      <div key={v.version} className="flex flex-col gap-1">
+                        <div className="flex items-center gap-2 text-muted-foreground">
+                          <span className="font-mono text-foreground shrink-0">
+                            v{v.version}
+                          </span>
+                          <span className="truncate flex-1">
+                            {v.release_notes || "—"}
+                          </span>
+                          <span className="shrink-0">
+                            {formatDate(v.published_at)}
+                          </span>
+                          {isCurrent ? (
+                            <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full text-success bg-success/10 shrink-0">
+                              live
+                            </span>
+                          ) : canEdit && confirmVersion !== v.version ? (
+                            <button
+                              onClick={() => setConfirmVersion(v.version)}
+                              className="text-[10px] rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
+                            >
+                              Make live
+                            </button>
+                          ) : null}
+                        </div>
+                        {canEdit && !isCurrent && confirmVersion === v.version && (
+                          <div className="flex items-center gap-1.5">
+                            <span className="text-[10px] text-muted-foreground flex-1">
+                              Make v{v.version} live?
+                            </span>
+                            <button
+                              onClick={() => makeLive(v.version)}
+                              disabled={rollbackBusy}
+                              className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
+                            >
+                              {rollbackBusy && (
+                                <Loader2 className="w-3 h-3 animate-spin" />
+                              )}
+                              Confirm
+                            </button>
+                            <button
+                              onClick={() => setConfirmVersion(null)}
+                              className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground tech-transition"
+                            >
+                              Cancel
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })
                 )}
               </div>
             </div>

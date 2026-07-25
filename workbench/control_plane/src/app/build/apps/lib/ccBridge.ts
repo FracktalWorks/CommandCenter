@@ -19,11 +19,17 @@
  * on the same window without ever colliding: each handler ignores the other's
  * messages.
  *
+ * Besides the RPC calls, the SDK also mirrors frame errors (window.onerror,
+ * unhandledrejection, console.error) to the parent as fire-and-forget
+ * `{ __ccsdk, event: "console", … }` notifications — no `id`, so the RPC
+ * broker ignores them; `useCcBridge({ onConsoleEvent })` surfaces them to
+ * the Workshop's console drawer.
+ *
  * Trust model: the frame holds no token, no cookie, no credential — every call
  * is brokered by this page and executed as the viewing user (see RFC §4.4).
  */
 
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 
 // ─── In-frame SDK ─────────────────────────────────────────────────────────
 
@@ -82,6 +88,72 @@ const CC_SDK = `
       if (d.error != null) p.reject(new Error(String(d.error)));
       else p.resolve(d.result);
     });
+    // ── Console capture ──────────────────────────────────────────────
+    // window.onerror / unhandledrejection / console.error are mirrored to
+    // the parent as fire-and-forget notifications (event field, NO id — the
+    // parent's RPC broker ignores them; its console listener picks them up).
+    var CONSOLE_CAP = 2000;
+    var lastConsoleKey = null;
+    function postConsole(level, message, stack) {
+      try {
+        var msg = String(message == null ? "" : message).slice(0, CONSOLE_CAP);
+        var stk = stack == null ? null : String(stack).slice(0, CONSOLE_CAP);
+        // Dedupe identical consecutive messages (error loops spam otherwise).
+        var key = level + "\\u0000" + msg + "\\u0000" + (stk || "");
+        if (key === lastConsoleKey) return;
+        lastConsoleKey = key;
+        var payload = {
+          __ccsdk: true,
+          event: "console",
+          level: level,
+          message: msg,
+          slug: SLUG,
+          mode: MODE
+        };
+        if (stk) payload.stack = stk;
+        parent.postMessage(payload, "*");
+      } catch (e) {
+        /* fire-and-forget */
+      }
+    }
+    var prevOnError = window.onerror;
+    window.onerror = function (message, source, lineno, colno, error) {
+      postConsole("error", message, error && error.stack);
+      if (typeof prevOnError === "function") {
+        return prevOnError.apply(this, arguments);
+      }
+      return false;
+    };
+    window.addEventListener("unhandledrejection", function (ev) {
+      var r = ev && ev.reason;
+      if (r instanceof Error) {
+        postConsole("error", "Unhandled rejection: " + r.message, r.stack);
+      } else {
+        var text;
+        try { text = typeof r === "string" ? r : JSON.stringify(r); }
+        catch (e) { text = String(r); }
+        postConsole("error", "Unhandled rejection: " + text, null);
+      }
+    });
+    var origConsoleError = console.error;
+    console.error = function () {
+      try { origConsoleError.apply(console, arguments); } catch (e) {}
+      var parts = [];
+      var stack = null;
+      for (var i = 0; i < arguments.length; i++) {
+        var a = arguments[i];
+        if (a instanceof Error) {
+          parts.push(a.message);
+          if (!stack && a.stack) stack = a.stack;
+        } else if (typeof a === "object" && a !== null) {
+          try { parts.push(JSON.stringify(a)); }
+          catch (e) { parts.push(String(a)); }
+        } else {
+          parts.push(String(a));
+        }
+      }
+      postConsole("error", parts.join(" "), stack);
+    };
     function table(name) {
       return {
         list: function (opts) { return call("storage.list", [name, opts || {}]); },
@@ -146,6 +218,33 @@ function isCcSdkRequest(data: unknown): data is CcSdkRequest {
     typeof d.id === "string" &&
     typeof d.method === "string" &&
     Array.isArray(d.args)
+  );
+}
+
+/** A console notification surfaced to the page (Workshop console drawer). */
+export interface CcConsoleEvent {
+  level: string;
+  message: string;
+  stack?: string;
+}
+
+/** Fire-and-forget console notification from the frame (event, NO id). */
+interface CcConsoleMessage extends CcConsoleEvent {
+  __ccsdk: true;
+  event: "console";
+  slug?: string;
+  mode?: string;
+}
+
+function isCcConsoleMessage(data: unknown): data is CcConsoleMessage {
+  if (!data || typeof data !== "object") return false;
+  const d = data as Record<string, unknown>;
+  return (
+    d.__ccsdk === true &&
+    d.event === "console" &&
+    typeof d.level === "string" &&
+    typeof d.message === "string" &&
+    (d.stack === undefined || typeof d.stack === "string")
   );
 }
 
@@ -249,14 +348,33 @@ async function dispatch(slug: string, msg: CcSdkRequest): Promise<unknown> {
  */
 export function useCcBridge(
   slug: string,
-  opts?: { mode?: "draft" | "live" }
+  opts?: {
+    mode?: "draft" | "live";
+    /** Invoked for `event: "console"` notifications from the app frame. */
+    onConsoleEvent?: (e: CcConsoleEvent) => void;
+  }
 ): void {
   const mode = opts?.mode ?? "live";
+  // Ref'd so a new callback identity never tears down the listener.
+  const onConsoleEventRef = useRef(opts?.onConsoleEvent);
+  useEffect(() => {
+    onConsoleEventRef.current = opts?.onConsoleEvent;
+  });
   useEffect(() => {
     let disposed = false;
 
     function onMessage(ev: MessageEvent) {
       const data: unknown = ev.data;
+      // Console notifications (no id) are not RPC — surface and stop.
+      if (isCcConsoleMessage(data)) {
+        if (data.slug !== slug) return;
+        onConsoleEventRef.current?.({
+          level: data.level,
+          message: data.message,
+          ...(data.stack !== undefined ? { stack: data.stack } : {}),
+        });
+        return;
+      }
       if (!isCcSdkRequest(data)) return;
       // Ignore requests stamped for a different app (two frames on one page).
       if (data.slug && data.slug !== slug) return;

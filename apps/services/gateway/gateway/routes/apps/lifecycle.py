@@ -36,6 +36,7 @@ from gateway.routes.apps._common import (
     role_for,
     router,
 )
+from gateway.routes.apps.durability import sync_workspace_best_effort
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -306,6 +307,9 @@ async def create_app(
         await db.commit()
     finally:
         await db.close()
+    # Durability: mirror the fresh scaffold into app_files right away so a
+    # brand-new draft survives a disk loss (best-effort, never fails create).
+    await sync_workspace_best_effort(row)
     _log.info("apps.created", slug=slug, owner=owner)
     publish_app_activity(slug, user=owner, action="created")
     return _to_detail(row, user, [])

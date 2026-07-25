@@ -43,6 +43,13 @@ MAX_AI_BUDGET_TOKENS = 10_000_000              # manifest ai_budget_tokens ceili
 
 TABLE_NAME_RE = re.compile(r"^[a-z0-9_]{1,48}$")
 
+# Workspace-walk rules shared by the files listing and the durability sync:
+# directories never walked (VCS + build/dependency noise — dotdirs are already
+# skipped wholesale, same stance as workspace.py's _EXCLUDED_DIRS), and the
+# per-walk file ceiling.
+WORKSPACE_SKIP_DIRS = frozenset({"node_modules", "dist", "build", "__pycache__"})
+MAX_WORKSPACE_FILES = 2000
+
 # Default manifest scopes for a fresh scaffold (RFC §4.1).
 DEFAULT_SCOPES = ["identity:read", "storage:app", "ai:tier-1"]
 

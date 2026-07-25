@@ -5,6 +5,7 @@ register their routes on the shared ``router`` as an import side effect.
 RFC: docs/app-workshop/README.md §4.10.
 """
 
+from gateway.routes.apps import durability as _durability  # noqa: F401
 from gateway.routes.apps import files as _files  # noqa: F401
 from gateway.routes.apps import lifecycle as _lifecycle  # noqa: F401
 from gateway.routes.apps import publish as _publish  # noqa: F401

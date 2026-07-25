@@ -7,7 +7,8 @@
  * The chat is a THIN wrapper around the shared <AgentChat> — the AssistantRail
  * pattern: one session per app (named `app:{slug}`), bound to the app's
  * workspace via PATCH /api/agent/workspace/{sessionId}, persona carrying the
- * workspace contract. Preview refreshes on artifact writes + a cheap poll.
+ * workspace contract. Preview refreshes on artifact writes, on run-end
+ * (onActivity → debounce → refetch + POST /sync), and a fallback poll.
  */
 
 import {
@@ -16,14 +17,18 @@ import {
   useCallback,
   useEffect,
   useMemo,
+  useRef,
   useState,
 } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
   ArrowLeft,
+  ChevronDown,
+  ChevronRight,
   Eye,
   FileCode,
+  History,
   Loader2,
   Lock,
   RefreshCw,
@@ -40,17 +45,45 @@ import {
   upsertSession,
   type ChatSession,
 } from "@/lib/sessions";
-import { buildAppSrcDoc, useCcBridge } from "../../lib/ccBridge";
-import type { AppFile, AppMeta } from "../../lib/types";
+import {
+  buildAppSrcDoc,
+  useCcBridge,
+  type CcConsoleEvent,
+} from "../../lib/ccBridge";
+import type { AppFile, AppMeta, Checkpoint } from "../../lib/types";
 
 const BUILDER_AGENT = "app-builder";
 const SESSION_KEY_PREFIX = "cc-app-builder-session-";
-const PREVIEW_POLL_MS = 10_000;
+/** Fallback poll — run-end sync (onActivity) is the primary refresh path. */
+const PREVIEW_POLL_MS = 30_000;
+/** Settle time after an assistant turn lands before refetch + sync. */
+const RUN_SYNC_DEBOUNCE_MS = 1_500;
+/** Bound on captured console events (newest-first, oldest dropped). */
+const CONSOLE_EVENT_CAP = 50;
 
 function formatBytes(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+}
+
+function formatRelative(iso: string): string {
+  try {
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return "just now";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs / 24);
+    if (days < 7) return `${days}d ago`;
+    return new Date(iso).toLocaleDateString(undefined, {
+      month: "short",
+      day: "numeric",
+    });
+  } catch {
+    return iso;
+  }
 }
 
 /** Find-or-create the ONE builder chat session for this app. */
@@ -272,14 +305,30 @@ function Workshop({ slug }: { slug: string }) {
   // Draft preview.
   const [draftBundle, setDraftBundle] = useState<string | null>(null);
   const [previewBusy, setPreviewBusy] = useState(false);
+  const lastBundleRef = useRef<string | null>(null);
+
+  // Console drawer (frame errors mirrored by the cc SDK, newest-first).
+  const [consoleEvents, setConsoleEvents] = useState<CcConsoleEvent[]>([]);
+  const [consoleOpen, setConsoleOpen] = useState(false);
+
+  // Checkpoints popover (topbar History icon).
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[] | null>(null);
+  const [showHistory, setShowHistory] = useState(false);
+  const [confirmSha, setConfirmSha] = useState<string | null>(null);
+  const [restoringSha, setRestoringSha] = useState<string | null>(null);
+  const historyRef = useRef<HTMLDivElement | null>(null);
 
   // Code view.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
 
   // Broker the DRAFT frame's cc.* calls — same bridge as production so the
-  // preview behaves identically to the published app (RFC §4.3).
-  useCcBridge(slug, { mode: "draft" });
+  // preview behaves identically to the published app (RFC §4.3). Console
+  // notifications feed the drawer under the preview.
+  const onConsoleEvent = useCallback((e: CcConsoleEvent) => {
+    setConsoleEvents((prev) => [e, ...prev].slice(0, CONSOLE_EVENT_CAP));
+  }, []);
+  useCcBridge(slug, { mode: "draft", onConsoleEvent });
 
   // ── App meta + files ────────────────────────────────────────────────
   // Fetch-on-mount wiring: same pattern (and lint carve-out) as
@@ -345,7 +394,13 @@ function Workshop({ slug }: { slug: string }) {
       );
       if (res.ok) {
         const text = await res.text();
-        setDraftBundle((prev) => (prev === text ? prev : text));
+        if (lastBundleRef.current !== text) {
+          lastBundleRef.current = text;
+          // New bundle reloads the frame — each rebuild starts with a clean
+          // console (stale errors from the previous build would mislead).
+          setConsoleEvents([]);
+          setDraftBundle(text);
+        }
       }
     } catch {
       // Preview refresh is best-effort.
@@ -356,7 +411,7 @@ function Workshop({ slug }: { slug: string }) {
 
   useEffect(() => {
     refreshPreview();
-    // Cheap poll so agent edits show up even without an artifact event; only
+    // Fallback poll so agent edits show up even if run-end sync misses; only
     // while the tab is visible.
     const t = setInterval(() => {
       if (document.visibilityState === "visible") refreshPreview();
@@ -369,6 +424,120 @@ function Workshop({ slug }: { slug: string }) {
     refreshPreview();
     fetchFiles();
   }, [refreshPreview, fetchFiles]);
+
+  // ── Checkpoints + run-end sync ──────────────────────────────────────
+  const refreshCheckpoints = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/apps/${encodeURIComponent(slug)}/checkpoints`
+      );
+      if (!res.ok) return;
+      const data = (await res.json()) as { checkpoints?: Checkpoint[] };
+      setCheckpoints(Array.isArray(data.checkpoints) ? data.checkpoints : []);
+    } catch {
+      // Best-effort.
+    }
+  }, [slug]);
+
+  /** Mirror the draft to Postgres + git checkpoint (best-effort). */
+  const syncDraft = useCallback(async () => {
+    try {
+      await fetch(`/api/apps/${encodeURIComponent(slug)}/sync`, {
+        method: "POST",
+      });
+    } catch {
+      // Sync is best-effort — the 30 s poll still covers the preview.
+    }
+  }, [slug]);
+
+  // When an assistant turn lands (messageCount grows), give the workspace a
+  // moment to settle, then refetch the preview and mirror the draft. This is
+  // the primary refresh path; the poll above is only the fallback.
+  const lastMessageCountRef = useRef(0);
+  const syncTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleActivity = useCallback(
+    (info: { messageCount: number }) => {
+      if (info.messageCount <= lastMessageCountRef.current) {
+        lastMessageCountRef.current = info.messageCount;
+        return;
+      }
+      lastMessageCountRef.current = info.messageCount;
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+      syncTimerRef.current = setTimeout(() => {
+        syncTimerRef.current = null;
+        refreshPreview();
+        fetchFiles();
+        syncDraft().then(refreshCheckpoints);
+      }, RUN_SYNC_DEBOUNCE_MS);
+    },
+    [refreshPreview, fetchFiles, syncDraft, refreshCheckpoints]
+  );
+  useEffect(
+    () => () => {
+      if (syncTimerRef.current) clearTimeout(syncTimerRef.current);
+    },
+    []
+  );
+
+  const toggleHistory = useCallback(() => {
+    const next = !showHistory;
+    setShowHistory(next);
+    if (next) {
+      setConfirmSha(null);
+      refreshCheckpoints();
+    }
+  }, [showHistory, refreshCheckpoints]);
+
+  // Close the checkpoints popover on outside click.
+  useEffect(() => {
+    if (!showHistory) return;
+    const onDown = (e: MouseEvent) => {
+      if (historyRef.current && !historyRef.current.contains(e.target as Node)) {
+        setShowHistory(false);
+      }
+    };
+    document.addEventListener("mousedown", onDown);
+    return () => document.removeEventListener("mousedown", onDown);
+  }, [showHistory]);
+
+  const restoreCheckpoint = useCallback(
+    async (sha: string) => {
+      setRestoringSha(sha);
+      try {
+        const res = await fetch(
+          `/api/apps/${encodeURIComponent(slug)}/restore`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ sha }),
+          }
+        );
+        if (res.ok) {
+          setConfirmSha(null);
+          await Promise.all([
+            refreshPreview(),
+            fetchFiles(),
+            refreshCheckpoints(),
+          ]);
+        }
+      } catch {
+        // Leave the popover open so the user can retry.
+      } finally {
+        setRestoringSha(null);
+      }
+    },
+    [slug, refreshPreview, fetchFiles, refreshCheckpoints]
+  );
+
+  // "✦ Fix with AI" — seed the build chat composer with the newest errors.
+  const fixWithAi = useCallback(() => {
+    const recent = consoleEvents.slice(0, 3).reverse();
+    if (recent.length === 0) return;
+    const lines = recent.map((e) =>
+      e.stack ? `${e.message}\n${e.stack}` : e.message
+    );
+    setPendingInput(`Preview errors:\n${lines.join("\n")}\nPlease fix them.`);
+  }, [consoleEvents]);
 
   // ── Code view file content ──────────────────────────────────────────
   const selectFile = useCallback(
@@ -466,6 +635,94 @@ function Workshop({ slug }: { slug: string }) {
           />
         </div>
 
+        <div className="relative shrink-0" ref={historyRef}>
+          <button
+            onClick={toggleHistory}
+            title="Checkpoints"
+            className={`p-2 rounded-lg border border-border tech-transition ${
+              showHistory
+                ? "text-primary bg-primary/10"
+                : "text-muted-foreground hover:bg-secondary"
+            }`}
+          >
+            <History className="w-4 h-4" />
+          </button>
+
+          {/* Checkpoints popover */}
+          {showHistory && (
+            <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-border bg-card shadow-lg z-40 p-3 flex flex-col gap-1 text-xs">
+              <span className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 py-1">
+                Checkpoints
+              </span>
+              {checkpoints === null ? (
+                <div className="px-2 py-1.5">
+                  <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                </div>
+              ) : checkpoints.length === 0 ? (
+                <p className="px-2 py-1.5 text-muted-foreground">
+                  No checkpoints yet — one is saved after each build turn.
+                </p>
+              ) : (
+                <div className="max-h-64 overflow-y-auto flex flex-col gap-0.5">
+                  {checkpoints.map((c, i) => (
+                    <div
+                      key={c.sha}
+                      className="flex flex-col gap-1 rounded-lg px-2 py-1.5 hover:bg-secondary/50 tech-transition"
+                    >
+                      <div className="flex items-center gap-2">
+                        <div className="min-w-0 flex-1">
+                          <div className="text-xs text-foreground truncate">
+                            {c.message || c.sha.slice(0, 7)}
+                          </div>
+                          <div className="text-[10px] text-muted-foreground">
+                            {formatRelative(c.at)} · {c.files_changed}{" "}
+                            {c.files_changed === 1 ? "file" : "files"} changed
+                          </div>
+                        </div>
+                        {i === 0 ? (
+                          <span className="text-[9px] font-bold uppercase tracking-wide px-1.5 py-0.5 rounded-full text-success bg-success/10 shrink-0">
+                            Current
+                          </span>
+                        ) : confirmSha !== c.sha ? (
+                          <button
+                            onClick={() => setConfirmSha(c.sha)}
+                            className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
+                          >
+                            Restore
+                          </button>
+                        ) : null}
+                      </div>
+                      {confirmSha === c.sha && (
+                        <div className="flex items-center gap-1.5">
+                          <span className="text-[10px] text-muted-foreground flex-1">
+                            Restore this checkpoint?
+                          </span>
+                          <button
+                            onClick={() => restoreCheckpoint(c.sha)}
+                            disabled={restoringSha === c.sha}
+                            className="text-[10px] rounded-md bg-primary px-2 py-1 font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50 flex items-center gap-1"
+                          >
+                            {restoringSha === c.sha && (
+                              <Loader2 className="w-3 h-3 animate-spin" />
+                            )}
+                            Confirm
+                          </button>
+                          <button
+                            onClick={() => setConfirmSha(null)}
+                            className="text-[10px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground tech-transition"
+                          >
+                            Cancel
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+
         <button
           onClick={() => setShowPublish(true)}
           className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 shrink-0"
@@ -517,6 +774,61 @@ function Workshop({ slug }: { slug: string }) {
                       Ask the builder to scaffold the app — the preview appears
                       as soon as it writes the first draft.
                     </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Console drawer — frame errors mirrored by the cc SDK. */}
+              <div className="border-t border-border bg-card shrink-0">
+                <div className="flex items-center gap-2 px-3 py-1.5">
+                  <button
+                    onClick={() => setConsoleOpen((o) => !o)}
+                    className="flex items-center gap-1.5 font-mono text-[11px] text-muted-foreground hover:text-foreground tech-transition"
+                  >
+                    {consoleOpen ? (
+                      <ChevronDown className="w-3 h-3 shrink-0" />
+                    ) : (
+                      <ChevronRight className="w-3 h-3 shrink-0" />
+                    )}
+                    {consoleEvents.length === 0 ? (
+                      <span className="text-success">Console · clean</span>
+                    ) : (
+                      <span className="text-destructive">
+                        Console · {consoleEvents.length}{" "}
+                        {consoleEvents.length === 1 ? "error" : "errors"}
+                      </span>
+                    )}
+                  </button>
+                  <div className="flex-1" />
+                  {consoleEvents.length > 0 && (
+                    <button
+                      onClick={fixWithAi}
+                      className="font-mono text-[11px] text-primary hover:opacity-80 tech-transition shrink-0"
+                    >
+                      ✦ Fix with AI
+                    </button>
+                  )}
+                </div>
+                {consoleOpen && (
+                  <div className="max-h-40 overflow-auto border-t border-border px-3 py-2 flex flex-col gap-2">
+                    {consoleEvents.length === 0 ? (
+                      <p className="font-mono text-[11px] text-muted-foreground">
+                        No errors captured since the last rebuild.
+                      </p>
+                    ) : (
+                      consoleEvents.map((e, i) => (
+                        <div key={i} className="font-mono text-[11px]">
+                          <div className="text-destructive break-words">
+                            {e.message}
+                          </div>
+                          {e.stack && (
+                            <pre className="text-[10px] text-muted-foreground whitespace-pre-wrap break-words mt-0.5">
+                              {e.stack}
+                            </pre>
+                          )}
+                        </div>
+                      ))
+                    )}
                   </div>
                 )}
               </div>
@@ -608,6 +920,7 @@ function Workshop({ slug }: { slug: string }) {
                 persona={persona}
                 pendingInput={pendingInput}
                 onPendingInputConsumed={() => setPendingInput(undefined)}
+                onActivity={handleActivity}
                 onArtifact={onArtifact}
               />
             ) : (

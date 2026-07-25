@@ -288,9 +288,9 @@ export default function WhatsAppPage() {
   return (
     <div className="flex h-full min-h-0 bg-background text-foreground">
       {/* ── Spine: triage streams ─────────────────────────────────── */}
-      <nav className="w-52 shrink-0 border-r border-border p-3 flex flex-col">
-        <div className="px-2 py-1 text-[10px] font-bold tracking-wider text-muted-foreground/70">
-          TRIAGE
+      <nav className="w-52 shrink-0 space-y-0.5 border-r border-border p-2 flex flex-col">
+        <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+          Triage
         </div>
         {STREAMS.map((s) => {
           const active = s.key === activeStream;
@@ -303,21 +303,25 @@ export default function WhatsAppPage() {
                 setActiveStream(s.key);
                 setSelectedChat(null);
               }}
-              className={`flex items-center gap-2 rounded-lg border-l-2 px-2.5 py-2 text-left text-[13px] ${
+              className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors ${
                 active
-                  ? "border-primary bg-primary/15 font-semibold text-primary"
-                  : "border-transparent text-muted-foreground hover:bg-muted/50"
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
               <Icon className="h-3.5 w-3.5 shrink-0" />
-              <span className="flex-1 truncate">{s.label}</span>
-              <span
-                className={`text-[11px] tabular-nums ${
-                  active ? "text-primary font-bold" : "text-muted-foreground/60"
-                }`}
-              >
-                {count || "·"}
-              </span>
+              <span className="flex-1 truncate text-xs">{s.label}</span>
+              {count > 0 && (
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-muted-foreground"
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
             </button>
           );
         })}

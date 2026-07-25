@@ -1,0 +1,411 @@
+<title>CommandCenter · Custom Apps — Gallery</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --sidebar: hsl(220 13% 9%);
+    --sidebar-accent: hsl(220 13% 13%);
+    --radius: 12px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --sidebar: hsl(0 0% 98%);
+    --sidebar-accent: hsl(210 40% 94%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font-ui); background: var(--background); color: var(--foreground); font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  .shell { display: grid; grid-template-columns: 256px 1fr; height: 100vh; }
+
+  /* ---- Sidebar (mirrors Sidebar.tsx) -------------------------------- */
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: auto; padding: 12px 10px; }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 6px 10px 14px; }
+  .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--primary), hsl(27 96% 61%)); display:grid; place-items:center; color: var(--primary-foreground); font-weight: 800; font-size: 13px; }
+  .brand b { font-size: 13.5px; letter-spacing: -0.01em; }
+  .brand span { display:block; font-size: 10px; color: var(--faint); }
+  .navsec { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); padding: 12px 10px 5px; }
+  .nav-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 7px 10px; border-radius: 9px; color: var(--muted-foreground); font-size: 13px; }
+  .nav-item:hover { background: var(--sidebar-accent); color: var(--foreground); }
+  .nav-item.on { background: var(--primary-wash); color: var(--foreground); }
+  .nav-item.on .icon { color: var(--primary); }
+  .nav-item .note { display:block; font-size: 10px; color: var(--faint); margin-top: 1px; }
+  .nav-item .badge { margin-left: auto; font-size: 10px; font-weight: 700; background: var(--secondary); border-radius: 999px; padding: 1px 7px; color: var(--muted-foreground); }
+  .nav-sub { margin-left: 30px; border-left: 1px solid var(--border); padding-left: 8px; display: flex; flex-direction: column; gap: 1px; }
+  .nav-sub .nav-item { padding: 4.5px 8px; font-size: 12px; }
+  .nav-sub .pin { margin-left: auto; opacity: 0; }
+  .nav-sub .nav-item:hover .pin { opacity: .6; }
+
+  /* ---- Main --------------------------------------------------------- */
+  .main { display: flex; flex-direction: column; min-width: 0; overflow: auto; }
+  .page-head { display: flex; align-items: center; justify-content: space-between; padding: 14px 24px; border-bottom: 1px solid var(--border); flex: none; }
+  .page-head h1 { margin: 0; font-size: 17px; font-weight: 700; }
+  .page-head p { margin: 2px 0 0; font-size: 12px; color: var(--muted-foreground); }
+  .btn { display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; padding: 8px 14px; font-size: 13px; font-weight: 500; transition: all .2s cubic-bezier(.4,0,.2,1); }
+  .btn-primary { background: var(--primary); color: var(--primary-foreground); font-weight: 600; }
+  .btn-primary:hover { opacity: .9; }
+
+  .content { padding: 20px 24px 40px; display: flex; flex-direction: column; gap: 22px; }
+
+  /* Describe-to-create bar */
+  .genesis {
+    border: 1px solid var(--border-strong); background: var(--card); border-radius: 16px;
+    padding: 18px 20px; display: flex; flex-direction: column; gap: 12px;
+    background-image: radial-gradient(600px 120px at 20% 0%, hsl(198 89% 50% / .06), transparent);
+  }
+  .genesis-row { display: flex; align-items: center; gap: 12px; }
+  .genesis-input {
+    flex: 1; display: flex; align-items: center; gap: 10px; background: var(--background);
+    border: 1px solid var(--border-strong); border-radius: 12px; padding: 11px 14px;
+  }
+  .genesis-input .icon { color: var(--accent); }
+  .genesis-input input { flex: 1; background: none; border: none; outline: none; color: var(--foreground); font-family: inherit; font-size: 13.5px; }
+  .genesis-hints { display: flex; gap: 8px; flex-wrap: wrap; }
+  .hint { font-size: 11.5px; color: var(--muted-foreground); border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; }
+  .hint:hover { border-color: hsl(198 89% 50% / .4); color: var(--foreground); }
+  .hint b { color: var(--accent); font-weight: 600; }
+
+  /* Filters */
+  .toolbar { display: flex; align-items: center; gap: 10px; }
+  .pills { display: flex; gap: 6px; }
+  .pill { font-size: 12px; padding: 5px 12px; border-radius: 999px; border: 1px solid var(--border); color: var(--muted-foreground); }
+  .pill.on { background: var(--primary-wash); border-color: hsl(198 89% 50% / .4); color: var(--foreground); font-weight: 600; }
+  .pill .n { font-size: 10.5px; color: var(--faint); margin-left: 4px; }
+  .search { margin-left: auto; display: flex; align-items: center; gap: 8px; border: 1px solid var(--border); border-radius: 10px; padding: 6px 11px; color: var(--faint); font-size: 12.5px; width: 220px; }
+  .search input { background: none; border: none; outline: none; color: var(--foreground); font-family: inherit; font-size: 12.5px; width: 100%; }
+
+  /* App grid */
+  .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
+  .appcard {
+    cursor: pointer; text-align: left; border: 1px solid var(--border); background: var(--card); border-radius: 14px;
+    padding: 16px; display: flex; flex-direction: column; gap: 10px; transition: all .2s cubic-bezier(.4,0,.2,1);
+    position: relative;
+  }
+  .appcard:hover { border-color: hsl(198 89% 50% / .4); background: var(--secondary); transform: translateY(-1px); }
+  .appcard-top { display: flex; align-items: flex-start; gap: 11px; }
+  .app-glyph { width: 38px; height: 38px; border-radius: 10px; display: grid; place-items: center; font-size: 19px; border: 1px solid var(--border-strong); flex: none; }
+  .g1 { background: linear-gradient(135deg, hsl(198 89% 50% / .22), hsl(27 96% 61% / .16)); }
+  .g2 { background: linear-gradient(135deg, hsl(142 76% 47% / .2), hsl(198 89% 50% / .14)); }
+  .g3 { background: linear-gradient(135deg, hsl(27 96% 61% / .2), hsl(0 63% 60% / .14)); }
+  .g4 { background: linear-gradient(135deg, hsl(262 60% 60% / .22), hsl(198 89% 50% / .14)); }
+  .appcard h3 { margin: 0; font-size: 14px; letter-spacing: -0.01em; }
+  .appcard .desc { font-size: 12px; color: var(--muted-foreground); line-height: 1.45; margin: 0; min-height: 34px; }
+  .appcard-meta { display: flex; align-items: center; gap: 8px; font-size: 11px; color: var(--faint); }
+  .avatar { width: 18px; height: 18px; border-radius: 50%; background: var(--secondary); border: 1px solid var(--border-strong); display: grid; place-items: center; font-size: 8.5px; font-weight: 700; color: var(--muted-foreground); }
+  .avatars { display: flex; }
+  .avatars .avatar { margin-left: -6px; }
+  .avatars .avatar:first-child { margin-left: 0; }
+  .chip { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+  .chip.live { color: var(--success); background: hsl(142 76% 47% / .1); }
+  .chip.draft { color: var(--warning); background: hsl(47 96% 53% / .1); }
+  .chip.review { color: var(--accent); background: hsl(27 96% 61% / .1); }
+  .chip.scoped { color: var(--muted-foreground); background: var(--secondary); }
+  .appcard-foot { display: flex; align-items: center; gap: 8px; margin-top: auto; padding-top: 4px; }
+  .appcard-foot .spacer { flex: 1; }
+  .kebab { color: var(--faint); padding: 3px 6px; border-radius: 6px; }
+  .kebab:hover { background: var(--muted); color: var(--foreground); }
+  .uses { display: inline-flex; align-items: center; gap: 4px; }
+
+  .sec-title { font-size: 11px; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); display: flex; align-items: center; gap: 8px; }
+  .sec-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+
+  /* New-from-template row */
+  .tmpl-row { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 10px; }
+  .tmpl {
+    border: 1px dashed var(--border-strong); border-radius: 12px; padding: 12px 14px; text-align: left;
+    display: flex; gap: 10px; align-items: center; color: var(--muted-foreground); font-size: 12.5px;
+  }
+  .tmpl:hover { border-color: hsl(198 89% 50% / .5); color: var(--foreground); background: var(--primary-wash); }
+  .tmpl b { display: block; font-size: 12.5px; color: var(--foreground); }
+  .tmpl span { font-size: 11px; color: var(--faint); }
+</style>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-mail" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M22 7l-10 6L2 7"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><path d="M22 16.9v3a2 2 0 0 1-2.2 2 19.8 19.8 0 0 1-8.6-3 19.5 19.5 0 0 1-6-6 19.8 19.8 0 0 1-3-8.7A2 2 0 0 1 4.1 2h3a2 2 0 0 1 2 1.7l.7 3.4a2 2 0 0 1-.5 1.8L8 10.2a16 16 0 0 0 5.8 5.8l1.3-1.3a2 2 0 0 1 1.8-.5l3.4.7a2 2 0 0 1 1.7 2z"/></symbol>
+  <symbol id="i-brain" viewBox="0 0 24 24"><path d="M9.5 2a2.5 2.5 0 0 0-2.5 2.5v.5A3.5 3.5 0 0 0 4 8.5c0 .8.3 1.6.8 2.2A3.5 3.5 0 0 0 3 13.9 3.6 3.6 0 0 0 6.6 17.5H7a2.5 2.5 0 0 0 5 .5v-13A2.5 2.5 0 0 0 9.5 2z"/><path d="M14.5 2a2.5 2.5 0 0 1 2.5 2.5v.5A3.5 3.5 0 0 1 20 8.5c0 .8-.3 1.6-.8 2.2a3.5 3.5 0 0 1 1.8 3.2 3.6 3.6 0 0 1-3.6 3.6H17a2.5 2.5 0 0 1-5 .5v-13A2.5 2.5 0 0 1 14.5 2z"/></symbol>
+  <symbol id="i-list" viewBox="0 0 24 24"><path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/></symbol>
+  <symbol id="i-note" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6M9 13h6M9 17h4"/></symbol>
+  <symbol id="i-gauge" viewBox="0 0 24 24"><path d="M12 15l4-4M3.3 14a9 9 0 1 1 17.4 0"/></symbol>
+  <symbol id="i-activity" viewBox="0 0 24 24"><path d="M22 12h-4l-3 9L9 3l-3 9H2"/></symbol>
+  <symbol id="i-folder" viewBox="0 0 24 24"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-cpu" viewBox="0 0 24 24"><rect x="4" y="4" width="16" height="16" rx="2"/><rect x="9" y="9" width="6" height="6"/><path d="M9 1v3M15 1v3M9 20v3M15 20v3M1 9h3M1 15h3M20 9h3M20 15h3"/></symbol>
+  <symbol id="i-bot" viewBox="0 0 24 24"><rect x="3" y="8" width="18" height="12" rx="2"/><path d="M12 8V4M8 4h8M8 13h.01M16 13h.01"/></symbol>
+  <symbol id="i-inbox" viewBox="0 0 24 24"><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.5 5.1L2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.5-6.9A2 2 0 0 0 16.7 4H7.3a2 2 0 0 0-1.8 1.1z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M6 8h12v4a6 6 0 0 1-12 0z"/></symbol>
+  <symbol id="i-wrench" viewBox="0 0 24 24"><path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/></symbol>
+  <symbol id="i-plus-sq" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></symbol>
+  <symbol id="i-plus" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-search" viewBox="0 0 24 24"><circle cx="11" cy="11" r="7"/><path d="M21 21l-4.3-4.3"/></symbol>
+  <symbol id="i-users" viewBox="0 0 24 24"><circle cx="9" cy="8" r="3.5"/><path d="M2.5 20c0-3.3 2.9-5 6.5-5s6.5 1.7 6.5 5"/><path d="M16 4.6a3.5 3.5 0 0 1 0 6.8M17.5 15.5c2.4.5 4 1.9 4 4.5"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l1 7 2.5 2.5H5.5L8 10z"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+  <symbol id="i-table" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M3 15h18M12 3v18"/></symbol>
+  <symbol id="i-form" viewBox="0 0 24 24"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M7 9h10M7 13h6"/><circle cx="17" cy="15.5" r="1.5"/></symbol>
+  <symbol id="i-chart" viewBox="0 0 24 24"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></symbol>
+</svg>
+
+<div class="shell">
+  <!-- ================= SIDEBAR (mirrors nav.ts sections) ================= -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">CC</div>
+      <div><b>CommandCenter</b><span>Fracktal Works</span></div>
+    </div>
+
+    <div class="navsec">Apps</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-chat"/></svg> Chat</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-mail"/></svg> Email <span class="badge">12</span></button>
+    <button class="nav-item"><svg class="icon"><use href="#i-phone"/></svg> WhatsApp</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-brain"/></svg> Memory</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-list"/></svg> Tasks</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-note"/></svg> Notes</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-activity"/></svg> Observability</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-folder"/></svg> Artifacts</button>
+
+    <div class="navsec">Custom Apps</div>
+    <button class="nav-item on"><svg class="icon"><use href="#i-plus-sq"/></svg> All apps <span class="badge">9</span></button>
+    <div class="nav-sub">
+      <button class="nav-item">🧵 Filament Tracker <svg class="icon icon-sm pin"><use href="#i-pin"/></svg></button>
+      <button class="nav-item">📅 Demo Scheduler <svg class="icon icon-sm pin"><use href="#i-pin"/></svg></button>
+      <button class="nav-item">💰 Quote Calculator <svg class="icon icon-sm pin"><use href="#i-pin"/></svg></button>
+    </div>
+
+    <div class="navsec">Configure</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-cpu"/></svg> Models</button>
+    <button class="nav-item"><svg class="icon"><use href="#i-bot"/></svg> Agents <span class="badge">7</span></button>
+    <button class="nav-item"><svg class="icon"><use href="#i-inbox"/></svg> Approvals <span class="badge" style="color:var(--warning)">2</span></button>
+    <button class="nav-item"><svg class="icon"><use href="#i-plug"/></svg> Integrations</button>
+
+    <div class="navsec">Build</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-wrench"/></svg> Agent Workbench<span class="note"></span></button>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main class="main">
+    <div class="page-head">
+      <div>
+        <h1>Custom Apps</h1>
+        <p>Small software, built by the team, for the team — created in the Workshop, deployed here.</p>
+      </div>
+      <button class="btn btn-primary"><svg class="icon icon-sm"><use href="#i-plus"/></svg> New app</button>
+    </div>
+
+    <div class="content">
+      <!-- Describe-to-create -->
+      <div class="genesis">
+        <div class="genesis-row">
+          <div class="genesis-input">
+            <svg class="icon"><use href="#i-sparkles"/></svg>
+            <input placeholder="Describe the tool you need… e.g. “A board that shows every Julia printer’s service history and next due date”" />
+            <button class="btn btn-primary" style="padding:6px 13px">Build it</button>
+          </div>
+        </div>
+        <div class="genesis-hints">
+          <span style="font-size:11px;color:var(--faint);align-self:center">Try:</span>
+          <button class="hint"><b>Track</b> demo-unit loans and returns</button>
+          <button class="hint"><b>Calculate</b> print quotes from STL weight + material</button>
+          <button class="hint"><b>Dashboard</b> for open service tickets by printer model</button>
+          <button class="hint"><b>Form</b> for logging factory QC checks → ClickUp</button>
+        </div>
+      </div>
+
+      <!-- Filters -->
+      <div class="toolbar">
+        <div class="pills">
+          <button class="pill on">All <span class="n">9</span></button>
+          <button class="pill">Mine <span class="n">3</span></button>
+          <button class="pill">Shared with me <span class="n">4</span></button>
+          <button class="pill">Team-wide <span class="n">5</span></button>
+          <button class="pill">Drafts <span class="n">2</span></button>
+        </div>
+        <div class="search"><svg class="icon icon-sm"><use href="#i-search"/></svg><input placeholder="Search apps…"/></div>
+      </div>
+
+      <!-- Team apps -->
+      <div class="sec-title">Published to everyone</div>
+      <div class="grid">
+        <div class="appcard" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g1">🧵</div>
+            <div><h3>Filament Tracker</h3>
+              <div class="appcard-meta"><span>v2</span>·<span>by Vijay</span>·<svg class="icon icon-sm"><use href="#i-clock"/></svg><span>2 d ago</span></div>
+            </div>
+          </div>
+          <p class="desc">Print-farm spool inventory with low-stock alerts and one-click ClickUp reorder tasks.</p>
+          <div class="appcard-foot">
+            <span class="chip live">Live</span>
+            <span class="chip scoped uses"><svg class="icon icon-sm"><use href="#i-plug"/></svg> clickup</span>
+            <div class="spacer"></div>
+            <div class="avatars"><span class="avatar">VJ</span><span class="avatar">AR</span><span class="avatar">+6</span></div>
+            <button class="kebab"><svg class="icon icon-sm"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+
+        <div class="appcard" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g2">📅</div>
+            <div><h3>Demo Scheduler</h3>
+              <div class="appcard-meta"><span>v7</span>·<span>by Ananya</span>·<svg class="icon icon-sm"><use href="#i-clock"/></svg><span>5 h ago</span></div>
+            </div>
+          </div>
+          <p class="desc">Book customer demo slots for Julia printers; checks the shared calendar and drafts the invite email.</p>
+          <div class="appcard-foot">
+            <span class="chip live">Live</span>
+            <span class="chip scoped uses"><svg class="icon icon-sm"><use href="#i-plug"/></svg> gmail</span>
+            <div class="spacer"></div>
+            <div class="avatars"><span class="avatar">AN</span><span class="avatar">SK</span><span class="avatar">+4</span></div>
+            <button class="kebab"><svg class="icon icon-sm"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+
+        <div class="appcard" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g3">💰</div>
+            <div><h3>Quote Calculator</h3>
+              <div class="appcard-meta"><span>v12</span>·<span>by Sales team</span>·<svg class="icon icon-sm"><use href="#i-clock"/></svg><span>1 w ago</span></div>
+            </div>
+          </div>
+          <p class="desc">Print-job quoting from material, weight and finish — pulls live filament costs from the tracker app.</p>
+          <div class="appcard-foot">
+            <span class="chip live">Live</span>
+            <span class="chip scoped uses"><svg class="icon icon-sm"><use href="#i-db"/></svg> app-data</span>
+            <div class="spacer"></div>
+            <div class="avatars"><span class="avatar">RK</span><span class="avatar">VJ</span><span class="avatar">+9</span></div>
+            <button class="kebab"><svg class="icon icon-sm"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+
+        <div class="appcard" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g4">🔧</div>
+            <div><h3>Service Log</h3>
+              <div class="appcard-meta"><span>v4</span>·<span>by Imran</span>·<svg class="icon icon-sm"><use href="#i-clock"/></svg><span>3 d ago</span></div>
+            </div>
+          </div>
+          <p class="desc">Per-printer service history with next-due reminders; escalates overdue units to the delivery agent.</p>
+          <div class="appcard-foot">
+            <span class="chip live">Live</span>
+            <span class="chip scoped uses"><svg class="icon icon-sm"><use href="#i-plug"/></svg> agent</span>
+            <div class="spacer"></div>
+            <div class="avatars"><span class="avatar">IM</span><span class="avatar">+3</span></div>
+            <button class="kebab"><svg class="icon icon-sm"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+
+        <div class="appcard" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g2">✅</div>
+            <div><h3>QC Checklist</h3>
+              <div class="appcard-meta"><span>v3</span>·<span>by Priya</span>·<svg class="icon icon-sm"><use href="#i-clock"/></svg><span>2 w ago</span></div>
+            </div>
+          </div>
+          <p class="desc">Factory-floor quality checks per unit; failures open a ClickUp ticket with photos attached.</p>
+          <div class="appcard-foot">
+            <span class="chip review">Update in review</span>
+            <div class="spacer"></div>
+            <div class="avatars"><span class="avatar">PR</span><span class="avatar">+5</span></div>
+            <button class="kebab"><svg class="icon icon-sm"><use href="#i-more"/></svg></button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Mine -->
+      <div class="sec-title">Your workshop</div>
+      <div class="grid">
+        <div class="appcard" style="border-style:dashed" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g1">🧪</div>
+            <div><h3>Filament Tracker</h3>
+              <div class="appcard-meta"><span>draft v3</span>·<span>live is v2</span></div>
+            </div>
+          </div>
+          <p class="desc">Low-stock alerts + ClickUp reorder — continue in the Workshop, then publish.</p>
+          <div class="appcard-foot">
+            <span class="chip draft">Draft</span>
+            <div class="spacer"></div>
+            <span style="font-size:11.5px;color:var(--primary);font-weight:600">Open Workshop →</span>
+          </div>
+        </div>
+
+        <div class="appcard" style="border-style:dashed" tabindex="0">
+          <div class="appcard-top">
+            <div class="app-glyph g4">📦</div>
+            <div><h3>Packing Slip Maker</h3>
+              <div class="appcard-meta"><span>draft v1</span>·<span>never published</span></div>
+            </div>
+          </div>
+          <p class="desc">Generate packing slips from an order number — started yesterday from chat.</p>
+          <div class="appcard-foot">
+            <span class="chip draft">Draft</span>
+            <div class="spacer"></div>
+            <span style="font-size:11.5px;color:var(--primary);font-weight:600">Open Workshop →</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Templates -->
+      <div class="sec-title">Start from a shape</div>
+      <div class="tmpl-row">
+        <button class="tmpl"><svg class="icon"><use href="#i-table"/></svg><div><b>Tracker</b><span>table + form + filters</span></div></button>
+        <button class="tmpl"><svg class="icon"><use href="#i-gauge"/></svg><div><b>Dashboard</b><span>stats + charts over data</span></div></button>
+        <button class="tmpl"><svg class="icon"><use href="#i-form"/></svg><div><b>Form → action</b><span>submit into an integration</span></div></button>
+        <button class="tmpl"><svg class="icon"><use href="#i-chart"/></svg><div><b>Report</b><span>scheduled snapshot page</span></div></button>
+        <button class="tmpl"><svg class="icon"><use href="#i-sparkles"/></svg><div><b>AI utility</b><span>prompt-powered micro-tool</span></div></button>
+      </div>
+    </div>
+  </main>
+</div>
+
+<script>
+  const mq = matchMedia('(prefers-color-scheme: light)');
+  const apply = () => document.documentElement.dataset.theme = mq.matches ? 'light' : 'dark';
+  apply(); mq.addEventListener('change', apply);
+  addEventListener('keydown', e => {
+    if (e.key === 't' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+      document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    }
+  });
+</script>

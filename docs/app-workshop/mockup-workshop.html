@@ -1,0 +1,636 @@
+<title>CommandCenter · App Workshop — Builder</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; /* Geist in-app */
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", "Cascadia Code", Menlo, monospace;
+
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --sidebar: hsl(220 13% 9%);
+    --radius: 12px;
+    --radius-sm: 8px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --sidebar: hsl(0 0% 98%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    font-family: var(--font-ui);
+    background: var(--background);
+    color: var(--foreground);
+    font-size: 14px;
+    -webkit-font-smoothing: antialiased;
+    overflow: hidden;
+  }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  /* ---- Shell -------------------------------------------------------- */
+  .app { display: grid; grid-template-rows: 52px 1fr; height: 100vh; }
+  .topbar {
+    display: flex; align-items: center; gap: 10px; padding: 0 12px 0 8px;
+    background: var(--card); border-bottom: 1px solid var(--border);
+  }
+  .back {
+    display: flex; align-items: center; gap: 6px; padding: 6px 10px; border-radius: var(--radius-sm);
+    color: var(--muted-foreground); font-size: 13px;
+  }
+  .back:hover { background: var(--secondary); color: var(--foreground); }
+  .app-identity { display: flex; align-items: center; gap: 9px; min-width: 0; }
+  .app-glyph {
+    width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center;
+    background: linear-gradient(135deg, hsl(198 89% 50% / .22), hsl(27 96% 61% / .18));
+    border: 1px solid var(--border-strong); font-size: 14px;
+  }
+  .app-name { font-weight: 700; font-size: 14px; letter-spacing: -0.01em; }
+  .app-name[contenteditable]:hover { border-bottom: 1px dashed var(--faint); }
+  .chip {
+    font-size: 10.5px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase;
+    padding: 2.5px 8px; border-radius: 999px; border: 1px solid var(--border-strong);
+    color: var(--muted-foreground); white-space: nowrap;
+  }
+  .chip.draft { color: var(--warning); border-color: hsl(47 96% 53% / .35); background: hsl(47 96% 53% / .08); }
+  .chip.live  { color: var(--success); border-color: hsl(142 76% 47% / .35); background: hsl(142 76% 47% / .08); }
+  .savestate { font-size: 11.5px; color: var(--faint); display: flex; align-items: center; gap: 5px; }
+
+  .seg { display: flex; background: var(--secondary); border: 1px solid var(--border); border-radius: 10px; padding: 3px; margin: 0 auto; }
+  .seg button {
+    display: flex; align-items: center; gap: 6px; padding: 5px 14px; border-radius: 7px;
+    font-size: 12.5px; font-weight: 500; color: var(--muted-foreground);
+  }
+  .seg button.on { background: var(--card); color: var(--foreground); box-shadow: 0 1px 3px hsl(220 13% 2% / .3); }
+
+  .topbar-actions { display: flex; align-items: center; gap: 8px; }
+  .btn {
+    display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; padding: 7px 14px;
+    font-size: 13px; font-weight: 500; transition: all .2s cubic-bezier(.4,0,.2,1);
+  }
+  .btn-secondary { border: 1px solid var(--border); color: var(--muted-foreground); }
+  .btn-secondary:hover { color: var(--foreground); border-color: hsl(198 89% 50% / .3); }
+  .btn-primary { background: var(--primary); color: var(--primary-foreground); font-weight: 600; }
+  .btn-primary:hover { opacity: .9; }
+  .btn-ghost { padding: 7px; border-radius: 9px; color: var(--muted-foreground); border: 1px solid transparent; }
+  .btn-ghost:hover { background: var(--secondary); color: var(--foreground); }
+
+  /* ---- Main split --------------------------------------------------- */
+  .main { display: grid; grid-template-columns: 1fr 408px; min-height: 0; }
+
+  /* ---- Preview pane ------------------------------------------------- */
+  .stage { display: flex; flex-direction: column; min-width: 0; background: var(--background); }
+  .stage-bar {
+    display: flex; align-items: center; gap: 8px; padding: 8px 14px;
+    border-bottom: 1px solid var(--border);
+  }
+  .devices { display: flex; gap: 2px; background: var(--secondary); border: 1px solid var(--border); border-radius: 9px; padding: 2px; }
+  .devices button { padding: 5px 8px; border-radius: 7px; color: var(--faint); display: grid; place-items: center; }
+  .devices button.on { background: var(--card); color: var(--foreground); }
+  .addr {
+    flex: 1; display: flex; align-items: center; gap: 8px; background: var(--secondary);
+    border: 1px solid var(--border); border-radius: 9px; padding: 6px 12px;
+    font-family: var(--font-mono); font-size: 12px; color: var(--muted-foreground);
+  }
+  .addr .lock { color: var(--success); }
+  .addr .origin { color: var(--faint); }
+  .ver-pill {
+    display: flex; align-items: center; gap: 6px; font-family: var(--font-mono); font-size: 11.5px;
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 11px; color: var(--muted-foreground);
+  }
+  .ver-pill:hover { border-color: var(--border-strong); color: var(--foreground); }
+  .ver-pill .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--warning); }
+
+  .viewport { flex: 1; display: grid; place-items: center; padding: 20px; min-height: 0;
+    background:
+      radial-gradient(hsl(220 13% 14%) 1px, transparent 1px);
+    background-size: 22px 22px;
+  }
+  :root[data-theme="light"] .viewport { background: radial-gradient(hsl(214 32% 88%) 1px, transparent 1px); background-size: 22px 22px; }
+  .frame {
+    width: 100%; height: 100%; max-width: 1024px; background: var(--card);
+    border: 1px solid var(--border-strong); border-radius: var(--radius);
+    box-shadow: var(--shadow-lg); overflow: hidden; display: flex; flex-direction: column;
+    position: relative;
+  }
+  .frame::after { /* sandbox badge */
+    content: "sandboxed · opaque origin"; position: absolute; right: 10px; bottom: 8px;
+    font-family: var(--font-mono); font-size: 9.5px; letter-spacing: .08em; text-transform: uppercase;
+    color: var(--faint); opacity: .65; pointer-events: none;
+  }
+
+  /* ---- The demo app INSIDE the preview (what the user is building) --- */
+  .demo { flex: 1; display: flex; flex-direction: column; padding: 22px 26px; gap: 18px; overflow: auto; }
+  .demo-head { display: flex; align-items: center; justify-content: space-between; }
+  .demo-head h1 { margin: 0; font-size: 17px; letter-spacing: -0.01em; }
+  .demo-head p { margin: 3px 0 0; font-size: 12px; color: var(--muted-foreground); }
+  .demo-btn {
+    background: var(--primary); color: var(--primary-foreground); font-weight: 600; font-size: 12.5px;
+    padding: 8px 14px; border-radius: 9px; display: flex; align-items: center; gap: 6px;
+  }
+  .stats { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+  .stat { background: var(--secondary); border: 1px solid var(--border); border-radius: 10px; padding: 12px 14px; }
+  .stat .k { font-size: 11px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .06em; }
+  .stat .v { font-size: 22px; font-weight: 700; margin-top: 4px; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
+  .stat.warn .v { color: var(--accent); }
+  .demo table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .demo th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); padding: 8px 10px; border-bottom: 1px solid var(--border); }
+  .demo td { padding: 9px 10px; border-bottom: 1px solid var(--border); }
+  .demo tr:last-child td { border-bottom: none; }
+  .swatch { width: 11px; height: 11px; border-radius: 3px; display: inline-block; margin-right: 8px; vertical-align: -1px; }
+  .meter { width: 110px; height: 6px; background: var(--muted); border-radius: 999px; overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 999px; background: var(--success); }
+  .meter.low i { background: var(--accent); }
+  .meter.crit i { background: var(--destructive); }
+  .tag-low { font-size: 10px; font-weight: 700; color: var(--accent); background: hsl(27 96% 61% / .12); border-radius: 999px; padding: 2px 8px; }
+
+  /* ---- Console drawer ----------------------------------------------- */
+  .console { border-top: 1px solid var(--border); background: var(--card); }
+  .console-bar { display: flex; align-items: center; gap: 8px; padding: 7px 14px; font-size: 12px; color: var(--muted-foreground); }
+  .console-bar .spacer { flex: 1; }
+  .badge-ok { display: inline-flex; align-items: center; gap: 5px; color: var(--success); font-size: 11.5px; }
+  .console-body {
+    font-family: var(--font-mono); font-size: 11.5px; padding: 4px 14px 10px; color: var(--muted-foreground);
+    max-height: 96px; overflow: auto; display: none;
+  }
+  .console.open .console-body { display: block; }
+  .console-body .warn { color: var(--warning); }
+  .fixit {
+    font-size: 11px; font-weight: 600; color: var(--primary); border: 1px solid hsl(198 89% 50% / .35);
+    border-radius: 999px; padding: 2px 10px; margin-left: 8px;
+  }
+
+  /* ---- Chat pane ----------------------------------------------------- */
+  .chat { display: flex; flex-direction: column; border-left: 1px solid var(--border); background: var(--card); min-height: 0; }
+  .chat-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .chat-head .title { font-size: 13px; font-weight: 600; }
+  .chat-head .sub { font-size: 11px; color: var(--faint); }
+  .chat-head .spacer { flex: 1; }
+  .thread { flex: 1; overflow: auto; padding: 14px; display: flex; flex-direction: column; gap: 14px; }
+
+  .msg-user { align-self: flex-end; max-width: 88%; background: var(--primary-wash); border: 1px solid hsl(198 89% 50% / .22);
+    border-radius: 14px 14px 4px 14px; padding: 9px 13px; font-size: 13px; line-height: 1.45; }
+  .msg-agent { max-width: 100%; font-size: 13px; line-height: 1.5; }
+  .msg-agent p { margin: 6px 0; }
+
+  .working {
+    border: 1px solid var(--border); border-radius: 10px; background: var(--secondary);
+    font-size: 12px; overflow: hidden; margin-bottom: 8px;
+  }
+  .working-head { display: flex; align-items: center; gap: 8px; padding: 7px 11px; color: var(--muted-foreground); width: 100%; text-align: left; }
+  .working-head .n { margin-left: auto; font-size: 11px; color: var(--faint); }
+  .working-steps { border-top: 1px solid var(--border); padding: 8px 11px; display: none; flex-direction: column; gap: 7px; }
+  .working.open .working-steps { display: flex; }
+  .step { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); }
+  .step .icon { color: var(--faint); }
+  .step code { font-family: var(--font-mono); font-size: 11px; color: var(--foreground); background: var(--muted); padding: 1px 6px; border-radius: 5px; }
+  .step .t { margin-left: auto; font-size: 10.5px; color: var(--faint); font-variant-numeric: tabular-nums; }
+  .step.done .icon { color: var(--success); }
+  .step.run .icon { color: var(--primary); animation: pulse 1.2s ease-in-out infinite; }
+  @keyframes pulse { 50% { opacity: .35; } }
+
+  .checkpoint {
+    display: inline-flex; align-items: center; gap: 7px; font-size: 11.5px; font-family: var(--font-mono);
+    border: 1px solid var(--border-strong); border-radius: 999px; padding: 3px 11px; color: var(--muted-foreground);
+    margin-top: 6px;
+  }
+  .checkpoint b { color: var(--foreground); font-weight: 600; }
+  .checkpoint .restore { color: var(--primary); font-size: 11px; font-weight: 600; }
+
+  .appcard {
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 8px;
+    display: flex; align-items: center; gap: 10px; background: var(--secondary); font-size: 12.5px;
+  }
+  .appcard .icon { color: var(--primary); width: 18px; height: 18px; }
+  .appcard b { display: block; font-size: 12.5px; }
+  .appcard span { color: var(--faint); font-size: 11px; }
+
+  .pills { display: flex; flex-wrap: wrap; gap: 7px; padding: 2px 14px 10px; }
+  .pill {
+    font-size: 11.5px; color: var(--muted-foreground); border: 1px solid var(--border);
+    border-radius: 999px; padding: 5px 11px; display: inline-flex; gap: 6px; align-items: center;
+  }
+  .pill:hover { border-color: hsl(198 89% 50% / .4); color: var(--foreground); }
+  .pill .icon { width: 12px; height: 12px; color: var(--accent); }
+
+  .composer { border-top: 1px solid var(--border); padding: 10px 12px 12px; display: flex; flex-direction: column; gap: 8px; }
+  .composer-box {
+    border: 1px solid var(--border-strong); border-radius: 12px; background: var(--background);
+    padding: 10px 12px 8px; display: flex; flex-direction: column; gap: 8px;
+  }
+  .composer-box:focus-within { border-color: hsl(198 89% 50% / .5); }
+  .composer textarea {
+    background: none; border: none; resize: none; color: var(--foreground); font-family: inherit;
+    font-size: 13px; line-height: 1.4; outline: none; height: 40px;
+  }
+  .composer-row { display: flex; align-items: center; gap: 8px; }
+  .model-chip { display: inline-flex; align-items: center; gap: 6px; font-size: 11px; color: var(--faint);
+    border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; }
+  .send {
+    margin-left: auto; width: 30px; height: 30px; border-radius: 9px; background: var(--primary);
+    color: var(--primary-foreground); display: grid; place-items: center;
+  }
+
+  /* ---- Code view (toggled) ------------------------------------------ */
+  .codeview { display: none; flex: 1; min-height: 0; grid-template-columns: 232px 1fr; }
+  .stage.code .viewport, .stage.code .console { display: none; }
+  .stage.code .codeview { display: grid; }
+  .filetree { border-right: 1px solid var(--border); padding: 12px 8px; font-size: 12.5px; overflow: auto; background: var(--card); }
+  .ft-section { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); padding: 4px 10px 6px; }
+  .ft { display: flex; align-items: center; gap: 7px; padding: 5px 10px; border-radius: 7px; color: var(--muted-foreground); width: 100%; text-align: left; font-family: var(--font-mono); font-size: 11.5px; }
+  .ft:hover { background: var(--secondary); }
+  .ft.on { background: var(--primary-wash); color: var(--foreground); }
+  .ft .icon { width: 13px; height: 13px; color: var(--faint); }
+  .codepane { overflow: auto; padding: 16px 20px; font-family: var(--font-mono); font-size: 12px; line-height: 1.65; background: var(--background); }
+  .codepane .ln { color: var(--faint); display: inline-block; width: 26px; user-select: none; }
+  .codepane .c-key { color: hsl(198 89% 62%); }
+  .codepane .c-str { color: hsl(142 60% 60%); }
+  .codepane .c-com { color: var(--faint); font-style: italic; }
+  .codepane .c-num { color: var(--accent); }
+  :root[data-theme="light"] .codepane .c-key { color: hsl(198 89% 32%); }
+  :root[data-theme="light"] .codepane .c-str { color: hsl(142 60% 30%); }
+  .code-note {
+    grid-column: 1 / -1; border-top: 1px solid var(--border); padding: 8px 16px; font-size: 11.5px;
+    color: var(--faint); display: flex; align-items: center; gap: 8px; background: var(--card);
+  }
+
+  /* ---- Publish modal ------------------------------------------------- */
+  .overlay {
+    position: fixed; inset: 0; background: hsl(220 13% 4% / .6); backdrop-filter: blur(3px);
+    display: none; place-items: center; z-index: 50;
+  }
+  .overlay.open { display: grid; }
+  .modal {
+    width: 480px; max-width: calc(100vw - 40px); background: var(--popover);
+    border: 1px solid var(--border-strong); border-radius: 16px; box-shadow: var(--shadow-lg);
+    padding: 20px 22px; max-height: 88vh; overflow: auto;
+  }
+  .modal h2 { margin: 0; font-size: 16px; }
+  .modal .sub { font-size: 12.5px; color: var(--muted-foreground); margin: 4px 0 16px; }
+  .field { margin-bottom: 14px; }
+  .field label { display: block; font-size: 11px; font-weight: 600; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); margin-bottom: 6px; }
+  .field input[type=text] {
+    width: 100%; background: var(--background); border: 1px solid var(--border-strong); border-radius: 9px;
+    color: var(--foreground); font-family: inherit; font-size: 13px; padding: 8px 11px; outline: none;
+  }
+  .vis { display: flex; flex-direction: column; gap: 7px; }
+  .vis label.opt {
+    display: flex; gap: 10px; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 12px; font-size: 12.5px; cursor: pointer; text-transform: none; letter-spacing: 0; color: var(--foreground); font-weight: 500;
+  }
+  .vis label.opt.on { border-color: hsl(198 89% 50% / .5); background: var(--primary-wash); }
+  .vis .d { font-size: 11.5px; color: var(--muted-foreground); font-weight: 400; margin-top: 2px; }
+  .scopes { border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .scope { display: flex; align-items: center; gap: 10px; padding: 9px 12px; font-size: 12.5px; border-bottom: 1px solid var(--border); }
+  .scope:last-child { border-bottom: none; }
+  .scope .icon { color: var(--muted-foreground); }
+  .scope .d { color: var(--faint); font-size: 11.5px; margin-left: auto; }
+  .scope .grant { font-size: 10px; font-weight: 700; border-radius: 999px; padding: 2px 8px; margin-left: auto; }
+  .scope .grant.auto { color: var(--success); background: hsl(142 76% 47% / .1); }
+  .scope .grant.review { color: var(--warning); background: hsl(47 96% 53% / .1); }
+  .approval-note {
+    display: flex; gap: 9px; font-size: 12px; color: var(--muted-foreground); background: var(--secondary);
+    border: 1px solid var(--border); border-radius: 10px; padding: 10px 12px; margin-top: 14px; line-height: 1.45;
+  }
+  .approval-note .icon { color: var(--warning); margin-top: 1px; }
+  .modal-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 18px; }
+</style>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-back" viewBox="0 0 24 24"><path d="M15 18l-6-6 6-6"/></symbol>
+  <symbol id="i-share" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></symbol>
+  <symbol id="i-rocket" viewBox="0 0 24 24"><path d="M4.5 16.5c-1.5 1.3-2 5-2 5s3.7-.5 5-2c.7-.8.7-2 0-2.8-.8-.7-2.2-.7-3 .8z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.9A12.6 12.6 0 0 1 22 2c0 2.7-.9 7.4-6 11a22 22 0 0 1-4 2z"/><path d="M9 12H4s.5-3.3 2-5c1.6-1.8 5-2 5-2M12 15v5s3.3-.5 5-2c1.8-1.6 2-5 2-5"/></symbol>
+  <symbol id="i-eye" viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="3"/></symbol>
+  <symbol id="i-code" viewBox="0 0 24 24"><path d="M16 18l6-6-6-6M8 6l-6 6 6 6"/></symbol>
+  <symbol id="i-monitor" viewBox="0 0 24 24"><rect x="2" y="3" width="20" height="14" rx="2"/><path d="M8 21h8M12 17v4"/></symbol>
+  <symbol id="i-tablet" viewBox="0 0 24 24"><rect x="4" y="2" width="16" height="20" rx="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-phone" viewBox="0 0 24 24"><rect x="6" y="2" width="12" height="20" rx="2"/><path d="M12 18h.01"/></symbol>
+  <symbol id="i-refresh" viewBox="0 0 24 24"><path d="M21 12a9 9 0 1 1-2.6-6.3L21 8"/><path d="M21 3v5h-5"/></symbol>
+  <symbol id="i-terminal" viewBox="0 0 24 24"><path d="M4 17l6-5-6-5M12 19h8"/></symbol>
+  <symbol id="i-clock" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></symbol>
+  <symbol id="i-check" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></symbol>
+  <symbol id="i-chevron" viewBox="0 0 24 24"><path d="M9 6l6 6-6 6"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-file" viewBox="0 0 24 24"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></symbol>
+  <symbol id="i-write" viewBox="0 0 24 24"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></symbol>
+  <symbol id="i-hammer" viewBox="0 0 24 24"><path d="M15 12l-8.4 8.4a2 2 0 0 1-2.8 0l-.2-.2a2 2 0 0 1 0-2.8L12 9"/><path d="M17.6 15L22 10.6 13.4 2 9 6.4l2.2 2.2"/></symbol>
+  <symbol id="i-send" viewBox="0 0 24 24"><path d="M22 2L11 13M22 2l-7 20-4-9-9-4z"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M6 8h12v4a6 6 0 0 1-12 0z"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-package" viewBox="0 0 24 24"><path d="M21 8l-9-5-9 5v8l9 5 9-5z"/><path d="M3 8l9 5 9-5M12 13v9"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></symbol>
+</svg>
+
+<div class="app">
+  <!-- ======================= TOPBAR ======================= -->
+  <header class="topbar">
+    <button class="back"><svg class="icon"><use href="#i-back"/></svg> Apps</button>
+    <div class="app-identity">
+      <div class="app-glyph">🧵</div>
+      <span class="app-name" contenteditable="true" spellcheck="false">Filament Tracker</span>
+      <span class="chip draft">Draft</span>
+      <span class="savestate"><svg class="icon icon-sm"><use href="#i-check"/></svg> Saved · v3</span>
+    </div>
+
+    <div class="seg" role="tablist">
+      <button class="on" id="tab-preview" onclick="setView('preview')"><svg class="icon icon-sm"><use href="#i-eye"/></svg> Preview</button>
+      <button id="tab-code" onclick="setView('code')"><svg class="icon icon-sm"><use href="#i-code"/></svg> Code</button>
+    </div>
+
+    <div class="topbar-actions">
+      <button class="btn-ghost" title="Version history"><svg class="icon"><use href="#i-history"/></svg></button>
+      <button class="btn btn-secondary"><svg class="icon icon-sm"><use href="#i-share"/></svg> Share</button>
+      <button class="btn btn-primary" onclick="document.getElementById('publish').classList.add('open')">
+        <svg class="icon icon-sm"><use href="#i-rocket"/></svg> Publish
+      </button>
+    </div>
+  </header>
+
+  <!-- ======================= MAIN ======================= -->
+  <div class="main">
+    <!-- ---------- LEFT: live preview stage ---------- -->
+    <section class="stage" id="stage">
+      <div class="stage-bar">
+        <div class="devices">
+          <button class="on" title="Desktop"><svg class="icon"><use href="#i-monitor"/></svg></button>
+          <button title="Tablet"><svg class="icon"><use href="#i-tablet"/></svg></button>
+          <button title="Phone"><svg class="icon"><use href="#i-phone"/></svg></button>
+        </div>
+        <div class="addr">
+          <span class="lock">●</span>
+          <span class="origin">apps-preview.cc.fracktal.in/</span>filament-tracker<span class="origin">/draft</span>
+        </div>
+        <button class="ver-pill" title="Deployed v2 · previewing draft v3"><span class="dot"></span> draft v3 · live is v2</button>
+        <button class="btn-ghost" title="Reload preview"><svg class="icon"><use href="#i-refresh"/></svg></button>
+      </div>
+
+      <!-- The user's app, rendered in the sandboxed frame -->
+      <div class="viewport">
+        <div class="frame">
+          <div class="demo">
+            <div class="demo-head">
+              <div>
+                <h1>Filament Inventory</h1>
+                <p>Print-farm spool stock · synced 4 min ago</p>
+              </div>
+              <button class="demo-btn">＋ Log usage</button>
+            </div>
+            <div class="stats">
+              <div class="stat"><div class="k">Spools in stock</div><div class="v">47</div></div>
+              <div class="stat warn"><div class="k">Low stock</div><div class="v">3 <small>materials</small></div></div>
+              <div class="stat"><div class="k">Used this week</div><div class="v">11.2 <small>kg</small></div></div>
+            </div>
+            <table>
+              <thead><tr><th>Material</th><th>Color</th><th>Spools</th><th>Remaining</th><th></th></tr></thead>
+              <tbody>
+                <tr><td>PLA</td><td><span class="swatch" style="background:#e8e6e0"></span>Natural</td><td>14</td><td><div class="meter"><i style="width:78%"></i></div></td><td></td></tr>
+                <tr><td>PLA</td><td><span class="swatch" style="background:#d64545"></span>Red</td><td>3</td><td><div class="meter low"><i style="width:18%"></i></div></td><td><span class="tag-low">LOW</span></td></tr>
+                <tr><td>ABS</td><td><span class="swatch" style="background:#2b2f36"></span>Black</td><td>9</td><td><div class="meter"><i style="width:56%"></i></div></td><td></td></tr>
+                <tr><td>PETG</td><td><span class="swatch" style="background:#3d7ae0"></span>Blue</td><td>2</td><td><div class="meter crit"><i style="width:9%"></i></div></td><td><span class="tag-low">LOW</span></td></tr>
+                <tr><td>TPU</td><td><span class="swatch" style="background:#f0f0f0"></span>White</td><td>5</td><td><div class="meter"><i style="width:44%"></i></div></td><td></td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+      <!-- Console drawer -->
+      <div class="console" id="console">
+        <div class="console-bar">
+          <button class="btn-ghost" style="padding:3px" onclick="document.getElementById('console').classList.toggle('open')">
+            <svg class="icon"><use href="#i-terminal"/></svg>
+          </button>
+          <span>Console</span>
+          <span class="badge-ok"><svg class="icon icon-sm"><use href="#i-check"/></svg> Build OK · 1 warning</span>
+          <button class="fixit">✦ Fix with AI</button>
+          <div class="spacer"></div>
+          <span style="font-size:11px;color:var(--faint)">bundle 148 KB · built in 0.9 s</span>
+        </div>
+        <div class="console-body">
+          <div class="warn">[preview] warning: cc.storage.query("usage_log") returned 0 rows — table not seeded yet</div>
+          <div>[build] esbuild: src/App.jsx + 3 files → app.bundle.js (148 KB) in 0.9 s</div>
+        </div>
+      </div>
+
+      <!-- ---------- Code view (hidden until toggled) ---------- -->
+      <div class="codeview">
+        <aside class="filetree">
+          <div class="ft-section">Filament-Tracker</div>
+          <button class="ft"><svg class="icon"><use href="#i-package"/></svg> app.json</button>
+          <button class="ft"><svg class="icon"><use href="#i-file"/></svg> index.html</button>
+          <button class="ft on"><svg class="icon"><use href="#i-file"/></svg> src/App.jsx</button>
+          <button class="ft"><svg class="icon"><use href="#i-file"/></svg> src/SpoolTable.jsx</button>
+          <button class="ft"><svg class="icon"><use href="#i-file"/></svg> src/useSpools.js</button>
+          <button class="ft"><svg class="icon"><use href="#i-file"/></svg> styles.css</button>
+          <div class="ft-section" style="margin-top:10px">Platform</div>
+          <button class="ft"><svg class="icon"><use href="#i-shield"/></svg> cc-sdk.d.ts <span style="margin-left:auto;font-size:9px;color:var(--faint)">read-only</span></button>
+        </aside>
+        <div class="codepane">
+<div><span class="ln">1</span><span class="c-com">// Spools live in the app's own scoped database (cc.storage) —</span></div>
+<div><span class="ln">2</span><span class="c-com">// no credentials, no backend code. The platform injects window.cc.</span></div>
+<div><span class="ln">3</span><span class="c-key">import</span> { useSpools } <span class="c-key">from</span> <span class="c-str">"./useSpools"</span>;</div>
+<div><span class="ln">4</span></div>
+<div><span class="ln">5</span><span class="c-key">export default function</span> App() {</div>
+<div><span class="ln">6</span>&nbsp;&nbsp;<span class="c-key">const</span> { spools, logUsage } = useSpools();          <span class="c-com">// cc.storage.table("spools")</span></div>
+<div><span class="ln">7</span>&nbsp;&nbsp;<span class="c-key">const</span> low = spools.filter(s =&gt; s.remaining &lt; <span class="c-num">0.2</span>);</div>
+<div><span class="ln">8</span></div>
+<div><span class="ln">9</span>&nbsp;&nbsp;<span class="c-key">async function</span> notifyProcurement() {</div>
+<div><span class="ln">10</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="c-com">// Declared scope: clickup · create task (needs approval on publish)</span></div>
+<div><span class="ln">11</span>&nbsp;&nbsp;&nbsp;&nbsp;<span class="c-key">await</span> cc.tools.call(<span class="c-str">"clickup.create_task"</span>, {</div>
+<div><span class="ln">12</span>&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;&nbsp;list: <span class="c-str">"Procurement"</span>, title: <span class="c-str">`Reorder ${low.length} filaments`</span>,</div>
+<div><span class="ln">13</span>&nbsp;&nbsp;&nbsp;&nbsp;});</div>
+<div><span class="ln">14</span>&nbsp;&nbsp;}</div>
+<div><span class="ln">15</span></div>
+<div><span class="ln">16</span>&nbsp;&nbsp;<span class="c-key">return</span> ( <span class="c-com">/* … stats + SpoolTable … */</span> );</div>
+<div><span class="ln">17</span>}</div>
+        </div>
+        <div class="code-note">
+          <svg class="icon icon-sm"><use href="#i-eye"/></svg>
+          Code is agent-authored — read it, or edit through chat. Power users: “Download source” / re-import round-trip.
+        </div>
+      </div>
+    </section>
+
+    <!-- ---------- RIGHT: build chat ---------- -->
+    <aside class="chat">
+      <div class="chat-head">
+        <svg class="icon" style="color:var(--accent)"><use href="#i-sparkles"/></svg>
+        <div>
+          <div class="title">Build chat</div>
+          <div class="sub">app-builder agent · session #a41f</div>
+        </div>
+        <div class="spacer"></div>
+        <button class="btn-ghost" title="Build history"><svg class="icon"><use href="#i-history"/></svg></button>
+      </div>
+
+      <div class="thread">
+        <div class="msg-user">Track our filament spools across the print farm — stock per material and color, and log usage after each job.</div>
+
+        <div class="msg-agent">
+          <div class="working" onclick="this.classList.toggle('open')">
+            <button class="working-head">
+              <svg class="icon icon-sm"><use href="#i-check"/></svg> Scaffolded the app
+              <span class="n">6 steps · 41 s</span>
+              <svg class="icon icon-sm"><use href="#i-chevron"/></svg>
+            </button>
+            <div class="working-steps">
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-package"/></svg> Created app <code>filament-tracker</code> from the React starter <span class="t">2 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-db"/></svg> Defined storage table <code>spools</code> (material, color, count, remaining) <span class="t">3 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-write"/></svg> Wrote <code>src/App.jsx</code>, <code>src/SpoolTable.jsx</code>, <code>src/useSpools.js</code> <span class="t">24 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-hammer"/></svg> Built preview bundle <code>148 KB</code> <span class="t">1 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-db"/></svg> Seeded 5 demo spools so the preview isn't empty <span class="t">2 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-eye"/></svg> Preview refreshed → v1 <span class="t">—</span></div>
+            </div>
+          </div>
+          <p>Here's a first cut: stock grouped by material and color with remaining-weight meters, plus a <b>Log usage</b> flow that subtracts from the right spool. Data lives in the app's own storage table — every teammate sees the same inventory.</p>
+          <div class="checkpoint"><svg class="icon icon-sm"><use href="#i-history"/></svg> Checkpoint <b>v1</b> <button class="restore">restore</button></div>
+        </div>
+
+        <div class="msg-user">Nice. Flag anything under 20% as low stock, and when I click a low item let me create a reorder task in ClickUp.</div>
+
+        <div class="msg-agent">
+          <div class="working open">
+            <button class="working-head">
+              <svg class="icon icon-sm" style="color:var(--primary)"><use href="#i-hammer"/></svg> Working…
+              <span class="n">3 of 4</span>
+              <svg class="icon icon-sm"><use href="#i-chevron"/></svg>
+            </button>
+            <div class="working-steps">
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-write"/></svg> Added low-stock threshold + badges to <code>SpoolTable.jsx</code> <span class="t">11 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-plug"/></svg> Requested scope <code>clickup · create task</code> → added to manifest <span class="t">1 s</span></div>
+              <div class="step done"><svg class="icon icon-sm"><use href="#i-hammer"/></svg> Rebuilt bundle → preview v3 <span class="t">1 s</span></div>
+              <div class="step run"><svg class="icon icon-sm"><use href="#i-eye"/></svg> Verifying: clicking a LOW row opens the reorder dialog… <span class="t"></span></div>
+            </div>
+          </div>
+          <div class="appcard">
+            <svg class="icon"><use href="#i-plug"/></svg>
+            <div><b>New capability requested: ClickUp — create task</b>
+            <span>Write action · runs through the Action Broker with per-use approval until an admin grants it at publish.</span></div>
+          </div>
+        </div>
+      </div>
+
+      <div class="pills">
+        <button class="pill"><svg class="icon"><use href="#i-sparkles"/></svg> Add CSV export</button>
+        <button class="pill"><svg class="icon"><use href="#i-sparkles"/></svg> Chart usage over time</button>
+        <button class="pill"><svg class="icon"><use href="#i-sparkles"/></svg> Polish the design</button>
+      </div>
+
+      <div class="composer">
+        <div class="composer-box">
+          <textarea placeholder="Describe a change… (⏎ to send, ⇧⏎ for a new line)"></textarea>
+          <div class="composer-row">
+            <span class="model-chip">◈ claude-sonnet-5</span>
+            <span class="model-chip"><svg class="icon icon-sm"><use href="#i-db"/></svg> storage</span>
+            <span class="model-chip"><svg class="icon icon-sm"><use href="#i-plug"/></svg> clickup</span>
+            <button class="send"><svg class="icon icon-sm"><use href="#i-send"/></svg></button>
+          </div>
+        </div>
+      </div>
+    </aside>
+  </div>
+</div>
+
+<!-- ======================= PUBLISH MODAL ======================= -->
+<div class="overlay" id="publish" onclick="if(event.target===this)this.classList.remove('open')">
+  <div class="modal">
+    <h2>Publish Filament Tracker</h2>
+    <p class="sub">Snapshots draft v3 as an immutable release and makes it available in Custom Apps.</p>
+
+    <div class="field">
+      <label>Release notes</label>
+      <input type="text" value="Low-stock alerts + ClickUp reorder tasks" />
+    </div>
+
+    <div class="field">
+      <label>Who can use it</label>
+      <div class="vis">
+        <label class="opt"><input type="radio" name="vis"> Only me
+          <span class="d" style="margin-left:auto">Private — stays in your workshop</span></label>
+        <label class="opt"><input type="radio" name="vis"> Specific people…
+          <span class="d" style="margin-left:auto">Pick teammates, like sharing a doc</span></label>
+        <label class="opt on"><input type="radio" name="vis" checked> Everyone at Fracktal
+          <span class="d" style="margin-left:auto">Listed in Custom Apps for the whole team</span></label>
+      </div>
+    </div>
+
+    <div class="field">
+      <label>Capabilities this app uses</label>
+      <div class="scopes">
+        <div class="scope"><svg class="icon icon-sm"><use href="#i-user"/></svg> Identity — viewer's name &amp; email <span class="grant auto">AUTO</span></div>
+        <div class="scope"><svg class="icon icon-sm"><use href="#i-db"/></svg> Storage — app database (shared, 3 tables) <span class="grant auto">AUTO</span></div>
+        <div class="scope"><svg class="icon icon-sm"><use href="#i-sparkles"/></svg> AI — LLM calls, tier-1 budget <span class="grant auto">AUTO</span></div>
+        <div class="scope"><svg class="icon icon-sm"><use href="#i-plug"/></svg> ClickUp — create task in “Procurement” <span class="grant review">ADMIN REVIEW</span></div>
+      </div>
+    </div>
+
+    <div class="approval-note">
+      <svg class="icon"><use href="#i-alert"/></svg>
+      <div>Org-wide publish with a <b>write scope</b> goes to the <b>Approvals inbox</b> first. Until approved,
+      teammates can use the app but ClickUp writes ask each user to confirm.</div>
+    </div>
+
+    <div class="modal-actions">
+      <button class="btn btn-secondary" onclick="document.getElementById('publish').classList.remove('open')">Cancel</button>
+      <button class="btn btn-primary"><svg class="icon icon-sm"><use href="#i-rocket"/></svg> Publish v3</button>
+    </div>
+  </div>
+</div>
+
+<script>
+  function setView(v) {
+    document.getElementById('stage').classList.toggle('code', v === 'code');
+    document.getElementById('tab-preview').classList.toggle('on', v === 'preview');
+    document.getElementById('tab-code').classList.toggle('on', v === 'code');
+  }
+  // keep the newest chat activity in view
+  const thread = document.querySelector('.thread');
+  thread.scrollTop = thread.scrollHeight;
+  // theme: follow OS, toggle with "t"
+  const mq = matchMedia('(prefers-color-scheme: light)');
+  const apply = () => document.documentElement.dataset.theme = mq.matches ? 'light' : 'dark';
+  apply(); mq.addEventListener('change', apply);
+  addEventListener('keydown', e => {
+    if (e.key === 't' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName) && !document.activeElement.isContentEditable) {
+      document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    }
+  });
+</script>

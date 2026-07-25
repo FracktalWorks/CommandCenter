@@ -226,6 +226,11 @@ export function PlanDayPanel({
                       AI ranking was unavailable, so this used priority order —
                       your note and standing prompt weren&apos;t applied. Times
                       are still packed around your calendar. Try Re-plan.
+                      {plan.rankNote && (
+                        <span className="mt-1 block text-warning/80">
+                          Reason: {plan.rankNote}
+                        </span>
+                      )}
                     </span>
                   </p>
                 ) : (

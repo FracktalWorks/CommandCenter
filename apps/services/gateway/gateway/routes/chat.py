@@ -278,11 +278,27 @@ def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
                          :reasoning, CAST(:agent_state AS jsonb), CAST(:custom_events AS jsonb))
                     ON CONFLICT (session_id, id) DO UPDATE SET
                         content        = EXCLUDED.content,
-                        tool_events    = EXCLUDED.tool_events,
-                        progress_lines = EXCLUDED.progress_lines,
-                        reasoning      = EXCLUDED.reasoning,
-                        agent_state    = EXCLUDED.agent_state,
-                        custom_events  = EXCLUDED.custom_events
+                        -- Run artifacts are MONOTONIC: an empty incoming array
+                        -- never erases a stored non-empty one.  Several writers
+                        -- upsert the same row (the Next translator's 3s
+                        -- checkpoints, the gateway's run-boundary chat_fold, and
+                        -- the browser re-saving its whole message list on every
+                        -- change) and last-writer-wins let the leanest of them
+                        -- win: a client whose SSE dropped mid-run re-POSTed a
+                        -- content-only snapshot and wiped the tool timeline and
+                        -- the generative_ui cards the fold had just persisted
+                        -- (inline AG-UI vanishing on the next turn / reload).
+                        tool_events    = CASE
+                            WHEN jsonb_array_length(COALESCE(EXCLUDED.tool_events, '[]'::jsonb)) > 0
+                            THEN EXCLUDED.tool_events ELSE chat_message.tool_events END,
+                        progress_lines = CASE
+                            WHEN jsonb_array_length(COALESCE(EXCLUDED.progress_lines, '[]'::jsonb)) > 0
+                            THEN EXCLUDED.progress_lines ELSE chat_message.progress_lines END,
+                        reasoning      = COALESCE(EXCLUDED.reasoning, chat_message.reasoning),
+                        agent_state    = COALESCE(EXCLUDED.agent_state, chat_message.agent_state),
+                        custom_events  = CASE
+                            WHEN jsonb_array_length(COALESCE(EXCLUDED.custom_events, '[]'::jsonb)) > 0
+                            THEN EXCLUDED.custom_events ELSE chat_message.custom_events END
                     """
                 ),
                 {

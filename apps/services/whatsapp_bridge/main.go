@@ -41,6 +41,16 @@ func main() {
 	ctx := context.Background()
 
 	store.DeviceProps.Os = strPtr("CommandCenter")
+	// Ask the phone for a larger on-link history sync (~1 year) instead of the
+	// default ~3-month recent window, so a freshly paired number backfills its
+	// recent history — the same payload WhatsApp Desktop receives on link.
+	if cfg.FullHistory {
+		store.DeviceProps.RequireFullSync = boolPtr(true)
+		if store.DeviceProps.HistorySyncConfig != nil {
+			store.DeviceProps.HistorySyncConfig.FullSyncDaysLimit = uint32Ptr(cfg.FullHistoryDays)
+		}
+		logger.Infof("full history sync enabled (~%d days requested on link)", cfg.FullHistoryDays)
+	}
 
 	container, err := sqlstore.New(
 		ctx, "sqlite",
@@ -235,4 +245,6 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func strPtr(s string) *string { return &s }
+func strPtr(s string) *string    { return &s }
+func boolPtr(b bool) *bool       { return &b }
+func uint32Ptr(n uint32) *uint32 { return &n }

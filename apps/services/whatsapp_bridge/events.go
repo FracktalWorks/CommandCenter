@@ -18,6 +18,8 @@ func (m *SessionManager) handler(s *Session) func(any) {
 		switch e := evt.(type) {
 		case *events.Message:
 			m.onMessage(s, e)
+		case *events.HistorySync:
+			m.onHistorySync(s, e)
 		case *events.Connected:
 			s.setStatus(statusLive)
 		case *events.LoggedOut:

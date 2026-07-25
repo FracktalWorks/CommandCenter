@@ -22,6 +22,7 @@ members = [
     "acb-stt",
     "action-broker",
     "agent-apis-config",
+    "agent-app-builder",
     "agent-email-assistant",
     "agent-orchestrator",
     "agent-task-manager",
@@ -254,6 +255,17 @@ requires-dist = [
     { name = "agent-framework-github-copilot" },
     { name = "httpx", specifier = ">=0.27" },
 ]
+
+[[package]]
+name = "agent-app-builder"
+version = "0.1.0"
+source = { editable = "apps/agents/agent-app-builder" }
+dependencies = [
+    { name = "agent-framework-github-copilot" },
+]
+
+[package.metadata]
+requires-dist = [{ name = "agent-framework-github-copilot" }]
 
 [[package]]
 name = "agent-email-assistant"

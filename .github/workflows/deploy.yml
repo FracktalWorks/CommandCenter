@@ -256,6 +256,64 @@ jobs:
               echo "    LOCAL_DIAR=0 — local diarization OFF"
             fi
 
+            # ── WhatsApp bridge (whatsmeow, personal-number QR) ───────────────
+            # A localhost-only Go service that links a PERSONAL number by QR and
+            # streams messages to the gateway's /whatsapp/bridge/ingest (same
+            # triage brain as a Cloud API number). Env is added BEFORE the gateway
+            # restart below so the gateway picks up WHATSAPP_BRIDGE_URL/SECRET.
+            # Opt out any time with WHATSAPP_BRIDGE_ENABLED=0 in .env. Fail-safe:
+            # a build/start hiccup only skips the bridge, never the whole deploy.
+            # NOTE: unofficial multi-device is outside WhatsApp's ToS — the number
+            # can be banned; idle is harmless, risk begins when a number is paired.
+            echo "==> WhatsApp bridge (whatsmeow, personal-number QR)"
+            grep -qE '^WHATSAPP_BRIDGE_ENABLED=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_ENABLED=1" >> "$ENV_FILE"
+            grep -qE '^WHATSAPP_BRIDGE_URL='         "$ENV_FILE" || echo "WHATSAPP_BRIDGE_URL=http://localhost:8790" >> "$ENV_FILE"
+            grep -qE '^WHATSAPP_BRIDGE_GATEWAY_URL=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_GATEWAY_URL=http://localhost:8080" >> "$ENV_FILE"
+            grep -qE '^WHATSAPP_BRIDGE_ADDR='        "$ENV_FILE" || echo "WHATSAPP_BRIDGE_ADDR=127.0.0.1:8790" >> "$ENV_FILE"
+            grep -qE '^WHATSAPP_BRIDGE_STORE='       "$ENV_FILE" || echo "WHATSAPP_BRIDGE_STORE=/opt/acb/data/whatsapp_bridge/bridge-store.db" >> "$ENV_FILE"
+            # Generate a strong shared secret once (used by BOTH gateway + bridge).
+            if ! grep -qE '^WHATSAPP_BRIDGE_SECRET=.+' "$ENV_FILE"; then
+              _wbsecret="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+              grep -vE '^WHATSAPP_BRIDGE_SECRET=' "$ENV_FILE" > "$ENV_FILE.wb.tmp" && mv "$ENV_FILE.wb.tmp" "$ENV_FILE"
+              echo "WHATSAPP_BRIDGE_SECRET=$_wbsecret" >> "$ENV_FILE"
+              echo "    + generated WHATSAPP_BRIDGE_SECRET"
+            fi
+
+            WB_ENABLED="$(grep -E '^WHATSAPP_BRIDGE_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+            if [ "$WB_ENABLED" = "1" ]; then
+              mkdir -p /opt/acb/data/whatsapp_bridge
+              # Ensure a Go >=1.24 toolchain (pure-Go / CGO-free build). Install to
+              # /usr/local/go on demand; cached across deploys.
+              GO=""
+              if command -v go >/dev/null 2>&1 && go version 2>/dev/null | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then
+                GO="$(command -v go)"
+              elif [ -x /usr/local/go/bin/go ] && /usr/local/go/bin/go version | grep -qE 'go1\.(2[4-9]|[3-9][0-9])'; then
+                GO="/usr/local/go/bin/go"
+              else
+                echo "    installing Go 1.24.7…"
+                if curl -fsSL -o /tmp/go.tgz https://go.dev/dl/go1.24.7.linux-amd64.tar.gz; then
+                  sudo rm -rf /usr/local/go && sudo tar -C /usr/local -xzf /tmp/go.tgz && GO="/usr/local/go/bin/go" && echo "    + Go installed"
+                fi
+              fi
+              if [ -n "$GO" ] && ( cd "$APP_DIR/apps/services/whatsapp_bridge" && GOFLAGS=-mod=mod CGO_ENABLED=0 "$GO" build -o whatsapp_bridge . ); then
+                sudo cp "$APP_DIR/deploy/hostinger/acb-whatsapp-bridge.service" /etc/systemd/system/acb-whatsapp-bridge.service || true
+                sudo systemctl daemon-reload || true
+                sudo systemctl enable acb-whatsapp-bridge >/dev/null 2>&1 || true
+                sudo systemctl restart acb-whatsapp-bridge || true
+                sleep 2
+                if systemctl is-active --quiet acb-whatsapp-bridge; then
+                  echo "    WhatsApp bridge is active (localhost:8790)"
+                else
+                  echo "    ! WhatsApp bridge not active (non-fatal) — journalctl -u acb-whatsapp-bridge"
+                fi
+              else
+                echo "    ! bridge build/toolchain unavailable (non-fatal) — personal-number linking stays offline"
+              fi
+            else
+              echo "    WHATSAPP_BRIDGE_ENABLED != 1 — ensuring bridge is stopped"
+              sudo systemctl disable --now acb-whatsapp-bridge >/dev/null 2>&1 || true
+            fi
+
             echo "==> Restarting gateway (systemd)"
             sudo systemctl restart acb-gateway
             sleep 3

@@ -1,0 +1,30 @@
+[Unit]
+# CommandCenter — whatsmeow WhatsApp bridge (personal-number QR transport).
+# Pairs a personal number by QR and streams normalized messages to the gateway
+# at WHATSAPP_BRIDGE_GATEWAY_URL. Listens on localhost ONLY (127.0.0.1:8790) —
+# it is never exposed through Caddy; only the co-located gateway talks to it.
+#
+# NOTE: this uses an unofficial multi-device client, which is outside WhatsApp's
+# Terms of Service and can get the paired number banned. The service sitting
+# idle is harmless (no session = no connection); the risk begins when a number
+# is actually paired via the app's QR flow. Disable with WHATSAPP_BRIDGE_ENABLED=0
+# in /opt/acb/app/.env (the deploy stops + disables it) or `systemctl disable
+# --now acb-whatsapp-bridge`.
+Description=CommandCenter WhatsApp Bridge (whatsmeow, personal-number QR)
+After=network-online.target acb-gateway.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=acb
+WorkingDirectory=/opt/acb/data/whatsapp_bridge
+# Reads WHATSAPP_BRIDGE_* from the shared app env (same file the gateway uses).
+EnvironmentFile=/opt/acb/app/.env
+ExecStart=/opt/acb/app/apps/services/whatsapp_bridge/whatsapp_bridge
+Restart=always
+RestartSec=5
+# The sqlite session store under WorkingDirectory is the paired identity — keep it.
+StateDirectory=whatsapp_bridge
+
+[Install]
+WantedBy=multi-user.target

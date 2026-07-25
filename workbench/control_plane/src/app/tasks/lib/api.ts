@@ -523,6 +523,9 @@ export interface PlanDayBlock {
   end: string;
   energy?: string;
   rationale?: string;
+  /** true = this block was already on the calendar and is being moved;
+   *  false = a new task pulled in from the unscheduled list. */
+  previouslyScheduled?: boolean;
 }
 export interface PlanDayUnplaced {
   itemId: string;
@@ -532,6 +535,9 @@ export interface PlanDayUnplaced {
 export interface DayPlanResult {
   blocks: PlanDayBlock[];
   unplaced: PlanDayUnplaced[];
+  /** blocks that WERE scheduled but no longer fit — cleared on apply, back to
+   *  the unscheduled list. */
+  evicted: PlanDayUnplaced[];
   notes?: string;
   usedMins: number;
   capacityMins: number;
@@ -560,8 +566,14 @@ function mapDayPlan(r: Raw): DayPlanResult {
       end: String(b.end ?? ""),
       energy: b.energy ? String(b.energy) : undefined,
       rationale: b.rationale ? String(b.rationale) : undefined,
+      previouslyScheduled: Boolean(b.previously_scheduled),
     })),
     unplaced: arr(r.unplaced).map((u) => ({
+      itemId: String(u.item_id ?? ""),
+      title: String(u.title ?? ""),
+      reason: String(u.reason ?? ""),
+    })),
+    evicted: arr(r.evicted).map((u) => ({
       itemId: String(u.item_id ?? ""),
       title: String(u.title ?? ""),
       reason: String(u.reason ?? ""),

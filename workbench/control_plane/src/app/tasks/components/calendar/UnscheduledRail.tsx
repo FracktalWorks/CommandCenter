@@ -252,11 +252,11 @@ export function UnscheduledRail({
         <button
           type="button"
           onClick={onPlan}
-          title="AI-plan your day around priority, energy + deadlines"
+          title="Rebuild your day: reshuffle what's scheduled + fill from your list, around priority, energy + deadlines"
           className="tech-transition flex w-full items-center justify-center gap-1.5 rounded-md bg-primary/10 px-2 py-2 text-[11px] font-medium text-primary hover:bg-primary/20"
         >
           <Sparkles className="h-3.5 w-3.5" />
-          Plan my day
+          Rebuild my day
         </button>
       </div>
 

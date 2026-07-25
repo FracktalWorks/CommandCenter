@@ -360,16 +360,16 @@ export function CalendarView() {
   // Is there anything left to reorganize today? "Replan the rest of my day" only
   // makes sense with ≥1 flexible, not-done block still ahead (end ≥ now) — a
   // fixed meeting or a finished block isn't movable, so it wouldn't offer this.
+  // "Fit what's left" is offered whenever there's ≥1 movable block ANYWHERE on
+  // today (flexible + not done) — including ones whose time already slipped past
+  // earlier today, since Fit sweeps those forward into the time remaining.
   const canReplan = useMemo(() => {
-    const nowMs = now.getTime();
     return items.some(
       (i) =>
         i.scheduledStart &&
-        i.scheduledEnd &&
         i.disposition !== "DONE" &&
         (i.flexible ?? true) &&
-        sameDay(new Date(i.scheduledStart), now) &&
-        new Date(i.scheduledEnd).getTime() >= nowMs,
+        sameDay(new Date(i.scheduledStart), now),
     );
   }, [items, now]);
 
@@ -507,21 +507,21 @@ export function CalendarView() {
             <button
               type="button"
               onClick={() => setPlanMode("replan")}
-              title="Fell behind? Reorganize the rest of today's flexible blocks from now."
+              title="Fit what's left: reshuffle today's not-done tasks into the time you have left, and move anything that no longer fits back to your list. Adds no new tasks."
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
               <CalendarClock className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Replan</span>
+              <span className="hidden sm:inline">Fit what&apos;s left</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => setPlanMode("plan")}
-            title="AI-plan your day from your Next Actions"
+            title="Rebuild my day: reshuffle what's on your calendar into the time left, trim the overflow back to your list, and fill any remaining room from your Next Actions."
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20"
           >
             <Wand2 className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Plan my day</span>
+            <span className="hidden sm:inline">Rebuild my day</span>
           </button>
           <button
             type="button"

@@ -142,7 +142,8 @@ async def embed_pending_messages(
         return 0
 
     embedded = 0
-    for r, vec, h in zip(rows, vectors, hashes, strict=False):
+    # lengths are guaranteed equal above (hashes from rows, vectors len-checked).
+    for r, vec, h in zip(rows, vectors, hashes, strict=True):
         vec_literal = "[" + ",".join(f"{x:.7f}" for x in vec) + "]"
         await db.execute(text(
             """INSERT INTO wa_message_embeddings

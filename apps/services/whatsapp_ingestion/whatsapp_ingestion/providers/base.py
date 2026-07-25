@@ -2,9 +2,10 @@
 
 The gateway and ingestion code call these methods and consume these dataclasses
 without knowing the transport details — the same contract the email vertical
-draws with ``BaseEmailProvider``. Today the only concrete provider is the
-official Meta Cloud API (:class:`~whatsapp_ingestion.providers.cloud_api
-.WhatsAppCloudProvider`).
+draws with ``BaseEmailProvider``. Two transports implement it: the official Meta
+Cloud API (:class:`~whatsapp_ingestion.providers.cloud_api.WhatsAppCloudProvider`)
+and the personal-number whatsmeow bridge
+(:class:`~whatsapp_ingestion.providers.bridge.BridgeProvider`).
 """
 
 from __future__ import annotations
@@ -13,17 +14,6 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Any
-
-# Message kinds normalized across the whole stack (DB ``wa_messages.kind``, the
-# webhook parser, the UI store). Anything Meta sends that we don't model maps to
-# ``system`` so the row still lands rather than being dropped.
-MESSAGE_KINDS = (
-    "text", "image", "video", "audio", "voice", "document",
-    "sticker", "location", "contact", "reaction", "system",
-)
-
-# Chat kinds. WhatsApp has no threads; a chat is the unit the reply queue ranks.
-CHAT_KINDS = ("dm", "group", "broadcast")
 
 
 @dataclass
@@ -79,15 +69,6 @@ class WhatsAppStatus:
 
 
 @dataclass
-class WhatsAppChat:
-    """Normalized conversation header (materialized from messages + contacts)."""
-    wa_chat_id: str
-    kind: str = "dm"
-    name: str = ""
-    participants: list[WhatsAppContact] = field(default_factory=list)
-
-
-@dataclass
 class SyncResult:
     """Result of parsing one webhook payload (or a history-import page)."""
     messages: list[WhatsAppMessage] = field(default_factory=list)
@@ -102,8 +83,8 @@ class SyncResult:
 class BaseWhatsAppProvider(ABC):
     """Abstract WhatsApp provider interface.
 
-    Only the official Cloud API implements it today; keeping the ABC means the
-    gateway send/media paths never import a concrete provider directly.
+    The Cloud API and the whatsmeow bridge both implement it; keeping the ABC
+    means the gateway send/media paths never import a concrete provider directly.
     """
 
     def __init__(self, credentials: dict[str, Any]):

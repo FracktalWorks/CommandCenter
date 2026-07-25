@@ -18,9 +18,11 @@ import os
 from typing import Any
 
 import httpx
+from acb_common import get_logger
 
 from whatsapp_ingestion.providers.base import BaseWhatsAppProvider
 
+_log = get_logger("whatsapp.provider.bridge")
 _TIMEOUT = httpx.Timeout(30.0)
 
 
@@ -100,5 +102,5 @@ class BridgeProvider(BaseWhatsAppProvider):
                 await client.post(
                     f"{self.base_url}/read", headers=self._headers(),
                     json={"session": self.session, "message_id": wa_message_id})
-        except Exception:
-            return None
+        except Exception as exc:  # best-effort, but surface it like cloud_api does
+            _log.warning("whatsapp.bridge.mark_read_failed", error=str(exc)[:200])

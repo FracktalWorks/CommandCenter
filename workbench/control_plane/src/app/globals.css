@@ -342,3 +342,25 @@ body {
   display: none;
 }
 
+/* ── Reduced motion ───────────────────────────────────────────────────── */
+/* Entrance/pulse animations become instant; the state they convey (a new
+   step arriving, a spinner turning) is still carried by the content itself.
+   Spinners keep turning but slow down — a frozen spinner reads as a hang. */
+@media (prefers-reduced-motion: reduce) {
+  .chat-fade-in,
+  .animate-fade-in,
+  .animate-bounce-subtle {
+    animation: none;
+  }
+
+  .animate-spin {
+    animation-duration: 1.6s;
+  }
+
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto;
+  }
+}
+

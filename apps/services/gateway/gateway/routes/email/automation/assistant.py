@@ -145,30 +145,34 @@ async def _load_assistant_about(
 # Per-task default tiers when no account preference is saved (or lookup fails).
 _DEFAULT_TASK_MODELS = {
     "rule": "tier-fast",       # rule evaluation / classification / labeling
-    "draft": "tier-powerful",  # draft writing
+    "draft": "tier-powerful",  # BACKGROUND draft writing (rules, follow-ups)
+    "compose": "tier-fast",    # MANUAL "Draft with AI" (user waits on it)
     "chat": "tier-powerful",   # email chat panel (strong tool-caller)
 }
 
 
 async def _account_models(db: Any, account_id: str) -> dict[str, str]:
-    """The three task-specific models an account uses, as a dict with keys
-    ``rule`` (rule evaluation/classification), ``draft`` (draft writing), and
-    ``chat`` (the email chat panel).
+    """The four task-specific models an account uses, as a dict with keys
+    ``rule`` (rule evaluation/classification), ``draft`` (background draft
+    writing), ``compose`` (manual "Draft with AI"), and ``chat`` (the email
+    chat panel).
 
     Each falls back to its per-task default (rule→tier-fast, draft→tier-powerful,
-    chat→tier-powerful) so automation works before the user saves a preference
-    or if the lookup fails."""
+    compose→tier-fast, chat→tier-powerful) so automation works before the user
+    saves a preference or if the lookup fails."""
     out = dict(_DEFAULT_TASK_MODELS)
     if not account_id:
         return out
     try:
         row = (await db.execute(text(
-            "SELECT rule_model, draft_model, chat_model "
+            "SELECT rule_model, draft_model, compose_model, chat_model "
             "FROM email_assistant_settings WHERE account_id = :aid"
         ), {"aid": account_id})).fetchone()
         if row:
             out["rule"] = (getattr(row, "rule_model", None) or out["rule"])
             out["draft"] = (getattr(row, "draft_model", None) or out["draft"])
+            out["compose"] = (
+                getattr(row, "compose_model", None) or out["compose"])
             out["chat"] = (getattr(row, "chat_model", None) or out["chat"])
     except Exception as exc:  # noqa: BLE001 — fall back to the per-task defaults
         _log.warning("email.account_models_failed", error=str(exc)[:160])
@@ -184,11 +188,15 @@ class AssistantSettingsModel(BaseModel):
     # account auto-runs once it has rules. An explicit OFF stops auto-run.
     auto_run: bool = True
     cold_email_blocker: str = "OFF"  # OFF | LABEL | ARCHIVE
-    # Three task-specific models (tier-fast | tier-balanced | tier-powerful, or
+    # Four task-specific models (tier-fast | tier-balanced | tier-powerful, or
     # any enabled model id). Rule evaluation / classification / labeling:
     rule_model: str = "tier-fast"
-    # Draft writing (replies, follow-ups, rule DRAFT_EMAIL actions):
+    # BACKGROUND draft writing (follow-ups, rule DRAFT_EMAIL actions):
     draft_model: str = "tier-powerful"
+    # MANUAL drafting — the composer's "Draft with AI" button, where the user
+    # is waiting on a spinner. Defaults to the fast tier: a reasoning-tier
+    # model here means a 20-60s wait per click.
+    compose_model: str = "tier-fast"
     # The interactive email chat panel (strong tool-caller for reliability):
     chat_model: str = "tier-powerful"
     digest_frequency: str = "OFF"  # OFF | DAILY | WEEKLY
@@ -243,7 +251,7 @@ async def get_assistant_settings(
         await _assert_account_owner(db, account_id, user.email or "anonymous")
         row = (await db.execute(text(
             """SELECT about, signature, auto_run, cold_email_blocker,
-                      rule_model, draft_model, chat_model,
+                      rule_model, draft_model, compose_model, chat_model,
                       digest_frequency, personal_instructions, writing_style,
                       draft_replies, follow_up_days, draft_confidence,
                       follow_up_awaiting_days, follow_up_needs_reply_days,
@@ -275,6 +283,10 @@ async def get_assistant_settings(
             or "tier-fast",
             "draft_model": (getattr(row, "draft_model", None) if row else None)
             or "tier-powerful",
+            # Default must match _DEFAULT_TASK_MODELS["compose"] — manual
+            # "Draft with AI" runs while the user watches, so it defaults fast.
+            "compose_model": (getattr(row, "compose_model", None) if row else None)
+            or "tier-fast",
             # Default must match _DEFAULT_TASK_MODELS["chat"] and
             # AssistantSettingsModel.chat_model (tier-powerful — a strong
             # tool-caller). A divergent default here previously made the email
@@ -369,7 +381,8 @@ async def put_assistant_settings(
         await db.execute(text(
             """INSERT INTO email_assistant_settings
                  (account_id, about, signature, auto_run, cold_email_blocker,
-                  rule_model, draft_model, chat_model, digest_frequency,
+                  rule_model, draft_model, compose_model, chat_model,
+                  digest_frequency,
                   personal_instructions,
                   writing_style, draft_replies, follow_up_days, draft_confidence,
                   follow_up_awaiting_days, follow_up_needs_reply_days,
@@ -378,7 +391,7 @@ async def put_assistant_settings(
                   multi_rule_execution, sensitive_data_protection, org_domains,
                   updated_at)
                VALUES (:aid, :about, :sig, :auto, :cold, :rule_model,
-                       :draft_model, :chat_model,
+                       :draft_model, :compose_model, :chat_model,
                        :digest,
                        :pi, :ws, :dr, :fu, :dc, :fua, :funr, :fuad, :dcat,
                        :ddow, :dtod, :dste, :mbe, :mre, :sdp, :orgd, now())
@@ -389,6 +402,7 @@ async def put_assistant_settings(
                  cold_email_blocker = EXCLUDED.cold_email_blocker,
                  rule_model = EXCLUDED.rule_model,
                  draft_model = EXCLUDED.draft_model,
+                 compose_model = EXCLUDED.compose_model,
                  chat_model = EXCLUDED.chat_model,
                  digest_frequency = EXCLUDED.digest_frequency,
                  personal_instructions = EXCLUDED.personal_instructions,
@@ -412,6 +426,7 @@ async def put_assistant_settings(
             "auto": req.auto_run, "cold": req.cold_email_blocker or "OFF",
             "rule_model": req.rule_model or "tier-fast",
             "draft_model": req.draft_model or "tier-powerful",
+            "compose_model": req.compose_model or "tier-fast",
             "chat_model": req.chat_model or "tier-powerful",
             "digest": req.digest_frequency or "OFF",
             "pi": req.personal_instructions, "ws": req.writing_style,
@@ -453,6 +468,7 @@ async def put_assistant_settings(
             "cold_email_blocker": req.cold_email_blocker or "OFF",
             "rule_model": req.rule_model or "tier-fast",
             "draft_model": req.draft_model or "tier-powerful",
+            "compose_model": req.compose_model or "tier-fast",
             "chat_model": req.chat_model or "tier-powerful",
             "digest_frequency": req.digest_frequency or "OFF",
             "personal_instructions": req.personal_instructions or "",

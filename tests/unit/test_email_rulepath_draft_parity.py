@@ -27,7 +27,9 @@ def test_rule_action_drafter_uses_the_shared_reply_context_builder() -> None:
 
 
 def test_compose_assist_stores_the_ai_draft_for_edit_learning() -> None:
-    src = inspect.getsource(drafting.compose_assist)
+    # The implementation lives in _compose_assist_run (shared by the JSON and
+    # SSE-streaming endpoints), so the invariant is pinned there.
+    src = inspect.getsource(drafting._compose_assist_run)
     assert "_store_ai_draft" in src, (
         "compose-assist reply-from-scratch must remember the draft so edits "
         "before send can teach _learn_from_sent")

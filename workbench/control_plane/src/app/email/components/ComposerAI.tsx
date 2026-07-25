@@ -1,7 +1,7 @@
 "use client";
 
 import { useState } from "react";
-import { Sparkles, MoreHorizontal, Loader2, X, CornerDownLeft } from "lucide-react";
+import { Sparkles, MoreHorizontal } from "lucide-react";
 
 /**
  * The quoted trailing email shown in a COMPOSE box — collapsed behind an
@@ -68,76 +68,5 @@ export function AiButton({
     >
       <Sparkles size={13} />
     </button>
-  );
-}
-
-/**
- * The inline AI draft/improve bar. An optional one-line instruction — blank
- * drafts from scratch (or polishes existing text); filled steers it ("make it
- * shorter", "accept the meeting"). `hasText` flips the button label between
- * Draft and Improve so the user knows it works on what they've written.
- */
-export function AiAssistBar({
-  instruction,
-  onInstruction,
-  busy,
-  hasText,
-  onRun,
-  onClose,
-}: {
-  instruction: string;
-  onInstruction: (v: string) => void;
-  busy: boolean;
-  hasText: boolean;
-  onRun: () => void;
-  onClose: () => void;
-}) {
-  return (
-    <div className="px-4 py-2 border-t border-border bg-primary/5 flex items-center gap-2">
-      <Sparkles size={13} className="text-primary flex-shrink-0" />
-      <input
-        type="text"
-        value={instruction}
-        autoFocus
-        disabled={busy}
-        onChange={(e) => onInstruction(e.target.value)}
-        onKeyDown={(e) => {
-          if (e.key === "Enter") {
-            e.preventDefault();
-            if (!busy) onRun();
-          } else if (e.key === "Escape") {
-            onClose();
-          }
-        }}
-        placeholder={
-          hasText
-            ? "How should AI improve this? (optional)"
-            : "What should this email say? (optional)"
-        }
-        className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none min-w-0"
-      />
-      <button
-        type="button"
-        onClick={onRun}
-        disabled={busy}
-        className="px-2.5 py-1 text-xs rounded-md bg-primary text-primary-foreground hover:bg-primary/90 transition-colors disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
-      >
-        {busy ? (
-          <Loader2 size={12} className="animate-spin" />
-        ) : (
-          <CornerDownLeft size={12} />
-        )}
-        {hasText ? "Improve" : "Draft"}
-      </button>
-      <button
-        type="button"
-        onClick={onClose}
-        disabled={busy}
-        className="text-muted-foreground hover:text-foreground transition-colors flex-shrink-0 disabled:opacity-50"
-        title="Close"
-      >
-        <X size={14} />
-      </button>
-    </div>
   );
 }

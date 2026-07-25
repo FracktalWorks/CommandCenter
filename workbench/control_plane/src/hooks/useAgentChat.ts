@@ -912,15 +912,37 @@ export function useAgentChat({
         for (const rm of remoteMsgs) {
           const localMatch = localById.get(rm.id);
           if (localMatch) {
-            // Same id — update if the server has more content/tool events/reasoning.
+            // Same id — update if the server has more content/tool events/
+            // reasoning/custom events.  Custom events count: the run-boundary
+            // fold persists generative_ui + artifact cards this client may
+            // never have seen (dropped SSE), and they are the whole payload of
+            // an inline AG-UI card.
             if (
               rm.content.length > localMatch.content.length ||
               (rm.toolEvents?.length ?? 0) > (localMatch.toolEvents?.length ?? 0) ||
-              (rm.reasoningBlocks?.length ?? 0) > (localMatch.reasoningBlocks?.length ?? 0)
+              (rm.reasoningBlocks?.length ?? 0) > (localMatch.reasoningBlocks?.length ?? 0) ||
+              (rm.customEvents?.length ?? 0) > (localMatch.customEvents?.length ?? 0)
             ) {
               const idx = merged.findIndex((m) => m.id === rm.id);
               if (idx >= 0) {
-                merged[idx] = { ...localMatch, ...rm, streaming: false };
+                // Spreading `rm` wholesale used to REPLACE the local stream
+                // artifacts with the server's — so a poll that fired only
+                // because the server content had grown also blanked the
+                // generative_ui cards this client had already rendered live
+                // (the "my UI card closed when I sent the next message" bug).
+                // Each artifact list is monotonic: keep whichever side has more.
+                const richer = <T,>(a?: T[], b?: T[]): T[] | undefined =>
+                  (a?.length ?? 0) >= (b?.length ?? 0) ? a : b;
+                merged[idx] = {
+                  ...localMatch,
+                  ...rm,
+                  toolEvents: richer(rm.toolEvents, localMatch.toolEvents),
+                  customEvents: richer(rm.customEvents, localMatch.customEvents),
+                  reasoningBlocks: richer(rm.reasoningBlocks, localMatch.reasoningBlocks),
+                  progressLines: richer(rm.progressLines, localMatch.progressLines),
+                  segments: richer(rm.segments, localMatch.segments),
+                  streaming: false,
+                };
                 changed = true;
               }
             }

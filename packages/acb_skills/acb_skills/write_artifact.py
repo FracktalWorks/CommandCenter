@@ -475,6 +475,12 @@ async def emit_generative_ui(ui: str) -> dict:
     42") or a long narrative explanation should stay as text. Use UI when it
     genuinely clarifies or when interaction is useful — not as decoration.
 
+    A card you emit is PART OF THE TRANSCRIPT — it is persisted with the message
+    and re-renders on later turns, on reload, and on any device. It does not
+    expire and later messages do not close it. Never tell the user inline UI is
+    temporary or offer a file as "something more durable"; if a card is missing
+    from an earlier turn, that is a bug to report, not expected behaviour.
+
     All three modes follow the Command Center design language automatically
     (blue primary, warm-orange accent, rounded cards, subtle motion). Templates
     and the component tree are on-brand by construction; custom HTML inherits the
@@ -540,7 +546,11 @@ async def emit_generative_ui(ui: str) -> dict:
        Each node is ``{"type":<kind>,"props":{...},"children":[...]}``. Kinds:
          card{title?} · stack · row · heading{text} · text{text,muted?} ·
          markdown{text} · badge{text,tone?} · divider · callout{title?,text?,tone?}
-         keyValue{pairs:[{key,value}]} · table{columns:[..],rows:[[..]]} ·
+         keyValue{pairs:[{key,value}]} ·
+         table{columns:["Deal","Amount"],rows:[["OsteoForge","₹8.4L"]]} —
+             ``columns`` are HEADER STRINGS and each row is a list of cell
+             values in the same order (objects like {key,label} / row dicts also
+             render, but plain strings + positional rows are the shape to emit) ·
          list{items:[..],ordered?} · code{text} · link{href,text?} ·
          button{label,action,tone?} ·
          icon{name,size?,tone?,label?}

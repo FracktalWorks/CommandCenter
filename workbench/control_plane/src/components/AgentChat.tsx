@@ -412,13 +412,23 @@ export default function AgentChat({
         setMessages(remote as ChatMessage[]);
         return;
       }
-      // Same count but maybe richer content?  Compare total content length
-      // and tool-event counts (refresh-recovery: same id, longer content).
+      // Same count but maybe richer content?  Compare total content length,
+      // tool-event counts, and CUSTOM-event counts (refresh-recovery: same id,
+      // longer content).  Custom events belong in this comparison: the
+      // run-boundary fold persists generative_ui / artifact cards the browser
+      // may never have received (dropped SSE), and without them here a lean
+      // local cache won and the very next save wrote that leanness back.
       const localTotalLen = local.reduce((sum, m) => sum + (m.content?.length ?? 0), 0);
       const remoteTotalLen = remote.reduce((sum: number, m: { content?: string }) => sum + (m.content?.length ?? 0), 0);
       const localToolCount = local.reduce((sum, m) => sum + ((m as { toolEvents?: unknown[] }).toolEvents?.length ?? 0), 0);
       const remoteToolCount = remote.reduce((sum: number, m: { toolEvents?: unknown[] }) => sum + (m.toolEvents?.length ?? 0), 0);
-      if (remoteTotalLen > localTotalLen || remoteToolCount > localToolCount) {
+      const localCustomCount = local.reduce((sum, m) => sum + (m.customEvents?.length ?? 0), 0);
+      const remoteCustomCount = remote.reduce((sum: number, m: { customEvents?: unknown[] }) => sum + (m.customEvents?.length ?? 0), 0);
+      if (
+        remoteTotalLen > localTotalLen ||
+        remoteToolCount > localToolCount ||
+        remoteCustomCount > localCustomCount
+      ) {
         setMessages(remote as ChatMessage[]);
       }
     }).catch(() => {}).finally(() => {

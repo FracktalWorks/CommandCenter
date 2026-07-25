@@ -378,7 +378,89 @@ Design rules:
   semantics for attribution, platform-pays in practice — it all goes through `/v1`
   where cost tracking already lives.
 
-### 4.5 Publish, versions, sharing
+### 4.5 How apps use AI — and how it rides the existing plumbing (binding)
+
+Every AI capability an app has goes through **one door: the gateway `/v1`** — the same
+in-process LiteLLM path every agent already uses. `cc.ai.complete()` → App Runtime API
+`POST /apps/{slug}/ai/complete` → `acb_llm.complete()` with the platform's tier aliases.
+No SDKs in app code, no provider keys anywhere near an app, no second routing layer.
+What that buys automatically, because it's the same choke point:
+
+- **Tiered routing** — the manifest requests a tier alias (`ai:tier-1` etc.), never a
+  raw model id; tier→model assignment stays a platform decision (`/settings/models`).
+- **Prompt caching, context-window guard, BYOK key store, output-token ceiling** — all
+  of `acb_llm` / `v1_compat` behavior applies unchanged.
+- **Cost metering** — the existing spend tracking sees app calls like any other caller,
+  with the attribution below layered on top.
+- Later `cc.ai` sugar (structured output, embeddings via `/v1/embeddings`, a
+  `cc.ai.agent()` that delegates to a platform agent) are conveniences over the same
+  door — anything that would bypass `/v1` is rejected by design.
+
+### 4.6 Cost attribution & live tracking (extends the observability stack)
+
+Apps are a new **actor class** in the tracking system, not a blind spot. Additions:
+
+- **Attribution triple on every AI call:** `(app_slug, app_version, viewer_email)` +
+  the calling surface (`app-runtime` vs `app-builder`). Builder-session tokens already
+  land in `agent_run` (it's a normal Tier-1.5 chat run of the `app-builder` agent);
+  runtime calls write an `app_audit` row (kind=`ai`, tokens, cost, model, latency) and
+  publish to the **Redis activity/cost feed** (`acb_common/activity.py`) as
+  `kind="app"`, so the live Observability feed shows app activity alongside agent runs.
+- **Budgets enforced at the proxy:** per-app monthly token budget + per-user-per-app
+  rate limit (manifest fields, platform-clamped defaults). Exceeding budget → 429 with
+  a friendly `cc.ai` error the app can render; owners see burn-down on the app card.
+- **Observability UI:** the existing cost pane gains a *by-app* lens (spend, tokens,
+  top users, calls) fed from `app_audit` aggregates; per-app detail lives on the app's
+  info popover ("this app used 412k tokens this month, ₹…").
+- **Tool calls too:** `cc.tools.call` writes the same audit rows (kind=`tool`) so
+  integration usage is attributable per app — one query answers "what is the Filament
+  Tracker doing to ClickUp, for whom, how often."
+
+### 4.7 Apps as tools for agents (not just people)
+
+App endpoints are **principal-agnostic**: a "viewer" can be a person *or a platform
+agent*. This turns every published app into a potential tool in the agent ecosystem —
+the Filament Tracker's data becomes queryable by the delivery agent; the Quote
+Calculator's logic becomes callable from a sales chat.
+
+- **Manifest `actions` block** — the agent-facing surface, explicit and typed (nothing
+  is exposed implicitly):
+
+  ```jsonc
+  "actions": [
+    { "name": "get_low_stock",
+      "description": "List filament spools under their low-stock threshold",
+      "params": {},                       // JSON-schema params
+      "kind": "storage.query",            // v1 kinds: storage.query | storage.mutate | tool.call
+      "config": { "table": "spools", "filter": "remaining < threshold" },
+      "readonly": true }
+  ]
+  ```
+
+  v1 action kinds are **declarative** (parameterized storage queries/mutations and
+  pre-declared tool-proxy calls — Windmill's frozen-args policy, Datasette's stored
+  queries), so exposing an action never means running app JS server-side. When T3
+  server handlers arrive, an action can map to an app HTTP endpoint.
+- **Grants cover agents:** `app_grants.subject` accepts `agent:<name>` and `agents:*`
+  alongside emails/`org`. Sharing an app with the agent system is the same one-click
+  flow as sharing with a person (mockup 1's "Specific people…" picker grows an
+  *Agents* tab).
+- **Registration into the tool registry:** at gateway startup (and on grant change),
+  granted actions are exposed to the orchestrator as platform tools named
+  `app_<slug>_<action>` — exactly the `as_tool()` pattern already used to expose every
+  agent. Each carries **risk annotations** (`readonly` → read_only; mutations/tool
+  calls → state-writing, gated like any other platform tool) per the harness standing
+  rules, and an agent's access is checked against `app_grants` at call time.
+- **Execution identity:** an agent-invoked action runs as the **agent principal**
+  (`UserContext(role=AGENT)`, actor=`agent:<name>` in `app_audit`) — never as a
+  fabricated human. Destructive actions hit the same Action Broker gate as human
+  clicks; per-app-per-agent grants keep least privilege. The reverse direction
+  (`cc.agents.run` — an app invoking an agent) uses the same audit vocabulary.
+- **Note:** until the injected-tool registration lands (Phase 2, with its golden
+  trajectory eval per the harness rules), agents can already reach granted apps over
+  the REST surface with the internal token — the API shape is identical either way.
+
+### 4.8 Publish, versions, sharing
 
 - **Publish** = build → snapshot: an immutable `app_versions` row (manifest + bundle
   sha256 + release notes + `scope_set_hash`), bundle bytes into the blob store, git tag.
@@ -398,7 +480,7 @@ Design rules:
 - **Suggest a change:** viewers who can't edit open a pre-seeded builder chat on a fork;
   the owner gets a diff-style proposal (Phase 2; the `pending_commit` UX pattern reused).
 
-### 4.6 Data model (new tables, one migration)
+### 4.9 Data model (new tables, one migration)
 
 ```
 apps                -- the editable definition (edit-model)
@@ -414,7 +496,8 @@ app_versions        -- immutable published snapshots (run-model)
   review_status enum(auto,pending,approved,rejected)
 
 app_grants          -- sharing + consent, forward-compatible with org-research roles
-  app_id fk · subject text ('org' | email) · role enum(use,edit,own)
+  app_id fk · subject text ('org' | email | 'agent:<name>' | 'agents:*')
+  role enum(use,edit,own)
   consented_scope_hash · granted_by · created_at
 
 app_data            -- the cc.storage backing store
@@ -432,7 +515,7 @@ Bundle bytes ride the existing blob store; the workspace rides the existing git/
 machinery. `pending_actions` (writes) and the Approvals UI (publish review) are reused,
 not duplicated.
 
-### 4.7 API surface
+### 4.10 API surface
 
 Gateway `routes/apps/` (new module, same layering as `routes/tasks/`):
 
@@ -450,8 +533,10 @@ GET/POST/DEL  /apps/{slug}/grants         sharing
 # App Runtime API (what the cc bridge hits — every call scope-checked + audited)
 GET           /apps/{slug}/me
 GET/PUT/DEL   /apps/{slug}/data/{table}[/{key}]
-POST          /apps/{slug}/ai/complete
+POST          /apps/{slug}/ai/complete    → gateway /v1, app-attributed + budgeted
 POST          /apps/{slug}/tools/{tool}   destructive → pending_actions + confirm
+POST          /apps/{slug}/actions/{name} manifest-declared action (people AND agents)
+GET           /apps/{slug}/usage          token/cost aggregates for the info popover
 ```
 
 Frontend: `/api/apps/[...path]` catch-all BFF proxy (copy `api/tasks/[...path]/route.ts`
@@ -501,9 +586,12 @@ per-app audit trail.
 
 **P1 — team-grade (Phase 2):**
 `cc.tools` integration actions with manifest scopes, per-use confirm, publish review via
-Approvals inbox · share-with-specific-people + first-open consent screen · templates
-gallery · fork/remix · suggest-a-change · usage stats on cards · pinned apps in sidebar ·
-app-to-app data reads (quote calculator ← filament costs).
+Approvals inbox · share-with-specific-people + first-open consent screen · **manifest
+`actions` + agent grants + `app_<slug>_<action>` tool registration** (risk-annotated,
+golden-trajectory-eval'd per harness rules) · by-app cost lens in Observability +
+per-app budgets · templates gallery · fork/remix · suggest-a-change · usage stats on
+cards · pinned apps in sidebar · app-to-app data reads (quote calculator ← filament
+costs).
 
 **P2 — power (Phase 3+):**
 real URLs on a usercontent subdomain with CSP headers · scoped short-TTL app tokens ·

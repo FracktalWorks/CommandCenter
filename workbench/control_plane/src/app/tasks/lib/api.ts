@@ -538,6 +538,8 @@ export interface DayPlanResult {
   /** "ai" = LLM judged the selection/order (your prompt + note applied);
    *  "priority" = LLM unavailable, deterministic fallback (prompts ignored). */
   rankedBy: "ai" | "priority";
+  /** when rankedBy === "priority", a short reason the AI ranking was skipped. */
+  rankNote?: string;
 }
 export interface PlanDayRequest {
   day_start: string;
@@ -568,6 +570,7 @@ function mapDayPlan(r: Raw): DayPlanResult {
     usedMins: Number(r.used_mins ?? 0),
     capacityMins: Number(r.capacity_mins ?? 0),
     rankedBy: r.ranked_by === "priority" ? "priority" : "ai",
+    rankNote: r.rank_note ? String(r.rank_note) : undefined,
   };
 }
 

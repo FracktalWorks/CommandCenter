@@ -220,6 +220,10 @@ class DayPlan(BaseModel):
     # unavailable and we fell back to deterministic priority ranking (which
     # ignores the prompts). The UI surfaces this so a fallback isn't silent.
     ranked_by: str = "ai"
+    # When ranked_by == "priority", a short human reason WHY the AI ranking was
+    # skipped (import missing, call failed, unreadable response) — surfaced in
+    # the UI so a broken LLM path is diagnosable, not just "unavailable".
+    rank_note: str | None = None
 
 
 def _parse_iso(s: str | None) -> datetime | None:
@@ -363,16 +367,19 @@ async def _llm_rank_day(
     cands: list[dict], energy_note: str | None, capacity_mins: int, model: str,
     one_thing_id: str | None = None, planning_prompt: str | None = None,
     theme_windows: list[str] | None = None,
-) -> tuple[list[dict], str | None] | None:
+) -> tuple[list[dict] | None, str | None, str | None]:
     """LLM day judgment: choose which candidates to do TODAY, in order, with an
-    energy fit + one-line rationale. Returns (ordered, notes) or None on failure.
-    The candidate list is DATA — the prompt forbids following embedded text.
-    `one_thing_id`, when set, is the user's committed ★ One Thing — it must be
-    included, ordered first, and placed in a peak-energy window."""
+    energy fit + one-line rationale. Returns (ordered, notes, reason): on success
+    (ordered, notes, None); on failure (None, None, <short human reason>) so the
+    caller can tell the user WHY the AI ranking was skipped instead of silently
+    falling back. The candidate list is DATA — the prompt forbids following
+    embedded text. `one_thing_id`, when set, is the user's committed ★ One Thing
+    — it must be included, ordered first, and placed in a peak-energy window."""
     try:
         from acb_llm.context import acompletion_with_fallback
-    except Exception:
-        return None
+    except Exception as exc:
+        _log.warning("tasks.calendar.plan_llm_import_failed", error=str(exc)[:160])
+        return None, None, "the gateway's AI client isn't available (acb_llm import failed)"
     hrs = round(capacity_mins / 60, 1)
     lines = []
     for c in cands:
@@ -452,7 +459,7 @@ async def _llm_rank_day(
         data = json.loads(raw[raw.find("{"):raw.rfind("}") + 1])
     except Exception as exc:
         _log.warning("tasks.calendar.plan_llm_failed", error=str(exc)[:160])
-        return None
+        return None, None, f"the AI call failed ({type(exc).__name__}: {str(exc)[:120]})"
     valid = {c["id"] for c in cands}
     seen: set[str] = set()
     ordered: list[dict] = []
@@ -471,7 +478,7 @@ async def _llm_rank_day(
                           if p.get("rationale") else None),
         })
     notes = str(data.get("notes")).strip() if data.get("notes") else None
-    return ordered, notes
+    return ordered, notes, None
 
 
 async def _estimate_ratio(db: Any, uid: str) -> tuple[float, int]:
@@ -736,14 +743,15 @@ async def _compute_day_plan(
     notes: str | None = None
     ordered: list[dict] | None = None
     ranked_by = "ai"
+    rank_note: str | None = None
     if cands:
         from gateway.routes.tasks.settings import gtd_models
         model = (await gtd_models(db, uid))["chat"]
-        res = await _llm_rank_day(
+        ordered_res, notes, rank_note = await _llm_rank_day(
             cands, req.energy_note, req.capacity_mins, model, one_thing_id,
             prefs["planning_prompt"], tflines)
-        if res is not None:
-            ordered, notes = res
+        if ordered_res is not None:
+            ordered = ordered_res
     if not ordered:
         # The LLM didn't rank (unavailable / errored / no candidates). Fall back
         # to deterministic priority order — but flag it, because this path can't
@@ -826,7 +834,8 @@ async def _compute_day_plan(
         blocks=blocks, unplaced=unplaced,
         notes=_join_notes(notes, lunch_note, template_note, break_note,
                           pad_note),
-        used_mins=used, capacity_mins=req.capacity_mins, ranked_by=ranked_by)
+        used_mins=used, capacity_mins=req.capacity_mins, ranked_by=ranked_by,
+        rank_note=(rank_note if ranked_by == "priority" else None))
 
 
 @router.post("/calendar/plan", response_model=DayPlan)

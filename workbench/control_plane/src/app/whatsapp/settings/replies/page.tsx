@@ -80,7 +80,7 @@ export default function SavedRepliesPage() {
   }
 
   return (
-    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-6 text-foreground">
+    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
         <MessageSquareText className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Saved replies</h1>
@@ -97,7 +97,7 @@ export default function SavedRepliesPage() {
 
       {/* add form */}
       <div className="mb-5 rounded-lg border border-border p-3">
-        <div className="mb-2 flex gap-2">
+        <div className="mb-2 flex flex-col gap-2 sm:flex-row">
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -108,7 +108,7 @@ export default function SavedRepliesPage() {
             value={shortcut}
             onChange={(e) => setShortcut(e.target.value)}
             placeholder="/shortcut (optional)"
-            className="w-40 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary"
+            className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary sm:w-40"
           />
         </div>
         <textarea

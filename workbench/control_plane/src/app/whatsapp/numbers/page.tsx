@@ -55,7 +55,7 @@ export default function NumbersPage() {
   }
 
   return (
-    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-6">
+    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 md:p-6">
       <div className="mb-1 flex items-center gap-2">
         <Smartphone className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Connected numbers</h1>

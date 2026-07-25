@@ -156,8 +156,9 @@ export function buildTaskAssistantPersona(opts: {
       "already scheduled into the time left, trims the overflow back to the " +
       "list, and fills the rest from Next Actions; gtd_replan_day(apply) FITS " +
       "WHAT'S LEFT — reshuffles today's not-done blocks into the time remaining " +
-      "and trims overflow, adding no new work; gtd_rollover(apply) pulls " +
-      "PREVIOUS days' overdue blocks forward; " +
+      "and trims overflow, adding no new work; gtd_rollover(apply) RETURNS " +
+      "overdue blocks to the unscheduled list to re-plan (it no longer auto-" +
+      "places them); " +
       "gtd_day_digest() is a quick 'how's my day' snapshot; " +
       "gtd_set_one_thing(item_id) sets the protected ★ priority. Always " +
       "propose first (apply=false), then apply only after the user confirms. " +

@@ -976,10 +976,11 @@ async def gtd_replan_day(apply: bool = False) -> str:
 
 @_annotate_risk(idempotent=True)
 async def gtd_rollover(apply: bool = False) -> str:
-    """Roll overdue-but-incomplete time-blocks forward into today's open slots
-    (deadline-aware, nearest-due first). Reversible. Propose first, apply after
-    the user agrees; apply=True commits the proposal you last showed, not a
-    recomputed one.
+    """Return overdue-but-incomplete time-blocks to the user's UNSCHEDULED list
+    (clears their schedule) so they can re-plan them, rather than auto-cramming
+    them onto a day. Reversible. Propose first, apply after the user agrees;
+    apply=True commits the proposal you last showed. To then place them, use
+    gtd_plan_day (Rebuild), which pulls from the unscheduled list.
 
     Args:
         apply: False = propose only (default); True = commit the proposal you

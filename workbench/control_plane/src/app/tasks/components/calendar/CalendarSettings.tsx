@@ -299,9 +299,9 @@ export function CalendarSettings({
           </p>
 
           <p className={sectionCls}>Automation</p>
-          <label className="mb-3 flex cursor-pointer items-center justify-between gap-2">
+          <label className="mb-1 flex cursor-pointer items-center justify-between gap-2">
             <span className="min-w-0 text-muted-foreground">
-              Auto roll-over overdue tasks daily
+              Auto-return unfinished tasks to my list daily
             </span>
             <input
               type="checkbox"
@@ -310,6 +310,11 @@ export function CalendarSettings({
               className="h-4 w-4 shrink-0 accent-primary"
             />
           </label>
+          <p className="mb-2 text-[10px] text-muted-foreground">
+            Each morning, any unfinished tasks left on past days have their times
+            cleared and move back to your unscheduled list, so you re-plan them
+            (drag, or Rebuild my day) instead of them auto-filling the day.
+          </p>
 
           <p className={sectionCls}>Energy &amp; themed time</p>
           <div className="mb-1 flex items-center justify-between">

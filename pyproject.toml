@@ -57,6 +57,11 @@ members = [
     "apps/skills/*",
     "packages/*",
 ]
+exclude = [
+    # Non-Python services that live under apps/services/* but are not uv
+    # workspace members (no pyproject.toml). The whatsmeow bridge is a Go module.
+    "apps/services/whatsapp_bridge",
+]
 
 [tool.uv.sources]
 acb-common    = { workspace = true }

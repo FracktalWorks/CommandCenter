@@ -235,41 +235,33 @@ function PersonalPairing({
   const accountId = useRef<string | null>(null);
   const doneRef = useRef(false);
 
+  // Apply a start-session result. All setState lives here (a promise callback),
+  // never synchronously inside an effect — the app's fetch-then-set pattern.
+  const applySession = useCallback((res: Awaited<ReturnType<typeof startBridgeSession>>) => {
+    if (!res.ok || !res.data) {
+      setError(res.error ?? "Couldn't start pairing.");
+      setStatus("error");
+      return;
+    }
+    accountId.current = res.data.account_id;
+    setQr(res.data.qr);
+    setReachable(res.data.bridge_reachable);
+    setStatus(res.data.status || "pairing");
+  }, []);
+
   // Retry / "New code": reset the visible state, then start a fresh session.
-  // setState lives inside the promise callback (never synchronously in an
-  // effect), matching the rest of the app's fetch-then-set pattern.
   const restart = useCallback(() => {
     doneRef.current = false;
     setError(null);
     setStatus("starting");
     setQr(null);
-    startBridgeSession().then((res) => {
-      if (!res.ok || !res.data) {
-        setError(res.error ?? "Couldn't start pairing.");
-        setStatus("error");
-        return;
-      }
-      accountId.current = res.data.account_id;
-      setQr(res.data.qr);
-      setReachable(res.data.bridge_reachable);
-      setStatus(res.data.status || "pairing");
-    });
-  }, []);
+    startBridgeSession().then(applySession);
+  }, [applySession]);
 
   // Kick off a session on mount.
   useEffect(() => {
-    startBridgeSession().then((res) => {
-      if (!res.ok || !res.data) {
-        setError(res.error ?? "Couldn't start pairing.");
-        setStatus("error");
-        return;
-      }
-      accountId.current = res.data.account_id;
-      setQr(res.data.qr);
-      setReachable(res.data.bridge_reachable);
-      setStatus(res.data.status || "pairing");
-    });
-  }, []);
+    startBridgeSession().then(applySession);
+  }, [applySession]);
 
   // Poll status + refreshed QR until the phone scans it (status → live).
   useEffect(() => {
@@ -976,12 +968,17 @@ function TextInput({
 
 function CopyRow({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
   const copy = useCallback(async () => {
     if (!value) return;
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard blocked — the value is still selectable */
     }

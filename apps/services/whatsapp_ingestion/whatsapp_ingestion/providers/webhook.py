@@ -52,7 +52,7 @@ def _message_kind(msg: dict[str, Any]) -> str:
         # A voice note carries ``voice: true``; a plain audio file does not.
         return "voice" if (msg.get("audio") or {}).get("voice") else "audio"
     if mtype in _MEDIA_TYPES or mtype in (
-        "text", "location", "contacts", "reaction", "sticker",
+        "text", "location", "contacts", "reaction",
     ):
         # 'contacts' (a shared vCard) normalizes to singular 'contact'.
         return "contact" if mtype == "contacts" else mtype

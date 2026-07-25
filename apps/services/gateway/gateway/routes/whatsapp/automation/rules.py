@@ -20,10 +20,11 @@ Rules screen's "honest stats" ethos.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends
+from fastapi import Depends, Query
 from gateway.routes.whatsapp.core import _get_db, router
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -141,7 +142,7 @@ class RulePreviewModel(BaseModel):
 async def rules_preview(
     account_id: str,
     within_office_hours: bool = True,
-    limit: int = 25,
+    limit: int = Query(25, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
 ):
     """Dry-run the auto-reply engine over recent needs-reply chats — what WOULD
@@ -175,11 +176,12 @@ async def rules_preview(
 
         items: list[PreviewItem] = []
         summary: dict[str, int] = {}
+        now = datetime.now(UTC)
         for r in rows:
-            window_open = bool(
-                r.service_window_expires_at
-                and r.service_window_expires_at.timestamp() > 0
-            )
+            # The 24h free-form window is open only until it expires — an already
+            # elapsed timestamp is closed (previously any real datetime read open).
+            expires = r.service_window_expires_at
+            window_open = bool(expires and expires > now)
             decision = decide_action(
                 intent=r.intent,
                 category_name=r.category,

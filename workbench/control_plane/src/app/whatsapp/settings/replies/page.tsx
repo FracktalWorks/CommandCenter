@@ -11,6 +11,7 @@ import {
   createSavedReply,
   deleteSavedReply,
   fetchAccounts,
+  pickDefaultAccount,
   fetchSavedReplies,
 } from "../../lib/api";
 import type { WaSavedReply } from "../../lib/types";
@@ -27,8 +28,8 @@ export default function SavedRepliesPage() {
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      if (accs[0]?.id) setAccountId(accs[0].id);
+      const def = pickDefaultAccount(await fetchAccounts());
+      if (def) setAccountId(def.id);
       setLoading(false);
     })();
   }, []);

@@ -11,6 +11,7 @@ import { ArrowLeft, Loader2 } from "lucide-react";
 import {
   bootstrapCategories,
   fetchAccounts,
+  pickDefaultAccount,
   fetchCategories,
   updateCategory,
 } from "../../lib/api";
@@ -26,11 +27,11 @@ export default function CategoriesSettingsPage() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [rows, setRows] = useState<WaCategory[]>([]);
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      const id = accs[0]?.id ?? null;
+      const id = pickDefaultAccount(await fetchAccounts())?.id ?? null;
       setAccountId(id);
       if (id) setRows(await fetchCategories(id));
       setLoading(false);
@@ -48,11 +49,20 @@ export default function CategoriesSettingsPage() {
   const onPatch = useCallback(
     async (cat: WaCategory, field: keyof WaCategory, value: string) => {
       setSaving(cat.id);
+      setError(null);
+      const prevValue = cat[field];
       // optimistic update
       setRows((prev) =>
         prev.map((r) => (r.id === cat.id ? { ...r, [field]: value } : r))
       );
-      await updateCategory(cat.id, { [field]: value });
+      const res = await updateCategory(cat.id, { [field]: value });
+      if (!res.ok) {
+        // roll the optimistic change back and surface the failure
+        setRows((prev) =>
+          prev.map((r) => (r.id === cat.id ? { ...r, [field]: prevValue } : r))
+        );
+        setError(res.error ?? "Couldn't save that change.");
+      }
       setSaving(null);
     },
     []
@@ -80,6 +90,12 @@ export default function CategoriesSettingsPage() {
           labels, upgraded to policy
         </span>
       </div>
+
+      {error && (
+        <div className="mb-3 rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] text-red-500">
+          {error}
+        </div>
+      )}
 
       {!accountId ? (
         <EmptyNoAccount />

@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"time"
 )
@@ -34,7 +35,6 @@ type bridgeMedia struct {
 	MimeType  string `json:"mime_type,omitempty"`
 	Filename  string `json:"filename,omitempty"`
 	SizeBytes int64  `json:"size_bytes,omitempty"`
-	SHA256    string `json:"sha256,omitempty"`
 }
 
 // bridgeMessage mirrors the WhatsAppMessage dataclass fields the parser reads.
@@ -49,7 +49,6 @@ type bridgeMessage struct {
 	QuotedWAMessageID string       `json:"quoted_wa_message_id,omitempty"`
 	Mentions          []string     `json:"mentions,omitempty"`
 	Media             *bridgeMedia `json:"media,omitempty"`
-	GroupSubject      string       `json:"group_subject,omitempty"`
 	ChatKind          string       `json:"chat_kind"`
 	SentAt            string       `json:"sent_at,omitempty"` // RFC3339
 }
@@ -94,7 +93,11 @@ func (g *GatewayClient) post(ctx context.Context, path string, body any) error {
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
+	// Drain + close so the keep-alive connection can be reused.
+	defer func() {
+		_, _ = io.Copy(io.Discard, resp.Body)
+		_ = resp.Body.Close()
+	}()
 	if resp.StatusCode >= 300 {
 		return fmt.Errorf("gateway %s -> HTTP %d", path, resp.StatusCode)
 	}

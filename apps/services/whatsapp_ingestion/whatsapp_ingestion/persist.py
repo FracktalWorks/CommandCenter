@@ -1,17 +1,18 @@
-"""Shared persistence for normalized WhatsApp messages — the ONE idempotent
+"""Shared persistence for normalized WhatsApp messages — the idempotent inbound
 write path, mirroring ``email_ingestion.persist``.
 
-Every inbound event (webhook batch, history-import page) and every outbound send
-lands here, so a schema change touches one place and the ingest paths never
-drift. ``whatsapp_ingestion`` is the LOWER layer: this module imports nothing
-from the gateway.
+Every inbound event (webhook batch, bridge batch, history-import page) lands here,
+so a schema change touches one place and the ingest paths never drift.
+``whatsapp_ingestion`` is the LOWER layer: this module imports nothing from the
+gateway. (Outbound sends write their own row in the gateway send route, which
+records the send regime the transport chose.)
 
-Dedupe key is the Meta message id (``wa_messages.wa_message_id``), which is
-stable, so re-delivery of the same webhook (Meta retries at-least-once) is a
-no-op UPDATE rather than a duplicate row. As in the email upsert, an existing
-row's ``categories`` and ``rules_processed_at`` are PRESERVED on conflict — those
-are the rule engine's, not the transport's, and a re-delivered message must not
-reset them (which would re-run automation on already-processed mail).
+Dedupe key is the message id (``wa_messages.wa_message_id``), which is stable, so
+re-delivery of the same event (providers retry at-least-once) is a no-op UPDATE
+rather than a duplicate row. As in the email upsert, an existing row's
+``categories`` and ``rules_processed_at`` are PRESERVED on conflict — those are the
+rule engine's, not the transport's, and a re-delivered message must not reset them
+(which would re-run automation on an already-processed message).
 """
 
 from __future__ import annotations
@@ -162,9 +163,9 @@ _MESSAGE_INSERT = """INSERT INTO wa_messages
      :sent_at, now())
   ON CONFLICT (account_id, wa_message_id) DO UPDATE SET
     -- Refresh transport fields on re-delivery, but NEVER touch the rule engine's
-    -- columns (categories / rules_processed_at) or a re-sent webhook would
-    -- re-run automation on already-processed mail. Same discipline as the email
-    -- upsert's categories guard.
+    -- columns (categories / rules_processed_at) or a re-delivered event would
+    -- re-run automation on already-processed messages. Same discipline as the
+    -- email upsert's categories guard.
     body_text = COALESCE(NULLIF(EXCLUDED.body_text, ''), wa_messages.body_text),
     kind = EXCLUDED.kind,
     sender = EXCLUDED.sender,
@@ -187,7 +188,7 @@ _MEDIA_INSERT = """INSERT INTO wa_media
 def _message_params(
     account_id: str, chat_id: str, msg: WhatsAppMessage, direction: str
 ) -> dict[str, Any]:
-    """Bind params for one message row (pure — unit-testable)."""
+    """Bind params for one message row (generates the row id via uuid4)."""
     return {
         "id": str(uuid4()),
         "account_id": account_id,

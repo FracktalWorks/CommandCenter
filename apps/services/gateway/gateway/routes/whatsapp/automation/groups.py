@@ -17,7 +17,6 @@ from __future__ import annotations
 
 import json
 from typing import Any
-from uuid import UUID  # noqa: F401  (kept for symmetry; str ids used at the seam)
 
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger

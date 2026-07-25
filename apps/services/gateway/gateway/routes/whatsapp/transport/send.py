@@ -83,9 +83,16 @@ async def send_message(
 
         provider, _store, _acc = await _provider_for_account(db, str(chat.account_id))
         if regime == "template":
-            wamid = await provider.send_template(
-                chat.wa_chat_id, req.template_name, req.template_language,
-            )
+            try:
+                wamid = await provider.send_template(
+                    chat.wa_chat_id, req.template_name, req.template_language,
+                )
+            except NotImplementedError as exc:
+                # A personal (whatsmeow) number has no templates / 24h window.
+                raise HTTPException(
+                    status_code=409,
+                    detail="This number sends free-form text only (no templates).",
+                ) from exc
             body = f"[template: {req.template_name}]"
             template_name: str | None = req.template_name
         else:

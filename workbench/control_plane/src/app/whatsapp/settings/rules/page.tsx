@@ -8,7 +8,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Loader2 } from "lucide-react";
-import { fetchAccounts, fetchRulesPreview } from "../../lib/api";
+import { fetchAccounts, fetchRulesPreview, pickDefaultAccount } from "../../lib/api";
 import type { WaRulePreview, WaRulePreviewItem } from "../../lib/types";
 
 const ACTION_LABEL: Record<string, string> = {
@@ -34,8 +34,8 @@ export default function RulesPreviewPage() {
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      if (accs[0]?.id) setPreview(await fetchRulesPreview(accs[0].id));
+      const def = pickDefaultAccount(await fetchAccounts());
+      if (def) setPreview(await fetchRulesPreview(def.id));
       setLoading(false);
     })();
   }, []);

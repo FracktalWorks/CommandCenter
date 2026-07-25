@@ -14,12 +14,11 @@ real, future timestamp. ``parse_snooze_until`` is pure/testable.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.whatsapp.automation.replyzero import recompute_chat_status
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, assert_chat_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -60,18 +59,6 @@ class SnoozeModel(BaseModel):
     snoozed_until: str | None = None
 
 
-async def _assert_chat_owned(db: Any, chat_id: str, user_email: str) -> str:
-    row = (await db.execute(
-        text("""SELECT c.account_id, a.phone_number
-                FROM wa_chats c JOIN wa_accounts a ON a.id = c.account_id
-                WHERE c.id = :cid AND a.user_id = :uid"""),
-        {"cid": chat_id, "uid": user_email},
-    )).fetchone()
-    if not row:
-        raise HTTPException(status_code=404, detail="Chat not found")
-    return str(row.account_id)
-
-
 @router.post("/chats/{chat_id}/snooze", response_model=SnoozeModel)
 async def snooze_chat(
     chat_id: str, req: SnoozeRequest,
@@ -86,7 +73,7 @@ async def snooze_chat(
 
     db = await _get_db()
     try:
-        account_id = await _assert_chat_owned(db, chat_id, user.email or "anonymous")
+        account_id = await assert_chat_owned(db, chat_id, user.email or "anonymous")
         # Ensure a status row exists (a never-classified chat has none yet), then
         # stamp the snooze onto it.
         await recompute_chat_status(db, account_id, chat_id)
@@ -113,7 +100,7 @@ async def unsnooze_chat(
     """Wake a snoozed chat now — it returns to the queue with its real status."""
     db = await _get_db()
     try:
-        account_id = await _assert_chat_owned(db, chat_id, user.email or "anonymous")
+        account_id = await assert_chat_owned(db, chat_id, user.email or "anonymous")
         await db.execute(
             text("""UPDATE wa_chat_status SET snoozed_until = NULL
                     WHERE account_id = :aid AND chat_id = :cid"""),

@@ -421,6 +421,30 @@ Design rules:
 - **AI is metered per app** (tier + monthly token budget in the manifest), viewer-pays
   semantics for attribution, platform-pays in practice — it all goes through `/v1`
   where cost tracking already lives.
+- **Never bake an integration into an app.** When an app needs a service the platform
+  doesn't have yet, the fix is registering the service *once*, platform-wide — the
+  Integrations page (or the `apis-config` agent, which already exists to discover and
+  configure an unfamiliar API) — never a direct `fetch()` from app code, never a key
+  pasted into a workspace file. One registration serves every app and every agent that
+  declares it; a baked-in call serves nobody but itself and reopens the credential-leak
+  surface the whole bridge exists to close. The builder's standing instructions enforce
+  this as a refuse-and-redirect rule (§4.0 layer 1), not a suggestion.
+- **`cc.tools` growth path: generalize, don't hand-code forever.** Phase 2's registry is
+  intentionally a small, explicit, hand-written map (one `ToolSpec` per action) — correct
+  for a first tool, wrong as a scaling strategy. The already-designed generalization point
+  is `specs/mcp_plugin_integration.md`'s `UnifiedTool` abstraction: once a service is
+  registered via the MCP registry (`mcp_servers` table) or the plugin OpenAPI importer
+  (`plugins.tools_generated` — currently generated but unwired to any runtime), `cc.tools`
+  should resolve actions from *that* registry instead of a bespoke Python function per
+  action. Adding tool #2 by hand is fine; adding tool #10 by hand is a sign this
+  generalization is overdue — treat it as the Phase 3+ trigger, not a Phase 2 requirement.
+- **Broker action names are namespaced `app.<service>_<action>`** (e.g.
+  `app.clickup_create_task`), distinct from each first-party surface's own action names
+  (`clickup.create_task` for the Task Manager, gated by its own per-account credentials).
+  `action_broker._HANDLERS` is a single flat dict keyed by action name — an unnamespaced
+  collision means the *last-registered* handler silently wins and every subsequent call
+  quietly resolves the wrong credential store. Every new `cc.tools` action must add its
+  entry under the `app.` prefix; this is a correctness rule, not a style preference.
 
 ### 4.5 How apps use AI — and how it rides the existing plumbing (binding)
 

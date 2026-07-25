@@ -31,6 +31,9 @@ await cc.storage.table("items").set(key, value, { scope: "user" }); // per-user 
 await cc.storage.table("items").delete(key);
 const kv   = cc.storage.kv;                          // get/set/delete simple keys
 const res  = await cc.ai.complete("prompt", { maxTokens: 400 }); // res.text
+const created = await cc.tools.call("clickup.create_task", {     // declared scope only
+  list: "Procurement", title: "Reorder filament",
+});
 ```
 
 Rules that follow:
@@ -39,6 +42,13 @@ Rules that follow:
 - AI features call `cc.ai.complete` — never fetch any external API, never embed keys.
   Handle its errors gracefully (a 429 means the app's AI budget is spent — show a
   friendly notice).
+- External services (ClickUp, Gmail, …) go through `cc.tools.call(tool, args)` — **only**
+  for a tool you've declared in `app.json`'s `scopes` (`"tool:clickup.create_task"`, with
+  any fixed params like `?list=Procurement` frozen server-side — you can't override them
+  from the app). Never invent a call to a tool that isn't declared or doesn't exist; add
+  the scope to `app.json` first. A `cc.tools.call` on a write-type tool may resolve to
+  `{queued:true}` (sent for human approval) instead of an immediate result — handle that
+  case in the UI ("Sent for review") rather than assuming synchronous success.
 - Wrap `cc.*` calls in try/catch and render readable error states, not blank screens.
 
 ## Design

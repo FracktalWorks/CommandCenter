@@ -65,10 +65,19 @@ async function forward(
     // like multipart, not JSON-parsed.
     const isBinary = reqType.startsWith("application/octet-stream");
     const rawBody = isMultipart || isBinary;
+    // Forward the browser's Range/If-Range for media playback — iOS Safari
+    // sends a `Range: bytes=0-1` probe and will NOT play <audio> unless it gets
+    // a 206 back. Starlette's FileResponse honours Range; we just relay it.
+    const rangeHeaders: Record<string, string> = {};
+    const rangeHeader = req.headers.get("range");
+    if (rangeHeader) rangeHeaders["Range"] = rangeHeader;
+    const ifRange = req.headers.get("if-range");
+    if (ifRange) rangeHeaders["If-Range"] = ifRange;
     const init: RequestInit = {
       method,
       headers: {
         ...(await buildGatewayHeaders()),
+        ...rangeHeaders,
         ...(method === "GET" || method === "DELETE"
           ? {}
           : // Multipart / binary must pass through byte-exact (with the
@@ -105,16 +114,28 @@ async function forward(
     }
     const resType = res.headers.get("content-type") ?? "";
     if (!resType.includes("application/json")) {
-      // Binary passthrough (audio playback): keep type + disposition.
-      const buf = Buffer.from(await res.arrayBuffer());
-      return new NextResponse(buf, {
+      // Binary passthrough (audio/video playback). Stream the body and PRESERVE
+      // the status (206 for range requests) + range/length headers, so seeking
+      // works and iOS Safari will actually play it. Buffering + dropping these
+      // was why <audio> showed "Error" on iPhone.
+      const passHeaders: Record<string, string> = {
+        "Content-Type": resType || "application/octet-stream",
+      };
+      for (const h of [
+        "content-length",
+        "content-range",
+        "accept-ranges",
+        "content-disposition",
+        "cache-control",
+        "etag",
+        "last-modified",
+      ]) {
+        const v = res.headers.get(h);
+        if (v) passHeaders[h] = v;
+      }
+      return new NextResponse(res.body, {
         status: res.status,
-        headers: {
-          "Content-Type": resType || "application/octet-stream",
-          ...(res.headers.get("content-disposition")
-            ? { "Content-Disposition": res.headers.get("content-disposition")! }
-            : {}),
-        },
+        headers: passHeaders,
       });
     }
     const resBody = await res.json().catch(() => ({}));

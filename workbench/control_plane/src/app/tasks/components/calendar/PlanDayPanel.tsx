@@ -8,6 +8,8 @@ import {
   AlertTriangle,
   Wand2,
   CalendarClock,
+  Sparkles,
+  Settings2,
 } from "lucide-react";
 import {
   apiPlanDay,
@@ -29,6 +31,7 @@ export function PlanDayPanel({
   bufferMins,
   energyWindows,
   extraNote,
+  onOpenSettings,
   onClose,
 }: {
   mode?: "plan" | "replan";
@@ -42,6 +45,8 @@ export function PlanDayPanel({
    *  (protect it in the first peak window). Rides the existing energy_note
    *  seam so no backend change is needed. */
   extraNote?: string;
+  /** open Calendar settings (to edit the STANDING planning prompt). */
+  onOpenSettings?: () => void;
   onClose: () => void;
 }) {
   const isReplan = mode === "replan";
@@ -101,17 +106,24 @@ export function PlanDayPanel({
     month: "short",
     day: "numeric",
   });
+  // The planner fell back to deterministic priority order — the LLM was
+  // unavailable, so the standing prompt AND today's note were NOT applied.
+  const fellBack = plan?.rankedBy === "priority" && plan.blocks.length > 0;
 
   return (
     <div
-      className="fixed inset-0 z-[90] flex items-center justify-center bg-black/50 p-4"
+      className="fixed inset-0 z-[90] flex items-end justify-center bg-black/50 sm:items-center sm:p-4"
       onClick={onClose}
     >
       <div
-        className="flex max-h-[85vh] w-full max-w-lg flex-col overflow-hidden rounded-2xl border border-border bg-card shadow-2xl"
+        className="flex max-h-[92vh] w-full flex-col overflow-hidden rounded-t-2xl border border-border bg-card shadow-2xl sm:max-h-[85vh] sm:max-w-lg sm:rounded-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+        {/* grab handle (mobile) */}
+        <div className="flex shrink-0 justify-center pt-2 sm:hidden">
+          <span className="h-1 w-10 rounded-full bg-border" />
+        </div>
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
           {isReplan ? (
             <CalendarClock className="h-4 w-4 shrink-0 text-primary" />
           ) : (
@@ -135,34 +147,60 @@ export function PlanDayPanel({
           </button>
         </div>
 
-        {/* The per-run note steers the LLM ranking (plan mode only — replan/
-            rollover are deterministic repacks that ignore it). Broader than
-            energy: today's mood, constraints or a theme for the day. Your
-            standing planning philosophy (Settings) applies on top of this. */}
+        {/* Today's note — steers the AI's selection/order for THIS run, on top of
+            your standing planning prompt (Settings). Plan mode only; replan and
+            rollover are deterministic repacks that ignore free text. */}
         {!isReplan && (
-          <div className="flex items-center gap-2 border-b border-border px-4 py-2.5">
-            <input
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") void run(note);
-              }}
-              placeholder="Anything for today? e.g. “low energy”, “calls only”, “deep work”, “free after 3pm”"
-              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
-            />
-            <button
-              type="button"
-              onClick={() => void run(note)}
-              disabled={loading}
-              className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
-            >
-              {loading ? (
-                <Loader2 className="h-3.5 w-3.5 animate-spin" />
-              ) : (
-                <Wand2 className="h-3.5 w-3.5" />
+          <div className="shrink-0 border-b border-border px-4 py-2.5">
+            <div className="mb-1 flex items-center justify-between gap-2">
+              <label
+                htmlFor="plan-note"
+                className="text-[11px] font-medium text-foreground"
+              >
+                Anything special about today?
+              </label>
+              {onOpenSettings && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    onClose();
+                    onOpenSettings();
+                  }}
+                  className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground"
+                >
+                  <Settings2 className="h-3 w-3" />
+                  Standing prompt
+                </button>
               )}
-              Re-plan
-            </button>
+            </div>
+            <div className="flex items-center gap-2">
+              <input
+                id="plan-note"
+                value={note}
+                onChange={(e) => setNote(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void run(note);
+                }}
+                placeholder="e.g. “low energy”, “calls only”, “deep work”, “free after 3pm”"
+                className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => void run(note)}
+                disabled={loading}
+                className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+              >
+                {loading ? (
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                ) : (
+                  <Wand2 className="h-3.5 w-3.5" />
+                )}
+                {plan ? "Re-plan" : "Plan"}
+              </button>
+            </div>
+            <p className="mt-1 text-[10px] text-muted-foreground">
+              Applied on top of your standing plan. Press Re-plan after typing.
+            </p>
           </div>
         )}
 
@@ -177,6 +215,24 @@ export function PlanDayPanel({
             </p>
           ) : plan ? (
             <>
+              {/* How the day was ordered — reassure when AI ran, warn (not fail)
+                  when it fell back so the user knows their prompt wasn't used. */}
+              {!isReplan &&
+                plan.blocks.length > 0 &&
+                (fellBack ? (
+                  <p className="mb-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-[11px] text-warning">
+                    <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
+                    <span>
+                      AI ranking was unavailable, so this used priority order —
+                      your note and standing prompt weren&apos;t applied. Times
+                      are still packed around your calendar. Try Re-plan.
+                    </span>
+                  </p>
+                ) : (
+                  <p className="mb-2 inline-flex items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[10px] font-medium text-primary">
+                    <Sparkles className="h-3 w-3" /> AI-ranked for your prompt
+                  </p>
+                ))}
               {plan.notes && (
                 <p className="mb-2 rounded-md bg-primary/5 px-2.5 py-2 text-[12px] text-muted-foreground">
                   {plan.notes}
@@ -253,7 +309,10 @@ export function PlanDayPanel({
           ) : null}
         </div>
 
-        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+        <div
+          className="flex shrink-0 items-center justify-end gap-2 border-t border-border px-4 py-3"
+          style={{ paddingBottom: "max(0.75rem, env(safe-area-inset-bottom))" }}
+        >
           <button
             type="button"
             onClick={onClose}

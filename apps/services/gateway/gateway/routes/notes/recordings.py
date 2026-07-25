@@ -374,4 +374,7 @@ async def get_audio(
     path = media_dir() / best.artifact_path
     if not path.is_file():
         raise HTTPException(status_code=410, detail="audio file no longer on disk")
-    return FileResponse(path, media_type=best.mime, filename=path.name)
+    # Serve INLINE (no filename → no Content-Disposition: attachment) so the
+    # browser treats it as playable media, not a download. FileResponse honours
+    # Range requests (206) for seeking; the Next proxy relays them.
+    return FileResponse(path, media_type=best.mime)

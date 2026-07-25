@@ -215,6 +215,11 @@ class DayPlan(BaseModel):
     # apply that replayed a reviewed proposal). Propose responses stay False so
     # the chat renderer never claims "applied" for a plan it only proposed.
     applied: bool = False
+    # How the day was ordered: "ai" = the LLM judged selection/order (your
+    # planning prompt + today's note applied); "priority" = the LLM was
+    # unavailable and we fell back to deterministic priority ranking (which
+    # ignores the prompts). The UI surfaces this so a fallback isn't silent.
+    ranked_by: str = "ai"
 
 
 def _parse_iso(s: str | None) -> datetime | None:
@@ -730,6 +735,7 @@ async def _compute_day_plan(
 
     notes: str | None = None
     ordered: list[dict] | None = None
+    ranked_by = "ai"
     if cands:
         from gateway.routes.tasks.settings import gtd_models
         model = (await gtd_models(db, uid))["chat"]
@@ -739,6 +745,11 @@ async def _compute_day_plan(
         if res is not None:
             ordered, notes = res
     if not ordered:
+        # The LLM didn't rank (unavailable / errored / no candidates). Fall back
+        # to deterministic priority order — but flag it, because this path can't
+        # honour the planning prompt or today's note.
+        if cands:
+            ranked_by = "priority"
         ordered = [
             {"id": c["id"], "preferred_energy": c["energy"],
              "rationale": "Priority-ranked."}
@@ -815,7 +826,7 @@ async def _compute_day_plan(
         blocks=blocks, unplaced=unplaced,
         notes=_join_notes(notes, lunch_note, template_note, break_note,
                           pad_note),
-        used_mins=used, capacity_mins=req.capacity_mins)
+        used_mins=used, capacity_mins=req.capacity_mins, ranked_by=ranked_by)
 
 
 @router.post("/calendar/plan", response_model=DayPlan)

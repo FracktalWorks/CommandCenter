@@ -657,6 +657,9 @@ export function CalendarView() {
               workStart={workStart}
               workEnd={workEnd}
               energyWindows={energyWindows}
+              lunchStartHour={settings.lunchStartHour}
+              lunchEndHour={settings.lunchEndHour}
+              dayTemplates={settings.dayTemplates}
               oneThingId={oneThingId}
               outcomeById={outcomeById}
               onToggleOneThing={handleToggleOneThing}
@@ -777,6 +780,7 @@ export function CalendarView() {
           capacityMins={capacityTarget}
           bufferMins={settings.bufferMins ?? 0}
           energyWindows={energyWindows}
+          onOpenSettings={() => setSettingsOpen(true)}
           extraNote={
             oneThingItem
               ? `The user's ONE Thing for today (top priority): "${oneThingItem.title}" — place it in the first high-energy window and protect it.`

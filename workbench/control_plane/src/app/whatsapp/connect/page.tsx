@@ -73,7 +73,7 @@ export default function ConnectPage() {
         : "Pick how you want to connect";
 
   return (
-    <div className="mx-auto flex min-h-full max-w-2xl flex-col p-6">
+    <div className="mx-auto flex min-h-full max-w-2xl flex-col p-4 md:p-6">
       <div className="mb-6 flex items-center gap-3">
         <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-500">
           <MessageCircle className="h-5 w-5" />

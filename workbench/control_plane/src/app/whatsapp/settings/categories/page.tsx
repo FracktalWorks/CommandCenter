@@ -76,7 +76,7 @@ export default function CategoriesSettingsPage() {
   }
 
   return (
-    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-6 text-foreground">
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
         <Tags className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Categories</h1>
@@ -110,8 +110,8 @@ export default function CategoriesSettingsPage() {
           </button>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-[12px]">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[520px] text-[12px]">
             <thead>
               <tr className="border-b border-border text-[9.5px] uppercase tracking-wider text-muted-foreground/70">
                 <th className="px-3 py-2 text-left font-bold">Category</th>

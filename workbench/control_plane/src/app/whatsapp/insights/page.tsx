@@ -74,7 +74,7 @@ export default function InsightsPage() {
   const maxIntent = Math.max(1, ...pulse.by_intent.map((i) => i.count));
 
   return (
-    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-6 text-foreground">
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-3">
         <Activity className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Pulse</h1>

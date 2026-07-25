@@ -163,6 +163,17 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
             meeting_id=meeting_id, run_id=run_id,
             segments=len(result.segments), provider=result.provider,
         )
+        # Auto-name diarized speakers from self-introductions ("I'm Priya") so
+        # the notes/actions/email use real people, not S1/S2. Fail-safe + non-
+        # destructive (never overwrites a name the user set); no-op when the
+        # transcript isn't diarized. Runs before summary so names flow through.
+        if result.segments and result.diarized:
+            try:
+                from gateway.routes.notes.speaker_id import infer_speaker_names
+
+                await infer_speaker_names(meeting_id)
+            except Exception as exc:
+                _log.warning("notes.speaker_id_enqueue_failed", error=str(exc)[:200])
         # Chain straight into notes generation so a single upload yields
         # transcript → notes without a second user action.
         if result.segments:

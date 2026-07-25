@@ -306,6 +306,19 @@ export async function saveSpeakerNames(
   );
 }
 
+/** Auto-detect speaker names from self-introductions in the transcript.
+ *  Non-destructive: names already set are kept; only anonymous speakers filled.
+ *  `detected` is just the labels this run newly named (for a toast). */
+export async function identifySpeakers(
+  meetingId: string
+): Promise<{ names: Record<string, string>; detected: Record<string, string> }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/identify-speakers`, {
+      method: "POST",
+    })
+  );
+}
+
 export async function draftFollowupEmail(
   meetingId: string
 ): Promise<EmailDraft> {

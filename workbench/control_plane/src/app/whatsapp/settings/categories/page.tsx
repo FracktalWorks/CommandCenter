@@ -78,7 +78,7 @@ export default function CategoriesSettingsPage() {
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
-        <Tags className="h-4 w-4 text-emerald-600" />
+        <Tags className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Categories</h1>
         <span className="text-[11px] text-muted-foreground">
           labels, upgraded to policy
@@ -127,7 +127,7 @@ export default function CategoriesSettingsPage() {
                   <td className="px-3 py-2.5">
                     <span className="font-semibold">{c.name}</span>
                     {c.wa_label_id && (
-                      <span className="ml-1 text-[10px] text-emerald-500">🏷</span>
+                      <span className="ml-1 text-[10px] text-success">🏷</span>
                     )}
                   </td>
                   <td className="px-3 py-2.5">

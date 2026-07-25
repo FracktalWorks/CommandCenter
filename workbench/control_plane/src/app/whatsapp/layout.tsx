@@ -55,7 +55,7 @@ export default function WhatsAppLayout({ children }: { children: React.ReactNode
                 href={t.href}
                 className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] whitespace-nowrap transition ${
                   active
-                    ? "bg-muted font-semibold text-foreground"
+                    ? "bg-primary/15 font-semibold text-primary"
                     : "text-muted-foreground hover:bg-muted/50"
                 }`}
               >
@@ -82,7 +82,7 @@ export default function WhatsAppLayout({ children }: { children: React.ReactNode
     <div className="flex h-full min-h-0 bg-background text-foreground">
       <aside className="flex w-14 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground md:w-52">
         <div className="flex h-12 shrink-0 items-center gap-2 border-b border-sidebar-border px-3">
-          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-emerald-500/15 text-emerald-500">
+          <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
             <MessageSquare className="h-3.5 w-3.5" />
           </span>
           <span className="hidden text-[13px] font-semibold md:block">WhatsApp</span>
@@ -99,7 +99,7 @@ export default function WhatsAppLayout({ children }: { children: React.ReactNode
                 title={t.label}
                 className={`flex items-center justify-center gap-2.5 rounded-lg px-2.5 py-2 text-[12.5px] transition md:justify-start ${
                   active
-                    ? "bg-muted font-semibold text-foreground"
+                    ? "bg-primary/15 font-semibold text-primary"
                     : "text-muted-foreground hover:bg-muted/50 hover:text-foreground"
                 }`}
               >

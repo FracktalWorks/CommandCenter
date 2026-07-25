@@ -57,7 +57,7 @@ export default function NumbersPage() {
   return (
     <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 md:p-6">
       <div className="mb-1 flex items-center gap-2">
-        <Smartphone className="h-4 w-4 text-emerald-600" />
+        <Smartphone className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Connected numbers</h1>
       </div>
       <p className="mb-5 text-[12.5px] text-muted-foreground">
@@ -102,7 +102,7 @@ export default function NumbersPage() {
                     {a.display_name || a.phone_number || "WhatsApp number"}
                   </span>
                   {a.is_default && (
-                    <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-emerald-600">
+                    <span className="rounded-full bg-primary/15 px-1.5 py-0.5 text-[9.5px] font-bold uppercase tracking-wide text-primary">
                       Default
                     </span>
                   )}
@@ -146,7 +146,7 @@ function SyncBadge({ status }: { status: string }) {
   return (
     <span
       className={`inline-flex items-center gap-1 ${
-        live ? "text-emerald-600" : "text-muted-foreground"
+        live ? "text-success" : "text-muted-foreground"
       }`}
     >
       {live ? <Check className="h-3 w-3" /> : null}

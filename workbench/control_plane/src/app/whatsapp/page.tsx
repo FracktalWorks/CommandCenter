@@ -245,7 +245,7 @@ export default function WhatsAppPage() {
                   }}
                   className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] whitespace-nowrap ${
                     active
-                      ? "bg-muted font-semibold text-foreground"
+                      ? "bg-primary/15 font-semibold text-primary"
                       : "text-muted-foreground hover:bg-muted/50"
                   }`}
                 >
@@ -305,7 +305,7 @@ export default function WhatsAppPage() {
               }}
               className={`flex items-center gap-2 rounded-lg border-l-2 px-2.5 py-2 text-left text-[13px] ${
                 active
-                  ? "border-primary bg-muted font-semibold text-foreground"
+                  ? "border-primary bg-primary/15 font-semibold text-primary"
                   : "border-transparent text-muted-foreground hover:bg-muted/50"
               }`}
             >
@@ -426,13 +426,13 @@ function AccountSwitcher({
                 </div>
               </div>
               {a.id === active.id && (
-                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <Check className="h-3.5 w-3.5 shrink-0 text-success" />
               )}
             </button>
           ))}
           <Link
             href="/whatsapp/connect"
-            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-emerald-600 hover:bg-muted/50"
+            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-primary hover:bg-muted/50"
           >
             <Plus className="h-3.5 w-3.5" /> Connect another number
           </Link>
@@ -452,7 +452,7 @@ function AccountSwitcher({
           <div className="truncate font-semibold">
             {active.display_name || active.phone_number}
           </div>
-          <div className="text-emerald-500">
+          <div className="text-success">
             ● live
             {accounts.length > 1 ? ` · ${accounts.length} numbers` : ""}
           </div>
@@ -494,7 +494,7 @@ function MobileAccountBar({
           <div className="truncate text-[12px] font-semibold">
             {active.display_name || active.phone_number}
           </div>
-          <div className="text-[10px] text-emerald-500">
+          <div className="text-[10px] text-success">
             ● live{multi ? ` · ${accounts.length} numbers` : ""}
           </div>
         </div>
@@ -530,13 +530,13 @@ function MobileAccountBar({
                 </div>
               </div>
               {a.id === active.id && (
-                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <Check className="h-3.5 w-3.5 shrink-0 text-success" />
               )}
             </button>
           ))}
           <Link
             href="/whatsapp/connect"
-            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-emerald-600 hover:bg-muted/50"
+            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-primary hover:bg-muted/50"
           >
             <Plus className="h-3.5 w-3.5" /> Connect another number
           </Link>
@@ -707,7 +707,7 @@ function Conversation({
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <b className="truncate text-[13px]">{chat.name || chat.wa_chat_id}</b>
             {chat.window_open ? (
-              <span className="hidden shrink-0 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-500 sm:inline">
+              <span className="hidden shrink-0 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success sm:inline">
                 session open
               </span>
             ) : (
@@ -869,7 +869,7 @@ function Conversation({
                 <button
                   onClick={doSendText}
                   disabled={!text.trim() || sending}
-                  className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[12px] font-semibold text-white disabled:opacity-50"
+                  className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-[12px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
                   {sending ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -1122,7 +1122,7 @@ function Bubble({
       <div
         className={`max-w-[78%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
           out
-            ? "rounded-br-sm border border-emerald-500/25 bg-emerald-500/15"
+            ? "rounded-br-sm border border-primary/30 bg-primary/10"
             : "rounded-bl-sm border border-border bg-muted"
         }`}
       >
@@ -1184,7 +1184,7 @@ function ConnectEmptyState() {
   return (
     <div className="flex h-full items-center justify-center bg-background p-8">
       <div className="max-w-md text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-500">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
           <MessageCircle className="h-7 w-7" />
         </div>
         <h1 className="text-lg font-semibold">Connect WhatsApp Business</h1>

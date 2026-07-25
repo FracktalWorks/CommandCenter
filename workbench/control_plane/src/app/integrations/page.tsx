@@ -669,9 +669,9 @@ function WhatsAppConnector({ onChange }: { onChange?: () => void }) {
         <Plus className="w-3.5 h-3.5" /> Connect a number
       </a>
       <p className="text-[10.5px] text-muted-foreground/70">
-        Connecting opens the guided wizard in the WhatsApp app (one-click Embedded
-        Signup, or paste your credentials). Numbers are stored per-account,
-        encrypted at rest.
+        Connecting opens the guided flow in the WhatsApp app — link a personal
+        number by QR scan, or connect a business number via the official Cloud
+        API. Numbers are stored per-account, encrypted at rest.
       </p>
     </div>
   );

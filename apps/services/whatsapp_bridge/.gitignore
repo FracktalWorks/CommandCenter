@@ -1,0 +1,14 @@
+# Compiled bridge binary
+/whatsapp_bridge
+/bridge
+
+# whatsmeow device store + our bookkeeping db (contain the paired session — secret)
+*.db
+*.db-wal
+*.db-shm
+*.meta
+*.meta-wal
+*.meta-shm
+
+# local env
+.env

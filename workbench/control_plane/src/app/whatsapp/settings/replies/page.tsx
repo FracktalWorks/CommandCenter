@@ -82,7 +82,7 @@ export default function SavedRepliesPage() {
   return (
     <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
-        <MessageSquareText className="h-4 w-4 text-emerald-600" />
+        <MessageSquareText className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Saved replies</h1>
         <span className="text-[11px] text-muted-foreground">
           canned snippets for the composer

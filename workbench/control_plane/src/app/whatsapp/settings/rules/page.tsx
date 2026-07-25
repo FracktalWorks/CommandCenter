@@ -18,8 +18,8 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 const ACTION_TONE: Record<string, string> = {
-  answer_from_system: "text-emerald-500",
-  holding_reply: "text-emerald-500",
+  answer_from_system: "text-success",
+  holding_reply: "text-success",
   draft: "text-primary",
   none: "text-muted-foreground",
 };
@@ -55,7 +55,7 @@ export default function RulesPreviewPage() {
   return (
     <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
       <div className="mb-5 flex items-center gap-2">
-        <SlidersHorizontal className="h-4 w-4 text-emerald-600" />
+        <SlidersHorizontal className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Rules preview</h1>
         <span className="text-[11px] text-muted-foreground">
           what automation would do — nothing is sent

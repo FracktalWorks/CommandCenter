@@ -257,6 +257,51 @@ def _get_messages(
     ]
 
 
+#: Columns whose value is a RUN ARTIFACT — accumulated from the agent's event
+#: stream, never authored by hand. Their upsert is MONOTONIC (see below); the
+#: contract test in tests/unit/test_chat_message_upsert.py enforces that.
+MONOTONIC_MESSAGE_COLUMNS = ("tool_events", "progress_lines", "custom_events")
+
+#: Upsert for one chat_message row.
+#:
+#: THREE writers race on the same row: the Next translator's 3s checkpoints
+#: (app/api/agent/chat/route.ts), the gateway's run-boundary fold
+#: (chat_fold.persist_final_assistant_message), and the browser re-POSTing its
+#: whole message list whenever anything changes (lib/sessions.saveMessages).
+#: Blind ``= EXCLUDED.*`` made this last-writer-wins, so the LEANEST writer won:
+#: a client whose SSE dropped mid-run re-POSTed a content-only snapshot over the
+#: fold's complete row and erased the tool timeline plus the generative_ui cards
+#: — inline AG-UI silently vanishing from earlier turns.
+#:
+#: So: an EMPTY incoming array never erases a stored non-empty one, and a NULL
+#: incoming reasoning/agent_state never erases stored ones. These fields only
+#: ever grow within a turn, so "keep what we have" is always the safe merge.
+#: ``content`` stays a plain overwrite — it is genuinely rewritten in place as
+#: the answer streams and is un-folded at RUN_FINISHED.
+_MESSAGE_UPSERT_SQL = """
+    INSERT INTO chat_message
+        (id, session_id, role, content, timestamp_ms,
+         tool_events, progress_lines, reasoning, agent_state, custom_events)
+    VALUES
+        (:id, :sid, :role, :content, :ts,
+         CAST(:tool_events AS jsonb), CAST(:progress_lines AS jsonb),
+         :reasoning, CAST(:agent_state AS jsonb), CAST(:custom_events AS jsonb))
+    ON CONFLICT (session_id, id) DO UPDATE SET
+        content        = EXCLUDED.content,
+        tool_events    = CASE
+            WHEN jsonb_array_length(COALESCE(EXCLUDED.tool_events, '[]'::jsonb)) > 0
+            THEN EXCLUDED.tool_events ELSE chat_message.tool_events END,
+        progress_lines = CASE
+            WHEN jsonb_array_length(COALESCE(EXCLUDED.progress_lines, '[]'::jsonb)) > 0
+            THEN EXCLUDED.progress_lines ELSE chat_message.progress_lines END,
+        reasoning      = COALESCE(EXCLUDED.reasoning, chat_message.reasoning),
+        agent_state    = COALESCE(EXCLUDED.agent_state, chat_message.agent_state),
+        custom_events  = CASE
+            WHEN jsonb_array_length(COALESCE(EXCLUDED.custom_events, '[]'::jsonb)) > 0
+            THEN EXCLUDED.custom_events ELSE chat_message.custom_events END
+"""
+
+
 def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
     from acb_graph import get_session  # noqa: PLC0415
     from sqlalchemy import text  # noqa: PLC0415
@@ -267,40 +312,7 @@ def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
     with get_session() as s:
         for m in messages:
             s.execute(
-                text(
-                    """
-                    INSERT INTO chat_message
-                        (id, session_id, role, content, timestamp_ms,
-                         tool_events, progress_lines, reasoning, agent_state, custom_events)
-                    VALUES
-                        (:id, :sid, :role, :content, :ts,
-                         CAST(:tool_events AS jsonb), CAST(:progress_lines AS jsonb),
-                         :reasoning, CAST(:agent_state AS jsonb), CAST(:custom_events AS jsonb))
-                    ON CONFLICT (session_id, id) DO UPDATE SET
-                        content        = EXCLUDED.content,
-                        -- Run artifacts are MONOTONIC: an empty incoming array
-                        -- never erases a stored non-empty one.  Several writers
-                        -- upsert the same row (the Next translator's 3s
-                        -- checkpoints, the gateway's run-boundary chat_fold, and
-                        -- the browser re-saving its whole message list on every
-                        -- change) and last-writer-wins let the leanest of them
-                        -- win: a client whose SSE dropped mid-run re-POSTed a
-                        -- content-only snapshot and wiped the tool timeline and
-                        -- the generative_ui cards the fold had just persisted
-                        -- (inline AG-UI vanishing on the next turn / reload).
-                        tool_events    = CASE
-                            WHEN jsonb_array_length(COALESCE(EXCLUDED.tool_events, '[]'::jsonb)) > 0
-                            THEN EXCLUDED.tool_events ELSE chat_message.tool_events END,
-                        progress_lines = CASE
-                            WHEN jsonb_array_length(COALESCE(EXCLUDED.progress_lines, '[]'::jsonb)) > 0
-                            THEN EXCLUDED.progress_lines ELSE chat_message.progress_lines END,
-                        reasoning      = COALESCE(EXCLUDED.reasoning, chat_message.reasoning),
-                        agent_state    = COALESCE(EXCLUDED.agent_state, chat_message.agent_state),
-                        custom_events  = CASE
-                            WHEN jsonb_array_length(COALESCE(EXCLUDED.custom_events, '[]'::jsonb)) > 0
-                            THEN EXCLUDED.custom_events ELSE chat_message.custom_events END
-                    """
-                ),
+                text(_MESSAGE_UPSERT_SQL),
                 {
                     "id": m.id,
                     "sid": session_id,

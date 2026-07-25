@@ -35,6 +35,7 @@ import remarkGfm from "remark-gfm";
 
 import SandboxedHtml from "@/components/SandboxedHtml";
 import { renderTemplate } from "@/components/genUITemplates";
+import { tableCells, tableColumns, text } from "@/lib/genUiText";
 import { resolveIcon } from "@/lib/icons";
 import { buildIconMap } from "@/lib/iconSvg";
 
@@ -64,8 +65,13 @@ const ICON_TONE: Record<string, string> = {
   neutral: "var(--foreground)",
 };
 
-const s = (v: unknown, fallback = ""): string =>
-  typeof v === "string" ? v : v == null ? fallback : String(v);
+/**
+ * Coerce an agent-supplied prop to display text — the ONE funnel for every
+ * node type, so no shape mismatch can ever render "[object Object]" (it
+ * shipped that way in a table header row when columns arrived as {key,label}).
+ * Pure + unit-tested in lib/genUiText.test.ts.
+ */
+const s = text;
 
 // ─── Node renderer ───────────────────────────────────────────────────────
 
@@ -158,41 +164,12 @@ function Node({
 
     case "table": {
       // Columns arrive as plain strings OR as objects ({key,label}, {title},
-      // {header}) — models emit both shapes and the old `String(col)` rendered
-      // the object ones as a row of "[object Object]" headers. Normalise to
-      // {key,label} so either shape renders, and so object ROWS (keyed by the
-      // column key) work alongside positional array rows.
-      const toCol = (c: unknown): { key: string; label: string } => {
-        if (c && typeof c === "object") {
-          const o = c as Record<string, unknown>;
-          return {
-            key: s(o.key ?? o.field ?? o.name ?? o.label ?? o.title ?? o.header),
-            label: s(o.label ?? o.title ?? o.header ?? o.name ?? o.key ?? o.field),
-          };
-        }
-        return { key: s(c), label: s(c) };
-      };
+      // {header}) — models emit both, and rows may be positional arrays or
+      // objects keyed by the column key. tableColumns/tableCells normalise all
+      // of it (and are unit-tested against the "[object Object]" header row
+      // this once shipped).
       const rows = Array.isArray(props.rows) ? props.rows : [];
-      const firstObjRow = rows.find(
-        (r) => r && typeof r === "object" && !Array.isArray(r),
-      ) as Record<string, unknown> | undefined;
-      const cols = Array.isArray(props.columns) && props.columns.length > 0
-        ? props.columns.map(toCol)
-        // No columns given but the rows are objects — derive headers from keys
-        // rather than dropping every cell.
-        : firstObjRow
-          ? Object.keys(firstObjRow).map((k) => ({ key: k, label: k }))
-          : [];
-      // A cell may be a primitive, a list, or a {text|label|value} object.
-      const cell = (v: unknown): string => {
-        if (Array.isArray(v)) return v.map((x) => cell(x)).join(", ");
-        if (v && typeof v === "object") {
-          const o = v as Record<string, unknown>;
-          const pick = o.text ?? o.label ?? o.value ?? o.name;
-          return pick != null ? s(pick) : "";
-        }
-        return s(v);
-      };
+      const cols = tableColumns(props.columns, rows);
       const hasHeader = cols.some((c) => c.label.trim());
       return (
         <div className="overflow-x-auto rounded-md border border-border/60">
@@ -205,20 +182,13 @@ function Node({
               </thead>
             )}
             <tbody>
-              {rows.map((r, ri) => {
-                const cells = Array.isArray(r)
-                  ? r.map(cell)
-                  : r && typeof r === "object"
-                    ? cols.map((c) => cell((r as Record<string, unknown>)[c.key]))
-                    : [];
-                return (
-                  <tr key={ri} className="border-t border-border/60">
-                    {cells.map((text, ci) => (
-                      <td key={ci} className="px-2 py-1 text-foreground">{text}</td>
-                    ))}
-                  </tr>
-                );
-              })}
+              {rows.map((r, ri) => (
+                <tr key={ri} className="border-t border-border/60">
+                  {tableCells(r, cols).map((cell, ci) => (
+                    <td key={ci} className="px-2 py-1 text-foreground">{cell}</td>
+                  ))}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

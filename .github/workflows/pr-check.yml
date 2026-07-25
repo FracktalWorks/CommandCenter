@@ -97,6 +97,35 @@ jobs:
       - name: Run unit tests
         run: uv run python -m pytest tests/unit/ -x -v
 
+  # The workbench had NO CI at all: a type error or a broken pure helper only
+  # surfaced when the VPS rebuilt after merge. Typecheck + vitest are seconds,
+  # and they're where the frontend-side invariants live (e.g. genUiText's
+  # "an agent's tree can never render [object Object]"). Not a full `next
+  # build` — that stays a deploy-time step.
+  frontend:
+    name: "Frontend (typecheck + unit tests)"
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: workbench/control_plane
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: workbench/control_plane/package-lock.json
+
+      - name: Install deps
+        run: npm ci --no-audit --no-fund
+
+      - name: Typecheck
+        run: npx tsc --noEmit -p tsconfig.json
+
+      - name: Unit tests
+        run: npm test
+
   secret-scan:
     name: "Secret scan"
     runs-on: ubuntu-latest

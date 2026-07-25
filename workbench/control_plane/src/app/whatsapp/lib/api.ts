@@ -87,6 +87,12 @@ export function pickDefaultAccount<T extends { id: string; is_default?: boolean 
   return accounts.find((a) => a.is_default) ?? accounts[0];
 }
 
+/** Disconnect (remove) a connected number. Its chats stay stored, but no new
+ *  messages sync until it's reconnected. */
+export function disconnectAccount(id: string) {
+  return deleteJSON(`accounts/${id}`);
+}
+
 // ── Connect wizard (W11) ─────────────────────────────────────────────────────
 
 export function fetchConnectionInfo(): Promise<WaConnectionInfo> {

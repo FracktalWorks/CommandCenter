@@ -11,7 +11,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Activity,
   Check,
   ChevronsUpDown,
   Clock,
@@ -22,7 +21,6 @@ import {
   Plus,
   Search,
   Send,
-  Settings,
   Sparkles,
   Zap,
 } from "lucide-react";
@@ -206,6 +204,7 @@ export default function WhatsAppPage() {
         {STREAMS.map((s) => {
           const active = s.key === activeStream;
           const count = streamCount(s.key);
+          const Icon = s.icon;
           return (
             <button
               key={s.key}
@@ -219,7 +218,7 @@ export default function WhatsAppPage() {
                   : "border-transparent text-muted-foreground hover:bg-muted/50"
               }`}
             >
-              <span className="w-4 text-center">{s.icon}</span>
+              <Icon className="h-3.5 w-3.5 shrink-0" />
               <span className="flex-1 truncate">{s.label}</span>
               <span
                 className={`text-[11px] tabular-nums ${
@@ -231,40 +230,16 @@ export default function WhatsAppPage() {
             </button>
           );
         })}
+        {/* Pulse / Categories / Replies / Rules / Numbers now live in the shared
+            WhatsApp nav (whatsapp/layout.tsx), so they stay reachable from every
+            sub-app. The switcher stays here — it scopes this inbox. */}
         <div className="mt-auto">
-          <div className="px-2 py-1 text-[10px] font-bold tracking-wider text-muted-foreground/70">
-            AUTOMATION
-          </div>
-          <Link
-            href="/whatsapp/insights"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            <Activity className="h-3.5 w-3.5" /> Pulse
-          </Link>
-          <Link
-            href="/whatsapp/settings/replies"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            <Zap className="h-3.5 w-3.5" /> Saved replies
-          </Link>
-          <Link
-            href="/whatsapp/settings/categories"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            <Settings className="h-3.5 w-3.5" /> Categories
-          </Link>
-          <Link
-            href="/whatsapp/settings/rules"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            ⚖ Rules preview
-          </Link>
+          <AccountSwitcher
+            accounts={accounts}
+            active={activeAccount}
+            onSwitch={switchAccount}
+          />
         </div>
-        <AccountSwitcher
-          accounts={accounts}
-          active={activeAccount}
-          onSwitch={switchAccount}
-        />
       </nav>
 
       {/* ── Conversation list (quiet rows) ────────────────────────── */}

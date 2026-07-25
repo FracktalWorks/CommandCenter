@@ -6,8 +6,7 @@
 // why; the summary tallies actions by kind.
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { Loader2, SlidersHorizontal } from "lucide-react";
 import { fetchAccounts, fetchRulesPreview, pickDefaultAccount } from "../../lib/api";
 import type { WaRulePreview, WaRulePreviewItem } from "../../lib/types";
 
@@ -54,14 +53,9 @@ export default function RulesPreviewPage() {
     .map((k) => [k, preview.summary[k]] as const);
 
   return (
-    <div className="mx-auto max-w-3xl p-6 text-foreground">
-      <div className="mb-5 flex items-center gap-3">
-        <Link
-          href="/whatsapp"
-          className="flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Queue
-        </Link>
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-6 text-foreground">
+      <div className="mb-5 flex items-center gap-2">
+        <SlidersHorizontal className="h-4 w-4 text-emerald-600" />
         <h1 className="text-[15px] font-semibold">Rules preview</h1>
         <span className="text-[11px] text-muted-foreground">
           what automation would do — nothing is sent

@@ -2,6 +2,15 @@
 // apps/services/gateway/gateway/routes/whatsapp/core.py). Kept in sync by hand —
 // a small, stable surface for the read-only W0 app.
 
+import {
+  Clock,
+  MessageSquare,
+  Moon,
+  Sparkles,
+  Users,
+  type LucideIcon,
+} from "lucide-react";
+
 export type WaAccount = {
   id: string;
   phone_number: string;
@@ -195,10 +204,12 @@ export type WaChatContext = {
 };
 
 // The triage streams shown in the nav — the single organizing spine.
-export const STREAMS: { key: string; label: string; icon: string }[] = [
-  { key: "needs_reply", label: "Needs reply", icon: "✦" },
-  { key: "waiting", label: "Waiting on them", icon: "⏳" },
-  { key: "groups", label: "Groups", icon: "👥" },
-  { key: "all", label: "All chats", icon: "💬" },
-  { key: "snoozed", label: "Snoozed", icon: "💤" },
+// Triage streams. Icons are the native lucide set (rendered as components), not
+// emoji, so they inherit the app's colour + sizing like every other icon.
+export const STREAMS: { key: string; label: string; icon: LucideIcon }[] = [
+  { key: "needs_reply", label: "Needs reply", icon: Sparkles },
+  { key: "waiting", label: "Waiting on them", icon: Clock },
+  { key: "groups", label: "Groups", icon: Users },
+  { key: "all", label: "All chats", icon: MessageSquare },
+  { key: "snoozed", label: "Snoozed", icon: Moon },
 ];

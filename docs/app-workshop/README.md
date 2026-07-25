@@ -255,6 +255,50 @@ model, the build/publish pipeline, the runtime bridge, and the sharing UX.
      app.json  index.html  src/*.jsx  styles.css  dist/bundle.html  data/seed.json
 ```
 
+### 4.0 The platform contract (non-negotiable)
+
+Custom apps are **CommandCenter-native by construction, not by convention**. The
+platform is the app's entire backend — identity, data, AI, and integrations all come
+from CommandCenter through `window.cc`, and there is no second path. This is what
+keeps every app shareable, auditable, secure, and maintainable by whoever inherits it.
+Apps that "bring their own architecture" (direct API calls, external SDKs, their own
+backends or keys) are not supported — not as an option, not as an escape hatch.
+
+**The mapping is total** — every need an app has resolves to a platform capability:
+
+| App need | The CommandCenter way | Never |
+|---|---|---|
+| Data | `cc.storage` (shared app tables) | localStorage/IndexedDB as store, external DBs (Firebase/Supabase/…) |
+| AI | `cc.ai` → gateway `/v1` tiers | provider SDKs, embedded API keys, direct provider calls |
+| Identity | `cc.user()` (ambient SSO) | login forms, auth libraries, cookies |
+| External services | manifest scopes → `cc.tools` → Integration Registry | direct `fetch()` to any API, keys in code or config |
+| UI assets | inline code, platform design tokens | CDN scripts/fonts/styles, external images |
+| Automation | platform triggers + agents (Phase 3) | service workers, timers polling external services |
+
+**Enforcement ladder** (defense in depth — each layer holds independently):
+
+1. **The builder refuses and redirects.** When a request specifies an off-architecture
+   approach ("call the weather API directly", "add Firebase", "load React from a
+   CDN"), the `app-builder` does not comply-with-caveats — it names the deviation,
+   explains the platform equivalent, and builds *that*. If the platform genuinely
+   lacks the capability, it says so and points at the right extension path (register
+   the integration in the Registry → declare the scope), never at a workaround.
+2. **Sandbox physics.** The opaque-origin iframe + CSP (`connect-src 'none'`, no
+   external `src`) make deviations *non-functional*, not merely discouraged — code
+   that bypasses `cc.*` simply cannot reach anything.
+3. **Publish conformance scan.** Publishing statically scans the bundle: external
+   URL references in code/markup, key-shaped strings, service-worker registration,
+   storage-API reliance → hard errors block the publish; softer findings surface as
+   warnings in the publish modal.
+4. **Runtime gate.** Every capability call is checked against the manifest ∩ grants
+   at the gateway; undeclared scope → 403 + audit row. Budgets and Action-Broker
+   gating apply regardless of what the code intended.
+
+When an app needs something the platform can't do yet, **the platform grows** (a new
+Registry integration, a new `cc.*` capability, eventually T3 server handlers) — the
+app never routes around it. That rule is what makes the whole system compound instead
+of fragment.
+
 ### 4.1 The app model
 
 An app is **a workspace folder + a manifest + immutable published versions**.
@@ -580,8 +624,9 @@ a gated ClickUp write with Approve / Deny / "always allow for this app".
 **P0 — the loop works (Phases 0–1):**
 create from description · builder chat with streaming tool timeline · live sandboxed
 preview · single-file + React/esbuild apps · checkpoint/restore per AI edit · bounded
-build auto-repair + Fix-with-AI · publish → immutable version → run page · rollback ·
-private/org visibility · `cc.user` + `cc.storage` + `cc.ai` · gallery + sidebar section ·
+build auto-repair + Fix-with-AI · publish → immutable version → run page · **publish
+conformance scan (platform-contract enforcement, §4.0)** · rollback · private/org
+visibility · `cc.user` + `cc.storage` + `cc.ai` · gallery + sidebar section ·
 per-app audit trail.
 
 **P1 — team-grade (Phase 2):**
@@ -717,9 +762,10 @@ single-file HTML apps; publish = version row + run page. *Goal: describe → bui
 
 **Phase 1 — MVP product (2–4 wk).** React template + esbuild build step + bounded
 auto-repair; checkpoint/restore chips; console drawer + Fix-with-AI; `cc-sdk` bridge v1
-(`user` / `storage` / `ai`) + App Runtime API + `app_data`/`app_audit`; versions +
-rollback UI; visibility private/org; sidebar Custom Apps section with pins; blob-store
-durability sweeps.
+(`user` / `storage` / `ai`) + App Runtime API + `app_data`/`app_audit`; **full publish
+conformance scan** (external-URL/key/service-worker/storage-reliance checks — a basic
+external-URL scan ships in Phase 0); versions + rollback UI; visibility private/org;
+sidebar Custom Apps section with pins; blob-store durability sweeps.
 
 **Phase 2 — Capabilities & sharing (3–5 wk).** `cc.tools` proxy over the Integration
 Registry with manifest scopes + Action-Broker gating + per-use confirm toast; publish

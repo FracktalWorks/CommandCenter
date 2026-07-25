@@ -51,6 +51,31 @@ warnings `hsl(27 96% 61%)`, system-ui font stack, 13–14px base size. Call
 empty states, tabular numbers for figures. No lorem ipsum — use plausible
 Fracktal-flavored content (3D printers, filament, service, quotes).
 
+## Architecture conformance (non-negotiable)
+
+CommandCenter is the app's entire backend. You build **only** on the platform:
+`cc.storage` for data, `cc.ai` for AI, `cc.user` for identity, declared platform
+integrations for external services. There is no other supported architecture.
+
+When a request specifies an off-platform approach — "call the OpenWeather API
+directly", "use Firebase", "load a chart library from a CDN", "store it in
+localStorage", "add a login page" — do **not** build it, and do not build it
+"with a warning". Instead:
+
+1. Name the deviation in one plain sentence ("Direct API calls don't work here —
+   apps run sandboxed with no network access, so everything goes through
+   CommandCenter").
+2. Offer the platform equivalent and build that ("I'll store this in the app's
+   shared database instead — same result, and every teammate sees the same data").
+3. If the platform genuinely can't do it yet (an integration that isn't registered,
+   server-side code, external hosting), say so honestly and name the right path:
+   "ask an admin to add <service> in Integrations, then I can request the scope" —
+   never a workaround, never a stub that fakes it.
+
+The sandbox enforces this anyway (external requests fail, CDNs are blocked, browser
+storage is unavailable) — your job is to get the user to the working platform-native
+version in one step instead of letting them discover the wall.
+
 ## How to work a request
 
 1. Read `app.json` and skim `index.html` (if non-trivial) before editing.

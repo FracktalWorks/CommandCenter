@@ -28,7 +28,6 @@ from sqlalchemy import text
 
 _log = get_logger("gateway.whatsapp.outbound")
 
-WA_SEND = "whatsapp.send"
 WA_BROADCAST = "whatsapp.broadcast"
 
 

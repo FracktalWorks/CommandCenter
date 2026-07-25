@@ -136,3 +136,53 @@ async def _provider_for_account(db: Any, account_id: str):
     provider = _instantiate_provider(
         getattr(row, "provider", None) or "cloud_api", creds)
     return provider, store, row
+
+
+# ── shared ownership guards (used across transport/ + automation/) ────────────
+
+async def assert_account_owned(db: Any, account_id: str, user_email: str) -> None:
+    """Raise 404 unless ``account_id`` belongs to ``user_email``."""
+    from sqlalchemy import text
+    owned = (await db.execute(
+        text("SELECT 1 FROM wa_accounts WHERE id = :id AND user_id = :uid"),
+        {"id": account_id, "uid": user_email},
+    )).fetchone()
+    if not owned:
+        raise HTTPException(status_code=404, detail="Account not found")
+
+
+async def assert_chat_owned(db: Any, chat_id: str, user_email: str) -> str:
+    """Return the chat's ``account_id``, or raise 404 unless it belongs to
+    ``user_email``. Callers that only need the guard can ignore the return."""
+    from sqlalchemy import text
+    row = (await db.execute(
+        text("""SELECT c.account_id FROM wa_chats c
+                JOIN wa_accounts a ON a.id = c.account_id
+                WHERE c.id = :cid AND a.user_id = :uid"""),
+        {"cid": chat_id, "uid": user_email},
+    )).fetchone()
+    if not row:
+        raise HTTPException(status_code=404, detail="Chat not found")
+    return str(row.account_id)
+
+
+# ── shared post-sync hook runner (used by both inbound transports) ────────────
+
+async def fire_post_sync_hooks(account_id: str, counts: dict[str, int]) -> None:
+    """Run the post-sync pipeline after a persisted batch: the new-message hook
+    (only when inbound landed) then the chat-status classifier (always — even a
+    status-only echo can flip a chat's state). Shared by the Cloud API webhook and
+    the whatsmeow bridge. Best-effort: a hook failure never turns into a provider
+    retry of an already-stored batch."""
+    from whatsapp_ingestion.post_sync import hooks, run_hook
+    if counts.get("messages"):
+        try:
+            await run_hook(hooks.on_new_messages, account_id)
+        except Exception as exc:
+            _log.warning("whatsapp.hook_failed",
+                         hook="on_new_messages", error=str(exc)[:200])
+    try:
+        await run_hook(hooks.classify_chats, account_id)
+    except Exception as exc:
+        _log.warning("whatsapp.hook_failed",
+                     hook="classify_chats", error=str(exc)[:200])

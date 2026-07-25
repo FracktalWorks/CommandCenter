@@ -142,6 +142,6 @@ async def stop_whatsapp_enrichment() -> None:
         await _task
     except asyncio.CancelledError:
         pass
-    except Exception:
-        pass
+    except Exception as exc:
+        _log.warning("whatsapp.enrichment.stop_error", error=str(exc)[:200])
     _task = None

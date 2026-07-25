@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, assert_account_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -73,15 +73,6 @@ def _model(row: Any) -> SavedReplyModel:
 _SELECT = "SELECT id, title, body, shortcut, sort_order FROM wa_saved_replies"
 
 
-async def _assert_account_owned(db: Any, account_id: str, user_email: str) -> None:
-    owned = (await db.execute(
-        text("SELECT 1 FROM wa_accounts WHERE id = :id AND user_id = :uid"),
-        {"id": account_id, "uid": user_email},
-    )).fetchone()
-    if not owned:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-
 async def _owned_reply_account(db: Any, reply_id: str, user_email: str) -> str:
     row = (await db.execute(
         text("""SELECT r.account_id FROM wa_saved_replies r
@@ -101,7 +92,7 @@ async def list_saved_replies(
     """List an account's saved replies, in the founder's chosen order."""
     db = await _get_db()
     try:
-        await _assert_account_owned(db, account_id, user.email or "anonymous")
+        await assert_account_owned(db, account_id, user.email or "anonymous")
         rows = (await db.execute(
             text(_SELECT + " WHERE account_id = :aid ORDER BY sort_order, title"),
             {"aid": account_id},
@@ -123,7 +114,7 @@ async def create_saved_reply(
     shortcut = normalize_shortcut(req.shortcut)
     db = await _get_db()
     try:
-        await _assert_account_owned(db, req.account_id, user.email or "anonymous")
+        await assert_account_owned(db, req.account_id, user.email or "anonymous")
         try:
             row = (await db.execute(
                 text("""INSERT INTO wa_saved_replies

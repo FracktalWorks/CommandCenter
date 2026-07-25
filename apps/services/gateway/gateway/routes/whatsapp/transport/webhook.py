@@ -20,7 +20,7 @@ from typing import Any
 
 from acb_common import get_logger
 from fastapi import Request, Response
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, fire_post_sync_hooks, router
 from sqlalchemy import text
 
 _log = get_logger("gateway.whatsapp.webhook")
@@ -104,6 +104,10 @@ async def receive_webhook(request: Request):
     from whatsapp_ingestion.providers.webhook import parse_webhook
 
     result = parse_webhook(payload)
+    if result.errors:
+        # The parser is total (never raises); surface malformed changes instead of
+        # swallowing them silently.
+        _log.warning("whatsapp.webhook.parse_errors", errors=result.errors[:5])
     if not result.phone_number_id:
         # A status-only or empty batch with no metadata — ack so Meta stops.
         return Response(status_code=200, content="ok")
@@ -121,24 +125,8 @@ async def receive_webhook(request: Request):
         counts = await persist_sync_result(db, account_id, result)
         await db.commit()
 
-        # Fire the post-sync pipeline (intent classification, then Reply Zero
-        # chat status). Best-effort so a hook failure never turns into a Meta
-        # retry of an already-stored batch. classify_chats runs whenever a batch
-        # landed — even a status-only echo can flip a chat from NEEDS_REPLY to
-        # AWAITING — so it is not gated on new inbound the way on_new_messages is.
-        if counts["messages"]:
-            try:
-                from whatsapp_ingestion.post_sync import hooks, run_hook
-                await run_hook(hooks.on_new_messages, account_id)
-            except Exception as exc:
-                _log.warning("whatsapp.webhook.hook_failed",
-                             hook="on_new_messages", error=str(exc)[:200])
-        try:
-            from whatsapp_ingestion.post_sync import hooks, run_hook
-            await run_hook(hooks.classify_chats, account_id)
-        except Exception as exc:
-            _log.warning("whatsapp.webhook.hook_failed",
-                         hook="classify_chats", error=str(exc)[:200])
+        # Fire the shared post-sync pipeline (same brain the whatsmeow bridge uses).
+        await fire_post_sync_hooks(account_id, counts)
 
         _log.info(
             "whatsapp.webhook.ingested",

@@ -69,10 +69,12 @@ def _account_wa_ids(phone_number: str | None) -> set[str]:
 
 
 async def recompute_chat_status(
-    db: Any, account_id: str, chat_id: str, *, account_phone: str | None = None,
+    db: Any, account_id: str, chat_id: str, *,
+    account_phone: str | None = None, chat_kind: str | None = None,
 ) -> str | None:
     """Recompute + persist one chat's status. Returns the status, or None if the
-    chat has no messages. Caller owns the transaction."""
+    chat has no messages. Caller owns the transaction. ``chat_kind`` may be passed
+    when the caller already knows it (the sweep does), sparing a per-chat lookup."""
     last = (await db.execute(
         text("""SELECT direction, kind, mentions, sent_at, id
                 FROM wa_messages WHERE chat_id = :cid
@@ -82,11 +84,13 @@ async def recompute_chat_status(
     if last is None:
         return None
 
-    chat = (await db.execute(
-        text("SELECT kind FROM wa_chats WHERE id = :cid"),
-        {"cid": chat_id},
-    )).fetchone()
-    is_group = bool(chat and chat.kind == "group")
+    if chat_kind is None:
+        chat = (await db.execute(
+            text("SELECT kind FROM wa_chats WHERE id = :cid"),
+            {"cid": chat_id},
+        )).fetchone()
+        chat_kind = chat.kind if chat else None
+    is_group = chat_kind == "group"
 
     mentions = set(last.mentions or [])
     mentioned = bool(mentions & _account_wa_ids(account_phone))
@@ -140,12 +144,13 @@ async def classify_chats(account_id: str) -> None:
         )).fetchone()
         phone = acc.phone_number if acc else None
         chats = (await db.execute(
-            text("SELECT id FROM wa_chats WHERE account_id = :aid"),
+            text("SELECT id, kind FROM wa_chats WHERE account_id = :aid"),
             {"aid": account_id},
         )).fetchall()
         for c in chats:
             await recompute_chat_status(
-                db, account_id, str(c.id), account_phone=phone)
+                db, account_id, str(c.id),
+                account_phone=phone, chat_kind=c.kind)
         await db.commit()
         _log.info("whatsapp.classify_chats.done",
                   account_id=account_id, chats=len(chats))

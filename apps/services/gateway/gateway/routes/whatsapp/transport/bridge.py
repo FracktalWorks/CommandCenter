@@ -31,7 +31,7 @@ from uuid import uuid4
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, Request, Response
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, fire_post_sync_hooks, router
 from pydantic import BaseModel
 from sqlalchemy import text
 from whatsapp_ingestion.providers.base import (
@@ -164,19 +164,8 @@ async def bridge_ingest(request: Request):
         counts = await persist_sync_result(db, account_id, result)
         await db.commit()
 
-        if counts["messages"]:
-            try:
-                from whatsapp_ingestion.post_sync import hooks, run_hook
-                await run_hook(hooks.on_new_messages, account_id)
-            except Exception as exc:
-                _log.warning("whatsapp.bridge.hook_failed",
-                             hook="on_new_messages", error=str(exc)[:200])
-        try:
-            from whatsapp_ingestion.post_sync import hooks, run_hook
-            await run_hook(hooks.classify_chats, account_id)
-        except Exception as exc:
-            _log.warning("whatsapp.bridge.hook_failed",
-                         hook="classify_chats", error=str(exc)[:200])
+        # Same shared post-sync pipeline the Cloud API webhook fires.
+        await fire_post_sync_hooks(account_id, counts)
         return {"ok": True, "messages": counts["messages"]}
     finally:
         await db.close()

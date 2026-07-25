@@ -15,7 +15,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, assert_account_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -91,15 +91,6 @@ def _model(row: Any) -> CategoryModel:
     )
 
 
-async def _assert_account_owned(db: Any, account_id: str, user_email: str) -> None:
-    owned = (await db.execute(
-        text("SELECT 1 FROM wa_accounts WHERE id = :id AND user_id = :uid"),
-        {"id": account_id, "uid": user_email},
-    )).fetchone()
-    if not owned:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-
 _SELECT = """SELECT id, name, icon, wa_label_id, notify_policy,
                     auto_reply_policy, draft_policy, escalate_after_mins,
                     sort_order
@@ -113,7 +104,7 @@ async def list_categories(
     """List an account's categories with their policies, in nav order."""
     db = await _get_db()
     try:
-        await _assert_account_owned(db, account_id, user.email or "anonymous")
+        await assert_account_owned(db, account_id, user.email or "anonymous")
         rows = (await db.execute(
             text(_SELECT + " WHERE account_id = :aid ORDER BY sort_order, name"),
             {"aid": account_id},
@@ -131,7 +122,7 @@ async def bootstrap_categories(
     """Seed the default category policy set (idempotent — existing names kept)."""
     db = await _get_db()
     try:
-        await _assert_account_owned(db, account_id, user.email or "anonymous")
+        await assert_account_owned(db, account_id, user.email or "anonymous")
         for c in default_categories():
             await db.execute(
                 text("""INSERT INTO wa_categories

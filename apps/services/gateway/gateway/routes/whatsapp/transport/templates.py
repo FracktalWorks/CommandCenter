@@ -14,7 +14,7 @@ from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, assert_account_owned, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -108,15 +108,6 @@ def _model(row: Any) -> WhatsAppTemplateModel:
     )
 
 
-async def _assert_account_owned(db: Any, account_id: str, user_email: str) -> None:
-    owned = (await db.execute(
-        text("SELECT 1 FROM wa_accounts WHERE id = :id AND user_id = :uid"),
-        {"id": account_id, "uid": user_email},
-    )).fetchone()
-    if not owned:
-        raise HTTPException(status_code=404, detail="Account not found")
-
-
 @router.get("/templates", response_model=list[WhatsAppTemplateModel])
 async def list_templates(
     account_id: str,
@@ -127,7 +118,7 @@ async def list_templates(
     right now (what the composer's `/` picker offers when the window is closed)."""
     db = await _get_db()
     try:
-        await _assert_account_owned(db, account_id, user.email or "anonymous")
+        await assert_account_owned(db, account_id, user.email or "anonymous")
         where = "account_id = :aid"
         params: dict[str, Any] = {"aid": account_id}
         if approved_only:
@@ -156,7 +147,7 @@ async def create_template(
     import json
     db = await _get_db()
     try:
-        await _assert_account_owned(db, account_id, user.email or "anonymous")
+        await assert_account_owned(db, account_id, user.email or "anonymous")
         row = (await db.execute(
             text("""INSERT INTO wa_templates
                       (id, account_id, name, language, category, body,
@@ -195,7 +186,7 @@ async def bootstrap_templates(
     import json
     db = await _get_db()
     try:
-        await _assert_account_owned(db, account_id, user.email or "anonymous")
+        await assert_account_owned(db, account_id, user.email or "anonymous")
         for t in default_templates():
             await db.execute(
                 text("""INSERT INTO wa_templates

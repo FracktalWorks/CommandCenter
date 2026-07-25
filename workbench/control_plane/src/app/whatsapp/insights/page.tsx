@@ -7,7 +7,7 @@
 import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { ArrowLeft, Clock, Loader2 } from "lucide-react";
-import { fetchAccounts, fetchPulse } from "../lib/api";
+import { fetchAccounts, fetchPulse, pickDefaultAccount } from "../lib/api";
 import type { WaPulse } from "../lib/types";
 
 const EMPTY: WaPulse = {
@@ -49,8 +49,8 @@ export default function InsightsPage() {
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      if (accs[0]?.id) setAccountId(accs[0].id);
+      const def = pickDefaultAccount(await fetchAccounts());
+      if (def) setAccountId(def.id);
       setLoading(false);
     })();
   }, []);

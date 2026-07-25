@@ -8,7 +8,7 @@
 // buttons — capability arrives in later phases as streams / settings / drawers,
 // never as more always-on chrome on the queue.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   Activity,
@@ -151,9 +151,15 @@ export default function WhatsAppPage() {
     loadChats();
   }, [loadChats]);
 
+  // Tracks the most recently opened chat so an out-of-order fetch (fast A→B
+  // clicks) can't render A's messages under B.
+  const openChatReq = useRef<string | null>(null);
   const openChat = useCallback(async (chat: WaChat) => {
     setSelectedChat(chat);
-    setMessages(await fetchMessages(chat.id));
+    setMessages([]); // clear immediately so a slow fetch can't show the old chat
+    openChatReq.current = chat.id;
+    const msgs = await fetchMessages(chat.id);
+    if (openChatReq.current === chat.id) setMessages(msgs);
   }, []);
 
   const reloadMessages = useCallback(async () => {
@@ -297,6 +303,7 @@ export default function WhatsAppPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedChat ? (
           <Conversation
+            key={selectedChat.id}
             chat={selectedChat}
             messages={messages}
             accountId={activeAccount.id}

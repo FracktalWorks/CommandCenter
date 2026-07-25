@@ -1,7 +1,8 @@
 "use client";
 
 /**
- * ccBridge — the Custom Apps capability bridge (Phase 0: user / storage / ai).
+ * ccBridge — the Custom Apps capability bridge (Phase 2a: user / storage / ai
+ * / tools).
  *
  * Two halves that speak one tiny RPC protocol over postMessage:
  *
@@ -9,7 +10,9 @@
  *     an app bundle before it is handed to <SandboxedHtml>. Inside the frame,
  *     every cc.* method posts `{ __ccsdk: true, id, method, args }` to the
  *     parent and awaits the matching `{ __ccsdk: true, id, result | error }`
- *     reply (30 s timeout).
+ *     reply (30 s timeout). This holds even for `cc.tools.call()`, whose
+ *     handshake with the backend can take two round-trips (see below) — the
+ *     frame still only ever sends one request and awaits one reply.
  *  2. useCcBridge()     — the parent-side listener that validates each request,
  *     executes it against the App Runtime API (/api/apps/{slug}/…) with the
  *     VIEWER's session, and posts the reply back to the frame.
@@ -24,6 +27,14 @@
  * `{ __ccsdk, event: "console", … }` notifications — no `id`, so the RPC
  * broker ignores them; `useCcBridge({ onConsoleEvent })` surfaces them to
  * the Workshop's console drawer.
+ *
+ * `cc.tools.call(tool, args)` is the one RPC that can't be a simple
+ * fetch-and-reply, because a human decision happens in between: dispatch()
+ * POSTs `/api/apps/{slug}/tools/{tool}`; a 409 `confirmation_required` means
+ * nothing ran yet, so it awaits `useCcBridge({ onToolConfirm })` for the
+ * viewer's approve/deny before re-POSTing with `confirm:true`. All of that
+ * multi-step handling happens on the PARENT side — invisible to the frame,
+ * which just sees its one `call()` promise eventually resolve or reject.
  *
  * Trust model: the frame holds no token, no cookie, no credential — every call
  * is brokered by this page and executed as the viewing user (see RFC §4.4).
@@ -167,6 +178,15 @@ const CC_SDK = `
       storage: { table: table, kv: table("kv") },
       ai: {
         complete: function (prompt, opts) { return call("ai.complete", [prompt, opts || {}]); }
+      },
+      tools: {
+        // One request, one eventual reply, same as every other cc.* method —
+        // the confirm handshake (409 -> human decision -> re-POST) all happens
+        // on the PARENT side (useCcBridge's dispatch()); the frame just awaits
+        // the final outcome. A truthy "queued" on the resolved value means
+        // "sent to the Approvals inbox, not executed yet" - not a normal
+        // result - apps should branch on it rather than treat it as done.
+        call: function (tool, args) { return call("tools.call", [tool, args || {}]); }
       }
     };
   })();
@@ -248,6 +268,24 @@ function isCcConsoleMessage(data: unknown): data is CcConsoleMessage {
   );
 }
 
+/**
+ * A `cc.tools.call()` the app made that hit a destructive tool with no
+ * remembered grant (backend 409 `confirmation_required`) — `args` is the
+ * server-echoed, constraint-merged version, not necessarily what the app
+ * originally sent.
+ */
+export interface CcToolConfirmRequest {
+  tool: string;
+  args: Record<string, unknown>;
+}
+
+/** The viewer's decision on a CcToolConfirmRequest. */
+export interface CcToolConfirmDecision {
+  approved: boolean;
+  /** Persist this as a standing "always allow" grant for this app + tool. */
+  remember: boolean;
+}
+
 /** Read an app-supplied path segment (table / key), rejecting non-strings. */
 function seg(v: unknown, what: string): string {
   if (typeof v !== "string" || v.length === 0 || v.length > 200) {
@@ -268,8 +306,27 @@ async function jsonOrThrow(res: Response): Promise<unknown> {
   return body;
 }
 
+/** Parse a JSON body, defaulting to `{}` on empty/invalid responses. */
+async function readJsonBody(res: Response): Promise<Record<string, unknown>> {
+  const body: unknown = await res.json().catch(() => null);
+  return body && typeof body === "object" ? (body as Record<string, unknown>) : {};
+}
+
+/** 200 → `body.result`; any other status → throw `body.error` (or the status). */
+async function toolResultOrThrow(res: Response): Promise<unknown> {
+  const body = await readJsonBody(res);
+  if (!res.ok) {
+    throw new Error(typeof body.error === "string" ? body.error : `HTTP ${res.status}`);
+  }
+  return body.result ?? null;
+}
+
 /** Execute one SDK request against the App Runtime API (viewer's session). */
-async function dispatch(slug: string, msg: CcSdkRequest): Promise<unknown> {
+async function dispatch(
+  slug: string,
+  msg: CcSdkRequest,
+  onToolConfirm?: (req: CcToolConfirmRequest) => Promise<CcToolConfirmDecision>
+): Promise<unknown> {
   const base = `/api/apps/${encodeURIComponent(slug)}`;
   const [a0, a1, a2, a3] = msg.args;
   switch (msg.method) {
@@ -336,6 +393,58 @@ async function dispatch(slug: string, msg: CcSdkRequest): Promise<unknown> {
         })
       );
     }
+    case "tools.call": {
+      if (typeof a0 !== "string" || a0.length === 0 || a0.length > 200) {
+        throw new Error("invalid tool");
+      }
+      const tool = a0;
+      const args = (a1 ?? {}) as Record<string, unknown>;
+      const url = `${base}/tools/${encodeURIComponent(tool)}`;
+      const post = (payload: Record<string, unknown>) =>
+        fetch(url, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload),
+        });
+
+      const first = await post({ args, confirm: false });
+      if (first.status === 202) {
+        // ACTION_BROKER_ENFORCE is on for this tool: sent to the Approvals
+        // inbox, nothing executed yet. The app sees a truthy `queued` and
+        // should treat that as "pending approval", not a normal result.
+        const body = await readJsonBody(first);
+        return {
+          queued: true,
+          action_id: typeof body.action_id === "string" ? body.action_id : null,
+        };
+      }
+      if (first.status !== 409) {
+        return toolResultOrThrow(first);
+      }
+      // 409 confirmation_required — first attempt at a destructive tool with
+      // no remembered grant; nothing executed yet. A human decision happens
+      // here, brokered by whatever page installed onToolConfirm (e.g. the
+      // run page's bottom-right toast), before we ever re-POST.
+      const body = await readJsonBody(first);
+      if (body.error !== "confirmation_required") {
+        throw new Error(typeof body.error === "string" ? body.error : `HTTP ${first.status}`);
+      }
+      if (!onToolConfirm) {
+        throw new Error("No confirmation UI installed for this app");
+      }
+      // Server-echoed args are the constraint-merged, source-of-truth
+      // version of what will actually run — use those, not the original
+      // request args, for both the confirm prompt and the re-POST.
+      const confirmArgs = (body.args as Record<string, unknown> | undefined) ?? args;
+      const decision = await onToolConfirm({ tool, args: confirmArgs });
+      if (!decision.approved) throw new Error("Denied");
+      const second = await post({
+        args: confirmArgs,
+        confirm: true,
+        remember: decision.remember,
+      });
+      return toolResultOrThrow(second);
+    }
     default:
       throw new Error(`unknown method: ${msg.method}`);
   }
@@ -352,13 +461,25 @@ export function useCcBridge(
     mode?: "draft" | "live";
     /** Invoked for `event: "console"` notifications from the app frame. */
     onConsoleEvent?: (e: CcConsoleEvent) => void;
+    /**
+     * Invoked when a `cc.tools.call()` hits a destructive tool with no
+     * remembered grant (backend 409 `confirmation_required`). Resolve with
+     * the viewer's decision; ccBridge re-POSTs with `confirm:true` when
+     * approved, or rejects the app's call with `Error("Denied")` otherwise.
+     * Apps calling `cc.tools.call` when no callback is installed get a
+     * clear `Error("No confirmation UI installed for this app")` instead of
+     * hanging or silently no-oping.
+     */
+    onToolConfirm?: (req: CcToolConfirmRequest) => Promise<CcToolConfirmDecision>;
   }
 ): void {
   const mode = opts?.mode ?? "live";
   // Ref'd so a new callback identity never tears down the listener.
   const onConsoleEventRef = useRef(opts?.onConsoleEvent);
+  const onToolConfirmRef = useRef(opts?.onToolConfirm);
   useEffect(() => {
     onConsoleEventRef.current = opts?.onConsoleEvent;
+    onToolConfirmRef.current = opts?.onToolConfirm;
   });
   useEffect(() => {
     let disposed = false;
@@ -396,7 +517,7 @@ export function useCcBridge(
         }
       };
 
-      dispatch(slug, data)
+      dispatch(slug, data, onToolConfirmRef.current)
         .then((result) => {
           if (!disposed) reply({ result: result ?? null });
         })

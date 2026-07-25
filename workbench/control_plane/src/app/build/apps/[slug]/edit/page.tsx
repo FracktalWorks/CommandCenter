@@ -23,14 +23,17 @@ import {
 import { useRouter, useSearchParams } from "next/navigation";
 import { useTheme } from "next-themes";
 import {
+  AlertTriangle,
   ArrowLeft,
   ChevronDown,
   ChevronRight,
+  Clock,
   Eye,
   FileCode,
   History,
   Loader2,
   Lock,
+  Plug,
   RefreshCw,
   Rocket,
   Sparkles,
@@ -49,8 +52,15 @@ import {
   buildAppSrcDoc,
   useCcBridge,
   type CcConsoleEvent,
+  type CcToolConfirmDecision,
+  type CcToolConfirmRequest,
 } from "../../lib/ccBridge";
 import type { AppFile, AppMeta, Checkpoint } from "../../lib/types";
+
+/** A pending `cc.tools.call()` confirm, waiting on the builder's decision. */
+type PendingToolConfirm = CcToolConfirmRequest & {
+  resolve: (decision: CcToolConfirmDecision) => void;
+};
 
 const BUILDER_AGENT = "app-builder";
 const SESSION_KEY_PREFIX = "cc-app-builder-session-";
@@ -84,6 +94,15 @@ function formatRelative(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+/** The `tool:`-prefixed manifest scopes — the ones gated by the Action Broker. */
+function toolScopes(manifest: Record<string, unknown> | undefined): string[] {
+  const raw = manifest?.scopes;
+  if (!Array.isArray(raw)) return [];
+  return raw.filter(
+    (s): s is string => typeof s === "string" && s.startsWith("tool:")
+  );
 }
 
 /** Find-or-create the ONE builder chat session for this app. */
@@ -135,6 +154,11 @@ function PublishModal({
   const [visibility, setVisibility] = useState<"private" | "org">("private");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  // Org-wide publish with a write scope goes to the Approvals inbox instead
+  // of going live (docs/app-workshop/README.md §5) — a distinct success
+  // state so we don't navigate to a run page that would 404 or show the
+  // stale live version.
+  const [pendingReview, setPendingReview] = useState(false);
 
   const publish = async () => {
     setBusy(true);
@@ -148,11 +172,12 @@ function PublishModal({
           body: JSON.stringify({ notes: notes || undefined, visibility }),
         }
       );
+      const body = (await res.json().catch(() => ({}))) as {
+        error?: string;
+        detail?: { error?: string; errors?: string[] } | string;
+        review?: "pending" | "auto";
+      };
       if (!res.ok) {
-        const body = (await res.json().catch(() => ({}))) as {
-          error?: string;
-          detail?: { error?: string; errors?: string[] } | string;
-        };
         // The platform-contract scan (RFC §4.0) rejects with a FastAPI-wrapped
         // detail listing each deviation — show them, they name the fix.
         const detail =
@@ -172,13 +197,51 @@ function PublishModal({
         );
         return;
       }
-      onPublished();
+      if (body.review === "pending") {
+        // Not live yet — stay on this modal and show the review state
+        // instead of navigating to a run page with nothing new to show.
+        setPendingReview(true);
+      } else {
+        onPublished();
+      }
     } catch (e) {
       setError(String(e));
     } finally {
       setBusy(false);
     }
   };
+
+  if (pendingReview) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onClose();
+        }}
+      >
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-lg p-5 flex flex-col items-center gap-3 text-center">
+          <div className="w-11 h-11 rounded-xl bg-warning/10 flex items-center justify-center">
+            <Clock className="w-5 h-5 text-warning" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-foreground">
+              Sent for admin review
+            </h2>
+            <p className="text-xs text-muted-foreground mt-1 max-w-xs">
+              Teammates will see it once approved — you can keep building in
+              the Workshop meanwhile.
+            </p>
+          </div>
+          <button
+            onClick={onClose}
+            className="mt-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div
@@ -322,13 +385,63 @@ function Workshop({ slug }: { slug: string }) {
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
 
+  // New `tool:` scopes the builder has added to app.json since the Workshop
+  // opened, surfaced as a dismissible "New capability requested" card above
+  // the composer (no dedicated AG-UI event for this in Phase 2a — derived
+  // purely from re-fetching app meta on the existing refresh paths).
+  const seenToolScopesRef = useRef<Set<string> | null>(null);
+  const [newCapabilities, setNewCapabilities] = useState<string[]>([]);
+  const [dismissedCapabilities, setDismissedCapabilities] = useState<
+    Set<string>
+  >(new Set());
+  const noteManifestScopes = useCallback(
+    (manifest: Record<string, unknown> | undefined) => {
+      const scopes = toolScopes(manifest);
+      const prev = seenToolScopesRef.current;
+      seenToolScopesRef.current = new Set(scopes);
+      if (prev === null) return; // first observation is the baseline, not "new"
+      const fresh = scopes.filter((s) => !prev.has(s));
+      if (fresh.length === 0) return;
+      setNewCapabilities((cur) => Array.from(new Set([...cur, ...fresh])));
+    },
+    []
+  );
+  const dismissCapability = useCallback((scope: string) => {
+    setDismissedCapabilities((cur) => {
+      const next = new Set(cur);
+      next.add(scope);
+      return next;
+    });
+  }, []);
+  const visibleCapabilities = useMemo(
+    () => newCapabilities.filter((s) => !dismissedCapabilities.has(s)),
+    [newCapabilities, dismissedCapabilities]
+  );
+
+  // Tool-confirm toast (bottom-right) — mirrors the run page (RFC §4.4): a
+  // cc.tools.call() in the DRAFT preview hit a destructive tool with no
+  // remembered grant. Without this, testing a just-added scope inside the
+  // Workshop would hard-fail instead of letting the builder try it.
+  const [pendingConfirm, setPendingConfirm] = useState<PendingToolConfirm | null>(
+    null
+  );
+  const [rememberTool, setRememberTool] = useState(false);
+  const onToolConfirm = useCallback(
+    (req: CcToolConfirmRequest) =>
+      new Promise<CcToolConfirmDecision>((resolve) => {
+        setRememberTool(false);
+        setPendingConfirm({ ...req, resolve });
+      }),
+    []
+  );
+
   // Broker the DRAFT frame's cc.* calls — same bridge as production so the
   // preview behaves identically to the published app (RFC §4.3). Console
   // notifications feed the drawer under the preview.
   const onConsoleEvent = useCallback((e: CcConsoleEvent) => {
     setConsoleEvents((prev) => [e, ...prev].slice(0, CONSOLE_EVENT_CAP));
   }, []);
-  useCcBridge(slug, { mode: "draft", onConsoleEvent });
+  useCcBridge(slug, { mode: "draft", onConsoleEvent, onToolConfirm });
 
   // ── App meta + files ────────────────────────────────────────────────
   // Fetch-on-mount wiring: same pattern (and lint carve-out) as
@@ -356,7 +469,10 @@ function Workshop({ slug }: { slug: string }) {
           return;
         }
         const data = (await res.json()) as { app?: AppMeta };
-        if (!cancelled && data.app) setApp(data.app);
+        if (!cancelled && data.app) {
+          setApp(data.app);
+          noteManifestScopes(data.app.manifest);
+        }
       } catch (e) {
         if (!cancelled) setLoadError(String(e));
       }
@@ -365,7 +481,21 @@ function Workshop({ slug }: { slug: string }) {
     return () => {
       cancelled = true;
     };
-  }, [slug, fetchFiles]);
+  }, [slug, fetchFiles, noteManifestScopes]);
+
+  /** Re-fetch app meta and check for newly-declared `tool:` scopes. */
+  const refreshAppMeta = useCallback(async () => {
+    try {
+      const res = await fetch(`/api/apps/${encodeURIComponent(slug)}`);
+      if (!res.ok) return;
+      const data = (await res.json()) as { app?: AppMeta };
+      if (!data.app) return;
+      setApp(data.app);
+      noteManifestScopes(data.app.manifest);
+    } catch {
+      // Best-effort — the next refresh (poll or activity) will catch it.
+    }
+  }, [slug, noteManifestScopes]);
 
   // ── Builder session wiring (critical) ───────────────────────────────
   // Only editors receive workspace_path from the API; without it the chat is
@@ -423,7 +553,8 @@ function Workshop({ slug }: { slug: string }) {
   const onArtifact = useCallback(() => {
     refreshPreview();
     fetchFiles();
-  }, [refreshPreview, fetchFiles]);
+    refreshAppMeta();
+  }, [refreshPreview, fetchFiles, refreshAppMeta]);
 
   // ── Checkpoints + run-end sync ──────────────────────────────────────
   const refreshCheckpoints = useCallback(async () => {
@@ -468,9 +599,12 @@ function Workshop({ slug }: { slug: string }) {
         refreshPreview();
         fetchFiles();
         syncDraft().then(refreshCheckpoints);
+        // The builder mentions new tool: scopes in chat, not a dedicated
+        // event (Phase 2a) — catch them by re-fetching app meta here too.
+        refreshAppMeta();
       }, RUN_SYNC_DEBOUNCE_MS);
     },
-    [refreshPreview, fetchFiles, syncDraft, refreshCheckpoints]
+    [refreshPreview, fetchFiles, syncDraft, refreshCheckpoints, refreshAppMeta]
   );
   useEffect(
     () => () => {
@@ -901,6 +1035,41 @@ function Workshop({ slug }: { slug: string }) {
               </div>
             </div>
           </div>
+
+          {/* New capability requested — a tool: scope the builder just added
+              to app.json, above the composer (not in the chat transcript). */}
+          {visibleCapabilities.length > 0 && (
+            <div className="flex flex-col gap-1.5 px-3 py-2 border-b border-border shrink-0">
+              {visibleCapabilities.map((scope) => (
+                <div
+                  key={scope}
+                  className="flex items-start gap-2.5 rounded-lg border border-border bg-secondary px-3 py-2.5"
+                >
+                  <Plug className="w-4 h-4 text-primary shrink-0 mt-0.5" />
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[12px] font-semibold text-foreground leading-snug">
+                      New capability requested:{" "}
+                      <span className="font-mono font-normal">
+                        {scope.replace(/^tool:/, "")}
+                      </span>
+                    </p>
+                    <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed">
+                      Runs through the Action Broker with per-use approval
+                      until an admin grants it at publish.
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => dismissCapability(scope)}
+                    aria-label="Dismiss"
+                    className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground tech-transition"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+
           <div className="flex-1 min-h-0">
             {!app.workspace_path ? (
               <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
@@ -944,6 +1113,67 @@ function Workshop({ slug }: { slug: string }) {
           onClose={() => setShowPublish(false)}
           onPublished={() => router.push(`/build/apps/${slug}`)}
         />
+      )}
+
+      {/* ── Tool-confirm toast — a destructive cc.tools.call() in the DRAFT
+          preview awaiting the builder's approve/deny (mirrors the run page,
+          RFC §4.4). ─────────────────────────────────────────────────────── */}
+      {pendingConfirm && (
+        <div className="fixed bottom-5 right-5 z-40 w-[360px] rounded-2xl border border-border bg-popover shadow-lg p-3.5 flex flex-col gap-2.5">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-semibold text-foreground leading-snug">
+                Preview wants to use{" "}
+                <span className="font-mono font-normal">
+                  {pendingConfirm.tool}
+                </span>
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                Testing this scope as you — this runs through the Action
+                Broker.
+              </p>
+            </div>
+          </div>
+          <pre className="rounded-lg border border-border bg-secondary px-2.5 py-2 font-mono text-[11px] text-muted-foreground overflow-auto max-h-40">
+            {JSON.stringify(pendingConfirm.args, null, 2)}
+          </pre>
+          <div className="flex items-center gap-2">
+            <label className="mr-auto flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rememberTool}
+                onChange={(e) => setRememberTool(e.target.checked)}
+                className="accent-current"
+              />
+              Always allow for this app
+            </label>
+            <button
+              onClick={() => {
+                pendingConfirm.resolve({
+                  approved: false,
+                  remember: rememberTool,
+                });
+                setPendingConfirm(null);
+              }}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+            >
+              Deny
+            </button>
+            <button
+              onClick={() => {
+                pendingConfirm.resolve({
+                  approved: true,
+                  remember: rememberTool,
+                });
+                setPendingConfirm(null);
+              }}
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
+            >
+              Approve
+            </button>
+          </div>
+        </div>
       )}
     </div>
   );

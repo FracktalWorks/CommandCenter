@@ -12,10 +12,20 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { Hammer, Info, Loader2, Wrench } from "lucide-react";
+import { AlertTriangle, Hammer, Info, Loader2, Wrench } from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
-import { buildAppSrcDoc, useCcBridge } from "../lib/ccBridge";
+import {
+  buildAppSrcDoc,
+  useCcBridge,
+  type CcToolConfirmDecision,
+  type CcToolConfirmRequest,
+} from "../lib/ccBridge";
 import type { AppMeta, AppUsage, AppVersion } from "../lib/types";
+
+/** A pending `cc.tools.call()` confirm, waiting on the viewer's decision. */
+type PendingToolConfirm = CcToolConfirmRequest & {
+  resolve: (decision: CcToolConfirmDecision) => void;
+};
 
 function formatTokens(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
@@ -61,8 +71,23 @@ export default function AppRunPage({
   const [confirmVersion, setConfirmVersion] = useState<number | null>(null);
   const [rollbackBusy, setRollbackBusy] = useState(false);
 
+  // Tool-confirm toast (bottom-right) — a cc.tools.call() hit a destructive
+  // tool with no remembered grant; resolve() unblocks the app frame's call.
+  const [pendingConfirm, setPendingConfirm] = useState<PendingToolConfirm | null>(
+    null
+  );
+  const [rememberTool, setRememberTool] = useState(false);
+  const onToolConfirm = useCallback(
+    (req: CcToolConfirmRequest) =>
+      new Promise<CcToolConfirmDecision>((resolve) => {
+        setRememberTool(false);
+        setPendingConfirm({ ...req, resolve });
+      }),
+    []
+  );
+
   // Broker the app frame's cc.* calls against /api/apps/{slug}/…
-  useCcBridge(slug, { mode: "live" });
+  useCcBridge(slug, { mode: "live", onToolConfirm });
 
   useEffect(() => {
     let cancelled = false;
@@ -374,6 +399,65 @@ export default function AppRunPage({
           sandboxed frame · runs as {viewerEmail} · audit logged
         </span>
       </div>
+
+      {/* ── Tool-confirm toast — a destructive cc.tools.call() awaiting the
+          viewer's approve/deny (RFC §4.4, mockup-app-run.html .toast). ──── */}
+      {pendingConfirm && (
+        <div className="fixed bottom-5 right-5 z-40 w-[360px] rounded-2xl border border-border bg-popover shadow-lg p-3.5 flex flex-col gap-2.5">
+          <div className="flex items-start gap-2.5">
+            <AlertTriangle className="w-4 h-4 text-warning shrink-0 mt-0.5" />
+            <div className="min-w-0">
+              <p className="text-[12.5px] font-semibold text-foreground leading-snug">
+                <span className="font-bold">{app.name}</span> wants to use{" "}
+                <span className="font-mono font-normal">
+                  {pendingConfirm.tool}
+                </span>
+              </p>
+              <p className="text-[11px] text-muted-foreground mt-1 leading-relaxed">
+                This runs through the Action Broker as you.
+              </p>
+            </div>
+          </div>
+          <pre className="rounded-lg border border-border bg-secondary px-2.5 py-2 font-mono text-[11px] text-muted-foreground overflow-auto max-h-40">
+            {JSON.stringify(pendingConfirm.args, null, 2)}
+          </pre>
+          <div className="flex items-center gap-2">
+            <label className="mr-auto flex items-center gap-1.5 text-[11px] text-muted-foreground cursor-pointer">
+              <input
+                type="checkbox"
+                checked={rememberTool}
+                onChange={(e) => setRememberTool(e.target.checked)}
+                className="accent-current"
+              />
+              Always allow for this app
+            </label>
+            <button
+              onClick={() => {
+                pendingConfirm.resolve({
+                  approved: false,
+                  remember: rememberTool,
+                });
+                setPendingConfirm(null);
+              }}
+              className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+            >
+              Deny
+            </button>
+            <button
+              onClick={() => {
+                pendingConfirm.resolve({
+                  approved: true,
+                  remember: rememberTool,
+                });
+                setPendingConfirm(null);
+              }}
+              className="rounded-lg bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition"
+            >
+              Approve
+            </button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

@@ -5,6 +5,15 @@ Publish snapshots the workspace's entry file into an ``app_versions`` row
 rollback just repoints (Apps Script's deployment model, RFC §4.8). The bundle
 endpoint serves draft (editors) or published (viewers) HTML with sandbox CSP
 headers as defense-in-depth — the frontend still renders via srcDoc.
+
+Publish-time admin review gate (§4.8, Phase 2a): an org-visible publish that
+declares a WRITE tool scope (any ``tool:*`` scope naming a non-read-only
+:class:`~gateway.routes.apps.tools.ToolSpec`) queues an
+``app.publish_review`` Action Broker proposal instead of going live
+immediately — one row in the existing Approvals inbox. Re-review is keyed to
+the scope SET (``scope_set_hash``), not the version: a later publish with a
+previously-approved scope set skips review (Apps Script's rule — this is what
+keeps iteration friction near zero while keeping consent honest).
 """
 
 from __future__ import annotations
@@ -15,8 +24,10 @@ import json
 from typing import Any
 
 from acb_auth import UserContext
+from action_broker import AuthorityTier, propose, submit
 from fastapi import Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
+from gateway.routes.apps import tools as _tools
 from gateway.routes.apps._common import (
     _get_db,
     _log,
@@ -68,6 +79,22 @@ class VersionEntry(BaseModel):
     release_notes: str = ""
     published_by: str = ""
     published_at: str = ""
+
+
+def _write_scopes(manifest: dict[str, Any]) -> list[str]:
+    """Manifest scopes naming a non-read-only app tool — the ones that force
+    org-publish admin review (§4.8). Reads ``_tools`` (the module, not a
+    snapshotted import) so a monkeypatched ``_tools._TOOL_REGISTRY`` in tests
+    is honoured."""
+    out: list[str] = []
+    for raw in manifest_scopes(manifest):
+        parsed = _tools.parse_tool_scope(raw)
+        if parsed is None:
+            continue
+        spec = _tools._TOOL_REGISTRY.get(parsed[0])
+        if spec is not None and not spec.read_only:
+            out.append(raw)
+    return out
 
 
 def _read_entry_bundle(row: Any) -> tuple[bytes, dict[str, Any]]:
@@ -122,13 +149,34 @@ async def publish_app(
             ),
             {"app_id": str(row.id)},
         )).scalar_one()
+
+        # Publish-time admin review gate (§4.8): an org-visible publish that
+        # declares a WRITE tool scope needs review UNLESS this exact scope
+        # SET was already approved on a previous version of this app.
+        scope_hash = scope_set_hash(manifest_scopes(manifest))
+        write_scopes = _write_scopes(manifest)
+        effective_visibility = body.visibility or row.visibility
+        needs_review = bool(write_scopes) and effective_visibility == "org"
+        if needs_review:
+            approved_before = (await db.execute(
+                text(
+                    "SELECT 1 FROM app_versions WHERE app_id = :app_id "
+                    "AND scope_set_hash = :hash AND review_status = 'approved' "
+                    "LIMIT 1"
+                ),
+                {"app_id": str(row.id), "hash": scope_hash},
+            )).fetchone()
+            if approved_before is not None:
+                needs_review = False
+
         await db.execute(
             text(
                 """INSERT INTO app_versions
                    (app_id, version, manifest, bundle_html, bundle_sha256,
-                    release_notes, scope_set_hash, published_by)
+                    release_notes, scope_set_hash, published_by, review_status)
                    VALUES (:app_id, :version, :manifest::jsonb, :bundle,
-                           :sha256, :notes, :scope_hash, :published_by)"""
+                           :sha256, :notes, :scope_hash, :published_by,
+                           :review_status)"""
             ),
             {
                 "app_id": str(row.id),
@@ -137,31 +185,56 @@ async def publish_app(
                 "bundle": data.decode("utf-8", errors="replace"),
                 "sha256": hashlib.sha256(data).hexdigest(),
                 "notes": body.notes.strip(),
-                "scope_hash": scope_set_hash(manifest_scopes(manifest)),
+                "scope_hash": scope_hash,
                 "published_by": _uid(user),
+                "review_status": "pending" if needs_review else "auto",
             },
         )
-        sets = "live_version = :version, status = 'live', updated_at = now()"
-        params: dict[str, Any] = {"version": version, "id": str(row.id)}
-        if body.visibility is not None:
-            sets += ", visibility = :visibility"
-            params["visibility"] = body.visibility
-        await db.execute(text(f"UPDATE apps SET {sets} WHERE id = :id"), params)
+        if not needs_review:
+            # The app keeps serving whatever was live before (or stays fully
+            # unpublished on a first-ever publish) until the review lands.
+            sets = "live_version = :version, status = 'live', updated_at = now()"
+            params: dict[str, Any] = {"version": version, "id": str(row.id)}
+            if body.visibility is not None:
+                sets += ", visibility = :visibility"
+                params["visibility"] = body.visibility
+            await db.execute(text(f"UPDATE apps SET {sets} WHERE id = :id"), params)
         await db.commit()
     finally:
         await db.close()
+
+    if needs_review:
+        # SUGGEST always → NEEDS_APPROVAL, so this unconditionally queues —
+        # a standing consent rule, not gated by ACTION_BROKER_ENFORCE.
+        proposal = propose(
+            actor=f"app:{slug}", action="app.publish_review",
+            target=f"app:{slug}:v{version}",
+            payload={
+                "app_id": str(row.id), "version": version,
+                "scopes": write_scopes, "notes": body.notes,
+                "visibility": effective_visibility,
+            },
+            authority=AuthorityTier.SUGGEST, destructive=True,
+        )
+        await submit(proposal)
+
     # Durability: the published draft is the one most worth mirroring
     # (best-effort — the version row above is already committed).
     await sync_workspace_best_effort(row)
+    review = "pending" if needs_review else "auto"
     await record_app_audit(
         app_id=str(row.id), user_email=_uid(user), kind="publish",
         app_version=version,
         detail={"notes": body.notes.strip()[:500],
-                "visibility": body.visibility},
+                "visibility": body.visibility, "review": review},
     )
-    publish_app_activity(slug, user=_uid(user), action="publish", version=version)
-    _log.info("apps.published", slug=slug, version=version, by=_uid(user))
-    return {"version": version, "warnings": warnings}
+    publish_app_activity(
+        slug, user=_uid(user), action="publish", version=version, review=review,
+    )
+    _log.info(
+        "apps.published", slug=slug, version=version, by=_uid(user), review=review,
+    )
+    return {"version": version, "warnings": warnings, "review": review}
 
 
 @router.post("/{slug}/rollback")

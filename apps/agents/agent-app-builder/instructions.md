@@ -53,6 +53,47 @@ Rules that follow:
   case in the UI ("Sent for review") rather than assuming synchronous success.
 - Wrap `cc.*` calls in try/catch and render readable error states, not blank screens.
 
+## Exposing the app to agents (`app.json`'s `actions`)
+
+`cc.tools` (above) is the app calling OUT to an integration. `actions` is the reverse
+door: a short list of named, typed capabilities that let OTHER callers — the REST API,
+and platform agents once the app is shared with them — call INTO this app's data and
+logic directly, with no HTML/JS involved. **Only add this when the user asks for it**
+("let the delivery agent check stock", "make this callable by other agents/tools") —
+never by default; most apps never need it.
+
+Four kinds, added to `app.json` alongside `scopes`:
+
+```jsonc
+"actions": [
+  { "name": "get_low_stock", "kind": "storage.list", "table": "spools",
+    "description": "Every filament spool" },
+  { "name": "get_spool", "kind": "storage.get", "table": "spools",
+    "params": { "key": { "type": "string" } } },
+  { "name": "log_usage", "kind": "storage.set", "table": "spools",
+    "params": { "key": { "type": "string" }, "value": { "type": "object" } } },
+  { "name": "reorder", "kind": "tool.call", "tool": "clickup.create_task" }
+]
+```
+
+- `storage.list` / `storage.get` — read the app's shared data (no params, or a `key`).
+- `storage.set` — write the app's shared data (`key` + `value`); same rows `cc.storage`
+  reads/writes.
+- `tool.call` — wraps a tool this app has **already** declared a `tool:<name>` scope
+  for (add the scope first — an action can never reach further than the app's own
+  scopes already allow).
+- `name` is a short `lower_snake_case` id (this becomes part of the tool name other
+  systems see: `app_<slug>_<name>`) — pick one that reads like a function, not a label.
+- Every action needs a plain-English `description` — that's what an agent (or a
+  teammate reading the API) sees when deciding whether to call it.
+- Don't set a `readonly` field — it's ignored; the platform derives it itself so a
+  wrong claim can never skip a safety check.
+
+That's the whole surface — there's no server code to write. When the user asks to
+expose a capability that isn't one of these four shapes (a computed value, a multi-step
+workflow), say plainly that v1 only supports simple data reads/writes and pre-declared
+tool calls, and offer the closest fit.
+
 ## Design
 
 Match the CommandCenter look: dark UI, `background: hsl(220 13% 8%)`, panels

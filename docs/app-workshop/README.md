@@ -492,41 +492,68 @@ the Filament Tracker's data becomes queryable by the delivery agent; the Quote
 Calculator's logic becomes callable from a sales chat.
 
 - **Manifest `actions` block** — the agent-facing surface, explicit and typed (nothing
-  is exposed implicitly):
+  is exposed implicitly). Four mechanical **v1 kinds**, deliberately no filter/expression
+  language (the same small-fixed-vocabulary stance the `tool:` scope grammar already
+  takes — `gateway/routes/apps/actions.py`):
 
   ```jsonc
   "actions": [
-    { "name": "get_low_stock",
-      "description": "List filament spools under their low-stock threshold",
-      "params": {},                       // JSON-schema params
-      "kind": "storage.query",            // v1 kinds: storage.query | storage.mutate | tool.call
-      "config": { "table": "spools", "filter": "remaining < threshold" },
-      "readonly": true }
+    { "name": "get_low_stock", "kind": "storage.list", "table": "spools",
+      "description": "List every filament spool" },
+    { "name": "get_spool", "kind": "storage.get", "table": "spools",
+      "params": { "key": { "type": "string" } } },
+    { "name": "log_usage", "kind": "storage.set", "table": "spools",
+      "params": { "key": { "type": "string" }, "value": { "type": "object" } } },
+    { "name": "reorder", "kind": "tool.call", "tool": "clickup.create_task" }
   ]
   ```
 
-  v1 action kinds are **declarative** (parameterized storage queries/mutations and
-  pre-declared tool-proxy calls — Windmill's frozen-args policy, Datasette's stored
-  queries), so exposing an action never means running app JS server-side. When T3
-  server handlers arrive, an action can map to an app HTTP endpoint.
+  `storage.list`/`storage.get` read the app's shared `app_data` partition;
+  `storage.set` writes it; `tool.call` wraps a tool the app already declared a
+  `tool:<name>` scope for (an action can never grant *more* than the app's own scopes
+  already allow — reuses `tools.py`'s scope/constraint/broker plumbing wholesale, no
+  second ClickUp-calling path). `readonly` is never read from the manifest — it's
+  **derived**: hardcoded for the three storage kinds, taken from the wrapped tool's
+  real `_TOOL_REGISTRY[...].read_only` for `tool.call`, so a manifest claiming `true`
+  for an actually-destructive tool can't skip the broker. When T3 server handlers
+  arrive, an action can map to an app HTTP endpoint instead.
 - **Grants cover agents:** `app_grants.subject` accepts `agent:<name>` and `agents:*`
-  alongside emails/`org`. Sharing an app with the agent system is the same one-click
-  flow as sharing with a person (mockup 1's "Specific people…" picker grows an
-  *Agents* tab).
-- **Registration into the tool registry:** at gateway startup (and on grant change),
-  granted actions are exposed to the orchestrator as platform tools named
-  `app_<slug>_<action>` — exactly the `as_tool()` pattern already used to expose every
-  agent. Each carries **risk annotations** (`readonly` → read_only; mutations/tool
-  calls → state-writing, gated like any other platform tool) per the harness standing
-  rules, and an agent's access is checked against `app_grants` at call time.
+  alongside emails/`org` (§4.8's sharing UI — "Specific people…" — currently manages
+  person grants; an agent grant is written the same row shape, `role='use'`).
 - **Execution identity:** an agent-invoked action runs as the **agent principal**
-  (`UserContext(role=AGENT)`, actor=`agent:<name>` in `app_audit`) — never as a
-  fabricated human. Destructive actions hit the same Action Broker gate as human
-  clicks; per-app-per-agent grants keep least privilege. The reverse direction
-  (`cc.agents.run` — an app invoking an agent) uses the same audit vocabulary.
-- **Note:** until the injected-tool registration lands (Phase 2, with its golden
-  trajectory eval per the harness rules), agents can already reach granted apps over
-  the REST surface with the internal token — the API shape is identical either way.
+  (`UserContext(email=<agent_name>, role=AGENT)` — the bare agent name, since
+  `can_view`/`can_edit` reconstruct `f"agent:{email}"` themselves to match the stored
+  `agent:<name>` grant), never a fabricated human. `app_audit` rows attribute to that
+  same identity.
+- **Registration into the tool registry (implemented, not `as_tool()`):** granted apps'
+  actions are injected as ordinary platform tools on every orchestrator run —
+  `orchestrator/app_tools.py`'s `load_app_action_tools(agent_name)` queries
+  `app_grants` for LIVE apps granted to `agents:*` or `agent:<name>`, and builds one
+  dynamic tool per action named `app_<slug>_<action>` (a synthetic `inspect.Signature`
+  from the action's declared `params`, so the LLM sees real per-action parameters, not
+  a generic args blob). These are appended into `_inject_agent_tools()`'s own
+  `_extra_tools` list — **deliberately not** the `_load_specialist_agents_as_tools()`
+  whole-agent-as-delegate path (`orchestrator/agents.py`), which appends tools directly
+  to `Agent(tools=...)` *before* injection runs and so never reaches
+  `permission_policy.decide()` at all. Routing through `_inject_agent_tools()` instead
+  means every dynamic action tool is gated by `_gate_injected_tool()` exactly like
+  `web_search` or `write_artifact` — same risk-aware permission check, same audit log.
+  Each tool also registers a derived risk annotation into
+  `acb_skills.tool_annotations.TOOL_ANNOTATIONS` (read-only storage reads;
+  non-destructive, non-open-world for `storage.set`; the wrapped tool's real risk for
+  `tool.call`) so the addendum's risk summary stays accurate.
+- **No separate execution path.** The injected tool calls
+  `gateway.routes.apps.actions.execute_app_action(slug, action, args, user)`
+  in-process — the exact function `POST /apps/{slug}/actions/{name}` calls — so an
+  agent invoking a tool and a person hitting the API behave identically: same
+  authority split, same auditing, same broker queueing. Readonly actions and
+  `storage.set` execute immediately for any caller (person or agent) — `storage.set`
+  only ever touches the app's own already-publish-reviewed storage. A non-readonly
+  `tool.call` auto-applies (`AuthorityTier.AUTONOMOUS`) only for a person who can also
+  edit the app (owner/editor testing their own app); every other caller — any other
+  person, or **any agent, unconditionally** — proposes at `AuthorityTier.SUGGEST`
+  (`NEEDS_APPROVAL`, no bypass): there's no synchronous confirm-toast possible for an
+  unattended API/agent caller, so none is offered.
 
 ### 4.8 Publish, versions, sharing
 
@@ -535,14 +562,26 @@ Calculator's logic becomes callable from a sales chat.
   The stable app URL always serves the pointed-at version; **rollback = repoint** (Apps
   Script's deployment model).
 - **Visibility:** `private` → `specific people` → `org` (Google-Doc mental model, mockup 1's
-  publish modal). Org-wide publish **with write scopes** requires admin review — one row
-  in the existing Approvals inbox showing the scope diff. Re-review triggers only when
-  the **scope-set hash changes**, not on every version (Apps Script's rule — this is what
-  keeps iteration friction near zero while keeping consent honest).
-- **Consent/disclosure:** first-open interstitial listing scopes in plain language
-  (platform-rendered, never app-rendered), stored per `(user, app, scope_set_hash)`.
-  For v1 with ~20 users this doubles as *disclosure* — teammates learn what LLM-written
-  code can touch.
+  publish modal). "Specific people…" is an email-chip picker (`gateway/routes/apps/grants.py`
+  — `GET/POST /{slug}/grants`, `DELETE /{slug}/grants/{subject}`, edit-gated, upsert on
+  re-share) that writes one `app_grants` row per grantee; the same row shape covers an
+  agent grant (`agent:<name>`/`agents:*`, §4.7). Org-wide publish **with write scopes**
+  requires admin review — one row in the existing Approvals inbox showing the scope diff.
+  Re-review triggers only when the **scope-set hash changes**, not on every version
+  (Apps Script's rule — this is what keeps iteration friction near zero while keeping
+  consent honest).
+- **Consent/disclosure:** a blocking first-open interstitial, platform-rendered (never
+  app-rendered), listing the LIVE (published+reviewed) version's scopes in plain
+  language before the run page fetches the bundle at all. `GET /{slug}` computes
+  `needs_consent`/`live_scopes`/`live_scope_set_hash` for the caller (always `false` for
+  an owner/editor — they already know what they built); `POST /{slug}/consent` re-verifies
+  the client's claimed hash against the LIVE `app_versions` row server-side and 409s
+  `scope_set_changed` on a stale view (a new version published between page load and the
+  click) rather than silently recording consent to an outdated scope set — the run page
+  re-fetches and re-shows the interstitial on that path. Recorded per `(user, app)` as
+  `app_grants.consented_scope_hash`, upserted without ever downgrading an existing
+  edit/own grant. For v1 with ~20 users this doubles as *disclosure* — teammates learn
+  what LLM-written code can touch.
 - **Remix/fork:** any viewer can "fork your own copy" into their workshop (Claude
   Artifacts' remix, Val Town's fork) — the org's library compounds.
 - **Suggest a change:** viewers who can't edit open a pre-seeded builder chat on a fork;
@@ -893,9 +932,10 @@ sidebar Custom Apps section with pins; blob-store durability sweeps.
 
 **Phase 2 — Capabilities & sharing (3–5 wk).** `cc.tools` proxy over the Integration
 Registry with manifest scopes + Action-Broker gating + per-use confirm toast; publish
-review row in Approvals for org+write apps; share-with-people + first-open consent
-(scope-set-hash rule); templates gallery; fork/remix + suggest-a-change; usage stats;
-app-to-app data reads.
+review row in Approvals for org+write apps; testing & evaluation (§4.9); share-with-people
++ first-open consent (scope-set-hash rule); manifest `actions` + registration as
+orchestrator agent tools (§4.7) — **shipped**; templates gallery; fork/remix +
+suggest-a-change; usage stats — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers

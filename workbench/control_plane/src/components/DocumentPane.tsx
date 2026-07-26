@@ -319,7 +319,20 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
       </div>
     );
   } else if (kind === "react") {
-    body = (
+    // While the agent is still writing the file, the source is incomplete by
+    // definition — compiling each 1.2s poll would flash syntax errors and burn a
+    // build per poll. Show it streaming in, then render once the writing stops.
+    body = live ? (
+      <div className="flex-1 overflow-auto">
+        <div className="flex items-center gap-1.5 border-b border-border/60 bg-card/40 px-3 py-1 text-[10px] text-muted-foreground">
+          <Loader2 size={9} className="animate-spin" />
+          building — renders when the agent finishes writing
+        </div>
+        <pre className="whitespace-pre-wrap break-words p-3 font-mono text-[12px] leading-relaxed text-muted-foreground">
+          {content}
+        </pre>
+      </div>
+    ) : (
       <div className="flex-1 min-h-0">
         <SandboxedReact code={content} theme={theme} chromeless />
       </div>

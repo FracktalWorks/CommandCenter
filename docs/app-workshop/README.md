@@ -713,7 +713,36 @@ trust, never sanitize-and-inline (sanitizers neutralize markup; apps *are* scrip
    resolved and pinned to their service/action **server-side only**; no secret — redacted
    or otherwise — ever appears in `app.json`, workspace files, or any app-editable
    config, so there is nothing to repoint or round-trip.
-6. **Known side channels, accepted for v1:** a malicious app can still phish inside its
+6. **Execution model & dependency isolation — decided, not deferred.** For T1/T2 (every
+   app shipped through Phase 2a) there is **no per-app server-side execution to sandbox in
+   the first place**: an app's JS never runs on the gateway/orchestrator — it only ever
+   runs client-side, in the viewer's own browser tab, contained by layer 1 before it can
+   touch anything shared. Consequently app-to-app and app-to-platform *dependency*
+   isolation is airtight by construction: no `package.json`, no `node_modules`, no system
+   package, nothing installed anywhere per app — CSP already forbids loading one (§4's
+   "never bake into the app" table). `cc.tools` handlers are hand-written platform Python
+   using dependencies the gateway already has; apps never supply code that runs
+   server-side, so no app can ever introduce a package requirement there either. This is
+   also why the model is cheap, not just safe: zero idle-container memory floor, zero
+   per-app image/cold-start cost — the compute for running an app is donated by whoever is
+   viewing it, not reserved on the VPS. A container-per-app model would be the *lossy*
+   choice here, paying a fixed resource tax per app for isolation the browser already
+   provides for free.
+   *The one honest nuance:* the **builder's own coding session** (writing the app, not
+   running it) shares the gateway's Python process with every other first-party agent —
+   unchanged from how `task-manager`/`apis-config` already work, not something Custom
+   Apps introduces or worsens. `agent-app-builder`'s `tool_scope` deliberately excludes
+   `install_dependency`/`run_script`/`code_task`, so no Workshop conversation can trigger
+   a `pip install` into that shared venv — the theoretical shared-venv risk items 5/`BO-7`
+   already track platform-wide are not reachable from an app conversation today.
+   *Where this actually changes:* **T3** (server-side app code, still deferred) is the one
+   point where per-app dependency isolation becomes a real, new question, because app code
+   would then execute on the VPS. The answer on record is still **not** Docker-per-app —
+   it's Val Town's runtime lineage (§2.5): a warm pool of short-lived, permission-flagged
+   subprocesses, sized for a small box, chosen after they proved in production that
+   language-level JS sandboxes don't hold and OS-level process isolation does, without
+   paying a full container's fixed cost per app.
+7. **Known side channels, accepted for v1:** a malicious app can still phish inside its
    own frame (mitigated by the platform chrome making authorship/scopes visible and
    report-issue one click away) and exfiltrate only what the bridge returns to it (bounded
    by scopes; audited). These are the same residuals every surveyed platform carries.

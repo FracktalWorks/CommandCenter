@@ -7,5 +7,9 @@ export default defineConfig({
   test: {
     environment: "node",
     include: ["src/**/*.test.ts"],
+    // esbuild's JS API talks to a child process over stdio, which deadlocks in
+    // the default worker_threads pool (compileArtifact.test.ts hangs on every
+    // build call). Forked child processes handle that correctly.
+    pool: "forks",
   },
 });

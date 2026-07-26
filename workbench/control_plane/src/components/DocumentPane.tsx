@@ -7,6 +7,8 @@
  * Rendering matrix (mirrors ArtifactViewerModal, adapted to a resizable pane):
  *   .md / .mdx  → react-markdown (rendered) ⇄ textarea (edit) with live preview
  *   .html/.htm  → SandboxedHtml (rendered, interactive) ⇄ textarea (edit) w/ live preview
+ *   .jsx/.tsx   → SandboxedReact — a full-page React artifact — but ONLY under
+ *                 outputs/; elsewhere they stay source code (see isArtifactPath)
  *   code exts   → syntax-highlighted text (edit = plain textarea)
  *   images      → <img>
  *   other       → download prompt
@@ -24,8 +26,9 @@ import rehypeRaw from "rehype-raw";
 import { useTheme } from "next-themes";
 import { Eye, Pencil, Save, RotateCcw, Download, Loader2 } from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
+import SandboxedReact from "@/components/SandboxedReact";
 
-type Kind = "markdown" | "html" | "code" | "image" | "text" | "binary";
+type Kind = "markdown" | "html" | "react" | "code" | "image" | "text" | "binary";
 
 const CODE_EXTS = new Set([
   "py", "ts", "tsx", "js", "jsx", "sh", "bash", "zsh", "fish",
@@ -40,10 +43,22 @@ function extOf(name: string): string {
   return (name.split(".").pop() ?? "").toLowerCase();
 }
 
-function classify(name: string): Kind {
+/**
+ * A .jsx/.tsx file is only treated as a runnable React ARTIFACT when it lives
+ * under outputs/ — that is where write_artifact puts generated deliverables.
+ * Everywhere else (an agent editing src/components/Foo.tsx in a code workspace)
+ * it stays source code, so opening a file to read it never silently turns into
+ * building and running it.
+ */
+function isArtifactPath(path: string): boolean {
+  return path.replace(/^\/+/, "").startsWith("outputs/");
+}
+
+function classify(name: string, path: string): Kind {
   const ext = extOf(name);
   if (ext === "md" || ext === "mdx") return "markdown";
   if (ext === "html" || ext === "htm") return "html";
+  if ((ext === "jsx" || ext === "tsx") && isArtifactPath(path)) return "react";
   if (CODE_EXTS.has(ext)) return "code";
   if (IMAGE_EXTS.has(ext)) return "image";
   if (TEXT_EXTS.has(ext)) return "text";
@@ -59,9 +74,10 @@ interface DocumentPaneProps {
 }
 
 export default function DocumentPane({ sessionId, path, name, live }: DocumentPaneProps) {
-  const kind = classify(name);
-  const editable = kind === "markdown" || kind === "html" || kind === "code" || kind === "text";
-  const previewable = kind === "markdown" || kind === "html";
+  const kind = classify(name, path);
+  const editable =
+    kind === "markdown" || kind === "html" || kind === "react" || kind === "code" || kind === "text";
+  const previewable = kind === "markdown" || kind === "html" || kind === "react";
 
   const { resolvedTheme } = useTheme();
   const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
@@ -281,6 +297,8 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             </div>
             {kind === "markdown" ? (
               <MarkdownBody content={draft} />
+            ) : kind === "react" ? (
+              <SandboxedReact code={draft} theme={theme} />
             ) : (
               <SandboxedHtml html={draft} theme={theme} />
             )}
@@ -298,6 +316,12 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
     body = (
       <div className="flex-1 min-h-0">
         <SandboxedHtml html={content} theme={theme} chromeless />
+      </div>
+    );
+  } else if (kind === "react") {
+    body = (
+      <div className="flex-1 min-h-0">
+        <SandboxedReact code={content} theme={theme} chromeless />
       </div>
     );
   } else {

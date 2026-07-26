@@ -257,6 +257,41 @@ def test_emit_generative_ui_returns_warnings_for_broken_html(monkeypatch) -> Non
     assert any(w.startswith("ERROR") for w in res["warnings"])
 
 
+def test_react_node_is_not_run_through_the_html_linter(monkeypatch) -> None:
+    """JSX is not HTML — linting it would produce nonsense findings.
+
+    A React artifact's `className`/`style={{}}` and its bare component source
+    look nothing like a cc-report document, so the HTML linter must stay out of
+    the way entirely.
+    """
+    import asyncio as _asyncio
+
+    wa = import_module("acb_skills.write_artifact")
+    executor = import_module("orchestrator.executor")
+    queue: _asyncio.Queue = _asyncio.Queue()
+    monkeypatch.setattr(executor, "resolve_run_queue", lambda _sid: queue)
+
+    ui = json.dumps({
+        "type": "react",
+        "props": {"code": 'export default function A(){ return <div className="x"/>; }'},
+    })
+    res = asyncio.run(wa.emit_generative_ui(ui))
+    assert res == {"ok": True}
+
+
+def test_react_source_written_as_jsx_is_not_linted(tmp_path, monkeypatch) -> None:
+    """A .jsx artifact is React source, so the HTML linter must not touch it."""
+    wa = import_module("acb_skills.write_artifact")
+    _prepare(wa, monkeypatch, tmp_path)
+
+    res = asyncio.run(wa.write_artifact(
+        "dashboard.jsx",
+        'export default function A(){ return <img src="https://x.io/a.png"/>; }',
+    ))
+    assert "warnings" not in res
+    assert res["path"] == "outputs/dashboard.jsx"
+
+
 def test_emit_generative_ui_inline_card_needs_no_report_wrapper(monkeypatch) -> None:
     import asyncio as _asyncio
 

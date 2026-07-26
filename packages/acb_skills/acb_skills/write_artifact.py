@@ -467,6 +467,7 @@ async def _notify(
 _GEN_UI_TYPES = {
     "card", "stack", "row", "heading", "text", "markdown", "badge",
     "divider", "keyValue", "table", "list", "code", "link", "button", "callout",
+    "template", "html", "react", "icon",
 }
 
 
@@ -527,7 +528,8 @@ async def emit_generative_ui(ui: str) -> dict:
       user's input to continue — a form to fill, an option to pick, a value to
       set. Without it, clicks arrive as a NEW chat message instead.
 
-    It supports THREE modes; prefer them in this order (template → tree → html):
+    It supports FOUR modes; prefer them in this order
+    (template → tree → react → html):
 
     1. NAMED TEMPLATE — pre-designed, animated, on-brand components. You supply
        ONLY data; the design is fixed and looks great every time. Use first when
@@ -588,8 +590,39 @@ async def emit_generative_ui(ui: str) -> dict:
        (buttons). A ``button``'s ``action`` string is sent back as the user's
        next message when clicked.
 
-    3. CUSTOM HTML — the escape hatch for bespoke animation/layout or genuinely
-       interactive controls no template or tree covers. Shape:
+    3. REACT COMPONENT — a real React component for anything genuinely
+       INTERACTIVE or stateful: multi-step forms, filterable/sortable tables,
+       calculators, live-editable dashboards, small tools. Shape:
+       ``{"type":"react","props":{"code":"<your component source>"}}``.
+
+       Write ordinary modern React and DEFAULT-EXPORT the component::
+
+           import { useState, useMemo } from "react";
+
+           export default function Dashboard() {
+             const [region, setRegion] = useState("all");
+             const rows = useMemo(() => DATA.filter(...), [region]);
+             return <div className="cc-report">…</div>;
+           }
+
+       • Hooks all work (useState/useEffect/useMemo/useReducer/useRef/context).
+       • JSX and TypeScript syntax are both fine — it is compiled for you.
+       • You may import ONLY from "react" / "react-dom/client". There is NO
+         network in the sandbox, so no npm packages, no CDNs, no icon libraries.
+         Inline any helper functions and hard-code/seed the data in the file.
+       • Style with the SAME ``cc-*`` classes and ``--cc-*`` tokens as mode 4 —
+         the design kit is already loaded, so ``<div className="cc-report">``
+         with ``cc-stats``/``cc-bars``/``cc-table`` looks right for free.
+       • Talk back to the agent with ``window.ccSubmit("Label", value)`` (send a
+         value the user set) or ``window.ccAction("message")`` (fire a fixed
+         follow-up). Both are available from first mount.
+       • Optional ``props.height`` (px); omit to auto-size.
+
+       If it compiles but the build fails, the tool result carries the compiler
+       errors — fix them and emit again.
+
+    4. CUSTOM HTML — the escape hatch for bespoke animation/layout or genuinely
+       interactive controls no template, tree, or React component covers. Shape:
        ``{"type":"html","props":{"code":"<div>…</div>"}}``. Your HTML/CSS/JS runs
        in an ISOLATED sandbox (its own opaque origin): it cannot reach the app,
        cookies, or the network, so inline everything — NO external CDNs, fonts, or

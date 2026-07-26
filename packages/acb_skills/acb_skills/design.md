@@ -221,6 +221,43 @@ a full document the user will keep or read at length → a saved `outputs/*.html
 report.** The markup is identical either way — the same `cc-report` container and
 `cc-*` blocks work in both, so you never rewrite to move between them.
 
+**React artifacts.** When the thing you're building is genuinely *interactive*
+rather than a document — a filterable table, a multi-step form, a calculator, a
+live dashboard — write a real React component instead of hand-rolling DOM
+scripting. Same two surfaces, same design kit:
+
+- **Inline in the chat** — an `emit_generative_ui` **`react` node**
+  (`{"type":"react","props":{"code":"…"}}`).
+- **Full-page in the side panel** — `write_artifact("outputs/<name>.jsx", …)`.
+
+Default-export the component and style it with the very same `cc-report` /
+`cc-stats` / `cc-bars` / `cc-table` blocks documented below — they are already
+loaded in the frame, so a React artifact and an HTML report look identical:
+
+```jsx
+import { useState, useMemo } from "react";
+
+export default function Dashboard() {
+  const [region, setRegion] = useState("all");
+  const rows = useMemo(() => DATA.filter(r => region === "all" || r.region === region), [region]);
+  return (
+    <div className="cc-report">
+      <p className="cc-eyebrow">Pipeline</p>
+      <h1>Deals by region</h1>
+      <div className="cc-stats">…</div>
+    </div>
+  );
+}
+```
+
+Hooks all work and JSX/TypeScript are compiled for you. The one hard limit is
+that the sandbox has **no network**: you may import only from `react` and
+`react-dom/client` — no npm packages, no CDNs, no icon libraries — so inline your
+helpers and seed the data in the file. Reach the agent with
+`window.ccSubmit("Label", value)` or `window.ccAction("message")`, available from
+first mount. A build failure comes back in the tool result with compiler errors —
+fix and emit again.
+
 Both render in a locked sandbox with these CSS variables **pre-injected** — use
 them, don't redefine colors:
 

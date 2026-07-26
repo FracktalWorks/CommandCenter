@@ -123,6 +123,31 @@ export interface NoteDoc {
   updated_at: string | null;
 }
 
+/** A notetaker bot dispatched to join a live call (spec §3.13). */
+export type MeetingBotStatus =
+  | "requested"
+  | "joining"
+  | "waiting_room"
+  | "in_call"
+  | "processing"
+  | "done"
+  | "failed"
+  | "left"
+  | "not_admitted";
+
+export interface MeetingBot {
+  id: string;
+  meeting_id: string;
+  status: MeetingBotStatus;
+  provider: string;
+  meeting_url: string;
+  bot_name: string | null;
+  error: string | null;
+  meeting_title: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 /** Snapshot pushed over the per-meeting SSE progress stream. */
 export interface MeetingEvent {
   status: MeetingStatus;

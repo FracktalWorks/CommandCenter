@@ -5,6 +5,7 @@ import type {
   Attendee,
   EmailAccount,
   EmailDraft,
+  MeetingBot,
   MeetingDetail,
   MeetingListItem,
   NoteDoc,
@@ -355,6 +356,44 @@ export async function sendEmail(payload: {
     throw new Error(String(detail));
   }
   return res.json().catch(() => ({}));
+}
+
+// ── Meeting bot (send a notetaker to join a live call) ──────────────────────
+
+/** Whether the meeting-bot feature is set up (a provider key is configured). */
+export async function getBotConfig(): Promise<{
+  configured: boolean;
+  provider: string;
+}> {
+  return json(await fetch(`/api/notes/bots/status`, { cache: "no-store" }));
+}
+
+/** Dispatch a notetaker bot to join one meeting link. Call once per URL to fan
+ *  out to several meetings at once. */
+export async function botJoin(
+  meetingUrl: string,
+  title?: string
+): Promise<MeetingBot> {
+  return json(
+    await fetch(`/api/notes/meetings/bot-join`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ meeting_url: meetingUrl, title: title || null }),
+    })
+  );
+}
+
+/** Active notetaker bots (poll-on-read: this also advances their status). */
+export async function listActiveBots(): Promise<MeetingBot[]> {
+  return json(await fetch(`/api/notes/bots/active`, { cache: "no-store" }));
+}
+
+/** Remove the notetaker from a meeting's call (audio so far is still processed). */
+export async function stopBot(meetingId: string): Promise<void> {
+  const res = await fetch(`/api/notes/meetings/${meetingId}/bot/stop`, {
+    method: "POST",
+  });
+  if (!res.ok && res.status !== 202) throw new Error(`${res.status}`);
 }
 
 export function formatClock(s: number): string {

@@ -38,6 +38,12 @@
  *
  * Trust model: the frame holds no token, no cookie, no credential — every call
  * is brokered by this page and executed as the viewing user (see RFC §4.4).
+ *
+ * Phase 2b adds `window.__ccTest` to the same injected script — a SEPARATE
+ * global from `window.cc`, reusing the identical `__ccsdk` envelope with a
+ * `test.` method prefix. It's a remote-control channel for `testRunner.ts`
+ * (an outside, self-contained caller — NOT `useCcBridge`) to drive an app's
+ * own DOM from a hidden offscreen iframe; see RFC §4.9. Apps never call it.
  */
 
 import { useEffect, useRef } from "react";
@@ -92,6 +98,14 @@ const CC_SDK = `
     window.addEventListener("message", function (ev) {
       var d = ev.data;
       if (!d || typeof d !== "object" || d.__ccsdk !== true || !d.id) return;
+      // A "test." method is an incoming REQUEST from an outside test runner
+      // (see __ccTest below), not a reply to one of our own pending cc.*
+      // calls — branch it off before the pending-lookup below, which only
+      // ever matches replies keyed by ids *we* generated.
+      if (typeof d.method === "string" && d.method.slice(0, 5) === "test.") {
+        handleTestRequest(d);
+        return;
+      }
       var p = pending[d.id];
       if (!p) return;
       delete pending[d.id];
@@ -189,6 +203,68 @@ const CC_SDK = `
         call: function (tool, args) { return call("tools.call", [tool, args || {}]); }
       }
     };
+    // ── __ccTest: remote-control channel for the test runner (Phase 2b) ──
+    // A SEPARATE global from window.cc — apps must never call this
+    // themselves, it is testing infrastructure, not app capability. It
+    // grants ZERO new power: the app's own script already has full
+    // run-of-the-DOM under sandbox="allow-scripts" (no allow-same-origin
+    // needed for that). The only thing missing, and the only thing this
+    // adds, is a way for code OUTSIDE the frame (testRunner.ts, driving a
+    // hidden offscreen iframe) to reach in — the opaque origin means it
+    // cannot touch this window's properties directly, so the "reach in"
+    // still has to happen over the same postMessage RPC as cc.* (see the
+    // "test." branch in the message listener above); window.__ccTest below
+    // is what that branch calls into.
+    function requireEl(selector) {
+      var el = document.querySelector(selector);
+      if (!el) throw new Error("element not found: " + selector);
+      return el;
+    }
+    window.__ccTest = {
+      click: function (selector) {
+        requireEl(selector).click();
+        return true;
+      },
+      type: function (selector, text) {
+        var el = requireEl(selector);
+        el.value = text;
+        el.dispatchEvent(new Event("input", { bubbles: true }));
+        return true;
+      },
+      select: function (selector, value) {
+        var el = requireEl(selector);
+        el.value = value;
+        el.dispatchEvent(new Event("change", { bubbles: true }));
+        return true;
+      },
+      text: function (selector) {
+        var el = document.querySelector(selector);
+        return el ? (el.textContent == null ? "" : el.textContent) : null;
+      },
+      exists: function (selector) {
+        return !!document.querySelector(selector);
+      }
+    };
+    // Runs a test.* request against window.__ccTest and replies with the
+    // same {__ccsdk,id,result|error} shape as every other RPC reply — the
+    // test runner's own listener (its hidden-iframe counterpart to this
+    // file's parent-side broker) awaits it exactly like useCcBridge's
+    // caller awaits a cc.* reply.
+    function handleTestRequest(d) {
+      try {
+        var fn = window.__ccTest[d.method.slice(5)];
+        if (typeof fn !== "function") {
+          throw new Error("unsupported in test mode: " + d.method);
+        }
+        var result = fn.apply(null, d.args || []);
+        parent.postMessage({ __ccsdk: true, id: d.id, result: result }, "*");
+      } catch (e) {
+        parent.postMessage(
+          { __ccsdk: true, id: d.id, error: e && e.message ? e.message : String(e) },
+          "*"
+        );
+      }
+    }
   })();
 </script>`;
 

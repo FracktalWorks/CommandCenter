@@ -277,6 +277,27 @@ Prod is a single Hostinger VPS (no GPU). Day-1 posture: **Tier A (cloud BYOK) wo
 - Tier A clearly labels that audio goes to the configured cloud provider; Tier B is the "audio never leaves the box" mode (Meetily's whole pitch, preserved as a toggle rather than an architecture).
 - No plaintext keys anywhere — STT keys live in the existing encrypted `provider_keys` store (Meetily anti-lesson).
 
+### 3.13 Remote-call capture — the meeting bot (planned)
+
+The browser/device recorder (§3.3) only captures the room the app is running in. To cover meetings happening *elsewhere* — a Google Meet / Microsoft Teams / Zoom call the user is on (or isn't) — we add a **meeting bot**: a headless participant that joins the call, records, and feeds the *same* pipeline (diarization → auto speaker-naming → summary → actions). The bot is just another audio source; everything downstream is unchanged. Two phases:
+
+- **Phase 1 — on-demand join by link (near-term, the first thing we build).** The user pastes a meeting URL → we create a `meeting` row and enqueue a **bot job** → the bot joins as a named participant, records, and on completion the audio/transcript flows into the existing pipeline. No calendar, no scheduling — one link, join now.
+- **Phase 2 — calendar auto-join (deferred, documented for later).** Connect the user's calendar; for each upcoming event carrying a video link, show a per-meeting **"Notetaker will join"** toggle plus a simple rule (*meetings I organize* / *all external* / *ask each time*), a pre-meeting nudge ("joins your 3:00 — [Don't join]"), default **off** for external calls. This is the "notes just appear" magic of Fireflies/Otter, but it depends on the calendar ingesting real invites *with* the join URL — wire that first. **Not in scope yet; revisit after Phase 1 has usage.**
+
+**Hard architectural fact.** The gateway *cannot* join a conferencing call by itself — a bot must run a real client (headless Chromium or a platform SDK) that connects to Meet/Teams/Zoom. So Phase 1 requires a **bot backend**, introduced as a pluggable `bot_provider` layer (mirrors `acb_stt`'s `resolve_stt_provider`): a provider `join(meeting_url, bot_name) → job`, plus a **webhook** that delivers `{recording, transcript, speaker events}` back to `run_transcription`/the pipeline. Provider options (decision **D10**, owner call — has cost/account/infra consequences):
+
+| Provider | Model | Platforms | Fit for our single 4 GB VPS | Notes |
+|---|---|---|---|---|
+| **Recall.ai** *(recommended first)* | Managed API (~$0.50/recording-hr, +$0.15 if using their ASR) | Meet + Teams + Zoom (+Webex) | ✅ — it's just outbound API calls + a webhook; **no bot fleet on our box** | Closed/proprietary; needs a Recall account + API key in `provider_keys`. Ships in days. |
+| **Vexa** | Self-host, Apache-2.0 | Meet/Teams/Zoom/Jitsi | ❌ on this VPS — each concurrent bot ≈ one headless-Chromium container | Genuinely OSS; real DevOps + separate host required. The self-host exit once volume justifies it. |
+| **Attendee** | Self-host, **Elastic License 2.0 (source-available, not OSI)** | Meet/Teams/Zoom | ❌ on this VPS (same fleet cost) | Django-in-one-Docker; ELv2 forbids reselling it as a service — fine to embed, flag for legal. |
+
+Official real-time media APIs (the non-headless path) as of 2026: **Zoom RTMS is GA** (adopt natively for Zoom-heavy use); **Teams** app-hosted media bots are supported but **Azure/.NET-locked**; **Google Meet Media API is Developer Preview and requires *every participant* to be enrolled** → not production-usable, so Meet still forces the bot approach. Plan: **ship Phase 1 on Recall.ai**, keep Vexa/Attendee as the self-host exit, layer in Zoom RTMS where it pays.
+
+**UX** reuses what exists: a "Have the notetaker join a call" entry (paste link) starts the job; the **Recording Dock (§5.2)** shows honest bot states — `joining → waiting to be admitted → recording → processing → ready` (plus `not admitted` / `removed` failures) — and the result lands in the *same* meeting detail (§5.3). Device capture and bot capture converge into one notes experience; no separate "bot meetings" silo.
+
+**Consent (not optional).** A bot appearing in the participant list is **not** legal consent (live 2025 litigation: *Brewer v. Otter.ai*, *Cruz v. Fireflies.ai*; ~13 US states are all-party-consent). The bot joins under a clear, user-controlled name ("<User>'s AI Notetaker"), with an optional join-time announcement, per-meeting opt-in, and external default-off — the §3.12 consent posture extended to the bot.
+
 ---
 
 ## 4. AI integration — brainstorm (ranked, with build cost)
@@ -339,7 +360,7 @@ Extracted action items appear as a rail of cards: description, owner avatar (res
 | **2. Loop closure** | `action_item` extraction + triage rail (§5.5); `/tasks/capture/from-meeting`; follow-up email compose+send; share-to-chat; delete/retention | *One meeting produces ≥1 approved task in `/tasks` and one sent recap email, all HITL* |
 | **3. Depth** | Tier B self-host STT service (compose `--profile stt`, CPU defaults, GPU flag); real diarization + speaker relabel UI; tab-audio dual-channel capture (Chromium) + graceful degradation; ask-the-meeting chat; scratch-notes merge; glossary; two-pass translation; Recording Dock (§5.2) | *Self-hosted transcription with named speakers; "audio never left the box" demo* |
 | **4. Live** | AudioWorklet→WS→WhisperLiveKit captions; live digest/catch-me-up; voice markers; `skill-notes` + meeting-janitor routine | *Live captions during a meeting with <2s latency, authoritative re-pass on stop* |
-| **5. Reach** (option gates) | Speaker-identity memory; commitment ledger; pre-meeting briefs (calendar); meeting-bot capture (Vexa-style); analytics | each gated by a build-or-kill decision after slice-4 usage data |
+| **5. Reach** (option gates) | Speaker-identity memory; commitment ledger; pre-meeting briefs (calendar); **meeting-bot capture (§3.13)** — Phase 1 *on-demand join by link* (near-term, Recall.ai-backed), Phase 2 *calendar auto-join* deferred; analytics | each gated by a build-or-kill decision after slice-4 usage data |
 
 Sequencing rationale: value lands at slice 1 (usable notes), the suite thesis lands at slice 2 (loop closure), the privacy/ownership story lands at slice 3, and only then do we pay for realtime complexity (slice 4) — the research is unambiguous that batch quality is the authoritative product and streaming is garnish (appendix §6).
 
@@ -358,6 +379,7 @@ Sequencing rationale: value lands at slice 1 (usable notes), the suite thesis la
 | D7 | Realtime transport | SSE through slice 3; slice-4 WS terminates at WhisperLiveKit with gateway-minted tokens — gateway stays SSE-only | Consistency with the whole platform; avoids teaching the gateway a second streaming stack for one feature |
 | D8 | Task creation | Never automatic — `action_item` draft→approve HITL, mirroring email capture | Constraint #4/#8 posture; confidence scores make bulk-approve fast without being autonomous |
 | D9 | Audio retention | Default 90d audio / forever transcripts, org-configurable | Storage reality on the VPS; transcripts are the durable asset |
+| D10 | Meeting-bot backend (§3.13) | Ship Phase 1 (on-demand join by link) on **Recall.ai** managed API behind a pluggable `bot_provider`; self-host (Vexa/Attendee) kept as the later exit; Phase 2 calendar auto-join deferred | Gateway can't join a call itself; a headless-Chromium fleet won't fit the single 4 GB VPS, so a managed API is the only VPS-friendly path to ship. Needs a Recall key + owner sign-off (paid, ~$0.50/hr) |
 
 **Open questions (need an owner call, none block slice 0–1):**
 1. **Q1 — Groq vs OpenAI vs Deepgram as the *recommended* Tier-A default?** Deepgram buys diarization before slice 3 lands but is the least BYOK-common key in the org today. (Lean: Groq for speed/cost, revisit at slice 3.)

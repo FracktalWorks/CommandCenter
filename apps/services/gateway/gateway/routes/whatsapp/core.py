@@ -52,6 +52,8 @@ class WhatsAppChatModel(BaseModel):
     window_open: bool = False
     window_expires_at: str | None = None
     snoozed_until: str | None = None    # set while the chat is snoozed (W6)
+    # Native WhatsApp labels the chat carries, mirrored read-only (W16).
+    labels: list[dict[str, Any]] = []
 
 
 class WhatsAppMessageModel(BaseModel):

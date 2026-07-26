@@ -35,6 +35,7 @@ import {
   fetchAccounts,
   fetchChats,
   fetchContext,
+  fetchLabels,
   fetchMessages,
   fetchSavedReplies,
   fetchStreams,
@@ -51,12 +52,21 @@ import {
   type WaAccount,
   type WaChat,
   type WaChatContext,
+  type WaChatLabel,
+  type WaLabel,
   type WaMessage,
   type WaSavedReply,
   type WaStreams,
   type WaTemplate,
   type WaWaitingOn,
 } from "./lib/types";
+
+// A native WhatsApp label is filtered via the activeStream key "label:<id>", so
+// the same selection machinery drives both triage streams and label filters.
+const LABEL_PREFIX = "label:";
+const labelKey = (id: string) => `${LABEL_PREFIX}${id}`;
+const isLabelKey = (key: string) => key.startsWith(LABEL_PREFIX);
+const labelIdOf = (key: string) => key.slice(LABEL_PREFIX.length);
 
 function relTime(iso: string | null): string {
   if (!iso) return "";
@@ -129,6 +139,7 @@ export default function WhatsAppPage() {
   const [activeAccountId, setActiveAccountId] = useState<string | null>(null);
   const [activeStream, setActiveStream] = useState("needs_reply");
   const [chats, setChats] = useState<WaChat[]>([]);
+  const [labels, setLabels] = useState<WaLabel[]>([]);
   const [selectedChat, setSelectedChat] = useState<WaChat | null>(null);
   const [messages, setMessages] = useState<WaMessage[]>([]);
 
@@ -144,15 +155,24 @@ export default function WhatsAppPage() {
     })();
   }, []);
 
-  // Stream counts follow the active number.
+  // Stream counts + native WhatsApp labels follow the active number.
   useEffect(() => {
     if (activeAccountId) fetchStreams(activeAccountId).then(setStreams);
   }, [activeAccountId]);
 
-  // Reload the chat list whenever the active stream OR number changes.
+  useEffect(() => {
+    if (activeAccountId) fetchLabels(activeAccountId).then(setLabels);
+  }, [activeAccountId]);
+
+  // Reload the chat list whenever the active stream OR number changes. A
+  // "label:<id>" key filters by a native WhatsApp label instead of a stream.
   const loadChats = useCallback(async () => {
     if (!activeAccountId) return;
-    setChats(await fetchChats(activeStream, activeAccountId));
+    if (isLabelKey(activeStream)) {
+      setChats(await fetchChats("", activeAccountId, labelIdOf(activeStream)));
+    } else {
+      setChats(await fetchChats(activeStream, activeAccountId));
+    }
   }, [activeAccountId, activeStream]);
 
   useEffect(() => {
@@ -199,6 +219,7 @@ export default function WhatsAppPage() {
       <TriageDrawer
         streams={streams}
         activeStream={activeStream}
+        labels={labels}
         accounts={accounts}
         activeAccountId={activeAccountId}
         onSelect={(key) => {
@@ -218,6 +239,7 @@ export default function WhatsAppPage() {
     closeDrawer,
     streams,
     activeStream,
+    labels,
     accounts,
     activeAccountId,
     switchAccount,
@@ -245,6 +267,11 @@ export default function WhatsAppPage() {
     accounts.find((a) => a.id === activeAccountId) ?? accounts[0];
   const streamCount = (key: string) =>
     (streams as unknown as Record<string, number>)[key] ?? 0;
+  // The list title resolves either a triage stream or a native WhatsApp label.
+  const activeTitle = isLabelKey(activeStream)
+    ? labels.find((l) => l.wa_label_id === labelIdOf(activeStream))?.name ??
+      "Label"
+    : STREAMS.find((s) => s.key === activeStream)?.label ?? "Inbox";
 
   // ── Mobile: single-pane drill-down (list ⇄ conversation) ──────────────
   if (isMobile) {
@@ -264,8 +291,6 @@ export default function WhatsAppPage() {
         </div>
       );
     }
-    const activeStreamLabel =
-      STREAMS.find((s) => s.key === activeStream)?.label ?? "Inbox";
     return (
       <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
         {/* Slim header: current stream + count, tap to open the triage drawer. */}
@@ -273,7 +298,7 @@ export default function WhatsAppPage() {
           onClick={openTriage}
           className="flex h-12 shrink-0 items-center gap-2 border-b border-border px-4 text-left"
         >
-          <span className="text-[14px] font-semibold">{activeStreamLabel}</span>
+          <span className="text-[14px] font-semibold">{activeTitle}</span>
           <span className="text-[11px] text-muted-foreground">
             {chats.length}
           </span>
@@ -347,6 +372,48 @@ export default function WhatsAppPage() {
             </button>
           );
         })}
+        {/* Native WhatsApp labels/lists the founder created, mirrored read-only
+            (W16) — filter the queue to a label without leaving triage. */}
+        {labels.length > 0 && (
+          <div className="mt-3">
+            <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+              Labels
+            </div>
+            {labels.map((l) => {
+              const key = labelKey(l.wa_label_id);
+              const active = key === activeStream;
+              return (
+                <button
+                  key={l.wa_label_id}
+                  onClick={() => {
+                    setActiveStream(key);
+                    setSelectedChat(null);
+                  }}
+                  className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors ${
+                    active
+                      ? "bg-primary/15 text-primary"
+                      : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                  }`}
+                >
+                  <LabelDot color={l.color} />
+                  <span className="flex-1 truncate text-xs">{l.name}</span>
+                  {l.chat_count > 0 && (
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
+                        active
+                          ? "bg-primary text-primary-foreground"
+                          : "bg-secondary text-muted-foreground"
+                      }`}
+                    >
+                      {l.chat_count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+          </div>
+        )}
+
         {/* Pulse / Categories / Replies / Rules / Numbers now live in the shared
             WhatsApp nav (whatsapp/layout.tsx), so they stay reachable from every
             sub-app. The switcher stays here — it scopes this inbox. */}
@@ -362,9 +429,7 @@ export default function WhatsAppPage() {
       {/* ── Conversation list (quiet rows) ────────────────────────── */}
       <div className="flex w-[340px] shrink-0 flex-col border-r border-border">
         <div className="flex h-12 items-center gap-2 border-b border-border px-4">
-          <b className="text-sm">
-            {STREAMS.find((s) => s.key === activeStream)?.label}
-          </b>
+          <b className="text-sm">{activeTitle}</b>
           <span className="text-[11px] text-muted-foreground">
             {chats.length}
           </span>
@@ -496,6 +561,7 @@ function AccountSwitcher({
 function TriageDrawer({
   streams,
   activeStream,
+  labels,
   onSelect,
   accounts,
   activeAccountId,
@@ -503,6 +569,7 @@ function TriageDrawer({
 }: {
   streams: WaStreams;
   activeStream: string;
+  labels: WaLabel[];
   onSelect: (key: string) => void;
   accounts: WaAccount[];
   activeAccountId: string | null;
@@ -545,6 +612,42 @@ function TriageDrawer({
           </button>
         );
       })}
+      {labels.length > 0 && (
+        <div className="mt-2 border-t border-border pt-2">
+          <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+            Labels
+          </div>
+          {labels.map((l) => {
+            const key = labelKey(l.wa_label_id);
+            const active = key === activeStream;
+            return (
+              <button
+                key={l.wa_label_id}
+                onClick={() => onSelect(key)}
+                className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2.5 text-left transition-colors ${
+                  active
+                    ? "bg-primary/15 text-primary"
+                    : "text-muted-foreground hover:bg-muted hover:text-foreground"
+                }`}
+              >
+                <LabelDot color={l.color} />
+                <span className="flex-1 truncate text-sm">{l.name}</span>
+                {l.chat_count > 0 && (
+                  <span
+                    className={`rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
+                      active
+                        ? "bg-primary text-primary-foreground"
+                        : "bg-secondary text-muted-foreground"
+                    }`}
+                  >
+                    {l.chat_count}
+                  </span>
+                )}
+              </button>
+            );
+          })}
+        </div>
+      )}
       {accounts.length > 1 && (
         <div className="mt-2 border-t border-border pt-2">
           <div className="px-3 py-1.5 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
@@ -583,6 +686,43 @@ function TriageDrawer({
   );
 }
 
+// A small colour swatch for a WhatsApp label, matching the colour the user chose
+// in WhatsApp. Falls back to a neutral dot when the label carries no colour.
+function LabelDot({ color }: { color: string | null }) {
+  return (
+    <span
+      className="h-2.5 w-2.5 shrink-0 rounded-full ring-1 ring-inset ring-black/10"
+      style={{ background: color || "#94a3b8" }}
+      aria-hidden
+    />
+  );
+}
+
+// The native WhatsApp labels a chat carries, as quiet dot+name pills under the
+// snippet. Capped so a heavily-labelled chat can't blow out the row.
+function LabelChips({ labels }: { labels: WaChatLabel[] }) {
+  if (!labels.length) return null;
+  const shown = labels.slice(0, 3);
+  return (
+    <div className="mt-1 flex items-center gap-1.5 overflow-hidden">
+      {shown.map((l) => (
+        <span
+          key={l.wa_label_id}
+          className="inline-flex max-w-[96px] items-center gap-1 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground"
+        >
+          <LabelDot color={l.color} />
+          <span className="truncate">{l.name}</span>
+        </span>
+      ))}
+      {labels.length > shown.length && (
+        <span className="text-[10px] text-muted-foreground/60">
+          +{labels.length - shown.length}
+        </span>
+      )}
+    </div>
+  );
+}
+
 function ChatRow({
   chat,
   selected,
@@ -614,6 +754,7 @@ function ChatRow({
         <div className="truncate text-[11.5px] text-muted-foreground">
           {chat.last_snippet || "…"}
         </div>
+        <LabelChips labels={chat.labels} />
       </div>
       <div className="flex shrink-0 flex-col items-end gap-1.5">
         <span className="text-[10px] tabular-nums text-muted-foreground/60">

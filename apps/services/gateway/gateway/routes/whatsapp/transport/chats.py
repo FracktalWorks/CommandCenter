@@ -28,7 +28,9 @@ _NOT_SNOOZED = "(s.snoozed_until IS NULL OR s.snoozed_until <= now())"
 _SNOOZED = "(s.snoozed_until > now())"
 
 
-def _chat_model(row: Any) -> WhatsAppChatModel:
+def _chat_model(
+    row: Any, labels: list[dict[str, Any]] | None = None
+) -> WhatsAppChatModel:
     window_open = bool(getattr(row, "window_open", False))
     snoozed_until = getattr(row, "snoozed_until", None)
     return WhatsAppChatModel(
@@ -47,7 +49,36 @@ def _chat_model(row: Any) -> WhatsAppChatModel:
             if row.service_window_expires_at else None
         ),
         snoozed_until=snoozed_until.isoformat() if snoozed_until else None,
+        labels=labels or [],
     )
+
+
+async def _labels_by_chat(
+    db: Any, rows: list[Any]
+) -> dict[tuple[str, str], list[dict[str, Any]]]:
+    """Fetch the native WhatsApp labels for a page of chats in one query, keyed by
+    (account_id, wa_chat_id). Associations key on the JID (see 113 migration), so
+    we match rows on that pair rather than the chat UUID."""
+    if not rows:
+        return {}
+    aids = list({str(r.account_id) for r in rows})
+    jids = list({r.wa_chat_id for r in rows})
+    recs = (await db.execute(text("""
+        SELECT cl.account_id, cl.wa_chat_id,
+               l.wa_label_id, l.name, l.color, l.sort_order
+        FROM wa_chat_labels cl
+        JOIN wa_labels l
+          ON l.account_id = cl.account_id AND l.wa_label_id = cl.wa_label_id
+        WHERE cl.account_id = ANY(:aids) AND cl.wa_chat_id = ANY(:jids)
+          AND NOT l.deleted
+        ORDER BY l.sort_order, l.name"""),
+        {"aids": aids, "jids": jids})).fetchall()
+    out: dict[tuple[str, str], list[dict[str, Any]]] = {}
+    for r in recs:
+        out.setdefault((str(r.account_id), r.wa_chat_id), []).append({
+            "wa_label_id": r.wa_label_id, "name": r.name or "", "color": r.color,
+        })
+    return out
 
 
 @router.get("/streams")
@@ -93,10 +124,11 @@ async def list_chats(
     account_id: str | None = None,
     stream: str | None = Query(None, description="needs_reply|waiting|groups|all"),
     category: str | None = None,
+    label: str | None = Query(None, description="filter to chats carrying this WhatsApp label id"),
     limit: int = Query(50, le=200),
     user: UserContext = Depends(get_current_user),
 ):
-    """List conversations, newest first, optionally scoped to a stream/category."""
+    """List conversations, newest first, optionally scoped to a stream/category/label."""
     db = await _get_db()
     try:
         params: dict[str, Any] = {"uid": user.email or "anonymous", "limit": limit}
@@ -119,6 +151,11 @@ async def list_chats(
         if category:
             where.append("c.category = :category")
             params["category"] = category
+        if label:
+            where.append("""EXISTS (SELECT 1 FROM wa_chat_labels cl
+                WHERE cl.account_id = c.account_id
+                  AND cl.wa_chat_id = c.wa_chat_id AND cl.wa_label_id = :label)""")
+            params["label"] = label
 
         # Last message snippet via a lateral pull of the most recent body.
         q = f"""
@@ -140,6 +177,10 @@ async def list_chats(
             LIMIT :limit
         """
         rows = (await db.execute(text(q), params)).fetchall()
-        return [_chat_model(r) for r in rows]
+        labels_by_chat = await _labels_by_chat(db, rows)
+        return [
+            _chat_model(r, labels_by_chat.get((str(r.account_id), r.wa_chat_id)))
+            for r in rows
+        ]
     finally:
         await db.close()

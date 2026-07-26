@@ -251,3 +251,113 @@ async def test_generate_avatar_400_on_empty_description(monkeypatch):
     with pytest.raises(HTTPException) as ei:
         await _obs.generate_avatar(_obs.AvatarGenerate(description="   "))
     assert ei.value.status_code == 400
+
+
+# ── Roster: Custom Apps as first-class office cast (RFC §4.6) ────────────────
+# A live "app:<slug>" presence key (created by publish_app_activity's
+# start/end pair, RFC docs/app-workshop/README.md §4.6) must surface in
+# /observability/roster as its own kind="app" entry with the app's real
+# name/icon — not swallowed into the generic "live but unregistered agent"
+# fallback, and not shown at all when idle (unlike agents, which list the
+# full registry regardless of live status).
+
+def test_load_app_details_degrades_to_empty_when_db_unavailable(monkeypatch):
+    import acb_graph
+
+    def _boom(*_a, **_k):
+        raise RuntimeError("no db")
+
+    monkeypatch.setattr(acb_graph, "get_session", _boom)
+    assert _obs._load_app_details(["filament-tracker"]) == {}
+
+
+def test_load_app_details_empty_slugs_skips_db_entirely(monkeypatch):
+    import acb_graph
+
+    def _boom(*_a, **_k):
+        raise AssertionError("must not touch the DB for an empty slug list")
+
+    monkeypatch.setattr(acb_graph, "get_session", _boom)
+    assert _obs._load_app_details([]) == {}
+
+
+@pytest.mark.asyncio
+async def test_roster_includes_a_live_app_as_a_distinct_kind(monkeypatch):
+    from gateway.routes import agent as _agent_routes
+
+    monkeypatch.setattr(_agent_routes, "_AGENT_REGISTRY", [])
+    monkeypatch.setattr(_agent_routes, "_load_dynamic_agents", lambda: [])
+    monkeypatch.setattr(_agent_routes, "_load_agent_aliases", lambda: {})
+
+    async def _fake_active_runs():
+        return [
+            {"agent": "app:filament-tracker", "kind": "app", "phase": "start",
+             "ts": "2026-07-26T00:00:00Z", "source": "apps"},
+        ]
+
+    monkeypatch.setattr(_obs, "active_runs", _fake_active_runs)
+    monkeypatch.setattr(_obs, "_load_avatars", lambda: {})
+    monkeypatch.setattr(
+        _obs, "_load_app_details",
+        lambda slugs: {"filament-tracker": {"name": "Filament Tracker", "icon": "🧵"}},
+    )
+
+    out = await _obs.roster()
+    apps = [a for a in out["agents"] if a["kind"] == "app"]
+    assert len(apps) == 1
+    entry = apps[0]
+    assert entry["slug"] == "filament-tracker"
+    assert entry["display_name"] == "Filament Tracker"
+    assert entry["icon"] == "🧵"
+    assert entry["status"] == "working"
+    assert entry["active_runs"] == 1
+    # Never duplicated into the generic live-but-unregistered agent fallback.
+    assert not any(
+        a["kind"] == "agent" and a["name"] == "app:filament-tracker"
+        for a in out["agents"]
+    )
+
+
+@pytest.mark.asyncio
+async def test_roster_has_no_idle_app_rows(monkeypatch):
+    # Unlike agents (full registry shown even when idle), an app with no live
+    # presence must not appear at all — "show apps being used AT THE MOMENT".
+    from gateway.routes import agent as _agent_routes
+
+    monkeypatch.setattr(_agent_routes, "_AGENT_REGISTRY", [])
+    monkeypatch.setattr(_agent_routes, "_load_dynamic_agents", lambda: [])
+    monkeypatch.setattr(_agent_routes, "_load_agent_aliases", lambda: {})
+
+    async def _fake_active_runs():
+        return []
+
+    def _unreachable(_slugs):
+        raise AssertionError("must not query app details with no live apps")
+
+    monkeypatch.setattr(_obs, "active_runs", _fake_active_runs)
+    monkeypatch.setattr(_obs, "_load_avatars", lambda: {})
+    monkeypatch.setattr(_obs, "_load_app_details", _unreachable)
+
+    out = await _obs.roster()
+    assert not any(a["kind"] == "app" for a in out["agents"])
+
+
+@pytest.mark.asyncio
+async def test_roster_agent_entries_are_tagged_kind_agent(monkeypatch):
+    from gateway.routes import agent as _agent_routes
+
+    monkeypatch.setattr(_agent_routes, "_AGENT_REGISTRY",
+                         [{"name": "email-assistant", "description": "d"}])
+    monkeypatch.setattr(_agent_routes, "_load_dynamic_agents", lambda: [])
+    monkeypatch.setattr(_agent_routes, "_load_agent_aliases", lambda: {})
+
+    async def _fake_active_runs():
+        return []
+
+    monkeypatch.setattr(_obs, "active_runs", _fake_active_runs)
+    monkeypatch.setattr(_obs, "_load_avatars", lambda: {})
+
+    out = await _obs.roster()
+    assert all(a["kind"] in ("agent", "app") for a in out["agents"])
+    assert any(a["kind"] == "agent" and a["name"] == "email-assistant"
+               for a in out["agents"])

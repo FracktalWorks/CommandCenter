@@ -130,6 +130,72 @@ async def test_acompletion_escalates_to_fallback_on_overflow(monkeypatch) -> Non
     assert calls == ["deepseek/deepseek-chat", "deepseek/deepseek-reasoner"]
 
 
+async def test_acompletion_explicit_source_overrides_stack_inference(
+    monkeypatch,
+) -> None:
+    # Custom Apps all share ONE calling module (gateway.routes.apps.runtime)
+    # regardless of app slug, so stack-inferred source can only ever resolve
+    # the package name ("apps") — never the individual app. An explicit
+    # `source` must win over `_infer_app_source()` so per-app cost
+    # attribution is possible at all.
+    monkeypatch.setattr(
+        "acb_llm.client._ensure_keys_loaded", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "acb_llm.client.ensure_model_registered", lambda m: "deepseek")
+    monkeypatch.setattr(ctx, "_infer_app_source", lambda: "apps")
+
+    async def fake_acompletion(*, model, messages, **kw):
+        return {"model": model, "ok": True}
+
+    import litellm
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+
+    captured: dict = {}
+
+    def fake_emit_usage(model, tier, resp, *, source=None, agent=None):
+        captured["source"] = source
+
+    monkeypatch.setattr("acb_llm.client._emit_usage", fake_emit_usage)
+
+    await ctx.acompletion_with_fallback(
+        model="deepseek/deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=100,
+        source="app:filament-tracker",
+    )
+    assert captured["source"] == "app:filament-tracker"
+
+
+async def test_acompletion_falls_back_to_stack_inference_when_source_omitted(
+    monkeypatch,
+) -> None:
+    monkeypatch.setattr(
+        "acb_llm.client._ensure_keys_loaded", AsyncMock(return_value=None))
+    monkeypatch.setattr(
+        "acb_llm.client.ensure_model_registered", lambda m: "deepseek")
+    monkeypatch.setattr(ctx, "_infer_app_source", lambda: "email")
+
+    async def fake_acompletion(*, model, messages, **kw):
+        return {"model": model, "ok": True}
+
+    import litellm
+    monkeypatch.setattr(litellm, "acompletion", fake_acompletion)
+
+    captured: dict = {}
+
+    def fake_emit_usage(model, tier, resp, *, source=None, agent=None):
+        captured["source"] = source
+
+    monkeypatch.setattr("acb_llm.client._emit_usage", fake_emit_usage)
+
+    await ctx.acompletion_with_fallback(
+        model="deepseek/deepseek-chat",
+        messages=[{"role": "user", "content": "hi"}],
+        max_tokens=100,
+    )
+    assert captured["source"] == "email"
+
+
 async def test_acompletion_no_fallback_when_same_model(monkeypatch) -> None:
     # When the fallback resolves to the same underlying model, it is skipped and
     # the primary failure propagates (no pointless second call).

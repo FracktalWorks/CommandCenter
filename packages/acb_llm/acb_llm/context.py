@@ -245,6 +245,7 @@ async def acompletion_with_fallback(
     messages: list[dict[str, Any]],
     max_tokens: int = 1024,
     temperature: float = 0.2,
+    source: str | None = None,
     **extra: Any,
 ) -> tuple[Any, str]:
     """Run a chat completion on ``model``, fitting the input to its context
@@ -255,6 +256,15 @@ async def acompletion_with_fallback(
     model as the primary. Returns ``(response, used_model)`` where
     ``used_model`` is the concrete litellm id that produced the answer. Raises
     the last error if every attempt fails.
+
+    ``source`` overrides the stack-inferred attribution (see
+    ``_infer_app_source``) for activity/cost tagging. Needed by callers whose
+    real identity isn't recoverable from the calling module's dotted path —
+    e.g. Custom Apps: every app's AI call runs through the SAME
+    ``gateway.routes.apps.runtime`` module regardless of which app slug made
+    it, so stack inspection can only ever resolve the shared package name
+    (``"apps"``), never the individual app. Passing ``source=f"app:{slug}"``
+    explicitly is the only way to get per-app cost attribution.
     """
     import litellm as _litellm
     from litellm import acompletion
@@ -265,7 +275,7 @@ async def acompletion_with_fallback(
         ensure_model_registered,
     )
 
-    _source = _infer_app_source()
+    _source = source if source is not None else _infer_app_source()
 
     _litellm.drop_params = True
     _litellm.suppress_debug_info = True

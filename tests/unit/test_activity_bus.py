@@ -146,6 +146,71 @@ def test_publish_write_failure_is_swallowed(monkeypatch):
     asyncio.run(_run())
 
 
+# ── Presence gate (kind="agent" | "app") ────────────────────────────────────
+
+class _FakePresenceRedis:
+    """Enough of the redis.asyncio surface for `_axadd`'s presence branch."""
+
+    def __init__(self):
+        self.store: dict[str, str] = {}
+        self.xadded: list[dict] = []
+
+    async def xadd(self, stream, fields, **_kw):
+        self.xadded.append(fields)
+
+    async def set(self, key, value, ex=None):
+        self.store[key] = value
+
+    async def delete(self, key):
+        self.store.pop(key, None)
+
+
+def test_app_start_creates_a_presence_key_like_an_agent_run(monkeypatch):
+    # A Custom App AI call (kind="app") is a first-class presence source now,
+    # not just agents — the office view treats a working app identically to a
+    # working agent (RFC docs/app-workshop/README.md §4.6).
+    from acb_common import activity
+
+    r = _FakePresenceRedis()
+    monkeypatch.setattr(activity, "_get_client", lambda: r)
+
+    asyncio.run(activity._axadd({
+        "kind": "app", "phase": "start", "run_id": "app-run-1",
+        "agent": "app:filament-tracker",
+    }))
+    assert activity._live_key("app-run-1") in r.store
+
+
+def test_app_end_clears_the_presence_key(monkeypatch):
+    from acb_common import activity
+
+    r = _FakePresenceRedis()
+    monkeypatch.setattr(activity, "_get_client", lambda: r)
+
+    asyncio.run(activity._axadd({
+        "kind": "app", "phase": "start", "run_id": "app-run-2",
+    }))
+    assert activity._live_key("app-run-2") in r.store
+    asyncio.run(activity._axadd({
+        "kind": "app", "phase": "end", "run_id": "app-run-2",
+    }))
+    assert activity._live_key("app-run-2") not in r.store
+
+
+def test_model_events_never_create_a_presence_key(monkeypatch):
+    # kind="model" is cost/feed-only — it must never leak into presence, even
+    # though the gate now accepts more than one kind.
+    from acb_common import activity
+
+    r = _FakePresenceRedis()
+    monkeypatch.setattr(activity, "_get_client", lambda: r)
+
+    asyncio.run(activity._axadd({
+        "kind": "model", "phase": "start", "run_id": "model-run-1",
+    }))
+    assert r.store == {}
+
+
 # ── Cost rollup ──────────────────────────────────────────────────────────────
 
 def test_split_field_parses_rollup_hash_fields():

@@ -5,12 +5,15 @@
 // CommandCenter:
 //   • Desktop: a persistent LEFT column (like email's AccountSidebar / tasks'
 //     ListsSidebar) — icon rail that widens to labels at md.
-//   • Mobile: a compact horizontal, scrollable tab strip at the top — the same
-//     "no left rail on phones" posture the shell's other apps take.
+//   • Mobile: no in-page nav chrome. The section list lives in a slide-up
+//     drawer opened by the shell's "Sections" bottom-nav tab (which dispatches
+//     the `cc-mobile-nav` "wa-sections" event) — the same drawer pattern
+//     email/tasks use for their mobile sub-navigation.
 // Icons are the native lucide set.
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import { useEffect } from "react";
 import {
   Activity,
   Inbox,
@@ -23,6 +26,7 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useViewMode } from "@/components/ViewModeProvider";
+import { useMobileDrawer } from "@/components/AppShell";
 
 type Tab = { href: string; label: string; icon: LucideIcon; exact?: boolean };
 
@@ -35,43 +39,82 @@ const TABS: Tab[] = [
   { href: "/whatsapp/numbers", label: "Numbers", icon: Smartphone },
 ];
 
+const isTabActive = (t: Tab, pathname: string | null) =>
+  t.exact ? pathname === t.href : pathname?.startsWith(t.href) ?? false;
+
+// The section list as it appears inside the mobile bottom-nav drawer.
+function SectionNavDrawer({
+  pathname,
+  onNavigate,
+}: {
+  pathname: string | null;
+  onNavigate: () => void;
+}) {
+  return (
+    <div className="flex flex-col p-2">
+      <div className="flex items-center gap-2 px-3 py-2">
+        <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md bg-primary/15 text-primary">
+          <MessageSquare className="h-3.5 w-3.5" />
+        </span>
+        <span className="text-[13px] font-semibold">WhatsApp</span>
+      </div>
+      {TABS.map((t) => {
+        const Icon = t.icon;
+        const active = isTabActive(t, pathname);
+        return (
+          <Link
+            key={t.href}
+            href={t.href}
+            onClick={onNavigate}
+            className={`flex items-center gap-2.5 rounded-md px-3 py-2.5 transition-colors ${
+              active
+                ? "bg-primary/15 text-primary"
+                : "text-muted-foreground hover:bg-muted hover:text-foreground"
+            }`}
+          >
+            <Icon className="h-4 w-4 shrink-0" />
+            <span className="text-sm">{t.label}</span>
+          </Link>
+        );
+      })}
+      <div className="mt-1 border-t border-border pt-2">
+        <Link
+          href="/whatsapp/connect"
+          onClick={onNavigate}
+          className="flex items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2.5 text-sm font-semibold text-primary-foreground hover:opacity-90"
+        >
+          <Plus className="h-4 w-4 shrink-0" />
+          Connect a number
+        </Link>
+      </div>
+    </div>
+  );
+}
+
 export default function WhatsAppLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const { isMobile } = useViewMode();
-  const isActive = (t: Tab) =>
-    t.exact ? pathname === t.href : pathname?.startsWith(t.href) ?? false;
+  const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
+  const isActive = (t: Tab) => isTabActive(t, pathname);
 
-  // ── Mobile: horizontal, scrollable tab strip above the content ──────────
+  // The shell's "Sections" bottom-nav tab dispatches "wa-sections"; open the
+  // section list in the slide-up drawer. Rebuilt on each open so its active
+  // row reflects the current route.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      if ((e as CustomEvent<string>).detail !== "wa-sections") return;
+      openDrawer(
+        <SectionNavDrawer pathname={pathname} onNavigate={closeDrawer} />
+      );
+    };
+    window.addEventListener("cc-mobile-nav", handler);
+    return () => window.removeEventListener("cc-mobile-nav", handler);
+  }, [openDrawer, closeDrawer, pathname]);
+
+  // ── Mobile: no in-page chrome; the section nav lives in the bottom drawer ─
   if (isMobile) {
     return (
       <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
-        <div className="flex shrink-0 items-center gap-1 overflow-x-auto border-b border-border px-2 py-1.5">
-          {TABS.map((t) => {
-            const Icon = t.icon;
-            const active = isActive(t);
-            return (
-              <Link
-                key={t.href}
-                href={t.href}
-                className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] whitespace-nowrap transition ${
-                  active
-                    ? "bg-primary/15 font-semibold text-primary"
-                    : "text-muted-foreground hover:bg-muted/50"
-                }`}
-              >
-                <Icon className="h-3.5 w-3.5 shrink-0" />
-                {t.label}
-              </Link>
-            );
-          })}
-          <Link
-            href="/whatsapp/connect"
-            className="ml-auto flex shrink-0 items-center gap-1 rounded-full bg-primary px-3 py-1.5 text-[12px] font-semibold text-primary-foreground"
-          >
-            <Plus className="h-3.5 w-3.5 shrink-0" />
-            Connect
-          </Link>
-        </div>
         <div className="min-h-0 flex-1 overflow-hidden">{children}</div>
       </div>
     );

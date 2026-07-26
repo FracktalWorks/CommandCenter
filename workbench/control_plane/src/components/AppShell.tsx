@@ -151,7 +151,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 // Mobile bottom navigation bar — ChatGPT/DeepSeek-style 3-tab bar
 // ---------------------------------------------------------------------------
 
-import { MessageCircle, FolderOpen, Menu as MenuIcon } from "lucide-react";
+import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid } from "lucide-react";
 import { resolveIcon } from "@/lib/icons";
 
 function MobileBottomNavInner({
@@ -260,6 +260,10 @@ function MobileBottomNavInner({
   // Notes actions live on the library page; the meeting/session sub-pages have
   // their own in-view controls, so scope the context tabs to the list.
   const isNotesPage = pathname === "/notes";
+  // WhatsApp: "Sections" (the app sub-nav) applies across every /whatsapp page;
+  // "Triage" (the stream filter) is inbox-only. Both open bottom drawers.
+  const isWhatsAppPage = pathname?.startsWith("/whatsapp") ?? false;
+  const isWhatsAppInbox = pathname === "/whatsapp";
 
   // Tasks: the bottom bar reflects which GTD section you're in. The page emits
   // `cc-tasks-section` whenever the active view changes.
@@ -380,6 +384,20 @@ function MobileBottomNavInner({
               label="Glossary"
             />
           </>
+        )}
+        {isWhatsAppInbox && (
+          <TaskTab
+            onClick={() => dispatchNav("wa-triage")}
+            icon={Filter}
+            label="Triage"
+          />
+        )}
+        {isWhatsAppPage && (
+          <TaskTab
+            onClick={() => dispatchNav("wa-sections")}
+            icon={LayoutGrid}
+            label="Sections"
+          />
         )}
     </nav>
   );

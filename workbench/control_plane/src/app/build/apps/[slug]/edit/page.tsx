@@ -725,8 +725,10 @@ function Workshop({ slug }: { slug: string }) {
     try {
       const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/files`);
       if (!res.ok) return;
-      const data = (await res.json()) as { files?: AppFile[] };
-      setFiles(Array.isArray(data.files) ? data.files : []);
+      // GET /apps/{slug}/files returns a bare array (no {files: [...]}
+      // envelope — see gateway/routes/apps/files.py).
+      const data = (await res.json()) as AppFile[];
+      setFiles(Array.isArray(data) ? data : []);
     } catch {}
   }, [slug]);
 
@@ -742,10 +744,11 @@ function Workshop({ slug }: { slug: string }) {
             );
           return;
         }
-        const data = (await res.json()) as { app?: AppMeta };
-        if (!cancelled && data.app) {
-          setApp(data.app);
-          noteManifestScopes(data.app.manifest);
+        // GET /apps/{slug} returns a bare AppDetail (no {app: ...} envelope).
+        const data = (await res.json()) as AppMeta;
+        if (!cancelled && data) {
+          setApp(data);
+          noteManifestScopes(data.manifest);
         }
       } catch (e) {
         if (!cancelled) setLoadError(String(e));
@@ -793,10 +796,11 @@ function Workshop({ slug }: { slug: string }) {
     try {
       const res = await fetch(`/api/apps/${encodeURIComponent(slug)}`);
       if (!res.ok) return;
-      const data = (await res.json()) as { app?: AppMeta };
-      if (!data.app) return;
-      setApp(data.app);
-      noteManifestScopes(data.app.manifest);
+      // GET /apps/{slug} returns a bare AppDetail (no {app: ...} envelope).
+      const data = (await res.json()) as AppMeta;
+      if (!data) return;
+      setApp(data);
+      noteManifestScopes(data.manifest);
     } catch {
       // Best-effort — the next refresh (poll or activity) will catch it.
     }

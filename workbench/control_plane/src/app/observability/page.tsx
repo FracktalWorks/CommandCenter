@@ -24,7 +24,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import {
-  Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server,
+  AppWindow, Bot, Building2, Coins, Cpu, History as HistoryIcon, Radio, Server,
 } from "lucide-react";
 
 import { CHARACTER_LIBRARY } from "./character-library.generated";
@@ -39,7 +39,7 @@ import type { AvatarConfig } from "./scene";
 interface ActivityEvent {
   _id?: string;
   ts?: string;
-  kind?: "agent" | "model" | string;
+  kind?: "agent" | "app" | "model" | string;
   phase?: "start" | "end" | string;
   agent?: string;
   model?: string;
@@ -56,6 +56,11 @@ interface ActivityEvent {
 }
 
 interface AgentRow {
+  /** "agent" (default when omitted, older cached payloads) | "app" — a
+   *  Custom App currently consuming AI tokens (RFC docs/app-workshop/
+   *  README.md §4.6). Apps only ever appear here while live — there is no
+   *  "idle app" row, unlike agents which list the full registry. */
+  kind?: "agent" | "app" | string;
   name: string;
   /** Friendly alias from the roster; falls back to `name` when empty. */
   display_name?: string;
@@ -66,6 +71,9 @@ interface AgentRow {
   last_ts?: string | null;
   source?: string | null;
   avatar?: { config?: Partial<AvatarConfig>; sprite?: string | null } | null;
+  /** kind="app" only — the app's slug and emoji icon (from the apps table). */
+  slug?: string;
+  icon?: string;
 }
 
 interface RunRow {
@@ -297,32 +305,36 @@ function OfficeView({
 
 function ActivityRow({ e, onOpen, aliases }: { e: ActivityEvent; onOpen: (name: string) => void; aliases?: Record<string, string> }) {
   const isAgent = e.kind === "agent";
+  const isApp = e.kind === "app";
+  const isRunLike = isAgent || isApp; // both use the start/end phase contract
   const isEnd = e.phase === "end";
   const isError = e.status === "error";
-  const dotClass = isAgent
+  const dotClass = isRunLike
     ? isEnd
       ? isError
         ? "bg-destructive"
         : "bg-success/70"
       : "bg-amber-500 obs-led"
     : "bg-violet-500";
-  const label = isAgent ? (aliases?.[e.agent ?? ""] || e.agent || "agent") : shortModel(e.model);
-  const verb = isAgent ? (isEnd ? (isError ? "failed" : "finished") : "started") : "called";
+  const label = isRunLike
+    ? aliases?.[e.agent ?? ""] || (isApp ? (e.agent ?? "").replace(/^app:/, "") : e.agent) || (isApp ? "app" : "agent")
+    : shortModel(e.model);
+  const verb = isRunLike ? (isEnd ? (isError ? "failed" : "finished") : "started") : "called";
 
   return (
     <li className="flex items-center gap-3 py-2 px-3 rounded-lg hover:bg-secondary/30 transition-colors">
       <span className={`h-2 w-2 shrink-0 rounded-full ${dotClass}`} />
       <span
         className={`shrink-0 flex items-center gap-1 rounded px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide border ${
-          isAgent ? "bg-secondary/40 text-foreground border-border" : "bg-violet-500/10 text-violet-500 border-violet-500/20"
+          isRunLike ? "bg-secondary/40 text-foreground border-border" : "bg-violet-500/10 text-violet-500 border-violet-500/20"
         }`}
       >
-        {isAgent ? <Bot size={11} /> : <Cpu size={11} />}
-        {isAgent ? "Agent" : "Model"}
+        {isAgent ? <Bot size={11} /> : isApp ? <AppWindow size={11} /> : <Cpu size={11} />}
+        {isAgent ? "Agent" : isApp ? "App" : "Model"}
       </span>
       <div className="min-w-0 flex-1">
         <div className="flex items-center gap-2 min-w-0">
-          {isAgent ? (
+          {isRunLike ? (
             <button
               onClick={() => e.agent && onOpen(e.agent)}
               className="font-mono text-sm text-foreground truncate hover:underline"
@@ -333,10 +345,10 @@ function ActivityRow({ e, onOpen, aliases }: { e: ActivityEvent; onOpen: (name: 
             <span className="font-mono text-sm text-foreground truncate">{label}</span>
           )}
           <span className="text-xs text-muted-foreground shrink-0">{verb}</span>
-          {isAgent && e.model && !isEnd && (
+          {isRunLike && e.model && !isEnd && (
             <span className="font-mono text-[11px] text-muted-foreground/70 truncate">· {shortModel(e.model)}</span>
           )}
-          {!isAgent && e.tier && (
+          {!isRunLike && e.tier && (
             <span className="text-[11px] text-muted-foreground/70 shrink-0">· tier {e.tier}</span>
           )}
         </div>
@@ -354,10 +366,13 @@ function ActivityRow({ e, onOpen, aliases }: { e: ActivityEvent; onOpen: (name: 
         </span>
       )}
       <div className="shrink-0 text-right w-[80px]">
-        {isAgent && isEnd && e.duration_ms != null && (
+        {isRunLike && isEnd && e.duration_ms != null && (
           <div className="text-[11px] font-mono text-muted-foreground">{fmtDuration(e.duration_ms)}</div>
         )}
-        {!isAgent && (
+        {isRunLike && isEnd && e.tokens != null && (
+          <div className="text-[11px] font-mono text-muted-foreground">{fmtTokens(e.tokens)}t</div>
+        )}
+        {!isRunLike && (
           <div className="text-[11px] font-mono text-muted-foreground">
             {e.tokens != null ? `${fmtTokens(e.tokens)}t` : ""}
             {e.cost_usd != null ? ` · ${fmtCost(e.cost_usd)}` : ""}

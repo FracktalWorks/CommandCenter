@@ -466,20 +466,48 @@ What that buys automatically, because it's the same choke point:
 
 ### 4.6 Cost attribution & live tracking (extends the observability stack)
 
-Apps are a new **actor class** in the tracking system, not a blind spot. Additions:
+Apps are a new **actor class** in the tracking system, not a blind spot — and, as of
+this section's implementation, a first-class member of the SAME live office view
+agents already get, not a separate/disconnected "app usage" screen.
 
 - **Attribution triple on every AI call:** `(app_slug, app_version, viewer_email)` +
   the calling surface (`app-runtime` vs `app-builder`). Builder-session tokens already
   land in `agent_run` (it's a normal Tier-1.5 chat run of the `app-builder` agent);
-  runtime calls write an `app_audit` row (kind=`ai`, tokens, cost, model, latency) and
-  publish to the **Redis activity/cost feed** (`acb_common/activity.py`) as
-  `kind="app"`, so the live Observability feed shows app activity alongside agent runs.
+  runtime calls write an `app_audit` row (kind=`ai`, tokens, cost, model, latency).
+- **Live presence, the same start/end contract agent runs use:** `ai_complete`
+  (`gateway/routes/apps/runtime.py`) emits a `kind="app"` start event immediately
+  before the provider call and an end event immediately after (success or failure —
+  never relying on the 15-minute presence-key TTL self-heal for the common case), with
+  a fresh `run_id` per call. `acb_common.activity`'s presence gate
+  (`cc:activity:live:{run_id}`) was widened from `kind=="agent"`-only to
+  `kind in ("agent", "app")`, so a working app is presence-eligible through the exact
+  same mechanism as a working agent — no parallel "is an app busy" system.
+- **Per-app cost attribution, not a generic "apps" bucket:** every custom app's AI
+  call runs through the SAME `gateway.routes.apps.runtime` module regardless of slug,
+  so `acb_llm.context._infer_app_source()`'s stack-walk can only ever resolve the
+  shared package name (`"apps"`) — never the individual app. `ai_complete` passes
+  `source=f"app:{slug}"` explicitly (a new `acompletion_with_fallback(..., source=)`
+  override param) so the existing `kind="model"` cost-rollup event carries the real
+  per-app identity; no second event, no double-counted spend.
 - **Budgets enforced at the proxy:** per-app monthly token budget + per-user-per-app
   rate limit (manifest fields, platform-clamped defaults). Exceeding budget → 429 with
-  a friendly `cc.ai` error the app can render; owners see burn-down on the app card.
-- **Observability UI:** the existing cost pane gains a *by-app* lens (spend, tokens,
-  top users, calls) fed from `app_audit` aggregates; per-app detail lives on the app's
-  info popover ("this app used 412k tokens this month, ₹…").
+  a friendly `cc.ai` error the app can render, before any presence/cost event fires
+  (a budget-exhausted call never reaches the LLM, so it never appears as "working").
+- **Observability UI (`/observability`):**
+  - **Office view:** a live app surfaces as its own roster entry (`GET
+    /observability/roster`, `kind="app"`, name/icon resolved from the `apps` table) —
+    rendered as a small glowing terminal kiosk showing the app's icon (`AppSeat` in
+    `office-topdown.tsx`), not a character sprite; there's no human to animate, and no
+    "idle app" row — an app only appears while actually consuming tokens, unlike
+    agents which list the full registry regardless of status. Apps never join a
+    conference-room grouping (that needs a standing/breathing sprite set apps don't
+    have).
+  - **Feed tab:** `kind="app"` events render with their own "App" badge and the app's
+    resolved name, instead of falling through to the generic (and misleading) "Model"
+    row shape.
+  - **Cost tab:** the existing *by-app* (`by_source`) lens now shows individual app
+    slugs instead of one aggregate `"apps"` row, as a direct consequence of the
+    explicit `source` override above.
 - **Tool calls too:** `cc.tools.call` writes the same audit rows (kind=`tool`) so
   integration usage is attributable per app — one query answers "what is the Filament
   Tracker doing to ClickUp, for whom, how often."

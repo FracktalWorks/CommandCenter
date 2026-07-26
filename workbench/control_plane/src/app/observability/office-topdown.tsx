@@ -77,6 +77,10 @@ import { roleFor } from "./scene";
 export type OfficeState = "working" | "idle" | "error";
 
 interface OfficeAgent {
+  /** "agent" (default) | "app" — a Custom App currently consuming AI tokens
+   *  (RFC docs/app-workshop/README.md §4.6). Renders as a terminal kiosk
+   *  (AppSeat), not a character sprite — an app has no human to animate. */
+  kind?: "agent" | "app" | string;
   name: string;
   /** Friendly alias for the visible nameplate; `name` stays the avatar key. */
   display_name?: string;
@@ -87,6 +91,8 @@ interface OfficeAgent {
   // avatar override; when set, the office uses that character's full animated set
   // (seated / typing / sleeping / breathing) instead of the role default.
   avatar?: { config?: { libraryId?: string | null } | null } | null;
+  /** kind="app" only — the app's emoji icon (from the apps table). */
+  icon?: string;
 }
 
 // Every FLOOR object is drawn at native_size * ONE scale, so all objects share the
@@ -309,6 +315,43 @@ function Seat({
   );
 }
 
+/**
+ * A Custom App currently consuming AI tokens, rendered as a small glowing
+ * terminal kiosk (its emoji icon on screen) rather than a character sprite —
+ * an app has no human to animate, and forcing it into the seated-worker
+ * sprite pipeline would need pixel-art assets that don't exist for it. Fits
+ * the SAME `.oc-seat`/`.oc-figure`/`.oc-plate` grid cell as `Seat` so it
+ * drops into the desk grid without any layout changes.
+ */
+function AppSeat({
+  agent,
+  onOpen,
+}: {
+  agent: OfficeAgent;
+  onOpen: (name: string) => void;
+}) {
+  return (
+    <button
+      onClick={() => onOpen(agent.name)}
+      className="oc-seat oc-working"
+      title={agent.description || agent.display_name || agent.name}
+    >
+      <div className="oc-figure">
+        <div className="oc-kiosk">
+          <span className="oc-kiosk-screen">{agent.icon || "🧩"}</span>
+          <span className="oc-kiosk-stand" aria-hidden />
+        </div>
+        <span className="oc-badge oc-b-app" title="Consuming AI tokens">
+          <Coins size={12} strokeWidth={2.5} />
+        </span>
+      </div>
+      <div className="oc-plate">
+        <span className="oc-name">{agent.display_name || agent.name}</span>
+      </div>
+    </button>
+  );
+}
+
 /** Rotating "who's speaking" index for a room — cycles every ~1.9s (client only, so
  *  starts at 0 on the server to avoid a hydration mismatch). */
 function useSpeaker(count: number): number {
@@ -464,9 +507,11 @@ export function TopDownOffice({
   // Collaborations → conference rooms. When 2+ agents work concurrently they pair up
   // (~2-3 per room) and are shown meeting in a separate conference-room card instead
   // of at their desks; nothing shows when nobody is collaborating. (A real backend
-  // collaboration signal can replace this heuristic later.)
+  // collaboration signal can replace this heuristic later.) Apps never join a
+  // conference room — CrStandee needs a standing/breathing sprite set that only
+  // characters have; an app just keeps consuming tokens at its desk.
   const workingAgents = roster
-    .filter((a) => stateOf(a) === "working")
+    .filter((a) => stateOf(a) === "working" && a.kind !== "app")
     .sort((a, b) => a.name.localeCompare(b.name));
   const collabs: OfficeAgent[][] = [];
   if (workingAgents.length >= 2) {
@@ -558,6 +603,9 @@ export function TopDownOffice({
             ))}
             <div className="oc-grid">
               {roster.map((a, i) => {
+                if (a.kind === "app") {
+                  return <AppSeat key={a.name} agent={a} onOpen={onOpen} />;
+                }
                 // Green up ~every 3rd desk with a small plant (variant rotates).
                 const plantKey = i % 3 === 1 ? DESK_PLANTS[(i >> 1) % DESK_PLANTS.length] : null;
                 const plant = plantKey ? OFFICE_OBJECTS[plantKey]?.south ?? null : null;
@@ -800,6 +848,26 @@ img.oc-fix-tv-screen { animation: oc-tv 2.6s ease-in-out infinite; }
   text-shadow:0 1px 1px rgba(255,255,255,.6); }
 .oc-b-working { color:#2a7fff; }
 .oc-b-error { color:#e0392f; animation-duration:1.5s; }
+.oc-b-app { color:#1fae66; }
+
+/* App kiosk — a Custom App consuming AI tokens, no character sprite (there is
+   no human to animate). A small glowing terminal on a stand, sized to sit
+   inside the same .oc-figure box a character sprite would occupy. */
+.oc-kiosk { position:relative; width:88px; height:88px; display:flex;
+  flex-direction:column; align-items:center; justify-content:flex-end;
+  filter:drop-shadow(0 5px 4px rgba(0,0,0,.5)); }
+.oc-kiosk-screen { display:flex; align-items:center; justify-content:center;
+  width:72px; height:56px; border-radius:6px; image-rendering:pixelated;
+  background:linear-gradient(#1c2430,#0f151c); border:3px solid #3a4656;
+  box-shadow: inset 0 0 10px rgba(80,180,255,.35), 0 0 14px rgba(80,180,255,.25);
+  font-size:26px; line-height:1; animation: oc-kiosk-glow 2.2s ease-in-out infinite; }
+.oc-kiosk-stand { width:26px; height:14px; margin-top:2px; border-radius:2px;
+  background:linear-gradient(#4a5566,#2c3440); }
+@keyframes oc-kiosk-glow {
+  0%,100% { box-shadow: inset 0 0 10px rgba(80,180,255,.35), 0 0 14px rgba(80,180,255,.25); }
+  50% { box-shadow: inset 0 0 14px rgba(80,180,255,.55), 0 0 20px rgba(80,180,255,.4); }
+}
+@media (prefers-reduced-motion: reduce){ .oc-kiosk-screen { animation:none !important; } }
 
 .oc-plate { margin-top:-2px; text-align:center; z-index:3; }
 /* the agent NAME styled as a readable pill (like the old status indicator) */

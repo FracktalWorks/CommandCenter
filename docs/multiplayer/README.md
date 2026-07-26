@@ -20,10 +20,17 @@ Interactive mockups live alongside this doc:
 | [`mockup-room-settings.html`](mockup-room-settings.html) | Access & data-sharing panel — roles, capacity dials, context policy, integration bindings, what's private |
 | [`mockup-share.html`](mockup-share.html) | Going shared mid-conversation — `@mention` in the composer, history waterline, memory disclosure |
 | [`mockup-memory.html`](mockup-memory.html) | What the agent knows and who can see it — compartments, per-fact audience, "what would they see?" |
+| [`mockup-agents.html`](mockup-agents.html) | The agent catalog — personal / team / shared instancing, and what each choice means |
 
-**Companion doc:** [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned
-across sessions *and* across people, and how the agent decides which parts it may use on a
-given call. It supersedes §6.3 below.
+**Companion docs:**
+
+- [`agent-kinds.md`](agent-kinds.md) — **personal vs shared agents.** Which agents are
+  one-per-person (coach, email) and which are one-brain-for-a-team (sales assistant).
+  Read this first: instancing decides what a memory compartment even is, and whether an
+  agent's sessions may become rooms at all.
+- [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned across sessions
+  *and* across people, and how the agent decides which parts it may use on a given call.
+  Supersedes §6.3 below.
 
 ---
 
@@ -644,6 +651,10 @@ confidential-deal case safe, and it is detailed in
   `UserContext` and never compares it to the path parameter, so any signed-in user can list,
   semantically search, and delete any other user's memory scope today
   ([`memory-clearance.md`](memory-clearance.md) §2.1). Independent of everything else here.
+- **Scope Graphiti reads** — knowledge-graph episodes are written with a per-user `group_id`
+  but `GraphitiClient.search()` passes no group filter, so retrieval spans every user's
+  episodes ([`agent-kinds.md`](agent-kinds.md) §2.2). Both memory findings are latent while
+  `MEM0_ENABLED` / `GRAPHITI_ENABLED` are false — check the deployed `.env` for urgency.
 - **Acceptance:** two clients on one thread; the second cannot cancel or erase the first's
   run; every stored message resolves to an author; a caller cannot read a memory scope they
   don't own.

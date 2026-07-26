@@ -2,7 +2,12 @@
 
 **Status:** Draft / RFC · **Date:** 2026-07-26 · **Owner:** vjvarada
 **Companion to:** [`README.md`](README.md) (the multiplayer room model) ·
+[`agent-kinds.md`](agent-kinds.md) (personal vs shared agents) ·
 [`../../ai-company-brain/specs/multi_user_organization_research.md`](../../ai-company-brain/specs/multi_user_organization_research.md) (org/RBAC)
+
+> **Read [`agent-kinds.md`](agent-kinds.md) first.** An agent's *instancing* (one brain per
+> person / per team / for everyone) decides how the `agent:` compartment below is keyed, and
+> whether the agent's sessions may become rooms at all. This doc assumes that choice is made.
 
 How one agent holds memory across sessions **and** across people, and decides which
 parts of it are usable on any given call.
@@ -107,7 +112,7 @@ scope_key(org=True)                          → "org:global"               # ex
 | `<email>` (user) | **What this person told it** — episodic facts from their private sessions | Private, always | **Never** |
 | `subject:<entity>` | Everything about a deal / customer / project | Explicit member list | Only if every viewer is a member |
 | `room:<thread_id>` | Facts established in this room | Room members | It *is* the room |
-| `agent:<name>` | Tradecraft the agent learns across everyone — "Odoo invoice lines lag Zoho ~2 days" | Org | Yes |
+| `agent:<name>[#instance]` | Tradecraft the agent learns — "Odoo invoice lines lag Zoho ~2 days" | Depends on the agent's **instancing** — see [`agent-kinds.md`](agent-kinds.md) | Yes, if the viewers share the instance |
 | `org:global` | Company facts — "standard terms are Net 30" | Org | Yes |
 
 **Splitting personal memory into `prefs` and `user` is what makes shared rooms usable.** In a

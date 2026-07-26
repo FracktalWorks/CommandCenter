@@ -1,5 +1,5 @@
 -- ============================================================================
--- 113_whatsapp_labels_sync.sql — native WhatsApp labels/lists, synced (W16)
+-- 117_whatsapp_labels_sync.sql — native WhatsApp labels/lists, synced (W16)
 -- ============================================================================
 -- The founder's personal number (whatsmeow bridge) already has the labels/lists
 -- they created inside WhatsApp — "Clients", "Suppliers", "Follow up", etc. Those

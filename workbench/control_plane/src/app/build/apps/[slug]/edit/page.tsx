@@ -110,6 +110,13 @@ function toolScopes(manifest: Record<string, unknown> | undefined): string[] {
   );
 }
 
+/** The manifest's declared entry file — `index.html` for a T1 app, e.g.
+ * `dist/bundle.html` once the builder upgrades an app to T2 (React). */
+function manifestEntry(manifest: Record<string, unknown> | undefined): string {
+  const raw = manifest?.entry;
+  return typeof raw === "string" && raw.trim() ? raw : "index.html";
+}
+
 // ─── Test scenarios (RFC §4.9) — plain-English descriptions for the Tests
 // panel and the "✦ Fix with AI" seed message. Terse by design: only failing
 // steps/assertions get spelled out, passing ones just show a checkmark. ────
@@ -1143,7 +1150,7 @@ function Workshop({ slug }: { slug: string }) {
         : "(empty workspace)";
     return [
       `You are the app-builder for the CommandCenter custom app "${app.name}" (slug: ${app.slug}).`,
-      `You are building the app in this workspace. Entry file: index.html.`,
+      `You are building the app in this workspace. Entry file: ${manifestEntry(app.manifest)}.`,
       `Workspace files: ${fileList}.`,
     ].join("\n");
   }, [app, files]);

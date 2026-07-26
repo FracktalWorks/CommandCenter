@@ -32,6 +32,7 @@ from gateway.routes.apps._common import (
     _uid,
     app_workspace,
     get_app_or_404,
+    manifest_entry_rel,
     parse_db_manifest,
     read_workspace_manifest,
     record_app_audit,
@@ -55,24 +56,53 @@ class RestoreRequest(BaseModel):
 
 # ── Workspace walk (pure — mirrors files.py's listing rules) ─────────────────
 
-def list_workspace_text_files(workspace: Path) -> list[Path]:
+def list_workspace_text_files(
+    workspace: Path, manifest: dict[str, Any] | None = None,
+) -> list[Path]:
     """Every workspace file eligible for the ``app_files`` mirror.
 
     Same rules as ``files._walk_files`` (skip dot-anything, the shared
     VCS/build dirs, and directories) plus the durability-specific cuts:
     files over ``MAX_SOURCE_FILE_BYTES`` and non-UTF-8-decodable files are
     skipped — only text the files API could serve is mirrored.
+
+    One carve-out: the manifest's resolved ``entry`` file (e.g. a T2 app's
+    ``dist/bundle.html``) is always eligible even when it sits under a
+    skip-dir — it's the file ``ensure_workspace``/``_workspace_ready`` depend
+    on to recover a lost workspace, so it must survive the mirror. Everything
+    else under that dir (a stray source map, a vendored ``node_modules``)
+    stays excluded.
     """
     out: list[Path] = []
     if not workspace.is_dir():
         return out
+    entry_segments = tuple(
+        s for s in manifest_entry_rel(
+            manifest if manifest is not None else read_workspace_manifest(workspace),
+        ).split("/") if s
+    )
+    entry_dir_segments = entry_segments[:-1]
     for dirpath, dirnames, filenames in os.walk(workspace):
+        rel_segments = tuple(
+            p for p in Path(dirpath).relative_to(workspace).parts if p != "."
+        )
         dirnames[:] = sorted(
             d for d in dirnames
-            if not d.startswith(".") and d not in WORKSPACE_SKIP_DIRS
+            if not d.startswith(".")
+            and (
+                d not in WORKSPACE_SKIP_DIRS
+                or (
+                    len(rel_segments) < len(entry_dir_segments)
+                    and rel_segments == entry_dir_segments[: len(rel_segments)]
+                    and d == entry_dir_segments[len(rel_segments)]
+                )
+            )
         )
+        under_skip_dir = any(seg in WORKSPACE_SKIP_DIRS for seg in rel_segments)
         for fname in sorted(filenames):
             if fname.startswith("."):
+                continue
+            if under_skip_dir and (*rel_segments, fname) != entry_segments:
                 continue
             fpath = Path(dirpath) / fname
             try:

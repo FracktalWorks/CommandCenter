@@ -136,6 +136,20 @@ def apps_root() -> Path:
     return root
 
 
+def t2_vendor_dir() -> Path:
+    """The shared, deploy-provisioned T2 (React) build dependency cache —
+    ``react``/``react-dom``/``esbuild``, installed once outside any app
+    workspace (never per-app ``npm install``). ``CUSTOM_APPS_T2_VENDOR_DIR``
+    overrides; empty falls back to ``{agents_clone_dir}/vendor/t2-react``.
+    Does not create the directory — deploy provisioning owns that."""
+    settings = get_settings()
+    configured = (getattr(settings, "custom_apps_t2_vendor_dir", "") or "").strip()
+    return (
+        Path(configured) if configured
+        else Path(settings.agents_clone_dir) / "vendor" / "t2-react"
+    )
+
+
 # ── Slugs ────────────────────────────────────────────────────────────────────
 
 SLUG_RE = re.compile(r"^[a-z0-9](?:[a-z0-9-]{1,46})[a-z0-9]$")
@@ -269,7 +283,12 @@ def role_for(
 def default_manifest(
     slug: str, name: str, icon: str = "", description: str = "",
 ) -> dict[str, Any]:
-    """A fresh scaffold's ``app.json`` (RFC §4.1, runtime T1: static)."""
+    """A fresh scaffold's ``app.json`` (RFC §4.1, runtime T1: static).
+
+    ``tier`` is display/prompt metadata only (T1 vanilla vs T2 React) — every
+    backend read path (publish, draft preview, durability) already resolves
+    the real entry point dynamically from ``entry``, not from ``tier``.
+    """
     return {
         "slug": slug,
         "name": name,
@@ -277,6 +296,7 @@ def default_manifest(
         "description": description,
         "runtime": "static",
         "entry": "index.html",
+        "tier": "T1",
         "run_as": "viewer",
         "scopes": list(DEFAULT_SCOPES),
         "storage": {"tables": []},
@@ -303,6 +323,15 @@ def parse_db_manifest(val: Any) -> dict[str, Any]:
         except ValueError:
             return {}
     return {}
+
+
+def manifest_entry_rel(manifest: dict[str, Any] | None) -> str:
+    """Normalized rel path of the manifest's declared entry (default
+    ``index.html``) — the one path durability must mirror even when it falls
+    under a ``WORKSPACE_SKIP_DIRS`` directory (e.g. a T2 app's
+    ``dist/bundle.html``)."""
+    raw = str((manifest or {}).get("entry") or "index.html")
+    return raw.replace("\\", "/").strip("/")
 
 
 def manifest_scopes(manifest: dict[str, Any] | None) -> list[str]:

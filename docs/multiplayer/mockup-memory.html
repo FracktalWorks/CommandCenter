@@ -1,0 +1,296 @@
+<title>CommandCenter · Multiplayer Agents — What it knows, who can see it</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --violet: hsl(262 60% 62%);
+    --sidebar: hsl(220 13% 9%);
+    --sidebar-accent: hsl(220 13% 13%);
+    --radius: 12px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --violet: hsl(262 60% 50%);
+    --sidebar: hsl(0 0% 98%);
+    --sidebar-accent: hsl(210 40% 94%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font-ui); background: var(--background); color: var(--foreground); font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  .shell { display: grid; grid-template-rows: auto 1fr; height: 100vh; }
+
+  /* ---- Head ---- */
+  .head { padding: 15px 22px 13px; border-bottom: 1px solid var(--border); display: flex; align-items: flex-end; gap: 16px; }
+  .head h1 { margin: 0; font-size: 18px; font-weight: 680; letter-spacing: -0.015em; }
+  .head p { margin: 3px 0 0; font-size: 12px; color: var(--muted-foreground); }
+  .head .spacer { flex: 1; }
+  .lens { display: flex; align-items: center; gap: 9px; border: 1px solid hsl(27 96% 61% / .4); background: hsl(27 96% 61% / .08); border-radius: 10px; padding: 7px 11px; font-size: 12px; }
+  .lens .icon { color: var(--accent); }
+  .lens b { font-weight: 620; }
+  .lens .who { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 3px 8px; font-size: 11.5px; color: var(--muted-foreground); }
+
+  .body { display: grid; grid-template-columns: 300px 1fr; min-height: 0; }
+
+  /* ---- Compartment list ---- */
+  .comps { border-right: 1px solid var(--border); overflow: auto; padding: 12px 10px; background: var(--sidebar); display: flex; flex-direction: column; gap: 3px; }
+  .csec { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); font-weight: 700; padding: 12px 10px 6px; }
+  .comp { display: flex; align-items: center; gap: 10px; padding: 9px 10px; border-radius: 10px; text-align: left; width: 100%; border: 1px solid transparent; }
+  .comp:hover { background: var(--sidebar-accent); }
+  .comp.on { background: var(--primary-wash); border-color: hsl(198 89% 50% / .35); }
+  .comp.out { opacity: .38; }
+  .glyph { width: 28px; height: 28px; border-radius: 8px; display: grid; place-items: center; flex: none; border: 1px solid var(--border-strong); }
+  .g-sub { background: hsl(262 60% 62% / .16); color: hsl(262 60% 72%); }
+  .g-usr { background: hsl(198 89% 50% / .16); color: hsl(198 89% 62%); }
+  .g-pref { background: hsl(142 76% 47% / .14); color: hsl(142 66% 55%); }
+  .g-agt { background: hsl(27 96% 61% / .16); color: hsl(27 96% 66%); }
+  .g-org { background: var(--secondary); color: var(--muted-foreground); }
+  .comp .nm { font-size: 12.5px; font-weight: 550; line-height: 1.3; display: block; }
+  .comp .mt { font-size: 10.5px; color: var(--faint); margin-top: 2px; display: flex; align-items: center; gap: 5px; }
+  .lockicon { color: var(--destructive); }
+  .comp .n { margin-left: auto; font-size: 11px; color: var(--faint); font-variant-numeric: tabular-nums; }
+
+  /* ---- Detail ---- */
+  .detail { overflow: auto; padding: 18px 22px 40px; display: flex; flex-direction: column; gap: 16px; min-width: 0; }
+  .dhead { display: flex; align-items: flex-start; gap: 13px; }
+  .dhead .glyph { width: 42px; height: 42px; border-radius: 11px; }
+  .dhead h2 { margin: 0; font-size: 17px; font-weight: 660; letter-spacing: -0.01em; display: flex; align-items: center; gap: 9px; }
+  .badge { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+  .badge.restricted { color: var(--destructive); background: hsl(0 63% 60% / .12); }
+  .dhead .key { font-family: var(--font-mono); font-size: 11px; color: var(--faint); margin-top: 4px; display: block; }
+  .dacts { margin-left: auto; display: flex; gap: 7px; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 12px; font-size: 12.5px; font-weight: 550; border: 1px solid var(--border-strong); color: var(--muted-foreground); }
+  .btn:hover { color: var(--foreground); border-color: var(--primary); }
+  .btn.warn { border-color: hsl(47 96% 53% / .4); color: var(--warning); }
+
+  .who-can { border: 1px solid var(--border); background: var(--card); border-radius: 13px; padding: 13px 15px; display: flex; flex-direction: column; gap: 11px; }
+  .who-can h3 { margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); font-weight: 700; }
+  .members { display: flex; flex-wrap: wrap; gap: 7px; }
+  .mem { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--border-strong); border-radius: 999px; padding: 4px 11px 4px 4px; font-size: 12px; }
+  .avatar { width: 21px; height: 21px; border-radius: 50%; display: grid; place-items: center; font-size: 8.5px; font-weight: 700; border: 1px solid var(--border-strong); }
+  .av-v { background: hsl(198 89% 50% / .2); color: hsl(198 89% 62%); }
+  .av-m { background: hsl(142 76% 47% / .18); color: hsl(142 66% 55%); }
+  .av-s { background: hsl(27 96% 61% / .2); color: hsl(27 96% 66%); }
+  .mem .x { color: var(--faint); font-size: 13px; margin-left: 2px; }
+  .mem.add { border-style: dashed; color: var(--faint); padding-left: 11px; }
+  .rooms { font-size: 11.5px; color: var(--muted-foreground); border-top: 1px solid var(--border); padding-top: 10px; display: flex; align-items: center; gap: 8px; }
+  .rooms .icon { color: var(--faint); }
+  .rooms b { color: var(--foreground); font-weight: 600; }
+
+  /* facts */
+  .facts { border: 1px solid var(--border); border-radius: 13px; overflow: hidden; }
+  .fact { padding: 12px 15px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 7px; }
+  .fact:last-child { border-bottom: none; }
+  .fact:hover { background: var(--card); }
+  .fact .txt { font-size: 13px; line-height: 1.5; }
+  .fact .meta { display: flex; align-items: center; gap: 9px; font-size: 11px; color: var(--faint); flex-wrap: wrap; }
+  .fact .meta .src { color: var(--muted-foreground); }
+  .fact .meta .sep { opacity: .4; }
+  .fact .row { display: flex; align-items: center; gap: 9px; }
+  .fact .acts { margin-left: auto; display: flex; gap: 5px; opacity: 0; transition: opacity .15s; }
+  .fact:hover .acts { opacity: 1; }
+  .mini { font-size: 10.5px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--border-strong); color: var(--muted-foreground); }
+  .mini:hover { color: var(--foreground); }
+  .mini.danger:hover { color: var(--destructive); border-color: hsl(0 63% 60% / .5); }
+
+  .fhead { display: flex; align-items: center; gap: 10px; padding: 10px 15px; background: var(--secondary); font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); font-weight: 700; }
+  .fhead .n { margin-left: auto; text-transform: none; letter-spacing: 0; font-size: 11px; font-weight: 500; }
+
+  .rule { display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px; border-radius: 11px; border: 1px solid var(--border-strong); background: var(--card); font-size: 12px; color: var(--muted-foreground); line-height: 1.55; }
+  .rule .icon { color: var(--violet); margin-top: 1px; }
+  .rule b { color: var(--foreground); font-weight: 600; }
+</style>
+
+<div class="shell">
+  <header class="head">
+    <div>
+      <h1>agent-sales · memory</h1>
+      <p>Everything this agent knows, which compartment it lives in, and who can read it.</p>
+    </div>
+    <span class="spacer"></span>
+    <div class="lens">
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/></svg>
+      <b>What would</b>
+      <span class="who"><span class="avatar av-s" style="width:17px;height:17px;font-size:7px">SK</span>Sanjay <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span>
+      <b>see?</b>
+    </div>
+  </header>
+
+  <div class="body">
+    <!-- ---------- compartments ---------- -->
+    <nav class="comps">
+      <div class="csec">Subjects</div>
+      <button class="comp on">
+        <span class="glyph g-sub"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 7h-9M14 17H5M17 3l3 4-3 4M7 13l-3 4 3 4"/></svg></span>
+        <span style="flex:1"><span class="nm">Project Falcon</span><span class="mt"><svg class="icon lockicon" style="width:10px;height:10px" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Restricted · 2 people</span></span>
+        <span class="n">14</span>
+      </button>
+      <button class="comp">
+        <span class="glyph g-sub"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg></span>
+        <span style="flex:1"><span class="nm">Acme Corp</span><span class="mt">Sales team · 6 people</span></span>
+        <span class="n">31</span>
+      </button>
+      <button class="comp">
+        <span class="glyph g-sub"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 21h18M5 21V7l7-4 7 4v14M9 21v-6h6v6"/></svg></span>
+        <span style="flex:1"><span class="nm">Northwind Industries</span><span class="mt">Sales team · 6 people</span></span>
+        <span class="n">22</span>
+      </button>
+      <button class="comp out">
+        <span class="glyph g-sub"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 7h-9M14 17H5M17 3l3 4-3 4M7 13l-3 4 3 4"/></svg></span>
+        <span style="flex:1"><span class="nm">Project Meridian</span><span class="mt"><svg class="icon lockicon" style="width:10px;height:10px" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Restricted · 3 people</span></span>
+        <span class="n">8</span>
+      </button>
+
+      <div class="csec">People</div>
+      <button class="comp">
+        <span class="glyph g-usr"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg></span>
+        <span style="flex:1"><span class="nm">Your private memory</span><span class="mt">Only you, always</span></span>
+        <span class="n">47</span>
+      </button>
+      <button class="comp">
+        <span class="glyph g-pref"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/></svg></span>
+        <span style="flex:1"><span class="nm">How you like to work</span><span class="mt">Travels with you into any room</span></span>
+        <span class="n">9</span>
+      </button>
+
+      <div class="csec">Shared</div>
+      <button class="comp">
+        <span class="glyph g-agt"><svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="4" y="8" width="16" height="12" rx="2"/><path d="M12 8V4M9 14h.01M15 14h.01"/></svg></span>
+        <span style="flex:1"><span class="nm">Sales agent memory</span><span class="mt">Everyone who uses this agent</span></span>
+        <span class="n">63</span>
+      </button>
+      <button class="comp">
+        <span class="glyph g-org"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 21h18M6 21V5a2 2 0 0 1 2-2h8a2 2 0 0 1 2 2v16M10 8h4M10 12h4M10 16h4"/></svg></span>
+        <span style="flex:1"><span class="nm">Company memory</span><span class="mt">Everyone at Fracktal</span></span>
+        <span class="n">118</span>
+      </button>
+    </nav>
+
+    <!-- ---------- detail ---------- -->
+    <main class="detail">
+      <div class="dhead">
+        <span class="glyph g-sub" style="width:42px;height:42px;border-radius:11px"><svg class="icon" viewBox="0 0 24 24"><path d="M20 7h-9M14 17H5M17 3l3 4-3 4M7 13l-3 4 3 4"/></svg></span>
+        <div>
+          <h2>Project Falcon <span class="badge restricted">Restricted</span></h2>
+          <span class="key">subject:deal/zoho-4471 · linked to Deal “Falcon” in Zoho</span>
+        </div>
+        <div class="dacts">
+          <button class="btn">Move facts…</button>
+          <button class="btn warn">Widen access…</button>
+        </div>
+      </div>
+
+      <div class="who-can">
+        <h3>Who can read this</h3>
+        <div class="members">
+          <span class="mem"><span class="avatar av-v">VV</span>Vijay Varada <b style="font-size:10px;color:var(--faint);font-weight:600">can widen</b></span>
+          <span class="mem"><span class="avatar av-m">MP</span>Meera Pillai <button class="x">×</button></span>
+          <span class="mem add">+ Add someone</span>
+        </div>
+        <div class="rooms">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>
+          <span>Used by <b>1 room</b> (Falcon — board prep) and <b>4 private conversations</b>. Any room whose members aren't all listed above simply never queries it.</span>
+        </div>
+      </div>
+
+      <div class="facts">
+        <div class="fhead"><span>What the agent knows</span><span class="n">14 memories · newest first</span></div>
+
+        <div class="fact">
+          <div class="row">
+            <span class="txt">Falcon's board wants the deal signed before the Q3 close; the CFO has authority up to ₹4.2Cr without a further vote.</span>
+          </div>
+          <div class="meta">
+            <span class="src">from “Falcon — board prep”</span><span class="sep">·</span><span>2 days ago</span><span class="sep">·</span>
+            <span>readable by Vijay, Meera</span>
+            <span class="acts">
+              <button class="mini">Move</button><button class="mini">Widen</button><button class="mini danger">Forget</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="fact">
+          <div class="row">
+            <span class="txt">Competing bid from Harrow is believed to be around ₹3.8Cr but with a 90-day close — speed is our advantage, not price.</span>
+          </div>
+          <div class="meta">
+            <span class="src">from a private conversation</span><span class="sep">·</span><span>5 days ago</span><span class="sep">·</span>
+            <span>readable by Vijay, Meera</span>
+            <span class="acts">
+              <button class="mini">Move</button><button class="mini">Widen</button><button class="mini danger">Forget</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="fact">
+          <div class="row">
+            <span class="txt">Do not route anything about Falcon through the shared sales channel or the weekly digest.</span>
+          </div>
+          <div class="meta">
+            <span class="src">from a private conversation</span><span class="sep">·</span><span>1 week ago</span><span class="sep">·</span>
+            <span>readable by Vijay, Meera</span>
+            <span class="acts">
+              <button class="mini">Move</button><button class="mini">Widen</button><button class="mini danger">Forget</button>
+            </span>
+          </div>
+        </div>
+
+        <div class="fact">
+          <div class="row">
+            <span class="txt">Meera is the only other person read in; Sanjay owns Acme and must not be given Falcon context by mistake.</span>
+          </div>
+          <div class="meta">
+            <span class="src">from a private conversation</span><span class="sep">·</span><span>1 week ago</span><span class="sep">·</span>
+            <span>readable by Vijay, Meera</span>
+            <span class="acts">
+              <button class="mini">Move</button><button class="mini">Widen</button><button class="mini danger">Forget</button>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="rule">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span><b>Widening is the only way out of a compartment.</b> Nothing here reaches a room, a digest, or another person because a model decided it was relevant — a compartment the room isn't cleared for is never searched at all. When you widen, we'll name everyone who gains access and how many memories they gain. Removing someone stops future reads; it can't un-read what they've already seen.</span>
+      </div>
+    </main>
+  </div>
+</div>

@@ -18,6 +18,12 @@ Interactive mockups live alongside this doc:
 |---|---|
 | [`mockup-room.html`](mockup-room.html) | The shared session room — presence rail, attributed turns, floor control, observer lane, live steer |
 | [`mockup-room-settings.html`](mockup-room-settings.html) | Access & data-sharing panel — roles, capacity dials, context policy, integration bindings, what's private |
+| [`mockup-share.html`](mockup-share.html) | Going shared mid-conversation — `@mention` in the composer, history waterline, memory disclosure |
+| [`mockup-memory.html`](mockup-memory.html) | What the agent knows and who can see it — compartments, per-fact audience, "what would they see?" |
+
+**Companion doc:** [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned
+across sessions *and* across people, and how the agent decides which parts it may use on a
+given call. It supersedes §6.3 below.
 
 ---
 
@@ -516,6 +522,24 @@ Ship the room memory scope in the **same** phase that opens sharing (Phase 3 gat
 default). Until then, shared rooms run `context_policy='none'` — no memory rather than the
 wrong memory.
 
+> **⚠️ Superseded — `context_policy` is on the wrong axis.**
+>
+> A per-room switch cannot express *"this deal is confidential and that one is
+> collaborative"* when both belong to the same person and the same agent: `driver` leaks the
+> restricted subject through semantic retrieval, and `room` forgets the collaborative one.
+> Confidentiality is a property of the **subject**, not of the person or the room.
+>
+> **[`memory-clearance.md`](memory-clearance.md) replaces this section** with memory
+> *compartments* (`subject:` / `room:` / `prefs:` / `user:` / `agent:` / `org:`) and a
+> per-run *clearance* — **a run reads at the clearance of its least-cleared viewer**. The
+> two rules above survive intact; what changes is that the unit of scoping becomes the
+> compartment rather than the room. `context_policy` remains only as a coarse room-level
+> override (`none` forces a clean room regardless of clearance).
+>
+> That doc also flags a prerequisite: `routes/memory.py` currently accepts any scope key by
+> path parameter without checking the caller, so any signed-in user can read or delete
+> another user's memory today. It moves to Phase 0.
+
 ### 6.4 Which identity do the tools act as?
 
 When the agent sends an email or writes to ClickUp from a room, whose credentials does it use?
@@ -581,6 +605,28 @@ See the mockups. The load-bearing ideas:
    policy is in force, and whether anyone's personal context is in play. Privacy that is only
    in a settings page is not privacy.
 
+### 7.1 Going shared mid-conversation
+
+The common case is not "start a shared session" — it is realising, forty turns deep, that
+this shouldn't be yours alone. Five entry points, one sheet
+([`mockup-share.html`](mockup-share.html)):
+
+- **`@mention` in the composer.** Type `@sanjay` mid-message; a chip appears inline; sending
+  converts the thread to a room and invites him. The Docs move, and the path most sharing
+  should take.
+- **Share button in the thread header** — always present, quiet while solo. Plus `⌘⇧S` and
+  the sidebar row menu.
+- **The agent asks.** When a run hits an approval it can't make or a domain it can't act in:
+  *"This needs Finance sign-off — bring someone in?"* Agent-initiated multiplayer costs
+  nothing once rooms exist.
+
+The sheet makes three entangled decisions together, which is why it is one sheet: **who**,
+**the history waterline** (*from here on* by default, rendered as a visible divider in the
+transcript afterwards), and **what memory the room will and won't have** — computed exactly,
+because the clearance of every past run is known. That last block is what makes the
+confidential-deal case safe, and it is detailed in
+[`memory-clearance.md`](memory-clearance.md) §6.
+
 ---
 
 ## 8. Phased plan
@@ -594,8 +640,13 @@ See the mockups. The load-bearing ideas:
 - `mark_active(reset=True)` is only reachable from a legitimate supersede.
 - `chat_message.author_email` / `author_kind` added and populated on every write path
   (`chat_fold`, `save_messages`, the Next translator's checkpoints).
+- **Authorize `routes/memory.py`** — `GET/POST/DELETE /memory/{user_id}` resolves
+  `UserContext` and never compares it to the path parameter, so any signed-in user can list,
+  semantically search, and delete any other user's memory scope today
+  ([`memory-clearance.md`](memory-clearance.md) §2.1). Independent of everything else here.
 - **Acceptance:** two clients on one thread; the second cannot cancel or erase the first's
-  run; every stored message resolves to an author.
+  run; every stored message resolves to an author; a caller cannot read a memory scope they
+  don't own.
 
 ### Phase 1 — Read-only multiplayer (~1 week)
 
@@ -619,16 +670,25 @@ See the mockups. The load-bearing ideas:
 - **Acceptance:** Sanjay requests the floor, Vijay grants it, Sanjay redirects the run
   mid-flight without cancelling it, and the transcript shows exactly who did what when.
 
-### Phase 3 — The privacy boundary (~2 weeks)
+### Phase 3 — The privacy boundary (~3 weeks)
 
-- `room` memory scope in `acb_memory`; `context_policy` branch at both memory call sites.
+Expanded by [`memory-clearance.md`](memory-clearance.md) §7, which splits it into 3a/3b/3c.
+
+- **3a** — compartment registry (migration 118), `scope_key()` kinds, the `prefs`/`user`
+  split, clearance resolution at run start, read/write rules at both `routes/agent.py` memory
+  call sites, `_set_memory_write_scope`.
+- **3b** — subject binding (bound rooms, inline declaration), entity-linked inference that may
+  only narrow, the per-viewer private hint, extraction classification.
+- **3c** — share sheet with the memory disclosure, history waterline, memory inspector.
 - Room integration bindings + `acting_identity` fixed at run start, stamped into audit.
 - Private lanes: whisper child threads, private notes, promote-to-room.
 - `history_visibility='since_join'` via the join cursors.
 - The permanent data banner.
-- **Acceptance:** in a `room`-policy room no participant's personal Mem0 facts appear in
-  context or output; facts learned land in room scope only; a late joiner with `since_join`
-  cannot read a single message from before they joined.
+- **Acceptance:** the load-bearing test is at the query layer, not the answer layer — in a
+  room whose viewers aren't all cleared for a restricted subject, assert that `search()` is
+  **never called** with that scope key, rather than asserting the answer avoids mentioning
+  it. Plus: facts learned in a room land only in room/subject scope; a late joiner with
+  `since_join` cannot read a message from before they joined.
 
 ### Phase 4 — Scale & limits (~1 week)
 

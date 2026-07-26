@@ -25,19 +25,23 @@ import { useTheme } from "next-themes";
 import {
   AlertTriangle,
   ArrowLeft,
+  CheckCircle2,
   ChevronDown,
   ChevronRight,
   Clock,
   Eye,
   FileCode,
+  FlaskConical,
   History,
   Loader2,
   Lock,
+  Play,
   Plug,
   RefreshCw,
   Rocket,
   Sparkles,
   X,
+  XCircle,
 } from "lucide-react";
 import AgentChat from "@/components/AgentChat";
 import SandboxedHtml from "@/components/SandboxedHtml";
@@ -55,6 +59,7 @@ import {
   type CcToolConfirmDecision,
   type CcToolConfirmRequest,
 } from "../../lib/ccBridge";
+import { runAllScenarios, type TestResult, type TestScenario } from "../../lib/testRunner";
 import type { AppFile, AppMeta, Checkpoint } from "../../lib/types";
 
 /** A pending `cc.tools.call()` confirm, waiting on the builder's decision. */
@@ -105,6 +110,54 @@ function toolScopes(manifest: Record<string, unknown> | undefined): string[] {
   );
 }
 
+// ─── Test scenarios (RFC §4.9) — plain-English descriptions for the Tests
+// panel and the "✦ Fix with AI" seed message. Terse by design: only failing
+// steps/assertions get spelled out, passing ones just show a checkmark. ────
+
+function describeStep(step: TestScenario["steps"][number]): string {
+  switch (step.action) {
+    case "click":
+      return `click ${step.selector}`;
+    case "type":
+      return `type "${step.text}" into ${step.selector}`;
+    case "select":
+      return `select "${step.value}" in ${step.selector}`;
+    case "wait":
+      return `wait ${step.ms}ms`;
+  }
+}
+
+function describeAssertion(a: TestScenario["assertions"][number]): string {
+  switch (a.kind) {
+    case "storage":
+      return `${a.table}.${a.key}${a.path ? `.${a.path}` : ""} ${a.op}${
+        a.value !== undefined ? ` ${JSON.stringify(a.value)}` : ""
+      }`;
+    case "dom-text":
+      return `${a.selector} text ${a.op} ${JSON.stringify(a.value)}`;
+    case "dom-exists":
+      return `${a.selector} exists = ${a.expect}`;
+  }
+}
+
+/** Short first-failure summary for a result — used in the row detail and the
+ * "✦ Fix with AI" seed message alike. */
+function describeFailure(result: TestResult): string {
+  const failedStep = result.steps.find((s) => !s.ok);
+  if (failedStep) {
+    return failedStep.error
+      ? `${describeStep(failedStep.step)} — ${failedStep.error}`
+      : `${describeStep(failedStep.step)} failed`;
+  }
+  const failedAssertion = result.assertions.find((a) => !a.passed);
+  if (failedAssertion) {
+    return `${describeAssertion(failedAssertion.assertion)} — got ${JSON.stringify(
+      failedAssertion.actual
+    )}`;
+  }
+  return result.error ?? "unknown failure";
+}
+
 /** Find-or-create the ONE builder chat session for this app. */
 function ensureBuilderSession(slug: string): ChatSession {
   const name = `app:${slug}`;
@@ -143,10 +196,14 @@ function ensureBuilderSession(slug: string): ChatSession {
 
 function PublishModal({
   app,
+  testStatus,
   onClose,
   onPublished,
 }: {
   app: AppMeta;
+  /** Current aggregate test result ({passed, total}), or null when there are
+   * no scenarios yet — informational only, never blocks Publish (RFC §4.9). */
+  testStatus: { passed: number; total: number } | null;
   onClose: () => void;
   onPublished: () => void;
 }) {
@@ -312,6 +369,32 @@ function PublishModal({
           </div>
         </div>
 
+        {/* Test status — informational only, never blocks Publish. */}
+        {testStatus && testStatus.total > 0 && (
+          <div
+            className={`flex items-center gap-1.5 text-xs rounded-lg px-3 py-2 ${
+              testStatus.passed === testStatus.total
+                ? "text-success bg-success/10"
+                : "text-warning bg-warning/10"
+            }`}
+          >
+            {testStatus.passed === testStatus.total ? (
+              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+            ) : (
+              <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+            )}
+            <span>
+              {testStatus.passed === testStatus.total
+                ? `All ${testStatus.total} test scenario${
+                    testStatus.total === 1 ? "" : "s"
+                  } passing`
+                : `${testStatus.total - testStatus.passed} of ${
+                    testStatus.total
+                  } test scenarios failing — you can still publish`}
+            </span>
+          </div>
+        )}
+
         {error && (
           <div className="flex items-start gap-1.5 text-xs text-destructive whitespace-pre-line">
             <X className="w-3.5 h-3.5 shrink-0 mt-0.5" /> <span>{error}</span>
@@ -354,7 +437,7 @@ function Workshop({ slug }: { slug: string }) {
   const [app, setApp] = useState<AppMeta | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [files, setFiles] = useState<AppFile[]>([]);
-  const [view, setView] = useState<"preview" | "code">("preview");
+  const [view, setView] = useState<"preview" | "code" | "tests">("preview");
   const [showPublish, setShowPublish] = useState(false);
 
   // Builder chat session (one per app).
@@ -384,6 +467,30 @@ function Workshop({ slug }: { slug: string }) {
   // Code view.
   const [selectedPath, setSelectedPath] = useState<string | null>(null);
   const [fileContent, setFileContent] = useState<string | null>(null);
+
+  // Tests panel (RFC §4.9) — scenarios authored conversationally by the
+  // builder into tests.json, run client-side by testRunner.ts against an
+  // ephemeral in-memory `cc` store. testResults is keyed by scenario id so a
+  // partial re-run (single "Run" click) only touches the rows involved.
+  const [testScenarios, setTestScenarios] = useState<TestScenario[]>([]);
+  const [testResults, setTestResults] = useState<Record<string, TestResult>>(
+    {}
+  );
+  const testResultsRef = useRef<Record<string, TestResult>>({});
+  const [runningTestIds, setRunningTestIds] = useState<Set<string>>(
+    new Set()
+  );
+  const [expandedTestId, setExpandedTestId] = useState<string | null>(null);
+  // Regressions surfaced since the last run — a scenario that was passing
+  // (or never run) and is now failing, mirroring the console drawer's
+  // "✦ Fix with AI" card (dismissible, re-surfaces on a fresh regression
+  // even if an earlier one for the same scenario was dismissed).
+  const [newlyFailingTests, setNewlyFailingTests] = useState<
+    Record<string, TestResult>
+  >({});
+  const [dismissedFailingTests, setDismissedFailingTests] = useState<
+    Set<string>
+  >(new Set());
 
   // New `tool:` scopes the builder has added to app.json since the Workshop
   // opened, surfaced as a dismissible "New capability requested" card above
@@ -483,6 +590,37 @@ function Workshop({ slug }: { slug: string }) {
     };
   }, [slug, fetchFiles, noteManifestScopes]);
 
+  // ── Tests: tests.json read (write stays conversational — the builder
+  // edits the file directly, this component only ever reads it) ─────────
+  const fetchTestScenarios = useCallback(async (): Promise<TestScenario[]> => {
+    try {
+      const res = await fetch(
+        `/api/apps/${encodeURIComponent(slug)}/files/content?path=tests.json`
+      );
+      // 404 (no tests.json yet) is not an error — just no scenarios.
+      if (!res.ok) return [];
+      const text = await res.text();
+      try {
+        const data: unknown = JSON.parse(text);
+        return Array.isArray(data) ? (data as TestScenario[]) : [];
+      } catch {
+        return []; // malformed tests.json — never throw, just show none
+      }
+    } catch {
+      return [];
+    }
+  }, [slug]);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetchTestScenarios().then((scenarios) => {
+      if (!cancelled) setTestScenarios(scenarios);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [fetchTestScenarios]);
+
   /** Re-fetch app meta and check for newly-declared `tool:` scopes. */
   const refreshAppMeta = useCallback(async () => {
     try {
@@ -581,6 +719,93 @@ function Workshop({ slug }: { slug: string }) {
     }
   }, [slug]);
 
+  // ── Tests: run + merge results ────────────────────────────────────────
+  /** Merge fresh results into state and surface any newly-broken scenario —
+   * one that was passing (or never run) before this run and is failing now.
+   * A dismissed pill re-surfaces if the scenario regresses again later. */
+  const applyTestResults = useCallback((results: TestResult[]) => {
+    const prev = testResultsRef.current;
+    const freshlyFailing = results.filter((r) => {
+      if (r.passed) return false;
+      const prior = prev[r.scenarioId];
+      return !prior || prior.passed;
+    });
+    const next = { ...prev };
+    for (const r of results) next[r.scenarioId] = r;
+    testResultsRef.current = next;
+    setTestResults(next);
+    if (freshlyFailing.length > 0) {
+      setNewlyFailingTests((cur) => {
+        const nextFailing = { ...cur };
+        for (const r of freshlyFailing) nextFailing[r.scenarioId] = r;
+        return nextFailing;
+      });
+      setDismissedFailingTests((cur) => {
+        if (freshlyFailing.every((r) => !cur.has(r.scenarioId))) return cur;
+        const nextDismissed = new Set(cur);
+        for (const r of freshlyFailing) nextDismissed.delete(r.scenarioId);
+        return nextDismissed;
+      });
+    }
+  }, []);
+
+  /** Manual run — one row's "Run" button, or "Run all" — against the
+   * currently-loaded draft bundle. */
+  const runScenarios = useCallback(
+    async (scenariosToRun: TestScenario[]) => {
+      if (scenariosToRun.length === 0 || !draftBundle) return;
+      const ids = scenariosToRun.map((s) => s.id);
+      setRunningTestIds((prev) => new Set([...prev, ...ids]));
+      try {
+        const results = await runAllScenarios(draftBundle, scenariosToRun, {
+          slug,
+        });
+        applyTestResults(results);
+      } catch {
+        // Best-effort — leave prior results in place, the row still shows
+        // its last known status.
+      } finally {
+        setRunningTestIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
+    },
+    [draftBundle, slug, applyTestResults]
+  );
+
+  /** Auto-run after a builder turn — fetches a FRESH bundle + tests.json
+   * directly (not the debounced setTimeout's stale closures) so the run
+   * reflects what the builder just wrote. */
+  const runTestsAfterSync = useCallback(async () => {
+    try {
+      const [bundleRes, scenarios] = await Promise.all([
+        fetch(`/api/apps/${encodeURIComponent(slug)}/bundle?version=draft`),
+        fetchTestScenarios(),
+      ]);
+      setTestScenarios(scenarios);
+      if (scenarios.length === 0 || !bundleRes.ok) return;
+      const bundleText = await bundleRes.text();
+      const ids = scenarios.map((s) => s.id);
+      setRunningTestIds((prev) => new Set([...prev, ...ids]));
+      try {
+        const results = await runAllScenarios(bundleText, scenarios, {
+          slug,
+        });
+        applyTestResults(results);
+      } finally {
+        setRunningTestIds((prev) => {
+          const next = new Set(prev);
+          ids.forEach((id) => next.delete(id));
+          return next;
+        });
+      }
+    } catch {
+      // Best-effort — the next activity or a manual run will catch it.
+    }
+  }, [slug, fetchTestScenarios, applyTestResults]);
+
   // When an assistant turn lands (messageCount grows), give the workspace a
   // moment to settle, then refetch the preview and mirror the draft. This is
   // the primary refresh path; the poll above is only the fallback.
@@ -602,9 +827,19 @@ function Workshop({ slug }: { slug: string }) {
         // The builder mentions new tool: scopes in chat, not a dedicated
         // event (Phase 2a) — catch them by re-fetching app meta here too.
         refreshAppMeta();
+        // Re-run test scenarios (if any) against the freshly-synced draft —
+        // same trigger as the checkpoint/preview refresh above (RFC §4.9).
+        runTestsAfterSync();
       }, RUN_SYNC_DEBOUNCE_MS);
     },
-    [refreshPreview, fetchFiles, syncDraft, refreshCheckpoints, refreshAppMeta]
+    [
+      refreshPreview,
+      fetchFiles,
+      syncDraft,
+      refreshCheckpoints,
+      refreshAppMeta,
+      runTestsAfterSync,
+    ]
   );
   useEffect(
     () => () => {
@@ -672,6 +907,44 @@ function Workshop({ slug }: { slug: string }) {
     );
     setPendingInput(`Preview errors:\n${lines.join("\n")}\nPlease fix them.`);
   }, [consoleEvents]);
+
+  // Aggregate pass/fail across all known scenarios — null hides the topbar
+  // pill and the Publish modal banner when there are no scenarios at all.
+  // A scenario with no result yet counts as not-passing (converges to real
+  // numbers on the first auto-run / manual run).
+  const testAggregate = useMemo(() => {
+    if (testScenarios.length === 0) return null;
+    const total = testScenarios.length;
+    const passed = testScenarios.filter((s) => testResults[s.id]?.passed).length;
+    return { passed, total };
+  }, [testScenarios, testResults]);
+
+  const visibleFailingTests = useMemo(
+    () =>
+      Object.values(newlyFailingTests).filter(
+        (r) => !dismissedFailingTests.has(r.scenarioId)
+      ),
+    [newlyFailingTests, dismissedFailingTests]
+  );
+  const dismissFailingTest = useCallback((scenarioId: string) => {
+    setDismissedFailingTests((cur) => {
+      const next = new Set(cur);
+      next.add(scenarioId);
+      return next;
+    });
+  }, []);
+  // "✦ Fix with AI" on a regressed scenario — same setPendingInput mechanism
+  // as fixWithAi above, seeded with which scenario broke and why.
+  const fixTestWithAi = useCallback(
+    (result: TestResult) => {
+      const scenario = testScenarios.find((s) => s.id === result.scenarioId);
+      const name = scenario?.name ?? result.scenarioId;
+      setPendingInput(
+        `Test "${name}" is now failing: ${describeFailure(result)}. Please fix it.`
+      );
+    },
+    [testScenarios]
+  );
 
   // ── Code view file content ──────────────────────────────────────────
   const selectFile = useCallback(
@@ -761,9 +1034,10 @@ function Workshop({ slug }: { slug: string }) {
             tabs={[
               { id: "preview", label: "Preview" },
               { id: "code", label: "Code" },
+              { id: "tests", label: "Tests", icon: FlaskConical },
             ]}
             activeTab={view}
-            onTabChange={(id) => setView(id as "preview" | "code")}
+            onTabChange={(id) => setView(id as "preview" | "code" | "tests")}
             variant="segmented"
             className="border-b-0! px-0! sm:px-0! pt-0! pb-0!"
           />
@@ -856,6 +1130,24 @@ function Workshop({ slug }: { slug: string }) {
             </div>
           )}
         </div>
+
+        {/* Aggregate test badge — hidden with zero scenarios, click jumps to
+            the Tests view (RFC §4.9's "compact pass/fail badge near
+            Publish"). */}
+        {testAggregate && (
+          <button
+            onClick={() => setView("tests")}
+            title="Open the Tests view"
+            className={`font-mono text-[10.5px] px-2 py-1 rounded-full border tech-transition shrink-0 ${
+              testAggregate.passed === testAggregate.total
+                ? "text-success border-success/30 bg-success/10 hover:bg-success/20"
+                : "text-destructive border-destructive/30 bg-destructive/10 hover:bg-destructive/20"
+            }`}
+          >
+            {testAggregate.passed === testAggregate.total ? "✓" : "✗"}{" "}
+            {testAggregate.passed}/{testAggregate.total} tests
+          </button>
+        )}
 
         <button
           onClick={() => setShowPublish(true)}
@@ -967,7 +1259,7 @@ function Workshop({ slug }: { slug: string }) {
                 )}
               </div>
             </>
-          ) : (
+          ) : view === "code" ? (
             <div className="flex-1 min-h-0 flex">
               {/* File list */}
               <div className="w-52 shrink-0 border-r border-border overflow-y-auto p-2">
@@ -1017,6 +1309,169 @@ function Workshop({ slug }: { slug: string }) {
                   <Eye className="w-3.5 h-3.5" />
                   Code is agent-authored — edit through chat.
                 </div>
+              </div>
+            </div>
+          ) : testScenarios.length === 0 ? (
+            /* Tests — empty state. Authoring stays conversational (RFC
+               §4.9) — no form/editor here, just a nudge toward chat. */
+            <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
+              <FlaskConical className="w-6 h-6 text-muted-foreground/50" />
+              <p className="text-sm font-medium text-foreground">
+                No test scenarios yet
+              </p>
+              <p className="text-xs text-muted-foreground max-w-xs">
+                Ask the build chat to add one, e.g. &quot;test that logging
+                usage decreases stock&quot;
+              </p>
+            </div>
+          ) : (
+            <div className="flex-1 min-h-0 flex flex-col">
+              <div className="flex items-center gap-2 px-3 py-2 border-b border-border shrink-0">
+                <span className="text-xs text-muted-foreground">
+                  {testScenarios.filter((s) => testResults[s.id]?.passed).length}/
+                  {testScenarios.length} passing
+                </span>
+                <div className="flex-1" />
+                <button
+                  onClick={() => runScenarios(testScenarios)}
+                  disabled={runningTestIds.size > 0}
+                  title="Run all scenarios"
+                  className="flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-50 shrink-0"
+                >
+                  {runningTestIds.size > 0 ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    <Play className="w-3.5 h-3.5" />
+                  )}
+                  Run all
+                </button>
+              </div>
+              <div className="flex-1 min-h-0 overflow-y-auto p-3 flex flex-col gap-2">
+                {testScenarios.map((scenario) => {
+                  const result = testResults[scenario.id];
+                  const status: "pass" | "fail" | "not-run" = !result
+                    ? "not-run"
+                    : result.passed
+                      ? "pass"
+                      : "fail";
+                  const running = runningTestIds.has(scenario.id);
+                  const expanded = expandedTestId === scenario.id;
+                  return (
+                    <div
+                      key={scenario.id}
+                      className="rounded-lg border border-border"
+                    >
+                      <div className="flex items-center gap-2 px-3 py-2">
+                        <button
+                          onClick={() =>
+                            setExpandedTestId((cur) =>
+                              cur === scenario.id ? null : scenario.id
+                            )
+                          }
+                          className="flex items-center gap-1.5 flex-1 min-w-0 text-left"
+                        >
+                          {expanded ? (
+                            <ChevronDown className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                          ) : (
+                            <ChevronRight className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
+                          )}
+                          <span className="text-sm text-foreground truncate">
+                            {scenario.name}
+                          </span>
+                        </button>
+                        <span
+                          className={`text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full shrink-0 ${
+                            status === "pass"
+                              ? "text-success bg-success/10"
+                              : status === "fail"
+                                ? "text-destructive bg-destructive/10"
+                                : "text-muted-foreground bg-muted"
+                          }`}
+                        >
+                          {status === "pass"
+                            ? "Pass"
+                            : status === "fail"
+                              ? "Fail"
+                              : "Not run"}
+                        </span>
+                        <button
+                          onClick={() => runScenarios([scenario])}
+                          disabled={running}
+                          title="Run this scenario"
+                          className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[10px] text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-50 shrink-0"
+                        >
+                          {running ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            <Play className="w-3 h-3" />
+                          )}
+                          Run
+                        </button>
+                      </div>
+                      {expanded && (
+                        <div className="border-t border-border px-3 py-2.5 text-[11px] flex flex-col gap-1.5">
+                          {!result ? (
+                            <p className="text-muted-foreground">
+                              Not run yet.
+                            </p>
+                          ) : result.passed ? (
+                            <div className="flex items-center gap-1.5 text-success">
+                              <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                              All {result.steps.length} steps and{" "}
+                              {result.assertions.length} assertions passed.
+                            </div>
+                          ) : (
+                            <>
+                              <div className="text-muted-foreground">
+                                {result.steps.filter((s) => s.ok).length}/
+                                {result.steps.length} steps ok ·{" "}
+                                {result.assertions.filter((a) => a.passed).length}/
+                                {result.assertions.length} assertions passed
+                              </div>
+                              {result.steps
+                                .filter((s) => !s.ok)
+                                .map((s, i) => (
+                                  <div
+                                    key={`step-${i}`}
+                                    className="flex items-start gap-1.5"
+                                  >
+                                    <XCircle className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
+                                    <span className="text-destructive break-words">
+                                      {describeStep(s.step)}
+                                      {s.error ? `: ${s.error}` : ""}
+                                    </span>
+                                  </div>
+                                ))}
+                              {result.assertions
+                                .filter((a) => !a.passed)
+                                .map((a, i) => (
+                                  <div
+                                    key={`assertion-${i}`}
+                                    className="flex items-start gap-1.5"
+                                  >
+                                    <XCircle className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
+                                    <span className="text-destructive break-words">
+                                      {describeAssertion(a.assertion)} — got{" "}
+                                      {JSON.stringify(a.actual)}
+                                      {a.error ? ` (${a.error})` : ""}
+                                    </span>
+                                  </div>
+                                ))}
+                              {result.error && (
+                                <div className="flex items-start gap-1.5">
+                                  <XCircle className="w-3 h-3 text-destructive shrink-0 mt-0.5" />
+                                  <span className="text-destructive break-words">
+                                    {result.error}
+                                  </span>
+                                </div>
+                              )}
+                            </>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -1070,6 +1525,52 @@ function Workshop({ slug }: { slug: string }) {
             </div>
           )}
 
+          {/* Regressed test scenarios — a scenario that was passing (or
+              never run) and just failed, above the composer like the
+              capability card above (RFC §4.9's "Fix with AI" one-click
+              loop). */}
+          {visibleFailingTests.length > 0 && (
+            <div className="flex flex-col gap-1.5 px-3 py-2 border-b border-border shrink-0">
+              {visibleFailingTests.map((result) => {
+                const scenario = testScenarios.find(
+                  (s) => s.id === result.scenarioId
+                );
+                return (
+                  <div
+                    key={result.scenarioId}
+                    className="flex items-start gap-2.5 rounded-lg border border-border bg-secondary px-3 py-2.5"
+                  >
+                    <FlaskConical className="w-4 h-4 text-destructive shrink-0 mt-0.5" />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[12px] font-semibold text-foreground leading-snug">
+                        Test failing:{" "}
+                        <span className="font-normal">
+                          {scenario?.name ?? result.scenarioId}
+                        </span>
+                      </p>
+                      <p className="text-[11px] text-muted-foreground mt-0.5 leading-relaxed break-words">
+                        {describeFailure(result)}
+                      </p>
+                      <button
+                        onClick={() => fixTestWithAi(result)}
+                        className="mt-1 font-mono text-[11px] text-primary hover:opacity-80 tech-transition"
+                      >
+                        ✦ Fix with AI
+                      </button>
+                    </div>
+                    <button
+                      onClick={() => dismissFailingTest(result.scenarioId)}
+                      aria-label="Dismiss"
+                      className="shrink-0 p-0.5 rounded text-muted-foreground hover:text-foreground tech-transition"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
           <div className="flex-1 min-h-0">
             {!app.workspace_path ? (
               <div className="flex flex-col items-center justify-center h-full gap-3 px-6 text-center">
@@ -1110,6 +1611,7 @@ function Workshop({ slug }: { slug: string }) {
       {showPublish && (
         <PublishModal
           app={app}
+          testStatus={testAggregate}
           onClose={() => setShowPublish(false)}
           onPublished={() => router.push(`/build/apps/${slug}`)}
         />

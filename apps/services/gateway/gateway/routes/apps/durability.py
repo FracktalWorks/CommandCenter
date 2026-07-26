@@ -2,7 +2,7 @@
 
 Published apps are already Postgres-durable (``app_versions``); this module
 makes the DRAFT workspace durable too. Every eligible workspace text file is
-mirrored into ``app_files`` (``infra/postgres/114_app_files.sql``) on file
+mirrored into ``app_files`` (``infra/postgres/115_app_files.sql``) on file
 writes / publish / explicit sync, and a missing-or-gutted workspace is lazily
 rehydrated from those rows at the read choke point (``ensure_workspace``).
 Per-edit checkpoints ride the workspace's own git repo (the one

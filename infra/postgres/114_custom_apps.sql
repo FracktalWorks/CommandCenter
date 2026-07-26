@@ -1,5 +1,5 @@
 -- ============================================================================
--- 113_custom_apps.sql — Custom Apps / App Workshop data model (Phase 0)
+-- 114_custom_apps.sql — Custom Apps / App Workshop data model (Phase 0)
 -- ============================================================================
 -- The app platform's core tables (RFC: docs/app-workshop/README.md §4.9):
 --

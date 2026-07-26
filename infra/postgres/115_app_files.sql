@@ -1,5 +1,5 @@
 -- ============================================================================
--- 114_app_files.sql — Custom Apps draft durability (Phase 1)
+-- 115_app_files.sql — Custom Apps draft durability (Phase 1)
 -- ============================================================================
 -- Postgres mirror of every app's DRAFT workspace text files. Published bundles
 -- are already durable in app_versions, but the draft workspace under
@@ -13,7 +13,7 @@
 --               (the sha lets the sync skip unchanged files). Rows for paths
 --               deleted on disk are removed on the next full sync.
 --
--- Idempotent. Depends on: 113_custom_apps.sql (apps).
+-- Idempotent. Depends on: 114_custom_apps.sql (apps).
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS app_files (

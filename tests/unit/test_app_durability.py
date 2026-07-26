@@ -6,7 +6,7 @@ reconstruction + baseline git repo, and the git checkpoint helpers
 (checkpoint → list → additive restore, all best-effort). git IS available in
 CI, so the checkpoint tests run against real throwaway repos in tmp_path;
 identity comes from the helpers' own ``-c user.name/user.email`` flags.
-RFC: docs/app-workshop/README.md §4.9; tables: infra/postgres/114_app_files.sql.
+RFC: docs/app-workshop/README.md §4.9; tables: infra/postgres/115_app_files.sql.
 """
 from __future__ import annotations
 

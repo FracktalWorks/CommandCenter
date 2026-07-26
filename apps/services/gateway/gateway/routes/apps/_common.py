@@ -7,7 +7,7 @@ best-effort audit + activity writers. Mirrors ``routes/tasks/core.py`` (the
 leaf module: it imports nothing from siblings).
 
 Canonical store: the ``apps`` / ``app_*`` tables from
-``infra/postgres/113_custom_apps.sql`` (RFC §4.9). App workspaces live at
+``infra/postgres/114_custom_apps.sql`` (RFC §4.9). App workspaces live at
 ``apps_root()/{slug}`` — git-inited folders holding ``app.json`` (the
 manifest, RFC §4.1) plus the app's source files.
 """

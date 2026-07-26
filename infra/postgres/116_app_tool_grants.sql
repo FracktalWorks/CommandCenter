@@ -1,5 +1,5 @@
 -- ============================================================================
--- 115_app_tool_grants.sql — Custom Apps · per-user "always allow" tool grants
+-- 116_app_tool_grants.sql — Custom Apps · per-user "always allow" tool grants
 -- ============================================================================
 -- Phase 2a (cc.tools, RFC: docs/app-workshop/README.md §4.4/§4.7). A destructive
 -- app tool call (e.g. tool:clickup.create_task) normally needs a per-use human
@@ -12,7 +12,7 @@
 -- (gateway.routes.apps.tools.find_declared_tool_scope) or the Action Broker
 -- gate itself, both of which still run on every call.
 --
--- Idempotent. Depends on: 113_custom_apps.sql (apps).
+-- Idempotent. Depends on: 114_custom_apps.sql (apps).
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS app_tool_grants (

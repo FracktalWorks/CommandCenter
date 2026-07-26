@@ -596,6 +596,7 @@ async def _run_sub_agent_streaming(
                 agents,
                 is_sub_agent=True,
                 tool_scope=_sub_tool_scope,
+                agent_name=agent_name,
             )
             if not agents:
                 return f"({agent_name!r} returned empty agent list)"
@@ -1550,6 +1551,7 @@ async def run_agent(
             _inject_agent_tools(
                 agents,
                 tool_scope=loaded.config.get("tool_scope") or None,
+                agent_name=agent_name,
             )  # inject call_agent / call_agent_background
 
             # Set write_artifact context + ensure visible workspace dirs exist.
@@ -2040,6 +2042,7 @@ async def run_agent_stream(
                 tool_scope=_merged_tool_scope(
                     loaded.config.get("tool_scope") or None, _agent_md_spec,
                 ),
+                agent_name=agent_name,
             )  # inject call_agent / call_agent_background
             # Inject MCP servers from the registry into every agent at runtime
             for _a in agents:
@@ -3781,7 +3784,7 @@ async def _self_anneal(
                         _apply_agent_md_overrides(
                             agents, loaded.agent_dir, agent_name,
                         )
-                        _inject_agent_tools(agents)
+                        _inject_agent_tools(agents, agent_name=agent_name)
                         result = await _run_with_maf_agent(
                             agents,
                             agent_name=agent_name,
@@ -3824,7 +3827,7 @@ async def _self_anneal(
                     _apply_agent_md_overrides(
                         agents, loaded.agent_dir, agent_name,
                     )
-                    _inject_agent_tools(agents)
+                    _inject_agent_tools(agents, agent_name=agent_name)
                     result = await _run_with_maf_agent(
                         agents,
                         agent_name=agent_name,

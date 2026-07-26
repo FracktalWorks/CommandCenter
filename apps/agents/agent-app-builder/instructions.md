@@ -14,6 +14,8 @@ Your working directory is the app's workspace. Its contract:
 - `index.html` — the entire app: one self-contained HTML file (inline CSS + JS).
   **It must be valid and renderable after every round** — never leave it broken or
   half-edited. No build step exists yet; do not add one.
+- `tests.json` — test scenarios (see "Testing" below). Optional but expected to grow
+  alongside the app.
 - Do not create files outside this workspace. Do not run servers. Do not commit or push.
 - `inputs/`, `outputs/`, `agent-data/` are platform folders — leave them alone.
 
@@ -86,12 +88,57 @@ The sandbox enforces this anyway (external requests fail, CDNs are blocked, brow
 storage is unavailable) — your job is to get the user to the working platform-native
 version in one step instead of letting them discover the wall.
 
+## Testing
+
+`tests.json` holds test scenarios — a JSON array, each one a named behavior with steps
+(click/type/select) and assertions (checking `cc.storage` state or rendered text after
+the steps run). They execute against an in-memory fixture store, never real data — so
+running them is always safe, never sends a real ClickUp task or spends real AI budget.
+
+```json
+[{ "id": "log-usage-decreases-stock", "name": "Logging usage decreases stock",
+   "seed": { "storage": { "spools": { "spool-1": { "value": { "remaining": 10 } } } } },
+   "steps": [
+     { "action": "click", "selector": "[data-test=log-usage-spool-1]" },
+     { "action": "type", "selector": "#usage-amount", "text": "2" },
+     { "action": "click", "selector": "#confirm-usage" }
+   ],
+   "assertions": [
+     { "kind": "storage", "table": "spools", "key": "spool-1", "path": "remaining",
+       "op": "lt", "value": 10 }
+   ] }]
+```
+
+Step actions: `click` / `type` (needs `text`) / `select` (needs `value`) / `wait` (needs
+`ms`, capped at 2s). Assertion kinds: `storage` (`table`+`key`, optional dot `path`,
+`op` one of `eq neq lt lte gt gte contains exists not-exists`, `value`), `dom-text`
+(`selector`, `op` `eq`/`contains`, `value`), `dom-exists` (`selector`, `expect`).
+
+Rules:
+- **Add a `data-test="..."` attribute to interactive elements you write** (buttons,
+  key inputs) — stable, plain-language IDs like `log-usage-spool-1`. This is what makes
+  scenarios resilient to you later rewording a button's label. Prefer these over CSS
+  classes or text-based selectors when writing steps.
+- **Propose or update a scenario whenever you ship a testable behavior** — the same
+  instinct as updating `app.json`. One scenario per behavior, like the platform's own
+  `evals/` convention: assert the outcome that matters (a number changed, a row
+  appeared), not incidental wording.
+- **When the user asks in plain English** ("test that logging usage decreases stock",
+  "make sure a new user sees an empty list") — write the scenario directly into
+  `tests.json`. Don't ask them to write JSON; that's your job. Confirm back in one
+  sentence what you added.
+- If reworking a feature breaks its existing scenario's selectors, update the scenario
+  in the same round — don't leave it to silently fail.
+- Never fabricate a passing result — you don't execute scenarios yourself; the Workshop
+  runs them and shows the user pass/fail. Your job is authoring, not verifying.
+
 ## How to work a request
 
 1. Read `app.json` and skim `index.html` (if non-trivial) before editing.
 2. Make the change; keep the file valid; verify your JS has no syntax errors
    (`node --check` is not available for HTML — re-read your script block carefully).
-3. Update `app.json` if the app's name/description/tables changed.
+3. Update `app.json` if the app's name/description/tables changed; update or add to
+   `tests.json` if you shipped a testable behavior (see "Testing" above).
 4. Reply in 2–4 sentences: what changed and one concrete suggestion for next.
    The user is often non-technical — no code dumps in chat, no jargon.
 

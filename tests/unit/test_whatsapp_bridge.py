@@ -22,6 +22,7 @@ import gateway.routes.whatsapp.transport.bridge as bridge
 from gateway.routes.whatsapp.transport.bridge import (
     bridge_secret_ok,
     parse_bridge_payload,
+    parse_labels_payload,
 )
 
 # ── pure parser ────────────────────────────────────────────────────────────────
@@ -338,6 +339,112 @@ async def test_paired_rejects_bad_secret(monkeypatch) -> None:
     assert resp.status_code == 403
 
 
+# ── labels: pure parser ─────────────────────────────────────────────────────────
+
+def test_parse_labels_payload_normalizes_labels_and_assocs() -> None:
+    labels, assocs = parse_labels_payload({
+        "labels": [{
+            "wa_label_id": "7", "name": "Suppliers", "color": "#4bc2d6",
+            "color_index": 6, "list_type": "CUSTOM", "predefined_id": 0,
+            "sort_order": 2, "active": True, "deleted": False,
+        }],
+        "associations": [
+            {"wa_label_id": "7", "wa_chat_id": "919990388@s.whatsapp.net",
+             "labeled": True},
+        ],
+    })
+    assert len(labels) == 1
+    lbl = labels[0]
+    assert lbl["wa_label_id"] == "7"
+    assert lbl["name"] == "Suppliers"
+    assert lbl["color"] == "#4bc2d6"
+    assert lbl["color_index"] == 6
+    assert lbl["list_type"] == "CUSTOM"
+    assert lbl["sort_order"] == 2
+    assert lbl["active"] is True and lbl["deleted"] is False
+    assert len(assocs) == 1
+    assert assocs[0] == {
+        "wa_label_id": "7", "wa_chat_id": "919990388@s.whatsapp.net",
+        "labeled": True}
+
+
+def test_parse_labels_payload_skips_invalid_and_defaults() -> None:
+    labels, assocs = parse_labels_payload({
+        "labels": [
+            {"name": "no id"},                       # missing wa_label_id → skip
+            {"wa_label_id": "9"},                    # name defaults to the id
+            "not-a-dict",
+        ],
+        "associations": [
+            {"wa_label_id": "9"},                    # missing chat → skip
+            {"wa_chat_id": "x@s.whatsapp.net"},      # missing label → skip
+            {"wa_label_id": "9", "wa_chat_id": "c@s.whatsapp.net"},  # labeled defaults True
+        ],
+    })
+    assert len(labels) == 1
+    assert labels[0]["wa_label_id"] == "9"
+    assert labels[0]["name"] == "9"                  # fell back to the id
+    assert labels[0]["sort_order"] == 100            # default
+    assert len(assocs) == 1
+    assert assocs[0]["labeled"] is True
+
+
+def test_parse_labels_payload_empty_is_total() -> None:
+    labels, assocs = parse_labels_payload({})
+    assert labels == [] and assocs == []
+
+
+# ── labels: ingest route ─────────────────────────────────────────────────────────
+
+async def test_labels_persists_upsert_and_assoc(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB()  # ownership check returns a truthy row
+    _patch_db(monkeypatch, db)
+    out = await bridge.bridge_labels(_FakeRequest({
+        "account_id": "acc-1",
+        "labels": [{"wa_label_id": "7", "name": "Suppliers", "active": True}],
+        "associations": [{"wa_label_id": "7", "wa_chat_id": "9@s.whatsapp.net",
+                          "labeled": True}],
+    }))
+    assert out["ok"] is True
+    assert out["labels"] == 1 and out["associations"] == 1
+    assert db.committed is True
+    joined = " ".join(sql for sql, _ in db.executed)
+    assert "INSERT INTO wa_labels" in joined
+    assert "INSERT INTO wa_chat_labels" in joined
+
+
+async def test_labels_unlabel_deletes_assoc(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB()
+    _patch_db(monkeypatch, db)
+    await bridge.bridge_labels(_FakeRequest({
+        "account_id": "acc-1",
+        "associations": [{"wa_label_id": "7", "wa_chat_id": "9@s.whatsapp.net",
+                          "labeled": False}],
+    }))
+    joined = " ".join(sql for sql, _ in db.executed)
+    assert "DELETE FROM wa_chat_labels" in joined
+
+
+async def test_labels_unknown_account_acks(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB(row=None)  # not owned / not whatsmeow
+    _patch_db(monkeypatch, db)
+    resp = await bridge.bridge_labels(_FakeRequest({
+        "account_id": "acc-x",
+        "labels": [{"wa_label_id": "1", "name": "X"}]}))
+    assert resp.status_code == 200
+    assert db.committed is False
+
+
+async def test_labels_rejects_bad_secret(monkeypatch) -> None:
+    monkeypatch.setenv("WHATSAPP_BRIDGE_SECRET", "s3cr3t")
+    resp = await bridge.bridge_labels(
+        _FakeRequest({"account_id": "a"}, headers={"X-Bridge-Secret": "no"}))
+    assert resp.status_code == 403
+
+
 # ── route registration ─────────────────────────────────────────────────────────
 
 def test_bridge_routes_registered() -> None:
@@ -348,3 +455,5 @@ def test_bridge_routes_registered() -> None:
     assert "/whatsapp/bridge/connect" in paths
     assert "/whatsapp/bridge/status" in paths
     assert "/whatsapp/bridge/reclassify" in paths
+    assert "/whatsapp/bridge/labels" in paths
+    assert "/whatsapp/labels" in paths

@@ -136,6 +136,10 @@ func (m *SessionManager) remove(accountID string) {
 // per-account event handler.
 func (m *SessionManager) newClient(accountID string, device *store.Device) *Session {
 	client := whatsmeow.NewClient(device, m.log.Sub("wa:"+accountID))
+	// Emit label/list (and other app-state) events during a FULL sync too, so a
+	// forced regular-collection resync backfills the number's existing labels —
+	// without this, whatsmeow only emits app-state events for incremental patches.
+	client.EmitAppStateEventsOnFullSync = true
 	s := &Session{accountID: accountID, client: client, status: statusPairing}
 	client.AddEventHandler(m.handler(s))
 	return s

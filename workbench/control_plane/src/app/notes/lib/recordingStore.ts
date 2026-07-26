@@ -39,6 +39,11 @@ interface RecordingState {
   captions: Cap[];
   interim: Cap | null;
   liveOff: boolean;
+  /** App is currently hidden (screen off / switched away) while recording. */
+  hidden: boolean;
+  /** Latched: the app was backgrounded at least once during this recording, so
+   *  capture may have paused — the UI warns the transcript could have a gap. */
+  wasBackgrounded: boolean;
 
   start: (
     meetingId: string,
@@ -63,6 +68,8 @@ const IDLE = {
   captions: [] as Cap[],
   interim: null as Cap | null,
   liveOff: false,
+  hidden: false,
+  wasBackgrounded: false,
 };
 
 export const useRecordingStore = create<RecordingState>((set, get) => ({
@@ -93,6 +100,8 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
         }
       },
       onLiveUnavailable: () => set({ liveOff: true }),
+      onVisibility: (hidden) =>
+        set((st) => ({ hidden, wasBackgrounded: st.wasBackgrounded || hidden })),
     }, { deviceId });
     recorder = rec;
     try {

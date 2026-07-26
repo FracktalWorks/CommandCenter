@@ -11,7 +11,16 @@
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { ArrowLeft, Loader2, Mic, Pause, Play, Square } from "lucide-react";
+import {
+  AlertTriangle,
+  ArrowLeft,
+  Loader2,
+  Mic,
+  Pause,
+  Play,
+  Smartphone,
+  Square,
+} from "lucide-react";
 import {
   LEVEL_BARS,
   isActive,
@@ -41,6 +50,7 @@ export default function SessionPage({
   const captions = useRecordingStore((s) => s.captions);
   const interim = useRecordingStore((s) => s.interim);
   const liveOff = useRecordingStore((s) => s.liveOff);
+  const wasBackgrounded = useRecordingStore((s) => s.wasBackgrounded);
   const startRec = useRecordingStore((s) => s.start);
   const pauseRec = useRecordingStore((s) => s.pause);
   const resumeRec = useRecordingStore((s) => s.resume);
@@ -251,6 +261,25 @@ export default function SessionPage({
                   ? `Uploading… ${backlog} chunk${backlog > 1 ? "s" : ""} pending`
                   : "Recording"}
             </p>
+
+            {/* Mobile-background honesty: the screen is kept awake, but leaving
+                the app can still suspend capture — say so plainly. */}
+            {wasBackgrounded ? (
+              <div className="flex items-start gap-2 rounded-lg bg-warning/10 px-3 py-2 text-xs text-warning max-w-md">
+                <AlertTriangle className="w-3.5 h-3.5 shrink-0 mt-0.5" />
+                <span className="text-left">
+                  You switched away from the app. On phones, recording can pause
+                  in the background — there may be a gap in the transcript. Keep
+                  this screen open until you stop.
+                </span>
+              </div>
+            ) : (
+              <p className="flex items-center gap-1.5 text-[11px] text-muted-foreground max-w-md text-center px-4">
+                <Smartphone className="w-3 h-3 shrink-0" />
+                On mobile, keep this app open and the screen on — recording
+                pauses if you switch apps or lock the phone.
+              </p>
+            )}
 
             {!liveOff && (captions.length > 0 || interim) && (
               <div className="w-full max-w-2xl">

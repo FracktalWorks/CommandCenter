@@ -230,33 +230,40 @@ scripting. Same two surfaces, same design kit:
   (`{"type":"react","props":{"code":"…"}}`).
 - **Full-page in the side panel** — `write_artifact("outputs/<name>.jsx", …)`.
 
-Default-export the component and style it with the very same `cc-report` /
-`cc-stats` / `cc-bars` / `cc-table` blocks documented below — they are already
-loaded in the frame, so a React artifact and an HTML report look identical:
+Default-export the component. **Don't hand-write the markup** — import the same
+blocks documented below as ready-made components from `@cc/ui`:
 
 ```jsx
-import { useState, useMemo } from "react";
+import { useState } from "react";
+import { Report, Eyebrow, Stats, Stat, Bars, Submit } from "@cc/ui";
 
 export default function Dashboard() {
   const [region, setRegion] = useState("all");
-  const rows = useMemo(() => DATA.filter(r => region === "all" || r.region === region), [region]);
   return (
-    <div className="cc-report">
-      <p className="cc-eyebrow">Pipeline</p>
+    <Report>
+      <Eyebrow>Pipeline</Eyebrow>
       <h1>Deals by region</h1>
-      <div className="cc-stats">…</div>
-    </div>
+      <Stats><Stat label="Revenue" value={18} unit="%" delta={12} /></Stats>
+      <Bars data={[{ label: "North", value: 72 }, { label: "South", value: 41 }]} />
+      <Submit label="Region" value={region}>Send to agent</Submit>
+    </Report>
   );
 }
 ```
 
+**Call `load_artifact_kit()` for the component list** (a few hundred tokens), then
+`load_artifact_kit("Stat,Bars")` for the exact props of the ones you picked. That
+is much cheaper and more reliable than writing the divs yourself, and the output
+is on-brand by construction. Anything the kit doesn't cover: drop to the `cc-*`
+classes below — they work identically inside a React artifact.
+
 Hooks all work and JSX/TypeScript are compiled for you. The one hard limit is
-that the sandbox has **no network**: you may import only from `react` and
-`react-dom/client` — no npm packages, no CDNs, no icon libraries — so inline your
-helpers and seed the data in the file. Reach the agent with
-`window.ccSubmit("Label", value)` or `window.ccAction("message")`, available from
-first mount. A build failure comes back in the tool result with compiler errors —
-fix and emit again.
+that the sandbox has **no network**: you may import only from `@cc/ui`, `react`,
+and `react-dom/client` — no npm packages, no CDNs, no icon libraries — so inline
+your helpers and seed the data in the file. Reach the agent with `<Submit>` /
+`<Action>` (or `window.ccSubmit("Label", value)` / `window.ccAction("message")`),
+available from first mount. A build failure comes back in the tool result with
+compiler errors — fix and emit again.
 
 Both render in a locked sandbox with these CSS variables **pre-injected** — use
 them, don't redefine colors:

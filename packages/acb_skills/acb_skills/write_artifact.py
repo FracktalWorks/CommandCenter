@@ -607,12 +607,15 @@ async def emit_generative_ui(ui: str) -> dict:
 
        • Hooks all work (useState/useEffect/useMemo/useReducer/useRef/context).
        • JSX and TypeScript syntax are both fine — it is compiled for you.
-       • You may import ONLY from "react" / "react-dom/client". There is NO
-         network in the sandbox, so no npm packages, no CDNs, no icon libraries.
-         Inline any helper functions and hard-code/seed the data in the file.
-       • Style with the SAME ``cc-*`` classes and ``--cc-*`` tokens as mode 4 —
-         the design kit is already loaded, so ``<div className="cc-report">``
-         with ``cc-stats``/``cc-bars``/``cc-table`` looks right for free.
+       • PREFER the prebuilt components: ``import { Report, Stat, Bars } from
+         "@cc/ui"``. Call ``load_artifact_kit()`` for the list and
+         ``load_artifact_kit("Stat,Bars")`` for their props. They are on-brand by
+         construction and far cheaper than hand-writing the markup.
+       • You may import ONLY from ``@cc/ui``, ``react``, and ``react-dom/client``.
+         There is NO network in the sandbox, so no npm packages, no CDNs, no icon
+         libraries. Inline any helpers and seed the data in the file.
+       • Anything the kit doesn't cover: fall back to the same ``cc-*`` classes
+         and ``--cc-*`` tokens as mode 4.
        • Talk back to the agent with ``window.ccSubmit("Label", value)`` (send a
          value the user set) or ``window.ccAction("message")`` (fire a fixed
          follow-up). Both are available from first mount.

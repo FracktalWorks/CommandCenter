@@ -27,7 +27,24 @@
  * reaches the filesystem resolver. Bundling never executes the code, but it
  * does read it, and that is enough to matter.
  */
+import { existsSync } from "node:fs";
+import path from "node:path";
+
 import { build, type Plugin } from "esbuild";
+
+/** The bare specifier artifacts import the design kit from. */
+const UI_PACKAGE = "@cc/ui";
+
+/**
+ * Absolute path to the design-kit source, bundled into artifacts on demand.
+ *
+ * Resolved from cwd because the deploy builds and runs in the repo checkout
+ * (`npm ci && npm run build && next start`), so src/ is present at runtime. If
+ * that ever stops being true — a standalone/Docker output that ships only
+ * .next — compilation fails loudly via assertUiKitPresent rather than silently
+ * losing every component.
+ */
+const UI_SOURCE = path.join(process.cwd(), "src", "lib", "artifactUi.tsx");
 
 /**
  * Bare specifiers an artifact module may import. Everything else is refused.
@@ -44,10 +61,13 @@ const ALLOWED_IMPORTS = new Set([
   "react/jsx-dev-runtime",
   "preact/jsx-runtime",
   "preact/jsx-dev-runtime",
+  // The Command Center design kit as components (lib/artifactUi.tsx). Bundled
+  // from our own source, tree-shaken, so an artifact pays only for what it uses.
+  UI_PACKAGE,
 ]);
 
 /** What an agent should see in a refusal — the injected internals are noise. */
-const AGENT_FACING_IMPORTS = ["react", "react-dom/client", "react/jsx-runtime"];
+const AGENT_FACING_IMPORTS = ["@cc/ui", "react", "react-dom/client"];
 
 /**
  * react/react-dom → preact/compat, applied by esbuild's own `alias`.
@@ -150,6 +170,17 @@ export async function compileArtifact(code: string): Promise<CompileResult> {
       error: `Source is larger than ${MAX_SOURCE_BYTES / 1024} KB. Split the artifact up or trim it.`,
     };
   }
+  if (code.includes(UI_PACKAGE) && !existsSync(UI_SOURCE)) {
+    // Deployment problem, not an agent mistake — say so plainly rather than
+    // letting it surface as a confusing "cannot import" further down.
+    return {
+      ok: false,
+      error:
+        `The ${UI_PACKAGE} design kit is not available on this server ` +
+        `(expected ${UI_SOURCE}). This is a deployment issue — the artifact ` +
+        `source is fine.`,
+    };
+  }
 
   // The agent supplies a component module; we own the mount so the agent never
   // has to know about the root element or which renderer is underneath.
@@ -175,9 +206,10 @@ export async function compileArtifact(code: string): Promise<CompileResult> {
       target: ["es2020"],
       jsx: "automatic",
       jsxImportSource: "preact",
-      // Rewrites the agent's `from "react"` to the runtime we actually ship.
-      // Runs after plugins decline, so the allowlist above still gets first say.
-      alias: { ...RUNTIME_ALIAS },
+      // Rewrites the agent's `from "react"` to the runtime we actually ship,
+      // and points @cc/ui at our design-kit source. Runs after plugins decline,
+      // so the allowlist above still gets first say.
+      alias: { ...RUNTIME_ALIAS, [UI_PACKAGE]: UI_SOURCE },
       write: false,
       logLevel: "silent",
       // Keep the bundle honest: no process.env leakage into artifact code.

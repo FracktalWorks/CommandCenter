@@ -94,6 +94,52 @@ describe("compileArtifact", () => {
     expect(res.ok).toBe(true);
   });
 
+  // ── The @cc/ui design kit ────────────────────────────────────────────────
+
+  it("resolves the @cc/ui design kit", async () => {
+    const res = await compileArtifact(
+      'import { Report, Stat, Stats } from "@cc/ui";\n' +
+        "export default function A(){ return <Report><Stats>" +
+        '<Stat label="Revenue" value={18} unit="%" delta={12} />' +
+        "</Stats></Report>; }",
+    );
+    expect(res.ok, res.ok ? "" : res.error).toBe(true);
+    if (!res.ok) return;
+    // The kit compiles to the same cc-* classes HTML artifacts use.
+    expect(res.js).toContain("cc-stat");
+    expect(res.js).toContain("cc-report");
+  });
+
+  it("tree-shakes unused components so one import stays cheap", async () => {
+    const one = await compileArtifact(
+      'import { Report } from "@cc/ui";\nexport default function A(){ return <Report/>; }',
+    );
+    const many = await compileArtifact(
+      'import { Report, Table, Timeline, Chart, Donuts, Steps, Decision } from "@cc/ui";\n' +
+        "export default function A(){ return <Report>" +
+        "<Table columns={[]} rows={[]}/><Timeline rows={[]}/><Chart values={[1,2]}/>" +
+        '<Donuts data={[]}/><Steps items={[]}/><Decision title="x"/>' +
+        "</Report>; }",
+    );
+    expect(one.ok && many.ok).toBe(true);
+    if (!one.ok || !many.ok) return;
+    // Importing one component must not drag the whole library in — otherwise the
+    // kit costs every artifact the same, which defeats the point.
+    expect(one.bytes).toBeLessThan(many.bytes);
+    expect(many.js).toContain("cc-timeline");
+    expect(one.js).not.toContain("cc-timeline");
+  });
+
+  it("computes chart geometry so agents never hand-roll SVG points", async () => {
+    const res = await compileArtifact(
+      'import { Chart } from "@cc/ui";\n' +
+        "export default function A(){ return <Chart values={[3,1,4,1,5]} labels={['a','e']}/>; }",
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.js).toContain("cc-plot");
+  });
+
   // ── Input hygiene ────────────────────────────────────────────────────────
 
   it("rejects empty source", async () => {

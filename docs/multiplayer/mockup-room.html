@@ -1,0 +1,476 @@
+<title>CommandCenter · Multiplayer Agents — The Room</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --violet: hsl(262 60% 62%);
+    --sidebar: hsl(220 13% 9%);
+    --sidebar-accent: hsl(220 13% 13%);
+    --radius: 12px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --violet: hsl(262 60% 50%);
+    --sidebar: hsl(0 0% 98%);
+    --sidebar-accent: hsl(210 40% 94%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font-ui); background: var(--background); color: var(--foreground); font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  .shell { display: grid; grid-template-columns: 236px 1fr 268px; height: 100vh; }
+
+  /* ---- Sidebar ------------------------------------------------------ */
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: auto; padding: 12px 10px; }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 6px 10px 14px; }
+  .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--primary), var(--accent)); display:grid; place-items:center; color: var(--primary-foreground); font-weight: 800; font-size: 13px; }
+  .brand b { font-size: 13.5px; letter-spacing: -0.01em; }
+  .brand span { display:block; font-size: 10px; color: var(--faint); }
+  .navsec { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); padding: 12px 10px 5px; }
+  .nav-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 7px 10px; border-radius: 9px; color: var(--muted-foreground); font-size: 13px; }
+  .nav-item:hover { background: var(--sidebar-accent); color: var(--foreground); }
+  .nav-item.on { background: var(--primary-wash); color: var(--foreground); }
+  .nav-item.on .icon { color: var(--primary); }
+  .room-item { display: flex; align-items: flex-start; gap: 8px; width: 100%; text-align: left; padding: 7px 10px; border-radius: 9px; color: var(--muted-foreground); }
+  .room-item:hover { background: var(--sidebar-accent); }
+  .room-item.on { background: var(--primary-wash); color: var(--foreground); }
+  .room-item .t { font-size: 12.5px; line-height: 1.3; display: block; color: var(--foreground); }
+  .room-item .s { font-size: 10.5px; color: var(--faint); display: flex; align-items: center; gap: 5px; margin-top: 3px; }
+  .dot { width: 6px; height: 6px; border-radius: 50%; flex: none; }
+  .dot.live { background: var(--success); box-shadow: 0 0 0 3px hsl(142 76% 47% / .18); animation: pulse 2s ease-in-out infinite; }
+  .dot.idle { background: var(--faint); }
+  @keyframes pulse { 0%,100% { opacity: 1 } 50% { opacity: .45 } }
+
+  /* ---- Main --------------------------------------------------------- */
+  .main { display: flex; flex-direction: column; min-width: 0; }
+  .room-head { padding: 12px 20px; border-bottom: 1px solid var(--border); flex: none; display: flex; flex-direction: column; gap: 9px; }
+  .room-title { display: flex; align-items: center; gap: 10px; }
+  .room-title h1 { margin: 0; font-size: 15.5px; font-weight: 650; letter-spacing: -0.01em; }
+  .chip { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 7px; border-radius: 999px; }
+  .chip.live { color: var(--success); background: hsl(142 76% 47% / .12); }
+  .chip.shared { color: var(--violet); background: hsl(262 60% 62% / .14); }
+  .room-sub { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--faint); }
+  .room-sub .sep { opacity: .4; }
+
+  /* The data banner — permanent, unmissable (RFC §6.4 / §7.6) */
+  .banner { display: flex; align-items: center; gap: 10px; padding: 7px 11px; border-radius: 10px;
+            border: 1px solid hsl(27 96% 61% / .28); background: hsl(27 96% 61% / .07); font-size: 11.5px; color: var(--muted-foreground); }
+  .banner .icon { color: var(--accent); }
+  .banner b { color: var(--foreground); font-weight: 600; }
+  .banner .spacer { flex: 1; }
+  .banner .lnk { color: var(--accent); font-size: 11.5px; font-weight: 600; }
+
+  /* ---- Transcript --------------------------------------------------- */
+  .transcript { flex: 1; overflow: auto; padding: 18px 20px 8px; display: flex; flex-direction: column; gap: 16px; }
+  .turn { display: flex; gap: 11px; max-width: 860px; }
+  .avatar { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 10px; font-weight: 700; flex: none; border: 1px solid var(--border-strong); }
+  .av-v { background: hsl(198 89% 50% / .2); color: hsl(198 89% 62%); }
+  .av-s { background: hsl(27 96% 61% / .2); color: hsl(27 96% 66%); }
+  .av-p { background: hsl(142 76% 47% / .18); color: hsl(142 66% 55%); }
+  .av-a { background: linear-gradient(135deg, hsl(262 60% 62% / .3), hsl(198 89% 50% / .22)); color: hsl(262 60% 74%); }
+  .turn-body { min-width: 0; flex: 1; }
+  .turn-head { display: flex; align-items: baseline; gap: 8px; margin-bottom: 4px; }
+  .turn-head b { font-size: 12.5px; font-weight: 620; }
+  .turn-head .role { font-size: 9.5px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); border: 1px solid var(--border); border-radius: 999px; padding: 1px 6px; }
+  .turn-head time { font-size: 11px; color: var(--faint); margin-left: auto; }
+  .turn p { margin: 0; font-size: 13.5px; line-height: 1.55; color: var(--foreground); }
+  .turn p.soft { color: var(--muted-foreground); }
+
+  /* Tool timeline */
+  .tools { margin-top: 9px; border: 1px solid var(--border); border-radius: 11px; background: var(--card); overflow: hidden; }
+  .tool { display: flex; align-items: center; gap: 9px; padding: 7px 11px; font-size: 12px; border-bottom: 1px solid var(--border); }
+  .tool:last-child { border-bottom: none; }
+  .tool code { font-family: var(--font-mono); font-size: 11.5px; color: var(--foreground); }
+  .tool .arg { color: var(--faint); font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .tool .ok { margin-left: auto; color: var(--success); font-size: 11px; }
+  .tool .run { margin-left: auto; color: var(--primary); font-size: 11px; display: flex; align-items: center; gap: 5px; }
+  .spin { width: 10px; height: 10px; border-radius: 50%; border: 1.6px solid hsl(198 89% 50% / .3); border-top-color: var(--primary); animation: sp .8s linear infinite; }
+  @keyframes sp { to { transform: rotate(360deg) } }
+
+  /* Steer — rendered inline, attributed, at its true position in the run */
+  .steer { display: flex; align-items: flex-start; gap: 9px; padding: 8px 12px; margin-left: 37px; max-width: 823px;
+           border-left: 2px solid var(--accent); background: hsl(27 96% 61% / .06); border-radius: 0 9px 9px 0; }
+  .steer .icon { color: var(--accent); margin-top: 1px; }
+  .steer .txt { font-size: 12.5px; font-style: italic; color: var(--muted-foreground); line-height: 1.5; }
+  .steer .txt b { font-style: normal; color: var(--foreground); font-weight: 600; }
+
+  /* Room events — presence, floor, handoff */
+  .sysline { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--faint); padding-left: 37px; }
+  .sysline .icon { color: var(--faint); }
+  .sysline b { color: var(--muted-foreground); font-weight: 600; }
+
+  /* HITL card */
+  .hitl { margin-left: 37px; max-width: 823px; border: 1px solid hsl(198 89% 50% / .35); background: var(--primary-wash);
+          border-radius: 12px; padding: 13px 15px; display: flex; flex-direction: column; gap: 11px; }
+  .hitl .q { font-size: 13px; line-height: 1.5; }
+  .hitl .q b { color: var(--primary); }
+  .hitl-actions { display: flex; align-items: center; gap: 8px; }
+  .hitl-note { font-size: 11px; color: var(--faint); margin-left: auto; }
+
+  /* ---- Composer + floor bar ----------------------------------------- */
+  .composer-wrap { flex: none; padding: 10px 20px 16px; border-top: 1px solid var(--border); display: flex; flex-direction: column; gap: 9px; background: var(--background); }
+  .floorbar { display: flex; align-items: center; gap: 10px; padding: 8px 12px; border-radius: 11px; border: 1px solid var(--border-strong); background: var(--card); font-size: 12.5px; }
+  .floorbar .who { display: flex; align-items: center; gap: 7px; }
+  .floorbar .who b { font-weight: 620; }
+  .floorbar .spacer { flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 12px; font-size: 12.5px; font-weight: 550; transition: all .18s cubic-bezier(.4,0,.2,1); border: 1px solid transparent; }
+  .btn-primary { background: var(--primary); color: var(--primary-foreground); font-weight: 620; }
+  .btn-primary:hover { opacity: .9; }
+  .btn-ghost { border-color: var(--border-strong); color: var(--muted-foreground); }
+  .btn-ghost:hover { color: var(--foreground); border-color: var(--primary); }
+  .btn-accent { border-color: hsl(27 96% 61% / .4); color: var(--accent); background: hsl(27 96% 61% / .08); }
+  .btn-accent:hover { background: hsl(27 96% 61% / .16); }
+
+  .composer { border: 1px solid var(--border-strong); border-radius: 13px; background: var(--card); padding: 11px 13px; display: flex; flex-direction: column; gap: 9px; }
+  .composer.locked { opacity: .72; }
+  .composer .ph { font-size: 13.5px; color: var(--faint); }
+  .composer-foot { display: flex; align-items: center; gap: 8px; }
+  .modeswitch { display: flex; gap: 3px; padding: 2px; border-radius: 9px; background: var(--secondary); }
+  .modeswitch button { font-size: 11.5px; padding: 4px 10px; border-radius: 7px; color: var(--muted-foreground); }
+  .modeswitch button.on { background: var(--card); color: var(--foreground); font-weight: 600; box-shadow: 0 1px 2px hsl(220 13% 2% / .4); }
+  .kbd { font-family: var(--font-mono); font-size: 10px; border: 1px solid var(--border-strong); border-radius: 5px; padding: 1px 5px; color: var(--faint); }
+
+  /* ---- Presence rail ------------------------------------------------ */
+  .rail { background: var(--sidebar); border-left: 1px solid var(--border); overflow: auto; padding: 14px 12px; display: flex; flex-direction: column; gap: 16px; }
+  .railsec > h3 { margin: 0 0 8px; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); font-weight: 700; display: flex; align-items: center; gap: 6px; }
+  .railsec > h3 .n { color: var(--muted-foreground); }
+  .person { display: flex; align-items: center; gap: 9px; padding: 6px 8px; border-radius: 9px; }
+  .person:hover { background: var(--sidebar-accent); }
+  .person .nm { font-size: 12.5px; line-height: 1.25; }
+  .person .rl { font-size: 10.5px; color: var(--faint); }
+  .person .tag { margin-left: auto; font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2px 6px; border-radius: 999px; }
+  .tag.driving { color: var(--success); background: hsl(142 76% 47% / .12); }
+  .tag.wants { color: var(--accent); background: hsl(27 96% 61% / .12); }
+  .tag.away { color: var(--faint); background: var(--secondary); }
+  .avatar.ring { box-shadow: 0 0 0 2px var(--sidebar), 0 0 0 3.5px var(--success); }
+
+  .stat { border: 1px solid var(--border); background: var(--card); border-radius: 11px; padding: 11px 12px; display: flex; flex-direction: column; gap: 9px; }
+  .stat-row { display: flex; align-items: baseline; justify-content: space-between; font-size: 11.5px; color: var(--muted-foreground); }
+  .stat-row b { font-size: 13px; color: var(--foreground); font-weight: 620; font-variant-numeric: tabular-nums; }
+  .bar { height: 5px; border-radius: 999px; background: var(--secondary); overflow: hidden; display: flex; }
+  .bar i { display: block; height: 100%; }
+  .legend { display: flex; gap: 10px; font-size: 10.5px; color: var(--faint); }
+  .legend span { display: flex; align-items: center; gap: 5px; }
+  .sw { width: 7px; height: 7px; border-radius: 2px; }
+
+  .policy { display: flex; flex-direction: column; gap: 7px; }
+  .policy-row { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted-foreground); }
+  .policy-row .icon { color: var(--faint); }
+  .policy-row b { color: var(--foreground); font-weight: 600; }
+  .policy-row .lock { margin-left: auto; font-size: 9.5px; text-transform: uppercase; letter-spacing: .05em; color: var(--faint); }
+
+  .observer-lane { border: 1px dashed var(--border-strong); border-radius: 11px; padding: 10px; display: flex; flex-direction: column; gap: 8px; }
+  .sugg { border: 1px solid var(--border); background: var(--card); border-radius: 9px; padding: 8px 10px; display: flex; flex-direction: column; gap: 7px; }
+  .sugg .who { display: flex; align-items: center; gap: 6px; font-size: 10.5px; color: var(--faint); }
+  .sugg .txt { font-size: 12px; line-height: 1.45; color: var(--muted-foreground); }
+  .sugg-actions { display: flex; gap: 6px; }
+  .mini { font-size: 10.5px; padding: 3px 9px; border-radius: 7px; border: 1px solid var(--border-strong); color: var(--muted-foreground); }
+  .mini.go { border-color: hsl(198 89% 50% / .45); color: var(--primary); }
+
+  .note { font-size: 10.5px; color: var(--faint); line-height: 1.5; }
+</style>
+
+<div class="shell">
+  <!-- ============ SIDEBAR ============ -->
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="brand-mark">CC</div>
+      <div><b>CommandCenter</b><span>Fracktal Works</span></div>
+    </div>
+
+    <button class="nav-item"><svg class="icon" viewBox="0 0 24 24"><path d="M3 12h18M3 6h18M3 18h18"/></svg>Dashboard</button>
+    <button class="nav-item on"><svg class="icon" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></svg>Chat</button>
+    <button class="nav-item"><svg class="icon" viewBox="0 0 24 24"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>Apps</button>
+
+    <div class="navsec">Shared rooms · 3</div>
+    <button class="room-item on">
+      <span style="flex:1">
+        <span class="t">Q3 pipeline reconciliation</span>
+        <span class="s"><i class="dot live"></i> running · 4 here</span>
+      </span>
+    </button>
+    <button class="room-item">
+      <span style="flex:1">
+        <span class="t">Incident: Odoo sync drift</span>
+        <span class="s"><i class="dot live"></i> running · 2 here</span>
+      </span>
+    </button>
+    <button class="room-item">
+      <span style="flex:1">
+        <span class="t">Acme renewal — deal room</span>
+        <span class="s"><i class="dot idle"></i> idle 2h · 6 members</span>
+      </span>
+    </button>
+
+    <div class="navsec">My conversations</div>
+    <button class="room-item">
+      <span style="flex:1">
+        <span class="t">Weekly digest draft</span>
+        <span class="s"><i class="dot idle"></i> yesterday</span>
+      </span>
+    </button>
+    <button class="room-item">
+      <span style="flex:1">
+        <span class="t">Invoice chase — Bengaluru</span>
+        <span class="s"><i class="dot idle"></i> 3d ago</span>
+      </span>
+    </button>
+  </aside>
+
+  <!-- ============ MAIN ============ -->
+  <main class="main">
+    <header class="room-head">
+      <div class="room-title">
+        <h1>Q3 pipeline reconciliation</h1>
+        <span class="chip shared">Shared room</span>
+        <span class="chip live">● Running 41m</span>
+      </div>
+      <div class="room-sub">
+        <span>agent-reconciler</span><span class="sep">·</span>
+        <span>floor mode: <b style="color:var(--muted-foreground)">driver</b></span><span class="sep">·</span>
+        <span>history: full</span><span class="sep">·</span>
+        <span>4 here, 7 members</span>
+      </div>
+      <div class="banner">
+        <svg class="icon" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+        <span>Acting as <b>vijay@fracktal.in</b> · Zoho CRM, Odoo (read-only), ClickUp — context policy <b>room</b>, no personal memory in play</span>
+        <span class="spacer"></span>
+        <button class="lnk">Access &amp; data →</button>
+      </div>
+    </header>
+
+    <div class="transcript">
+      <!-- turn 1 -->
+      <div class="turn">
+        <div class="avatar av-v">VV</div>
+        <div class="turn-body">
+          <div class="turn-head"><b>Vijay Varada</b><span class="role">Owner · driving</span><time>10:02</time></div>
+          <p>Reconcile the Q3 pipeline in Zoho against what Odoo actually invoiced. Flag every deal where the booked value and the invoiced value differ by more than 5%.</p>
+        </div>
+      </div>
+
+      <!-- agent turn -->
+      <div class="turn">
+        <div class="avatar av-a">R</div>
+        <div class="turn-body">
+          <div class="turn-head"><b>agent-reconciler</b><span class="role">MAF · sonnet</span><time>10:02</time></div>
+          <p class="soft">Pulling Q3 closed-won deals from Zoho and matching them against Odoo invoice lines. I'll group discrepancies by owner.</p>
+          <div class="tools">
+            <div class="tool">
+              <svg class="icon icon-sm" style="color:var(--success)" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              <code>zoho.list_deals</code><span class="arg">stage=closed_won · period=Q3</span><span class="ok">148 deals · 3.1s</span>
+            </div>
+            <div class="tool">
+              <svg class="icon icon-sm" style="color:var(--success)" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              <code>odoo.query_invoices</code><span class="arg">date_from=2026-04-01</span><span class="ok">1,204 lines · 6.4s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- someone joins -->
+      <div class="sysline">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/></svg>
+        <span><b>Sanjay Kulkarni</b> joined the room · watching from the start</span>
+      </div>
+
+      <!-- second human turn, attributed -->
+      <div class="turn">
+        <div class="avatar av-s">SK</div>
+        <div class="turn-body">
+          <div class="turn-head"><b>Sanjay Kulkarni</b><span class="role">Contributor</span><time>10:24</time></div>
+          <p>Careful — the Bengaluru deals were re-booked in July after the org split, so their Zoho close dates are wrong. They'll look like discrepancies but they aren't.</p>
+        </div>
+      </div>
+
+      <!-- floor handoff -->
+      <div class="sysline">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M5 12h14M12 5l7 7-7 7"/></svg>
+        <span><b>Vijay</b> granted the floor to <b>Sanjay</b></span>
+      </div>
+
+      <!-- steer, inline at its true position -->
+      <div class="steer">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 12h13M13 6l6 6-6 6"/></svg>
+        <span class="txt"><b>Sanjay steered the run</b> — "exclude deals whose owner_org changed after 2026-07-01; treat their Odoo line as authoritative" · applied at the next tool boundary</span>
+      </div>
+
+      <div class="turn">
+        <div class="avatar av-a">R</div>
+        <div class="turn-body">
+          <div class="turn-head"><b>agent-reconciler</b><span class="role">MAF · sonnet</span><time>10:25</time></div>
+          <p class="soft">Understood — re-running the match with re-booked Bengaluru deals excluded from the discrepancy set and their Odoo lines taken as authoritative.</p>
+          <div class="tools">
+            <div class="tool">
+              <svg class="icon icon-sm" style="color:var(--success)" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+              <code>graph.diff_entities</code><span class="arg">left=zoho.deal · right=odoo.invoice · tolerance=0.05</span><span class="ok">31 flagged · 2.2s</span>
+            </div>
+            <div class="tool">
+              <span class="spin"></span>
+              <code>write_artifact</code><span class="arg">q3-reconciliation.md — grouping by owner…</span><span class="run">running 12s</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- HITL routed to the room -->
+      <div class="hitl">
+        <div class="q"><b>agent-reconciler asks:</b> 9 of the 31 flagged deals have no Odoo counterpart at all. Should I treat them as un-invoiced (escalate to Finance) or as data-entry errors (flag for CRM cleanup)?</div>
+        <div class="hitl-actions">
+          <button class="btn btn-primary">Un-invoiced → Finance</button>
+          <button class="btn btn-ghost">Data-entry → CRM cleanup</button>
+          <button class="btn btn-ghost">Answer in my own words</button>
+          <span class="hitl-note">Sanjay holds the floor · opens to any contributor in 41s</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Composer: this viewer is Priya, an observer -->
+    <div class="composer-wrap">
+      <div class="floorbar">
+        <span class="who">
+          <span class="avatar av-s" style="width:20px;height:20px;font-size:8.5px">SK</span>
+          <b>Sanjay is driving</b>
+        </span>
+        <span style="color:var(--faint);font-size:11.5px">· floor auto-releases when the run finishes</span>
+        <span class="spacer"></span>
+        <button class="btn btn-ghost">Request the floor</button>
+        <button class="btn btn-accent">
+          <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M3 12h13M13 6l6 6-6 6"/></svg>Steer
+        </button>
+      </div>
+
+      <div class="composer locked">
+        <div class="ph">Sanjay holds the floor — you can steer the run, add a note to the room, or ask privately.</div>
+        <div class="composer-foot">
+          <div class="modeswitch">
+            <button>Turn</button>
+            <button class="on">Steer</button>
+            <button>Note</button>
+            <button>Ask privately</button>
+          </div>
+          <span style="flex:1"></span>
+          <span class="kbd">⌘↵</span>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- ============ PRESENCE RAIL ============ -->
+  <aside class="rail">
+    <div class="railsec">
+      <h3>In the room <span class="n">· 4 of 7</span></h3>
+      <div class="person">
+        <span class="avatar av-s ring">SK</span>
+        <span><span class="nm">Sanjay Kulkarni</span><span class="rl">Contributor</span></span>
+        <span class="tag driving">Driving</span>
+      </div>
+      <div class="person">
+        <span class="avatar av-v">VV</span>
+        <span><span class="nm">Vijay Varada</span><span class="rl">Owner</span></span>
+      </div>
+      <div class="person">
+        <span class="avatar av-p">PN</span>
+        <span><span class="nm">Priya Nair</span><span class="rl">Observer · you</span></span>
+        <span class="tag wants">Wants floor</span>
+      </div>
+      <div class="person">
+        <span class="avatar" style="background:var(--secondary);color:var(--muted-foreground)">AR</span>
+        <span><span class="nm">Arun Rao</span><span class="rl">Observer</span></span>
+        <span class="tag away">Idle 6m</span>
+      </div>
+      <p class="note" style="padding:4px 8px 0">3 members not currently here. They'll replay everything when they open the room.</p>
+    </div>
+
+    <div class="railsec">
+      <h3>This run</h3>
+      <div class="stat">
+        <div class="stat-row"><span>Elapsed</span><b>41m 08s</b></div>
+        <div class="stat-row"><span>Tokens</span><b>1.24M</b></div>
+        <div class="bar">
+          <i style="width:61%;background:hsl(198 89% 50%)"></i>
+          <i style="width:31%;background:hsl(27 96% 61%)"></i>
+          <i style="width:8%;background:hsl(142 76% 47%)"></i>
+        </div>
+        <div class="legend">
+          <span><i class="sw" style="background:hsl(198 89% 50%)"></i>Vijay 61%</span>
+          <span><i class="sw" style="background:hsl(27 96% 61%)"></i>Sanjay 31%</span>
+          <span><i class="sw" style="background:hsl(142 76% 47%)"></i>Priya 8%</span>
+        </div>
+        <div class="stat-row" style="border-top:1px solid var(--border);padding-top:8px"><span>Room budget</span><b>1.24M / 5M</b></div>
+      </div>
+    </div>
+
+    <div class="railsec">
+      <h3>What's shared here</h3>
+      <div class="policy">
+        <div class="policy-row"><svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/></svg><span>Transcript, tools, files</span><b style="margin-left:auto">Room</b></div>
+        <div class="policy-row"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M9 18V5l12-2v13"/><circle cx="6" cy="18" r="3"/><circle cx="18" cy="16" r="3"/></svg><span>Reasoning</span><b style="margin-left:auto">Room</b></div>
+        <div class="policy-row"><svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>Your personal memory</span><span class="lock">Private</span></div>
+        <div class="policy-row"><svg class="icon icon-sm" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>Credentials &amp; keys</span><span class="lock">Never</span></div>
+        <div class="policy-row"><svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M12 2v20M2 12h20"/></svg><span>Facts learned here</span><b style="margin-left:auto">Room memory</b></div>
+      </div>
+    </div>
+
+    <div class="railsec">
+      <h3>Observer lane <span class="n">· 2</span></h3>
+      <div class="observer-lane">
+        <div class="sugg">
+          <div class="who"><span class="avatar av-p" style="width:16px;height:16px;font-size:7.5px">PN</span>Priya · 2m ago</div>
+          <div class="txt">Worth checking whether the 9 orphans are all from the same sales rep — that would point at a process gap, not data.</div>
+          <div class="sugg-actions">
+            <button class="mini go">Promote to run</button>
+            <button class="mini">Dismiss</button>
+          </div>
+        </div>
+        <div class="sugg">
+          <div class="who"><span class="avatar" style="width:16px;height:16px;font-size:7.5px;background:var(--secondary);color:var(--muted-foreground)">AR</span>Arun · 9m ago</div>
+          <div class="txt">Finance closes the Q3 books Friday — we need this before then.</div>
+          <div class="sugg-actions">
+            <button class="mini go">Promote to run</button>
+            <button class="mini">Dismiss</button>
+          </div>
+        </div>
+      </div>
+      <p class="note" style="margin-top:8px">Observers can always add to the lane. Only the floor holder promotes a suggestion into the agent's context.</p>
+    </div>
+  </aside>
+</div>

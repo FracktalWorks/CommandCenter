@@ -548,7 +548,73 @@ Calculator's logic becomes callable from a sales chat.
 - **Suggest a change:** viewers who can't edit open a pre-seeded builder chat on a fork;
   the owner gets a diff-style proposal (Phase 2; the `pending_commit` UX pattern reused).
 
-### 4.9 Data model (new tables, one migration)
+### 4.9 Testing & evaluation
+
+Mirrors the platform's own `evals/` convention (`evals/README.md`: "one golden case per
+behaviour", fixtures over live dependencies, CI-visible) — applied to apps, but
+**authored in plain English through chat**, never hand-written YAML, consistent with
+"chat is the editor" (§4.0/ADR-027). No new backend route or table: scenarios live in a
+workspace file (`tests.json`) served by the existing files API (§4.11).
+
+**The load-bearing design decision: scenarios run against an ephemeral, in-memory `cc`
+store — never the real backend.** A test run never creates a real ClickUp task, never
+spends real AI budget, never mutates a teammate's actual app data. This is what makes
+testing safe to run constantly (on every build, automatically) rather than something a
+non-technical owner has to remember to do carefully:
+
+- **In-frame interaction helpers** (`__ccTest` — a small addition to the same injected
+  SDK script, always present, zero new capability: the app already fully owns its own
+  DOM under `sandbox="allow-scripts"`, this just gives an *outside* runner a channel to
+  trigger `click`/`type`/`select` on it, since the opaque origin blocks direct access).
+  Real DOM events fire — a scenario catches "the button isn't wired to a handler," not
+  just backend logic bugs, which is the difference between testing the app and testing
+  a function.
+- **A self-contained client-side runner** (`testRunner.ts`, not the visible preview's
+  `useCcBridge`): creates its own hidden offscreen `<iframe>` from the current draft
+  bundle, seeds an in-memory store from the scenario's `seed`, drives the step sequence,
+  answers `cc.storage`/`cc.tools.call`/`cc.ai.complete` from memory (tool calls resolve
+  to a canned/generic success payload; AI calls to a canned string) rather than fetching,
+  evaluates assertions against the resulting in-memory state (plus any DOM text/existence
+  checks), tears the frame down, returns a result. Zero backend load, zero new server
+  infrastructure — the same "compute donated by the viewer" property that makes the rest
+  of the runtime cheap (§7.6) applies here too.
+- **Scenario format** (`tests.json`, small fixed vocabulary — deliberately not
+  arbitrary/`eval`'d JS, so an LLM authors it reliably and the runner stays simple):
+  ```jsonc
+  [{ "id": "log-usage-decreases-stock", "name": "Logging usage decreases stock",
+     "seed": { "storage": { "spools": { "spool-1": { "value": { "remaining": 10 } } } } },
+     "steps": [
+       { "action": "click", "selector": "[data-test=log-usage-spool-1]" },
+       { "action": "type", "selector": "#usage-amount", "text": "2" },
+       { "action": "click", "selector": "#confirm-usage" }
+     ],
+     "assertions": [
+       { "kind": "storage", "table": "spools", "key": "spool-1", "path": "remaining",
+         "op": "lt", "value": 10 }
+     ] }]
+  ```
+  Step actions: `click` | `type` | `select` | `wait` (capped, an escape hatch for async
+  UI updates). Assertion kinds: `storage` (dot-path compare: `eq`/`neq`/`lt`/`lte`/`gt`/
+  `gte`/`contains`/`exists`/`not-exists`) | `dom-text` | `dom-exists`.
+- **Authoring stays conversational.** The builder proposes/updates a scenario whenever
+  it ships a testable behavior — the same instinct as its checkpoint discipline — and
+  the user reviews it as a plain-English checklist in the Workshop, never the JSON
+  directly. Asking "test that logging usage decreases stock" is a normal chat message,
+  same as any feature request.
+- **Automatic, proactive surfacing** (the non-technical-friendly part): scenarios re-run
+  after every builder turn (same trigger as the existing sync/checkpoint refresh), with
+  a compact pass/fail badge near Publish — a regression is caught before the owner goes
+  looking for it, the same "Fix with AI" one-click loop the Phase 1 console drawer
+  already established, seeded with which scenario broke. Publish shows the last known
+  result as an informational banner alongside the conformance scan — visible, not a
+  hard gate (consistent with how conformance *warnings*, as opposed to *errors*, already
+  behave — a failing scenario is the owner's call, not a platform-contract violation).
+- **Deliberately out of v1 scope:** a fixture/"test as a brand-new user" toggle on the
+  *live* preview (would need to touch the shared `useCcBridge`, not just the isolated
+  runner — a real but separable follow-up); screenshots/visual diffing; anything
+  resembling a full E2E framework. The assertion vocabulary stays intentionally small.
+
+### 4.10 Data model (new tables, one migration)
 
 ```
 apps                -- the editable definition (edit-model)
@@ -583,7 +649,7 @@ Bundle bytes ride the existing blob store; the workspace rides the existing git/
 machinery. `pending_actions` (writes) and the Approvals UI (publish review) are reused,
 not duplicated.
 
-### 4.10 API surface
+### 4.11 API surface
 
 Gateway `routes/apps/` (new module, same layering as `routes/tasks/`):
 
@@ -606,6 +672,9 @@ POST          /apps/{slug}/tools/{tool}   destructive → pending_actions + conf
 POST          /apps/{slug}/actions/{name} manifest-declared action (people AND agents)
 GET           /apps/{slug}/usage          token/cost aggregates for the info popover
 ```
+
+`tests.json` (§4.9) needs no route of its own — it rides the existing
+`GET/PUT /apps/{slug}/files[?path=]` passthrough like any other workspace file.
 
 Frontend: `/api/apps/[...path]` catch-all BFF proxy (copy `api/tasks/[...path]/route.ts`
 verbatim — it already handles auth headers, retries, binary passthrough). Pages:
@@ -655,7 +724,9 @@ per-app audit trail.
 
 **P1 — team-grade (Phase 2):**
 `cc.tools` integration actions with manifest scopes, per-use confirm, publish review via
-Approvals inbox · share-with-specific-people + first-open consent screen · **manifest
+Approvals inbox · **test scenarios (§4.9) — ephemeral-store runner, auto-run + pass/fail
+badge, "Fix with AI" on regression, publish-modal status** · share-with-specific-people +
+first-open consent screen · **manifest
 `actions` + agent grants + `app_<slug>_<action>` tool registration** (risk-annotated,
 golden-trajectory-eval'd per harness rules) · by-app cost lens in Observability +
 per-app budgets · templates gallery · fork/remix · suggest-a-change · usage stats on

@@ -24,11 +24,26 @@ async def _noop_notify(**_kwargs) -> None:
     return None
 
 
-def _set_ctx(wa, tmp_path) -> None:
+async def _noop_mirror(*_args, **_kwargs) -> None:
+    return None
+
+
+def _prepare(wa, monkeypatch, tmp_path) -> None:
+    """Point write_artifact at a temp workspace with its I/O side effects stubbed.
+
+    Both side effects are fire-and-forget tasks spawned on the loop that
+    ``asyncio.run`` tears down. ``mirror_to_blob_store`` in particular reaches for
+    Postgres, which hangs this test file — and, because these tests sort ahead of
+    most of the suite, everything after it. A lint unit test has no business
+    touching the blob store, so stub both.
+    """
+    monkeypatch.setattr(wa, "_notify", _noop_notify)
+    monkeypatch.setattr(wa, "mirror_to_blob_store", _noop_mirror)
     wa._WRITE_ARTIFACT_CONTEXT.clear()
     wa._WRITE_ARTIFACT_CONTEXT.update(
         {"session_id": "sess-lint", "workspace_root": str(tmp_path)}
     )
+
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 SANDBOX_TSX = (
@@ -199,8 +214,7 @@ BROKEN_REPORT = '<div class="cc-report"><img src="https://cdn.example.com/a.png"
 
 def test_write_artifact_returns_warnings_for_broken_html(tmp_path, monkeypatch) -> None:
     wa = import_module("acb_skills.write_artifact")
-    monkeypatch.setattr(wa, "_notify", _noop_notify)
-    _set_ctx(wa, tmp_path)
+    _prepare(wa, monkeypatch, tmp_path)
 
     res = asyncio.run(wa.write_artifact("report.html", BROKEN_REPORT))
     # The file is still written — linting is advisory, never blocking.
@@ -211,8 +225,7 @@ def test_write_artifact_returns_warnings_for_broken_html(tmp_path, monkeypatch) 
 
 def test_write_artifact_clean_html_has_no_warnings_key(tmp_path, monkeypatch) -> None:
     wa = import_module("acb_skills.write_artifact")
-    monkeypatch.setattr(wa, "_notify", _noop_notify)
-    _set_ctx(wa, tmp_path)
+    _prepare(wa, monkeypatch, tmp_path)
 
     res = asyncio.run(wa.write_artifact("report.html", CLEAN_REPORT))
     assert "warnings" not in res
@@ -221,8 +234,7 @@ def test_write_artifact_clean_html_has_no_warnings_key(tmp_path, monkeypatch) ->
 def test_write_artifact_does_not_lint_non_html(tmp_path, monkeypatch) -> None:
     """Markdown and other formats must not be run through an HTML linter."""
     wa = import_module("acb_skills.write_artifact")
-    monkeypatch.setattr(wa, "_notify", _noop_notify)
-    _set_ctx(wa, tmp_path)
+    _prepare(wa, monkeypatch, tmp_path)
 
     res = asyncio.run(wa.write_artifact("notes.md", "# Title\n<img src='https://x.io/a.png'>"))
     assert "warnings" not in res

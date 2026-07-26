@@ -275,6 +275,19 @@ async def write_artifact(
     result: dict = {"path": clean_path, "size": size, "sha256": digest}
     if download_url:
         result["download_url"] = download_url
+    # Advisory lint for HTML documents. The sandbox fails silently (a CDN link is
+    # just blocked, a typo'd cc- class just renders unstyled), so surface those
+    # mistakes here while the agent can still fix them. Never blocks the write.
+    if target.suffix.lower() in {".html", ".htm"} and isinstance(content, str):
+        from acb_skills.artifact_lint import lint_artifact_html  # noqa: PLC0415
+
+        warnings = lint_artifact_html(content, full_page=True)
+        if warnings:
+            result["warnings"] = warnings
+            result["warning_note"] = (
+                "The artifact was saved, but these issues will degrade how it "
+                "renders. Fix them and write the file again with overwrite=True."
+            )
     return result
 
 
@@ -455,6 +468,19 @@ _GEN_UI_TYPES = {
     "card", "stack", "row", "heading", "text", "markdown", "badge",
     "divider", "keyValue", "table", "list", "code", "link", "button", "callout",
 }
+
+
+def _warn_fields(warnings: list[str]) -> dict:
+    """Lint warnings as result fields — empty dict when the markup is clean."""
+    if not warnings:
+        return {}
+    return {
+        "warnings": warnings,
+        "warning_note": (
+            "The card was rendered, but these issues will degrade how it looks. "
+            "Fix them and emit it again."
+        ),
+    }
 
 
 async def emit_generative_ui(ui: str) -> dict:
@@ -661,6 +687,17 @@ async def emit_generative_ui(ui: str) -> dict:
     if not isinstance(spec, dict):
         return {"ok": False, "error": "ui must be a JSON object (a component node)"}
 
+    # Advisory lint for the custom-HTML tier — the sandbox swallows these errors
+    # silently, so report them back with the emit result. Inline cards are not
+    # expected to carry the cc-report wrapper (that is for full-page documents).
+    _ui_warnings: list[str] = []
+    if spec.get("type") == "html":
+        _code = (spec.get("props") or {}).get("code")
+        if isinstance(_code, str):
+            from acb_skills.artifact_lint import lint_artifact_html  # noqa: PLC0415
+
+            _ui_warnings = lint_artifact_html(_code, full_page=False)
+
     # ── HITL blocking mode (generative_ui_2 Phase 1) ──────────────────────
     # ``"hitl": true`` parks THIS tool call on the same Future machinery as
     # ask_questions: the UI's submit/action resolves it via
@@ -703,7 +740,7 @@ async def emit_generative_ui(ui: str) -> dict:
             "value": spec,
         })
         if not _blocking or _fut is None:
-            return {"ok": True}
+            return {"ok": True, **_warn_fields(_ui_warnings)}
         # Park until the user interacts (heartbeats the relay so the run
         # stays visibly alive — same wait as every other HITL surface).
         try:
@@ -715,7 +752,11 @@ async def emit_generative_ui(ui: str) -> dict:
                 _result = await wait_user_future(_fut, 3600)
             finally:
                 _pending_user_input.pop(_request_id, None)
-            return {"ok": True, "response": _result.get("answer", "")}
+            return {
+                "ok": True,
+                "response": _result.get("answer", ""),
+                **_warn_fields(_ui_warnings),
+            }
         except Exception:  # noqa: BLE001 — timeout or wait failure
             return {
                 "ok": True,

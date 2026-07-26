@@ -150,6 +150,47 @@ light-theme overrides are applied automatically by the app.
 - Don't cram — when in doubt, add spacing and remove borders.
 - Don't invent a new visual style; match what's described here.
 
+### 8.1 Avoid the generic-AI look
+
+There is a recognisable house style that LLM-generated pages fall into, and it
+reads as unconsidered. Actively avoid it:
+
+- **No purple/violet gradients.** This is the single strongest tell. Command
+  Center is blue (`--cc-primary`) with one warm-orange accent (`--cc-accent`).
+- **No `font-family` declaration at all** — the sandbox already sets the
+  on-brand stack. Naming Inter explicitly is a tell.
+- **Don't centre everything.** Reports are left-aligned documents. Centre stat
+  tiles and gauges; leave prose, headings, and tables ranged left.
+- **Vary the corner radius.** Uniform pill-rounding on every element flattens
+  hierarchy — `--cc-radius` on cards, tighter on buttons and inputs.
+- **No emoji as iconography.** Use the `cc-dot`, `cc-ico`, and `cc-mark` blocks,
+  or a Lucide icon via `ccIcon('Name')`.
+
+The test is not "does this look nice in isolation" but **"does it look like it
+was designed for this product?"**
+
+---
+
+## 8.5 Your output is linted — read the warnings
+
+Generated HTML runs in a sandbox that fails **silently**: a CDN `<script src>`
+is blocked with no error, a misspelled `cc-` class renders unstyled, and a
+`cc-bar` without its `--v` custom property draws an empty track. You cannot see
+any of this from the tool result alone.
+
+So `write_artifact` (for `.html` files) and `emit_generative_ui` (for `html`
+nodes) both **lint the markup and return a `warnings` list** when something is
+wrong. Treat it as part of the result, not noise:
+
+- **`ERROR:`** — the artifact is genuinely broken (almost always a remote URL
+  the CSP blocks). Fix it and write again with `overwrite=True`.
+- **`warning:`** — it renders, but off-brand or degraded (unknown class,
+  missing `--v`, hard-coded hex, no `cc-report` wrapper).
+
+A clean write returns no `warnings` key at all. If you get warnings, fix them
+in the same turn — the user should never be the one to discover the artifact is
+broken.
+
 ---
 
 ## 9. Generating documents & HTML (how this applies to your output)

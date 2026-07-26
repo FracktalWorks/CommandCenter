@@ -31,6 +31,11 @@ Interactive mockups live alongside this doc:
 - [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned across sessions
   *and* across people, and how the agent decides which parts it may use on a given call.
   Supersedes §6.3 below.
+- [`../../ai-company-brain/specs/memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md)
+  — the memory system as a whole: seven stores unified into six tiers, how a fact persists
+  and gets corrected, and the always-on **file tier** (`agent-data/`), which is shared across
+  all users of an agent today and matters more than the vector tier because it is injected
+  rather than retrieved.
 
 ---
 
@@ -653,8 +658,13 @@ confidential-deal case safe, and it is detailed in
   ([`memory-clearance.md`](memory-clearance.md) §2.1). Independent of everything else here.
 - **Scope Graphiti reads** — knowledge-graph episodes are written with a per-user `group_id`
   but `GraphitiClient.search()` passes no group filter, so retrieval spans every user's
-  episodes ([`agent-kinds.md`](agent-kinds.md) §2.2). Both memory findings are latent while
-  `MEM0_ENABLED` / `GRAPHITI_ENABLED` are false — check the deployed `.env` for urgency.
+  episodes ([`agent-kinds.md`](agent-kinds.md) §2.2). Both Mem0/Graphiti findings are latent
+  while `MEM0_ENABLED` / `GRAPHITI_ENABLED` are false — check the deployed `.env` for urgency.
+  The **file tier** finding is not gated by either flag: `agent-data/` is shared across all
+  users of an agent whenever an agent uses `save_note` / `recall_notes`
+  ([`memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md) §5.3).
+  Its instance key lands with the compartment work in Phase 3a, not Phase 0 — but it is the
+  finding to weigh first, because it is the tier that is injected rather than retrieved.
 - **Acceptance:** two clients on one thread; the second cannot cancel or erase the first's
   run; every stored message resolves to an author; a caller cannot read a memory scope they
   don't own.

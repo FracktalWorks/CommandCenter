@@ -113,6 +113,7 @@ scope_key(org=True)                          → "org:global"               # ex
 | `subject:<entity>` | Everything about a deal / customer / project | Explicit member list | Only if every viewer is a member |
 | `room:<thread_id>` | Facts established in this room | Room members | It *is* the room |
 | `agent:<name>[#instance]` | Tradecraft the agent learns — "Odoo invoice lines lag Zoho ~2 days" | Depends on the agent's **instancing** — see [`agent-kinds.md`](agent-kinds.md) | Yes, if the viewers share the instance |
+| `file:agent:<name>#<instance>` | The **always-on file tier** — curated `agent-data/` knowledge injected on every run | Same as the agent instance | Yes, if the viewers share the instance — and this is the tier to get right first (see below) |
 | `org:global` | Company facts — "standard terms are Net 30" | Org | Yes |
 
 **Splitting personal memory into `prefs` and `user` is what makes shared rooms usable.** In a
@@ -224,10 +225,28 @@ do is file a fact somewhere too narrow — recoverable, and visible in the inspe
 | Memory *tools* write scope | `_set_memory_user_id(user_id)` (`routes/agent.py:1263`) becomes `_set_memory_write_scope(resolved_compartment)` — today it points the `remember`/`save_memory` tools at the caller, which in a room is wrong |
 | Authorize the memory API | `routes/memory.py:59,71,84,97` (§2.1) |
 | Graphiti grouping | `add_episode(group_id=<scope_key>)` — `graphiti_client.py:187` |
+| **Instance-key the file tier** | `agent_blob` PK `(agent_name, path)` → `(agent_name, instance, path)` — [`memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md) §6.1 |
 
 The read path is the only one with a cost change: N compartment searches instead of one.
 Bounded by clearance size (typically 4–6), parallelisable, and absorbed across turns by the
-existing `get_session_memory` cache.
+existing `get_session_memory` cache — **whose key must gain the clearance set**, or a room
+whose membership changes will serve a block assembled at a wider clearance.
+
+### 3.6 The file tier is the one to get right first
+
+Compartments above are the *vector* tier. There is a second durable tier that is more
+dangerous, because it is **injected rather than retrieved**: the curated `agent-data/`
+knowledge the framework doc calls *"prompt that grows over time."*
+
+`agent_blob`'s primary key is `(agent_name, path)` — `agent_name` is documented as the only
+tenant key — so today there is **one `agent-data/NOTES.md` per agent, shared by every user of
+it**, and `recall_notes(path)` with no query returns the whole file. A vector fact leaks only
+on a semantic match; the file tier is simply *there*, in full, on every run that loads it.
+
+It needs the same instance key and the same write rule as the compartments, and the two must
+land in the same phase — partitioning the vector tier while leaving the file tier shared fixes
+the smaller half of the problem. Full design:
+[`memory_architecture.md`](../../ai-company-brain/specs/memory_architecture.md).
 
 ---
 

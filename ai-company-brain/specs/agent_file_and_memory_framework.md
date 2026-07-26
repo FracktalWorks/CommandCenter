@@ -16,6 +16,22 @@ function, table, and seam; **read this before changing how persistence works**),
 > how it's built (what to edit to change it).** Keep them in sync: a mechanism
 > change lands in the implementation reference; a contract change lands here.
 
+> **⚠️ Multi-user gap — read before adopting §4's reference pattern.**
+> The blob store is keyed by `agent_name` alone, so **`agent-data/` is shared by every
+> user of an agent**: two people using the email assistant append to one `NOTES.md`, and
+> `recall_notes(path)` with no query returns all of it. Separately, nothing injects
+> `NOTES.md` — §3's prompt *asks* the model to read it, so an agent that skips the call
+> runs with no durable memory at all. The tier is therefore both leaky when it fires and
+> absent when it doesn't.
+>
+> Adopting a richer memory bank (§4's `agent-startup-guru` pattern) **amplifies** the first
+> problem — the more the pattern succeeds, the more each user's bank holds, and all of it is
+> shared. Two additions make it safe, and they belong in the same change:
+> an **instance key** on `agent_blob` (`u:<email>` / `t:<team>` / `''`), and a **budget with
+> compaction** on the always-on portion.
+> Design: [`memory_architecture.md`](memory_architecture.md) §5.3–§6.4 ·
+> agent instancing: [`../../docs/multiplayer/agent-kinds.md`](../../docs/multiplayer/agent-kinds.md).
+
 ---
 
 ## 1. The two axes of agent durability
@@ -120,6 +136,15 @@ three folders. No agent is exempt.
 under `outputs/_memory/` + `agent-data/` managed by a `memory-management` skill
 (JSON/MD working memory + SQLite FTS long-term). This is the model for what a rich
 `agent-data/` looks like.
+
+> **Copy the structure, not the storage — and add two things it never needed.** It is a
+> single-user agent's design: it assumes one bank, one reader, and unbounded growth. Before
+> porting it here it needs an **instance key** and a **budget with compaction**
+> ([`memory_architecture.md`](memory_architecture.md) §6.1, §6.4). Skip the SQLite FTS layer
+> — our Mem0 + pgvector `agent:<name>` partition already beats lexical FTS on recall and is
+> one store instead of two; §8 below reached the same conclusion. **Open question for
+> whoever has repo access:** does its memory-management skill keep an index/manifest, and
+> does it already implement compaction? If so, port that rather than inventing ours.
 
 ### Upcoming / to-be-built MAF agents
 Any new specialist agent (whether authored in VS Code today or in the in-platform

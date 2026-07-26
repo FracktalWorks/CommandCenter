@@ -12,7 +12,19 @@ import { use, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import { useTheme } from "next-themes";
-import { AlertTriangle, Hammer, Info, Loader2, Wrench } from "lucide-react";
+import {
+  AlertTriangle,
+  Database,
+  Hammer,
+  HelpCircle,
+  Info,
+  Loader2,
+  Plug,
+  Sparkles,
+  User,
+  Wrench,
+  type LucideIcon,
+} from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   buildAppSrcDoc,
@@ -44,6 +56,89 @@ function formatDate(iso: string): string {
   }
 }
 
+// ─── First-open consent interstitial (§4.8) ────────────────────────────────
+// Plain-language scope disclosure, platform-rendered (never app-rendered).
+
+/** A few well-known integrations don't title-case cleanly (`clickup` →
+ * `ClickUp`, not `Clickup`) — everything else falls back to a generic
+ * title-case of the `tool:` scope's service segment. */
+const KNOWN_SERVICE_LABELS: Record<string, string> = {
+  clickup: "ClickUp",
+};
+
+function serviceLabel(service: string): string {
+  const known = KNOWN_SERVICE_LABELS[service.toLowerCase()];
+  if (known) return known;
+  return service.length > 0
+    ? service[0].toUpperCase() + service.slice(1)
+    : service;
+}
+
+/** `tool:clickup.create_task?list=Procurement` → `clickup.create_task` +
+ * `{list: "Procurement"}`. Mirrors `gateway/routes/apps/tools.py`'s
+ * `parse_tool_scope` (split on the first `?`, `?`-side is `key=value&...`). */
+function parseToolScope(
+  scope: string
+): { service: string; action: string; params: [string, string][] } | null {
+  if (!scope.startsWith("tool:")) return null;
+  const body = scope.slice("tool:".length);
+  const qIndex = body.indexOf("?");
+  const toolName = (qIndex === -1 ? body : body.slice(0, qIndex)).trim();
+  const query = qIndex === -1 ? "" : body.slice(qIndex + 1);
+  if (!toolName) return null;
+  const dotIndex = toolName.indexOf(".");
+  if (dotIndex === -1) return null;
+  const service = toolName.slice(0, dotIndex);
+  const action = toolName.slice(dotIndex + 1);
+  if (!service || !action) return null;
+  const params: [string, string][] = [];
+  if (query) {
+    for (const pair of query.split("&")) {
+      if (!pair) continue;
+      const [rawKey, rawValue = ""] = pair.split("=");
+      params.push([
+        decodeURIComponent(rawKey.replace(/\+/g, " ")),
+        decodeURIComponent(rawValue.replace(/\+/g, " ")),
+      ]);
+    }
+  }
+  return { service, action, params };
+}
+
+/** A manifest scope, in plain language for the consent interstitial. Never
+ * silently drops a scope it doesn't recognize — falls back to the raw
+ * string, which at least doesn't misrepresent what's being granted. */
+function describeScope(scope: string): string {
+  if (scope === "identity:read") return "See your name and email";
+  if (scope === "storage:app")
+    return "Store and read data in this app's shared database";
+  if (scope.startsWith("ai:")) return "Use AI on your behalf";
+  if (scope.startsWith("tool:")) {
+    try {
+      const parsed = parseToolScope(scope);
+      if (!parsed) return scope;
+      const action = parsed.action.replace(/_/g, " ");
+      const parenthetical =
+        parsed.params.length > 0
+          ? ` (${parsed.params.map(([k, v]) => `${k}: ${v}`).join(", ")})`
+          : "";
+      return `Use ${serviceLabel(parsed.service)} to ${action}${parenthetical}`;
+    } catch {
+      return scope;
+    }
+  }
+  return scope;
+}
+
+/** Icon per scope category — `HelpCircle` for anything unrecognized. */
+function scopeIcon(scope: string): LucideIcon {
+  if (scope === "identity:read") return User;
+  if (scope === "storage:app") return Database;
+  if (scope.startsWith("ai:")) return Sparkles;
+  if (scope.startsWith("tool:")) return Plug;
+  return HelpCircle;
+}
+
 export default function AppRunPage({
   params,
 }: {
@@ -60,6 +155,13 @@ export default function AppRunPage({
   const [bundle, setBundle] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+
+  // First-open consent interstitial (§4.8) — a blocking gate distinct from
+  // the tool-confirm toast: it must clear before the live bundle is even
+  // fetched, not just before a specific cc.tools.call().
+  const [showConsent, setShowConsent] = useState(false);
+  const [consentBusy, setConsentBusy] = useState(false);
+  const [consentNotice, setConsentNotice] = useState<string | null>(null);
 
   // Info popover (versions + usage, fetched lazily on first open).
   const [showInfo, setShowInfo] = useState(false);
@@ -89,6 +191,17 @@ export default function AppRunPage({
   // Broker the app frame's cc.* calls against /api/apps/{slug}/…
   useCcBridge(slug, { mode: "live", onToolConfirm });
 
+  /** Fetch + set the live bundle — factored out so both the "no consent
+   * needed" mount path and the "just consented" Allow handler can trigger
+   * it without duplicating the fetch. `track=1` counts this open in the
+   * app's usage stats. */
+  const fetchLiveBundle = useCallback(async () => {
+    const bres = await fetch(
+      `/api/apps/${encodeURIComponent(slug)}/bundle?version=live&track=1`
+    );
+    if (bres.ok) setBundle(await bres.text());
+  }, [slug]);
+
   useEffect(() => {
     let cancelled = false;
     (async () => {
@@ -106,13 +219,13 @@ export default function AppRunPage({
         const data = (await res.json()) as { app?: AppMeta };
         if (cancelled || !data.app) return;
         setApp(data.app);
-        if (data.app.live_version) {
-          // track=1: count this open in the app's usage stats.
-          const bres = await fetch(
-            `/api/apps/${encodeURIComponent(slug)}/bundle?version=live&track=1`
-          );
-          if (!cancelled && bres.ok) setBundle(await bres.text());
+        if (data.app.needs_consent === true) {
+          // Blocking gate — don't fetch the bundle until the viewer clears
+          // the interstitial (or bails via "Not now").
+          setShowConsent(true);
+          return;
         }
+        if (data.app.live_version) await fetchLiveBundle();
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -122,7 +235,60 @@ export default function AppRunPage({
     return () => {
       cancelled = true;
     };
-  }, [slug]);
+  }, [slug, fetchLiveBundle]);
+
+  /** "Allow" on the consent interstitial — records consent for the live
+   * scope set, then proceeds exactly like the no-consent-needed path. A 409
+   * `scope_set_changed` means the live version moved between page load and
+   * this click; refresh app meta so the modal shows the current scopes
+   * instead of silently proceeding on stale consent. */
+  const allowConsent = useCallback(async () => {
+    if (!app) return;
+    setConsentBusy(true);
+    setConsentNotice(null);
+    try {
+      const res = await fetch(
+        `/api/apps/${encodeURIComponent(slug)}/consent`,
+        {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            scope_set_hash: app.live_scope_set_hash,
+          }),
+        }
+      );
+      if (res.ok) {
+        setShowConsent(false);
+        if (app.live_version) await fetchLiveBundle();
+        return;
+      }
+      if (res.status === 409) {
+        // FastAPI's HTTPException wraps the app-facing payload under
+        // `detail` (see gateway/routes/apps/grants.py's consent_app) —
+        // same envelope the Publish modal already unwraps for its own
+        // conformance-scan error.
+        const body = (await res.json().catch(() => ({}))) as {
+          detail?: { error?: string } | string;
+        };
+        const detail =
+          typeof body.detail === "object" && body.detail ? body.detail : null;
+        if (detail?.error === "scope_set_changed") {
+          setConsentNotice("The scopes changed — refreshing…");
+          const ares = await fetch(`/api/apps/${encodeURIComponent(slug)}`);
+          if (ares.ok) {
+            const data = (await ares.json()) as { app?: AppMeta };
+            if (data.app) setApp(data.app);
+          }
+          return;
+        }
+      }
+      setConsentNotice(`Couldn't record consent (HTTP ${res.status}).`);
+    } catch (e) {
+      setConsentNotice(String(e));
+    } finally {
+      setConsentBusy(false);
+    }
+  }, [app, slug, fetchLiveBundle]);
 
   const toggleInfo = useCallback(() => {
     setShowInfo((open) => {
@@ -399,6 +565,65 @@ export default function AppRunPage({
           sandboxed frame · runs as {viewerEmail} · audit logged
         </span>
       </div>
+
+      {/* ── First-open consent interstitial — a blocking gate (§4.8), NOT the
+          bottom-right toast pattern: centered, backdrop-blocked, matching
+          the Publish modal's own container styling for consistency. ────── */}
+      {showConsent && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4">
+          <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-lg p-5 flex flex-col gap-4">
+            <div className="flex items-center gap-2.5">
+              <div className="w-9 h-9 rounded-lg border border-border bg-gradient-to-br from-primary/20 to-accent/15 flex items-center justify-center text-base shrink-0">
+                {app.icon || "▦"}
+              </div>
+              <h2 className="text-base font-bold text-foreground">
+                {app.name}{" "}
+                <span className="font-normal text-muted-foreground">
+                  wants to:
+                </span>
+              </h2>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              {(app.live_scopes ?? []).map((scope) => {
+                const Icon = scopeIcon(scope);
+                return (
+                  <div
+                    key={scope}
+                    className="flex items-center gap-2.5 rounded-lg border border-border px-3 py-2.5"
+                  >
+                    <Icon className="w-4 h-4 text-muted-foreground shrink-0" />
+                    <span className="text-sm text-foreground">
+                      {describeScope(scope)}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+
+            {consentNotice && (
+              <p className="text-xs text-warning">{consentNotice}</p>
+            )}
+
+            <div className="flex justify-end gap-2">
+              <button
+                onClick={() => router.push("/build/apps")}
+                className="rounded-lg border border-border px-3 sm:px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+              >
+                Not now
+              </button>
+              <button
+                onClick={allowConsent}
+                disabled={consentBusy}
+                className="rounded-lg bg-primary px-3 sm:px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1.5 disabled:opacity-50"
+              >
+                {consentBusy && <Loader2 className="w-4 h-4 animate-spin" />}
+                Allow
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* ── Tool-confirm toast — a destructive cc.tools.call() awaiting the
           viewer's approve/deny (RFC §4.4, mockup-app-run.html .toast). ──── */}

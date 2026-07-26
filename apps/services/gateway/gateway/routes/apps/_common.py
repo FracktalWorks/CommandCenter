@@ -393,6 +393,30 @@ async def get_app_or_404(
     return row, grants
 
 
+async def load_live_version_scopes(
+    db: Any, app_id: str, version: int,
+) -> tuple[list[str], str] | None:
+    """The LIVE (published) version's declared scopes + ``scope_set_hash``,
+    read from ``app_versions`` — never the draft workspace's ``app.json``.
+
+    Shared by ``lifecycle.get_app`` (computing ``needs_consent``, RFC §4.8)
+    and ``grants``'s consent endpoint (re-verifying the client's claimed
+    hash server-side): a viewer must consent to exactly what was published
+    and reviewed, never to whatever the builder has since drafted. ``None``
+    when the version row is missing.
+    """
+    vrow = (await db.execute(
+        text(
+            "SELECT manifest, scope_set_hash FROM app_versions "
+            "WHERE app_id = :app_id AND version = :version"
+        ),
+        {"app_id": app_id, "version": version},
+    )).fetchone()
+    if vrow is None:
+        return None
+    return manifest_scopes(parse_db_manifest(vrow.manifest)), (vrow.scope_set_hash or "")
+
+
 def app_workspace(row: Any) -> Path:
     return Path(str(_field(row, "workspace_path") or ""))
 

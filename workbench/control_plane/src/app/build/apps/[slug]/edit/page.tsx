@@ -60,7 +60,7 @@ import {
   type CcToolConfirmRequest,
 } from "../../lib/ccBridge";
 import { runAllScenarios, type TestResult, type TestScenario } from "../../lib/testRunner";
-import type { AppFile, AppMeta, Checkpoint } from "../../lib/types";
+import type { AppFile, AppMeta, Checkpoint, GrantEntry } from "../../lib/types";
 
 /** A pending `cc.tools.call()` confirm, waiting on the builder's decision. */
 type PendingToolConfirm = CcToolConfirmRequest & {
@@ -208,7 +208,9 @@ function PublishModal({
   onPublished: () => void;
 }) {
   const [notes, setNotes] = useState("");
-  const [visibility, setVisibility] = useState<"private" | "org">("private");
+  const [visibility, setVisibility] = useState<"private" | "org" | "people">(
+    () => (app.visibility === "people" ? "people" : "private")
+  );
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   // Org-wide publish with a write scope goes to the Approvals inbox instead
@@ -216,6 +218,84 @@ function PublishModal({
   // state so we don't navigate to a run page that would 404 or show the
   // stale live version.
   const [pendingReview, setPendingReview] = useState(false);
+
+  // "Specific people…" sharing — a chip list of viewer emails granted `use`
+  // (§4.8). Prefilled from existing grants so re-opening Publish shows who
+  // already has access; editor/owner grants (role !== "use") are a
+  // deliberate scope cut, this picker only manages viewer-level sharing.
+  const [shareEmails, setShareEmails] = useState<string[]>([]);
+  const [emailInput, setEmailInput] = useState("");
+  // Set after a successful publish if one or more invite POSTs failed —
+  // shown instead of navigating away so the note is actually visible.
+  const [inviteWarning, setInviteWarning] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch(
+          `/api/apps/${encodeURIComponent(app.slug)}/grants`
+        );
+        if (!res.ok) return;
+        const data = (await res.json()) as GrantEntry[];
+        const subjects = Array.isArray(data)
+          ? data.filter((g) => g.role === "use").map((g) => g.subject)
+          : [];
+        if (!cancelled && subjects.length > 0) setShareEmails(subjects);
+      } catch {
+        // Best-effort — prefill isn't critical, the owner can just re-add.
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [app.slug]);
+
+  const addEmailFromInput = useCallback(() => {
+    const value = emailInput.trim();
+    setEmailInput("");
+    if (!value || !value.includes("@")) return;
+    setShareEmails((cur) => (cur.includes(value) ? cur : [...cur, value]));
+  }, [emailInput]);
+
+  const removeShareEmail = useCallback(
+    async (email: string) => {
+      try {
+        const res = await fetch(
+          `/api/apps/${encodeURIComponent(app.slug)}/grants/${encodeURIComponent(email)}`,
+          { method: "DELETE" }
+        );
+        // Best-effort: on failure just leave the chip, the user can retry.
+        if (res.ok) {
+          setShareEmails((cur) => cur.filter((e) => e !== email));
+        }
+      } catch {
+        // Leave the chip in place.
+      }
+    },
+    [app.slug]
+  );
+
+  /** POST a `use` grant for every current chip — an upsert, so redundant
+   * re-POSTs of already-shared emails are harmless. Returns the failure
+   * count (Promise.allSettled — one bad invite doesn't block the rest). */
+  const syncShareGrants = useCallback(async (): Promise<number> => {
+    if (shareEmails.length === 0) return 0;
+    const results = await Promise.allSettled(
+      shareEmails.map(async (email) => {
+        const res = await fetch(
+          `/api/apps/${encodeURIComponent(app.slug)}/grants`,
+          {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ subject: email, role: "use" }),
+          }
+        );
+        if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      })
+    );
+    return results.filter((r) => r.status === "rejected").length;
+  }, [shareEmails, app.slug]);
 
   const publish = async () => {
     setBusy(true);
@@ -258,9 +338,21 @@ function PublishModal({
         // Not live yet — stay on this modal and show the review state
         // instead of navigating to a run page with nothing new to show.
         setPendingReview(true);
-      } else {
-        onPublished();
+        return;
       }
+      // Invite sync only ever matters for "people" visibility — send the
+      // chips along now that the version they're being shared on exists.
+      const failedInvites =
+        visibility === "people" ? await syncShareGrants() : 0;
+      if (failedInvites > 0) {
+        setInviteWarning(
+          `${failedInvites} invite${
+            failedInvites === 1 ? "" : "s"
+          } may not have gone through — you can retry from Share settings.`
+        );
+        return;
+      }
+      onPublished();
     } catch (e) {
       setError(String(e));
     } finally {
@@ -291,6 +383,37 @@ function PublishModal({
           </div>
           <button
             onClick={onClose}
+            className="mt-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+          >
+            Done
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (inviteWarning) {
+    return (
+      <div
+        className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+        onClick={(e) => {
+          if (e.target === e.currentTarget) onPublished();
+        }}
+      >
+        <div className="w-full max-w-md rounded-2xl border border-border bg-card shadow-lg p-5 flex flex-col items-center gap-3 text-center">
+          <div className="w-11 h-11 rounded-xl bg-warning/10 flex items-center justify-center">
+            <AlertTriangle className="w-5 h-5 text-warning" />
+          </div>
+          <div>
+            <h2 className="text-base font-bold text-foreground">
+              Published
+            </h2>
+            <p className="text-xs text-muted-foreground mt-1 max-w-xs">
+              {inviteWarning}
+            </p>
+          </div>
+          <button
+            onClick={onPublished}
             className="mt-1 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
           >
             Done
@@ -339,6 +462,11 @@ function PublishModal({
               [
                 ["private", "Only me", "Private — stays in your workshop"],
                 [
+                  "people",
+                  "Specific people…",
+                  "Pick teammates, like sharing a doc",
+                ],
+                [
                   "org",
                   "Everyone at Fracktal",
                   "Listed in Custom Apps for the whole team",
@@ -367,6 +495,45 @@ function PublishModal({
               </label>
             ))}
           </div>
+
+          {/* Email-chip picker — revealed only for "people" visibility
+              (mockup-workshop.html's publish modal, "share a doc" model). */}
+          {visibility === "people" && (
+            <div className="mt-2 flex flex-col gap-1.5 rounded-lg border border-border bg-secondary/40 p-2.5">
+              {shareEmails.length > 0 && (
+                <div className="flex flex-wrap gap-1.5">
+                  {shareEmails.map((email) => (
+                    <span
+                      key={email}
+                      className="inline-flex items-center gap-1 rounded-full border border-border bg-secondary px-2.5 py-1 text-xs text-foreground"
+                    >
+                      {email}
+                      <button
+                        type="button"
+                        onClick={() => removeShareEmail(email)}
+                        aria-label={`Remove ${email}`}
+                        className="rounded-full p-0.5 text-muted-foreground hover:text-foreground tech-transition"
+                      >
+                        <X className="w-3 h-3" />
+                      </button>
+                    </span>
+                  ))}
+                </div>
+              )}
+              <input
+                value={emailInput}
+                onChange={(e) => setEmailInput(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === ",") {
+                    e.preventDefault();
+                    addEmailFromInput();
+                  }
+                }}
+                placeholder="Add an email, press Enter"
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50 tech-transition"
+              />
+            </div>
+          )}
         </div>
 
         {/* Test status — informational only, never blocks Publish. */}

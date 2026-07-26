@@ -29,6 +29,7 @@ from gateway.routes.apps._common import (
     generate_slug,
     get_app_or_404,
     iso,
+    load_live_version_scopes,
     parse_db_manifest,
     publish_app_activity,
     read_workspace_manifest,
@@ -64,6 +65,14 @@ class AppDetail(AppSummary):
     builder_session_id: str | None = None
     # Only present for editors — viewers never learn server paths.
     workspace_path: str | None = None
+    # Consent (RFC §4.8) — computed only by GET /{slug}; left unset (None) by
+    # create/patch/list so those paths don't pay for the extra queries.
+    # ``live_scopes``/``live_scope_set_hash`` come from the LIVE app_versions
+    # row, never the draft `manifest` above (a viewer must consent to what
+    # was actually published, not whatever the builder has since drafted).
+    needs_consent: bool | None = None
+    live_scopes: list[str] | None = None
+    live_scope_set_hash: str | None = None
 
 
 class AppCreate(BaseModel):
@@ -215,6 +224,10 @@ def _to_summary(
 
 def _to_detail(
     row: Any, user: UserContext, grants: list[tuple[str, str]],
+    *,
+    needs_consent: bool | None = None,
+    live_scopes: list[str] | None = None,
+    live_scope_set_hash: str | None = None,
 ) -> AppDetail:
     workspace = app_workspace(row)
     manifest = (
@@ -229,6 +242,9 @@ def _to_detail(
         manifest=manifest,
         builder_session_id=row.builder_session_id,
         workspace_path=str(workspace) if editable else None,
+        needs_consent=needs_consent,
+        live_scopes=live_scopes,
+        live_scope_set_hash=live_scope_set_hash,
     )
 
 
@@ -320,12 +336,47 @@ async def get_app(
     slug: str,
     user: UserContext = Depends(require_app_user),
 ) -> AppDetail:
+    """The single detail read — also computes the consent disclosure fields
+    (RFC §4.8), which is why this is the only caller of ``_to_detail`` that
+    passes them: create/patch/list never need the extra queries.
+    """
     db = await _get_db()
     try:
         row, grants = await get_app_or_404(db, slug, user)
+        needs_consent: bool | None = None
+        live_scopes: list[str] | None = None
+        live_scope_set_hash: str | None = None
+        if row.live_version is not None:
+            live = await load_live_version_scopes(
+                db, str(row.id), row.live_version,
+            )
+            if live is not None:
+                live_scopes, live_scope_set_hash = live
+                if can_edit(row, user, grants):
+                    # Owners/editors implicitly know what they built — this
+                    # disclosure step is viewer-facing only, distinct from
+                    # the admin scope-review gate publish.py already runs.
+                    needs_consent = False
+                else:
+                    consent_row = (await db.execute(
+                        text(
+                            "SELECT consented_scope_hash FROM app_grants "
+                            "WHERE app_id = :app_id AND subject = :subject"
+                        ),
+                        {"app_id": str(row.id), "subject": _uid(user)},
+                    )).fetchone()
+                    consented_hash = (
+                        consent_row.consented_scope_hash if consent_row else None
+                    ) or ""
+                    needs_consent = consented_hash != live_scope_set_hash
     finally:
         await db.close()
-    return _to_detail(row, user, grants)
+    return _to_detail(
+        row, user, grants,
+        needs_consent=needs_consent,
+        live_scopes=live_scopes,
+        live_scope_set_hash=live_scope_set_hash,
+    )
 
 
 @router.patch("/{slug}", response_model=AppDetail)

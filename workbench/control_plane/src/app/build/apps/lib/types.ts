@@ -31,6 +31,26 @@ export interface AppMeta {
   manifest?: Record<string, unknown>;
   /** Detail route only, editors only — the builder session's working dir. */
   workspace_path?: string;
+  /** Detail route only. true = the viewer must clear the first-open consent
+   * interstitial before the run page fetches the live bundle (§4.8). */
+  needs_consent?: boolean | null;
+  /** Detail route only. The manifest scopes of the LIVE (published, reviewed)
+   * version — NOT the draft's, which may have moved on since the last
+   * publish. Populated whenever `needs_consent` is relevant. */
+  live_scopes?: string[] | null;
+  /** Detail route only. Echoed back verbatim in POST /consent to detect a
+   * scope-set change between page load and the viewer's "Allow" click. */
+  live_scope_set_hash?: string | null;
+}
+
+/** One sharing grant from GET/POST /api/apps/{slug}/grants — "specific
+ * people" visibility's per-viewer allow list (§4.8). */
+export interface GrantEntry {
+  subject: string;
+  role: "use" | "edit" | "own";
+  consented_scope_hash?: string | null;
+  granted_by: string;
+  created_at: string;
 }
 
 /** One workspace file from GET /api/apps/{slug}/files. */

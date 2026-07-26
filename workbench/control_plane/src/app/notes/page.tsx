@@ -19,6 +19,7 @@ import {
   Search,
   Upload,
   Users,
+  Video,
 } from "lucide-react";
 import {
   createMeeting,
@@ -29,6 +30,8 @@ import {
 } from "./lib/api";
 import { useViewMode } from "@/components/ViewModeProvider";
 import GlossaryModal from "./components/GlossaryModal";
+import JoinCallModal from "./components/JoinCallModal";
+import ActiveBots from "./components/ActiveBots";
 import type { MeetingListItem, NoteTemplate } from "./lib/types";
 
 const STATUS_META: Record<
@@ -51,6 +54,8 @@ export default function NotesPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [showGlossary, setShowGlossary] = useState(false);
+  const [showJoin, setShowJoin] = useState(false);
+  const [botReload, setBotReload] = useState(0);
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
   const [templateKey, setTemplateKey] = useState("standard_meeting");
   const fileInput = useRef<HTMLInputElement>(null);
@@ -112,6 +117,7 @@ export default function NotesPage() {
     const handler = (e: Event) => {
       const tab = (e as CustomEvent<string>).detail;
       if (tab === "notes-record") void onRecord();
+      else if (tab === "notes-join") setShowJoin(true);
       else if (tab === "notes-upload") fileInput.current?.click();
       else if (tab === "notes-glossary") setShowGlossary(true);
     };
@@ -207,6 +213,15 @@ export default function NotesPage() {
             </span>
           </button>
           <button
+            onClick={() => setShowJoin(true)}
+            className="shrink-0 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+            title="Send a notetaker bot to join a Meet / Zoom / Teams call"
+          >
+            <span className="flex items-center gap-1.5">
+              <Video className="w-4 h-4" /> Join call
+            </span>
+          </button>
+          <button
             className="shrink-0 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
             onClick={() => fileInput.current?.click()}
             disabled={uploading}
@@ -244,6 +259,11 @@ export default function NotesPage() {
               {error}
             </div>
           )}
+
+          <ActiveBots
+            reloadSignal={botReload}
+            onChange={() => void refresh(query || undefined)}
+          />
 
           {loading ? (
             <div className="flex items-center justify-center py-16 text-muted-foreground">
@@ -317,6 +337,15 @@ export default function NotesPage() {
       </div>
 
       {showGlossary && <GlossaryModal onClose={() => setShowGlossary(false)} />}
+      {showJoin && (
+        <JoinCallModal
+          onClose={() => setShowJoin(false)}
+          onJoined={() => {
+            setBotReload((n) => n + 1);
+            void refresh(query || undefined);
+          }}
+        />
+      )}
     </div>
   );
 }

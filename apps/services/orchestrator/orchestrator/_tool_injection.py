@@ -579,7 +579,10 @@ def _apply_own_tool_scope(agents: list[Any], own_scope: list[str] | None) -> Non
                 )
 
 
-def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_scope: list[str] | None = None) -> None:
+def _inject_agent_tools(
+    agents: list[Any], *, is_sub_agent: bool = False,
+    tool_scope: list[str] | None = None, agent_name: str | None = None,
+) -> None:
     """Inject cross-agent delegation tools into every loaded agent.
 
     Adds ``call_agent`` and ``call_agent_background`` from ``acb_skills.agent_tools``
@@ -594,6 +597,13 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
     named tools are injected.  This prevents the Berkeley leaderboard failure mode
     where every additional tool degrades model accuracy — inject only what the
     agent actually needs.  ``None`` means inject all tools (default).
+
+    When ``agent_name`` is provided, Custom Apps granted to this agent
+    (``app_grants.subject`` = ``agents:*`` or ``agent:<agent_name>``, RFC
+    §4.7) are also injected as tools — one per declared manifest action,
+    named ``app_<slug>_<action>`` — via ``orchestrator.app_tools``. Unlike
+    ``tool_scope``, this is unconditional: a grant is an explicit per-agent
+    permission, not a platform tool a static scope narrows.
 
     Injection is best-effort: failures are silently swallowed so they never
     block the main agent execution path.
@@ -772,6 +782,20 @@ def _inject_agent_tools(agents: list[Any], *, is_sub_agent: bool = False, tool_s
             _extra_tools = _all_tools
     else:
         _extra_tools = _all_tools
+
+    # ── Custom Apps granted to this agent (RFC §4.7, Phase 3b) ─────────────
+    # Independent of tool_scope above: a granted app is an explicit per-agent
+    # permission (app_grants.subject = 'agents:*' or 'agent:<name>'), not a
+    # platform tool a static scope list would name — so these are ALWAYS
+    # added regardless of tool_scope, then gated through the SAME
+    # _gate_injected_tool pipeline as everything else below. Best-effort: a
+    # lookup failure must never block the rest of injection.
+    if agent_name:
+        try:
+            from orchestrator.app_tools import load_app_action_tools  # noqa: PLC0415
+            _extra_tools = _extra_tools + load_app_action_tools(agent_name)
+        except Exception:  # noqa: BLE001
+            _log.warning("executor.app_tools_injection_failed", agent=agent_name)
 
     # Gate every injected tool with the risk-aware permission policy (B6). This
     # closes the live gap where injected function-tools (web_search, …) executed

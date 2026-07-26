@@ -21,6 +21,8 @@ Run *inside* the orchestrator/gateway process — no server of their own.
 - agent-task-manager/ -- ClickUp task management
 - agent-apis-config/ -- API discovery and configuration assistant
 - agent-email-assistant/ -- Email AI assistant: read, search, summarize, draft replies across Gmail and Microsoft accounts
+- agent-whatsapp-assistant/ -- WhatsApp inbox briefing, triage, and reply drafting (drafts only)
+- agent-app-builder/ -- App Workshop builder (Custom Apps): Copilot-SDK engine; each chat session runs in its app's workspace via the executor's `allow_session_workspace` binding; enforces the platform contract (window.cc only — see docs/app-workshop/README.md §4.0)
 
 ## `skills/` — importable tool packages
 Capabilities (tools) an agent picks up. No identity, no server. Python packages

@@ -1,0 +1,315 @@
+<title>CommandCenter · Custom Apps — Running App</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --sidebar: hsl(220 13% 9%);
+    --sidebar-accent: hsl(220 13% 13%);
+    --radius: 12px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --sidebar: hsl(0 0% 98%);
+    --sidebar-accent: hsl(210 40% 94%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font-ui); background: var(--background); color: var(--foreground); font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  .shell { display: grid; grid-template-columns: 232px 1fr; height: 100vh; }
+
+  /* ---- Sidebar (condensed) ------------------------------------------ */
+  .sidebar { background: var(--sidebar); border-right: 1px solid var(--border); display: flex; flex-direction: column; overflow: auto; padding: 12px 10px; }
+  .brand { display: flex; align-items: center; gap: 9px; padding: 6px 10px 12px; }
+  .brand-mark { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--primary), hsl(27 96% 61%)); display:grid; place-items:center; color: var(--primary-foreground); font-weight: 800; font-size: 13px; }
+  .brand b { font-size: 13.5px; }
+  .navsec { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); padding: 11px 10px 5px; }
+  .nav-item { display: flex; align-items: center; gap: 9px; width: 100%; text-align: left; padding: 6px 10px; border-radius: 9px; color: var(--muted-foreground); font-size: 12.5px; }
+  .nav-item:hover { background: var(--sidebar-accent); color: var(--foreground); }
+  .nav-item.on { background: var(--primary-wash); color: var(--foreground); font-weight: 600; }
+  .nav-dot { width: 15px; text-align: center; }
+
+  /* ---- Main --------------------------------------------------------- */
+  .main { display: flex; flex-direction: column; min-width: 0; }
+
+  /* App chrome header — the platform's frame around a user app */
+  .app-chrome {
+    display: flex; align-items: center; gap: 11px; padding: 9px 16px;
+    border-bottom: 1px solid var(--border); background: var(--card); flex: none;
+  }
+  .app-glyph { width: 30px; height: 30px; border-radius: 9px; display: grid; place-items: center; font-size: 15px;
+    background: linear-gradient(135deg, hsl(198 89% 50% / .22), hsl(27 96% 61% / .16)); border: 1px solid var(--border-strong); }
+  .app-title { font-weight: 700; font-size: 14px; display: flex; align-items: center; gap: 8px; }
+  .app-sub { font-size: 11px; color: var(--faint); }
+  .chip { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 2.5px 8px; border-radius: 999px; }
+  .chip.live { color: var(--success); background: hsl(142 76% 47% / .1); }
+  .cap { display: inline-flex; align-items: center; gap: 5px; font-size: 10.5px; color: var(--muted-foreground);
+    border: 1px solid var(--border); border-radius: 999px; padding: 3px 9px; }
+  .cap .ok { color: var(--success); }
+  .spacer { flex: 1; }
+  .identity { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: var(--muted-foreground);
+    border: 1px solid var(--border); border-radius: 999px; padding: 4px 10px 4px 5px; }
+  .avatar { width: 20px; height: 20px; border-radius: 50%; background: var(--secondary); border: 1px solid var(--border-strong);
+    display: grid; place-items: center; font-size: 8.5px; font-weight: 700; }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 11px; font-size: 12px; font-weight: 500;
+    border: 1px solid var(--border); color: var(--muted-foreground); transition: all .2s cubic-bezier(.4,0,.2,1); }
+  .btn:hover { color: var(--foreground); border-color: hsl(198 89% 50% / .35); }
+  .btn-ghost { border: none; padding: 6px; border-radius: 8px; color: var(--muted-foreground); }
+  .btn-ghost:hover { background: var(--secondary); color: var(--foreground); }
+
+  /* The app itself (inside the sandboxed frame) */
+  .frame-host { flex: 1; min-height: 0; position: relative; background: var(--background); }
+  .userapp { height: 100%; overflow: auto; padding: 26px 34px; display: flex; flex-direction: column; gap: 20px; max-width: 1080px; margin: 0 auto; }
+  .ua-head { display: flex; align-items: center; justify-content: space-between; }
+  .ua-head h1 { margin: 0; font-size: 19px; letter-spacing: -0.01em; }
+  .ua-head p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted-foreground); }
+  .ua-btn { background: var(--primary); color: var(--primary-foreground); font-weight: 600; font-size: 13px; padding: 9px 15px; border-radius: 10px; }
+  .stats { display: grid; grid-template-columns: repeat(4, 1fr); gap: 13px; }
+  .stat { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 14px 16px; }
+  .stat .k { font-size: 10.5px; color: var(--muted-foreground); text-transform: uppercase; letter-spacing: .06em; }
+  .stat .v { font-size: 24px; font-weight: 700; margin-top: 5px; font-variant-numeric: tabular-nums; }
+  .stat .v small { font-size: 12px; font-weight: 500; color: var(--muted-foreground); }
+  .stat.warn .v { color: var(--accent); }
+  .panel { background: var(--card); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .userapp table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  .userapp th { text-align: left; font-size: 10.5px; text-transform: uppercase; letter-spacing: .07em; color: var(--faint); padding: 10px 14px; border-bottom: 1px solid var(--border); }
+  .userapp td { padding: 11px 14px; border-bottom: 1px solid var(--border); }
+  .userapp tr:last-child td { border-bottom: none; }
+  .userapp tr:hover td { background: var(--secondary); }
+  .swatch { width: 12px; height: 12px; border-radius: 3px; display: inline-block; margin-right: 8px; vertical-align: -1px; }
+  .meter { width: 130px; height: 6px; background: var(--muted); border-radius: 999px; overflow: hidden; }
+  .meter i { display: block; height: 100%; border-radius: 999px; background: var(--success); }
+  .meter.low i { background: var(--accent); }
+  .meter.crit i { background: var(--destructive); }
+  .tag-low { font-size: 10px; font-weight: 700; color: var(--accent); background: hsl(27 96% 61% / .12); border-radius: 999px; padding: 2px 8px; }
+  .rowact { font-size: 11.5px; font-weight: 600; color: var(--primary); opacity: 0; }
+  tr:hover .rowact { opacity: 1; }
+
+  /* Approval toast (Action-Broker HITL for a gated write) */
+  .toast {
+    position: absolute; right: 20px; bottom: 20px; width: 360px; background: var(--popover);
+    border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lg);
+    padding: 14px 16px; display: flex; flex-direction: column; gap: 10px; font-size: 12.5px;
+  }
+  .toast-head { display: flex; gap: 9px; align-items: flex-start; }
+  .toast-head .icon { color: var(--warning); margin-top: 1px; }
+  .toast b { font-size: 12.5px; }
+  .toast .d { color: var(--muted-foreground); margin-top: 2px; line-height: 1.45; }
+  .toast pre { margin: 0; background: var(--secondary); border: 1px solid var(--border); border-radius: 8px; padding: 8px 10px;
+    font-family: var(--font-mono); font-size: 11px; color: var(--muted-foreground); overflow: auto; }
+  .toast-actions { display: flex; gap: 8px; justify-content: flex-end; align-items: center; }
+  .toast-actions .remember { margin-right: auto; font-size: 11px; color: var(--faint); display: flex; align-items: center; gap: 5px; }
+  .t-approve { background: var(--primary); color: var(--primary-foreground); font-weight: 600; border-radius: 8px; padding: 6px 13px; font-size: 12px; }
+  .t-deny { border: 1px solid var(--border); border-radius: 8px; padding: 6px 13px; font-size: 12px; color: var(--muted-foreground); }
+
+  /* Status strip */
+  .status {
+    display: flex; align-items: center; gap: 14px; padding: 5px 16px; border-top: 1px solid var(--border);
+    background: var(--card); font-size: 10.5px; color: var(--faint); flex: none; font-family: var(--font-mono);
+  }
+  .status .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--success); }
+  .status .spacer { flex: 1; }
+  .status button { font-size: 10.5px; color: var(--faint); text-decoration: underline dotted; }
+
+  /* Info popover */
+  .info-pop {
+    position: absolute; top: 8px; right: 16px; width: 330px; background: var(--popover);
+    border: 1px solid var(--border-strong); border-radius: 14px; box-shadow: var(--shadow-lg); padding: 16px;
+    display: none; flex-direction: column; gap: 12px; z-index: 40; font-size: 12.5px;
+  }
+  .info-pop.open { display: flex; }
+  .info-row { display: flex; justify-content: space-between; gap: 10px; }
+  .info-row .k { color: var(--faint); }
+  .info-scopes { border-top: 1px solid var(--border); padding-top: 10px; display: flex; flex-direction: column; gap: 7px; }
+  .info-scopes .s { display: flex; align-items: center; gap: 8px; color: var(--muted-foreground); font-size: 12px; }
+  .info-scopes .s .icon { width: 13px; height: 13px; }
+  .info-links { border-top: 1px solid var(--border); padding-top: 10px; display: flex; gap: 12px; }
+  .info-links button { font-size: 12px; color: var(--primary); font-weight: 600; }
+</style>
+
+<svg width="0" height="0" style="position:absolute">
+  <symbol id="i-chat" viewBox="0 0 24 24"><path d="M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z"/></symbol>
+  <symbol id="i-plus-sq" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></symbol>
+  <symbol id="i-info" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 16v-5M12 8h.01"/></symbol>
+  <symbol id="i-wand" viewBox="0 0 24 24"><path d="M15 4V2M15 10V8M11.5 5.5h-2M20.5 5.5h-2M17.8 8.2L19 9.4M17.8 2.8L19 1.6M3 21l9.6-9.6M12.2 2.8L11 1.6"/></symbol>
+  <symbol id="i-pin" viewBox="0 0 24 24"><path d="M12 17v5M9 3h6l1 7 2.5 2.5H5.5L8 10z"/></symbol>
+  <symbol id="i-more" viewBox="0 0 24 24"><circle cx="5" cy="12" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/></symbol>
+  <symbol id="i-user" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path d="M4 21c0-4 3.6-6 8-6s8 2 8 6"/></symbol>
+  <symbol id="i-db" viewBox="0 0 24 24"><ellipse cx="12" cy="5" rx="9" ry="3"/><path d="M3 5v14c0 1.7 4 3 9 3s9-1.3 9-3V5"/><path d="M3 12c0 1.7 4 3 9 3s9-1.3 9-3"/></symbol>
+  <symbol id="i-plug" viewBox="0 0 24 24"><path d="M12 22v-5M9 8V2M15 8V2M6 8h12v4a6 6 0 0 1-12 0z"/></symbol>
+  <symbol id="i-shield" viewBox="0 0 24 24"><path d="M12 2l8 4v6c0 5-3.4 8.6-8 10-4.6-1.4-8-5-8-10V6z"/></symbol>
+  <symbol id="i-alert" viewBox="0 0 24 24"><path d="M10.3 3.9L1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></symbol>
+  <symbol id="i-sparkles" viewBox="0 0 24 24"><path d="M12 3l1.9 5.1L19 10l-5.1 1.9L12 17l-1.9-5.1L5 10l5.1-1.9z"/><path d="M19 15l.9 2.1L22 18l-2.1.9L19 21l-.9-2.1L16 18l2.1-.9z"/></symbol>
+  <symbol id="i-history" viewBox="0 0 24 24"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5"/><path d="M12 7v5l3 2"/></symbol>
+</svg>
+
+<div class="shell">
+  <!-- ================= SIDEBAR ================= -->
+  <aside class="sidebar">
+    <div class="brand"><div class="brand-mark">CC</div><b>CommandCenter</b></div>
+    <div class="navsec">Apps</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-chat"/></svg> Chat</button>
+    <button class="nav-item"><span class="nav-dot">✉️</span> Email</button>
+    <button class="nav-item"><span class="nav-dot">📋</span> Tasks</button>
+    <button class="nav-item"><span class="nav-dot">📝</span> Notes</button>
+    <div class="navsec">Custom Apps</div>
+    <button class="nav-item"><svg class="icon"><use href="#i-plus-sq"/></svg> All apps</button>
+    <button class="nav-item on"><span class="nav-dot">🧵</span> Filament Tracker</button>
+    <button class="nav-item"><span class="nav-dot">📅</span> Demo Scheduler</button>
+    <button class="nav-item"><span class="nav-dot">💰</span> Quote Calculator</button>
+    <div class="navsec">Configure</div>
+    <button class="nav-item"><span class="nav-dot">🤖</span> Agents</button>
+    <button class="nav-item"><span class="nav-dot">📥</span> Approvals</button>
+    <button class="nav-item"><span class="nav-dot">🔌</span> Integrations</button>
+  </aside>
+
+  <!-- ================= MAIN ================= -->
+  <main class="main">
+    <!-- Platform chrome around the user app -->
+    <div class="app-chrome">
+      <div class="app-glyph">🧵</div>
+      <div>
+        <div class="app-title">Filament Tracker <span class="chip live">Live · v2</span></div>
+        <div class="app-sub">by Vijay · published to everyone at Fracktal</div>
+      </div>
+      <span class="cap"><svg class="icon icon-sm"><use href="#i-db"/></svg> shared data</span>
+      <span class="cap"><svg class="icon icon-sm"><use href="#i-plug"/></svg> clickup <span class="ok">✓ approved</span></span>
+      <div class="spacer"></div>
+      <div class="identity"><span class="avatar">AR</span> runs as arjun@fracktal.in</div>
+      <button class="btn"><svg class="icon icon-sm"><use href="#i-wand"/></svg> Suggest a change</button>
+      <button class="btn-ghost" title="Pin to sidebar"><svg class="icon"><use href="#i-pin"/></svg></button>
+      <button class="btn-ghost" title="App info" onclick="document.getElementById('info').classList.toggle('open')"><svg class="icon"><use href="#i-info"/></svg></button>
+      <button class="btn-ghost"><svg class="icon"><use href="#i-more"/></svg></button>
+    </div>
+
+    <!-- The user app, served into the sandboxed frame -->
+    <div class="frame-host">
+      <!-- Info popover -->
+      <div class="info-pop" id="info">
+        <div class="info-row"><span class="k">Version</span><span>v2 — “Low-stock alerts” · 2 d ago</span></div>
+        <div class="info-row"><span class="k">Owner</span><span>Vijay Varada</span></div>
+        <div class="info-row"><span class="k">Used by</span><span>8 people · 214 opens</span></div>
+        <div class="info-scopes">
+          <div class="s"><svg class="icon"><use href="#i-user"/></svg> Sees your name &amp; email (viewer identity)</div>
+          <div class="s"><svg class="icon"><use href="#i-db"/></svg> Reads/writes the app's shared database</div>
+          <div class="s"><svg class="icon"><use href="#i-plug"/></svg> ClickUp: create task in “Procurement” — admin-approved</div>
+          <div class="s"><svg class="icon"><use href="#i-shield"/></svg> Sandboxed · no other data access · every write audited</div>
+        </div>
+        <div class="info-links">
+          <button>Version history</button>
+          <button>Open in Workshop</button>
+          <button style="color:var(--destructive)">Report issue</button>
+        </div>
+      </div>
+
+      <div class="userapp">
+        <div class="ua-head">
+          <div>
+            <h1>Filament Inventory</h1>
+            <p>Print-farm spool stock · synced 4 min ago</p>
+          </div>
+          <button class="ua-btn">＋ Log usage</button>
+        </div>
+
+        <div class="stats">
+          <div class="stat"><div class="k">Spools in stock</div><div class="v">47</div></div>
+          <div class="stat warn"><div class="k">Low stock</div><div class="v">3 <small>materials</small></div></div>
+          <div class="stat"><div class="k">Used this week</div><div class="v">11.2 <small>kg</small></div></div>
+          <div class="stat"><div class="k">On order</div><div class="v">6 <small>spools</small></div></div>
+        </div>
+
+        <div class="panel">
+          <table>
+            <thead><tr><th>Material</th><th>Color</th><th>Spools</th><th>Remaining</th><th></th><th></th></tr></thead>
+            <tbody>
+              <tr><td>PLA</td><td><span class="swatch" style="background:#e8e6e0"></span>Natural</td><td>14</td><td><div class="meter"><i style="width:78%"></i></div></td><td></td><td><button class="rowact">Log usage</button></td></tr>
+              <tr><td>PLA</td><td><span class="swatch" style="background:#d64545"></span>Red</td><td>3</td><td><div class="meter low"><i style="width:18%"></i></div></td><td><span class="tag-low">LOW</span></td><td><button class="rowact">Reorder →</button></td></tr>
+              <tr><td>ABS</td><td><span class="swatch" style="background:#2b2f36"></span>Black</td><td>9</td><td><div class="meter"><i style="width:56%"></i></div></td><td></td><td><button class="rowact">Log usage</button></td></tr>
+              <tr><td>PETG</td><td><span class="swatch" style="background:#3d7ae0"></span>Blue</td><td>2</td><td><div class="meter crit"><i style="width:9%"></i></div></td><td><span class="tag-low">LOW</span></td><td><button class="rowact">Reorder →</button></td></tr>
+              <tr><td>TPU</td><td><span class="swatch" style="background:#f0f0f0"></span>White</td><td>5</td><td><div class="meter"><i style="width:44%"></i></div></td><td></td><td><button class="rowact">Log usage</button></td></tr>
+              <tr><td>PC-ABS</td><td><span class="swatch" style="background:#8a6f4c"></span>Bronze</td><td>4</td><td><div class="meter"><i style="width:38%"></i></div></td><td></td><td><button class="rowact">Log usage</button></td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Per-use approval for a gated write (until admin grants the scope org-wide) -->
+      <div class="toast">
+        <div class="toast-head">
+          <svg class="icon"><use href="#i-alert"/></svg>
+          <div>
+            <b>Filament Tracker wants to write to ClickUp</b>
+            <div class="d">Create task in <b>Procurement</b> — this runs through the Action Broker as you.</div>
+          </div>
+        </div>
+        <pre>clickup.create_task
+  list:  "Procurement"
+  title: "Reorder PETG Blue — 2 spools left (9%)"</pre>
+        <div class="toast-actions">
+          <label class="remember"><input type="checkbox"> Always allow for this app</label>
+          <button class="t-deny">Deny</button>
+          <button class="t-approve">Approve</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Status strip -->
+    <div class="status">
+      <span class="dot"></span> sandboxed frame · scoped app token
+      <span>storage: apps/filament-tracker (shared)</span>
+      <span>audit: every tool call logged</span>
+      <div class="spacer"></div>
+      <button>v2 · rollback</button>
+      <span>built in Workshop · <button>fork your own copy</button></span>
+    </div>
+  </main>
+</div>
+
+<script>
+  const mq = matchMedia('(prefers-color-scheme: light)');
+  const apply = () => document.documentElement.dataset.theme = mq.matches ? 'light' : 'dark';
+  apply(); mq.addEventListener('change', apply);
+  addEventListener('keydown', e => {
+    if (e.key === 't' && !/INPUT|TEXTAREA/.test(document.activeElement.tagName)) {
+      document.documentElement.dataset.theme = document.documentElement.dataset.theme === 'light' ? 'dark' : 'light';
+    }
+  });
+</script>

@@ -96,6 +96,7 @@ export default function Tabs({
         role="tablist"
       >
         {tabs.map((t) => {
+          const Icon = t.icon;
           const active = activeTab === t.id;
           return (
             <button
@@ -104,12 +105,13 @@ export default function Tabs({
               aria-selected={active}
               onClick={() => onTabChange(t.id)}
               title={t.note}
-              className={`px-4 py-1.5 rounded-md text-xs font-medium tech-transition whitespace-nowrap ${
+              className={`flex items-center gap-1.5 px-4 py-1.5 rounded-md text-xs font-medium tech-transition whitespace-nowrap ${
                 active
                   ? "bg-card text-foreground shadow-sm"
                   : "text-muted-foreground hover:text-foreground"
               }`}
             >
+              {Icon && <Icon className="w-3.5 h-3.5" />}
               {t.label}
               {t.count !== undefined && (
                 <span className="ml-1 opacity-50">{t.count}</span>

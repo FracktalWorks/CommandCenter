@@ -93,6 +93,7 @@ _KNOWN_AGENTS: frozenset[str] = frozenset(
         "apis-config",
         "email-assistant",
         "whatsapp-assistant",
+        "app-builder",
     ]
 )
 
@@ -145,6 +146,24 @@ _AGENT_REGISTRY: list[dict] = [
         # the BYOK LiteLLM tiers (tier-balanced → deepseek). Keep this "maf".
         "agent_runtime": "maf",
         "local_path": "apps/agents/agent-email-assistant",
+        "integrations": [],
+        "optional_integrations": [],
+    },
+    {
+        "name": "app-builder",
+        "description": (
+            "App Workshop builder — turns chat into small internal web apps "
+            "(Custom Apps). Each Workshop session is bound to its app's "
+            "workspace; the agent edits index.html and the app.json manifest "
+            "and keeps the preview renderable after every round."
+        ),
+        "tags": ["apps", "builder", "workshop"],
+        "status": "live",
+        # Copilot-SDK engine: the builder needs native file/shell tools to
+        # edit the app workspace. BYOK-routed through the gateway tiers like
+        # the sales-assistant (no GitHub quota dependency).
+        "agent_runtime": "github-copilot",
+        "local_path": "apps/agents/agent-app-builder",
         "integrations": [],
         "optional_integrations": [],
     },

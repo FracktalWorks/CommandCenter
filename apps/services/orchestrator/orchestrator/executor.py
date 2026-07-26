@@ -596,6 +596,7 @@ async def _run_sub_agent_streaming(
                 agents,
                 is_sub_agent=True,
                 tool_scope=_sub_tool_scope,
+                agent_name=agent_name,
             )
             if not agents:
                 return f"({agent_name!r} returned empty agent list)"
@@ -817,8 +818,70 @@ async def _run_sub_agent_streaming(
                 pass
 
 
+def _custom_apps_root() -> Path:
+    """Root directory that per-session workspaces must live under.
+
+    Matches the Custom Apps workspace root used by the gateway apps routes:
+    ``settings.custom_apps_root`` when configured, else
+    ``{agents_clone_dir}/custom_apps``.
+    """
+    settings = get_settings()
+    raw = str(getattr(settings, "custom_apps_root", "") or "")
+    if raw:
+        return Path(raw).expanduser().resolve()
+    return (Path(settings.agents_clone_dir).expanduser() / "custom_apps").resolve()
+
+
+def _session_workspace_override(
+    thread_id: str | None, agent_config: dict[str, Any]
+) -> str | None:
+    """Per-session working-directory override for opt-in agents.
+
+    An agent whose config sets ``"allow_session_workspace": true`` (the
+    ``app-builder``) runs each chat session in the workspace bound to that
+    session (``chat_session.workspace_path``, set by the Workshop UI via
+    ``PATCH /agent/workspace/{session_id}``) instead of its own clone.
+
+    Fail-closed containment: the stored path must resolve to an existing
+    directory inside the Custom Apps root — anything else (traversal,
+    symlink escape, stale path) falls back to the agent clone.
+    """
+    if not thread_id or not agent_config.get("allow_session_workspace"):
+        return None
+    workspace_path = ""
+    try:
+        from acb_graph import get_session as _db_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        with _db_session() as s:
+            row = s.execute(
+                text("SELECT workspace_path FROM chat_session WHERE id = :id"),
+                {"id": thread_id},
+            ).fetchone()
+        if row and row.workspace_path:
+            workspace_path = str(row.workspace_path)
+    except Exception:  # noqa: BLE001
+        return None
+    if not workspace_path:
+        return None
+    try:
+        resolved = Path(workspace_path).expanduser().resolve(strict=True)
+        root = _custom_apps_root()
+        if resolved.is_dir() and resolved != root and resolved.is_relative_to(root):
+            return str(resolved)
+    except OSError:
+        pass
+    _log.warning(
+        "executor.session_workspace_rejected",
+        thread_id=thread_id,
+        workspace_path=workspace_path,
+    )
+    return None
+
+
 def _resolve_effective_agent_dir(
-    agent_dir: Path, agent_config: dict[str, Any]
+    agent_dir: Path,
+    agent_config: dict[str, Any],
+    session_override: str | None = None,
 ) -> str:
     """Resolve the effective working directory for an agent.
 
@@ -827,11 +890,16 @@ def _resolve_effective_agent_dir(
     ``"$SOME_REPO_ROOT"``), that directory is used instead — provided it
     exists on disk.
 
+    ``session_override`` (an already-validated per-session workspace from
+    :func:`_session_workspace_override`) takes precedence over both.
+
     This lets an agent opt in to working on an external repo while its
     agent definition stays in its own clone, exactly like every other
     Copilot SDK agent.  When unset (the default), the agent operates in
     its own cloned repo directory.
     """
+    if session_override:
+        return session_override
     raw = agent_config.get("workspace_root") or ""
     if not raw:
         return str(agent_dir)
@@ -1429,6 +1497,9 @@ async def run_agent(
             # agent operates in its own clone directory.
             _effective_agent_dir = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
+                session_override=_session_workspace_override(
+                    thread_id, loaded.config,
+                ),
             )
 
             # For GitHub Copilot SDK agents: install the push guard (prevents
@@ -1480,6 +1551,7 @@ async def run_agent(
             _inject_agent_tools(
                 agents,
                 tool_scope=loaded.config.get("tool_scope") or None,
+                agent_name=agent_name,
             )  # inject call_agent / call_agent_background
 
             # Set write_artifact context + ensure visible workspace dirs exist.
@@ -1970,10 +2042,16 @@ async def run_agent_stream(
                 tool_scope=_merged_tool_scope(
                     loaded.config.get("tool_scope") or None, _agent_md_spec,
                 ),
+                agent_name=agent_name,
             )  # inject call_agent / call_agent_background
             # Inject MCP servers from the registry into every agent at runtime
             for _a in agents:
                 await _inject_mcp_servers(_a, agent_name)
+
+            # Per-session workspace override (Custom Apps builder sessions):
+            # resolved once here, reused for the artifact context and the
+            # Copilot working directory below so both stay consistent.
+            _session_ws = _session_workspace_override(thread_id, loaded.config)
 
             # Set write_artifact context so the tool knows which session to
             # report files to and where the workspace root lives.
@@ -1983,7 +2061,9 @@ async def run_agent_stream(
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
-                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(loaded.agent_dir)
+                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(
+                    _session_ws or loaded.agent_dir
+                )
                 # Declared+resolved integrations for this run — read by
                 # list_integrations (discoverability) and code_tools
                 # (_script_env grants a script exactly these creds).
@@ -2003,7 +2083,7 @@ async def run_agent_stream(
                 # Ensure the three visible workspace directories exist so the
                 # Files Viewer sidebar shows them even before the agent writes
                 # its first artefact.
-                _ws_root = loaded.agent_dir
+                _ws_root = Path(_session_ws) if _session_ws else loaded.agent_dir
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
             except Exception:  # noqa: BLE001
@@ -2155,11 +2235,12 @@ async def run_agent_stream(
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless
             # working_directory is explicitly set.  Point it at the agent's
-            # effective workspace (clone dir or workspace_root from config)
-            # so shell commands, file I/O, AGENTS.md, and skill resolution
-            # all work correctly.
+            # effective workspace (clone dir, workspace_root from config, or
+            # the session-bound Custom Apps workspace) so shell commands,
+            # file I/O, AGENTS.md, and skill resolution all work correctly.
             _effective_agent_dir = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
+                session_override=_session_ws,
             )
             if _is_copilot_sdk:
                 for _ag in agents:
@@ -3703,7 +3784,7 @@ async def _self_anneal(
                         _apply_agent_md_overrides(
                             agents, loaded.agent_dir, agent_name,
                         )
-                        _inject_agent_tools(agents)
+                        _inject_agent_tools(agents, agent_name=agent_name)
                         result = await _run_with_maf_agent(
                             agents,
                             agent_name=agent_name,
@@ -3746,7 +3827,7 @@ async def _self_anneal(
                     _apply_agent_md_overrides(
                         agents, loaded.agent_dir, agent_name,
                     )
-                    _inject_agent_tools(agents)
+                    _inject_agent_tools(agents, agent_name=agent_name)
                     result = await _run_with_maf_agent(
                         agents,
                         agent_name=agent_name,

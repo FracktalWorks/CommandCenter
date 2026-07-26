@@ -17,7 +17,6 @@ import {
   CalendarDays,
   CalendarPlus,
   Settings2,
-  Loader2,
   AlertTriangle,
   Wand2,
   RotateCcw,
@@ -26,7 +25,6 @@ import {
   Sun,
 } from "lucide-react";
 import {
-  apiRollover,
   apiGetDayState,
   apiSetDayState,
 } from "../lib/api";
@@ -57,7 +55,6 @@ import {
   addMonths,
   startOfWeek,
   useNow,
-  energyWindowsPayload,
   type Mode,
   type OutcomeById,
 } from "./calendar/shared";
@@ -98,7 +95,6 @@ export function CalendarView() {
   // The AI planner panel: "plan" fills free slots from unscheduled next actions;
   // "replan" reorganizes the rest of today's flexible blocks from now. null = shut.
   const [planMode, setPlanMode] = useState<null | "plan" | "replan">(null);
-  const [rolling, setRolling] = useState(false);
   const [reviewOpen, setReviewOpen] = useState(false);
   // Mobile / tap-to-schedule sheet. `at` set ⇒ a tapped slot (schedule at that
   // exact time); absent ⇒ opened from the FAB (auto-place into the first free
@@ -360,16 +356,16 @@ export function CalendarView() {
   // Is there anything left to reorganize today? "Replan the rest of my day" only
   // makes sense with ≥1 flexible, not-done block still ahead (end ≥ now) — a
   // fixed meeting or a finished block isn't movable, so it wouldn't offer this.
+  // "Fit what's left" is offered whenever there's ≥1 movable block ANYWHERE on
+  // today (flexible + not done) — including ones whose time already slipped past
+  // earlier today, since Fit sweeps those forward into the time remaining.
   const canReplan = useMemo(() => {
-    const nowMs = now.getTime();
     return items.some(
       (i) =>
         i.scheduledStart &&
-        i.scheduledEnd &&
         i.disposition !== "DONE" &&
         (i.flexible ?? true) &&
-        sameDay(new Date(i.scheduledStart), now) &&
-        new Date(i.scheduledEnd).getTime() >= nowMs,
+        sameDay(new Date(i.scheduledStart), now),
     );
   }, [items, now]);
 
@@ -383,33 +379,19 @@ export function CalendarView() {
     [items, now],
   );
 
-  const rollOver = async () => {
-    setRolling(true);
-    const today = startOfDay(new Date());
-    const s = new Date(today);
-    s.setHours(workStart, 0, 0, 0);
-    const e = new Date(today);
-    e.setHours(workEnd, 0, 0, 0);
-    try {
-      const res = await apiRollover({
-        day_start: s.toISOString(),
-        day_end: e.toISOString(),
-        energy_windows: energyWindowsPayload(energyWindows, today),
-        capacity_mins: capacityTarget,
-        buffer_mins: settings.bufferMins ?? 0,
-      });
-      applySchedule(
-        `Rolled ${res.blocks.length} block${res.blocks.length === 1 ? "" : "s"} into today`,
-        res.blocks.map((b) => ({
-          id: b.itemId,
-          patch: { scheduledStart: b.start, scheduledEnd: b.end },
-        })),
-      );
-    } catch {
-      /* best-effort */
-    } finally {
-      setRolling(false);
-    }
+  // Roll-over now RETURNS unfinished tasks to the unscheduled list (clears their
+  // schedule) instead of auto-cramming them onto today — you re-plan them
+  // deliberately (drag, or Rebuild my day). Instant + undoable; they land in the
+  // rail. (The nightly auto-return does the same server-side.)
+  const rollOver = () => {
+    if (!overdueItems.length) return;
+    applySchedule(
+      `Moved ${overdueItems.length} unfinished task${overdueItems.length === 1 ? "" : "s"} to your list`,
+      overdueItems.map((i) => ({
+        id: i.id,
+        patch: { scheduledStart: "", scheduledEnd: "" },
+      })),
+    );
   };
 
   const step = (dir: 1 | -1) =>
@@ -507,21 +489,21 @@ export function CalendarView() {
             <button
               type="button"
               onClick={() => setPlanMode("replan")}
-              title="Fell behind? Reorganize the rest of today's flexible blocks from now."
+              title="Fit what's left: reshuffle today's not-done tasks into the time you have left, and move anything that no longer fits back to your list. Adds no new tasks."
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-secondary px-2.5 py-1.5 text-[12px] font-medium text-muted-foreground hover:bg-secondary/70 hover:text-foreground"
             >
               <CalendarClock className="h-3.5 w-3.5" />
-              <span className="hidden sm:inline">Replan</span>
+              <span className="hidden sm:inline">Fit what&apos;s left</span>
             </button>
           )}
           <button
             type="button"
             onClick={() => setPlanMode("plan")}
-            title="AI-plan your day from your Next Actions"
+            title="Rebuild my day: reshuffle what's on your calendar into the time left, trim the overflow back to your list, and fill any remaining room from your Next Actions."
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary/10 px-2.5 py-1.5 text-[12px] font-medium text-primary hover:bg-primary/20"
           >
             <Wand2 className="h-3.5 w-3.5" />
-            <span className="hidden sm:inline">Plan my day</span>
+            <span className="hidden sm:inline">Rebuild my day</span>
           </button>
           <button
             type="button"
@@ -615,22 +597,17 @@ export function CalendarView() {
         <div className="flex items-center gap-2 border-b border-warning/40 bg-warning/10 px-4 py-2 text-[12px]">
           <AlertTriangle className="h-4 w-4 shrink-0 text-warning" />
           <span className="min-w-0 flex-1 text-foreground">
-            {overdueCount} scheduled task{overdueCount === 1 ? "" : "s"} from
-            earlier {overdueCount === 1 ? "wasn't" : "weren't"} completed.
+            {overdueCount} unfinished task{overdueCount === 1 ? "" : "s"} from
+            earlier {overdueCount === 1 ? "is" : "are"} still on your calendar.
           </span>
           <button
             type="button"
-            onClick={() => void rollOver()}
-            disabled={rolling}
-            title="Reschedule them into today's open slots (deadline-aware)"
-            className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1 font-medium text-warning hover:bg-warning/30 disabled:opacity-50"
+            onClick={rollOver}
+            title="Clear their times and move them back to your unscheduled list, so you can re-plan them (drag, or Rebuild my day)."
+            className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1 font-medium text-warning hover:bg-warning/30"
           >
-            {rolling ? (
-              <Loader2 className="h-3.5 w-3.5 animate-spin" />
-            ) : (
-              <RotateCcw className="h-3.5 w-3.5" />
-            )}
-            Roll over to today
+            <RotateCcw className="h-3.5 w-3.5" />
+            Move to my list
           </button>
         </div>
       )}
@@ -795,8 +772,7 @@ export function CalendarView() {
           items={items}
           urgentWindowHours={settings.urgentWindowHours}
           carryForward={overdueItems}
-          rolling={rolling}
-          onRollover={() => void rollOver()}
+          onRollover={rollOver}
           onPlan={() => setPlanMode("plan")}
           onClose={() => {
             setStartupOpen(false);

@@ -73,9 +73,9 @@ export default function ConnectPage() {
         : "Pick how you want to connect";
 
   return (
-    <div className="mx-auto flex min-h-full max-w-2xl flex-col p-6">
+    <div className="mx-auto flex min-h-full max-w-2xl flex-col p-4 md:p-6">
       <div className="mb-6 flex items-center gap-3">
-        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-500">
+        <span className="flex h-9 w-9 items-center justify-center rounded-xl bg-primary/15 text-primary">
           <MessageCircle className="h-5 w-5" />
         </span>
         <div>
@@ -169,9 +169,9 @@ function PickTransport({
     <div className="space-y-3">
       <button
         onClick={onPersonal}
-        className="group flex w-full items-start gap-3 rounded-xl border border-border bg-background p-5 text-left transition hover:border-emerald-500/60 hover:bg-emerald-500/[0.03]"
+        className="group flex w-full items-start gap-3 rounded-xl border border-border bg-background p-5 text-left transition hover:border-primary/60 hover:bg-primary/[0.03]"
       >
-        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-emerald-500/15 text-emerald-600">
+        <span className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-xl bg-primary/15 text-primary">
           <Smartphone className="h-5 w-5" />
         </span>
         <div className="min-w-0 flex-1">
@@ -179,7 +179,7 @@ function PickTransport({
             <span className="text-[14px] font-semibold">
               Personal WhatsApp
             </span>
-            <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-emerald-600">
+            <span className="rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-bold uppercase tracking-wide text-primary">
               Fastest
             </span>
           </div>
@@ -188,7 +188,7 @@ function PickTransport({
             Web works. No Meta developer account, no tokens, live in a minute.
           </p>
         </div>
-        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-emerald-600" />
+        <ArrowRight className="mt-1 h-4 w-4 shrink-0 text-muted-foreground transition group-hover:translate-x-0.5 group-hover:text-primary" />
       </button>
 
       <button
@@ -235,41 +235,33 @@ function PersonalPairing({
   const accountId = useRef<string | null>(null);
   const doneRef = useRef(false);
 
+  // Apply a start-session result. All setState lives here (a promise callback),
+  // never synchronously inside an effect — the app's fetch-then-set pattern.
+  const applySession = useCallback((res: Awaited<ReturnType<typeof startBridgeSession>>) => {
+    if (!res.ok || !res.data) {
+      setError(res.error ?? "Couldn't start pairing.");
+      setStatus("error");
+      return;
+    }
+    accountId.current = res.data.account_id;
+    setQr(res.data.qr);
+    setReachable(res.data.bridge_reachable);
+    setStatus(res.data.status || "pairing");
+  }, []);
+
   // Retry / "New code": reset the visible state, then start a fresh session.
-  // setState lives inside the promise callback (never synchronously in an
-  // effect), matching the rest of the app's fetch-then-set pattern.
   const restart = useCallback(() => {
     doneRef.current = false;
     setError(null);
     setStatus("starting");
     setQr(null);
-    startBridgeSession().then((res) => {
-      if (!res.ok || !res.data) {
-        setError(res.error ?? "Couldn't start pairing.");
-        setStatus("error");
-        return;
-      }
-      accountId.current = res.data.account_id;
-      setQr(res.data.qr);
-      setReachable(res.data.bridge_reachable);
-      setStatus(res.data.status || "pairing");
-    });
-  }, []);
+    startBridgeSession().then(applySession);
+  }, [applySession]);
 
   // Kick off a session on mount.
   useEffect(() => {
-    startBridgeSession().then((res) => {
-      if (!res.ok || !res.data) {
-        setError(res.error ?? "Couldn't start pairing.");
-        setStatus("error");
-        return;
-      }
-      accountId.current = res.data.account_id;
-      setQr(res.data.qr);
-      setReachable(res.data.bridge_reachable);
-      setStatus(res.data.status || "pairing");
-    });
-  }, []);
+    startBridgeSession().then(applySession);
+  }, [applySession]);
 
   // Poll status + refreshed QR until the phone scans it (status → live).
   useEffect(() => {
@@ -293,7 +285,7 @@ function PersonalPairing({
   return (
     <Card>
       <div className="flex items-center gap-2">
-        <QrCode className="h-4 w-4 text-emerald-600" />
+        <QrCode className="h-4 w-4 text-primary" />
         <h2 className="text-[14px] font-semibold">Scan to link your WhatsApp</h2>
       </div>
 
@@ -335,7 +327,7 @@ function PersonalPairing({
 
           <div className="mt-3 flex items-center justify-center gap-1.5 text-[11.5px] text-muted-foreground">
             {status === "live" ? (
-              <span className="font-semibold text-emerald-600">Linked!</span>
+              <span className="font-semibold text-success">Linked!</span>
             ) : (
               <>
                 <Loader2 className="h-3 w-3 animate-spin" />
@@ -578,7 +570,7 @@ function Stepper({ step }: { step: number }) {
               <span
                 className={`flex h-6 w-6 items-center justify-center rounded-full text-[11px] font-bold ${
                   done
-                    ? "bg-emerald-500 text-white"
+                    ? "bg-primary text-primary-foreground"
                     : active
                       ? "bg-primary text-primary-foreground"
                       : "bg-muted text-muted-foreground"
@@ -596,7 +588,7 @@ function Stepper({ step }: { step: number }) {
             </div>
             {i < STEPS.length - 1 && (
               <div
-                className={`h-px flex-1 ${done ? "bg-emerald-500/50" : "bg-border"}`}
+                className={`h-px flex-1 ${done ? "bg-primary/50" : "bg-border"}`}
               />
             )}
           </div>
@@ -663,7 +655,7 @@ function StepPrereqs({
                 href={it.href}
                 target="_blank"
                 rel="noreferrer"
-                className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-emerald-600 hover:underline"
+                className="mt-0.5 inline-flex items-center gap-1 text-[11px] text-primary hover:underline"
               >
                 {it.link} <ExternalLink className="h-3 w-3" />
               </a>
@@ -852,15 +844,15 @@ function StepCredentials({
           Test connection
         </GhostButton>
         {verified && (
-          <span className="text-[11px] font-semibold text-emerald-600">
+          <span className="text-[11px] font-semibold text-success">
             Verified with Meta
           </span>
         )}
       </div>
 
       {result?.ok && (
-        <div className="mt-3 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3">
-          <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-emerald-600">
+        <div className="mt-3 rounded-lg border border-success/30 bg-success/10 p-3">
+          <div className="flex items-center gap-1.5 text-[12.5px] font-semibold text-success">
             <CheckCircle2 className="h-4 w-4" />
             {result.verified_name || "Connected"}
           </div>
@@ -911,7 +903,7 @@ function StepDone({ onGo }: { onGo: () => void }) {
   return (
     <Card>
       <div className="flex flex-col items-center py-4 text-center">
-        <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-500">
+        <span className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-success/15 text-success">
           <CheckCircle2 className="h-7 w-7" />
         </span>
         <h2 className="text-[15px] font-semibold">You&apos;re connected 🎉</h2>
@@ -976,12 +968,17 @@ function TextInput({
 
 function CopyRow({ label, value }: { label: string; value: string }) {
   const [copied, setCopied] = useState(false);
+  const copiedTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
+  useEffect(() => () => {
+    if (copiedTimer.current) clearTimeout(copiedTimer.current);
+  }, []);
   const copy = useCallback(async () => {
     if (!value) return;
     try {
       await navigator.clipboard.writeText(value);
       setCopied(true);
-      setTimeout(() => setCopied(false), 1500);
+      if (copiedTimer.current) clearTimeout(copiedTimer.current);
+      copiedTimer.current = setTimeout(() => setCopied(false), 1500);
     } catch {
       /* clipboard blocked — the value is still selectable */
     }
@@ -1002,7 +999,7 @@ function CopyRow({ label, value }: { label: string; value: string }) {
         >
           {copied ? (
             <>
-              <Check className="h-3 w-3 text-emerald-500" /> Copied
+              <Check className="h-3 w-3 text-success" /> Copied
             </>
           ) : (
             <>

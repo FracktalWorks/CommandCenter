@@ -27,7 +27,6 @@ class PostSyncHooks:
     # because it has a backlog to work through and must catch up on a quiet
     # number, exactly as the email classify_threads hook does (W2+).
     classify_chats: PostSyncHook | None = None
-    send_digest: PostSyncHook | None = None
 
 
 hooks = PostSyncHooks()

@@ -94,6 +94,28 @@ Then in the app: **Integrations → WhatsApp → Connect a personal number**, sc
 the QR, and the number goes live. Sessions survive restarts (re-connected from
 the sqlite store on boot).
 
+## History backfill
+
+On link, WhatsApp pushes a history-sync payload to the new device — the same
+mechanism that populates WhatsApp Desktop's recent chats. The bridge handles the
+`events.HistorySync` event, normalizes each conversation's messages, and streams
+them to `/whatsapp/bridge/ingest` as a **backfill** batch: they're persisted (and
+searchable/triaged) but the post-sync hooks are skipped, so **auto-reply never
+fires on months-old messages**. Once the payloads stop arriving (~90s debounce),
+the bridge calls `/whatsapp/bridge/reclassify` once to compute reply statuses.
+
+- `WHATSAPP_BRIDGE_FULL_HISTORY=true` (default) requests the ~1-year desktop-profile
+  sync; `false` gives the default ~3-month "recent" window.
+- It's **recent history, not a full archive**: ~1 year is reliable, ~3 years is the
+  server ceiling, and you only get what your phone still stores. Older-than-retention
+  messages won't come, and **old media often 404s** (expired from WhatsApp's CDN) —
+  the text/metadata still lands; the media download just fails.
+- The bootstrap sync is delivered **once**, at link time — it can't be re-requested;
+  the only reset is unlink + relink.
+- On-demand "load older" pagination (`BuildHistorySyncRequest`) is a possible
+  follow-up; it's best-effort (needs the phone online and WhatsApp may drop
+  companion-device requests), so it's intentionally not wired in yet.
+
 ## Notes / limits
 
 - Personal WhatsApp has **no templates** and **no 24-hour window** — the composer

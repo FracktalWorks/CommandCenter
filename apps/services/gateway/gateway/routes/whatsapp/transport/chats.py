@@ -50,14 +50,6 @@ def _chat_model(row: Any) -> WhatsAppChatModel:
     )
 
 
-async def _user_account_ids(db: Any, user_email: str) -> list[str]:
-    rows = (await db.execute(
-        text("SELECT id FROM wa_accounts WHERE user_id = :uid"),
-        {"uid": user_email},
-    )).fetchall()
-    return [str(r.id) for r in rows]
-
-
 @router.get("/streams")
 async def list_streams(
     account_id: str | None = None,
@@ -73,20 +65,25 @@ async def list_streams(
             params["aid"] = account_id
         scope += ")"
 
-        async def _count(where: str) -> int:
-            q = f"SELECT COUNT(*) FROM wa_chats c LEFT JOIN wa_chat_status s " \
-                f"ON s.account_id = c.account_id AND s.chat_id = c.id " \
-                f"WHERE {scope} AND {where}"
-            return int((await db.execute(text(q), params)).scalar() or 0)
-
-        counts = {
-            "needs_reply": await _count(f"s.status = 'NEEDS_REPLY' AND {_NOT_SNOOZED}"),
-            "waiting": await _count(f"s.status = 'AWAITING' AND {_NOT_SNOOZED}"),
-            "groups": await _count(f"c.kind = 'group' AND {_NOT_SNOOZED}"),
-            "all": await _count(_NOT_SNOOZED),
-            "snoozed": await _count(_SNOOZED),
+        # One pass with conditional aggregates instead of five COUNT round-trips.
+        row = (await db.execute(text(f"""
+            SELECT
+              COUNT(*) FILTER (WHERE s.status = 'NEEDS_REPLY' AND {_NOT_SNOOZED}) AS needs_reply,
+              COUNT(*) FILTER (WHERE s.status = 'AWAITING' AND {_NOT_SNOOZED})     AS waiting,
+              COUNT(*) FILTER (WHERE c.kind = 'group' AND {_NOT_SNOOZED})          AS groups,
+              COUNT(*) FILTER (WHERE {_NOT_SNOOZED})                               AS all,
+              COUNT(*) FILTER (WHERE {_SNOOZED})                                   AS snoozed
+            FROM wa_chats c
+            LEFT JOIN wa_chat_status s
+              ON s.account_id = c.account_id AND s.chat_id = c.id
+            WHERE {scope}"""), params)).fetchone()
+        return {
+            "needs_reply": int(row.needs_reply or 0),
+            "waiting": int(row.waiting or 0),
+            "groups": int(row.groups or 0),
+            "all": int(row.all or 0),
+            "snoozed": int(row.snoozed or 0),
         }
-        return counts
     finally:
         await db.close()
 

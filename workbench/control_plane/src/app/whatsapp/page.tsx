@@ -8,10 +8,10 @@
 // buttons — capability arrives in later phases as streams / settings / drawers,
 // never as more always-on chrome on the queue.
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
-  Activity,
+  ArrowLeft,
   Check,
   ChevronsUpDown,
   Clock,
@@ -22,10 +22,11 @@ import {
   Plus,
   Search,
   Send,
-  Settings,
   Sparkles,
+  X,
   Zap,
 } from "lucide-react";
+import { useViewMode } from "@/components/ViewModeProvider";
 import {
   captureTask,
   draftNudge,
@@ -109,6 +110,10 @@ function initials(name: string, fallback: string): string {
 }
 
 export default function WhatsAppPage() {
+  const { isMobile } = useViewMode();
+  // On mobile the three panes collapse to one: the list drills down into a
+  // single conversation ("chat"), with a back button returning to "list".
+  const [mobileView, setMobileView] = useState<"list" | "chat">("list");
   const [loading, setLoading] = useState(true);
   const [accounts, setAccounts] = useState<WaAccount[]>([]);
   const [streams, setStreams] = useState<WaStreams>({
@@ -151,9 +156,16 @@ export default function WhatsAppPage() {
     loadChats();
   }, [loadChats]);
 
+  // Tracks the most recently opened chat so an out-of-order fetch (fast A→B
+  // clicks) can't render A's messages under B.
+  const openChatReq = useRef<string | null>(null);
   const openChat = useCallback(async (chat: WaChat) => {
     setSelectedChat(chat);
-    setMessages(await fetchMessages(chat.id));
+    setMobileView("chat"); // drill into the single-pane thread on mobile
+    setMessages([]); // clear immediately so a slow fetch can't show the old chat
+    openChatReq.current = chat.id;
+    const msgs = await fetchMessages(chat.id);
+    if (openChatReq.current === chat.id) setMessages(msgs);
   }, []);
 
   const reloadMessages = useCallback(async () => {
@@ -164,6 +176,7 @@ export default function WhatsAppPage() {
   const switchAccount = useCallback((id: string) => {
     setActiveAccountId(id);
     setSelectedChat(null);
+    setMobileView("list");
     setActiveStream("needs_reply");
   }, []);
 
@@ -171,6 +184,7 @@ export default function WhatsAppPage() {
   // drop the selection and refresh the counts + list.
   const refreshTriage = useCallback(async () => {
     setSelectedChat(null);
+    setMobileView("list"); // a snoozed chat leaves the pane — return to the list
     if (activeAccountId) setStreams(await fetchStreams(activeAccountId));
     await loadChats();
   }, [activeAccountId, loadChats]);
@@ -190,16 +204,98 @@ export default function WhatsAppPage() {
   const streamCount = (key: string) =>
     (streams as unknown as Record<string, number>)[key] ?? 0;
 
+  // ── Mobile: single-pane drill-down (list ⇄ conversation) ──────────────
+  if (isMobile) {
+    if (mobileView === "chat" && selectedChat) {
+      return (
+        <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
+          <Conversation
+            key={selectedChat.id}
+            chat={selectedChat}
+            messages={messages}
+            accountId={activeAccount.id}
+            onReload={reloadMessages}
+            onTriageChange={refreshTriage}
+            isMobile
+            onBack={() => setMobileView("list")}
+          />
+        </div>
+      );
+    }
+    return (
+      <div className="flex h-full min-h-0 w-full flex-col bg-background text-foreground">
+        {/* number + triage-stream header */}
+        <div className="shrink-0 border-b border-border">
+          <MobileAccountBar
+            accounts={accounts}
+            active={activeAccount}
+            onSwitch={switchAccount}
+          />
+          <div className="flex gap-1.5 overflow-x-auto px-3 pb-2">
+            {STREAMS.map((s) => {
+              const active = s.key === activeStream;
+              const count = streamCount(s.key);
+              const Icon = s.icon;
+              return (
+                <button
+                  key={s.key}
+                  onClick={() => {
+                    setActiveStream(s.key);
+                    setSelectedChat(null);
+                  }}
+                  className={`flex shrink-0 items-center gap-1.5 rounded-full px-3 py-1.5 text-[12px] whitespace-nowrap ${
+                    active
+                      ? "bg-primary/15 font-semibold text-primary"
+                      : "text-muted-foreground hover:bg-muted/50"
+                  }`}
+                >
+                  <Icon className="h-3.5 w-3.5 shrink-0" />
+                  {s.label}
+                  <span
+                    className={`tabular-nums ${
+                      active ? "text-primary font-bold" : "text-muted-foreground/60"
+                    }`}
+                  >
+                    {count || "·"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {/* chat list (full width) */}
+        <div className="min-h-0 flex-1 overflow-y-auto">
+          {chats.length === 0 ? (
+            <div className="p-6 text-center text-[12px] text-muted-foreground">
+              Nothing here yet. New messages arrive automatically once your
+              number receives them.
+            </div>
+          ) : (
+            chats.map((c) => (
+              <ChatRow
+                key={c.id}
+                chat={c}
+                selected={selectedChat?.id === c.id}
+                onClick={() => openChat(c)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="flex h-full min-h-0 bg-background text-foreground">
       {/* ── Spine: triage streams ─────────────────────────────────── */}
-      <nav className="w-52 shrink-0 border-r border-border p-3 flex flex-col">
-        <div className="px-2 py-1 text-[10px] font-bold tracking-wider text-muted-foreground/70">
-          TRIAGE
+      <nav className="w-52 shrink-0 space-y-0.5 border-r border-border p-2 flex flex-col">
+        <div className="px-3 py-1 text-[10px] font-bold uppercase tracking-wider text-muted-foreground/70">
+          Triage
         </div>
         {STREAMS.map((s) => {
           const active = s.key === activeStream;
           const count = streamCount(s.key);
+          const Icon = s.icon;
           return (
             <button
               key={s.key}
@@ -207,58 +303,38 @@ export default function WhatsAppPage() {
                 setActiveStream(s.key);
                 setSelectedChat(null);
               }}
-              className={`flex items-center gap-2 rounded-lg border-l-2 px-2.5 py-2 text-left text-[13px] ${
+              className={`flex w-full items-center gap-2.5 rounded-md px-3 py-2 text-left transition-colors ${
                 active
-                  ? "border-primary bg-muted font-semibold text-foreground"
-                  : "border-transparent text-muted-foreground hover:bg-muted/50"
+                  ? "bg-primary/15 text-primary"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground"
               }`}
             >
-              <span className="w-4 text-center">{s.icon}</span>
-              <span className="flex-1 truncate">{s.label}</span>
-              <span
-                className={`text-[11px] tabular-nums ${
-                  active ? "text-primary font-bold" : "text-muted-foreground/60"
-                }`}
-              >
-                {count || "·"}
-              </span>
+              <Icon className="h-3.5 w-3.5 shrink-0" />
+              <span className="flex-1 truncate text-xs">{s.label}</span>
+              {count > 0 && (
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] tabular-nums ${
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "bg-secondary text-muted-foreground"
+                  }`}
+                >
+                  {count}
+                </span>
+              )}
             </button>
           );
         })}
+        {/* Pulse / Categories / Replies / Rules / Numbers now live in the shared
+            WhatsApp nav (whatsapp/layout.tsx), so they stay reachable from every
+            sub-app. The switcher stays here — it scopes this inbox. */}
         <div className="mt-auto">
-          <div className="px-2 py-1 text-[10px] font-bold tracking-wider text-muted-foreground/70">
-            AUTOMATION
-          </div>
-          <Link
-            href="/whatsapp/insights"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            <Activity className="h-3.5 w-3.5" /> Pulse
-          </Link>
-          <Link
-            href="/whatsapp/settings/replies"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            <Zap className="h-3.5 w-3.5" /> Saved replies
-          </Link>
-          <Link
-            href="/whatsapp/settings/categories"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            <Settings className="h-3.5 w-3.5" /> Categories
-          </Link>
-          <Link
-            href="/whatsapp/settings/rules"
-            className="flex items-center gap-2 rounded-lg px-2.5 py-2 text-[12px] text-muted-foreground hover:bg-muted/50"
-          >
-            ⚖ Rules preview
-          </Link>
+          <AccountSwitcher
+            accounts={accounts}
+            active={activeAccount}
+            onSwitch={switchAccount}
+          />
         </div>
-        <AccountSwitcher
-          accounts={accounts}
-          active={activeAccount}
-          onSwitch={switchAccount}
-        />
       </nav>
 
       {/* ── Conversation list (quiet rows) ────────────────────────── */}
@@ -297,6 +373,7 @@ export default function WhatsAppPage() {
       <div className="flex min-w-0 flex-1 flex-col">
         {selectedChat ? (
           <Conversation
+            key={selectedChat.id}
             chat={selectedChat}
             messages={messages}
             accountId={activeAccount.id}
@@ -353,13 +430,13 @@ function AccountSwitcher({
                 </div>
               </div>
               {a.id === active.id && (
-                <Check className="h-3.5 w-3.5 shrink-0 text-emerald-500" />
+                <Check className="h-3.5 w-3.5 shrink-0 text-success" />
               )}
             </button>
           ))}
           <Link
             href="/whatsapp/connect"
-            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-emerald-600 hover:bg-muted/50"
+            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-primary hover:bg-muted/50"
           >
             <Plus className="h-3.5 w-3.5" /> Connect another number
           </Link>
@@ -379,13 +456,96 @@ function AccountSwitcher({
           <div className="truncate font-semibold">
             {active.display_name || active.phone_number}
           </div>
-          <div className="text-emerald-500">
+          <div className="text-success">
             ● live
             {accounts.length > 1 ? ` · ${accounts.length} numbers` : ""}
           </div>
         </div>
         <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
       </button>
+    </div>
+  );
+}
+
+// Mobile equivalent of the desktop AccountSwitcher: a header row that names the
+// active number and, when more than one is connected, opens a downward menu to
+// switch. Desktop's switcher opens upward from the spine's foot — no good at the
+// top of a phone screen — so this one drops down instead.
+function MobileAccountBar({
+  accounts,
+  active,
+  onSwitch,
+}: {
+  accounts: WaAccount[];
+  active: WaAccount;
+  onSwitch: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const multi = accounts.length > 1;
+  return (
+    <div className="relative">
+      <button
+        onClick={() => multi && setOpen((v) => !v)}
+        className="flex w-full items-center gap-2 px-3 py-2 text-left"
+      >
+        <span
+          className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+          style={{ background: active.avatar_color || "#25D366" }}
+        >
+          {initials(active.display_name, "WA")}
+        </span>
+        <div className="min-w-0 flex-1">
+          <div className="truncate text-[12px] font-semibold">
+            {active.display_name || active.phone_number}
+          </div>
+          <div className="text-[10px] text-success">
+            ● live{multi ? ` · ${accounts.length} numbers` : ""}
+          </div>
+        </div>
+        {multi && (
+          <ChevronsUpDown className="h-3.5 w-3.5 shrink-0 text-muted-foreground/60" />
+        )}
+      </button>
+      {open && multi && (
+        <div className="absolute inset-x-3 top-full z-20 overflow-hidden rounded-lg border border-border bg-background shadow-lg">
+          {accounts.map((a) => (
+            <button
+              key={a.id}
+              onClick={() => {
+                onSwitch(a.id);
+                setOpen(false);
+              }}
+              className={`flex w-full items-center gap-2 px-2.5 py-2 text-left hover:bg-muted/50 ${
+                a.id === active.id ? "bg-muted/40" : ""
+              }`}
+            >
+              <span
+                className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full text-[9px] font-bold text-white"
+                style={{ background: a.avatar_color || "#25D366" }}
+              >
+                {initials(a.display_name, "WA")}
+              </span>
+              <div className="min-w-0 flex-1">
+                <div className="truncate text-[11px] font-semibold">
+                  {a.display_name || a.phone_number}
+                </div>
+                <div className="truncate text-[10px] text-muted-foreground">
+                  {a.phone_number}
+                </div>
+              </div>
+              {a.id === active.id && (
+                <Check className="h-3.5 w-3.5 shrink-0 text-success" />
+              )}
+            </button>
+          ))}
+          <Link
+            href="/whatsapp/connect"
+            className="flex items-center gap-2 border-t border-border px-2.5 py-2 text-[11px] font-semibold text-primary hover:bg-muted/50"
+          >
+            <Plus className="h-3.5 w-3.5" /> Connect another number
+          </Link>
+        </div>
+      )}
     </div>
   );
 }
@@ -440,12 +600,16 @@ function Conversation({
   accountId,
   onReload,
   onTriageChange,
+  isMobile = false,
+  onBack,
 }: {
   chat: WaChat;
   messages: WaMessage[];
   accountId: string;
   onReload: () => Promise<void> | void;
   onTriageChange: () => Promise<void> | void;
+  isMobile?: boolean;
+  onBack?: () => void;
 }) {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
@@ -529,31 +693,45 @@ function Conversation({
   );
 
   return (
-    <div className="flex h-full min-h-0 flex-1">
+    <div className="relative flex h-full min-h-0 flex-1">
       <div className="flex min-w-0 flex-1 flex-col">
-        <div className="flex h-12 items-center gap-3 border-b border-border px-4">
-          <span className="flex h-8 w-8 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-foreground/80">
+        <div className="flex h-12 items-center gap-2 border-b border-border px-3">
+          {onBack && (
+            <button
+              onClick={onBack}
+              aria-label="Back to list"
+              className="-ml-1 shrink-0 rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <ArrowLeft className="h-4 w-4" />
+            </button>
+          )}
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-foreground/80">
             {initials(chat.name, chat.wa_chat_id)}
           </span>
-          <b className="text-[13px]">{chat.name || chat.wa_chat_id}</b>
-          {chat.window_open ? (
-            <span className="ml-2 rounded-full bg-emerald-500/15 px-2 py-0.5 text-[10px] font-semibold text-emerald-500">
-              session open
-            </span>
-          ) : (
-            <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground">
-              window closed · template only
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-2">
+          <div className="flex min-w-0 flex-1 items-center gap-2">
+            <b className="truncate text-[13px]">{chat.name || chat.wa_chat_id}</b>
+            {chat.window_open ? (
+              <span className="hidden shrink-0 rounded-full bg-success/15 px-2 py-0.5 text-[10px] font-semibold text-success sm:inline">
+                session open
+              </span>
+            ) : (
+              <span className="hidden shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-semibold text-muted-foreground sm:inline">
+                window closed · template only
+              </span>
+            )}
+          </div>
+          <div className="ml-auto flex shrink-0 items-center gap-2">
             {isSnoozed ? (
               <button
                 onClick={doUnsnooze}
                 className="flex items-center gap-1 rounded-md border border-border bg-muted px-2 py-1 text-[11px] text-muted-foreground"
                 title={`Snoozed until ${snoozeLabel(chat.snoozed_until)}`}
               >
-                <Clock className="h-3.5 w-3.5" /> Snoozed ·{" "}
-                {snoozeLabel(chat.snoozed_until)} — wake
+                <Clock className="h-3.5 w-3.5 shrink-0" />
+                <span className="hidden sm:inline">
+                  Snoozed · {snoozeLabel(chat.snoozed_until)} — wake
+                </span>
+                <span className="sm:hidden">Snoozed</span>
               </button>
             ) : (
               <div className="relative">
@@ -563,7 +741,8 @@ function Conversation({
                     showSnooze ? "bg-muted text-foreground" : "text-muted-foreground"
                   }`}
                 >
-                  <Clock className="h-3.5 w-3.5" /> Snooze
+                  <Clock className="h-3.5 w-3.5 shrink-0" />
+                  <span className="hidden sm:inline">Snooze</span>
                 </button>
                 {showSnooze && (
                   <div className="absolute right-0 top-8 z-10 w-40 overflow-hidden rounded-lg border border-border bg-background shadow-lg">
@@ -589,7 +768,8 @@ function Conversation({
                 showDetails ? "bg-muted text-foreground" : "text-muted-foreground"
               }`}
             >
-              <PanelRight className="h-3.5 w-3.5" /> Details
+              <PanelRight className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Details</span>
             </button>
           </div>
         </div>
@@ -693,7 +873,7 @@ function Conversation({
                 <button
                   onClick={doSendText}
                   disabled={!text.trim() || sending}
-                  className="flex h-9 items-center gap-1.5 rounded-lg bg-emerald-600 px-3 text-[12px] font-semibold text-white disabled:opacity-50"
+                  className="flex h-9 items-center gap-1.5 rounded-lg bg-primary px-3 text-[12px] font-semibold text-primary-foreground hover:opacity-90 disabled:opacity-50"
                 >
                   {sending ? (
                     <Loader2 className="h-3.5 w-3.5 animate-spin" />
@@ -740,9 +920,30 @@ function Conversation({
         </div>
       </div>
 
-      {showDetails && (
-        <DetailsDrawer context={context} onUseDraft={(t) => setText(t)} />
-      )}
+      {showDetails &&
+        (isMobile ? (
+          <div className="absolute inset-0 z-20 flex flex-col bg-background">
+            <div className="flex h-12 shrink-0 items-center justify-between border-b border-border px-3">
+              <span className="text-[13px] font-semibold">Details</span>
+              <button
+                onClick={() => setShowDetails(false)}
+                aria-label="Close details"
+                className="rounded-md p-1 text-muted-foreground hover:bg-muted hover:text-foreground"
+              >
+                <X className="h-4 w-4" />
+              </button>
+            </div>
+            <div className="min-h-0 flex-1 overflow-y-auto">
+              <DetailsDrawer
+                context={context}
+                onUseDraft={(t) => setText(t)}
+                mobile
+              />
+            </div>
+          </div>
+        ) : (
+          <DetailsDrawer context={context} onUseDraft={(t) => setText(t)} />
+        ))}
     </div>
   );
 }
@@ -750,13 +951,21 @@ function Conversation({
 function DetailsDrawer({
   context,
   onUseDraft,
+  mobile = false,
 }: {
   context: WaChatContext | null;
   onUseDraft: (text: string) => void;
+  mobile?: boolean;
 }) {
   return (
-    <div className="w-60 shrink-0 overflow-y-auto border-l border-border bg-muted/20 p-4 text-[11px]">
-      <div className="mb-2 text-[12px] font-semibold">Details</div>
+    <div
+      className={
+        mobile
+          ? "p-4 text-[11px]"
+          : "w-60 shrink-0 overflow-y-auto border-l border-border bg-muted/20 p-4 text-[11px]"
+      }
+    >
+      {!mobile && <div className="mb-2 text-[12px] font-semibold">Details</div>}
       {!context ? (
         <div className="text-muted-foreground">Loading…</div>
       ) : (
@@ -917,7 +1126,7 @@ function Bubble({
       <div
         className={`max-w-[78%] rounded-xl px-3 py-2 text-[12px] leading-relaxed ${
           out
-            ? "rounded-br-sm border border-emerald-500/25 bg-emerald-500/15"
+            ? "rounded-br-sm border border-primary/30 bg-primary/10"
             : "rounded-bl-sm border border-border bg-muted"
         }`}
       >
@@ -979,7 +1188,7 @@ function ConnectEmptyState() {
   return (
     <div className="flex h-full items-center justify-center bg-background p-8">
       <div className="max-w-md text-center">
-        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-emerald-500/15 text-emerald-500">
+        <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/15 text-primary">
           <MessageCircle className="h-7 w-7" />
         </div>
         <h1 className="text-lg font-semibold">Connect WhatsApp Business</h1>

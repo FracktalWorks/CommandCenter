@@ -1962,7 +1962,8 @@ CREATE TABLE public.email_assistant_settings (
     learned_style_evidence_count integer DEFAULT 0 NOT NULL,
     chat_model text DEFAULT 'tier-balanced'::text NOT NULL,
     draft_model text DEFAULT 'tier-powerful'::text NOT NULL,
-    org_domains text[] DEFAULT '{}'::text[] NOT NULL
+    org_domains text[] DEFAULT '{}'::text[] NOT NULL,
+    compose_model text DEFAULT 'tier-fast'::text NOT NULL
 );
 
 

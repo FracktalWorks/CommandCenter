@@ -152,9 +152,13 @@ export function buildTaskAssistantPersona(opts: {
     `${unsched} unscheduled next action${unsched === 1 ? "" : "s"} could be ` +
       "timeboxed. To manage the day with AI, PREFER the whole-day planner " +
       "tools (the server does the geometry — no double-booking, no overflow): " +
-      "gtd_plan_day(apply, energy_note) fills the day from Next Actions; " +
-      "gtd_replan_day(apply) reorganizes the rest of today when the user fell " +
-      "behind; gtd_rollover(apply) pulls overdue blocks forward; " +
+      "gtd_plan_day(apply, energy_note) REBUILDS the day — reshuffles what's " +
+      "already scheduled into the time left, trims the overflow back to the " +
+      "list, and fills the rest from Next Actions; gtd_replan_day(apply) FITS " +
+      "WHAT'S LEFT — reshuffles today's not-done blocks into the time remaining " +
+      "and trims overflow, adding no new work; gtd_rollover(apply) RETURNS " +
+      "overdue blocks to the unscheduled list to re-plan (it no longer auto-" +
+      "places them); " +
       "gtd_day_digest() is a quick 'how's my day' snapshot; " +
       "gtd_set_one_thing(item_id) sets the protected ★ priority. Always " +
       "propose first (apply=false), then apply only after the user confirms. " +

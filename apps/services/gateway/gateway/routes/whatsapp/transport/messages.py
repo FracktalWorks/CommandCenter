@@ -5,8 +5,8 @@ from __future__ import annotations
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException, Query
-from gateway.routes.whatsapp.core import WhatsAppMessageModel, _get_db, router
+from fastapi import Depends, Query
+from gateway.routes.whatsapp.core import WhatsAppMessageModel, _get_db, assert_chat_owned, router
 from sqlalchemy import text
 
 
@@ -35,17 +35,6 @@ def _message_model(row: Any) -> WhatsAppMessageModel:
     )
 
 
-async def _assert_chat_owned(db: Any, chat_id: str, user_email: str) -> None:
-    owned = (await db.execute(
-        text("""SELECT 1 FROM wa_chats c
-                JOIN wa_accounts a ON a.id = c.account_id
-                WHERE c.id = :cid AND a.user_id = :uid"""),
-        {"cid": chat_id, "uid": user_email},
-    )).fetchone()
-    if not owned:
-        raise HTTPException(status_code=404, detail="Chat not found")
-
-
 @router.get("/chats/{chat_id}/messages", response_model=list[WhatsAppMessageModel])
 async def list_messages(
     chat_id: str,
@@ -55,7 +44,7 @@ async def list_messages(
     """Return a conversation's messages oldest-first (thread reading order)."""
     db = await _get_db()
     try:
-        await _assert_chat_owned(db, chat_id, user.email or "anonymous")
+        await assert_chat_owned(db, chat_id, user.email or "anonymous")
         rows = (await db.execute(
             text("""SELECT id, chat_id, wa_message_id, direction, kind, sender,
                            body_text, transcript_text, quoted_wa_message_id,

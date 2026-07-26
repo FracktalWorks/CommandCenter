@@ -894,7 +894,8 @@ async def gtd_list_schedule(from_iso: str, to_iso: str) -> str:
 
 def _fmt_plan(plan: dict[str, Any], applied: bool) -> str:
     blocks = plan.get("blocks") or []
-    if not blocks:
+    evicted = plan.get("evicted") or []
+    if not blocks and not evicted:
         return plan.get("notes") or "Nothing to schedule."
     head = ("Applied — your calendar is updated:" if applied
             else "Proposed plan (tell me to apply it to commit):")
@@ -904,9 +905,17 @@ def _fmt_plan(plan: dict[str, Any], applied: bool) -> str:
         e = (b.get("end") or "")[11:16]
         rat = b.get("rationale") or ""
         star = "★ " if rat.startswith("★") else ""
+        tag = (" (carried over)" if b.get("carried_over")
+               else " (moved)" if b.get("previously_scheduled") else "")
         lines.append(
-            f"• {s}-{e} {star}{_data(b.get('title', '?'))}"
+            f"• {s}-{e} {star}{_data(b.get('title', '?'))}{tag}"
             + (f" — {_data(rat.lstrip('★ '))}" if rat else ""))
+    if evicted:
+        # Blocks that no longer fit the time left — back on the unscheduled list.
+        lines.append(
+            f"Moved back to the list ({len(evicted)}): "
+            + ", ".join(_data(u.get("title", "?")) for u in evicted[:5])
+            + (" …" if len(evicted) > 5 else ""))
     unplaced = plan.get("unplaced") or []
     if unplaced:
         lines.append(
@@ -920,9 +929,13 @@ def _fmt_plan(plan: dict[str, Any], applied: bool) -> str:
 
 @_annotate_risk(idempotent=True)
 async def gtd_plan_day(apply: bool = False, energy_note: str = "") -> str:
-    """Plan the user's day with AI — pick which unscheduled next actions to do
-    today, in what order, fit to energy windows, packed within capacity around
-    existing blocks. The ★ One Thing is protected automatically. Reversible.
+    """Rebuild the user's day with AI. Reshuffles what's ALREADY on today's
+    calendar (not-done, movable blocks) into the time that's left, SWEEPS IN any
+    unfinished tasks left over from PRIOR days, trims whatever no longer fits back
+    onto their unscheduled list, AND fills any remaining room with unscheduled
+    next actions — fit to energy windows, within capacity (minus what's already
+    done today), around fixed meetings + protected windows. The ★ One Thing is
+    protected automatically. Reversible.
 
     Propose first, then apply after the user agrees.
 
@@ -945,10 +958,12 @@ async def gtd_plan_day(apply: bool = False, energy_note: str = "") -> str:
 
 @_annotate_risk(idempotent=True)
 async def gtd_replan_day(apply: bool = False) -> str:
-    """Reorganize the REST of today when the user fell behind — repack today's
-    flexible, not-yet-done blocks from now onward, around fixed meetings and
-    what's already done. Reversible. Propose first, apply after the user agrees;
-    apply=True commits the proposal you last showed, not a recomputed one.
+    """Fit what's left — when the user fell behind, take today's not-done movable
+    blocks (INCLUDING ones whose time already slipped past earlier today) and
+    repack them into the time that's actually left, around fixed meetings and
+    what's done, trimming whatever no longer fits back onto their list. Adds NO
+    new work (that's gtd_plan_day / Rebuild). Reversible. Propose first, apply
+    after the user agrees; apply=True commits the proposal you last showed.
 
     Args:
         apply: False = propose only (default); True = commit the proposal you
@@ -961,10 +976,11 @@ async def gtd_replan_day(apply: bool = False) -> str:
 
 @_annotate_risk(idempotent=True)
 async def gtd_rollover(apply: bool = False) -> str:
-    """Roll overdue-but-incomplete time-blocks forward into today's open slots
-    (deadline-aware, nearest-due first). Reversible. Propose first, apply after
-    the user agrees; apply=True commits the proposal you last showed, not a
-    recomputed one.
+    """Return overdue-but-incomplete time-blocks to the user's UNSCHEDULED list
+    (clears their schedule) so they can re-plan them, rather than auto-cramming
+    them onto a day. Reversible. Propose first, apply after the user agrees;
+    apply=True commits the proposal you last showed. To then place them, use
+    gtd_plan_day (Rebuild), which pulls from the unscheduled list.
 
     Args:
         apply: False = propose only (default); True = commit the proposal you

@@ -90,15 +90,73 @@ export function PlanDayPanel({
 
   const apply = () => {
     if (!plan) return;
-    applySchedule(
-      `Planned ${plan.blocks.length} block${plan.blocks.length === 1 ? "" : "s"}`,
-      plan.blocks.map((b) => ({
+    // One undoable op: place/move the blocks AND clear the evicted ones (back to
+    // the unscheduled list). Undo restores every block's prior schedule.
+    const changes = [
+      ...plan.blocks.map((b) => ({
         id: b.itemId,
         patch: { scheduledStart: b.start, scheduledEnd: b.end },
       })),
-    );
+      ...plan.evicted.map((e) => ({
+        id: e.itemId,
+        patch: { scheduledStart: "", scheduledEnd: "" },
+      })),
+    ];
+    const label = plan.evicted.length
+      ? `Replanned ${plan.blocks.length}, freed ${plan.evicted.length}`
+      : `Planned ${plan.blocks.length} block${plan.blocks.length === 1 ? "" : "s"}`;
+    applySchedule(label, changes);
     onClose();
   };
+  // Carried over from a prior day (unfinished leftovers Rebuild swept in);
+  // Reshuffled = today's own blocks moved; Added = new from the unscheduled list.
+  const carried = plan?.blocks.filter((b) => b.carriedOver) ?? [];
+  const moved =
+    plan?.blocks.filter((b) => b.previouslyScheduled && !b.carriedOver) ?? [];
+  const added = plan?.blocks.filter((b) => !b.previouslyScheduled) ?? [];
+  const groupHdr =
+    "mb-1 mt-3 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground first:mt-0";
+  const renderBlock = (b: DayPlanResult["blocks"][number]) => {
+    const dot =
+      b.energy === "high"
+        ? "bg-destructive"
+        : b.energy === "low"
+          ? "bg-success"
+          : "bg-warning";
+    return (
+      <div
+        key={b.itemId}
+        className="rounded-md border border-border bg-background/60 p-2"
+      >
+        <div className="flex items-baseline gap-2">
+          <span className="shrink-0 text-[11px] font-medium tabular-nums text-primary">
+            {fmt(b.start)}–{fmt(b.end)}
+          </span>
+          <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
+            {b.title}
+          </span>
+          {b.energy && (
+            <span className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`} />
+          )}
+        </div>
+        {b.rationale && (
+          <p className="mt-0.5 text-[10.5px] text-muted-foreground">
+            {b.rationale}
+          </p>
+        )}
+      </div>
+    );
+  };
+  const dropRow = (u: DayPlanResult["unplaced"][number]) => (
+    <div key={u.itemId} className="flex items-baseline gap-2 text-[11.5px]">
+      <span className="min-w-0 flex-1 truncate text-muted-foreground">
+        {u.title}
+      </span>
+      <span className="shrink-0 text-[10px] text-muted-foreground/70">
+        {u.reason}
+      </span>
+    </div>
+  );
 
   const fmt = (iso: string) => fmtClock(new Date(iso));
   const dateLabel = target.toLocaleDateString(undefined, {
@@ -131,10 +189,12 @@ export function PlanDayPanel({
           )}
           <div className="min-w-0 flex-1">
             <h2 className="truncate text-sm font-semibold text-foreground">
-              {isReplan ? "Replan the rest of my day" : "Plan my day"}
+              {isReplan ? "Fit what's left" : "Rebuild my day"}
             </h2>
             <p className="truncate text-[11px] text-muted-foreground">
-              {isReplan ? `From now · ${dateLabel}` : dateLabel}
+              {isReplan
+                ? `Reshuffle today into the time left · ${dateLabel}`
+                : dateLabel}
             </p>
           </div>
           <button
@@ -226,6 +286,11 @@ export function PlanDayPanel({
                       AI ranking was unavailable, so this used priority order —
                       your note and standing prompt weren&apos;t applied. Times
                       are still packed around your calendar. Try Re-plan.
+                      {plan.rankNote && (
+                        <span className="mt-1 block text-warning/80">
+                          Reason: {plan.rankNote}
+                        </span>
+                      )}
                     </span>
                   </p>
                 ) : (
@@ -238,73 +303,76 @@ export function PlanDayPanel({
                   {plan.notes}
                 </p>
               )}
+              {/* Headline: what this plan does, in one line. */}
               <p className="mb-2 text-[11px] text-muted-foreground">
-                {plan.blocks.length} block{plan.blocks.length === 1 ? "" : "s"} ·{" "}
+                {(() => {
+                  const parts: string[] = [];
+                  if (carried.length) parts.push(`${carried.length} carried over`);
+                  if (moved.length) parts.push(`${moved.length} moved`);
+                  if (added.length) parts.push(`${added.length} added`);
+                  if (plan.evicted.length)
+                    parts.push(`${plan.evicted.length} back to list`);
+                  return parts.length ? parts.join(" · ") + " · " : "";
+                })()}
                 {Math.round((plan.usedMins / 60) * 10) / 10}h of{" "}
                 {Math.round((plan.capacityMins / 60) * 10) / 10}h capacity
               </p>
-              <div className="flex flex-col gap-1.5">
-                {plan.blocks.map((b) => {
-                  const dot =
-                    b.energy === "high"
-                      ? "bg-destructive"
-                      : b.energy === "low"
-                        ? "bg-success"
-                        : "bg-warning";
-                  return (
-                    <div
-                      key={b.itemId}
-                      className="rounded-md border border-border bg-background/60 p-2"
-                    >
-                      <div className="flex items-baseline gap-2">
-                        <span className="shrink-0 text-[11px] font-medium tabular-nums text-primary">
-                          {fmt(b.start)}–{fmt(b.end)}
-                        </span>
-                        <span className="min-w-0 flex-1 truncate text-[12.5px] text-foreground">
-                          {b.title}
-                        </span>
-                        {b.energy && (
-                          <span
-                            className={`h-1.5 w-1.5 shrink-0 rounded-full ${dot}`}
-                          />
-                        )}
-                      </div>
-                      {b.rationale && (
-                        <p className="mt-0.5 text-[10.5px] text-muted-foreground">
-                          {b.rationale}
-                        </p>
-                      )}
-                    </div>
-                  );
-                })}
-              </div>
-              {plan.unplaced.length > 0 && (
-                <div className="mt-3">
-                  <p className="mb-1 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground">
-                    Not scheduled ({plan.unplaced.length})
+
+              {carried.length > 0 && (
+                <>
+                  <p className={`${groupHdr} text-primary`}>
+                    Carried over from earlier ({carried.length})
+                  </p>
+                  <div className="flex flex-col gap-1.5">
+                    {carried.map(renderBlock)}
+                  </div>
+                </>
+              )}
+              {moved.length > 0 && (
+                <>
+                  <p className={groupHdr}>Reshuffled ({moved.length})</p>
+                  <div className="flex flex-col gap-1.5">
+                    {moved.map(renderBlock)}
+                  </div>
+                </>
+              )}
+              {added.length > 0 && (
+                <>
+                  <p className={groupHdr}>Added from your list ({added.length})</p>
+                  <div className="flex flex-col gap-1.5">
+                    {added.map(renderBlock)}
+                  </div>
+                </>
+              )}
+              {plan.evicted.length > 0 && (
+                <>
+                  <p className={`${groupHdr} text-warning`}>
+                    Back to your list ({plan.evicted.length})
                   </p>
                   <div className="flex flex-col gap-1">
-                    {plan.unplaced.map((u) => (
-                      <div
-                        key={u.itemId}
-                        className="flex items-baseline gap-2 text-[11.5px]"
-                      >
-                        <span className="min-w-0 flex-1 truncate text-muted-foreground">
-                          {u.title}
-                        </span>
-                        <span className="shrink-0 text-[10px] text-muted-foreground/70">
-                          {u.reason}
-                        </span>
-                      </div>
-                    ))}
+                    {plan.evicted.map(dropRow)}
                   </div>
-                </div>
+                </>
               )}
-              {plan.blocks.length === 0 && plan.unplaced.length === 0 && (
-                <p className="py-4 text-center text-[12px] text-muted-foreground">
-                  Nothing to schedule — no unscheduled next actions.
-                </p>
+              {plan.unplaced.length > 0 && (
+                <>
+                  <p className={groupHdr}>
+                    Left for another day ({plan.unplaced.length})
+                  </p>
+                  <div className="flex flex-col gap-1">
+                    {plan.unplaced.map(dropRow)}
+                  </div>
+                </>
               )}
+              {plan.blocks.length === 0 &&
+                plan.unplaced.length === 0 &&
+                plan.evicted.length === 0 && (
+                  <p className="py-4 text-center text-[12px] text-muted-foreground">
+                    {isReplan
+                      ? "Nothing to reshuffle — the rest of your day is clear."
+                      : "Nothing to schedule — no unscheduled next actions."}
+                  </p>
+                )}
             </>
           ) : null}
         </div>
@@ -323,7 +391,7 @@ export function PlanDayPanel({
           <button
             type="button"
             onClick={apply}
-            disabled={!plan || plan.blocks.length === 0}
+            disabled={!plan || (plan.blocks.length === 0 && plan.evicted.length === 0)}
             className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
             <Check className="h-3.5 w-3.5" />

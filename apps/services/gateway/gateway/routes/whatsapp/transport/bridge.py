@@ -31,7 +31,7 @@ from uuid import uuid4
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, Request, Response
-from gateway.routes.whatsapp.core import _get_db, router
+from gateway.routes.whatsapp.core import _get_db, fire_post_sync_hooks, router
 from pydantic import BaseModel
 from sqlalchemy import text
 from whatsapp_ingestion.providers.base import (
@@ -164,22 +164,54 @@ async def bridge_ingest(request: Request):
         counts = await persist_sync_result(db, account_id, result)
         await db.commit()
 
-        if counts["messages"]:
-            try:
-                from whatsapp_ingestion.post_sync import hooks, run_hook
-                await run_hook(hooks.on_new_messages, account_id)
-            except Exception as exc:
-                _log.warning("whatsapp.bridge.hook_failed",
-                             hook="on_new_messages", error=str(exc)[:200])
-        try:
-            from whatsapp_ingestion.post_sync import hooks, run_hook
-            await run_hook(hooks.classify_chats, account_id)
-        except Exception as exc:
-            _log.warning("whatsapp.bridge.hook_failed",
-                         hook="classify_chats", error=str(exc)[:200])
+        if payload.get("backfill"):
+            # History-sync batch: persist only. Skip the post-sync hooks so
+            # auto-reply rules never fire on months-old messages — the bridge
+            # calls /bridge/reclassify once the backfill settles.
+            return {"ok": True, "messages": counts["messages"], "backfill": True}
+
+        # Same shared post-sync pipeline the Cloud API webhook fires.
+        await fire_post_sync_hooks(account_id, counts)
         return {"ok": True, "messages": counts["messages"]}
     finally:
         await db.close()
+
+
+@router.post("/bridge/reclassify")
+async def bridge_reclassify(request: Request):
+    """The bridge signals that a history backfill has settled: run the chat-status
+    classifier once over the account so imported chats get their reply state. We
+    deliberately run ONLY classify_chats here (never on_new_messages) — a backfill
+    must not trigger auto-replies to old messages."""
+    if not bridge_secret_ok(request.headers.get("X-Bridge-Secret")):
+        return Response(status_code=403, content="bad secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=400, content="invalid json")
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id:
+        return Response(status_code=400, content="account_id required")
+
+    db = await _get_db()
+    try:
+        owned = (await db.execute(
+            text("""SELECT 1 FROM wa_accounts
+                    WHERE id = :aid AND provider = 'whatsmeow'"""),
+            {"aid": account_id},
+        )).fetchone()
+    finally:
+        await db.close()
+    if not owned:
+        return Response(status_code=200, content="ok")
+
+    try:
+        from whatsapp_ingestion.post_sync import hooks, run_hook
+        await run_hook(hooks.classify_chats, account_id)
+    except Exception as exc:
+        _log.warning("whatsapp.bridge.reclassify_failed",
+                     account_id=account_id, error=str(exc)[:200])
+    return {"ok": True}
 
 
 @router.post("/bridge/paired")

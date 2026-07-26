@@ -41,6 +41,16 @@ func main() {
 	ctx := context.Background()
 
 	store.DeviceProps.Os = strPtr("CommandCenter")
+	// Ask the phone for a larger on-link history sync (~1 year) instead of the
+	// default ~3-month recent window, so a freshly paired number backfills its
+	// recent history — the same payload WhatsApp Desktop receives on link.
+	if cfg.FullHistory {
+		store.DeviceProps.RequireFullSync = boolPtr(true)
+		if store.DeviceProps.HistorySyncConfig != nil {
+			store.DeviceProps.HistorySyncConfig.FullSyncDaysLimit = uint32Ptr(cfg.FullHistoryDays)
+		}
+		logger.Infof("full history sync enabled (~%d days requested on link)", cfg.FullHistoryDays)
+	}
 
 	container, err := sqlstore.New(
 		ctx, "sqlite",
@@ -65,21 +75,28 @@ func main() {
 	srv := &Server{cfg: cfg, mgr: mgr, log: logger}
 	httpSrv := &http.Server{Addr: cfg.Addr, Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
 
+	// A listener failure signals the main goroutine (rather than os.Exit here) so
+	// the deferred cleanup + graceful shutdown below still run.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
+	srvErr := make(chan error, 1)
 	go func() {
 		logger.Infof("bridge listening on %s -> gateway %s", cfg.Addr, cfg.GatewayURL)
 		if err := httpSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
-			logger.Errorf("http server: %v", err)
-			os.Exit(1)
+			srvErr <- err
 		}
 	}()
 
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGINT, syscall.SIGTERM)
-	<-stop
-	logger.Infof("shutting down")
+	select {
+	case <-stop:
+		logger.Infof("shutting down")
+	case err := <-srvErr:
+		logger.Errorf("http server: %v", err)
+	}
 	shutCtx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = httpSrv.Shutdown(shutCtx)
+	mgr.Shutdown() // disconnect clients + close the whatsmeow container
 }
 
 // Server holds the HTTP handlers' shared dependencies.
@@ -111,6 +128,8 @@ func (s *Server) auth(next http.HandlerFunc) http.HandlerFunc {
 				return
 			}
 		}
+		// Bound request bodies so a runaway payload can't exhaust memory.
+		r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MiB
 		next(w, r)
 	}
 }
@@ -156,7 +175,7 @@ func (s *Server) handleSend(w http.ResponseWriter, r *http.Request) {
 	}
 	id, err := s.mgr.Send(r.Context(), body.Session, body.To, body.Body, body.ReplyTo)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), statusForSend(err))
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]any{"id": id})
@@ -173,7 +192,7 @@ func (s *Server) handleMedia(w http.ResponseWriter, r *http.Request) {
 	}
 	data, mime, err := s.mgr.DownloadMedia(r.Context(), body.Session, body.MediaID)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadGateway)
+		http.Error(w, err.Error(), statusForMedia(err))
 		return
 	}
 	w.Header().Set("Content-Type", mime)
@@ -198,10 +217,34 @@ func (s *Server) handleRead(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, map[string]any{"ok": true})
 }
 
+// statusForSend maps a Send error to a status code: a disconnected account is a
+// state precondition (409), everything else is a genuine downstream failure (502).
+func statusForSend(err error) int {
+	if errors.Is(err, ErrNotConnected) {
+		return http.StatusConflict
+	}
+	return http.StatusBadGateway
+}
+
+// statusForMedia maps a DownloadMedia error: unknown media → 404, disconnected
+// account → 409, otherwise a downstream failure → 502.
+func statusForMedia(err error) int {
+	switch {
+	case errors.Is(err, ErrMediaNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrNotConnected):
+		return http.StatusConflict
+	default:
+		return http.StatusBadGateway
+	}
+}
+
 func writeJSON(w http.ResponseWriter, status int, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(v)
 }
 
-func strPtr(s string) *string { return &s }
+func strPtr(s string) *string    { return &s }
+func boolPtr(b bool) *bool       { return &b }
+func uint32Ptr(n uint32) *uint32 { return &n }

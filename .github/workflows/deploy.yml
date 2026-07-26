@@ -337,8 +337,40 @@ jobs:
             systemctl is-active --quiet acb-workbench || { echo "WORKBENCH FAILED TO START"; exit 1; }
             echo "Workbench is active"
 
-            echo "==> Reloading Caddy"
-            sudo systemctl reload caddy || true
+            echo "==> Ensuring Caddy is serving"
+            # Caddy fronts BOTH public hostnames — if it is down, the whole app
+            # is unreachable no matter how healthy gateway/workbench are. The
+            # old `reload || true` silently swallowed a chronically failing
+            # reload (broken on-disk config), which turns any later Caddy
+            # restart into a full outage. Recover deterministically instead:
+            #   1. surface Caddy's current state + recent journal in the log;
+            #   2. validate the live config — if invalid, back it up and
+            #      reinstall the repo's known-good Caddyfile;
+            #   3. reload if running, restart if dead;
+            #   4. fail LOUDLY if Caddy still is not active.
+            CADDY_LIVE=/etc/caddy/Caddyfile
+            CADDY_REPO="$APP_DIR/deploy/hostinger/caddy/Caddyfile"
+            echo "    caddy state: $(systemctl is-active caddy 2>&1 || true)"
+            sudo journalctl -u caddy --no-pager -n 25 || true
+            if ! sudo caddy validate --config "$CADDY_LIVE"; then
+              echo "    ! live Caddyfile INVALID — reinstalling repo config (backup kept)"
+              sudo cp -a "$CADDY_LIVE" "$CADDY_LIVE.broken.$(date +%s)" || true
+              sudo install -m 0644 "$CADDY_REPO" "$CADDY_LIVE"
+              sudo caddy validate --config "$CADDY_LIVE"
+            fi
+            if systemctl is-active --quiet caddy; then
+              sudo systemctl reload caddy || sudo systemctl restart caddy
+            else
+              echo "    caddy is DOWN — restarting"
+              sudo systemctl restart caddy
+            fi
+            sleep 2
+            systemctl is-active --quiet caddy || {
+              echo "CADDY FAILED TO START"
+              sudo journalctl -u caddy --no-pager -n 40 || true
+              exit 1
+            }
+            echo "Caddy is active"
 
             echo "==> Running infra health probe"
             cd "$APP_DIR"
@@ -407,25 +439,26 @@ jobs:
           }
 
           verify() {
-            # The deploy is SUCCESSFUL iff the app is actually serving. Poll the
-            # gateway /health (the real signal) — the 4GB box can be slow right
-            # after a rebuild, so allow a warm-up window. We try the public URL
-            # AND the direct IP:8080: the same network blip that flakes SSH can
-            # transiently break the public/TLS path while the raw port is fine,
-            # so the direct probe stops a healthy app being read as down.
-            echo "── Verifying gateway health ──"
+            # The deploy is SUCCESSFUL iff the app is actually serving to USERS,
+            # which requires Caddy: gate on the PUBLIC workbench URL answering
+            # (2xx/3xx), not just the gateway. The direct-IP gateway probe stays
+            # as a fallback for the gateway signal only — it must never mask a
+            # dead Caddy (that exact blind spot let a full outage ship green).
+            # The 4GB box can be slow right after a rebuild — allow a warm-up.
+            echo "── Verifying public workbench + gateway health ──"
             for i in $(seq 1 24); do
+              gw_ok=0
               if curl -fsS --max-time 10 "$GATEWAY_URL/health" >/dev/null 2>&1; then
-                echo "  gateway healthy via public URL (poll $i)"
-                code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$WORKBENCH_URL/" 2>/dev/null || echo 000)
-                echo "  workbench / -> HTTP $code"
+                gw_ok=1
+              elif curl -fsS --max-time 10 "http://$SSH_HOST:8080/health" >/dev/null 2>&1; then
+                gw_ok=1
+              fi
+              wb_code=$(curl -s -o /dev/null -m 10 -w '%{http_code}' "$WORKBENCH_URL/" 2>/dev/null || echo 000)
+              if [ "$gw_ok" = 1 ] && printf '%s' "$wb_code" | grep -qE '^[23]'; then
+                echo "  gateway healthy; workbench / -> HTTP $wb_code (poll $i)"
                 return 0
               fi
-              if curl -fsS --max-time 10 "http://$SSH_HOST:8080/health" >/dev/null 2>&1; then
-                echo "  gateway healthy via direct IP:8080 (poll $i; public path flaking)"
-                return 0
-              fi
-              echo "  not healthy yet (poll $i/24) — 10s…"
+              echo "  not healthy yet (gateway_ok=$gw_ok workbench=$wb_code, poll $i/24) — 10s…"
               sleep 10
             done
             return 1

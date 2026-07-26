@@ -159,7 +159,7 @@ export function ScheduleSheet({
             className="tech-transition flex w-full items-center justify-center gap-1.5 rounded-md bg-primary px-3 py-2.5 text-[13px] font-semibold text-primary-foreground hover:opacity-90"
           >
             <Wand2 className="h-4 w-4" />
-            Plan my day with AI
+            Rebuild my day with AI
           </button>
         </div>
 

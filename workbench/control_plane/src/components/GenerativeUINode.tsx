@@ -35,6 +35,7 @@ import remarkGfm from "remark-gfm";
 
 import SandboxedHtml from "@/components/SandboxedHtml";
 import { renderTemplate } from "@/components/genUITemplates";
+import { tableCells, tableColumns, text } from "@/lib/genUiText";
 import { resolveIcon } from "@/lib/icons";
 import { buildIconMap } from "@/lib/iconSvg";
 
@@ -64,8 +65,13 @@ const ICON_TONE: Record<string, string> = {
   neutral: "var(--foreground)",
 };
 
-const s = (v: unknown, fallback = ""): string =>
-  typeof v === "string" ? v : v == null ? fallback : String(v);
+/**
+ * Coerce an agent-supplied prop to display text — the ONE funnel for every
+ * node type, so no shape mismatch can ever render "[object Object]" (it
+ * shipped that way in a table header row when columns arrived as {key,label}).
+ * Pure + unit-tested in lib/genUiText.test.ts.
+ */
+const s = text;
 
 // ─── Node renderer ───────────────────────────────────────────────────────
 
@@ -157,27 +163,32 @@ function Node({
     }
 
     case "table": {
-      const cols = Array.isArray(props.columns) ? props.columns.map((c) => s(c)) : [];
+      // Columns arrive as plain strings OR as objects ({key,label}, {title},
+      // {header}) — models emit both, and rows may be positional arrays or
+      // objects keyed by the column key. tableColumns/tableCells normalise all
+      // of it (and are unit-tested against the "[object Object]" header row
+      // this once shipped).
       const rows = Array.isArray(props.rows) ? props.rows : [];
+      const cols = tableColumns(props.columns, rows);
+      const hasHeader = cols.some((c) => c.label.trim());
       return (
         <div className="overflow-x-auto rounded-md border border-border/60">
           <table className="w-full text-left text-[12px]">
-            <thead className="bg-secondary/60">
-              <tr>{cols.map((c, i) => (
-                <th key={i} className="px-2 py-1 font-medium text-muted-foreground">{c}</th>
-              ))}</tr>
-            </thead>
+            {hasHeader && (
+              <thead className="bg-secondary/60">
+                <tr>{cols.map((c, i) => (
+                  <th key={i} className="px-2 py-1 font-medium text-muted-foreground">{c.label}</th>
+                ))}</tr>
+              </thead>
+            )}
             <tbody>
-              {rows.map((r, ri) => {
-                const cells = Array.isArray(r) ? r : [];
-                return (
-                  <tr key={ri} className="border-t border-border/60">
-                    {cells.map((cell, ci) => (
-                      <td key={ci} className="px-2 py-1 text-foreground">{s(cell)}</td>
-                    ))}
-                  </tr>
-                );
-              })}
+              {rows.map((r, ri) => (
+                <tr key={ri} className="border-t border-border/60">
+                  {tableCells(r, cols).map((cell, ci) => (
+                    <td key={ci} className="px-2 py-1 text-foreground">{cell}</td>
+                  ))}
+                </tr>
+              ))}
             </tbody>
           </table>
         </div>

@@ -523,6 +523,11 @@ export interface PlanDayBlock {
   end: string;
   energy?: string;
   rationale?: string;
+  /** true = this block was already on the calendar and is being moved;
+   *  false = a new task pulled in from the unscheduled list. */
+  previouslyScheduled?: boolean;
+  /** true = an unfinished task carried forward from a PRIOR day. */
+  carriedOver?: boolean;
 }
 export interface PlanDayUnplaced {
   itemId: string;
@@ -532,12 +537,17 @@ export interface PlanDayUnplaced {
 export interface DayPlanResult {
   blocks: PlanDayBlock[];
   unplaced: PlanDayUnplaced[];
+  /** blocks that WERE scheduled but no longer fit — cleared on apply, back to
+   *  the unscheduled list. */
+  evicted: PlanDayUnplaced[];
   notes?: string;
   usedMins: number;
   capacityMins: number;
   /** "ai" = LLM judged the selection/order (your prompt + note applied);
    *  "priority" = LLM unavailable, deterministic fallback (prompts ignored). */
   rankedBy: "ai" | "priority";
+  /** when rankedBy === "priority", a short reason the AI ranking was skipped. */
+  rankNote?: string;
 }
 export interface PlanDayRequest {
   day_start: string;
@@ -558,8 +568,15 @@ function mapDayPlan(r: Raw): DayPlanResult {
       end: String(b.end ?? ""),
       energy: b.energy ? String(b.energy) : undefined,
       rationale: b.rationale ? String(b.rationale) : undefined,
+      previouslyScheduled: Boolean(b.previously_scheduled),
+      carriedOver: Boolean(b.carried_over),
     })),
     unplaced: arr(r.unplaced).map((u) => ({
+      itemId: String(u.item_id ?? ""),
+      title: String(u.title ?? ""),
+      reason: String(u.reason ?? ""),
+    })),
+    evicted: arr(r.evicted).map((u) => ({
       itemId: String(u.item_id ?? ""),
       title: String(u.title ?? ""),
       reason: String(u.reason ?? ""),
@@ -568,6 +585,7 @@ function mapDayPlan(r: Raw): DayPlanResult {
     usedMins: Number(r.used_mins ?? 0),
     capacityMins: Number(r.capacity_mins ?? 0),
     rankedBy: r.ranked_by === "priority" ? "priority" : "ai",
+    rankNote: r.rank_note ? String(r.rank_note) : undefined,
   };
 }
 

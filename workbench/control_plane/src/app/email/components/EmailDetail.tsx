@@ -12,11 +12,13 @@ import { fullDateLabel, initials, buildOptimisticSent, bodyMatchKey } from "../l
 import { useEmailStore, isRealFolder } from "../lib/emailStore";
 import {
   fetchFullBody, getEmail, listThread, createRule,
-  fileToSendAttachment, composeAssist,
+  fileToSendAttachment,
   type SendAttachment, type ArtifactAttachmentRef,
 } from "../lib/api";
+import { useDraftSession } from "../lib/useDraftSession";
 import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
-import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
+import { ComposerQuote, AiButton } from "./ComposerAI";
+import { DraftAssistant } from "./DraftAssistant";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { SignaturePreview } from "./SignaturePreview";
@@ -65,7 +67,6 @@ export function EmailDetail({ email }: EmailDetailProps) {
   // AI draft/improve bar (sparkles button in the composer footer).
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
   const [replyAttachments, setReplyAttachments] = useState<SendAttachment[]>([]);
   const [replyArtifacts, setReplyArtifacts] = useState<ArtifactAttachmentRef[]>([]);
   const [sendErr, setSendErr] = useState<string | null>(null);
@@ -81,6 +82,15 @@ export function EmailDetail({ email }: EmailDetailProps) {
   // conversation card so the draft box isn't off-screen below a long thread.
   const composerRef = useRef<HTMLDivElement>(null);
   const replyDirty = useRef(false);
+  // The AI drafting session for this reply: live backend steps + the revision
+  // history of each refine round.
+  const ai = useDraftSession({
+    onBody: (next) => {
+      replyDirty.current = true;
+      setReplyBody(next);
+    },
+    onError: setSendErr,
+  });
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
   const [loadingFullBody, setLoadingFullBody] = useState(false);
   const [fullBodyText, setFullBodyText] = useState<string | null>(null);
@@ -504,47 +514,41 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setReplyArtifacts([]);
     setAiOpen(false);
     setAiInstruction("");
+    ai.reset(); // a new reply starts a fresh drafting session
   };
 
   /** The full outgoing body: the user's new text plus the quoted trailing chain. */
   const composedReply = (newBody: string) =>
     replyQuote ? `${newBody.replace(/\s+$/, "")}\n\n${replyQuote}` : newBody;
 
-  /** Draft or improve the reply with AI — operates on the NEW text only (the
-   *  quoted trailing chain is never sent), then drops the result into the box. */
+  /** Draft or refine the reply with AI — operates on the NEW text only (the
+   *  quoted trailing chain is never sent). Backend steps stream into the
+   *  panel, draft text lands live, and the panel stays open so the next
+   *  instruction refines this draft instead of starting over. */
   const runAiDraft = async () => {
-    if (!selectedAccountId || aiBusy) return;
+    if (!selectedAccountId || ai.busy) return;
     setSendErr(null);
-    setAiBusy(true);
-    try {
-      const target = replyTargetRef.current ?? email;
-      const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
-      // A dashboard nudge seeds a follow-up instruction (consumed once); a
-      // manual AI draft uses whatever the user typed in the AI box.
-      const seeded = autoDraftInstructionRef.current;
-      autoDraftInstructionRef.current = "";
-      const res = await composeAssist({
+    const target = replyTargetRef.current ?? email;
+    const toArr = replyTo.split(",").map((s) => s.trim()).filter(Boolean);
+    // A dashboard nudge seeds a follow-up instruction (consumed once); a
+    // manual AI draft uses whatever the user typed in the AI box.
+    const seeded = autoDraftInstructionRef.current;
+    autoDraftInstructionRef.current = "";
+    const instruction = seeded || aiInstruction.trim();
+    const draft = await ai.run(
+      {
         accountId: selectedAccountId,
         body: replyBody, // NEW text only — the quote is excluded by design
-        instruction: seeded || aiInstruction.trim(),
+        instruction,
         mode: replyMode === "forward" ? "forward" : "reply",
         messageId: target.id,
         to: toArr,
         subject: replyTarget.subject,
-      });
-      if (res.draft) {
-        replyDirty.current = true;
-        setReplyBody(res.draft);
-        setAiOpen(false);
-        setAiInstruction("");
-      } else {
-        setSendErr("AI couldn't draft this — try adding a quick instruction.");
-      }
-    } catch (e: any) {
-      setSendErr(e?.message || "AI draft failed");
-    } finally {
-      setAiBusy(false);
-    }
+      },
+      { instruction },
+    );
+    // The panel stays open on success: the next instruction refines this draft.
+    if (draft) setAiInstruction("");
   };
 
   /** Send the reply/forward. If it was auto-saved as a draft we send that draft
@@ -1164,12 +1168,19 @@ export function EmailDetail({ email }: EmailDetailProps) {
             <ComposerQuote quote={replyQuote} />
             {/* AI draft/improve bar */}
             {aiOpen && (
-              <AiAssistBar
+              <DraftAssistant
                 instruction={aiInstruction}
                 onInstruction={setAiInstruction}
-                busy={aiBusy}
+                busy={ai.busy}
                 hasText={replyBody.trim().length > 0}
+                hasDraft={ai.hasDraft}
+                steps={ai.steps}
+                thinking={ai.thinking}
+                revisions={ai.revisions}
+                activeRevision={ai.activeRevision}
+                elapsedMs={ai.elapsedMs}
                 onRun={runAiDraft}
+                onRestore={(id) => ai.restore(id)}
                 onClose={() => setAiOpen(false)}
               />
             )}

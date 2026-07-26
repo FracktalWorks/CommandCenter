@@ -12,6 +12,8 @@ Two seams are covered:
 """
 from __future__ import annotations
 
+import asyncio
+
 from unittest.mock import patch
 
 from gateway.routes import email as m
@@ -19,6 +21,14 @@ from gateway.routes.email.core import email_memory_scope
 from gateway.routes.email.transport.accounts import EmailAccountModel
 
 _drafting = m.automation.drafting
+
+
+async def _drain_background_tasks() -> None:
+    """The Mem0 write is fire-and-forget (_spawn_background) so the draft
+    returns without waiting on it — the tests must drain it before asserting
+    the write happened (and under which scope)."""
+    while _drafting._BG_TASKS:
+        await asyncio.gather(*list(_drafting._BG_TASKS), return_exceptions=True)
 
 
 # ── email_memory_scope ───────────────────────────────────────────────────────
@@ -66,7 +76,7 @@ async def test_orchestrate_draft_scopes_memory_per_account() -> None:
     async def fake_draft(*_a, **_kw) -> str:
         return "Hi,\n\nConfirmed — happy to proceed."
 
-    async def fake_plan(_email: dict) -> list:
+    async def fake_plan(_email: dict, **_kw) -> list:
         return []
 
     with patch("acb_skills.memory_tools._set_memory_user_id", fake_set), \
@@ -77,6 +87,7 @@ async def test_orchestrate_draft_scopes_memory_per_account() -> None:
         out = await _drafting._orchestrate_draft(
             {"from": "rep@3ds.com", "subject": "s", "body": "b"},
             about="", signature="", user_email="Me@X.com", account_id="acc-1")
+        await _drain_background_tasks()
 
     assert out.startswith("Hi,")
     # The drafter's remember() read is steered to the account scope …
@@ -101,7 +112,7 @@ async def test_orchestrate_draft_without_account_uses_bare_email() -> None:
     async def fake_draft(*_a, **_kw) -> str:
         return "Hi."
 
-    async def fake_plan(_email: dict) -> list:
+    async def fake_plan(_email: dict, **_kw) -> list:
         return []
 
     with patch("acb_skills.memory_tools._set_memory_user_id", fake_set), \
@@ -112,6 +123,7 @@ async def test_orchestrate_draft_without_account_uses_bare_email() -> None:
         await _drafting._orchestrate_draft(
             {"from": "rep@3ds.com", "subject": "s", "body": "b"},
             about="", signature="", user_email="me@x.com")
+        await _drain_background_tasks()
 
     assert captured["set_uid"] == ["me@x.com"]
     assert captured["add_uid"] == ["me@x.com"]

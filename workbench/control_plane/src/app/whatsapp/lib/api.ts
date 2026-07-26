@@ -77,6 +77,22 @@ export function fetchAccounts(): Promise<WaAccount[]> {
   return getJSON<WaAccount[]>("accounts", []);
 }
 
+/** The user's default account (is_default), else the first, else null. Shared so
+ *  every WhatsApp screen scopes to the SAME number the inbox shows — settings
+ *  pages previously used a bare accounts[0], which could diverge. */
+export function pickDefaultAccount<T extends { id: string; is_default?: boolean }>(
+  accounts: T[]
+): T | null {
+  if (accounts.length === 0) return null;
+  return accounts.find((a) => a.is_default) ?? accounts[0];
+}
+
+/** Disconnect (remove) a connected number. Its chats stay stored, but no new
+ *  messages sync until it's reconnected. */
+export function disconnectAccount(id: string) {
+  return deleteJSON(`accounts/${id}`);
+}
+
 // ── Connect wizard (W11) ─────────────────────────────────────────────────────
 
 export function fetchConnectionInfo(): Promise<WaConnectionInfo> {
@@ -286,13 +302,6 @@ export function createSavedReply(input: {
   shortcut?: string | null;
 }) {
   return postJSON<WaSavedReply>("saved-replies", input);
-}
-
-export function updateSavedReply(
-  id: string,
-  patch: Partial<Pick<WaSavedReply, "title" | "body" | "shortcut" | "sort_order">>
-) {
-  return sendJSON<WaSavedReply>(`saved-replies/${id}`, "PATCH", patch);
 }
 
 export function deleteSavedReply(id: string) {

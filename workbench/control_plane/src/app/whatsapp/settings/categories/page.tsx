@@ -6,11 +6,11 @@
 // meaningful cell should draw the eye; defaults stay quiet.
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
+import { Loader2, Tags } from "lucide-react";
 import {
   bootstrapCategories,
   fetchAccounts,
+  pickDefaultAccount,
   fetchCategories,
   updateCategory,
 } from "../../lib/api";
@@ -26,11 +26,11 @@ export default function CategoriesSettingsPage() {
   const [accountId, setAccountId] = useState<string | null>(null);
   const [rows, setRows] = useState<WaCategory[]>([]);
   const [saving, setSaving] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      const id = accs[0]?.id ?? null;
+      const id = pickDefaultAccount(await fetchAccounts())?.id ?? null;
       setAccountId(id);
       if (id) setRows(await fetchCategories(id));
       setLoading(false);
@@ -48,11 +48,20 @@ export default function CategoriesSettingsPage() {
   const onPatch = useCallback(
     async (cat: WaCategory, field: keyof WaCategory, value: string) => {
       setSaving(cat.id);
+      setError(null);
+      const prevValue = cat[field];
       // optimistic update
       setRows((prev) =>
         prev.map((r) => (r.id === cat.id ? { ...r, [field]: value } : r))
       );
-      await updateCategory(cat.id, { [field]: value });
+      const res = await updateCategory(cat.id, { [field]: value });
+      if (!res.ok) {
+        // roll the optimistic change back and surface the failure
+        setRows((prev) =>
+          prev.map((r) => (r.id === cat.id ? { ...r, [field]: prevValue } : r))
+        );
+        setError(res.error ?? "Couldn't save that change.");
+      }
       setSaving(null);
     },
     []
@@ -67,19 +76,20 @@ export default function CategoriesSettingsPage() {
   }
 
   return (
-    <div className="mx-auto max-w-3xl p-6 text-foreground">
-      <div className="mb-5 flex items-center gap-3">
-        <Link
-          href="/whatsapp"
-          className="flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Queue
-        </Link>
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
+      <div className="mb-5 flex items-center gap-2">
+        <Tags className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Categories</h1>
         <span className="text-[11px] text-muted-foreground">
           labels, upgraded to policy
         </span>
       </div>
+
+      {error && (
+        <div className="mb-3 rounded-md bg-red-500/10 px-3 py-1.5 text-[11px] text-red-500">
+          {error}
+        </div>
+      )}
 
       {!accountId ? (
         <EmptyNoAccount />
@@ -100,8 +110,8 @@ export default function CategoriesSettingsPage() {
           </button>
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-[12px]">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[520px] text-[12px]">
             <thead>
               <tr className="border-b border-border text-[9.5px] uppercase tracking-wider text-muted-foreground/70">
                 <th className="px-3 py-2 text-left font-bold">Category</th>
@@ -117,7 +127,7 @@ export default function CategoriesSettingsPage() {
                   <td className="px-3 py-2.5">
                     <span className="font-semibold">{c.name}</span>
                     {c.wa_label_id && (
-                      <span className="ml-1 text-[10px] text-emerald-500">🏷</span>
+                      <span className="ml-1 text-[10px] text-success">🏷</span>
                     )}
                   </td>
                   <td className="px-3 py-2.5">

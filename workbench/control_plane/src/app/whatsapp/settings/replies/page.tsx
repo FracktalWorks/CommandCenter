@@ -5,12 +5,12 @@
 // '/shortcut'. Plain CRUD; the composer's picker inserts the body.
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Loader2, Plus, Trash2 } from "lucide-react";
+import { Loader2, MessageSquareText, Plus, Trash2 } from "lucide-react";
 import {
   createSavedReply,
   deleteSavedReply,
   fetchAccounts,
+  pickDefaultAccount,
   fetchSavedReplies,
 } from "../../lib/api";
 import type { WaSavedReply } from "../../lib/types";
@@ -27,8 +27,8 @@ export default function SavedRepliesPage() {
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      if (accs[0]?.id) setAccountId(accs[0].id);
+      const def = pickDefaultAccount(await fetchAccounts());
+      if (def) setAccountId(def.id);
       setLoading(false);
     })();
   }, []);
@@ -80,14 +80,9 @@ export default function SavedRepliesPage() {
   }
 
   return (
-    <div className="mx-auto max-w-2xl p-6 text-foreground">
-      <div className="mb-5 flex items-center gap-3">
-        <Link
-          href="/whatsapp"
-          className="flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Queue
-        </Link>
+    <div className="mx-auto h-full max-w-2xl overflow-y-auto p-4 text-foreground md:p-6">
+      <div className="mb-5 flex items-center gap-2">
+        <MessageSquareText className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Saved replies</h1>
         <span className="text-[11px] text-muted-foreground">
           canned snippets for the composer
@@ -102,7 +97,7 @@ export default function SavedRepliesPage() {
 
       {/* add form */}
       <div className="mb-5 rounded-lg border border-border p-3">
-        <div className="mb-2 flex gap-2">
+        <div className="mb-2 flex flex-col gap-2 sm:flex-row">
           <input
             value={title}
             onChange={(e) => setTitle(e.target.value)}
@@ -113,7 +108,7 @@ export default function SavedRepliesPage() {
             value={shortcut}
             onChange={(e) => setShortcut(e.target.value)}
             placeholder="/shortcut (optional)"
-            className="w-40 rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary"
+            className="w-full rounded-md border border-border bg-background px-2.5 py-1.5 text-[12px] outline-none focus:border-primary sm:w-40"
           />
         </div>
         <textarea

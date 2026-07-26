@@ -2,6 +2,7 @@ package main
 
 import (
 	"os"
+	"strconv"
 	"strings"
 )
 
@@ -20,6 +21,31 @@ type Config struct {
 	// StorePath is the sqlite file holding whatsmeow device sessions + our
 	// account↔jid and media-reference tables. One file serves every number.
 	StorePath string
+	// FullHistory requests the larger on-link history sync (~1 year, desktop
+	// profile) instead of the default ~3-month "recent" window. Default true.
+	FullHistory bool
+	// FullHistoryDays caps the requested history window (server ceiling ≈ 3 years).
+	FullHistoryDays uint32
+}
+
+func envBool(key string, def bool) bool {
+	v := strings.ToLower(strings.TrimSpace(os.Getenv(key)))
+	if v == "" {
+		return def
+	}
+	return v == "1" || v == "true" || v == "yes" || v == "on"
+}
+
+func envUint(key string, def uint32) uint32 {
+	v := strings.TrimSpace(os.Getenv(key))
+	if v == "" {
+		return def
+	}
+	n, err := strconv.ParseUint(v, 10, 32)
+	if err != nil {
+		return def
+	}
+	return uint32(n)
 }
 
 func env(key, def string) string {
@@ -32,9 +58,11 @@ func env(key, def string) string {
 // LoadConfig reads the bridge configuration from the environment.
 func LoadConfig() Config {
 	return Config{
-		Addr:       env("WHATSAPP_BRIDGE_ADDR", ":8790"),
-		GatewayURL: strings.TrimRight(env("WHATSAPP_BRIDGE_GATEWAY_URL", "http://localhost:8000"), "/"),
-		Secret:     env("WHATSAPP_BRIDGE_SECRET", ""),
-		StorePath:  env("WHATSAPP_BRIDGE_STORE", "./bridge-store.db"),
+		Addr:            env("WHATSAPP_BRIDGE_ADDR", ":8790"),
+		GatewayURL:      strings.TrimRight(env("WHATSAPP_BRIDGE_GATEWAY_URL", "http://localhost:8000"), "/"),
+		Secret:          env("WHATSAPP_BRIDGE_SECRET", ""),
+		StorePath:       env("WHATSAPP_BRIDGE_STORE", "./bridge-store.db"),
+		FullHistory:     envBool("WHATSAPP_BRIDGE_FULL_HISTORY", true),
+		FullHistoryDays: envUint("WHATSAPP_BRIDGE_FULL_HISTORY_DAYS", 365),
 	}
 }

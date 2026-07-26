@@ -436,9 +436,17 @@ export function SettingsTab({ accountId }: { accountId: string | null }) {
               key: "draft_model" as const,
               title: "Draft writing model",
               description:
-                "Writes reply drafts, follow-ups, and rule draft actions. A powerful tier is recommended for reply quality.",
+                "Writes background reply drafts, follow-ups, and rule draft actions. A powerful tier is recommended for reply quality — nobody is waiting on these.",
               value: s.draft_model,
               def: "tier-powerful",
+            },
+            {
+              key: "compose_model" as const,
+              title: "Manual draft model",
+              description:
+                "The composer's \"Draft with AI\" button — you wait on this one, so a fast tier is recommended (reasoning tiers can take 30s+ per click).",
+              value: s.compose_model,
+              def: "tier-fast",
             },
             {
               key: "chat_model" as const,

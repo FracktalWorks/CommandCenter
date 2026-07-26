@@ -6,9 +6,8 @@
 // why; the summary tallies actions by kind.
 
 import { useEffect, useState } from "react";
-import Link from "next/link";
-import { ArrowLeft, Loader2 } from "lucide-react";
-import { fetchAccounts, fetchRulesPreview } from "../../lib/api";
+import { Loader2, SlidersHorizontal } from "lucide-react";
+import { fetchAccounts, fetchRulesPreview, pickDefaultAccount } from "../../lib/api";
 import type { WaRulePreview, WaRulePreviewItem } from "../../lib/types";
 
 const ACTION_LABEL: Record<string, string> = {
@@ -19,8 +18,8 @@ const ACTION_LABEL: Record<string, string> = {
 };
 
 const ACTION_TONE: Record<string, string> = {
-  answer_from_system: "text-emerald-500",
-  holding_reply: "text-emerald-500",
+  answer_from_system: "text-success",
+  holding_reply: "text-success",
   draft: "text-primary",
   none: "text-muted-foreground",
 };
@@ -34,8 +33,8 @@ export default function RulesPreviewPage() {
 
   useEffect(() => {
     (async () => {
-      const accs = await fetchAccounts();
-      if (accs[0]?.id) setPreview(await fetchRulesPreview(accs[0].id));
+      const def = pickDefaultAccount(await fetchAccounts());
+      if (def) setPreview(await fetchRulesPreview(def.id));
       setLoading(false);
     })();
   }, []);
@@ -54,14 +53,9 @@ export default function RulesPreviewPage() {
     .map((k) => [k, preview.summary[k]] as const);
 
   return (
-    <div className="mx-auto max-w-3xl p-6 text-foreground">
-      <div className="mb-5 flex items-center gap-3">
-        <Link
-          href="/whatsapp"
-          className="flex items-center gap-1 text-[12px] text-muted-foreground hover:text-foreground"
-        >
-          <ArrowLeft className="h-3.5 w-3.5" /> Queue
-        </Link>
+    <div className="mx-auto h-full max-w-3xl overflow-y-auto p-4 text-foreground md:p-6">
+      <div className="mb-5 flex items-center gap-2">
+        <SlidersHorizontal className="h-4 w-4 text-primary" />
         <h1 className="text-[15px] font-semibold">Rules preview</h1>
         <span className="text-[11px] text-muted-foreground">
           what automation would do — nothing is sent
@@ -92,8 +86,8 @@ export default function RulesPreviewPage() {
           Nothing in the needs-reply queue to preview right now.
         </div>
       ) : (
-        <div className="overflow-hidden rounded-lg border border-border">
-          <table className="w-full text-[12px]">
+        <div className="overflow-x-auto rounded-lg border border-border">
+          <table className="w-full min-w-[520px] text-[12px]">
             <thead>
               <tr className="border-b border-border text-[9.5px] uppercase tracking-wider text-muted-foreground/70">
                 <th className="px-3 py-2 text-left font-bold">Chat</th>

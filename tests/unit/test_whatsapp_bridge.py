@@ -259,6 +259,54 @@ async def test_ingest_skips_new_message_hook_when_no_messages(monkeypatch) -> No
     assert calls == ["classify_chats"]
 
 
+async def test_ingest_backfill_persists_but_skips_all_hooks(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB()
+    _patch_db(monkeypatch, db)
+    calls = _patch_persist_and_hooks(monkeypatch, messages=5)
+    out = await bridge.bridge_ingest(_FakeRequest({
+        "account_id": "acc-1", "backfill": True,
+        "messages": [{"wa_message_id": "h", "chat_id": "c", "body_text": "old"}],
+    }))
+    assert out == {"ok": True, "messages": 5, "backfill": True}
+    assert db.committed is True          # history is persisted
+    assert calls == []                   # but NO hooks fire (no auto-reply on history)
+
+
+# ── reclassify route (post-backfill) ────────────────────────────────────────────
+
+async def test_reclassify_runs_only_classify_chats(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB()                       # owned row present
+    _patch_db(monkeypatch, db)
+    calls = _patch_persist_and_hooks(monkeypatch)
+    out = await bridge.bridge_reclassify(_FakeRequest({"account_id": "acc-1"}))
+    assert out == {"ok": True}
+    # Exactly one hook — the status classifier — and never on_new_messages.
+    assert calls == ["classify_chats"]
+
+
+async def test_reclassify_requires_account(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    resp = await bridge.bridge_reclassify(_FakeRequest({}))
+    assert resp.status_code == 400
+
+
+async def test_reclassify_unknown_account_acks(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB(row=None)               # not owned
+    _patch_db(monkeypatch, db)
+    resp = await bridge.bridge_reclassify(_FakeRequest({"account_id": "ghost"}))
+    assert resp.status_code == 200
+
+
+async def test_reclassify_rejects_bad_secret(monkeypatch) -> None:
+    monkeypatch.setenv("WHATSAPP_BRIDGE_SECRET", "s3cr3t")
+    resp = await bridge.bridge_reclassify(
+        _FakeRequest({"account_id": "a"}, headers={"X-Bridge-Secret": "no"}))
+    assert resp.status_code == 403
+
+
 # ── paired route ───────────────────────────────────────────────────────────────
 
 async def test_paired_updates_account(monkeypatch) -> None:
@@ -299,3 +347,4 @@ def test_bridge_routes_registered() -> None:
     assert "/whatsapp/bridge/paired" in paths
     assert "/whatsapp/bridge/connect" in paths
     assert "/whatsapp/bridge/status" in paths
+    assert "/whatsapp/bridge/reclassify" in paths

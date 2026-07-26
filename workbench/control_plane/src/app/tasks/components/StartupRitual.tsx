@@ -12,7 +12,6 @@ import {
   AlertTriangle,
   ArrowRight,
   Check,
-  Loader2,
   RotateCcw,
   Star,
   Sun,
@@ -40,7 +39,6 @@ export function StartupRitual({
   items,
   urgentWindowHours,
   carryForward,
-  rolling,
   onRollover,
   onPlan,
   onClose,
@@ -49,7 +47,7 @@ export function StartupRitual({
   urgentWindowHours: number;
   /** yesterday's (or older) scheduled-but-unfinished blocks. */
   carryForward: GtdItem[];
-  rolling: boolean;
+  /** move the carry-forwards back to the unscheduled list (instant). */
   onRollover: () => void;
   /** hand off to the AI planner (PlanDayPanel), One Thing already committed. */
   onPlan: () => void;
@@ -261,7 +259,8 @@ export function StartupRitual({
                       {carryForward.length} carry-forward
                       {carryForward.length === 1 ? "" : "s"}
                     </span>{" "}
-                    from earlier — not a failure, just today&apos;s plan.
+                    from earlier — not a failure. Move them back to your list,
+                    then Rebuild my day to re-plan them.
                   </p>
                   <ul className="mt-1.5 flex flex-col gap-0.5">
                     {carryForward.slice(0, 4).map((i) => (
@@ -281,15 +280,10 @@ export function StartupRitual({
                   <button
                     type="button"
                     onClick={onRollover}
-                    disabled={rolling}
-                    className="tech-transition mt-2 inline-flex items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1.5 text-[11.5px] font-medium text-warning hover:bg-warning/30 disabled:opacity-50"
+                    className="tech-transition mt-2 inline-flex items-center gap-1.5 rounded-md bg-warning/20 px-2.5 py-1.5 text-[11.5px] font-medium text-warning hover:bg-warning/30"
                   >
-                    {rolling ? (
-                      <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                    ) : (
-                      <RotateCcw className="h-3.5 w-3.5" />
-                    )}
-                    Roll into today
+                    <RotateCcw className="h-3.5 w-3.5" />
+                    Move to my list
                   </button>
                 </div>
               ) : (
@@ -392,7 +386,7 @@ export function StartupRitual({
               className="tech-transition inline-flex items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-semibold text-primary-foreground hover:opacity-90"
             >
               <Wand2 className="h-3.5 w-3.5" />
-              Plan my day
+              Rebuild my day
             </button>
           </div>
         )}

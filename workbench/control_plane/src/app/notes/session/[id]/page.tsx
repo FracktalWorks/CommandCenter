@@ -19,6 +19,7 @@ import {
   useRecordingStore,
 } from "../../lib/recordingStore";
 import { formatClock, getMeeting, saveScratchNotes } from "../../lib/api";
+import { MicPicker, loadPreferredMic } from "../../components/MicPicker";
 
 const BARS = LEVEL_BARS;
 
@@ -53,6 +54,12 @@ export default function SessionPage({
   const otherActive = active && meetingId !== null && meetingId !== id;
 
   const [scratch, setScratch] = useState("");
+  // Restore the remembered mic (localStorage) — lazy init so it reads once on
+  // the client and is null during SSR (no hydration mismatch: the value only
+  // feeds the mic picker, which shows a generic label until devices enumerate).
+  const [micId, setMicId] = useState<string | null>(() =>
+    typeof window !== "undefined" ? loadPreferredMic() : null
+  );
   const scratchTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const capEndRef = useRef<HTMLDivElement>(null);
 
@@ -108,7 +115,7 @@ export default function SessionPage({
   }, [captions, interim]);
 
   async function begin() {
-    await startRec(id);
+    await startRec(id, { deviceId: micId });
     // Best-effort: pull the meeting's title so the dock can label it.
     void getMeeting(id)
       .then((m) => m.title && setTitle(m.title))
@@ -204,10 +211,12 @@ export default function SessionPage({
                 Ready to record
               </p>
               <p className="text-xs text-muted-foreground mt-1">
-                We&apos;ll capture your microphone. For the clearest transcript,
-                use a headset in noisy rooms. Nothing is saved until you stop.
+                Pick your mic and check the level below. For the clearest
+                transcript, use a headset in noisy rooms. Nothing is saved until
+                you stop.
               </p>
             </div>
+            <MicPicker value={micId} onChange={setMicId} disabled={active} />
             <button
               onClick={begin}
               className="rounded-full bg-primary w-16 h-16 flex items-center justify-center text-primary-foreground hover:opacity-90 tech-transition tech-glow"

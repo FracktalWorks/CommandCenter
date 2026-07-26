@@ -26,6 +26,29 @@ export interface RecorderCallbacks {
   onLiveUnavailable?: (reason: string) => void;
 }
 
+export interface MicDevice {
+  deviceId: string;
+  label: string;
+}
+
+/** Enumerate the browser's audio-input devices (Google-Meet-style mic picker).
+ *  Device labels are only populated once the user has granted mic permission at
+ *  least once this session; before that they come back blank (we show a generic
+ *  name and reveal real labels after the first getUserMedia). */
+export async function listMicrophones(): Promise<MicDevice[]> {
+  if (typeof navigator === "undefined" || !navigator.mediaDevices?.enumerateDevices) {
+    return [];
+  }
+  try {
+    const devices = await navigator.mediaDevices.enumerateDevices();
+    return devices
+      .filter((d) => d.kind === "audioinput")
+      .map((d) => ({ deviceId: d.deviceId, label: d.label }));
+  } catch {
+    return [];
+  }
+}
+
 /** Pick the best MediaRecorder mime the browser supports (Chromium/FF → webm,
  *  Safari → mp4). */
 export function pickMimeType(): string {
@@ -45,9 +68,16 @@ export function pickMimeType(): string {
 const CHUNK_MS = 5000;
 const MAX_RETRIES = 6;
 
+export interface MeetingRecorderOptions {
+  /** Preferred mic (from listMicrophones). Falls back to the system default if
+   *  the device is gone by the time we record (unplugged / switched). */
+  deviceId?: string | null;
+}
+
 export class MeetingRecorder {
   private meetingId: string;
   private cb: RecorderCallbacks;
+  private opts: MeetingRecorderOptions;
   private stream: MediaStream | null = null;
   private recorder: MediaRecorder | null = null;
   private audioCtx: AudioContext | null = null;
@@ -72,19 +102,39 @@ export class MeetingRecorder {
   private timerId: ReturnType<typeof setInterval> | null = null;
   private stopping = false;
 
-  constructor(meetingId: string, cb: RecorderCallbacks = {}) {
+  constructor(
+    meetingId: string,
+    cb: RecorderCallbacks = {},
+    opts: MeetingRecorderOptions = {}
+  ) {
     this.meetingId = meetingId;
     this.cb = cb;
+    this.opts = opts;
   }
 
   async start(): Promise<void> {
-    this.stream = await navigator.mediaDevices.getUserMedia({
-      audio: {
-        echoCancellation: true,
-        noiseSuppression: true,
-        autoGainControl: true,
-      },
-    });
+    const base: MediaTrackConstraints = {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true,
+    };
+    const deviceId = this.opts.deviceId;
+    try {
+      this.stream = await navigator.mediaDevices.getUserMedia({
+        // `exact` so a stale saved device errors instead of silently falling
+        // back to the wrong mic — we handle that fallback explicitly below.
+        audio: deviceId ? { ...base, deviceId: { exact: deviceId } } : base,
+      });
+    } catch (e) {
+      // Chosen mic vanished (common on Windows when a headset is unplugged) —
+      // retry on the system default rather than failing the recording outright.
+      const name = e instanceof DOMException ? e.name : "";
+      if (deviceId && (name === "OverconstrainedError" || name === "NotFoundError")) {
+        this.stream = await navigator.mediaDevices.getUserMedia({ audio: base });
+      } else {
+        throw e;
+      }
+    }
     this.mime = pickMimeType();
     const { recording_id } = await startRecording(
       this.meetingId,

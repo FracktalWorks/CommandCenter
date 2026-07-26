@@ -6,12 +6,14 @@ from __future__ import annotations
 import asyncio
 import json
 import re
+from collections.abc import Awaitable, Callable
 from datetime import datetime, timezone
 from typing import Any
 from uuid import uuid4
 
 from acb_auth import UserContext, get_current_user
 from fastapi import BackgroundTasks, Depends, HTTPException
+from fastapi.responses import StreamingResponse
 from gateway.routes.email.automation.assistant import (
     _account_models,
     _load_assistant_about,
@@ -672,6 +674,7 @@ async def _llm_draft_reply(
     email: dict[str, str], about: str, signature: str,
     instructions: str = "", context: str = "", user_email: str = "",
     *, model: str = "tier-powerful", interactive_fallback: bool = False,
+    on_delta: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> str:
     """Draft a reply body with the LLM, using the user's About context plus any
     extra `context` gathered from memory / specialist agents.
@@ -832,11 +835,22 @@ async def _llm_draft_reply(
                      {"role": "user", "content": user_prompt}]
         # Generous output budget — a full reply body (greeting + paragraphs +
         # context) must never be truncated mid-sentence.
-        resp, _used = await acompletion_with_fallback(
-            model=model,
-            messages=_messages, temperature=0.3, max_tokens=3000,
-        )
-        body = _clean_draft_body((resp.choices[0].message.content or "").strip())
+        if on_delta is not None:
+            # Streaming path (SSE compose): live deltas reach the composer;
+            # the cleaned final body below still wins over the preview.
+            from acb_llm.context import acompletion_stream_text  # noqa: PLC0415
+            raw, _used = await acompletion_stream_text(
+                model=model,
+                messages=_messages, temperature=0.3, max_tokens=3000,
+                on_delta=on_delta,
+            )
+        else:
+            resp, _used = await acompletion_with_fallback(
+                model=model,
+                messages=_messages, temperature=0.3, max_tokens=3000,
+            )
+            raw = resp.choices[0].message.content or ""
+        body = _clean_draft_body(raw.strip())
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.llm_draft_failed", error=str(exc)[:200],
                      interactive=interactive_fallback)
@@ -866,6 +880,7 @@ async def _llm_compose_assist(
     *, about: str, signature: str, current_body: str, instruction: str,
     mode: str, recipient: str = "", subject: str = "", thread: str = "",
     reply_to_body: str = "", user_email: str = "", model: str = "tier-powerful",
+    on_delta: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> str:
     """Draft OR improve an outgoing email body for the compose box.
 
@@ -965,11 +980,22 @@ async def _llm_compose_assist(
         user_prompt = "".join(parts)
         _messages = [{"role": "system", "content": sys_prompt},
                      {"role": "user", "content": user_prompt}]
-        resp, _used = await acompletion_with_fallback(
-            model=model,
-            messages=_messages, temperature=0.3, max_tokens=3000,
-        )
-        body = _clean_draft_body((resp.choices[0].message.content or "").strip())
+        if on_delta is not None:
+            # Streaming path (SSE compose): live deltas reach the composer;
+            # the cleaned final body below still wins over the preview.
+            from acb_llm.context import acompletion_stream_text  # noqa: PLC0415
+            raw, _used = await acompletion_stream_text(
+                model=model,
+                messages=_messages, temperature=0.3, max_tokens=3000,
+                on_delta=on_delta,
+            )
+        else:
+            resp, _used = await acompletion_with_fallback(
+                model=model,
+                messages=_messages, temperature=0.3, max_tokens=3000,
+            )
+            raw = resp.choices[0].message.content or ""
+        body = _clean_draft_body(raw.strip())
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.compose_assist_failed", error=str(exc)[:200])
         # Fall back to the owner's own text (improve) or a neutral opener (draft).
@@ -984,21 +1010,44 @@ async def _llm_compose_assist(
     return body
 
 
-async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
-    """Decide which specialist agents (if any) could improve this reply.
+async def _draft_consult_plan(
+    email: dict[str, str],
+    on_activity: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+) -> list[dict[str, str]]:
+    """Qualify the email, then decide which specialist agents (if any) are
+    NECESSARY to draft the reply.
+
+    One fast LLM call does both steps: classify what kind of email this is,
+    then name a specialist only when the reply must state facts the thread
+    itself doesn't contain and that agent's system holds them. Most mail
+    (scheduling, courtesy, newsletters, questions answered in-thread) needs no
+    consult — a consult costs a 10-18s agent round-trip, so the default answer
+    is an empty list, not "might help".
 
     Returns [{"agent": "agent-sales-assistant"|"task-manager", "question": "..."}], capped at 2.
     """
     try:
         sys_prompt = (
-            "You plan how to draft an email reply. Decide which internal specialist "
-            "agents, if any, would provide context that materially improves the "
-            "reply. Available agents:\n"
-            "- agent-sales-assistant: CRM, deals, pipeline, quotes, customer/account status (Zoho).\n"
+            "You qualify an incoming email before a reply is drafted, and "
+            "decide whether drafting that reply REQUIRES consulting an "
+            "internal specialist agent.\n"
+            "Step 1 — classify the email kind: scheduling | social/courtesy | "
+            "newsletter/notification | sales/commercial | project/delivery | "
+            "support/technical | other.\n"
+            "Step 2 — decide consults. Available agents:\n"
+            "- agent-sales-assistant: CRM — deals, pipeline, quotes, customer/account status (Zoho).\n"
             "- task-manager: projects, tasks, deadlines, delivery status (ClickUp).\n"
-            "Only include an agent when the email clearly relates to its domain. "
-            'Respond ONLY JSON: {"consult": [{"agent": "<name>", "question": '
-            '"<specific question to ask that agent>"}]} (empty list if none).'
+            "Consult an agent ONLY when the reply must state facts that the "
+            "email thread itself does not contain AND that agent's system "
+            "holds them — e.g. the sender asks for an order/quote/project "
+            "status, a deadline, or a deliverable update. If a correct, "
+            "useful reply can be written from the thread alone "
+            "(acknowledgements, scheduling, introductions, thanks, questions "
+            "already answered in the thread), consult NOBODY. When unsure, "
+            "consult nobody.\n"
+            'Respond ONLY JSON: {"kind": "<kind>", "consult": [{"agent": '
+            '"<name>", "question": "<specific question to ask that agent>"}]} '
+            "(consult: [] when none is necessary — this is the common case)."
         )
         user_prompt = (
             f"From: {email.get('from', '')}\nSubject: {email.get('subject', '')}\n"
@@ -1017,9 +1066,25 @@ async def _draft_consult_plan(email: dict[str, str]) -> list[dict[str, str]]:
             if isinstance(c, dict) and c.get("agent") in ("agent-sales-assistant", "task-manager") \
                     and c.get("question"):
                 out.append({"agent": c["agent"], "question": str(c["question"])})
-        return out[:2]
+        out = out[:2]
+        email_kind = (
+            str(data.get("kind", ""))[:40] if isinstance(data, dict) else "")
+        # The kind is logged so we can audit gating decisions against real
+        # traffic and tighten the prompt if consults stay noisy — and streamed
+        # to the composer so the user SEES why a specialist was (not) called.
+        _log.info("email.draft_consult_plan",
+                  kind=email_kind, consults=len(out))
+        await _emit_activity(
+            on_activity, kind="qualify", emailKind=email_kind,
+            consults=len(out),
+            detail=("no specialist needed" if not out
+                    else f"needs {', '.join(c['agent'] for c in out)}"))
+        return out
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.draft_plan_failed", error=str(exc)[:200])
+        await _emit_activity(
+            on_activity, kind="qualify", emailKind="", consults=0,
+            detail="qualifier unavailable — drafting from the thread alone")
         return []
 
 
@@ -1255,6 +1320,8 @@ async def _agent_draft_reply(
     follow_up: bool = False, confidence: str = "ALL_EMAILS",
     model: str = "tier-powerful", account_id: str = "",
     interactive_fallback: bool = False, extra_instructions: str = "",
+    on_activity: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_delta: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> str:
     """Draft a reply (or a follow-up nudge). When ``use_agent`` is set (background
     rule actions), run the email-assistant MAF agent first; otherwise — and on any
@@ -1287,7 +1354,47 @@ async def _agent_draft_reply(
         max_agents=max_agents, agent_timeout=agent_timeout,
         instructions=instructions, model=model, account_id=account_id,
         interactive_fallback=interactive_fallback,
+        on_activity=on_activity, on_delta=on_delta,
     )
+
+
+# Strong refs to fire-and-forget tasks (asyncio only holds weak ones — an
+# unreferenced task can be garbage-collected mid-flight).
+_BG_TASKS: set[asyncio.Task] = set()
+
+
+def _spawn_background(coro: Awaitable[None], label: str) -> None:
+    """Run ``coro`` as a fire-and-forget task; log (never raise) its failure."""
+    async def _wrapped() -> None:
+        try:
+            await coro
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("email.background_task_failed",
+                         task=label, error=str(exc)[:160])
+    task = asyncio.create_task(_wrapped())
+    _BG_TASKS.add(task)
+    task.add_done_callback(_BG_TASKS.discard)
+
+
+async def _emit_activity(
+    on_activity: Callable[[dict[str, Any]], Awaitable[None]] | None,
+    **fields: Any,
+) -> None:
+    """Best-effort progress signal to the caller (SSE); never breaks drafting.
+
+    Each event is a dict the composer's activity panel renders directly:
+      {"kind": "stage",    "id": "context|memory|draft", "status": "start|done",
+       "detail": "human summary"}
+      {"kind": "qualify",  "emailKind": "scheduling", "consults": 0}
+      {"kind": "consult",  "agent": "task-manager", "question": "...",
+       "status": "start|done|failed", "detail": "..."}
+    """
+    if on_activity is None:
+        return
+    try:
+        await on_activity(fields)
+    except Exception:  # noqa: BLE001
+        pass
 
 
 async def _orchestrate_draft(
@@ -1295,6 +1402,8 @@ async def _orchestrate_draft(
     *, max_agents: int = 2, agent_timeout: float = 90.0, instructions: str = "",
     model: str = "tier-powerful", account_id: str = "",
     interactive_fallback: bool = False,
+    on_activity: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_delta: Callable[[str, str], Awaitable[None]] | None = None,
 ) -> str:
     """In-gateway orchestrating drafter: gather context from memory + specialist
     agents (sales / task-manager), then draft. Best-effort; degrades to an
@@ -1303,44 +1412,72 @@ async def _orchestrate_draft(
     ``account_id`` scopes the Mem0 read/write to this inbox (email_memory_scope)
     so a user's other mailboxes don't bleed their reply context into this draft.
     Setting the ContextVar here only steers this in-process ``remember`` call —
-    it is NOT the agent's gateway-auth identity, so a scoped value is safe."""
+    it is NOT the agent's gateway-auth identity, so a scoped value is safe.
+
+    ``on_activity(event)`` (optional) receives structured progress events for
+    streaming UIs (see _emit_activity). ``on_delta(kind, text)`` streams the
+    draft itself (see _llm_draft_reply)."""
     context_parts: list[str] = []
     mem_scope = email_memory_scope(user_email or "", account_id)
 
-    # 1) Memory: what do we know about this sender / relationship?
-    try:
-        from acb_skills.memory_tools import (  # noqa: PLC0415
-            _set_memory_user_id,
-            remember,
-        )
-        _set_memory_user_id(mem_scope)
-        mem = await remember(
-            f"past context, agreements, and preferences relevant to "
-            f"{email.get('from', '')} and: {email.get('subject', '')}"
-        )
-        if mem and "no relevant" not in mem.lower():
-            context_parts.append(f"From memory:\n{mem[:1500]}")
-        # Precedent: semantically similar past emails (any sender) and how the
-        # account handled them — inbox-zero's <email_history> advisory context.
-        precedent = await remember(
-            f"similar past emails about '{email.get('subject', '')}' and how "
-            f"they were handled or replied to: "
-            f"{(email.get('body', '') or '')[:200]}"
-        )
-        if (precedent and "no relevant" not in precedent.lower()
-                and precedent.strip() != (mem or "").strip()):
-            context_parts.append(
-                "Similar past emails (precedent — advisory, the current thread "
-                f"still wins):\n{precedent[:1200]}")
-    except Exception as exc:  # noqa: BLE001
-        _log.warning("email.draft_memory_failed", error=str(exc)[:160])
+    # 1) Memory: what do we know about this sender / relationship? Both
+    # lookups are independent — run them concurrently.
+    async def _memory_context() -> list[str]:
+        parts: list[str] = []
+        try:
+            from acb_skills.memory_tools import (  # noqa: PLC0415
+                _set_memory_user_id,
+                remember,
+            )
+            _set_memory_user_id(mem_scope)
+            mem, precedent = await asyncio.gather(
+                remember(
+                    f"past context, agreements, and preferences relevant to "
+                    f"{email.get('from', '')} and: {email.get('subject', '')}"
+                ),
+                # Precedent: semantically similar past emails (any sender) and
+                # how the account handled them — inbox-zero's <email_history>
+                # advisory context.
+                remember(
+                    f"similar past emails about '{email.get('subject', '')}' "
+                    f"and how they were handled or replied to: "
+                    f"{(email.get('body', '') or '')[:200]}"
+                ),
+            )
+            if mem and "no relevant" not in mem.lower():
+                parts.append(f"From memory:\n{mem[:1500]}")
+            if (precedent and "no relevant" not in precedent.lower()
+                    and precedent.strip() != (mem or "").strip()):
+                parts.append(
+                    "Similar past emails (precedent — advisory, the current "
+                    f"thread still wins):\n{precedent[:1200]}")
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("email.draft_memory_failed", error=str(exc)[:160])
+        return parts
 
-    # 2) Specialist agents: delegate via the orchestrator's run_agent.
-    plan = await _draft_consult_plan(email)
+    # 2) Memory recall and the consult qualifier are independent of each other
+    # — run them concurrently, so qualifying the email costs no wall-clock
+    # unless it actually triggers a specialist consult.
+    await _emit_activity(on_activity, kind="stage", id="memory", status="start")
+    mem_parts, plan = await asyncio.gather(
+        _memory_context(), _draft_consult_plan(email, on_activity=on_activity))
+    context_parts.extend(mem_parts)
+    await _emit_activity(
+        on_activity, kind="stage", id="memory", status="done",
+        detail=("nothing relevant found" if not mem_parts
+                else f"{len(mem_parts)} relevant "
+                     f"{'note' if len(mem_parts) == 1 else 'notes'}"))
+
+    # 3) Specialist agents: delegate via the orchestrator's run_agent — only
+    # when the qualifier judged the reply NEEDS their data (see
+    # _draft_consult_plan; most emails come back with an empty plan).
     if plan:
         try:
             from orchestrator.executor import run_agent  # noqa: PLC0415
             for item in plan[:max_agents]:
+                await _emit_activity(
+                    on_activity, kind="consult", status="start",
+                    agent=item["agent"], question=item["question"])
                 try:
                     res = await asyncio.wait_for(
                         run_agent(
@@ -1357,40 +1494,57 @@ async def _orchestrate_draft(
                             f"From the {item['agent']} agent "
                             f"(asked: {item['question']}):\n{ans[:1500]}"
                         )
+                    await _emit_activity(
+                        on_activity, kind="consult", status="done",
+                        agent=item["agent"], question=item["question"],
+                        answer=ans.strip()[:400],
+                        detail=("answered" if ans.strip() else "no answer"))
                 except Exception as exc:  # noqa: BLE001
                     _log.warning("email.draft_agent_failed",
                                  agent=item.get("agent"), error=str(exc)[:160])
+                    await _emit_activity(
+                        on_activity, kind="consult", status="failed",
+                        agent=item["agent"], question=item["question"],
+                        detail="unavailable — drafting without it")
         except Exception as exc:  # noqa: BLE001
             _log.warning("email.draft_orchestrator_unavailable", error=str(exc)[:160])
 
+    await _emit_activity(on_activity, kind="stage", id="draft", status="start")
     draft = await _llm_draft_reply(
         email, about, signature, instructions=instructions,
         context="\n\n".join(context_parts), user_email=user_email,
         model=model, interactive_fallback=interactive_fallback,
+        on_delta=on_delta,
     )
 
-    # 3) Record this exchange in Mem0 (episodic, pgvector) so future drafts to
+    # 4) Record this exchange in Mem0 (episodic, pgvector) so future drafts to
     # this correspondent have context. Use add_memories_background — NOT
     # add_episode, which targets Graphiti/Neo4j (disabled → silent no-op).
+    # Fire-and-forget (its own documented contract): Mem0's add runs an LLM
+    # extraction pass, and awaiting it here made the user wait several extra
+    # seconds AFTER the draft was already written.
     # Scoped to this inbox (mem_scope) so it reads back under the same key.
     # Skip when the drafter declined or failed: storing "I replied: NO_DRAFT"
     # (or a boilerplate fallback) as precedent poisons future retrievals.
     if not _is_no_draft(draft):
         try:
             from acb_memory import add_memories_background  # noqa: PLC0415
-            await add_memories_background(
-                mem_scope or "default",
-                [
-                    {"role": "user",
-                     "content": (
-                         f"Email from {email.get('from', '')} — subject "
-                         f"'{email.get('subject', '')}': "
-                         f"{(email.get('body', '') or '')[:600]}"
-                     )},
-                    {"role": "assistant",
-                     "content": f"I replied: {draft[:600]}"},
-                ],
-                agent_id="email",
+            _spawn_background(
+                add_memories_background(
+                    mem_scope or "default",
+                    [
+                        {"role": "user",
+                         "content": (
+                             f"Email from {email.get('from', '')} — subject "
+                             f"'{email.get('subject', '')}': "
+                             f"{(email.get('body', '') or '')[:600]}"
+                         )},
+                        {"role": "assistant",
+                         "content": f"I replied: {draft[:600]}"},
+                    ],
+                    agent_id="email",
+                ),
+                label="draft_memory_add",
             )
         except Exception:  # noqa: BLE001
             pass
@@ -1495,11 +1649,12 @@ async def draft_reply_smart(
             query=f"{email.get('subject', '')} {email.get('body', '')}")
         models = await _account_models(db, req.account_id)
         # Synchronous request → keep the orchestration budget under the proxy
-        # timeout (one specialist agent, short timeout).
+        # timeout (one specialist agent, short timeout). Interactive → the
+        # account's COMPOSE model (fast by default), not the background one.
         draft = await _agent_draft_reply(
             email, about, signature, user.email or "",
             max_agents=1, agent_timeout=18.0, follow_up=req.follow_up,
-            model=models["draft"], account_id=req.account_id,
+            model=models["compose"], account_id=req.account_id,
             interactive_fallback=True,
         )
 
@@ -1564,18 +1719,19 @@ class ComposeAssistRequest(BaseModel):
     subject: str = ""
 
 
-@router.post("/compose-assist")
-async def compose_assist(
-    req: ComposeAssistRequest,
-    user: UserContext = Depends(get_current_user),
-):
-    """Draft or improve the body the user is composing. Operates ONLY on the new
-    text (the client strips the quoted trailing email first); for a reply/forward
-    the original thread is loaded as context but never quoted back. Returns the
-    drafted/improved body."""
+async def _compose_assist_run(
+    req: ComposeAssistRequest, user: UserContext,
+    on_activity: Callable[[dict[str, Any]], Awaitable[None]] | None = None,
+    on_delta: Callable[[str, str], Awaitable[None]] | None = None,
+) -> dict[str, str]:
+    """The ONE compose-assist implementation behind both the JSON endpoint and
+    the SSE streaming endpoint. Returns {"draft": ...} or
+    {"draft": "", "skipped": "low_confidence"}."""
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        await _emit_activity(
+            on_activity, kind="stage", id="context", status="start")
         # Rank the KB by what's being composed, not recency (3.5).
         about, signature = await _load_assistant_about(
             db, req.account_id,
@@ -1603,12 +1759,14 @@ async def compose_assist(
                 # The user's AI-bar prompt must steer this draft. This path used
                 # to drop req.instruction entirely, so typing an instruction and
                 # hitting Draft on an empty reply changed nothing.
+                # Interactive → the account's COMPOSE model (fast by default).
                 draft = await _agent_draft_reply(
                     ctx, about, signature, user.email or "",
                     max_agents=1, agent_timeout=18.0,
-                    model=models["draft"], account_id=req.account_id,
+                    model=models["compose"], account_id=req.account_id,
                     interactive_fallback=True,
                     extra_instructions=(req.instruction or "").strip(),
+                    on_activity=on_activity, on_delta=on_delta,
                 )
                 if _is_no_draft(draft):
                     return {"draft": "", "skipped": "low_confidence"}
@@ -1629,17 +1787,104 @@ async def compose_assist(
         if not recipient and req.to:
             recipient = ", ".join([a for a in req.to if a])
 
+        # Refinement rounds (the user is iterating on an existing draft) reuse
+        # the improve-in-place path — no memory/consult sweep, so each edit
+        # round is a single fast model call.
+        await _emit_activity(
+            on_activity, kind="stage", id="context", status="done",
+            detail="thread and recipient loaded")
+        await _emit_activity(
+            on_activity, kind="stage", id="draft", status="start",
+            detail=("refining your draft" if (req.body or "").strip()
+                    else "writing a new draft"))
         draft = await _llm_compose_assist(
             about=about, signature=signature, current_body=req.body,
             instruction=req.instruction, mode=req.mode, recipient=recipient,
             subject=subject, thread=thread, reply_to_body=reply_to_body,
-            user_email=user.email or "", model=models["draft"],
+            user_email=user.email or "", model=models["compose"],
+            on_delta=on_delta,
         )
         if _is_no_draft(draft):
             return {"draft": "", "skipped": "low_confidence"}
         return {"draft": draft}
     finally:
         await db.close()
+
+
+@router.post("/compose-assist")
+async def compose_assist(
+    req: ComposeAssistRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Draft or improve the body the user is composing. Operates ONLY on the new
+    text (the client strips the quoted trailing email first); for a reply/forward
+    the original thread is loaded as context but never quoted back. Returns the
+    drafted/improved body."""
+    return await _compose_assist_run(req, user)
+
+
+@router.post("/compose-assist/stream")
+async def compose_assist_stream(
+    req: ComposeAssistRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """SSE variant of /compose-assist: same drafting pipeline, but progress is
+    streamed so the composer shows what the backend is doing instead of a bare
+    spinner. Events (each ``data: {json}``):
+
+      {"type": "activity", ...}
+          — structured step events the composer's activity panel renders:
+            stage (context/memory/draft, start|done), qualify (the email kind
+            + whether a specialist is needed), consult (agent, the question
+            asked, and its answer). See _emit_activity.
+      {"type": "delta", "kind": "reasoning|content", "text": ...}
+          — live model output; "reasoning" is the model thinking out loud
+            (reasoning-tier models), "content" is draft text.
+      {"type": "done", "draft": ..., "skipped"?: ...}
+          — the FINAL cleaned draft (salutation/placeholder rules applied);
+            always replaces any streamed preview text.
+      {"type": "error", "error": ...}
+    """
+    queue: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
+
+    async def on_activity(event: dict[str, Any]) -> None:
+        await queue.put({"type": "activity", **event})
+
+    async def on_delta(kind: str, text_delta: str) -> None:
+        await queue.put({"type": "delta", "kind": kind, "text": text_delta})
+
+    async def runner() -> None:
+        try:
+            result = await _compose_assist_run(
+                req, user, on_activity=on_activity, on_delta=on_delta)
+            await queue.put({"type": "done", **result})
+        except HTTPException as exc:
+            await queue.put({"type": "error", "error": str(exc.detail)})
+        except Exception as exc:  # noqa: BLE001
+            _log.warning("email.compose_stream_failed", error=str(exc)[:200])
+            await queue.put({"type": "error", "error": "draft failed"})
+        finally:
+            await queue.put(None)
+
+    async def event_stream():
+        task = asyncio.create_task(runner())
+        try:
+            while True:
+                item = await queue.get()
+                if item is None:
+                    break
+                yield f"data: {json.dumps(item)}\n\n"
+        finally:
+            # Client went away mid-draft → stop paying for the LLM call.
+            if not task.done():
+                task.cancel()
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={"Cache-Control": "no-cache", "Connection": "keep-alive",
+                 "X-Accel-Buffering": "no"},
+    )
 
 
 async def _upsert_local_draft(

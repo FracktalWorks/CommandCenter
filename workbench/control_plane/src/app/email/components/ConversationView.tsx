@@ -7,12 +7,12 @@ import {
 } from "lucide-react";
 import { Email } from "../lib/types";
 import { fullDateLabel, initials, buildOptimisticSent } from "../lib/utils";
-import {
-  getEmail, fetchFullBody, composeAssist, detectReplyCommitment,
-} from "../lib/api";
+import { getEmail, fetchFullBody, detectReplyCommitment } from "../lib/api";
+import { useDraftSession } from "../lib/useDraftSession";
 import { splitQuotedText } from "../lib/quoting";
 import { useEmailStore } from "../lib/emailStore";
-import { ComposerQuote, AiButton, AiAssistBar } from "./ComposerAI";
+import { ComposerQuote, AiButton } from "./ComposerAI";
+import { DraftAssistant } from "./DraftAssistant";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { SignaturePreview } from "./SignaturePreview";
@@ -384,10 +384,15 @@ export function DraftCard({
   const [sending, setSending] = useState(false);
   const dirty = useRef(false);
   const [draftStatus, setDraftStatus] = useState<"idle" | "saving" | "saved">("idle");
-  // AI draft/improve bar.
+  // AI draft/refine panel — the session owns live backend steps + revisions.
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
+  const ai = useDraftSession({
+    onBody: (next) => {
+      dirty.current = true;
+      setBody(next);
+    },
+  });
 
   /** The full outgoing body: the editable text plus the quoted trailing chain. */
   const combinedBody = () =>
@@ -521,33 +526,27 @@ export function DraftCard({
     }
   };
 
-  /** Draft or improve the reply with AI — operates on the NEW text only (the
-   *  quoted trailing chain is kept separate, never sent). */
+  /** Draft or refine the reply with AI — operates on the NEW text only (the
+   *  quoted trailing chain is kept separate, never sent). Backend steps stream
+   *  into the panel, and it stays open so the next instruction refines this
+   *  draft rather than starting from scratch. */
   const runAi = async () => {
     const accountId = draft.accountId || selectedAccountId;
-    if (!accountId || aiBusy) return;
-    setAiBusy(true);
-    try {
-      const res = await composeAssist({
+    if (!accountId || ai.busy) return;
+    const instruction = aiInstruction.trim();
+    const result = await ai.run(
+      {
         accountId,
         body,
-        instruction: aiInstruction.trim(),
+        instruction,
         mode: replyTo ? "reply" : "new",
         messageId: replyTo?.id,
         to: recipients(),
         subject: draft.subject || "",
-      });
-      if (res.draft) {
-        dirty.current = true;
-        setBody(res.draft);
-        setAiOpen(false);
-        setAiInstruction("");
-      }
-    } catch {
-      /* leave the draft as-is on failure; the user can retry */
-    } finally {
-      setAiBusy(false);
-    }
+      },
+      { instruction },
+    );
+    if (result) setAiInstruction("");
   };
 
   return (
@@ -631,12 +630,19 @@ export function DraftCard({
       </div>
       {aiOpen && (
         <div className="mt-2 -mx-3 border-y border-border">
-          <AiAssistBar
+          <DraftAssistant
             instruction={aiInstruction}
             onInstruction={setAiInstruction}
-            busy={aiBusy}
+            busy={ai.busy}
             hasText={body.trim().length > 0}
+            hasDraft={ai.hasDraft}
+            steps={ai.steps}
+            thinking={ai.thinking}
+            revisions={ai.revisions}
+            activeRevision={ai.activeRevision}
+            elapsedMs={ai.elapsedMs}
             onRun={runAi}
+            onRestore={(id) => ai.restore(id)}
             onClose={() => setAiOpen(false)}
           />
         </div>

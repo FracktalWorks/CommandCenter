@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import uuid
 from typing import Any
 
 from acb_auth import UserContext
@@ -367,6 +368,15 @@ async def ai_complete(
         )
     tier = resolve_ai_tier(body.tier, manifest)
     from acb_llm import acompletion_with_fallback
+
+    # Presence (RFC §4.6): a start/end pair around the actual provider call —
+    # NOT the budget check above, which never reaches the LLM — makes this app
+    # "working" in the observability office view for the call's real duration,
+    # the same start/end contract an agent run uses. A fresh run_id per call so
+    # concurrent completions from the same app (different users) don't collide
+    # on one presence key.
+    run_id = str(uuid.uuid4())
+    publish_app_activity(slug, user=_uid(user), phase="start", run_id=run_id, action="ai")
     try:
         resp, used_model = await acompletion_with_fallback(
             model=tier,
@@ -374,8 +384,18 @@ async def ai_complete(
             messages=messages,
             max_tokens=max_tokens,
             temperature=0.2,
+            # Every custom app's AI call runs through this SAME module
+            # regardless of slug, so the stack-inferred source can only ever
+            # resolve to the shared "apps" package — an explicit per-slug
+            # source is the only way cost attribution (/observability/cost's
+            # "by app" view) can tell one app's spend from another's.
+            source=f"app:{slug}",
         )
     except Exception as exc:
+        publish_app_activity(
+            slug, user=_uid(user), phase="end", run_id=run_id,
+            action="ai", status="error",
+        )
         _log.warning("apps.ai_failed", slug=slug, error=str(exc)[:200])
         raise HTTPException(
             status_code=502, detail="LLM completion failed",
@@ -394,7 +414,7 @@ async def ai_complete(
         detail={"surface": "app-runtime", "tier": tier},
     )
     publish_app_activity(
-        slug, user=_uid(user), action="ai",
+        slug, user=_uid(user), phase="end", run_id=run_id, action="ai",
         model=used_model, tokens=tokens_in + tokens_out,
     )
     return {

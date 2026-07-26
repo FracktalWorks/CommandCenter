@@ -16,7 +16,8 @@ low-volume stream instead of one per conversation):
 * **Small, stable event shape.** One JSON object per stream entry under the
   ``event`` field (same convention as ``stream_relay.push_event``).
 * **Presence keys** (``cc:activity:live:{run_id}``) track in-flight agent runs
-  with a TTL so the "running now" panel survives a crash without leaking.
+  (and, identically, in-flight Custom App AI calls — ``kind="app"``) with a
+  TTL so the "running now" panel survives a crash without leaking.
 
 This is the live signal only — the durable record stays in ``agent_run``
 (migration 50) and the correlated logs. Retention here is bounded by
@@ -144,9 +145,14 @@ async def _axadd(evt: dict[str, Any]) -> None:
         maxlen=STREAM_MAXLEN,
         approximate=True,
     )
-    # Presence: an agent run is "live" between its start and end events.
+    # Presence: an agent run — or an app AI call, RFC docs/app-workshop/README.md
+    # §4.6 — is "live" between its start and end events. Apps publish through
+    # ``publish_app_activity`` (kind="app") with the same phase/run_id contract
+    # as an agent run, so this one gate covers both actor kinds identically —
+    # the office view and /active treat a working app exactly like a working
+    # agent, no separate presence mechanism needed.
     run_id = evt.get("run_id")
-    if evt.get("kind") == "agent" and run_id:
+    if evt.get("kind") in ("agent", "app") and run_id:
         if evt.get("phase") == "start":
             await r.set(_live_key(run_id), json.dumps(evt, default=str),
                         ex=LIVE_TTL_SECONDS)
@@ -164,8 +170,8 @@ def publish_activity(**fields: Any) -> None:
     """Publish one activation event to the global feed. Best-effort, non-blocking.
 
     Call from anywhere (sync or async). Common fields:
-      ``kind``     — "agent" | "model" (required to be useful)
-      ``phase``    — "start" | "end"   (agents; models are single events)
+      ``kind``     — "agent" | "app" | "model" (required to be useful)
+      ``phase``    — "start" | "end"   (agents + apps; models are single events)
       ``model``, ``tier``              — model activations
       ``status``, ``duration_ms``      — agent "end" events
       ``agent``, ``user``, ``thread_id``, ``run_id``, ``source`` — inherited

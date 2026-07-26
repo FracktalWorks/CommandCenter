@@ -91,9 +91,14 @@ class AppPatch(BaseModel):
 # ── Scaffold (sync — run in an executor) ─────────────────────────────────────
 
 def starter_index_html(name: str) -> str:
-    """The single-file starter app: control-plane-toned, with a commented
-    ``window.cc`` usage example (the bridge is injected by the run/preview
-    frame — see RFC §4.4)."""
+    """The single-file starter app: on-brand via the platform's PRE-INJECTED
+    design system, with a commented ``window.cc`` usage example (the bridge
+    + the ``--cc-*`` tokens and ``.cc-*`` block-kit classes below are
+    injected by the run/preview frame itself — ``SandboxedHtml.tsx``'s
+    ``buildSrcDoc``, the exact same styling every CommandCenter report and
+    generative-UI card already uses. Never redeclare these — see RFC §4.1
+    and ``apps/agents/agent-app-builder/instructions.md``'s Design section).
+    """
     safe = name.replace("<", "&lt;").replace(">", "&gt;")
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -102,38 +107,25 @@ def starter_index_html(name: str) -> str:
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>{safe}</title>
   <style>
-    :root {{
-      --bg: hsl(220 13% 8%);
-      --fg: hsl(210 40% 98%);
-      --muted: hsl(215 16% 62%);
-      --accent: hsl(198 89% 50%);
-      --card: hsl(220 13% 12%);
-      --border: hsl(217 19% 20%);
-    }}
     * {{ box-sizing: border-box; margin: 0; }}
     body {{
-      background: var(--bg);
-      color: var(--fg);
-      font: 15px/1.6 system-ui, -apple-system, "Segoe UI", sans-serif;
+      font: 15px/1.6 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
       min-height: 100vh;
       display: grid;
       place-items: center;
       padding: 2rem;
     }}
-    main {{
-      background: var(--card);
-      border: 1px solid var(--border);
-      border-radius: 12px;
-      padding: 2rem 2.5rem;
-      max-width: 34rem;
-    }}
+    main.cc-card {{ max-width: 34rem; padding: 2rem 2.5rem; }}
     h1 {{ font-size: 1.4rem; margin-bottom: 0.5rem; }}
-    h1::before {{ content: "◆ "; color: var(--accent); }}
-    p {{ color: var(--muted); }}
+    h1::before {{ content: "◆ "; color: var(--cc-accent); }}
+    p {{ color: var(--cc-muted); }}
   </style>
 </head>
 <body>
-  <main>
+  <!-- .cc-card is one of the platform's pre-styled, on-brand blocks (see
+       the Design section of your instructions) — no colors/borders/radius
+       to hand-write, it already matches CommandCenter. -->
+  <main class="cc-card">
     <h1>{safe}</h1>
     <p>Built in the CommandCenter Workshop — describe changes in the build chat.</p>
   </main>

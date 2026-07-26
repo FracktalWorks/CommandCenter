@@ -216,16 +216,18 @@ export default function AppRunPage({
             );
           return;
         }
-        const data = (await res.json()) as { app?: AppMeta };
-        if (cancelled || !data.app) return;
-        setApp(data.app);
-        if (data.app.needs_consent === true) {
+        // GET /apps/{slug} returns a bare AppDetail (no {app: ...} envelope
+        // — see gateway/routes/apps/lifecycle.py).
+        const data = (await res.json()) as AppMeta;
+        if (cancelled || !data) return;
+        setApp(data);
+        if (data.needs_consent === true) {
           // Blocking gate — don't fetch the bundle until the viewer clears
           // the interstitial (or bails via "Not now").
           setShowConsent(true);
           return;
         }
-        if (data.app.live_version) await fetchLiveBundle();
+        if (data.live_version) await fetchLiveBundle();
       } catch (e) {
         if (!cancelled) setError(String(e));
       } finally {
@@ -276,8 +278,8 @@ export default function AppRunPage({
           setConsentNotice("The scopes changed — refreshing…");
           const ares = await fetch(`/api/apps/${encodeURIComponent(slug)}`);
           if (ares.ok) {
-            const data = (await ares.json()) as { app?: AppMeta };
-            if (data.app) setApp(data.app);
+            const data = (await ares.json()) as AppMeta;
+            if (data) setApp(data);
           }
           return;
         }
@@ -295,11 +297,11 @@ export default function AppRunPage({
       const next = !open;
       if (next) {
         if (versions === null) {
+          // GET /apps/{slug}/versions returns a bare array (no {versions:
+          // [...]} envelope — see gateway/routes/apps/publish.py).
           fetch(`/api/apps/${encodeURIComponent(slug)}/versions`)
-            .then((r) => (r.ok ? r.json() : { versions: [] }))
-            .then((d: { versions?: AppVersion[] }) =>
-              setVersions(Array.isArray(d.versions) ? d.versions : [])
-            )
+            .then((r) => (r.ok ? r.json() : []))
+            .then((d: AppVersion[]) => setVersions(Array.isArray(d) ? d : []))
             .catch(() => setVersions([]));
         }
         if (usage === null) {
@@ -344,8 +346,8 @@ export default function AppRunPage({
           // Refetch app meta + live bundle so the badge and frame match.
           const ares = await fetch(`/api/apps/${encodeURIComponent(slug)}`);
           if (ares.ok) {
-            const data = (await ares.json()) as { app?: AppMeta };
-            if (data.app) setApp(data.app);
+            const data = (await ares.json()) as AppMeta;
+            if (data) setApp(data);
           }
           const bres = await fetch(
             `/api/apps/${encodeURIComponent(slug)}/bundle?version=live`

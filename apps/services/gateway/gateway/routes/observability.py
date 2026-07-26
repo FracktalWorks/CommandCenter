@@ -9,7 +9,9 @@ agent run and model call as it happens, across chat AND every app, plus a
     GET /observability/activity/recent?limit=   → recent activations (backfill)
     GET /observability/activity/stream          → SSE live feed (new events)
     GET /observability/active                    → agent runs in flight now
-    GET /observability/roster                    → all agents + working/idle
+    GET /observability/roster                    → all agents + working/idle,
+                                                     plus any Custom App
+                                                     currently consuming tokens
     GET /observability/cost?days=                → daily LLM cost rollup
     GET /observability/runs?agent=&status=       → DURABLE history (agent_run)
 
@@ -138,6 +140,7 @@ async def roster(
         seen.add(name)
         live = live_by_agent.get(name, [])
         agents.append({
+            "kind": "agent",
             "name": name,
             "display_name": aliases.get(name, ""),
             "description": str(a.get("description") or ""),
@@ -152,12 +155,15 @@ async def roster(
     # Include agents that are LIVE but not in the registry — most importantly the
     # "orchestrator" (the default-chat agent, which isn't a registered specialist)
     # and any ad-hoc sub-agent. Without this the primary agent never shows in the
-    # office even while it's clearly working.
+    # office even while it's clearly working. Custom Apps ("app:<slug>" presence,
+    # RFC docs/app-workshop/README.md §4.6) are handled separately below — they
+    # need their real name/icon from the apps table, not agent-shaped fields.
     for name, live in live_by_agent.items():
-        if not name or name in seen:
+        if not name or name in seen or name.startswith("app:"):
             continue
         seen.add(name)
         agents.append({
+            "kind": "agent",
             "name": name,
             "display_name": aliases.get(name, ""),
             "description": "Core orchestrator" if name == "orchestrator" else "",
@@ -169,8 +175,59 @@ async def roster(
             "avatar": avatars.get(name),
         })
 
+    # Custom Apps currently consuming tokens — an app only ever appears here
+    # WHILE live (unlike agents, whose full registry shows even when idle):
+    # there is no "idle app" roster row, matching "show apps being used AT
+    # THE MOMENT" rather than cluttering the office with every published app.
+    app_slugs = [
+        name[len("app:"):] for name in live_by_agent if name.startswith("app:")
+    ]
+    if app_slugs:
+        app_details = _load_app_details(app_slugs)
+        for slug in app_slugs:
+            live = live_by_agent[f"app:{slug}"]
+            details = app_details.get(slug, {})
+            agents.append({
+                "kind": "app",
+                "name": f"app:{slug}",
+                "slug": slug,
+                "display_name": details.get("name") or slug,
+                "description": "Custom App — consuming AI tokens right now",
+                "icon": details.get("icon") or "",
+                "runtime": "app",
+                "status": "working",
+                "active_runs": len(live),
+                "last_ts": live[0].get("ts") if live else None,
+                "source": live[0].get("source") if live else None,
+                "avatar": None,
+            })
+
     agents.sort(key=lambda e: (e["status"] != "working", e["name"]))
     return {"agents": agents, "count": len(agents)}
+
+
+def _load_app_details(slugs: list[str]) -> dict[str, dict[str, Any]]:
+    """``{slug: {name, icon}}`` for the given Custom App slugs.
+
+    Best-effort → ``{}`` on any error, same contract as ``_load_avatars`` —
+    a lookup failure must degrade to showing the bare slug, never break the
+    roster for every other agent/app.
+    """
+    if not slugs:
+        return {}
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+
+        with get_session() as s:
+            rows = s.execute(
+                text("SELECT slug, name, icon FROM apps WHERE slug = ANY(:slugs)"),
+                {"slugs": slugs},
+            ).fetchall()
+        return {r.slug: {"name": r.name, "icon": r.icon or ""} for r in rows}
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("observability.app_details_load_failed", error=str(exc))
+        return {}
 
 
 @router.get("/cost")

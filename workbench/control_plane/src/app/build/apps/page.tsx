@@ -187,8 +187,10 @@ export default function CustomAppsPage() {
         setApps([]);
         return;
       }
-      const data = (await res.json()) as { apps?: AppMeta[] };
-      setApps(Array.isArray(data.apps) ? data.apps : []);
+      // GET /apps returns a bare array (FastAPI response_model=list[AppSummary],
+      // no {apps: [...]} envelope — see gateway/routes/apps/lifecycle.py).
+      const data = (await res.json()) as AppMeta[];
+      setApps(Array.isArray(data) ? data : []);
     } catch (e) {
       setError(String(e));
       setApps([]);
@@ -217,16 +219,21 @@ export default function CustomAppsPage() {
             description: text || undefined,
           }),
         });
+        // POST /apps returns a bare AppDetail on success (no {app: ...}
+        // envelope) or a FastAPI error body ({"detail": ...}) on failure.
         const data = (await res.json().catch(() => ({}))) as {
-          app?: { slug?: string };
-          error?: string;
+          slug?: string;
+          detail?: string;
         };
-        if (!res.ok || !data.app?.slug) {
-          setCreateError(data.error ?? `Create failed (HTTP ${res.status})`);
+        if (!res.ok || !data.slug) {
+          setCreateError(
+            (typeof data.detail === "string" && data.detail) ||
+              `Create failed (HTTP ${res.status})`
+          );
           return;
         }
         const qs = text ? `?seed=${encodeURIComponent(text)}` : "";
-        router.push(`/build/apps/${data.app.slug}/edit${qs}`);
+        router.push(`/build/apps/${data.slug}/edit${qs}`);
       } catch (e) {
         setCreateError(String(e));
       } finally {

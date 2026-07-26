@@ -94,15 +94,46 @@ expose a capability that isn't one of these four shapes (a computed value, a mul
 workflow), say plainly that v1 only supports simple data reads/writes and pre-declared
 tool calls, and offer the closest fit.
 
-## Design
+## Design — don't build it, it's already in the frame
 
-Match the CommandCenter look: dark UI, `background: hsl(220 13% 8%)`, panels
-`hsl(220 13% 10%)` with `1px hsl(220 13% 16%)` borders and 12px radius, text
-`hsl(210 40% 98%)`, muted `hsl(215 20% 65%)`, accent/buttons `hsl(198 89% 50%)`,
-warnings `hsl(27 96% 61%)`, system-ui font stack, 13–14px base size. Call
-`load_design_system` when you need the full design language. Clean spacing, real
-empty states, tabular numbers for figures. No lorem ipsum — use plausible
-Fracktal-flavored content (3D printers, filament, service, quotes).
+The app's runtime frame has the **exact same design system CommandCenter's own
+reports and generative-UI cards use** already injected — `--cc-*` CSS variables
+AND a library of pre-styled `.cc-*` classes — for free, before you write a
+single line of CSS. Reach for these instead of hand-rolling equivalent styles;
+it's both the fastest path (no CSS to write or debug) and the only way the app
+is guaranteed to look native, not "close enough."
+
+**Never redeclare these** (no `:root { --primary: ... }`, no `.cc-card { ... }`
+override) — use them as-is, the same rule `load_design_system`'s full reference
+states for reports.
+
+- **Tokens** (use directly in your own CSS, never redefine): `--cc-bg`,
+  `--cc-card`, `--cc-fg`, `--cc-muted`, `--cc-border`, `--cc-secondary`,
+  `--cc-primary`, `--cc-primary-fg`, `--cc-accent`, `--cc-success`,
+  `--cc-warning`, `--cc-danger`, `--cc-radius`, `--cc-ease`.
+- **Buttons & panels** — `<button class="cc-btn cc-primary">Save</button>` /
+  `<button class="cc-btn">Cancel</button>`, `<div class="cc-card">…</div>`.
+  Native `input`/`select`/`textarea`/`input[type=range]` are already styled
+  on-brand — don't add your own borders/focus rings to them.
+- **Report/data block-kit** — the SAME building blocks CommandCenter's own
+  dashboards use, all namespaced `cc-*`: `cc-stats`/`cc-stat` (KPI tiles —
+  `<p class="cc-k">LABEL</p><div class="cc-v">42<small>%</small></div>`),
+  `cc-bars` (bar chart rows, `style="--v:72"` sets the fill %), `cc-donuts`/
+  `cc-donut` (ring gauges, same `--v` percent), `cc-table` (wrap a `<table>` for
+  ops/status data — `td.cc-num` for right-aligned figures, `cc-status`/
+  `cc-tag-pill` for status cells), `cc-callout`/`cc-note` (a tinted
+  highlight or status banner — tones `cc-info`/`cc-success`/`cc-warning`/
+  `cc-danger`), `cc-chart` (trend/area line, you supply an inline `<svg>`
+  with `cc-line`/`cc-area`/`cc-end`). A stock/low-inventory list is
+  `cc-table`, a dashboard number is `cc-stats`, a "3 orders pending" banner
+  is `cc-note`, a usage trend is `cc-chart` — reach for the block that
+  matches the DATA SHAPE before writing custom markup.
+- Call `load_design_system` when you want the full reference (every block's
+  exact HTML structure, more variants, motion/spacing rules) — most rounds
+  won't need it since the classes above cover the common cases directly.
+- Clean spacing, real empty states, tabular numbers for figures. No lorem
+  ipsum — use plausible Fracktal-flavored content (3D printers, filament,
+  service, quotes).
 
 ## Architecture conformance (non-negotiable)
 

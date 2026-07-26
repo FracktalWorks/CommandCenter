@@ -438,6 +438,17 @@ Design rules:
   should resolve actions from *that* registry instead of a bespoke Python function per
   action. Adding tool #2 by hand is fine; adding tool #10 by hand is a sign this
   generalization is overdue — treat it as the Phase 3+ trigger, not a Phase 2 requirement.
+- **The design system rides the same frame the SDK does — no second copy.**
+  Apps render through `SandboxedHtml.tsx`, the SAME component that backs
+  CommandCenter's own reports and generative-UI cards, so `buildSrcDoc`
+  already injects the identical `--cc-*` tokens and `.cc-*` block-kit
+  classes (`cc-card`, `cc-btn`, `cc-stats`, `cc-bars`, `cc-donuts`,
+  `cc-table`, `cc-callout`/`cc-note`, `cc-chart`, …) into every app frame —
+  for free, before the builder writes a line of CSS. The starter scaffold
+  (`starter_index_html`) and the builder's own instructions were updated to
+  use these directly instead of a hand-duplicated palette, so a fresh app
+  is on-brand and token-cheap to extend from round one, and `design.md`
+  stays the single source of truth instead of drifting copies.
 - **Broker action names are namespaced `app.<service>_<action>`** (e.g.
   `app.clickup_create_task`), distinct from each first-party surface's own action names
   (`clickup.create_task` for the Task Manager, gated by its own per-account credentials).

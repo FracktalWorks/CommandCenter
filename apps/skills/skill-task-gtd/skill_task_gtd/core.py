@@ -948,7 +948,12 @@ async def gtd_plan_day(apply: bool = False, energy_note: str = "") -> str:
         apply: False = propose only (default); True = commit the plan you last
             proposed. Only pass True after the user has confirmed it.
         energy_note: optional free text about the user's state, e.g. "low
-            energy, lots of meetings" — steers which work is chosen.
+            energy, lots of meetings" — steers which work is chosen. It also
+            sets the PLAN-THROUGH HORIZON: by default the planner stops at the
+            user's working-hours end, but a phrase like "work for 2 more hours"
+            or "until 2am" extends (or shrinks) the window from now, so a
+            late-night or short burst can be planned anytime across 24h. Pass
+            the user's words through verbatim.
     """
     plan = await _request(
         "POST", "/tasks/calendar/plan-today",

@@ -170,6 +170,10 @@ export function buildTaskAssistantPersona(opts: {
       "(breaks between long focus runs, a protected lunch, whitespace) — pass " +
       "the user's request for TODAY as energy_note (e.g. 'calls only', 'deep " +
       "work', 'low energy', 'free after 3pm') and let the server do the rest. " +
+      "energy_note also sets the PLAN-THROUGH HORIZON — by default the planner " +
+      "stops at the working-hours end, but a phrase like 'work for 2 more hours' " +
+      "or 'until 2am' extends (or shrinks) the window from now, so you can plan " +
+      "a late-night or short burst anytime across 24h; pass it through verbatim. " +
       "The planner also honours the user's recurring windows — protected blocks " +
       "(lunch, gym, family) it won't book over, and themed focus windows (deep " +
       "work, calls, meetings) it batches matching work into.",

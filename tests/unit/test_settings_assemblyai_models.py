@@ -78,3 +78,32 @@ async def test_network_failure_is_survivable(monkeypatch) -> None:
 @pytest.mark.asyncio
 async def test_no_key_means_no_probe(monkeypatch) -> None:
     assert await st._fetch_live_models("assemblyai", api_key=None) == []
+
+
+# ── provider registration must be COMPLETE ───────────────────────────────────
+
+def test_assemblyai_models_resolve_to_their_provider() -> None:
+    """A missing branch here made the STT tier render "? unknown" and "No key"
+    even with a valid key configured — _is_provider_configured("unknown") can't
+    find an env var, so a working key looked missing."""
+    assert st._provider_from_model("assemblyai/universal-3-pro") == "assemblyai"
+    assert st._provider_from_model("assemblyai/universal-2") == "assemblyai"
+
+
+def test_every_catalogued_stt_provider_is_registered_everywhere() -> None:
+    """Registering a provider means touching several maps; missing one fails
+    silently in the UI rather than raising. Check them together."""
+    for provider in ("assemblyai", "deepgram"):
+        assert provider in st._PROVIDER_ENV_MAP, "no env var mapping"
+        assert provider in st._PROVIDER_LABELS, "no display label"
+        assert provider in st._PROVIDER_MODELS, "no catalogued models"
+        for mid in st._PROVIDER_MODELS[provider]:
+            assert st._provider_from_model(mid) == provider, f"{mid} misroutes"
+
+
+def test_a_configured_key_is_reported_as_configured(monkeypatch) -> None:
+    monkeypatch.setenv("ASSEMBLYAI_API_KEY", "sk-test")
+    assert st._is_provider_configured("assemblyai") is True
+    monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
+    monkeypatch.setattr(st, "get_settings", lambda: type("S", (), {})())
+    assert st._is_provider_configured("assemblyai") is False

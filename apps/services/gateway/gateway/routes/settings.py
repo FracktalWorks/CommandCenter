@@ -440,6 +440,8 @@ def _provider_from_model(model: str) -> str:
         return "together"
     if model.startswith("deepgram/"):
         return "deepgram"
+    if model.startswith("assemblyai/"):
+        return "assemblyai"
     if model.startswith("ollama/"):
         return "ollama"
     if model.startswith("openai/"):

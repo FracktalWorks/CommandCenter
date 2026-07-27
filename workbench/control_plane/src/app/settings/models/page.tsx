@@ -656,7 +656,7 @@ export default function ModelsPage() {
                   <div>
                     <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-1">Speech-to-text</div>
                     <p className="text-[11px] text-muted-foreground/80 mb-3">
-                      Which model the Note Taker uses to transcribe recordings. Deepgram also names speakers (diarization) in multi-speaker meetings.
+                      Which model the Note Taker uses to transcribe recordings. AssemblyAI and Deepgram also name speakers (diarization) in multi-speaker meetings — AssemblyAI does it on live captions too.
                     </p>
                     {sttEnabledModels.length === 0 && !loadingModels && (
                       <div className="mb-2 rounded-lg border border-warning/25 bg-warning/5 px-4 py-3 text-xs text-warning/80">

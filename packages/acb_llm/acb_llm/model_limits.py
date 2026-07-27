@@ -196,6 +196,11 @@ MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     "openai/gpt-4o-mini-transcribe": {"label": "GPT-4o Mini Transcribe",        "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Fast, affordable GPT-4o transcription. No named speakers."},
     "deepgram/nova-3":               {"label": "Deepgram Nova-3",               "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers (diarization) + word timings — best for multi-speaker meetings."},
     "deepgram/nova-2":               {"label": "Deepgram Nova-2",               "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers (diarization) + word timings — proven meeting transcription."},
+    # AssemblyAI — native provider (submit-then-poll), not routed via litellm.
+    # The part after "assemblyai/" is passed straight through as `speech_model`,
+    # so any id AssemblyAI accepts works even if it isn't catalogued here.
+    "assemblyai/universal":          {"label": "AssemblyAI Universal",          "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers + word timings, multilingual incl. Hindi/English code-switching. Cheapest per hour — the default for meetings."},
+    "assemblyai/nano":               {"label": "AssemblyAI Nano",               "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers, widest language coverage, lowest cost. Less accurate than Universal."},
 }
 
 

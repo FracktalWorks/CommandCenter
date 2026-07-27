@@ -405,6 +405,9 @@ class ProviderKeyStore:
             # Speech-to-text provider (Note Taker STT tier). litellm's Deepgram
             # transcription handler reads DEEPGRAM_API_KEY from the environment.
             "deepgram":   ("deepgram_api_key",    "DEEPGRAM_API_KEY"),
+            # AssemblyAI is reached by a NATIVE provider (acb_stt) and by the
+            # live-token endpoint, both of which read the env var directly.
+            "assemblyai": ("assemblyai_api_key",  "ASSEMBLYAI_API_KEY"),
         }
 
         all_keys = await self.get_all()

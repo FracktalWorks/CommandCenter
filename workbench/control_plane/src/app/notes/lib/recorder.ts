@@ -9,7 +9,7 @@
  */
 
 import { completeRecording, startRecording, uploadChunk } from "./api";
-import { DeepgramLive, type LiveCaption } from "./live";
+import { LiveTranscription, type LiveCaption } from "./live";
 
 export type RecorderState = "idle" | "recording" | "paused" | "finalizing";
 
@@ -92,7 +92,7 @@ export class MeetingRecorder {
 
   // Live captions (Deepgram streaming) — additive; failures never affect the
   // chunked-upload / batch path below.
-  private live: DeepgramLive | null = null;
+  private live: LiveTranscription | null = null;
   private liveNode: ScriptProcessorNode | null = null;
   private liveSource: MediaStreamAudioSourceNode | null = null;
   private liveSink: GainNode | null = null;
@@ -237,10 +237,11 @@ export class MeetingRecorder {
     document.addEventListener("visibilitychange", this.visHandler);
   }
 
-  /** Best-effort live captions: tap the audio graph and stream PCM to Deepgram. */
+  /** Best-effort live captions: tap the audio graph and stream PCM to the
+   *  configured STT provider (AssemblyAI, or Deepgram as fallback). */
   private async setupLive(): Promise<void> {
     if (!this.audioCtx || !this.stream || this.stopping) return;
-    const live = new DeepgramLive({
+    const live = new LiveTranscription({
       onCaption: (c) => this.cb.onCaption?.(c),
       onUnavailable: (r) => this.cb.onLiveUnavailable?.(r),
     });

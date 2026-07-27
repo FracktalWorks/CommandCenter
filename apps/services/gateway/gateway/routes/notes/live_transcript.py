@@ -135,17 +135,11 @@ def _check_bot_auth(authorization: str | None) -> None:
         raise HTTPException(status_code=401, detail="bad bot token")
 
 
-@router.post("/meetings/{meeting_id}/live/segment", status_code=202)
-async def ingest_live_segment(
-    meeting_id: str,
-    seg: LiveSegment,
-    authorization: str | None = Header(default=None),
-) -> dict:
-    """Producer callback: the meeting-bot worker's streaming ASR posts a live
-    segment here as words are recognised. Resolves a stable speaker identity
-    (voiceprint gallery + live name binding), then fans out to captions +
-    agents. The embedding is stripped before fan-out."""
-    _check_bot_auth(authorization)
+def _resolve_and_publish(meeting_id: str, seg: LiveSegment) -> dict:
+    """Resolve a stable speaker identity for one live segment and fan it out.
+
+    Shared by both producers (bot worker, browser recorder) so the bus is fed
+    identically regardless of source — the copilot consumes one seam."""
     data = seg.model_dump()
     data["ts"] = time.time()
     # Resolve a stable speaker id from the running gallery and bind names live
@@ -181,6 +175,34 @@ async def ingest_live_segment(
         data.pop("embedding", None)  # never fan out big vectors downstream
     publish_segment(meeting_id, data)
     return {"ok": True}
+
+
+@router.post("/meetings/{meeting_id}/live/segment", status_code=202)
+async def ingest_live_segment(
+    meeting_id: str,
+    seg: LiveSegment,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Producer callback: the meeting-bot worker's streaming ASR posts a live
+    segment here as words are recognised (machine-authed)."""
+    _check_bot_auth(authorization)
+    return _resolve_and_publish(meeting_id, seg)
+
+
+@router.post("/meetings/{meeting_id}/live/browser-segment", status_code=202)
+async def ingest_browser_segment(
+    meeting_id: str,
+    seg: LiveSegment,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """The in-browser recorder's finalized captions → the SAME bus as the bot.
+
+    Makes the live path source-agnostic (copilot spec §3): whether audio came
+    from a headless bot or the user's own mic, agents and the console consume
+    one seam. User-authenticated (the browser has a session, not the bot token);
+    browser captions carry no voiceprint, so the registry passes their diarized
+    label through — live name binding from self-intros still applies."""
+    return _resolve_and_publish(meeting_id, seg)
 
 
 @router.get("/meetings/{meeting_id}/live/roster")

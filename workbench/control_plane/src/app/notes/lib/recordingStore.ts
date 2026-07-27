@@ -9,6 +9,7 @@
  */
 
 import { create } from "zustand";
+import { postLiveSegment } from "./api";
 import { MeetingRecorder, type RecorderState } from "./recorder";
 
 export type Cap = { text: string; speaker: number | null };
@@ -95,6 +96,16 @@ export const useRecordingStore = create<RecordingState>((set, get) => ({
             captions: [...st.captions.slice(-60), { text: c.text, speaker: c.speaker }],
             interim: null,
           }));
+          // Relay finals to the server-side live bus so on-page recordings feed
+          // the same seam as the meeting bot (live roster today, copilot next).
+          // Fire-and-forget by design — see postLiveSegment.
+          void postLiveSegment(meetingId, {
+            text: c.text,
+            start_s: c.startS,
+            end_s: c.endS,
+            // Deepgram speakers are 0-based; the transcript label space is S1-based.
+            speaker_label: c.speaker === null ? null : `S${c.speaker + 1}`,
+          });
         } else {
           set({ interim: { text: c.text, speaker: c.speaker } });
         }

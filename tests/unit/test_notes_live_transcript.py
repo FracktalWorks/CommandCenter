@@ -90,3 +90,33 @@ def test_ingest_resolves_speaker_and_strips_embedding() -> None:
     assert out["speaker_label"] == "S1"
     assert out["speaker_name"] == "Priya"
     assert "embedding" not in out
+
+
+def test_browser_segments_feed_the_same_bus() -> None:
+    """The in-browser recorder is a producer on the SAME bus as the bot, so the
+    copilot consumes one seam regardless of capture source. Browser captions
+    carry no voiceprint — their diarized label passes through, and live name
+    binding from self-intros still applies."""
+    from gateway.routes.notes import live_speakers as ls
+
+    async def scenario() -> list[dict]:
+        mid = "m-browser"
+        lt._BUSES.pop(mid, None)
+        ls.reset(mid)
+        for text, label in [
+            ("Hi, I'm Priya", "S1"),
+            ("Good to meet you", "S2"),
+            ("as I was saying", "S1"),
+        ]:
+            await lt.ingest_browser_segment(
+                mid,
+                lt.LiveSegment(text=text, speaker_label=label, start_s=0.0, end_s=1.0),
+                _user=None,
+            )
+        return list(lt._bus(mid).ring)
+
+    ring = asyncio.run(scenario())
+    assert [s["speaker_id"] for s in ring] == ["S1", "S2", "S1"]  # labels stable
+    assert ring[0]["speaker_name"] == "Priya"
+    assert ring[2]["speaker_name"] == "Priya"  # name sticks to the speaker
+    assert ring[1].get("speaker_name") is None  # unnamed stays anonymous

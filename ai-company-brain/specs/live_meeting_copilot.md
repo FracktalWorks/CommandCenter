@@ -90,10 +90,13 @@ The copilot must not care whether audio came from a bot or the browser.
 
 - **Bot source (built):** the worker already streams ASR segments to
   `POST /notes/meetings/{id}/live/segment`.
-- **Browser source (small addition):** today the recorder's live captions are
-  client-side only (Deepgram WS). Add: the recorder POSTs each *finalized*
-  caption to the same `…/live/segment` endpoint (or the gateway relays them).
-  Now the bus is fed identically from both. The batch re-pass on stop remains the
+- **Browser source (BUILT):** the recorder relays each *finalized* Deepgram
+  caption (with its own `start`/`duration` timings and diarized speaker) to
+  `POST …/live/browser-segment` — the same bus, user-authenticated rather than
+  bot-token'd, sharing one `_resolve_and_publish` path. Best-effort by design: a
+  dropped relay never disturbs the recording. Browser captions carry no
+  voiceprint, so the registry passes their diarized label through and live name
+  binding from self-intros still applies. The batch re-pass on stop remains the
   authoritative transcript in both cases.
 
 Result: `subscribe(meeting_id)` is the single seam the copilot consumes,

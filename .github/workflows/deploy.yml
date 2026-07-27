@@ -364,6 +364,12 @@ jobs:
             fi
 
             echo "==> Restarting gateway (systemd)"
+            # `restart` alone does NOT survive a reboot — without the enable
+            # symlink the box comes back with the gateway down until the next
+            # deploy. Install + enable the unit every time so boot is covered.
+            sudo cp "$APP_DIR/deploy/hostinger/acb-gateway.service" /etc/systemd/system/acb-gateway.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable acb-gateway >/dev/null 2>&1 || true
             sudo systemctl restart acb-gateway
             sleep 3
             systemctl is-active --quiet acb-gateway || { echo "GATEWAY FAILED TO START"; exit 1; }
@@ -407,6 +413,8 @@ jobs:
             # Reload systemd unit in case acb-workbench.service changed (adds PATH for uv etc.)
             sudo cp "$APP_DIR/deploy/hostinger/acb-workbench.service" /etc/systemd/system/acb-workbench.service
             sudo systemctl daemon-reload
+            # See the gateway note above — enable so the workbench survives reboots.
+            sudo systemctl enable acb-workbench >/dev/null 2>&1 || true
             sudo systemctl restart acb-workbench
             sleep 3
             systemctl is-active --quiet acb-workbench || { echo "WORKBENCH FAILED TO START"; exit 1; }
@@ -433,6 +441,7 @@ jobs:
               sudo install -m 0644 "$CADDY_REPO" "$CADDY_LIVE"
               sudo caddy validate --config "$CADDY_LIVE"
             fi
+            sudo systemctl enable caddy >/dev/null 2>&1 || true
             if systemctl is-active --quiet caddy; then
               sudo systemctl reload caddy || sudo systemctl restart caddy
             else

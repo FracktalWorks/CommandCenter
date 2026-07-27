@@ -22,6 +22,7 @@ from gateway.routes.tasks.calendar import (
     _day_window,
     _expand_templates,
     _free_intervals,
+    _horizon_from_note,
     _lunch_interval,
     _place_one,
 )
@@ -164,6 +165,54 @@ def test_block_template_is_busy_focus_template_is_not():
     free = _free_intervals(win_s, win_e, blocks, now=_dt(6))
     for fs, fe in free:
         assert fe <= _dt(17) or fs >= _dt(18)   # gym hour stays free of tasks
+
+
+# ── _horizon_from_note (24/7 plan-through override from the plan prompt) ───────
+
+def test_horizon_none_when_note_has_no_horizon():
+    now = _dt(9)
+    assert _horizon_from_note(None, now) is None
+    assert _horizon_from_note("", now) is None
+    assert _horizon_from_note("low energy, calls only", now) is None
+    # "free after 3pm" is a start-hint, not an END horizon — must not match.
+    assert _horizon_from_note("free after 3pm", now) is None
+
+
+def test_horizon_duration_hours_from_now():
+    now = _dt(23, 30)  # 11:30pm — a late-night burst
+    assert _horizon_from_note("work for 2 more hours", now) == now + timedelta(hours=2)
+    assert _horizon_from_note("for the next 3 hours", now) == now + timedelta(hours=3)
+    assert _horizon_from_note("plan 1 hour", now) == now + timedelta(hours=1)
+
+
+def test_horizon_spoken_duration_words():
+    now = _dt(23)
+    assert _horizon_from_note("I want to work for a couple hours", now) == now + timedelta(hours=2)
+    assert _horizon_from_note("just a few hours", now) == now + timedelta(hours=3)
+    assert _horizon_from_note("work an hour", now) == now + timedelta(hours=1)
+
+
+def test_horizon_till_clock_time_with_ampm():
+    now = _dt(9)
+    assert _horizon_from_note("until 11pm", now) == _dt(23)
+    assert _horizon_from_note("till 12pm", now) == _dt(12)
+
+
+def test_horizon_till_wraps_to_next_day_when_past():
+    now = _dt(23, 30)  # 11:30pm
+    # "till 2am" means 2am TOMORROW, not a window that already closed today.
+    assert _horizon_from_note("till 2am", now) == _dt(2) + timedelta(days=1)
+
+
+def test_horizon_bare_hour_prefers_pm_reading_during_the_day():
+    now = _dt(9)  # 9am; "until 3" most likely means 3pm, not 3am tomorrow
+    assert _horizon_from_note("until 3", now) == _dt(15)
+
+
+def test_horizon_duration_wins_over_clock_time():
+    now = _dt(9)
+    got = _horizon_from_note("work for 2 hours, until 5pm", now)
+    assert got == now + timedelta(hours=2)
 
 
 def test_template_day_of_week_filter_skips_other_days():

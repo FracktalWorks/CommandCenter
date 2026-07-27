@@ -56,13 +56,34 @@ export function PlanDayPanel({
   const [plan, setPlan] = useState<DayPlanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async (n: string) => {
+  // Plan-through horizon — where the day STOPS. "work" = your standing working
+  // hours (the office default); "1".."6" = that many hours from NOW, which
+  // crosses midnight so a late-night burst plans 24/7. When you open the panel
+  // OUTSIDE working hours (early morning / late night), we default to a few
+  // hours-from-now so the plan isn't an empty window. Only "today" gets the
+  // from-now options; a future day always plans its working hours.
+  const planningToday = new Date().toDateString() === target.toDateString();
+  const [horizon, setHorizon] = useState<string>(() => {
+    if (planningToday) {
+      const h = new Date().getHours();
+      if (h >= dayEnd || h < dayStart) return "3";
+    }
+    return "work";
+  });
+  const workEndAt = () => {
+    const d = new Date(target);
+    d.setHours(dayEnd, 0, 0, 0);
+    return d;
+  };
+  const endForHorizon = (hz: string) =>
+    hz === "work" ? workEndAt() : new Date(Date.now() + Number(hz) * 3600_000);
+
+  const run = async (n: string, hz: string = horizon) => {
     setLoading(true);
     setError(null);
     const dayStartAt = new Date(target);
     dayStartAt.setHours(dayStart, 0, 0, 0);
-    const dayEndAt = new Date(target);
-    dayEndAt.setHours(dayEnd, 0, 0, 0);
+    const dayEndAt = endForHorizon(hz);
     try {
       setPlan(
         await (isReplan ? apiReplan : apiPlanDay)({
@@ -207,6 +228,41 @@ export function PlanDayPanel({
           </button>
         </div>
 
+        {/* Plan-through horizon — how far into the day (or night) to schedule.
+            Defaults to your working hours; extend it to work 24/7, e.g. a couple
+            hours from now if you're up late. Changing it re-plans immediately. */}
+        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
+          <CalendarClock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+          <label
+            htmlFor="plan-horizon"
+            className="shrink-0 text-[11px] font-medium text-foreground"
+          >
+            Plan through
+          </label>
+          <select
+            id="plan-horizon"
+            value={horizon}
+            onChange={(e) => {
+              const v = e.target.value;
+              setHorizon(v);
+              void run(note, v);
+            }}
+            disabled={loading}
+            className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
+          >
+            <option value="work">
+              Working hours · till {fmt(workEndAt().toISOString())}
+            </option>
+            {planningToday &&
+              [1, 2, 3, 4, 6].map((h) => (
+                <option key={h} value={String(h)}>
+                  {h} more hour{h === 1 ? "" : "s"} · till{" "}
+                  {fmt(endForHorizon(String(h)).toISOString())}
+                </option>
+              ))}
+          </select>
+        </div>
+
         {/* Today's note — steers the AI's selection/order for THIS run, on top of
             your standing planning prompt (Settings). Plan mode only; replan and
             rollover are deterministic repacks that ignore free text. */}
@@ -241,7 +297,7 @@ export function PlanDayPanel({
                 onKeyDown={(e) => {
                   if (e.key === "Enter") void run(note);
                 }}
-                placeholder="e.g. “low energy”, “calls only”, “deep work”, “free after 3pm”"
+                placeholder="e.g. “low energy”, “calls only”, “deep work”, “work for 2 more hours”, “until 2am”"
                 className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
               />
               <button

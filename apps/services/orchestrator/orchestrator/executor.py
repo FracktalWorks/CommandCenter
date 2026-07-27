@@ -923,6 +923,75 @@ def _resolve_effective_agent_dir(
     return str(agent_dir)
 
 
+async def _maybe_sandbox_session_workspace(
+    *,
+    thread_id: str | None,
+    session_ws: str | None,
+    effective_agent_dir: str,
+    agent_dir: Path,
+    agent: Any,
+    settings: Any,
+) -> None:
+    """BO-7 phase 2: containerize a session-workspace-override agent's Copilot
+    CLI (the App Workshop app-builder — identified via the SAME
+    ``allow_session_workspace`` hook :func:`_session_workspace_override` gates
+    on, never a hardcoded agent name) when ``"app_builder"`` is in
+    ``settings.copilot_sandbox_scope``.
+
+    Sticky per-``thread_id`` reuse (``copilot_sandbox.get_or_spawn_sticky``) —
+    a fresh container on every chat turn would regress the latency this
+    interactive path doesn't have today.
+
+    Mutates *agent* (``_sandbox_cli_url``, ``_default_options
+    ["working_directory"]``) and ``_WRITE_ARTIFACT_CONTEXT
+    ["permission_check_root"]`` in place on success. Off by default (empty
+    scope); any spawn failure leaves *agent* untouched, falling back to the
+    in-process ``working_directory`` the caller already set. Never raises.
+    """
+    try:
+        from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT
+        scope = str(getattr(settings, "copilot_sandbox_scope", "") or "")
+        if not (
+            session_ws
+            and thread_id
+            and "app_builder" in {s.strip() for s in scope.split(",") if s.strip()}
+        ):
+            _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
+            return
+
+        from gateway.routes.apps._common import t2_vendor_dir
+
+        from orchestrator.copilot_sandbox import CONTAINER_WORKSPACE, get_or_spawn_sticky
+
+        # T2 builds run `node build_t2.mjs` — a host-absolute path already
+        # baked into this agent's system prompt at import time
+        # (agent-app-builder/agents.py). Mounting its own repo clone at the
+        # IDENTICAL container path makes that baked-in path resolve correctly
+        # with no prompt/agent changes. The vendor cache (react/react-dom/
+        # esbuild) is mounted at a fresh container path and pointed to via
+        # the same env var build_t2.mjs already reads on the host.
+        abuilder_dir = str(agent_dir)
+        sandbox = await get_or_spawn_sticky(
+            thread_id=thread_id,
+            workspace=effective_agent_dir,
+            label="app_builder",
+            settings=settings,
+            extra_mounts={
+                abuilder_dir: abuilder_dir,
+                str(t2_vendor_dir()): "/opt/t2-vendor",
+            },
+            extra_env={"CUSTOM_APPS_T2_VENDOR_DIR": "/opt/t2-vendor"},
+        )
+        if sandbox is not None:
+            agent._sandbox_cli_url = sandbox.cli_url
+            agent._default_options["working_directory"] = CONTAINER_WORKSPACE
+            _WRITE_ARTIFACT_CONTEXT["permission_check_root"] = CONTAINER_WORKSPACE
+        else:
+            _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
+    except Exception:
+        pass
+
+
 def _apply_agent_md_overrides(
     agents: list[Any],
     agent_dir: Path,
@@ -2616,6 +2685,21 @@ async def run_agent_stream(
                 )
                 agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
                     agent, type(agent)
+                )
+
+                # BO-7 phase 2: containerize the App Workshop app-builder's
+                # session (no-op for every other agent — see docstring).
+                # _effective_agent_dir IS _session_ws here whenever it applies
+                # (_resolve_effective_agent_dir gives the session override
+                # full precedence), so it's always the Custom App workspace,
+                # never the app-builder's own clone.
+                await _maybe_sandbox_session_workspace(
+                    thread_id=thread_id,
+                    session_ws=_session_ws,
+                    effective_agent_dir=_effective_agent_dir,
+                    agent_dir=loaded.agent_dir,
+                    agent=agent,
+                    settings=settings,
                 )
 
                 # Install push guard + capture HEAD for post-run commit detection.

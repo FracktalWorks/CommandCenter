@@ -199,8 +199,8 @@ MODEL_CAPABILITIES: dict[str, dict[str, Any]] = {
     # AssemblyAI — native provider (submit-then-poll), not routed via litellm.
     # The part after "assemblyai/" is passed straight through as `speech_model`,
     # so any id AssemblyAI accepts works even if it isn't catalogued here.
-    "assemblyai/universal":          {"label": "AssemblyAI Universal",          "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers + word timings, multilingual incl. Hindi/English code-switching. Cheapest per hour — the default for meetings."},
-    "assemblyai/nano":               {"label": "AssemblyAI Nano",               "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Named speakers, widest language coverage, lowest cost. Less accurate than Universal."},
+    "assemblyai/universal-3-pro":    {"label": "AssemblyAI Universal-3 Pro",    "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Highest accuracy. Named speakers + word timings, Hindi/English code-switching. The default for meetings."},
+    "assemblyai/universal-2":        {"label": "AssemblyAI Universal-2",        "vision": False, "audio": True, "transcription": True, "reasoning": False, "context_window": 0, "max_output": 0, "desc": "Broadest language coverage and cheaper per hour. Named speakers + word timings."},
 }
 
 

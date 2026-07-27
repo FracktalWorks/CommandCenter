@@ -19,6 +19,7 @@ Spec: ai-company-brain/specs/note_taker_app.md §3.4.
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import re
 from typing import Any
@@ -34,6 +35,8 @@ from acb_stt.types import (
     TranscriptWord,
     flatten_text,
 )
+
+_log = logging.getLogger("acb_stt.assemblyai")
 
 _API = "https://api.assemblyai.com/v2"
 _PREFIX = "assemblyai/"
@@ -220,12 +223,23 @@ class AssemblyAISTT(SttProvider):
             raise SttError(self.name, "upload returned no upload_url")
         return str(url)
 
-    def build_request(self, upload_url: str, opts: SttOptions) -> dict[str, Any]:
-        """The transcript-job body (pure, so the option mapping is testable)."""
+    def build_request(
+        self, upload_url: str, opts: SttOptions, *, plural_models: bool = True
+    ) -> dict[str, Any]:
+        """The transcript-job body (pure, so the option mapping is testable).
+
+        ``plural_models`` picks how the model is named. AssemblyAI's current
+        pre-recorded API takes **``speech_models``: a required non-empty list**,
+        but older accounts/regions take the singular ``speech_model`` string.
+        Guessing wrong fails *every* request, so :meth:`transcribe` sends the
+        documented plural form and retries once with the singular one if the API
+        rejects the field — self-correcting rather than a hardcoded bet."""
         body: dict[str, Any] = {"audio_url": upload_url}
         model = speech_model(opts.model or self._model)
         if model:
-            body["speech_model"] = model
+            body["speech_models" if plural_models else "speech_model"] = (
+                [model] if plural_models else model
+            )
         if opts.diarize:
             body["speaker_labels"] = True
         if opts.language:
@@ -246,9 +260,20 @@ class AssemblyAISTT(SttProvider):
             upload_url = await self._upload(client, audio)
             r = await client.post(
                 f"{_API}/transcript",
-                json=self.build_request(upload_url, opts),
+                json=self.build_request(upload_url, opts, plural_models=True),
                 headers=self._headers(),
             )
+            # The model field is named `speech_models` (list) on the current API
+            # and `speech_model` (string) on older accounts. If the plural form
+            # is rejected, retry once with the singular rather than failing the
+            # whole transcription over a field name.
+            if r.status_code == 400 and "speech_model" in r.text:
+                _log.info("assemblyai: retrying with singular speech_model")
+                r = await client.post(
+                    f"{_API}/transcript",
+                    json=self.build_request(upload_url, opts, plural_models=False),
+                    headers=self._headers(),
+                )
             if r.status_code >= 400:
                 raise SttError(
                     self.name, f"job create failed: {r.text[:200]}", r.status_code

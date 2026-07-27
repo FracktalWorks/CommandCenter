@@ -393,8 +393,8 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     # AssemblyAI is speech-to-text only too, and — unlike Deepgram — reaches us
     # through a native provider rather than litellm (its API is submit-then-poll).
     "assemblyai": [
-        "assemblyai/universal",
-        "assemblyai/nano",
+        "assemblyai/universal-3-pro",
+        "assemblyai/universal-2",
     ],
     "vllm": [
         "openai/Qwen/Qwen3-8B-Instruct",
@@ -1368,12 +1368,48 @@ async def _fetch_live_models(
             "together_ai/",
         )
 
+    if provider == "assemblyai" and api_key:
+        return await _fetch_assemblyai(api_key)
+
     if provider == "ollama":
         base = api_base or "http://localhost:11434"
         return await _fetch_ollama(base)
 
-    # github / vllm / unknown — fall back to static list
+    # github / vllm / deepgram / unknown — fall back to static list.
+    # (Deepgram publishes no model-list endpoint either; its models are curated.)
     return []
+
+
+async def _fetch_assemblyai(api_key: str) -> list[ModelInfo]:
+    """AssemblyAI models, verified against the account.
+
+    Unlike OpenAI-compatible providers, AssemblyAI publishes **no model-list
+    endpoint** — the valid `speech_models` values are documented, not
+    discoverable. So "refresh" can't enumerate them; what it CAN do is prove the
+    key works, which is the actual question a user is asking when they hit it.
+    We call a cheap authenticated endpoint and, on success, return the curated
+    list; on an auth failure we return nothing so the UI doesn't imply the key
+    is good. Any id the user types still works — the provider passes whatever
+    follows "assemblyai/" straight through as the model."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Cheapest authenticated call available: list one transcript.
+            r = await client.get(
+                "https://api.assemblyai.com/v2/transcript",
+                params={"limit": 1},
+                headers={"authorization": api_key},
+            )
+        if r.status_code in (401, 403):
+            _log.warning("provider_models.assemblyai_key_rejected", status=r.status_code)
+            return []
+        if r.status_code >= 400:
+            # Reachable but unhappy (rate limit, transient) — fall back to the
+            # curated list rather than blanking the picker.
+            _log.info("provider_models.assemblyai_probe_soft_fail", status=r.status_code)
+    except Exception as exc:
+        _log.warning("provider_models.assemblyai_probe_failed", error=str(exc)[:200])
+        return []
+    return _static_models_for_provider("assemblyai")
 
 
 def _static_models_for_provider(provider: str) -> list[ModelInfo]:

@@ -20,7 +20,7 @@ from acb_stt.types import SttOptions
 # ── model identification / routing ───────────────────────────────────────────
 
 def test_recognises_assemblyai_models() -> None:
-    assert is_assemblyai_model("assemblyai/universal")
+    assert is_assemblyai_model("assemblyai/universal-3-pro")
     assert is_assemblyai_model("AssemblyAI/Nano")      # case-insensitive
     assert not is_assemblyai_model("deepgram/nova-3")
     assert not is_assemblyai_model("groq/whisper-large-v3-turbo")
@@ -30,7 +30,7 @@ def test_recognises_assemblyai_models() -> None:
 def test_speech_model_strips_the_provider_prefix() -> None:
     """The part after the slash is passed through as `speech_model`, so any id
     AssemblyAI accepts works even if we haven't catalogued it."""
-    assert speech_model("assemblyai/universal") == "universal"
+    assert speech_model("assemblyai/universal-3-pro") == "universal-3-pro"
     assert speech_model("assemblyai/some-future-model") == "some-future-model"
     assert speech_model("assemblyai/") is None       # let AssemblyAI default
 
@@ -39,26 +39,27 @@ def test_speech_model_strips_the_provider_prefix() -> None:
 async def test_registry_routes_assemblyai_to_native_provider() -> None:
     from acb_stt import LiteLLMSTT, resolve_stt_provider
 
-    assert isinstance(await resolve_stt_provider("assemblyai/universal"), AssemblyAISTT)
+    assert isinstance(await resolve_stt_provider("assemblyai/universal-3-pro"), AssemblyAISTT)
     assert isinstance(await resolve_stt_provider("deepgram/nova-3"), LiteLLMSTT)
 
 
 # ── request building ─────────────────────────────────────────────────────────
 
 def test_request_asks_for_speakers_and_language_detection() -> None:
-    body = AssemblyAISTT("assemblyai/universal").build_request(
+    body = AssemblyAISTT("assemblyai/universal-3-pro").build_request(
         "https://cdn/audio", SttOptions(diarize=True)
     )
     assert body["audio_url"] == "https://cdn/audio"
     assert body["speaker_labels"] is True
-    assert body["speech_model"] == "universal"
+    # Current API takes a required non-empty LIST, not a string.
+    assert body["speech_models"] == ["universal-3-pro"]
     # No language hint → detect, so Hindi/English meetings aren't forced to one.
     assert body["language_detection"] is True
     assert "language_code" not in body
 
 
 def test_explicit_language_replaces_detection() -> None:
-    body = AssemblyAISTT("assemblyai/universal").build_request(
+    body = AssemblyAISTT("assemblyai/universal-3-pro").build_request(
         "u", SttOptions(language="en", diarize=False)
     )
     assert body["language_code"] == "en"
@@ -67,7 +68,7 @@ def test_explicit_language_replaces_detection() -> None:
 
 
 def test_glossary_prompt_becomes_word_boost() -> None:
-    body = AssemblyAISTT("assemblyai/universal").build_request(
+    body = AssemblyAISTT("assemblyai/universal-3-pro").build_request(
         "u", SttOptions(prompt="Fracktal Works, Julia printer; PETG")
     )
     assert body["word_boost"] == ["Fracktal Works", "Julia printer", "PETG"]
@@ -99,7 +100,7 @@ def _payload() -> dict:
 
 
 def test_utterances_become_diarized_segments() -> None:
-    r = normalize(_payload(), "assemblyai/universal")
+    r = normalize(_payload(), "assemblyai/universal-3-pro")
     assert r.diarized is True
     assert r.provider == "assemblyai"
     assert [s.speaker_label for s in r.segments] == ["S1", "S2"]
@@ -110,7 +111,7 @@ def test_utterances_become_diarized_segments() -> None:
 
 def test_offsets_convert_from_milliseconds_to_seconds() -> None:
     """AssemblyAI reports ms; the whole app (seek, reconciliation) assumes s."""
-    r = normalize(_payload(), "assemblyai/universal")
+    r = normalize(_payload(), "assemblyai/universal-3-pro")
     assert r.segments[0].start_s == 0.0
     assert r.segments[0].end_s == 2.0
     assert r.segments[1].start_s == 2.0
@@ -122,7 +123,7 @@ def test_speaker_letters_map_onto_the_shared_S1_S2_space() -> None:
     speaker_names, the rename UI and live reconciliation stay provider-agnostic."""
     r = normalize({"text": "x", "utterances": [
         {"speaker": "C", "text": "third speaker", "start": 0, "end": 1000},
-    ]}, "assemblyai/universal")
+    ]}, "assemblyai/universal-3-pro")
     assert r.segments[0].speaker_label == "S3"
 
 
@@ -131,7 +132,7 @@ def test_undiarized_response_falls_back_to_words() -> None:
         {"text": "hello world",
          "words": [{"text": "hello", "start": 0, "end": 500},
                    {"text": "world", "start": 500, "end": 1000}]},
-        "assemblyai/nano",
+        "assemblyai/universal-2",
     )
     assert r.diarized is False        # → local sherpa diarization can still run
     assert len(r.segments) == 1
@@ -139,7 +140,28 @@ def test_undiarized_response_falls_back_to_words() -> None:
 
 
 def test_empty_response_is_survivable() -> None:
-    r = normalize({}, "assemblyai/universal")
+    r = normalize({}, "assemblyai/universal-3-pro")
     assert r.segments == []
     assert r.text == ""
     assert r.diarized is False
+
+
+# ── model-field compatibility ────────────────────────────────────────────────
+
+def test_singular_form_is_available_for_older_accounts() -> None:
+    """The current API takes `speech_models` (list); older accounts take
+    `speech_model` (string). transcribe() sends the plural form and retries with
+    the singular if it's rejected, so a field-name change can't fail every
+    request."""
+    p = AssemblyAISTT("assemblyai/universal-3-pro")
+    plural = p.build_request("u", SttOptions(), plural_models=True)
+    singular = p.build_request("u", SttOptions(), plural_models=False)
+    assert plural["speech_models"] == ["universal-3-pro"]
+    assert singular["speech_model"] == "universal-3-pro"
+    assert "speech_model" not in plural
+    assert "speech_models" not in singular
+
+
+def test_no_model_id_omits_the_field_entirely() -> None:
+    body = AssemblyAISTT("assemblyai/").build_request("u", SttOptions())
+    assert "speech_models" not in body and "speech_model" not in body

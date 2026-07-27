@@ -57,6 +57,12 @@ class AppSummary(BaseModel):
     owner_email: str
     updated_at: str = ""
     role: str = "use"          # the caller's relationship: own | edit | use
+    pinned: bool = False       # this viewer's own app_pins bookmark
+    # This-month AI usage (app_audit, kind='ai') — the same aggregate
+    # GET /{slug}/usage computes, minus budget_tokens (that needs a manifest
+    # read per app; too expensive to pay for every card in the list).
+    month_cost_usd: float = 0.0
+    month_calls: int = 0
 
 
 class AppDetail(AppSummary):
@@ -199,7 +205,11 @@ def _sync_workspace_manifest(workspace: Path, fields: dict[str, Any]) -> None:
 
 def _to_summary(
     row: Any, user: UserContext, grants: list[tuple[str, str]],
+    *,
+    pinned: bool = False,
+    usage: tuple[float, int] | None = None,
 ) -> AppSummary:
+    cost, calls = usage or (0.0, 0)
     return AppSummary(
         slug=row.slug,
         name=row.name,
@@ -211,6 +221,9 @@ def _to_summary(
         owner_email=row.owner_email,
         updated_at=iso(row.updated_at) or "",
         role=role_for(row, user, grants),
+        pinned=pinned,
+        month_cost_usd=cost,
+        month_calls=calls,
     )
 
 
@@ -255,16 +268,41 @@ async def list_apps(
         grant_rows = (await db.execute(
             text("SELECT app_id, subject, role FROM app_grants"),
         )).fetchall()
+        pin_rows = (await db.execute(
+            text("SELECT app_id FROM app_pins WHERE user_email = :email"),
+            {"email": _uid(user)},
+        )).fetchall()
+        # One aggregate query for every app's this-month AI usage, mirroring
+        # runtime.py's _month_ai_usage but batched — an N+1 per-app query
+        # here would mean one extra round-trip per card on every gallery load.
+        usage_rows = (await db.execute(
+            text(
+                """SELECT app_id,
+                          COALESCE(SUM(cost_usd), 0) AS cost,
+                          COUNT(*) AS calls
+                   FROM app_audit
+                   WHERE kind = 'ai' AND at >= date_trunc('month', now())
+                   GROUP BY app_id"""
+            ),
+        )).fetchall()
     finally:
         await db.close()
     by_app: dict[str, list[tuple[str, str]]] = {}
     for g in grant_rows:
         by_app.setdefault(str(g.app_id), []).append((g.subject, g.role))
+    pinned_ids = {str(p.app_id) for p in pin_rows}
+    usage_by_app = {
+        str(u.app_id): (float(u.cost or 0), int(u.calls or 0)) for u in usage_rows
+    }
     out: list[AppSummary] = []
     for row in rows:
         grants = by_app.get(str(row.id), [])
         if can_view(row, user, grants):
-            out.append(_to_summary(row, user, grants))
+            out.append(_to_summary(
+                row, user, grants,
+                pinned=str(row.id) in pinned_ids,
+                usage=usage_by_app.get(str(row.id)),
+            ))
     return out
 
 

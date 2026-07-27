@@ -15,10 +15,13 @@ import {
   Clock,
   Hammer,
   Loader2,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   Sparkles,
   X,
+  Zap,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import type { AppMeta } from "./lib/types";
@@ -42,6 +45,11 @@ function formatRelative(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function formatCost(usd: number): string {
+  if (usd < 0.01) return "<$0.01";
+  return `$${usd.toFixed(usd < 10 ? 2 : 0)}`;
 }
 
 /** Derive a short app name from a free-form description (first ~5 words). */
@@ -81,26 +89,55 @@ function AppCard({
   app,
   onOpen,
   onWorkshop,
+  onTogglePin,
 }: {
   app: AppMeta;
   onOpen: () => void;
   onWorkshop: () => void;
+  onTogglePin: () => void;
 }) {
   const isLive = !!app.live_version;
   const canEdit = app.role === "own" || app.role === "edit";
   const showWorkshop = !isLive || canEdit;
+  const hasUsage = (app.month_calls ?? 0) > 0;
   return (
     <button
       onClick={isLive ? onOpen : showWorkshop ? onWorkshop : undefined}
-      className="text-left w-full p-3 sm:p-4 rounded-xl border tech-transition flex flex-col gap-2.5 border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
+      className="group relative text-left w-full p-3 sm:p-4 rounded-xl border tech-transition flex flex-col gap-2.5 border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
     >
+      <span
+        role="button"
+        tabIndex={0}
+        title={app.pinned ? "Unpin" : "Pin to sidebar"}
+        onClick={(e) => {
+          e.stopPropagation();
+          onTogglePin();
+        }}
+        onKeyDown={(e) => {
+          if (e.key === "Enter") {
+            e.stopPropagation();
+            onTogglePin();
+          }
+        }}
+        className={`absolute top-2 right-2 p-1.5 rounded-lg tech-transition ${
+          app.pinned
+            ? "text-primary opacity-100"
+            : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground"
+        }`}
+      >
+        {app.pinned ? (
+          <Pin className="w-3.5 h-3.5 fill-current" />
+        ) : (
+          <PinOff className="w-3.5 h-3.5" />
+        )}
+      </span>
       <div className="flex items-start gap-3">
         <div
           className={`w-9 h-9 rounded-lg border border-border flex items-center justify-center text-lg shrink-0 ${glyphGradient(app.slug)}`}
         >
           {app.icon || "▦"}
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pr-5">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-foreground truncate">
               {app.name}
@@ -132,6 +169,15 @@ function AppCard({
         ) : (
           <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full text-warning bg-warning/10">
             Draft
+          </span>
+        )}
+        {hasUsage && (
+          <span
+            title={`${app.month_calls} AI call${app.month_calls === 1 ? "" : "s"} this month`}
+            className="flex items-center gap-1 text-[10.5px] text-muted-foreground"
+          >
+            <Zap className="w-3 h-3 shrink-0" />
+            {formatCost(app.month_cost_usd ?? 0)}
           </span>
         )}
         <div className="flex-1" />
@@ -241,6 +287,26 @@ export default function CustomAppsPage() {
       }
     },
     [creating, router]
+  );
+
+  /** Optimistic — the button's own state must not lag a round-trip; a
+   * failure just refetches to correct it rather than surfacing an error for
+   * something this low-stakes. */
+  const togglePin = useCallback(
+    async (slug: string, currentlyPinned: boolean) => {
+      setApps((prev) =>
+        prev.map((a) => (a.slug === slug ? { ...a, pinned: !currentlyPinned } : a))
+      );
+      try {
+        const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/pin`, {
+          method: currentlyPinned ? "DELETE" : "POST",
+        });
+        if (!res.ok) fetchApps();
+      } catch {
+        fetchApps();
+      }
+    },
+    [fetchApps]
   );
 
   const counts = useMemo(() => {
@@ -407,6 +473,7 @@ export default function CustomAppsPage() {
                   onWorkshop={() =>
                     router.push(`/build/apps/${app.slug}/edit`)
                   }
+                  onTogglePin={() => togglePin(app.slug, !!app.pinned)}
                 />
               ))}
             </div>

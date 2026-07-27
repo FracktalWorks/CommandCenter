@@ -36,6 +36,12 @@ function, table, and seam; **read this before changing how persistence works**),
 
 ## 1. The two axes of agent durability
 
+> **Now three.** [`agent_architecture.md`](agent_architecture.md) §3 adds **Knowledge** — an
+> agent's authored KB/RAG corpus, which is neither Code (not executable) nor State (not
+> accumulated). It is git-backed and PR-reviewed like code, and compiles to a derived,
+> sha-pinned vector index. The two axes below remain exactly as stated; Knowledge sits
+> between them.
+
 Every agent has two fundamentally different kinds of persistent state. They are
 stored by two different mechanisms, and conflating them is the mistake this
 framework exists to prevent.

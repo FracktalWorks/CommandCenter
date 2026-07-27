@@ -7,6 +7,8 @@ survives a run, how it gets corrected, and how all of that holds up when several
 one agent.
 
 **Companions:**
+[`agent_architecture.md`](agent_architecture.md) (**the scope lattice, manifest, and the
+authored-Knowledge layer this doc's tiers sit inside**) ·
 [`agent_file_and_memory_framework.md`](agent_file_and_memory_framework.md) (the durable-state
 contract — the three folders) ·
 [`agent_persistence_implementation.md`](agent_persistence_implementation.md) (the blob store,
@@ -390,6 +392,10 @@ instance.
 1. **Where does the always-on budget actually sit?** 2 000 tokens is a guess. It should be
    derived from the model's context and what the caching work wants in the stable prefix —
    worth measuring against a real agent's `NOTES.md` before fixing a number.
+   **Partly answered:** `agent-startup-guru` keeps an `agent_memory_index.json` beside its
+   long-term store — *always-load a small index, load entries on demand*. That is the shape
+   the budget should take, so the question narrows to how big the index may be rather than how
+   big the memory may be. See [`agent_architecture.md`](agent_architecture.md) §5.5.
 2. **Who curates the file tier — the agent or a human?** Agent-curated is the point of the
    pattern; human-reviewable is what makes it trustworthy. Probably: agent proposes, the
    promotion affordance in §6.7 is the human's veto.

@@ -15,6 +15,7 @@ import { useTheme } from "next-themes";
 import {
   AlertTriangle,
   Database,
+  GitFork,
   Hammer,
   HelpCircle,
   Info,
@@ -172,6 +173,37 @@ export default function AppRunPage({
   // "Make live" (rollback) two-step confirm, editors only.
   const [confirmVersion, setConfirmVersion] = useState<number | null>(null);
   const [rollbackBusy, setRollbackBusy] = useState(false);
+
+  // Fork/remix — duplicate this app's current source as a new app owned by
+  // the viewer (works for anyone who can see the app, not just editors).
+  const [forking, setForking] = useState(false);
+  const [forkError, setForkError] = useState<string | null>(null);
+  const forkApp = useCallback(async () => {
+    if (forking) return;
+    setForking(true);
+    setForkError(null);
+    try {
+      const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/fork`, {
+        method: "POST",
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        slug?: string;
+        detail?: string;
+      };
+      if (!res.ok || !data.slug) {
+        setForkError(
+          (typeof data.detail === "string" && data.detail) ||
+            `Fork failed (HTTP ${res.status})`
+        );
+        return;
+      }
+      router.push(`/build/apps/${data.slug}/edit`);
+    } catch (e) {
+      setForkError(String(e));
+    } finally {
+      setForking(false);
+    }
+  }, [slug, forking, router]);
 
   // Tool-confirm toast (bottom-right) — a cc.tools.call() hit a destructive
   // tool with no remembered grant; resolve() unblocks the app frame's call.
@@ -423,6 +455,19 @@ export default function AppRunPage({
         <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground border border-border rounded-full px-2.5 py-1 shrink-0">
           runs as {viewerEmail}
         </span>
+        <button
+          onClick={forkApp}
+          disabled={forking}
+          title="Duplicate this app as your own editable copy"
+          className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+        >
+          {forking ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <GitFork className="w-3.5 h-3.5" />
+          )}
+          Fork
+        </button>
         {canEdit && (
           <button
             onClick={() => router.push(`/build/apps/${slug}/edit`)}
@@ -531,6 +576,19 @@ export default function AppRunPage({
           )}
         </div>
       </div>
+
+      {forkError && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-destructive/5 text-xs text-destructive shrink-0">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          {forkError}
+          <button
+            onClick={() => setForkError(null)}
+            className="ml-auto text-muted-foreground hover:text-foreground"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── The app, in the sandboxed frame ─────────────────────────── */}
       <div className="flex-1 min-h-0 flex flex-col">

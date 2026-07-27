@@ -20,8 +20,14 @@ func (m *SessionManager) handler(s *Session) func(any) {
 			m.onMessage(s, e)
 		case *events.HistorySync:
 			m.onHistorySync(s, e)
+		case *events.LabelEdit:
+			m.onLabelEdit(s, e)
+		case *events.LabelAssociationChat:
+			m.onLabelAssocChat(s, e)
 		case *events.Connected:
 			s.setStatus(statusLive)
+			// Backfill the number's existing labels once (guarded by a flag).
+			go m.ensureLabelSync(s)
 		case *events.LoggedOut:
 			s.setStatus(statusLoggedOut)
 			_ = m.meta.PutSession(context.Background(), s.accountID, "")

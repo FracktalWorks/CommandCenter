@@ -10,6 +10,7 @@ import type {
   WaChatContext,
   WaConnectionInfo,
   WaEmbeddedResult,
+  WaLabel,
   WaMessage,
   WaPulse,
   WaRulePreview,
@@ -166,10 +167,17 @@ export function fetchStreams(accountId?: string): Promise<WaStreams> {
   });
 }
 
-export function fetchChats(stream: string, accountId?: string): Promise<WaChat[]> {
+// `stream` is the triage stream ("needs_reply" | … ); pass a `label` id to
+// instead scope the list to chats carrying a native WhatsApp label (W16).
+export function fetchChats(
+  stream: string,
+  accountId?: string,
+  label?: string
+): Promise<WaChat[]> {
   const params = new URLSearchParams();
   if (stream) params.set("stream", stream);
   if (accountId) params.set("account_id", accountId);
+  if (label) params.set("label", label);
   const qs = params.toString();
   return getJSON<WaChat[]>(`chats${qs ? `?${qs}` : ""}`, []);
 }
@@ -260,6 +268,12 @@ export function fetchCategories(accountId: string): Promise<WaCategory[]> {
     `categories?account_id=${encodeURIComponent(accountId)}`,
     []
   );
+}
+
+// Native WhatsApp labels/lists synced from the founder's number (W16).
+export function fetchLabels(accountId?: string): Promise<WaLabel[]> {
+  const q = accountId ? `?account_id=${encodeURIComponent(accountId)}` : "";
+  return getJSON<WaLabel[]>(`labels${q}`, []);
 }
 
 export function bootstrapCategories(accountId: string) {

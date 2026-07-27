@@ -275,6 +275,19 @@ async def write_artifact(
     result: dict = {"path": clean_path, "size": size, "sha256": digest}
     if download_url:
         result["download_url"] = download_url
+    # Advisory lint for HTML documents. The sandbox fails silently (a CDN link is
+    # just blocked, a typo'd cc- class just renders unstyled), so surface those
+    # mistakes here while the agent can still fix them. Never blocks the write.
+    if target.suffix.lower() in {".html", ".htm"} and isinstance(content, str):
+        from acb_skills.artifact_lint import lint_artifact_html  # noqa: PLC0415
+
+        warnings = lint_artifact_html(content, full_page=True)
+        if warnings:
+            result["warnings"] = warnings
+            result["warning_note"] = (
+                "The artifact was saved, but these issues will degrade how it "
+                "renders. Fix them and write the file again with overwrite=True."
+            )
     return result
 
 
@@ -454,7 +467,21 @@ async def _notify(
 _GEN_UI_TYPES = {
     "card", "stack", "row", "heading", "text", "markdown", "badge",
     "divider", "keyValue", "table", "list", "code", "link", "button", "callout",
+    "template", "html", "react", "icon",
 }
+
+
+def _warn_fields(warnings: list[str]) -> dict:
+    """Lint warnings as result fields — empty dict when the markup is clean."""
+    if not warnings:
+        return {}
+    return {
+        "warnings": warnings,
+        "warning_note": (
+            "The card was rendered, but these issues will degrade how it looks. "
+            "Fix them and emit it again."
+        ),
+    }
 
 
 async def emit_generative_ui(ui: str) -> dict:
@@ -501,7 +528,8 @@ async def emit_generative_ui(ui: str) -> dict:
       user's input to continue — a form to fill, an option to pick, a value to
       set. Without it, clicks arrive as a NEW chat message instead.
 
-    It supports THREE modes; prefer them in this order (template → tree → html):
+    It supports FOUR modes; prefer them in this order
+    (template → tree → react → html):
 
     1. NAMED TEMPLATE — pre-designed, animated, on-brand components. You supply
        ONLY data; the design is fixed and looks great every time. Use first when
@@ -562,8 +590,42 @@ async def emit_generative_ui(ui: str) -> dict:
        (buttons). A ``button``'s ``action`` string is sent back as the user's
        next message when clicked.
 
-    3. CUSTOM HTML — the escape hatch for bespoke animation/layout or genuinely
-       interactive controls no template or tree covers. Shape:
+    3. REACT COMPONENT — a real React component for anything genuinely
+       INTERACTIVE or stateful: multi-step forms, filterable/sortable tables,
+       calculators, live-editable dashboards, small tools. Shape:
+       ``{"type":"react","props":{"code":"<your component source>"}}``.
+
+       Write ordinary modern React and DEFAULT-EXPORT the component::
+
+           import { useState, useMemo } from "react";
+
+           export default function Dashboard() {
+             const [region, setRegion] = useState("all");
+             const rows = useMemo(() => DATA.filter(...), [region]);
+             return <div className="cc-report">…</div>;
+           }
+
+       • Hooks all work (useState/useEffect/useMemo/useReducer/useRef/context).
+       • JSX and TypeScript syntax are both fine — it is compiled for you.
+       • PREFER the prebuilt components: ``import { Report, Stat, Bars } from
+         "@cc/ui"``. Call ``load_artifact_kit()`` for the list and
+         ``load_artifact_kit("Stat,Bars")`` for their props. They are on-brand by
+         construction and far cheaper than hand-writing the markup.
+       • You may import ONLY from ``@cc/ui``, ``react``, and ``react-dom/client``.
+         There is NO network in the sandbox, so no npm packages, no CDNs, no icon
+         libraries. Inline any helpers and seed the data in the file.
+       • Anything the kit doesn't cover: fall back to the same ``cc-*`` classes
+         and ``--cc-*`` tokens as mode 4.
+       • Talk back to the agent with ``window.ccSubmit("Label", value)`` (send a
+         value the user set) or ``window.ccAction("message")`` (fire a fixed
+         follow-up). Both are available from first mount.
+       • Optional ``props.height`` (px); omit to auto-size.
+
+       If it compiles but the build fails, the tool result carries the compiler
+       errors — fix them and emit again.
+
+    4. CUSTOM HTML — the escape hatch for bespoke animation/layout or genuinely
+       interactive controls no template, tree, or React component covers. Shape:
        ``{"type":"html","props":{"code":"<div>…</div>"}}``. Your HTML/CSS/JS runs
        in an ISOLATED sandbox (its own opaque origin): it cannot reach the app,
        cookies, or the network, so inline everything — NO external CDNs, fonts, or
@@ -661,6 +723,17 @@ async def emit_generative_ui(ui: str) -> dict:
     if not isinstance(spec, dict):
         return {"ok": False, "error": "ui must be a JSON object (a component node)"}
 
+    # Advisory lint for the custom-HTML tier — the sandbox swallows these errors
+    # silently, so report them back with the emit result. Inline cards are not
+    # expected to carry the cc-report wrapper (that is for full-page documents).
+    _ui_warnings: list[str] = []
+    if spec.get("type") == "html":
+        _code = (spec.get("props") or {}).get("code")
+        if isinstance(_code, str):
+            from acb_skills.artifact_lint import lint_artifact_html  # noqa: PLC0415
+
+            _ui_warnings = lint_artifact_html(_code, full_page=False)
+
     # ── HITL blocking mode (generative_ui_2 Phase 1) ──────────────────────
     # ``"hitl": true`` parks THIS tool call on the same Future machinery as
     # ask_questions: the UI's submit/action resolves it via
@@ -703,7 +776,7 @@ async def emit_generative_ui(ui: str) -> dict:
             "value": spec,
         })
         if not _blocking or _fut is None:
-            return {"ok": True}
+            return {"ok": True, **_warn_fields(_ui_warnings)}
         # Park until the user interacts (heartbeats the relay so the run
         # stays visibly alive — same wait as every other HITL surface).
         try:
@@ -715,7 +788,11 @@ async def emit_generative_ui(ui: str) -> dict:
                 _result = await wait_user_future(_fut, 3600)
             finally:
                 _pending_user_input.pop(_request_id, None)
-            return {"ok": True, "response": _result.get("answer", "")}
+            return {
+                "ok": True,
+                "response": _result.get("answer", ""),
+                **_warn_fields(_ui_warnings),
+            }
         except Exception:  # noqa: BLE001 — timeout or wait failure
             return {
                 "ok": True,

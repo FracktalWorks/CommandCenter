@@ -248,6 +248,54 @@ bridge (needs a scoping design so account-scoped memories stay private).
 - **Morning-brief LLM one-liner**: a single sentence ("2 urgent: X's quote, Y's contract")
   atop the dashboard and the emailed digest — costed, opt-in.
 
+### 3.14 Contact card ✅ (2026-07-27, user-requested) — and the Contacts view it unlocks
+
+**Shipped.** Clicking a display name, avatar orb, or any To/Cc recipient opens a people
+card (`ContactCard.tsx`, `GET /email/contacts/card`): identity, signature-derived phone /
+title / company / links with per-field copy buttons, correspondence stats (received / sent /
+unread / last seen), the sender's category and any Cleaner suppression, and the person's last
+three messages as previews that open on click. Wired into the reading pane's sender block,
+its To/Cc lines, and every message header in the conversation view.
+
+**The part that matters for later: the card WRITES what it learns.** Every open upserts into
+`email_contacts` (mig `119`) — display name, job title, organisation, phone numbers, links,
+with `source_message_id` + `parsed_at` for provenance. So the mailbox accumulates a people
+directory as a side effect of being read, with no data entry, no directory sync, and no
+external service. There is no separate crawl to build and nothing to backfill: the addresses
+a user actually looks at are exactly the ones worth having.
+
+Rules the writer already enforces (do not weaken these when building on it):
+- **`manual_fields[]` is permanent.** It names the columns a human edited; the signature
+  writer skips them forever. Without it, the next mail silently reverts a correction — the
+  one failure that would make a Contacts view untrustworthy.
+- **An empty parse never blanks a stored value.** A one-line reply with no sign-off leaves
+  yesterday's phone number intact.
+- **Derived facts are never stored.** Message counts, first/last seen, unread are a live
+  query over `email_messages`; freezing them would be wrong the moment mail arrives.
+- **The domain guess is display-only.** "acme.com" → "Acme" is shown when nothing better is
+  known, and is deliberately never written — it is a guess about the address, not something
+  the person told us.
+- Rows are per email ACCOUNT and cascade with it (matching `email_senders` /
+  `email_newsletters`), so disconnecting one mailbox never deletes another's knowledge.
+
+**Contacts view — what is already there when it gets built:**
+
+| Needs | Status |
+|---|---|
+| A people store to list / search / sort | ✅ `email_contacts`, populated and growing |
+| Per-person detail (title, org, phones, links) | ✅ same table |
+| Correspondence stats + recent mail per person | ✅ `GET /email/contacts/card` returns both |
+| Group by company | ✅ `idx_email_contacts_org` exists for exactly this |
+| Editing a contact by hand | ⏳ needs `PATCH /email/contacts/{email}` writing the field **and** appending its column name to `manual_fields` — the storage contract is already designed for it, the endpoint is not written |
+| Listing / searching contacts | ⏳ needs `GET /email/contacts` (paged, `q=`, `organization=`) |
+| Merging duplicates (same human, two addresses) | ⏳ undesigned — decide whether it is a `merged_into` pointer or a person-level parent row BEFORE the view ships, because retrofitting identity onto a flat address table is the expensive version |
+| Photos / avatars | ⏳ undesigned; provider APIs (Gmail People, Graph) are the only real source and both need OAuth scope the app does not currently request |
+
+**Backfill option** (not built, cheap when wanted): the same parse can run over each account's
+recent mail in a post-sync hook, so the directory fills without waiting for someone to click
+every sender. Deliberately deferred — it is a body-text scan over the whole mailbox, and the
+click-driven path already covers everyone the user cares about.
+
 ### Build-or-kill decisions (each needs a one-line owner call)
 
 | Item | Recommendation |

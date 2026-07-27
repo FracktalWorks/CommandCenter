@@ -38,6 +38,11 @@ func OpenMetaStore(ctx context.Context, path string) (*MetaStore, error) {
 		mime_type TEXT NOT NULL DEFAULT 'application/octet-stream',
 		proto     BLOB NOT NULL,
 		PRIMARY KEY (account_id, media_id)
+	);
+	CREATE TABLE IF NOT EXISTS flags (
+		account_id TEXT NOT NULL,
+		key        TEXT NOT NULL,
+		PRIMARY KEY (account_id, key)
 	);`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
@@ -96,4 +101,36 @@ func (m *MetaStore) GetMedia(ctx context.Context, accountID, mediaID string) (pr
 		return nil, "", false
 	}
 	return proto, mime, true
+}
+
+// HasFlag reports whether a per-account boolean flag is set (its presence in the
+// flags table). Used to guard one-time work like the initial label backfill.
+func (m *MetaStore) HasFlag(ctx context.Context, accountID, key string) (bool, error) {
+	var one int
+	err := m.db.QueryRowContext(ctx,
+		`SELECT 1 FROM flags WHERE account_id = ? AND key = ?`,
+		accountID, key).Scan(&one)
+	if err == sql.ErrNoRows {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// SetFlag records a per-account flag (idempotent).
+func (m *MetaStore) SetFlag(ctx context.Context, accountID, key string) error {
+	_, err := m.db.ExecContext(ctx,
+		`INSERT INTO flags (account_id, key) VALUES (?, ?)
+		 ON CONFLICT(account_id, key) DO NOTHING`,
+		accountID, key)
+	return err
+}
+
+// ClearFlag removes a per-account flag so its one-time work runs again.
+func (m *MetaStore) ClearFlag(ctx context.Context, accountID, key string) error {
+	_, err := m.db.ExecContext(ctx,
+		`DELETE FROM flags WHERE account_id = ? AND key = ?`, accountID, key)
+	return err
 }

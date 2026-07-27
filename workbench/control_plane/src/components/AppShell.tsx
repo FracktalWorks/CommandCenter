@@ -24,7 +24,7 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked } from "lucide-react";
+import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked, Video } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
@@ -372,6 +372,11 @@ function MobileBottomNavInner({
               icon={Mic}
               label="Record"
               accent
+            />
+            <TaskTab
+              onClick={() => dispatchNav("notes-join")}
+              icon={Video}
+              label="Join call"
             />
             <TaskTab
               onClick={() => dispatchNav("notes-upload")}

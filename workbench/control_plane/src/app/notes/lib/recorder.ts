@@ -24,6 +24,10 @@ export interface RecorderCallbacks {
   onCaption?: (c: LiveCaption) => void;
   /** Live captions aren't available; recording continues via the batch path. */
   onLiveUnavailable?: (reason: string) => void;
+  /** The page was hidden (screen off / app switched) or shown again while
+   *  recording. Mobile browsers suspend capture in the background, so the UI
+   *  uses this to warn the user to keep the app open. */
+  onVisibility?: (hidden: boolean) => void;
 }
 
 export interface MicDevice {
@@ -102,6 +106,12 @@ export class MeetingRecorder {
   private timerId: ReturnType<typeof setInterval> | null = null;
   private stopping = false;
 
+  // Screen Wake Lock — keeps the phone from auto-locking mid-recording (the
+  // browser suspends mic capture when the screen sleeps). Best-effort: the OS
+  // auto-releases it when the page hides, so we re-acquire on return.
+  private wakeLock: WakeLockSentinel | null = null;
+  private visHandler: (() => void) | null = null;
+
   constructor(
     meetingId: string,
     cb: RecorderCallbacks = {},
@@ -160,9 +170,71 @@ export class MeetingRecorder {
     this.timerId = setInterval(() => this.cb.onElapsed?.(this.elapsed()), 250);
     this.cb.onState?.("recording");
 
+    // Keep the screen awake and watch for backgrounding so a long recording
+    // survives as long as the app stays open (spec §5.1: mobile resilience).
+    void this.acquireWakeLock();
+    this.setupVisibility();
+
     // Attach live captions without blocking the recording start — if the token
     // or socket isn't available, the batch path is unaffected.
     void this.setupLive();
+  }
+
+  /** Ask the OS to keep the screen on while recording. No-op / silent on
+   *  browsers without the Wake Lock API (older iOS, Firefox) or if denied. */
+  private async acquireWakeLock(): Promise<void> {
+    try {
+      if (
+        typeof navigator !== "undefined" &&
+        "wakeLock" in navigator &&
+        typeof document !== "undefined" &&
+        document.visibilityState === "visible"
+      ) {
+        this.wakeLock = await navigator.wakeLock.request("screen");
+        // The browser drops the sentinel when the page hides; clear our ref so
+        // the visibility handler knows to re-request on return.
+        this.wakeLock.addEventListener?.("release", () => {
+          this.wakeLock = null;
+        });
+      }
+    } catch {
+      // Best-effort — recording proceeds without it.
+      this.wakeLock = null;
+    }
+  }
+
+  private releaseWakeLock(): void {
+    try {
+      void this.wakeLock?.release();
+    } catch {
+      /* already released */
+    }
+    this.wakeLock = null;
+  }
+
+  /** Watch page visibility: when the app is hidden (screen off / switched away)
+   *  mobile browsers suspend capture, so force out the buffered audio first and
+   *  tell the UI; re-acquire the wake lock when we come back. */
+  private setupVisibility(): void {
+    if (typeof document === "undefined") return;
+    this.visHandler = () => {
+      const hidden = document.visibilityState !== "visible";
+      this.cb.onVisibility?.(hidden);
+      if (hidden) {
+        // We're about to be frozen — flush whatever the encoder has buffered so
+        // it uploads before suspension, minimising truncation if capture stops.
+        try {
+          if (this.recorder?.state === "recording") this.recorder.requestData();
+        } catch {
+          /* requestData unsupported mid-stream — ignore */
+        }
+        void this.pump();
+        this.wakeLock = null; // auto-released by the browser when hidden
+      } else if (this.recorder?.state === "recording") {
+        void this.acquireWakeLock();
+      }
+    };
+    document.addEventListener("visibilitychange", this.visHandler);
   }
 
   /** Best-effort live captions: tap the audio graph and stream PCM to Deepgram. */
@@ -206,6 +278,8 @@ export class MeetingRecorder {
     if (this.recorder?.state === "recording") {
       this.recorder.pause();
       this.pausedAt = Date.now();
+      // Let the screen sleep while paused — nothing is being captured.
+      this.releaseWakeLock();
       this.cb.onState?.("paused");
     }
   }
@@ -215,6 +289,7 @@ export class MeetingRecorder {
       this.pausedAccum += Date.now() - this.pausedAt;
       this.pausedAt = 0;
       this.recorder.resume();
+      void this.acquireWakeLock();
       this.cb.onState?.("recording");
     }
   }
@@ -328,6 +403,12 @@ export class MeetingRecorder {
     if (this.rafId) cancelAnimationFrame(this.rafId);
     this.rafId = 0;
     this.analyser = null;
+    // Stop keeping the screen awake and unhook the visibility watcher.
+    if (this.visHandler && typeof document !== "undefined") {
+      document.removeEventListener("visibilitychange", this.visHandler);
+    }
+    this.visHandler = null;
+    this.releaseWakeLock();
     // Tear down the live path before the context closes.
     try {
       if (this.liveNode) this.liveNode.onaudioprocess = null;

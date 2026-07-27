@@ -62,6 +62,13 @@ export type WaBridgeSession = {
   bridge_reachable: boolean;
 };
 
+// A native WhatsApp label as it hangs off a chat row (mirrored read-only, W16).
+export type WaChatLabel = {
+  wa_label_id: string;
+  name: string;
+  color: string | null;
+};
+
 export type WaChat = {
   id: string;
   account_id: string;
@@ -75,6 +82,19 @@ export type WaChat = {
   window_open: boolean;
   window_expires_at: string | null;
   snoozed_until: string | null; // set while snoozed (W6)
+  labels: WaChatLabel[]; // native WhatsApp labels on this chat (W16)
+};
+
+// A native WhatsApp label/list the founder created, synced from their number
+// (W16) — distinct from WaCategory, which is our policy carrier. Read-only.
+export type WaLabel = {
+  wa_label_id: string;
+  name: string;
+  color: string | null;
+  color_index: number | null;
+  list_type: string | null;
+  sort_order: number;
+  chat_count: number;
 };
 
 export type WaMessage = {

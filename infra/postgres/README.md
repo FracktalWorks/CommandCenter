@@ -80,6 +80,7 @@ survives). Highlights:
 | `email_assistant_settings` | per-account AI config (PK = `account_id`): the three model roles (`rule_model`/`draft_model`/`chat_model`), digest, follow-up, cold-blocker, writing style |
 | `email_rules` / `email_actions` / `email_executed_rules` | rule engine + audit log |
 | `email_newsletters` / `email_senders` / `email_cold_senders` | bulk/sender classification |
+| `email_contacts` (`119`) | the people directory the mailbox learns by itself — name, title, org, phones, links per (account, address), parsed from the person's own signature by the contact card. `manual_fields[]` names columns a human edited; the signature writer never overwrites those. Counts / last-seen are NOT here (derived live from `email_messages`) |
 | `email_knowledge` / `email_learned_patterns` / `email_rule_patterns` | draft knowledge + learned classification patterns |
 | `email_thread_status` / `email_ai_drafts` | per-thread Reply-Zero status + AI draft cache |
 

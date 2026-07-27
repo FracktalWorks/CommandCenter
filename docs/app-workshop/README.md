@@ -214,10 +214,15 @@ model, the build/publish pipeline, the runtime bridge, and the sharing UX.
 
 1. *"No in-app agent/skill editing" (ADR-014 / root constraint #1).* Custom apps are
    **not agents or skills** — they are end-user artifacts (a workspace + manifest +
-   static bundle), authored through chat, not an IDE. The Control Plane gains no code
-   editor; the code view is read-only (edits happen through chat; power users round-trip
-   via download/git). Platform agents and skills remain VS-Code-and-Git-only. Draft
-   ADR-027 in §9 scopes this precisely.
+   static bundle), authored through chat. ADR-014's actual, load-bearing constraint —
+   *platform* code (agents, skills, orchestrator) stays VS-Code-and-Git-only, no in-app
+   editor, ever — is untouched. What changed: the RFC originally extended that same
+   stance to Custom Apps too ("no code editor; the code view is read-only, edits happen
+   through chat"). The Workshop's **Advanced view now ships a real hand-editable Monaco
+   IDE** scoped strictly to one app's own workspace (file tree, save, create/delete —
+   see §6/roadmap; "Monaco round-trip for developers" landed ahead of the rest of
+   Phase 3). Simple view (the default) still stays chat-only, matching the original
+   intent for casual use. Draft ADR-027 in §9 scopes this precisely.
 2. *`project_plan.md` non-goal: "visual workflow canvas".* Untouched — this is not a
    canvas and not workflows. But the non-goals line should be amended to say what IS in
    scope: *"user-space small software (App Workshop) — see docs/app-workshop/"*.
@@ -807,20 +812,24 @@ badge, "Fix with AI" on regression, publish-modal status** · share-with-specifi
 first-open consent screen · **manifest
 `actions` + agent grants + `app_<slug>_<action>` tool registration** (risk-annotated,
 golden-trajectory-eval'd per harness rules) · by-app cost lens in Observability +
-per-app budgets · templates gallery · fork/remix · suggest-a-change · usage stats on
-cards · pinned apps in sidebar · app-to-app data reads (quote calculator ← filament
-costs).
+per-app budgets · **usage stats on gallery cards** · **pinned apps in sidebar** ·
+templates gallery · fork/remix · suggest-a-change · app-to-app data reads (quote
+calculator ← filament costs) — remaining.
 
 **P2 — power (Phase 3+):**
 real URLs on a usercontent subdomain with CSP headers · scoped short-TTL app tokens ·
 `cc.agents.run` + app-triggered workflows (ties into the Workflow Editor RFC) · cron/
-webhook-triggered `run_as: author` automations · `cc.fetch` egress allowlists · Monaco
-read/edit round-trip for developers · element↔source "edit this button" targeting ·
-container runtime for server-side apps (post-BO-7) · export/import an app as a folder.
+webhook-triggered `run_as: author` automations · `cc.fetch` egress allowlists ·
+element↔source "edit this button" targeting · container runtime for server-side apps
+(post-BO-7) · export/import an app as a folder. **Monaco read/edit round-trip for
+developers — shipped** (Advanced view, ahead of the rest of P2 — see §3 item 1).
 
 **Explicit non-features:** a drag-and-drop editor (chat is the editor) · a browser IDE
-(ADR-014 stands) · customer-facing/external hosting (internal-only, like everything else)
-· a second integration/credential system (the Registry is the only one).
+**for platform code** (ADR-014 stands — agents/skills/orchestrator stay VS-Code-and-
+Git-only; the Advanced view's Monaco editor is scoped strictly to one Custom App's own
+workspace, a fundamentally different surface — see §3, item 1) · customer-facing/
+external hosting (internal-only, like everything else) · a second integration/
+credential system (the Registry is the only one).
 
 ---
 
@@ -967,19 +976,25 @@ auto-repair; checkpoint/restore chips; console drawer + Fix-with-AI; `cc-sdk` br
 (`user` / `storage` / `ai`) + App Runtime API + `app_data`/`app_audit`; **full publish
 conformance scan** (external-URL/key/service-worker/storage-reliance checks — a basic
 external-URL scan ships in Phase 0); versions + rollback UI; visibility private/org;
-sidebar Custom Apps section with pins; blob-store durability sweeps.
+sidebar Custom Apps section (a static nav link at this point — pins landed later, see
+Phase 2 note below); blob-store durability sweeps — remaining, only on-demand
+sync + lazy rehydrate exist.
 
 **Phase 2 — Capabilities & sharing (3–5 wk).** `cc.tools` proxy over the Integration
 Registry with manifest scopes + Action-Broker gating + per-use confirm toast; publish
 review row in Approvals for org+write apps; testing & evaluation (§4.9); share-with-people
 + first-open consent (scope-set-hash rule); manifest `actions` + registration as
-orchestrator agent tools (§4.7) — **shipped**; templates gallery; fork/remix +
-suggest-a-change; usage stats — remaining.
+orchestrator agent tools (§4.7) — **shipped**; usage stats on gallery cards + pinned
+apps in the sidebar — **shipped** (a later pass, batched together since both were
+cheap and the data/infra — the usage endpoint, the sidebar's dynamic-badge pattern —
+already existed); templates gallery; fork/remix + suggest-a-change — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers
 with `run_as: author` (persistent banner; joins the Workflow Editor's trigger table
-thinking); `cc.fetch` allowlists; Monaco round-trip for developers.
+thinking); `cc.fetch` allowlists — remaining (deliberately deferred). Monaco round-trip
+for developers — **shipped** ahead of the rest of this phase, as the Workshop's
+Advanced view (§3 item 1).
 
 **Phase 4 — Hardening & headroom (ongoing).** BO-7 container for the build step, then the
 T3 container runtime for server-side apps; element↔source targeting; MCP-UI/A2UI interop

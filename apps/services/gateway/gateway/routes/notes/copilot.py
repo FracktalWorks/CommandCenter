@@ -165,7 +165,9 @@ _CRAFT_SYSTEM = (
 _MIN_CONFIDENCE = 0.6
 
 
-async def _decide(state: RollingState, window_text: str) -> tuple[bool, str, int]:
+async def _decide(
+    state: RollingState, window_text: str, background: str = ""
+) -> tuple[bool, str, int]:
     """Stage 2 — cheap model, tiny context. Returns (act, topic, tokens)."""
     try:
         from acb_llm.context import acompletion_with_fallback
@@ -176,8 +178,9 @@ async def _decide(state: RollingState, window_text: str) -> tuple[bool, str, int
             messages=[
                 {"role": "system", "content": _DECIDE_SYSTEM},
                 {"role": "user", "content": (
-                    f"MEETING STATE:\n{state.as_prompt()}\n\n"
-                    f"LAST SAID (DATA):\n{window_text}"
+                    (f"BACKGROUND:\n{background}\n\n" if background else "")
+                    + f"MEETING STATE:\n{state.as_prompt()}\n\n"
+                    + f"LAST SAID (DATA):\n{window_text}"
                 )},
             ],
             temperature=0.0,
@@ -198,7 +201,9 @@ async def _decide(state: RollingState, window_text: str) -> tuple[bool, str, int
         return False, "", 0
 
 
-async def _craft(state: RollingState, window_text: str, topic: str) -> tuple[str, int]:
+async def _craft(
+    state: RollingState, window_text: str, topic: str, background: str = ""
+) -> tuple[str, int]:
     """Stage 3 — only runs when we've decided to act."""
     try:
         from acb_llm.context import acompletion_with_fallback
@@ -209,8 +214,9 @@ async def _craft(state: RollingState, window_text: str, topic: str) -> tuple[str
             messages=[
                 {"role": "system", "content": _CRAFT_SYSTEM},
                 {"role": "user", "content": (
-                    f"MEETING STATE:\n{state.as_prompt()}\n\n"
-                    f"LAST SAID (DATA):\n{window_text}\n\nFocus: {topic}"
+                    (f"BACKGROUND:\n{background}\n\n" if background else "")
+                    + f"MEETING STATE:\n{state.as_prompt()}\n\n"
+                    + f"LAST SAID (DATA):\n{window_text}\n\nFocus: {topic}"
                 )},
             ],
             temperature=0.3,
@@ -235,12 +241,39 @@ def _tokens_used(resp: object) -> int:
 _RUNNING: dict[str, asyncio.Task] = {}
 
 
+async def _deep_context(meeting_id: str) -> bool:
+    """Whether this session may fan out to the business agents. Off by default —
+    that fan-out spends tokens before the meeting has produced a word."""
+    try:
+        async with await _get_db() as db:
+            row = (
+                await db.execute(
+                    text(
+                        "SELECT deep_context FROM live_session "
+                        "WHERE meeting_id = CAST(:m AS UUID) AND status = 'live' "
+                        "ORDER BY started_at DESC LIMIT 1"
+                    ),
+                    {"m": meeting_id},
+                )
+            ).fetchone()
+        return bool(row.deep_context) if row is not None else False
+    except Exception:
+        return False
+
+
 async def _run(meeting_id: str) -> None:
     """Consume the live transcript and interject when warranted.
 
     Never raises: this task is spawned fire-and-forget, and the meeting must be
     unaffected by anything that happens in here."""
+    from gateway.routes.notes import copilot_context
     from gateway.routes.notes.live_transcript import subscribe
+
+    # Context is assembled ONCE, before the conversation — an agent lookup takes
+    # seconds and a meeting moves faster than that. From here it rides along as
+    # compact background rather than being re-fetched per suggestion.
+    pack = await copilot_context.get(meeting_id, deep=await _deep_context(meeting_id))
+    background = pack.as_prompt()
 
     windower = Windower()
     state = RollingState()
@@ -248,7 +281,18 @@ async def _run(meeting_id: str) -> None:
     count = 0
     spent = 0
     budget = _budget_tokens()
-    emit(meeting_id, "status", "Copilot is listening.")
+    if pack.is_empty:
+        emit(meeting_id, "status",
+             "Copilot is listening. It has no background for this meeting — add "
+             "a briefing to make its suggestions specific.")
+    else:
+        have = [n for n, ok in (
+            ("your briefing", bool(pack.brief)),
+            ("past meetings", bool(pack.past)),
+            ("open actions", bool(pack.open_actions)),
+            *((k, True) for k in pack.systems),
+        ) if ok]
+        emit(meeting_id, "status", f"Copilot is listening, with {', '.join(have)}.")
     try:
         async for seg in subscribe(meeting_id):
             window = windower.push(seg)
@@ -271,13 +315,13 @@ async def _run(meeting_id: str) -> None:
                 return
 
             # Stage 2 — cheap model.
-            act, topic, t2 = await _decide(state, window.text)
+            act, topic, t2 = await _decide(state, window.text, background)
             spent += t2
             if not act:
                 continue
 
             # Stage 3 — craft, then dedup before it ever reaches the user.
-            suggestion, t3 = await _craft(state, window.text, topic)
+            suggestion, t3 = await _craft(state, window.text, topic, background)
             spent += t3
             if not suggestion or is_duplicate(suggestion, state.raised):
                 continue
@@ -321,6 +365,9 @@ def stop(meeting_id: str) -> bool:
     if task is None or task.done():
         return False
     task.cancel()
+    from gateway.routes.notes import copilot_context
+
+    copilot_context.forget(meeting_id)
     emit(meeting_id, "status", "Copilot is off.")
     _log.info("notes.copilot_stopped", meeting_id=meeting_id)
     return True

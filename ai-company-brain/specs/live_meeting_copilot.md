@@ -1,6 +1,6 @@
 # Live Meeting Copilot — architecture plan
 
-**Status:** Phases A-B BUILT (presence + console + passive copilot). Phases C-E (business context, bidirectional, speaking) still planned.
+**Status:** Phases A-C BUILT (presence + console + passive copilot + business context). Phases D-E (bidirectional Q&A, speaking into the call) still planned.
 **Builds on:** `note_taker_app.md` §3.13 (meeting bot + live-transcript bus),
 the browser recorder + live captions, `acb_llm` tiers, the agent/skills/connector
 layer, and the notes auth/scoping.
@@ -377,9 +377,21 @@ feed**.
   starts/cancels the orchestrator — off cancels the task, which unsubscribes it
   from the transcript bus, so spend stops immediately. *Exit reached:*
   cost-bounded talking points appear live in the console.
-- **Phase C — Business context.** Pre-meeting pack + scoped retrieval tools
-  (email/ClickUp/CRM) → grounded suggestions. *Exit:* a suggestion cites a real
-  deal/ticket/email.
+- **Phase C — Business context. BUILT.** `copilot_context.py` assembles a
+  **pre-meeting pack** from three independent layers: (1) `meeting.copilot_brief`
+  — a user-written briefing, the highest-value source because it's usually the
+  only thing that knows what the meeting is FOR; (2) local history — past
+  meetings sharing an attendee email, their summaries and still-open action
+  items, needing no connector at all; (3) the business agents, via
+  `call_agent("agent-sales-assistant"|"task-manager", …)` fanned out in parallel.
+  Assembled **once at session start** and cached (an agent call takes seconds; a
+  meeting moves faster), then carried as compact `BACKGROUND` in both the decide
+  and craft prompts. Every layer degrades independently — a missing brief,
+  no history, an unregistered agent or a timeout each just omit their section.
+  Layer 3 is **opt-in per session** (`live_session.deep_context`) since the
+  fan-out spends tokens before a word is spoken. Capped on every axis because
+  the pack rides in *every* prompt. Migration 122. *Exit reached:* a suggestion
+  can cite the brief, a past decision, or a CRM fact.
 - **Phase D — Bidirectional.** Agent questions + user answers (typed/spoken) +
   steering. *Exit:* the agent asks, you answer by speaking, it adapts.
 - **Phase E — Speak into the call (opt-in).** Public interjection via bot `/say`,

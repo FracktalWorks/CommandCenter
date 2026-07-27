@@ -87,6 +87,8 @@ MEETING_BOT_TOKEN=<same secret as above>
 | `TTS_CMD` | _(none)_ | Shell template (`{text}`,`{out}`) that renders speech to WAV. Unset → can't speak. |
 | `EMBED_CMD` | _(none)_ | Shell template (`{in}` PCM s16le 16k mono → `{out}` JSON float array) that emits a per-utterance speaker embedding. Unset → text-only segments. |
 | `LIVE_VAD_RMS` | `300` | Energy-VAD threshold (RMS over s16le) for the pause endpointer. Tune per room/mic. |
+| `LIVE_SEGMENT_MAX_WAIT` | `2.5` | Max seconds a recognised segment waits for its utterance to close (and so for its embedding) before being forwarded untagged. Bounds live latency. |
+| `CHROME_EXECUTABLE` | _(none)_ | Path to a Chrome/Chromium binary. Needed when the browser on the box wasn't installed by *this* Playwright version — otherwise the launch fails with "Executable doesn't exist at …/chromium-&lt;rev&gt;". |
 
 ## Status & honest caveats
 
@@ -101,7 +103,24 @@ MEETING_BOT_TOKEN=<same secret as above>
   legally require their consent depending on jurisdiction. Get it.
 - Not yet load-tested for many concurrent instances; start with 1–2 per host and
   size up.
-- **The live path (streaming ASR + embeddings + TTS) is plumbing.** The pause
-  endpointer's boundary logic is unit-tested, but the energy-VAD threshold, the
-  `EMBED_CMD` embedder, the streaming-ASR wiring and the `TTS_CMD` voice must be
-  verified against a real meeting on the box (and the VAD/threshold tuned there).
+
+## What has actually been run (and what hasn't)
+
+Verified by running the service against a real PulseAudio/Xvfb/Chromium stack —
+not inferred:
+
+| Verified | Result |
+|---|---|
+| Audio stack (`entrypoint.sh`) | `meet` + `vmic` null sinks and their monitors come up. |
+| **Recording path** (`_start_ffmpeg`) | A 440 Hz tone played into `meet` was recovered from `meet.monitor` as 16 kHz mono Opus — decoded back at 440 Hz, RMS ≈ 2050. The exact production ffmpeg args. |
+| **Speak path** (virtual mic) | Audio played into the `vmic` sink is captured from `vmic.monitor` — the source Chrome uses as its microphone. |
+| **Energy VAD** (`LIVE_VAD_RMS`) | Real PCM: speech frames RMS ≈ 1700, silence 0.0. The `300` default separates them cleanly. |
+| **Live streaming + embeddings** | Against a stub ASR + callback: 16 s of real audio streamed, 46 segments forwarded, **42 carrying a per-utterance embedding**. |
+| HTTP contract | `/health`, bearer auth (401 without it), `POST /bots` → status lifecycle, clean `failed` + error text on a bad join. |
+| Chromium launch | Launches headful under Xvfb and drives `page.goto` (needs `CHROME_EXECUTABLE` when the box's browser build isn't this Playwright's). |
+
+**Still unverified — needs a real meeting:** the Google Meet **join flow itself**
+(`_maybe_fill_name` / `_click_join` / `_await_admission` selectors) and the
+end-to-end capture of an actual call. Meet's DOM is not a public API, so expect
+to tune those selectors on first run. A real `EMBED_CMD` model (CAM++/pyannote)
+and a `TTS_CMD` voice also still need to be installed and pointed at.

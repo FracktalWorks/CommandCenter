@@ -242,8 +242,14 @@ async def join_and_record(
 
     on_status("joining")
     async with async_playwright() as p:
+        # Normally Playwright's own pinned build is used. CHROME_EXECUTABLE lets a
+        # host point at a different Chrome/Chromium — needed whenever the browser
+        # on the box wasn't installed by THIS playwright version (otherwise the
+        # launch dies with "Executable doesn't exist at .../chromium-<rev>").
+        chrome_path = os.environ.get("CHROME_EXECUTABLE", "").strip() or None
         browser = await p.chromium.launch(
             headless=False,  # headful under Xvfb so the audio pipeline works
+            executable_path=chrome_path,
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",

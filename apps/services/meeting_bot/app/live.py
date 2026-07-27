@@ -29,6 +29,7 @@ import logging
 import os
 import struct
 import subprocess
+import time
 
 log = logging.getLogger("meeting_bot.live")
 
@@ -58,6 +59,13 @@ try:
     _VAD_RMS = float(os.environ.get("LIVE_VAD_RMS", "300"))
 except ValueError:
     _VAD_RMS = 300.0
+
+# How long a recognised segment may wait for its utterance to close (and so for
+# its speaker embedding) before being forwarded untagged. Bounds live latency.
+try:
+    _SEGMENT_MAX_WAIT = float(os.environ.get("LIVE_SEGMENT_MAX_WAIT", "2.5"))
+except ValueError:
+    _SEGMENT_MAX_WAIT = 2.5
 
 _SAMPLE_RATE = 16000
 _FRAME_BYTES = 3200  # 100 ms of 16 kHz s16le mono
@@ -179,24 +187,48 @@ async def _embed_and_store(utt: object, windows: list) -> None:
         del windows[:-50]  # keep the recent-window list bounded
 
 
-async def _asr_reader(ws, meeting_callback: str, chunking: bool, windows: list) -> None:
-    """Read ASR messages, tag each segment with the best-overlapping utterance
-    embedding (when chunking), and forward to the gateway live bus."""
+async def _flush_pending(
+    meeting_callback: str, pending: list, windows: list, *, force: bool = False
+) -> None:
+    """Forward pending segments, attaching an embedding once one is available.
+
+    An utterance's embedding only exists once that utterance CLOSES, but the ASR
+    streams segments *during* it — so forwarding immediately would leave most
+    segments without a voiceprint. We hold each segment briefly: as soon as a
+    covering window lands it goes out tagged, and if none arrives within
+    ``LIVE_SEGMENT_MAX_WAIT`` it goes out untagged rather than being delayed
+    further (the gateway then falls back to label passthrough). Bounded latency,
+    and it lines up with acting on turn boundaries anyway."""
     from . import endpointing
 
+    now = time.monotonic()
+    still: list = []
+    for seg, queued_at in pending:
+        emb = endpointing.pick_embedding(
+            float(seg.get("start_s", 0.0)), float(seg.get("end_s", 0.0)), windows
+        )
+        if emb is not None:
+            seg["embedding"] = emb
+        elif not force and (now - queued_at) < _SEGMENT_MAX_WAIT:
+            still.append((seg, queued_at))
+            continue
+        await _forward_segment(meeting_callback, seg)
+    pending[:] = still
+
+
+async def _asr_reader(ws, meeting_callback: str, chunking: bool, windows: list,
+                      pending: list) -> None:
+    """Read ASR messages and forward them to the gateway live bus — immediately
+    when not chunking, else queued so an embedding can be attached (above)."""
     async for message in ws:
         for seg in _parse_asr_message(
             message if isinstance(message, str) else message.decode()
         ):
             if chunking:
-                emb = endpointing.pick_embedding(
-                    float(seg.get("start_s", 0.0)),
-                    float(seg.get("end_s", 0.0)),
-                    windows,
-                )
-                if emb is not None:
-                    seg["embedding"] = emb
-            await _forward_segment(meeting_callback, seg)
+                pending.append((seg, time.monotonic()))
+                await _flush_pending(meeting_callback, pending, windows)
+            else:
+                await _forward_segment(meeting_callback, seg)
 
 
 async def stream_transcription(meeting_callback: str, stop: asyncio.Event) -> None:
@@ -221,7 +253,15 @@ async def stream_transcription(meeting_callback: str, stop: asyncio.Event) -> No
 
     chunking = bool(EMBED_CMD)  # only pay for VAD/embeddings when an embedder is set
     windows: list[tuple[float, float, list[float]]] = []
+    pending: list = []          # segments awaiting their utterance's embedding
     endpointer = endpointing.Endpointer(frame_ms=_FRAME_MS)
+
+    async def _embed_then_flush(utt: object) -> None:
+        # A closed utterance is exactly what the waiting segments need, so flush
+        # as soon as its embedding exists.
+        await _embed_and_store(utt, windows)
+        await _flush_pending(meeting_callback, pending, windows)
+
     tasks: set[asyncio.Task] = set()
 
     def _spawn(coro) -> None:
@@ -233,7 +273,7 @@ async def stream_transcription(meeting_callback: str, stop: asyncio.Event) -> No
     try:
         async with websockets.connect(LIVE_ASR_URL, max_size=None) as ws:
             reader = asyncio.create_task(
-                _asr_reader(ws, meeting_callback, chunking, windows)
+                _asr_reader(ws, meeting_callback, chunking, windows, pending)
             )
             loop = asyncio.get_event_loop()
             while not stop.is_set():
@@ -246,11 +286,18 @@ async def stream_transcription(meeting_callback: str, stop: asyncio.Event) -> No
                 if chunking:
                     utt = endpointer.push(chunk, _is_speech(chunk))
                     if utt is not None:
-                        _spawn(_embed_and_store(utt, windows))
+                        _spawn(_embed_then_flush(utt))
+                    # Release anything that has waited long enough.
+                    if pending:
+                        await _flush_pending(meeting_callback, pending, windows)
             if chunking:
                 last = endpointer.flush()
                 if last is not None:
                     await _embed_and_store(last, windows)
+                # Never strand a segment when the meeting ends.
+                await _flush_pending(
+                    meeting_callback, pending, windows, force=True
+                )
             reader.cancel()
     except Exception as exc:
         log.warning("live transcription stopped: %s", str(exc)[:200])

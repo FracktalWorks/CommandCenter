@@ -103,6 +103,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     import asyncio as _asyncio
     _asyncio.ensure_future(_warmup_copilot_models())
 
+    # Sweep any `cc-copilot-*` sandbox containers (BO-7 phase 2 —
+    # copilot_sandbox.py) left running by a prior crashed gateway process.
+    # Cheap no-op when copilot_sandbox_scope has never been enabled (docker ps
+    # finds nothing) or Docker itself isn't available (best-effort, never raises).
+    async def _sweep_copilot_sandboxes() -> None:
+        try:
+            from orchestrator.copilot_sandbox import sweep_orphaned_sandboxes
+            await sweep_orphaned_sandboxes()
+        except Exception as _e:
+            _log.warning("gateway.copilot_sandbox_sweep_failed", error=str(_e))
+
+    _asyncio.ensure_future(_sweep_copilot_sandboxes())
+
     # Warm-clone every live agent that has a source (GitHub repo or local path)
     # but no clone on disk yet.  Clones are created lazily on first run, so a
     # reboot/deploy that wiped the cache leaves registered agents invisible in

@@ -133,6 +133,29 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
+  # --- Copilot SDK session sandbox image. Build via `--profile sandbox`. ---
+  # BO-7 phase 2: containerizes just the `copilot` CLI binary as a TCP
+  # JSON-RPC server (orchestrator/copilot_sandbox.py) for code_task and the
+  # App Workshop app-builder — the host-side SDK/orchestration is unchanged,
+  # it just connects to this container's socket instead of a local
+  # subprocess. Not a long-running service — the orchestrator spawns
+  # short-lived, per-call (or per-thread, for app-builder) containers on
+  # demand; nothing here is kept running by `docker compose up`.
+  #
+  # No auth env needed at build or (compose) run time — BYOK credentials
+  # travel in the create_session RPC payload the host constructs after
+  # connecting, never as container env (see Dockerfile.copilot-sandbox).
+  #
+  # Build only: docker compose --profile sandbox build copilot-sandbox
+  copilot-sandbox:
+    build:
+      context: ../apps/services/orchestrator
+      dockerfile: Dockerfile.copilot-sandbox
+    image: acb-copilot-sandbox:latest
+    profiles: ["sandbox"]
+    # Override entrypoint so `docker compose up` is a no-op for this service.
+    entrypoint: ["true"]
+
 volumes:
   acb-postgres-data:
   acb-redis-data:

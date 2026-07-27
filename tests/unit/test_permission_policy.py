@@ -16,8 +16,10 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("AGENT_PERMISSION_MODE", raising=False)
     monkeypatch.delenv("AGENT_PERMISSION_DENY_PATTERNS", raising=False)
     _WRITE_ARTIFACT_CONTEXT.pop("workspace_root", None)
+    _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
     yield
     _WRITE_ARTIFACT_CONTEXT.pop("workspace_root", None)
+    _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
 
 
 # ── decide(): the decision table ─────────────────────────────────────────────
@@ -108,6 +110,34 @@ def test_write_inside_workspace_approved():
          "path": "/opt/acb/repos/agent-x/outputs/r.md"},
     )
     assert ok is True and code == "write_in_workspace"
+
+
+def test_permission_check_root_overrides_workspace_root_when_sandboxed():
+    # BO-7 phase 2: a sandboxed Copilot session reports CONTAINER paths
+    # (/workspace/repo/...), not the host workspace_root — permission_check_root
+    # is what the containment check must compare against when both are set.
+    _WRITE_ARTIFACT_CONTEXT["workspace_root"] = "/opt/acb/repos/agent-x"
+    _WRITE_ARTIFACT_CONTEXT["permission_check_root"] = "/workspace/repo"
+    ok, code, _ = pp.decide(
+        {"has_write_file_redirection": True, "path": "/workspace/repo/outputs/r.md"},
+    )
+    assert ok is True and code == "write_in_workspace"
+
+    # A path that's inside the HOST workspace_root but not the container
+    # permission_check_root is denied — proving the override actually changes
+    # which root is authoritative, not just widening what's allowed.
+    ok2, code2, _ = pp.decide(
+        {"has_write_file_redirection": True, "path": "/opt/acb/repos/agent-x/outputs/r.md"},
+    )
+    assert ok2 is False and code2 == "write_out_of_workspace"
+
+
+def test_permission_check_root_falls_back_to_workspace_root_when_unset():
+    _WRITE_ARTIFACT_CONTEXT["workspace_root"] = "/opt/acb/repos/agent-x"
+    ok, code, _ = pp.decide(
+        {"has_write_file_redirection": True, "path": "/etc/passwd"},
+    )
+    assert ok is False and code == "write_out_of_workspace"
 
 
 def test_write_with_no_workspace_context_approves():

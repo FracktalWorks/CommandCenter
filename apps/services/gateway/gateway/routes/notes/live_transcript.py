@@ -13,9 +13,13 @@ It powers three things, all off one pipe:
    bot worker, which speaks it into the call (TTS → the bot's virtual mic).
 
 Producers push segments to ``POST …/live/segment`` (the meeting-bot worker's
-streaming ASR today; the browser recorder can feed the same bus later). Nothing
-here is persisted — the authoritative transcript is still the batch re-pass on
-completion, so live stays a disposable draft (spec §3.4 / §5.2 principle).
+streaming ASR today; the browser recorder can feed the same bus later). Each
+segment is run through the **live speaker registry** (``live_speakers.py``) on
+the way in, so it gets a *stable* speaker id (from a running voiceprint gallery)
+and, when someone self-introduces, a live name — the identity context the copilot
+consumes. Nothing here is persisted: the authoritative transcript is still the
+batch re-pass on completion, so live is a fast *draft* that the batch pass
+upgrades — not a throwaway (spec §3.4 / §5.2 principle; §3.5 of the copilot spec).
 
 Design: a per-meeting in-memory ring + asyncio fan-out. Single-process, best-
 effort; a gateway restart drops the live buffer (the recording + batch pass are
@@ -50,6 +54,15 @@ class LiveSegment(BaseModel):
     speaker_label: str | None = None
     is_final: bool = True
     ts: float | None = None  # server stamp added on publish
+    # Optional per-chunk speaker embedding (voiceprint). When present, the live
+    # speaker registry uses it to assign a *stable* speaker id across chunks; it
+    # is stripped before fan-out (never sent to captions/agents). Sources that
+    # can't produce one (browser channel path) simply omit it.
+    embedding: list[float] | None = None
+    # Resolved on publish by the registry — the fields consumers read.
+    speaker_id: str | None = None
+    speaker_name: str | None = None
+    role: str | None = None
 
 
 class _Bus:
@@ -129,12 +142,50 @@ async def ingest_live_segment(
     authorization: str | None = Header(default=None),
 ) -> dict:
     """Producer callback: the meeting-bot worker's streaming ASR posts a live
-    segment here as words are recognised. Fans out to captions + agents."""
+    segment here as words are recognised. Resolves a stable speaker identity
+    (voiceprint gallery + live name binding), then fans out to captions +
+    agents. The embedding is stripped before fan-out."""
     _check_bot_auth(authorization)
     data = seg.model_dump()
     data["ts"] = time.time()
+    # Resolve a stable speaker id from the running gallery and bind names live
+    # from self-introductions, before fan-out. Fail-safe: any error leaves the
+    # segment with its original label rather than dropping it.
+    try:
+        from gateway.routes.notes.live_speakers import registry
+
+        reg = registry(meeting_id)
+        resolved = reg.resolve(data.get("embedding"),
+                               fallback_label=data.get("speaker_label"))
+        data["speaker_id"] = resolved.speaker_id
+        data["speaker_label"] = resolved.speaker_id
+        reg.note_text(resolved.speaker_id, data.get("text") or "")
+        name = reg.name_of(resolved.speaker_id)
+        if name:
+            data["speaker_name"] = name
+        if resolved.role:
+            data["role"] = resolved.role
+    except Exception as exc:
+        _log.warning(
+            "notes.live_speaker_resolve_failed",
+            meeting_id=meeting_id, error=str(exc)[:200],
+        )
+    finally:
+        data.pop("embedding", None)  # never fan out big vectors downstream
     publish_segment(meeting_id, data)
     return {"ok": True}
+
+
+@router.get("/meetings/{meeting_id}/live/roster")
+async def live_roster(
+    meeting_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Who's on the call so far — stable speaker ids with any live-bound names/
+    roles. The identity context the copilot console (and agent) read."""
+    from gateway.routes.notes.live_speakers import registry
+
+    return {"speakers": registry(meeting_id).roster()}
 
 
 # ── Live captions stream (bus → UI) ──────────────────────────────────────────

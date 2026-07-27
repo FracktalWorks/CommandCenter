@@ -99,6 +99,51 @@ The copilot must not care whether audio came from a bot or the browser.
 Result: `subscribe(meeting_id)` is the single seam the copilot consumes,
 regardless of source.
 
+### 3.5 Transcription strategy — one pause-chunked spine, two fidelity levels
+
+Earlier framing called the live transcript a "disposable draft" thrown away once
+the batch re-pass runs. That undersells it — and, done naively (fixed-time
+windows), it needlessly *compromises accuracy for latency*. The corrected model
+is **one pause-chunked pipeline that produces a genuinely good live transcript,
+which the batch pass then refines** — not two unrelated pipelines.
+
+**Chunk on pauses, not the clock.** Fixed N-second windows cut mid-word and
+mid-utterance, which is exactly where ASR loses context and diarization gets
+confused. Instead, the edge (bot worker / browser) uses VAD **endpointing**:
+close a chunk when a speaker actually pauses. Each chunk is then a *complete
+utterance* — near-batch ASR accuracy for that utterance, and usually a single
+speaker's turn (the cleanest input for diarization). Latency tracks the pause
+(sub-second to ~2 s), which is fine — the copilot acts on turn boundaries anyway.
+
+**Consistent speakers live, via a running voiceprint gallery.** Per-chunk
+diarization alone gives *local* labels that don't line up across chunks. So each
+chunk carries a speaker **embedding**; the gateway's live speaker registry
+(`live_speakers.py`) matches it (cosine ≥ threshold) against the speakers seen so
+far — assigning a **stable global id** or enrolling a new speaker, and updating a
+running centroid. This yields consistent identity *incrementally*, with no
+end-of-file wait. **Names bind live** from self-introductions (a cheap,
+precision-first heuristic — no LLM on the live path); **roles** attach from the
+business-context lookup (§5, name → CRM contact). The copilot therefore knows
+*who is speaking and their role in real time* — which materially improves its
+judgment (coach our rep, not the prospect; tailor a point to who objected).
+
+**The batch pass becomes a refinement, not a redo.** On stop, the authoritative
+re-pass (`pipeline.py`: full-file ASR + offline diarization + the LLM speaker-id
+pass) still runs — but its job shrinks from "transcribe everything from scratch"
+to *correcting* an already-good live transcript: global re-clustering fixes any
+online-diarization drift, and corrected speaker labels/names are back-propagated
+to earlier segments. Overlapping speech and early split/merge errors are the
+residual it earns its keep on.
+
+Cost note: running live + batch duplicates only the *ASR compute*, which on the
+**self-hosted** worker is just CPU (near-free beyond the box). On a **cloud** ASR
+(Deepgram) it's paid twice, so there the choice is explicit — stream-only if
+live diarization is good enough, or batch-only when real-time isn't needed.
+
+Data flow: `edge VAD-endpoint → per-utterance ASR + embedding → POST …/live/segment
+{text, embedding} → registry (stable id + live name/role) → bus → captions +
+copilot`. Then, on stop, `full recording → batch re-pass → reconcile/upgrade`.
+
 ---
 
 ## 4. The moderator policy — WHEN/WHAT to chime in (token efficiency crux)
@@ -278,6 +323,7 @@ exactly how the STT/bot provider layers were structured.
 | Need | Reuse |
 |---|---|
 | Live transcript in/out | `live_transcript.py` bus + `subscribe()` (built) |
+| Live speaker identity + roles | `live_speakers.py` voiceprint gallery + name binding + roster (built) |
 | Speak into call | bot `POST /bots/{id}/say` + virtual mic (built) |
 | LLM calls + tiers/fallback | `acb_llm` `acompletion_with_fallback` |
 | Business context | skills / connectors / agent framework (email, ClickUp, …) |
@@ -295,9 +341,10 @@ feed**.
 ## 13. Phasing (each phase shippable + independently valuable)
 
 - **Phase A — Presence + console (read-only), no LLM.** Live-session registry,
-  "live now" dock, console showing the live transcript for bot **and** browser
-  (add the browser→bus feed). Opt-in toggle scaffold. *Exit:* watch a live call's
-  transcript in Command Center.
+  "live now" dock, console showing the live transcript **with a stable speaker
+  roster** (`live_speakers.py`, built) for bot **and** browser (add the
+  browser→bus feed). Opt-in toggle scaffold. *Exit:* watch a live call's
+  transcript, correctly attributed by speaker, in Command Center.
 - **Phase B — Passive copilot (private suggestions).** Tiered cascade + rolling
   state + budget guardrails; suggestions stream to the console. No business
   context, no speaking. *Exit:* useful, cost-bounded talking points appear live.

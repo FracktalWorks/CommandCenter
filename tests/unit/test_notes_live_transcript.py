@@ -69,3 +69,24 @@ def test_unsubscribe_removes_subscriber() -> None:
     assert q in bus.subs
     bus.unsubscribe(q)
     assert q not in bus.subs
+
+
+def test_ingest_resolves_speaker_and_strips_embedding() -> None:
+    """The ingest endpoint runs each segment through the speaker registry:
+    a stable id + a live-bound name land on the fanned-out segment, and the raw
+    embedding never leaves the gateway."""
+    from gateway.routes.notes import live_speakers as ls
+
+    async def scenario() -> dict:
+        mid = "m-ingest"
+        lt._BUSES.pop(mid, None)
+        ls.reset(mid)
+        seg = lt.LiveSegment(text="Hi, I'm Priya", embedding=[1.0, 0.0, 0.0])
+        await lt.ingest_live_segment(mid, seg, authorization=None)
+        return list(lt._bus(mid).ring)[-1]
+
+    out = asyncio.run(scenario())
+    assert out["speaker_id"] == "S1"
+    assert out["speaker_label"] == "S1"
+    assert out["speaker_name"] == "Priya"
+    assert "embedding" not in out

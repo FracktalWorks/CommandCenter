@@ -1174,7 +1174,16 @@ function ChatPageInner() {
                   // them build in real time (Markdown/HTML → live preview in the
                   // side panel). Other file types surface in the Files tree only.
                   const ext = name.split(".").pop()?.toLowerCase() ?? "";
-                  const isDoc = ["md", "mdx", "html", "htm"].includes(ext);
+                  // A .jsx/.tsx under outputs/ is a full-page React artifact, so
+                  // it opens like any other document. Elsewhere those extensions
+                  // are ordinary source files an agent may be editing — opening
+                  // every one of those would hijack the panel (matches
+                  // DocumentPane's isArtifactPath rule).
+                  const isReactArtifact =
+                    (ext === "jsx" || ext === "tsx") &&
+                    entry.path.replace(/^\/+/, "").startsWith("outputs/");
+                  const isDoc =
+                    ["md", "mdx", "html", "htm"].includes(ext) || isReactArtifact;
                   if (isDoc && activeSession && !isMobile) {
                     openDoc({
                       path: entry.path,

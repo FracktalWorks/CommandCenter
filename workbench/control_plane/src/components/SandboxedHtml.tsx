@@ -543,8 +543,10 @@ function buildSrcDoc(
   /* ── Data table + status cells ────────────────────────────────────────
      Richer than .cc-compare: zebra rows, a leading status-stripe column, and
      inline mini-bar / pill cells for ops & audit reports.
-       <div class="cc-table"><table>… <td class="cc-cell-stat cc-t-warning">…
-     A row can carry a stripe with <tr class="cc-row cc-t-danger">. */
+       <div class="cc-table"><table>… <td class="cc-num">42</td>
+     A row can lead with a severity stripe: <td class="cc-stripe cc-t-danger">.
+     Cell helpers: .cc-num (mono, right-aligned), .cc-dim (muted),
+     .cc-status (dot + label), .cc-minibar (style="--v:74"), .cc-tag-pill. */
   .cc-table { overflow-x: auto; border: 1px solid var(--cc-border); border-radius: var(--cc-radius); }
   .cc-table table { border-collapse: collapse; width: 100%; font-size: 13px; min-width: 32rem; }
   .cc-table thead th {

@@ -1,0 +1,429 @@
+[
+ {
+  "name": "Report",
+  "section": "Document scaffolding",
+  "summary": "The document wrapper. Every artifact should start with this.",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Eyebrow",
+  "section": "Document scaffolding",
+  "summary": "Small uppercase kicker above the title.",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Lede",
+  "section": "Document scaffolding",
+  "summary": "The large intro paragraph under the title.",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "SectionNum",
+  "section": "Document scaffolding",
+  "summary": "A section marker, e.g. <SectionNum>01 — Metrics</SectionNum> before an <h2>.",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Grid",
+  "section": "Document scaffolding",
+  "summary": "Responsive grid of cards.",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Card",
+  "section": "Document scaffolding",
+  "summary": "A panel. `title` renders with the standard leading dot.",
+  "props": [
+   {
+    "name": "title",
+    "optional": true,
+    "type": "ReactNode; children?: ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Chips",
+  "section": "Document scaffolding",
+  "summary": "Metadata row: <Chips><Chip label=\"Period\" value=\"Q3\" /></Chips>",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Chip",
+  "section": "Document scaffolding",
+  "summary": "One metadata chip, e.g. label=\"Period\" value=\"Q3 FY26\".",
+  "props": [
+   {
+    "name": "label",
+    "optional": true,
+    "type": "ReactNode; value?: ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Stats",
+  "section": "Numbers",
+  "summary": "Row of KPI tiles. Wrap <Stat> children in this.",
+  "props": [
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Stat",
+  "section": "Numbers",
+  "summary": "A KPI tile — the big-number-is-the-hero block. `delta` renders a coloured ▲/▼ (positive is up). `feature` spotlights one tile.",
+  "props": [
+   {
+    "name": "label",
+    "optional": false,
+    "type": "ReactNode",
+    "doc": ""
+   },
+   {
+    "name": "value",
+    "optional": false,
+    "type": "ReactNode",
+    "doc": ""
+   },
+   {
+    "name": "unit",
+    "optional": true,
+    "type": "string",
+    "doc": ""
+   },
+   {
+    "name": "delta",
+    "optional": true,
+    "type": "number",
+    "doc": "Signed change; sign picks the arrow and the colour."
+   },
+   {
+    "name": "deltaLabel",
+    "optional": true,
+    "type": "string",
+    "doc": "Override the delta text, e.g. \"+12% QoQ\"."
+   },
+   {
+    "name": "feature",
+    "optional": true,
+    "type": "boolean",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Bars",
+  "section": "Numbers",
+  "summary": "Horizontal bar chart. Pass percentages (0–100) — the CSS draws the fill.",
+  "props": [
+   {
+    "name": "data",
+    "optional": false,
+    "type": "{ label: ReactNode; value: number; tone?: Tone; display?: string }[]",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Donuts",
+  "section": "Numbers",
+  "summary": "Ring gauges for single share/completion figures.",
+  "props": [
+   {
+    "name": "data",
+    "optional": false,
+    "type": "{ label: ReactNode; value: number; tone?: Tone }[]",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Spark",
+  "section": "Numbers",
+  "summary": "Tiny inline sparkline. You pass the numbers; the geometry is computed.",
+  "props": [
+   {
+    "name": "values",
+    "optional": false,
+    "type": "number[]",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Chart",
+  "section": "Numbers",
+  "summary": "Trend/area chart with grid, fill, and an emphasised endpoint.",
+  "props": [
+   {
+    "name": "values",
+    "optional": false,
+    "type": "number[]",
+    "doc": ""
+   },
+   {
+    "name": "labels",
+    "optional": true,
+    "type": "string[]",
+    "doc": ""
+   },
+   {
+    "name": "tone",
+    "optional": true,
+    "type": "Tone",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Table",
+  "section": "Tables",
+  "summary": "Data table. `rows` are plain cell values — strings, numbers, or the cell helpers below (<Status>, <Pill>, <MiniBar>). `stripes` adds a leading severity bar per row.",
+  "props": [
+   {
+    "name": "columns",
+    "optional": false,
+    "type": "ReactNode[]",
+    "doc": ""
+   },
+   {
+    "name": "rows",
+    "optional": false,
+    "type": "ReactNode[][]",
+    "doc": ""
+   },
+   {
+    "name": "stripes",
+    "optional": true,
+    "type": "(Tone | undefined)[]",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Status",
+  "section": "Tables",
+  "summary": "Table cell: coloured dot + label.",
+  "props": [
+   {
+    "name": "tone",
+    "optional": true,
+    "type": "Tone; children?: ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Pill",
+  "section": "Tables",
+  "summary": "Table cell: solid status pill.",
+  "props": [
+   {
+    "name": "tone",
+    "optional": true,
+    "type": "Tone; children?: ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "MiniBar",
+  "section": "Tables",
+  "summary": "Table cell: inline proportion bar (0–100).",
+  "props": [
+   {
+    "name": "value",
+    "optional": false,
+    "type": "number; tone?: Tone",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Note",
+  "section": "Narrative blocks",
+  "summary": "Short status notice. Use Decision when there is a verdict.",
+  "props": [
+   {
+    "name": "tone",
+    "optional": true,
+    "type": "\"info\" | \"success\" | \"warning\" | \"danger\"; children?: ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Callout",
+  "section": "Narrative blocks",
+  "summary": "Tinted highlight panel with a small tag.",
+  "props": [
+   {
+    "name": "tag",
+    "optional": true,
+    "type": "ReactNode; primary?: boolean; children?: ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Decision",
+  "section": "Narrative blocks",
+  "summary": "The recommendation box — a verdict as the hero.",
+  "props": [
+   {
+    "name": "verdict",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   },
+   {
+    "name": "title",
+    "optional": false,
+    "type": "ReactNode",
+    "doc": ""
+   },
+   {
+    "name": "tone",
+    "optional": true,
+    "type": "Tone",
+    "doc": ""
+   },
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Steps",
+  "section": "Narrative blocks",
+  "summary": "Numbered sequence — only when order genuinely matters.",
+  "props": [
+   {
+    "name": "items",
+    "optional": false,
+    "type": "{ title: ReactNode; body?: ReactNode }[]",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Timeline",
+  "section": "Narrative blocks",
+  "summary": "Gantt-style roadmap. `start` is 1-based; `span` is a column count.",
+  "props": [
+   {
+    "name": "cols",
+    "optional": true,
+    "type": "number",
+    "doc": ""
+   },
+   {
+    "name": "rows",
+    "optional": false,
+    "type": "{ label: ReactNode; start: number; span: number; tone?: Tone; ghost?: boolean }[]",
+    "doc": ""
+   },
+   {
+    "name": "labels",
+    "optional": true,
+    "type": "string[]",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Submit",
+  "section": "Talking back to the agent",
+  "summary": "Sends a VALUE the user chose back to the agent.",
+  "props": [
+   {
+    "name": "label",
+    "optional": false,
+    "type": "string",
+    "doc": ""
+   },
+   {
+    "name": "value",
+    "optional": true,
+    "type": "unknown",
+    "doc": ""
+   },
+   {
+    "name": "primary",
+    "optional": true,
+    "type": "boolean",
+    "doc": ""
+   },
+   {
+    "name": "children",
+    "optional": true,
+    "type": "ReactNode",
+    "doc": ""
+   }
+  ]
+ },
+ {
+  "name": "Action",
+  "section": "Talking back to the agent",
+  "summary": "Sends a fixed follow-up message, like clicking a suggestion.",
+  "props": [
+   {
+    "name": "message",
+    "optional": false,
+    "type": "string; children?: ReactNode",
+    "doc": ""
+   }
+  ]
+ }
+]

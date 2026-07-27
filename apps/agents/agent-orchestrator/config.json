@@ -3,10 +3,20 @@
   "description": "AI Company Brain orchestrator — routes to specialist agents, retrieves company data, spawns Copilot SDK agents for creation tasks.",
   "version": "0.1.0",
   "runtime": "maf",
+  "sharing": {
+    "instancing": "personal",
+    "visibility": "organization",
+    "shareable": true,
+    "outputs_visibility": "instance"
+  },
   "skill_repos": [],
   "mcp_servers": {},
   "max_mutation_attempts": 1,
-  "tags": ["orchestrator", "core", "routing"],
+  "tags": [
+    "orchestrator",
+    "core",
+    "routing"
+  ],
   "integrations": [],
   "optional_integrations": [],
   "tool_scope": [

@@ -3,11 +3,21 @@
   "description": "App Workshop builder — turns chat into small internal web apps (Custom Apps). Works inside the app's own workspace, keeps index.html always valid, and uses the injected window.cc platform APIs instead of external services.",
   "version": "0.1.0",
   "runtime": "maf",
+  "sharing": {
+    "instancing": "personal",
+    "visibility": "organization",
+    "shareable": true,
+    "outputs_visibility": "instance"
+  },
   "skill_repos": [],
   "mcp_servers": {},
   "max_mutation_attempts": 1,
   "allow_session_workspace": true,
-  "tags": ["apps", "builder", "workshop"],
+  "tags": [
+    "apps",
+    "builder",
+    "workshop"
+  ],
   "integrations": [],
   "optional_integrations": [],
   "tool_scope": [

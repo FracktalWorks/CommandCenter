@@ -314,6 +314,55 @@ jobs:
               sudo systemctl disable --now acb-whatsapp-bridge >/dev/null 2>&1 || true
             fi
 
+            # ── Self-hosted meeting bot (Note Taker §3.13) ────────────────────
+            # A headless-Chrome participant that joins a Meet link, records the
+            # call, and feeds the normal transcribe → diarize → notes pipeline.
+            # Runs as a Docker service (profile "meetingbot") because each in-call
+            # bot is a real Chrome (~1-3 GB RAM + up to 2 CPU) — it needs a box
+            # with headroom, which is why this is opt-out-able rather than core.
+            # Env is written BEFORE the gateway restart so the gateway picks up
+            # MEETING_BOT_URL/TOKEN. Fail-safe: a build or start hiccup skips the
+            # bot only — the rest of the deploy (and the whole app) is unaffected.
+            echo "==> Meeting bot (self-hosted, headless Chrome)"
+            grep -qE '^MEETING_BOT_ENABLED=' "$ENV_FILE" || echo "MEETING_BOT_ENABLED=1" >> "$ENV_FILE"
+            # The gateway talks to the worker over the host-published port; the
+            # worker calls back to the gateway from inside its container.
+            upsert_env MEETING_BOT_URL "http://127.0.0.1:8095"
+            upsert_env NOTES_BOT_PROVIDER "selfhosted"
+            upsert_env NOTES_LIVE_CALLBACK_BASE "http://host.docker.internal:8080"
+            # One shared secret, both directions (gateway -> worker, and the
+            # worker's live-segment callback). Generated once, then reused.
+            if ! grep -qE '^MEETING_BOT_TOKEN=.+' "$ENV_FILE"; then
+              _mbtoken="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+              grep -vE '^MEETING_BOT_TOKEN=' "$ENV_FILE" > "$ENV_FILE.mb.tmp" && mv "$ENV_FILE.mb.tmp" "$ENV_FILE"
+              echo "MEETING_BOT_TOKEN=$_mbtoken" >> "$ENV_FILE"
+              echo "    + generated MEETING_BOT_TOKEN"
+            fi
+
+            MB_ENABLED="$(grep -E '^MEETING_BOT_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+            if [ "$MB_ENABLED" = "1" ]; then
+              # --build is cheap after the first run (layer cache); the first
+              # deploy pulls the Playwright base image, which is large.
+              # --env-file is explicit on purpose: compose resolves a bare .env
+              # against the project directory (infra/), not the app root.
+              if docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml \
+                   --profile meetingbot up -d --build meeting-bot 2>&1 | tail -5; then
+                sleep 5
+                if curl -fsS --max-time 10 http://127.0.0.1:8095/health >/dev/null 2>&1; then
+                  echo "    meeting bot UP on 127.0.0.1:8095"
+                else
+                  echo "    ! meeting bot started but /health not answering yet"
+                  docker logs --tail 20 acb-meeting-bot 2>&1 | sed 's/^/      /' || true
+                fi
+              else
+                echo "    ! meeting bot build/start failed — join-by-link stays unavailable"
+              fi
+            else
+              echo "    MEETING_BOT_ENABLED=0 — meeting bot OFF (join-by-link unavailable)"
+              docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml \
+                --profile meetingbot rm -sf meeting-bot >/dev/null 2>&1 || true
+            fi
+
             echo "==> Restarting gateway (systemd)"
             sudo systemctl restart acb-gateway
             sleep 3

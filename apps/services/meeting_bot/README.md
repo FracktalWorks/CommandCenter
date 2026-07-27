@@ -57,7 +57,29 @@ mid-meeting:
 
 Batch recording is unaffected by either — both are additive and gated.
 
-## Run it
+## Deployment (the normal path)
+
+**It deploys itself.** `infra/docker-compose.yml` carries a `meeting-bot`
+service under the **`meetingbot` profile** (deliberately *not* `core` — each
+in-call bot is a real Chrome, so it must never start just because someone
+brought the stack up), and the deploy workflow builds and starts it, generates
+`MEETING_BOT_TOKEN` once, and points the gateway at it:
+
+```
+MEETING_BOT_ENABLED=1                                  # opt out with 0
+MEETING_BOT_URL=http://127.0.0.1:8095                  # gateway → worker
+NOTES_BOT_PROVIDER=selfhosted
+NOTES_LIVE_CALLBACK_BASE=http://host.docker.internal:8080   # worker → gateway
+```
+
+The worker publishes on host **8095** because the gateway itself owns 8080, and
+binds to loopback only — nothing off-box can dispatch a bot. A build or start
+failure skips the bot and never fails the deploy.
+
+To turn it off: set `MEETING_BOT_ENABLED=0` in `/opt/acb/app/.env` and redeploy
+(the container is removed; join-by-link just becomes unavailable).
+
+## Run it standalone (dev)
 
 ```bash
 cd apps/services/meeting_bot

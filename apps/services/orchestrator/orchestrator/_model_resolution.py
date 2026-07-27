@@ -106,6 +106,55 @@ def _apply_byok_provider_for_copilot_sdk(
     return final
 
 
+def _apply_thinking_mode(opts: dict, think_mode: str) -> None:
+    """Apply thinking/reasoning mode to an agent options dict.
+
+    Maps our three thinking modes to model-specific parameters:
+    - ``"thinking"``: chain-of-thought with a moderate budget
+    - ``"max"``:      chain-of-thought with the maximum budget
+    - ``"auto"``:     no override (the model decides)
+
+    For Copilot-SDK models this adds a ``thinking`` block; for LiteLLM models it
+    adds ``reasoning_effort``.  Both are set because one agent options dict may
+    be consumed by either path.
+
+    Moved here from ``gateway.main`` so the two run paths share ONE
+    implementation — ``/copilot/chat`` and ``/agent/run/stream`` having their own
+    copies of memory injection is precisely how the orchestrator ended up
+    silently missing agent- and org-scope memory (agent_architecture.md §11.1.2).
+    """
+    if think_mode == "thinking":
+        opts["model_params"] = opts.get("model_params", {})
+        opts["model_params"]["reasoning_effort"] = "medium"
+        opts["thinking"] = {"type": "enabled", "budget_tokens": 4000}
+    elif think_mode == "max":
+        opts["model_params"] = opts.get("model_params", {})
+        opts["model_params"]["reasoning_effort"] = "high"
+        opts["thinking"] = {"type": "enabled", "budget_tokens": 16000}
+
+
+def _apply_thinking_mode_for_agent(agent: Any, think_mode: str) -> bool:
+    """Apply *think_mode* to whichever options dict *agent* actually uses.
+
+    Copilot-SDK agents carry ``_default_options``; native MAF agents carry
+    ``default_options``.  ``_apply_model_for_maf_agent`` already relies on that
+    distinction — this mirrors it so a named agent honours the chat UI's thinking
+    toggle on either runtime.
+
+    Returns True when the mode was applied.  ``"auto"`` (or empty) is a no-op, so
+    the default path is untouched.
+    """
+    if not think_mode or think_mode == "auto":
+        return False
+    opts = getattr(agent, "_default_options", None)
+    if not isinstance(opts, dict):
+        opts = getattr(agent, "default_options", None)
+    if not isinstance(opts, dict):
+        return False
+    _apply_thinking_mode(opts, think_mode)
+    return True
+
+
 def _apply_model_for_maf_agent(
     agent: Any, requested_model: str, settings: Any,
     *, agent_model_tier: str = "",

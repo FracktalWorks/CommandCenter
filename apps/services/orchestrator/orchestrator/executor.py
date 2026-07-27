@@ -1054,6 +1054,7 @@ def _merged_tool_scope(
 from orchestrator._model_resolution import (  # noqa: E402
     _apply_byok_provider_for_copilot_sdk,
     _apply_model_for_maf_agent,
+    _apply_thinking_mode_for_agent,
     _byok_default_model,
     _is_gateway_model,
 )
@@ -1843,6 +1844,7 @@ async def run_agent_stream(
     run_id: str | None = None,
     thread_id: str | None = None,
     model: str | None = None,
+    think_mode: str = "auto",
 ) -> AsyncIterator[str]:
     """Load a named agent and yield AG-UI SSE events while it runs.
 
@@ -2231,6 +2233,25 @@ async def run_agent_stream(
                     )
                 except Exception:  # noqa: BLE001
                     pass
+
+            # ── Reasoning depth (chat UI "thinking" toggle) ─────────────
+            # Applied at the SAME seam as the model, and to every agent this
+            # run loaded, so a named agent honours the toggle on either
+            # runtime.  Until now this was handled only on /copilot/chat, so
+            # the control silently did nothing for named agents
+            # (agent_architecture.md §11.1.1).  "auto" is a no-op.
+            if think_mode and think_mode != "auto":
+                for _ag in agents:
+                    try:
+                        if _apply_thinking_mode_for_agent(_ag, think_mode):
+                            _log.info(
+                                "executor.think_mode_applied",
+                                agent=agent_name,
+                                runtime=_agent_runtime,
+                                think_mode=think_mode,
+                            )
+                    except Exception:  # never break a run over a rendering hint
+                        pass
 
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless

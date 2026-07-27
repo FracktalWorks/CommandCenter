@@ -392,24 +392,18 @@ app.add_middleware(
 def _apply_thinking_mode(opts: dict, think_mode: str) -> None:
     """Apply thinking/reasoning mode to agent options.
 
-    Maps our three thinking modes to model-specific parameters:
-    - "thinking": enable chain-of-thought with moderate budget
-    - "max":      enable chain-of-thought with maximum budget
-    - "auto":     no override (model decides)
-
-    For Copilot SDK models, this adds a 'thinking' block.
-    For LiteLLM models, this adds 'reasoning_effort' or 'thinking'.
+    Thin delegate to the single implementation in
+    ``orchestrator._model_resolution`` — the named-agent path
+    (``/agent/run/stream``) needs the same mapping, and two copies is how the
+    two run paths' memory injection silently diverged
+    (agent_architecture.md §11.1.2).  Kept as a module-level name so existing
+    callers and tests here are unaffected; it disappears with ``/copilot/chat``.
     """
-    if think_mode == "thinking":
-        # Moderate reasoning depth
-        opts["model_params"] = opts.get("model_params", {})
-        opts["model_params"]["reasoning_effort"] = "medium"
-        opts["thinking"] = {"type": "enabled", "budget_tokens": 4000}
-    elif think_mode == "max":
-        # Maximum reasoning depth
-        opts["model_params"] = opts.get("model_params", {})
-        opts["model_params"]["reasoning_effort"] = "high"
-        opts["thinking"] = {"type": "enabled", "budget_tokens": 16000}
+    from orchestrator._model_resolution import (
+        _apply_thinking_mode as _shared,
+    )
+
+    _shared(opts, think_mode)
 
 if _HAS_MAF:
     try:

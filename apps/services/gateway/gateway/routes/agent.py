@@ -55,6 +55,40 @@ class AgentRunRequest(BaseModel):
     fold-and-persist at run end (core_loop_unification Phase 1, P0-3) upserts
     the SAME row the live translator checkpoints, keeping the two writers
     idempotent.  Falls back to ``assistant-{thread}-{run_id}`` when absent."""
+    think_mode: str = "auto"
+    """Reasoning depth the chat UI selected: ``auto`` | ``thinking`` | ``max``.
+
+    Previously honoured only on ``/copilot/chat``, so the thinking toggle did
+    nothing for named agents.  Porting it here is the prerequisite for retiring
+    that endpoint (agent_architecture.md §11.1.1); ``auto`` is a no-op, so the
+    default path is unchanged."""
+
+
+#: Reasoning depths the chat UI can request.  Anything else falls back to auto.
+_THINK_MODES: frozenset[str] = frozenset({"auto", "thinking", "max"})
+
+
+def _resolve_think_mode(req: AgentRunRequest) -> str:
+    """Resolve the requested reasoning depth from either place it can arrive.
+
+    ``route.ts``'s named-agent branch has been sending ``think_mode`` inside
+    ``payload`` all along, where nothing read it — which is why the chat UI's
+    thinking toggle silently did nothing for named agents while working on
+    ``/copilot/chat`` (agent_architecture.md §11.1.1).  Reading both means the
+    existing frontend is fixed with no frontend change, and the top-level field
+    is there for future callers.
+
+    Unknown values resolve to ``"auto"`` rather than being passed through: the
+    downstream mapping ignores them anyway, and normalising here keeps the run
+    log honest about what was actually applied.
+    """
+    top = (req.think_mode or "").strip().lower()
+    if top in _THINK_MODES and top != "auto":
+        return top
+    nested = str(req.payload.get("think_mode") or "").strip().lower()
+    if nested in _THINK_MODES and nested != "auto":
+        return nested
+    return "auto"
 
 
 class AgentRunResponse(BaseModel):
@@ -1452,12 +1486,15 @@ async def run_agent_stream_endpoint(
             _log.warning("agent.run_end_memory_extraction_failed",
                          thread_id=thread_id[:12])
 
+    _think_mode = _resolve_think_mode(req)
+
     agent_gen = run_agent_stream(
         agent_name,
         req.payload,
         run_id=run_id,
         thread_id=thread_id,
         model=req.model,
+        think_mode=_think_mode,
     )
 
     async def _serve():

@@ -6,6 +6,7 @@ import {
   LearnedPattern, RunMessageResult, LearnedRulePattern, LabelInfo,
   RuleGuidance, MessageTimeline,
   VoiceProfile, VoiceProfilePreview, VoiceProfileBuildStatus,
+  ContactCard, SenderStatus,
 } from "./types";
 
 const GATEWAY_URL = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
@@ -1023,6 +1024,64 @@ export async function getAnalyticsOverview(
   const sp = new URLSearchParams({ days: String(days) });
   if (accountId) sp.set("account_id", accountId);
   return gatewayFetch<AnalyticsOverview>(`/email/analytics/overview?${sp}`);
+}
+
+// ── Contact card ────────────────────────────────────────────────────────────
+
+/** Everything the mail app knows about one person — address, signature-derived
+ *  contact details, correspondence stats, and their last few messages.
+ *
+ *  Backed by mail already in the user's own accounts; there is no directory
+ *  lookup and nothing is fetched from the provider, so this is fast enough to
+ *  fire on a click. Pass `accountId` to scope the card to one mailbox. */
+export async function getContactCard(
+  email: string,
+  accountId?: string,
+  limit = 3
+): Promise<ContactCard> {
+  const sp = new URLSearchParams({ email, limit: String(limit) });
+  if (accountId) sp.set("account_id", accountId);
+  const raw = await gatewayFetch<Record<string, unknown>>(
+    `/email/contacts/card?${sp}`
+  );
+  const stats = (raw.stats ?? {}) as Record<string, unknown>;
+  const details = (raw.details ?? {}) as Record<string, unknown>;
+  const recent = (raw.recent ?? []) as Record<string, unknown>[];
+  return {
+    email: String(raw.email ?? email),
+    name: raw.name ? String(raw.name) : null,
+    domain: raw.domain ? String(raw.domain) : null,
+    category: raw.category ? String(raw.category) : null,
+    status: (String(raw.status ?? "UNHANDLED") as SenderStatus),
+    stats: {
+      received: Number(stats.received ?? 0),
+      sent: Number(stats.sent ?? 0),
+      unread: Number(stats.unread ?? 0),
+      threads: Number(stats.threads ?? 0),
+      firstSeen: stats.first_seen ? String(stats.first_seen) : null,
+      lastSeen: stats.last_seen ? String(stats.last_seen) : null,
+    },
+    details: {
+      phones: ((details.phones ?? []) as unknown[]).map(String),
+      links: ((details.links ?? []) as unknown[]).map(String),
+      title: details.title ? String(details.title) : null,
+      organization: details.organization ? String(details.organization) : null,
+      sourceMessageId: details.source_message_id
+        ? String(details.source_message_id)
+        : null,
+    },
+    recent: recent.map((m) => ({
+      id: String(m.id ?? ""),
+      threadId: m.thread_id ? String(m.thread_id) : null,
+      accountId: String(m.account_id ?? ""),
+      subject: String(m.subject ?? "(no subject)"),
+      preview: String(m.preview ?? ""),
+      receivedAt: m.received_at ? String(m.received_at) : null,
+      isRead: Boolean(m.is_read),
+      hasAttachments: Boolean(m.has_attachments),
+      folder: String(m.folder ?? ""),
+    })),
+  };
 }
 
 // ── Senders + bulk actions ──────────────────────────────────────────────────

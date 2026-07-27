@@ -1,0 +1,432 @@
+"""Transport · contacts — the person card behind a sender's name/avatar.
+
+``GET /email/contacts/card`` answers one question the reading pane keeps
+raising: *who is this?* Clicking a display name or avatar in the mail app pops
+a card with the address, what we know about them, how the correspondence has
+gone, and their last few messages — the Outlook people-card affordance.
+
+There is no contacts table and no directory to read from: everything here is
+derived from mail already in ``email_messages`` for THIS user's accounts, plus
+the sender rollups the automation layer maintains (``email_senders`` category,
+``email_newsletters`` disposition).
+
+Contact details (phone, title, organisation, links) are parsed out of the
+sender's own signature block on their most recent messages. That parse is
+deterministic and read-only — nothing is persisted, and the numbers are shown
+only to the owner of the mailbox the message was addressed to.
+"""
+
+from __future__ import annotations
+
+import re
+from typing import Any
+
+from acb_auth import UserContext, get_current_user
+from fastapi import Depends, Query
+from gateway.routes.email.core import _account_scope, _get_db, router
+from pydantic import BaseModel
+from sqlalchemy import text
+
+# How many recent messages to read bodies from when hunting for a signature.
+# The card only ever shows one contact block, so the first message that yields
+# anything wins; a handful is enough to skip a couple of one-line replies.
+_SIGNATURE_SCAN_MESSAGES = 6
+
+# Only the tail of a message can plausibly be a signature. Bounded so a long
+# newsletter body never gets regex-scanned in full.
+_SIGNATURE_TAIL_CHARS = 1200
+
+# Free mail hosts — the domain says nothing about where the person works, so
+# don't offer it as their organisation.
+_GENERIC_DOMAINS = frozenset({
+    "gmail.com", "googlemail.com", "outlook.com", "hotmail.com", "live.com",
+    "msn.com", "yahoo.com", "yahoo.co.uk", "ymail.com", "icloud.com", "me.com",
+    "mac.com", "aol.com", "proton.me", "protonmail.com", "pm.me", "gmx.com",
+    "mail.com", "zoho.com", "fastmail.com", "hey.com", "qq.com", "163.com",
+})
+
+# Hyphen, en dash and em dash — signature blocks use all three interchangeably
+# as separators, so every place that strips or matches one must accept all.
+# Written as escapes so the dashes stay distinguishable in source.
+_DASHES = "-\u2013\u2014"
+# Bullets a signature line may be decorated or joined with.
+_BULLETS = "\u00b7\u2022"
+
+# A labelled phone line ("Mobile: +91 98765 43210", "T +1 415 555 0132"). The
+# label is what makes this safe — an unlabelled digit run in a message body is
+# far more often an order number, an invoice total or a date.
+_LABELLED_PHONE = re.compile(
+    rf"(?:^|[\s|{_BULLETS}(\[])"
+    r"(?:tel|telephone|phone|ph|mobile|mob|cell|direct|office|work|fax|whatsapp|"
+    r"m|t|p|o|d|f)"
+    rf"\s*(?:\.|:|\)|[{_DASHES}])?\s*"
+    # The number itself may open with a country code, an area code in
+    # parentheses ("(415) 555-0132"), or a bare digit.
+    r"(\+?\(?\d[\d\s().\-]{6,20}\d)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# An international number stands on its own: a leading + and a country code is
+# an unambiguous phone signal even with no label in front of it.
+_E164_PHONE = re.compile(r"\+\d[\d\s().\-]{6,20}\d")
+
+# Signatures write their site both ways — "https://acme.com" and a bare
+# "www.acme.com". Requiring the www. on the bare form keeps stray words with a
+# dot in them (and email domains) out.
+_URL = re.compile(r"(?:https?://|www\.)[^\s<>()\[\]\"']+", re.IGNORECASE)
+
+# Links that are plumbing, not the person's own site.
+_LINK_NOISE = re.compile(
+    r"unsubscribe|opt[-_]?out|mailchimp|list-manage|sendgrid|hubspot|"
+    r"click\.|track|utm_|/preferences|/privacy|/terms|calendly\.com/[^/]+/?$",
+    re.IGNORECASE,
+)
+
+# Where a signature starts, when the sender marks it.
+_SIG_SEPARATOR = re.compile(r"^\s*(--\s*|__+|—+|-{2,})\s*$", re.MULTILINE)
+
+# Quoted-reply banners — everything from here down belongs to someone else, so
+# a signature hunt must stop before it (otherwise the "signature" found is the
+# person being replied TO).
+_QUOTE_BANNER = re.compile(
+    r"^\s*(?:>|On .{0,80}wrote:|-{2,}\s*Original Message|From:\s|Sent from my)",
+    re.IGNORECASE | re.MULTILINE,
+)
+
+# Lines that are never a job title or a company name.
+_NOT_A_TITLE = re.compile(
+    r"@|https?://|www\.|\+\d|confidential|disclaimer|sent from|unsubscribe|"
+    r"^\s*[\d\W]+\s*$",
+    re.IGNORECASE,
+)
+
+
+class ContactRecentMessage(BaseModel):
+    """One of the person's recent messages, as a card in the popover."""
+
+    id: str
+    thread_id: str | None = None
+    account_id: str
+    subject: str
+    """Body preview, already truncated server-side for the card."""
+    preview: str
+    received_at: str | None = None
+    is_read: bool = True
+    has_attachments: bool = False
+    folder: str = ""
+
+
+class ContactDetails(BaseModel):
+    """What the sender's own signature says about them. All fields optional —
+    an empty details block is the normal case for a personal address."""
+
+    phones: list[str] = []
+    title: str | None = None
+    organization: str | None = None
+    links: list[str] = []
+    """Message the signature was read from, so the UI can cite it."""
+    source_message_id: str | None = None
+
+
+class ContactStats(BaseModel):
+    received: int = 0
+    """Messages the user sent where this person was a To/Cc recipient."""
+    sent: int = 0
+    unread: int = 0
+    threads: int = 0
+    first_seen: str | None = None
+    last_seen: str | None = None
+
+
+class ContactCardModel(BaseModel):
+    email: str
+    name: str | None = None
+    domain: str | None = None
+    """Sender rollup category (Newsletter / Conversation / …), when assigned."""
+    category: str | None = None
+    """Cleaner disposition: APPROVED | UNSUBSCRIBED | AUTO_ARCHIVED | UNHANDLED."""
+    status: str = "UNHANDLED"
+    stats: ContactStats = ContactStats()
+    details: ContactDetails = ContactDetails()
+    recent: list[ContactRecentMessage] = []
+
+
+def _normalize_phone(raw: str) -> str | None:
+    """Tidy a matched phone and reject the things that only look like one."""
+    cleaned = re.sub(r"[^\d+]", "", raw)
+    plus = cleaned.startswith("+")
+    digits = cleaned.lstrip("+")
+    if not digits.isdigit():
+        return None
+    # Below 8 digits is a room number or an extension; above 15 breaks E.164 and
+    # is almost always an id that happened to carry separators.
+    if not (8 <= len(digits) <= 15):
+        return None
+    # A bare 8-digit run reads as a date (20260727) far more often than a phone;
+    # require either a country code or a longer national number.
+    if not plus and len(digits) < 9:
+        return None
+    display = re.sub(r"\s{2,}", " ", raw.strip(f" .|{_DASHES}{_BULLETS}")).strip()
+    if plus and not display.startswith("+"):
+        display = f"+{display}"
+    return display
+
+
+def _signature_block(body: str) -> str:
+    """The slice of a message that could be the sender's own signature.
+
+    Cut at the first quoted-reply banner (below it is another person's mail),
+    then prefer the text after the last ``--`` separator; failing that, take the
+    tail. Returns '' when there's nothing plausible left.
+    """
+    if not body:
+        return ""
+    quote = _QUOTE_BANNER.search(body)
+    own = body[: quote.start()] if quote else body
+    own = own.rstrip()
+    if not own:
+        return ""
+    seps = list(_SIG_SEPARATOR.finditer(own))
+    if seps:
+        block = own[seps[-1].end():]
+        if block.strip():
+            return block[:_SIGNATURE_TAIL_CHARS]
+    return own[-_SIGNATURE_TAIL_CHARS:]
+
+
+def _parse_phones(block: str) -> list[str]:
+    """Labelled numbers first (the strongest signal), then bare E.164 ones."""
+    candidates = [m.group(1) for m in _LABELLED_PHONE.finditer(block)]
+    candidates += [m.group(0) for m in _E164_PHONE.finditer(block)]
+    out: list[str] = []
+    seen: set[str] = set()
+    for raw in candidates:
+        phone = _normalize_phone(raw)
+        if not phone:
+            continue
+        # De-dupe on the national part: "+91 98765 43210" and "9876543210" in
+        # the same block are one number written twice.
+        key = re.sub(r"\D", "", phone)[-10:]
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(phone)
+        if len(out) == 3:
+            break
+    return out
+
+
+def _parse_links(block: str) -> list[str]:
+    out: list[str] = []
+    for match in _URL.finditer(block):
+        url = match.group(0).rstrip(".,;:)")
+        if _LINK_NOISE.search(url):
+            continue
+        # Serve something the UI can put straight in an href.
+        if url.lower().startswith("www."):
+            url = f"https://{url}"
+        if url in out:
+            continue
+        out.append(url)
+        if len(out) == 3:
+            break
+    return out
+
+
+def _parse_title_and_org(block: str, name: str | None) -> tuple[str | None, str | None]:
+    """Title / company from the lines that follow the sender's name.
+
+    Signature blocks are overwhelmingly ``Name`` → ``Title`` → ``Company``. Find
+    the name line and read the next couple of short, plain lines. Without a name
+    to anchor on there is no reliable signal, so return nothing rather than
+    guess at an arbitrary line.
+    """
+    if not name or not name.strip():
+        return None, None
+    lines = [ln.strip(f" \t*|{_BULLETS}{_DASHES}") for ln in block.splitlines()]
+    first = (name.strip().split()[0] or "").lower()
+    last = (name.strip().split()[-1] or "").lower()
+    anchor = -1
+    for i, line in enumerate(lines):
+        low = line.lower()
+        if line and len(line) <= 60 and first in low and last in low:
+            anchor = i
+            break
+    if anchor < 0:
+        return None, None
+    picked: list[str] = []
+    for line in lines[anchor + 1: anchor + 6]:
+        if not line:
+            continue
+        if len(line) > 60 or _NOT_A_TITLE.search(line):
+            continue
+        picked.append(line)
+        if len(picked) == 2:
+            break
+    title = picked[0] if picked else None
+    org = picked[1] if len(picked) > 1 else None
+    return title, org
+
+
+def _org_from_domain(domain: str | None) -> str | None:
+    """A corporate domain names the company; a free mail host names nothing."""
+    if not domain or domain in _GENERIC_DOMAINS:
+        return None
+    label = domain.split(".")[0]
+    if len(label) < 2 or label in {"mail", "email", "smtp", "info", "no-reply"}:
+        return None
+    return label.replace("-", " ").title()
+
+
+def _iso(value: Any) -> str | None:
+    return value.isoformat() if value is not None and hasattr(value, "isoformat") else None
+
+
+def _preview(row: Any, max_chars: int = 180) -> str:
+    """Short plain-text preview for a recent-message card."""
+    raw = (getattr(row, "snippet", None) or getattr(row, "body_text", None) or "")
+    collapsed = re.sub(r"\s+", " ", raw).strip()
+    if len(collapsed) <= max_chars:
+        return collapsed
+    return collapsed[:max_chars].rstrip() + "…"
+
+
+@router.get("/contacts/card", response_model=ContactCardModel)
+async def contact_card(
+    email: str = Query(..., description="The person's email address"),
+    account_id: str | None = Query(
+        None, description="Scope to one mailbox; omit to span the user's accounts"),
+    limit: int = Query(3, ge=1, le=10, description="How many recent messages"),
+    user: UserContext = Depends(get_current_user),
+) -> ContactCardModel:
+    """Everything the mail app knows about one person, for the hover/click card.
+
+    Scoped to the caller's own accounts throughout — an address is only ever
+    resolved against mail that already belongs to this user.
+    """
+    address = (email or "").strip().lower()
+    domain = address.split("@")[-1] if "@" in address else None
+    card = ContactCardModel(email=address, domain=domain)
+    if not address:
+        return card
+
+    db = await _get_db()
+    try:
+        params: dict[str, Any] = {"uid": user.email or "anonymous", "addr": address}
+        scope = _account_scope(account_id, params)
+        # Mail FROM this person. Drafts are excluded: an unsent draft of the
+        # user's own is not correspondence from them, and a provider that echoes
+        # the address would otherwise pad every count.
+        from_them = (
+            f"{scope} AND LOWER(em.from_address->>'email') = :addr "
+            "AND LOWER(COALESCE(em.folder, '')) <> 'drafts'"
+        )
+
+        stats_row = (await db.execute(text(
+            f"""SELECT COUNT(*) AS received,
+                       COUNT(*) FILTER (WHERE em.is_read = false) AS unread,
+                       COUNT(DISTINCT COALESCE(em.thread_id, em.id::text)) AS threads,
+                       MIN(em.received_at) AS first_seen,
+                       MAX(em.received_at) AS last_seen,
+                       (ARRAY_AGG(em.from_address->>'name'
+                                  ORDER BY em.received_at DESC)
+                        FILTER (WHERE COALESCE(em.from_address->>'name', '') <> ''))[1]
+                           AS display_name
+                  FROM email_messages em
+                 WHERE {from_them}"""
+        ), params)).fetchone()
+
+        # Mail the user sent this person — the other half of the relationship,
+        # and the number that says whether this is a correspondent or a list.
+        sent_row = (await db.execute(text(
+            f"""SELECT COUNT(*) AS sent
+                  FROM email_messages em
+                 WHERE {scope}
+                   AND LOWER(COALESCE(em.folder, '')) = 'sent'
+                   AND EXISTS (
+                       SELECT 1 FROM jsonb_array_elements(
+                           COALESCE(em.to_addresses, '[]'::jsonb)
+                           || COALESCE(em.cc_addresses, '[]'::jsonb)) AS r
+                        WHERE LOWER(r->>'email') = :addr)"""
+        ), params)).fetchone()
+
+        card.stats = ContactStats(
+            received=int(getattr(stats_row, "received", 0) or 0),
+            sent=int(getattr(sent_row, "sent", 0) or 0),
+            unread=int(getattr(stats_row, "unread", 0) or 0),
+            threads=int(getattr(stats_row, "threads", 0) or 0),
+            first_seen=_iso(getattr(stats_row, "first_seen", None)),
+            last_seen=_iso(getattr(stats_row, "last_seen", None)),
+        )
+        card.name = (getattr(stats_row, "display_name", None) or "").strip() or None
+
+        # Sender rollups: the category the classifier assigned, and whether the
+        # Email Cleaner has a disposition on file.
+        rollup = (await db.execute(text(
+            """SELECT (SELECT category FROM email_senders se
+                        WHERE se.account_id IN (
+                              SELECT id FROM email_accounts WHERE user_id = :uid)
+                          AND LOWER(se.email) = :addr
+                        ORDER BY se.updated_at DESC NULLS LAST LIMIT 1) AS category,
+                      (SELECT status FROM email_newsletters ne
+                        WHERE ne.account_id IN (
+                              SELECT id FROM email_accounts WHERE user_id = :uid)
+                          AND LOWER(ne.email) = :addr
+                        ORDER BY ne.updated_at DESC NULLS LAST LIMIT 1) AS status"""
+        ), {"uid": params["uid"], "addr": address})).fetchone()
+        if rollup is not None:
+            card.category = getattr(rollup, "category", None) or None
+            card.status = getattr(rollup, "status", None) or "UNHANDLED"
+
+        # Recent messages — the newest first, one row per message (a burst in
+        # one thread is still several messages from them, and the card is about
+        # the person, not the conversation).
+        scan = max(limit, _SIGNATURE_SCAN_MESSAGES)
+        rows = (await db.execute(text(
+            f"""SELECT em.id, em.thread_id, em.account_id, em.subject,
+                       em.snippet, em.body_text, em.received_at, em.is_read,
+                       em.has_attachments, em.folder
+                  FROM email_messages em
+                 WHERE {from_them}
+                 ORDER BY em.received_at DESC
+                 LIMIT :scan"""
+        ), {**params, "scan": scan})).fetchall()
+
+        card.recent = [
+            ContactRecentMessage(
+                id=str(r.id),
+                thread_id=r.thread_id,
+                account_id=str(r.account_id),
+                subject=(r.subject or "(no subject)"),
+                preview=_preview(r),
+                received_at=_iso(r.received_at),
+                is_read=bool(r.is_read),
+                has_attachments=bool(r.has_attachments),
+                folder=r.folder or "",
+            )
+            for r in rows[:limit]
+        ]
+
+        # Signature parse — first message that yields anything wins.
+        details = ContactDetails()
+        for r in rows[:_SIGNATURE_SCAN_MESSAGES]:
+            block = _signature_block(r.body_text or "")
+            if not block:
+                continue
+            phones = _parse_phones(block)
+            links = _parse_links(block)
+            title, org = _parse_title_and_org(block, card.name)
+            if not (phones or links or title or org):
+                continue
+            details = ContactDetails(
+                phones=phones, links=links, title=title, organization=org,
+                source_message_id=str(r.id),
+            )
+            break
+        if not details.organization:
+            details.organization = _org_from_domain(domain)
+        card.details = details
+
+        return card
+    finally:
+        await db.close()

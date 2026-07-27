@@ -6,6 +6,7 @@ Control Plane (Next.js browser UI) and local development tools.
 ## Structure
 - control_plane/ -- Next.js app (chat, email, agents, integrations, settings)
 - control_plane/src/app/email/ -- Email AI Assistant: 4-panel email client (accounts sidebar, email list, email detail, AI chat) with multi-account Gmail/Microsoft support
+- control_plane/src/app/email/components/ContactCard.tsx -- People card (Outlook parity). `ContactTrigger` wraps any avatar/name/recipient to open it; `RecipientList` renders a clickable To:/Cc: line. Backed by GET /email/contacts/card. The trigger renders a real <button> and stops propagation, so a row that contains one must be a div (see ConversationView's message header), never a <button>
 - control_plane/src/components/AppShell.tsx -- Responsive shell: desktop Sidebar vs mobile top bar + unified slide-in drawer via useMobileDrawer() context
 - control_plane/src/components/ViewModeProvider.tsx -- Mobile/desktop view decision + "Request desktop" toggle (persisted)
 - control_plane/src/lib/nav.ts -- Shared primary navigation config (used by Sidebar + mobile drawer)

@@ -37,7 +37,11 @@ from gateway.routes.apps._common import (
     role_for,
     router,
 )
-from gateway.routes.apps.durability import sync_workspace_best_effort
+from gateway.routes.apps.durability import (
+    _read_workspace_files,
+    ensure_workspace,
+    sync_workspace_best_effort,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -184,6 +188,29 @@ def _scaffold_workspace(
         starter_index_html(name), encoding="utf-8",
     )
     _git_init(workspace)
+
+
+def _fork_workspace(
+    new_workspace: Path,
+    files: dict[str, tuple[str, str]],
+    manifest: dict[str, Any],
+) -> None:
+    """Copy a source app's SOURCE FILES into a fresh workspace — never its
+    runtime data/sharing/history (those stay DB-side, keyed to the source
+    app_id, and simply aren't touched). ``app.json`` is overwritten with the
+    corrected slug/name after the copy (the source's copy still names
+    itself). Fresh ``git init`` — the new app gets its own history, not the
+    source's, matching ``_scaffold_workspace``'s convention for every other
+    newly-created app."""
+    new_workspace.mkdir(parents=True, exist_ok=True)
+    for rel, (content, _sha) in files.items():
+        target = new_workspace / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    (new_workspace / "app.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8",
+    )
+    _git_init(new_workspace)
 
 
 def _sync_workspace_manifest(workspace: Path, fields: dict[str, Any]) -> None:
@@ -358,6 +385,79 @@ async def create_app(
     await sync_workspace_best_effort(row)
     _log.info("apps.created", slug=slug, owner=owner)
     publish_app_activity(slug, user=owner, action="created")
+    return _to_detail(row, user, [])
+
+
+@router.post("/{slug}/fork", response_model=AppDetail)
+async def fork_app(
+    slug: str,
+    user: UserContext = Depends(require_app_user),
+) -> AppDetail:
+    """Duplicate *slug*'s current SOURCE FILES into a brand-new app, owned
+    by the caller — view access is enough (no edit grant required), the same
+    "duplicate a shared team app as your own starting point" use case every
+    surveyed fork/remix feature supports.
+
+    Copies workspace files only. Deliberately NOT copied: app_data (runtime
+    storage — the fork starts empty), app_grants (sharing resets — the
+    forker is sole owner), app_audit (usage history stays with the
+    original), app_versions (the fork is an unpublished, private draft with
+    no publish history of its own).
+    """
+    owner = _uid(user)
+    db = await _get_db()
+    try:
+        source_row, _source_grants = await get_app_or_404(db, slug, user)
+        source_workspace = await ensure_workspace(db, source_row)
+        files = await asyncio.get_event_loop().run_in_executor(
+            None, _read_workspace_files, source_workspace,
+        )
+        taken = {
+            r.slug for r in (await db.execute(
+                text("SELECT slug FROM apps"),
+            )).fetchall()
+        }
+        name = f"{source_row.name} (fork)"
+        new_slug = generate_slug(name, taken)
+        new_workspace = apps_root() / new_slug
+
+        manifest = dict(
+            read_workspace_manifest(source_workspace)
+            or parse_db_manifest(source_row.manifest)
+            or {}
+        )
+        manifest["slug"] = new_slug
+        manifest["name"] = name
+
+        await asyncio.get_event_loop().run_in_executor(
+            None, _fork_workspace, new_workspace, files, manifest,
+        )
+
+        row = (await db.execute(
+            text(
+                """INSERT INTO apps
+                   (slug, name, icon, description, owner_email,
+                    manifest, workspace_path)
+                   VALUES (:slug, :name, :icon, :description, :owner,
+                           :manifest::jsonb, :workspace_path)
+                   RETURNING *"""
+            ),
+            {
+                "slug": new_slug,
+                "name": name,
+                "icon": source_row.icon or "",
+                "description": source_row.description or "",
+                "owner": owner,
+                "manifest": json.dumps(manifest),
+                "workspace_path": str(new_workspace),
+            },
+        )).fetchone()
+        await db.commit()
+    finally:
+        await db.close()
+    await sync_workspace_best_effort(row)
+    _log.info("apps.forked", source_slug=slug, slug=new_slug, owner=owner)
+    publish_app_activity(new_slug, user=owner, action="created")
     return _to_detail(row, user, [])
 
 

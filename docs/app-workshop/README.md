@@ -813,8 +813,10 @@ first-open consent screen · **manifest
 `actions` + agent grants + `app_<slug>_<action>` tool registration** (risk-annotated,
 golden-trajectory-eval'd per harness rules) · by-app cost lens in Observability +
 per-app budgets · **usage stats on gallery cards** · **pinned apps in sidebar** ·
-templates gallery · fork/remix · suggest-a-change · app-to-app data reads (quote
-calculator ← filament costs) — remaining.
+**fork/remix** (source files only — never runtime data/sharing/history, fresh git
+history, forker becomes sole owner of a new private draft) · templates gallery
+(now cheap: a template is just "fork from a curated app") · suggest-a-change ·
+app-to-app data reads (quote calculator ← filament costs) — remaining.
 
 **P2 — power (Phase 3+):**
 real URLs on a usercontent subdomain with CSP headers · scoped short-TTL app tokens ·
@@ -987,7 +989,10 @@ review row in Approvals for org+write apps; testing & evaluation (§4.9); share-
 orchestrator agent tools (§4.7) — **shipped**; usage stats on gallery cards + pinned
 apps in the sidebar — **shipped** (a later pass, batched together since both were
 cheap and the data/infra — the usage endpoint, the sidebar's dynamic-badge pattern —
-already existed); templates gallery; fork/remix + suggest-a-change — remaining.
+already existed); fork/remix — **shipped** (`POST /{slug}/fork`, view access is
+enough — copies source files only, resets sharing/runtime data/history, fresh git
+history, forker owns the new private draft); templates gallery (now cheap: fork
+from a curated app); suggest-a-change — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers

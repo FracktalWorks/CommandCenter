@@ -42,10 +42,25 @@ TOOL_ANNOTATIONS: dict[str, dict[str, bool]] = {
     # Code / runtime
     "get_errors":            {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},
     "run_diagnostics":       {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},
-    "install_dependency":    {"read_only": False, "destructive": False, "idempotent": True,  "open_world": True},
+    # destructive: installs into the SHARED gateway venv (not per-agent-
+    # isolated) — a malicious/typosquatted package can affect every agent in
+    # the process, not just the caller. Note (BO-7 cheap win 2/3): flagging
+    # here changes decide()'s reason code (tool_destructive_defer) and the
+    # agent-facing risk_summary_block text, but no tool in this codebase yet
+    # calls request_confirmation on its own behalf before running — that live
+    # HITL wiring is BO-14's job, not this flag. Don't read "destructive here"
+    # as "a confirmation card already exists."
+    "install_dependency":    {"read_only": False, "destructive": True,  "idempotent": True,  "open_world": True},
     # Coding skill — run_script executes arbitrary saved code; code_task runs a
     # bounded Copilot coding session. Both mutate the workspace and can reach
-    # out (a script may hit the network), hence open_world.
+    # out (a script may hit the network), hence open_world. NOT flagged
+    # destructive despite executing code: both are explicitly documented (see
+    # the injected-tools addendum) as fast, non-interactive re-runs of
+    # already-reviewed workspace scripts — confirming every call would
+    # contradict that intentional design, not hardener it. The real gate on
+    # what they can execute is decide()'s shell-denylist/workspace-
+    # containment checks (BO-7 cheap win 1/3), which now see run_script's
+    # actual path/args, not this annotation.
     "run_script":            {"read_only": False, "destructive": False, "idempotent": False, "open_world": True},
     "code_task":             {"read_only": False, "destructive": False, "idempotent": False, "open_world": True},
     "list_integrations":     {"read_only": True,  "destructive": False, "idempotent": True,  "open_world": False},

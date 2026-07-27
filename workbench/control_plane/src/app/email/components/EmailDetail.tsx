@@ -23,6 +23,7 @@ import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { SignaturePreview } from "./SignaturePreview";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
+import { ContactTrigger, RecipientList } from "./ContactCard";
 import { LabelMenu } from "./LabelMenu";
 import { LabelChip } from "./LabelChip";
 import { MessageTimelineModal } from "./MessageTimelineModal";
@@ -904,28 +905,40 @@ export function EmailDetail({ email }: EmailDetailProps) {
           <DraftCard draft={email} replyTo={replyTarget} />
         ) : (
         <>
-        {/* Sender info */}
+        {/* Sender info — the avatar, name and every recipient open a contact card */}
         <div className="flex items-start gap-3 mb-6">
-          <div className="w-9 h-9 rounded-full bg-primary/20 text-primary flex items-center justify-center flex-shrink-0 text-xs font-semibold">
+          <ContactTrigger
+            contact={email.from}
+            accountId={email.accountId}
+            className="w-9 h-9 rounded-full bg-primary/20 text-primary flex items-center justify-center flex-shrink-0 text-xs font-semibold hover:ring-2 hover:ring-primary/40 tech-transition"
+          >
             {initials(email.from.name)}
-          </div>
+          </ContactTrigger>
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-2 flex-wrap">
-              <span className="text-sm font-medium text-foreground">
+              <ContactTrigger
+                contact={email.from}
+                accountId={email.accountId}
+                className="text-sm font-medium text-foreground hover:text-primary hover:underline tech-transition"
+              >
                 {email.from.name}
-              </span>
+              </ContactTrigger>
               <span className="text-xs text-muted-foreground">
                 &lt;{email.from.email}&gt;
               </span>
             </div>
-            <div className="text-xs text-muted-foreground mt-0.5">
-              To: {email.to.map((t) => t.name || t.email).join(", ")}
+            <div className="mt-0.5">
+              <RecipientList
+                label="To"
+                people={email.to}
+                accountId={email.accountId}
+              />
             </div>
-            {email.cc && email.cc.length > 0 && (
-              <div className="text-xs text-muted-foreground">
-                Cc: {email.cc.map((c) => c.name || c.email).join(", ")}
-              </div>
-            )}
+            <RecipientList
+              label="Cc"
+              people={email.cc ?? []}
+              accountId={email.accountId}
+            />
             <div className="text-xs text-muted-foreground">
               {fullDateLabel(email.receivedAt)}
             </div>

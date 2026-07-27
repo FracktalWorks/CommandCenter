@@ -17,6 +17,7 @@ import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { SignaturePreview } from "./SignaturePreview";
 import { TaskCaptureModal, type CommitmentContext } from "./TaskCaptureModal";
+import { ContactTrigger, RecipientList } from "./ContactCard";
 
 const isDraft = (m: Email) =>
   (m.folder || "").toLowerCase() === "drafts" ||
@@ -169,16 +170,38 @@ export function ConversationView({
               isOpen ? "" : "bg-secondary/20"
             }`}
           >
-            <button
+            {/* The row toggles the message; the avatar and name inside it open
+                the sender's contact card instead. A div (not a button) so those
+                nested triggers are real buttons rather than fake ones. */}
+            <div
+              role="button"
+              tabIndex={0}
+              aria-expanded={isOpen}
               onClick={() => toggle(m.id)}
-              className="w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-secondary/40 transition-colors"
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  toggle(m.id);
+                }
+              }}
+              className="w-full flex items-center gap-2 px-3 py-2 text-left cursor-pointer hover:bg-secondary/40 transition-colors"
             >
-              <div className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-semibold flex-shrink-0">
+              <ContactTrigger
+                contact={m.from}
+                accountId={m.accountId}
+                className="w-7 h-7 rounded-full bg-primary/20 text-primary flex items-center justify-center text-[10px] font-semibold flex-shrink-0 hover:ring-2 hover:ring-primary/40 transition-shadow"
+              >
                 {initials(m.from.name)}
-              </div>
+              </ContactTrigger>
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-medium text-foreground truncate flex items-center gap-1">
-                  {m.from.name}
+                  <ContactTrigger
+                    contact={m.from}
+                    accountId={m.accountId}
+                    className="truncate hover:text-primary hover:underline transition-colors"
+                  >
+                    {m.from.name}
+                  </ContactTrigger>
                   {!m.isRead && (
                     <span className="inline-block w-1.5 h-1.5 rounded-full bg-primary" />
                   )}
@@ -201,12 +224,16 @@ export function ConversationView({
                   isOpen ? "rotate-180" : ""
                 }`}
               />
-            </button>
+            </div>
             {isOpen && (
               <div className="px-3 pb-3">
                 <div className="flex items-start justify-between gap-2 mb-2">
-                  <div className="text-[11px] text-muted-foreground min-w-0 truncate">
-                    To: {m.to.map((t) => t.name || t.email).join(", ")}
+                  <div className="min-w-0 truncate text-[11px]">
+                    <RecipientList
+                      label="To"
+                      people={m.to}
+                      accountId={m.accountId}
+                    />
                   </div>
                   {onReply && (
                     <div className="flex items-center gap-0.5 flex-shrink-0 -mt-0.5">

@@ -161,6 +161,17 @@ class Settings(BaseSettings):
     mutation_timeout_seconds: int = 600              # hard cap on a single mutation run
     mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix
 
+    # Resource/capability limits on the `docker run` invocation (BO-7 cheap
+    # win 3/3 — the mutation-runner was the concrete precedent BO-7 wants
+    # generalized to the normal agent load path, but it shipped with none of
+    # its own: no --cap-drop, no --memory/--cpus, unrestricted on a 4GB VPS).
+    # Conservative defaults sized for that box — mutation is an occasional,
+    # on-demand run, not a resident service, so it doesn't need to compete
+    # with Postgres/Redis/gateway/workbench for the whole machine.
+    mutation_memory_limit: str = "2g"                # docker --memory
+    mutation_cpu_limit: str = "2"                    # docker --cpus
+    mutation_pids_limit: int = 512                   # docker --pids-limit (fork-bomb backstop)
+
     # Native-MAF mutation → monorepo PR (Part 1).
     # A native MAF agent (local_path, no git remote) can't push its self-mutation
     # anywhere, so approving one opens a PR against the CommandCenter monorepo

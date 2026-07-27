@@ -676,13 +676,36 @@ async def _run_mutation_sandbox(
         await _stash_pull_before_mutation(agent_dir, agent_name)
 
     prompt = _build_mutation_prompt(telemetry)
+    mem_limit: str = str(getattr(settings, "mutation_memory_limit", "2g"))
+    cpu_limit: str = str(getattr(settings, "mutation_cpu_limit", "2"))
+    pids_limit: int = int(getattr(settings, "mutation_pids_limit", 512))
 
     # Run in the foreground (no -d) so we can capture stdout and learn whether
     # the fix branch was pushed.  --rm cleans the container up on exit.
+    #
+    # Hardening (BO-7 cheap win 3/3): this was the concrete "existing
+    # container pattern" the BO-7 backlog item wants generalized to the
+    # normal agent load path — but it shipped with none of its own resource/
+    # capability limits. --cap-drop ALL strips everything (CAP_SYS_ADMIN,
+    # CAP_NET_RAW, CAP_SYS_PTRACE, …) except DAC_OVERRIDE, which is added
+    # back deliberately: the container's default user is root (Dockerfile.
+    # mutation has no USER directive) but the bind-mounted agent_dir is owned
+    # by the host's non-root `acb` service user (deploy/hostinger/acb-
+    # gateway.service), so root-in-container needs DAC_OVERRIDE to read/write
+    # it — without it every git commit inside the sandbox would fail with
+    # permission denied. no-new-privileges blocks setuid-binary privilege
+    # escalation. Memory/CPU/pids limits keep a runaway sandbox from starving
+    # the rest of the 4GB VPS (Postgres/Redis/gateway/workbench all resident).
     docker_cmd = [
         "docker", "run",
         "--rm",
         "--name", f"acb-mutation-{short_run}",
+        "--cap-drop", "ALL",
+        "--cap-add", "DAC_OVERRIDE",
+        "--security-opt", "no-new-privileges",
+        "--memory", mem_limit,
+        "--cpus", cpu_limit,
+        "--pids-limit", str(pids_limit),
         "-e", f"MUTATION_PROMPT={prompt}",
         "-e", f"MUTATION_TELEMETRY_JSON={json.dumps(telemetry)}",
         "-e", f"COPILOT_GITHUB_TOKEN={github_token or ''}",

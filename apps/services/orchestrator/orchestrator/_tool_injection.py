@@ -196,17 +196,27 @@ def _gate_injected_tool(fn: Any) -> Any:
 
     tool_name = getattr(fn, "__name__", "tool")
 
-    def _gate() -> tuple[bool, str]:
+    def _gate(call_kwargs: dict[str, Any] | None = None) -> tuple[bool, str]:
         """Return (allowed, reason). Never raises. Logs EVERY decision.
 
         Logging approvals too (not just denials) is what makes audit mode
         actually observable — an operator running in audit needs the full
         decision stream to judge the policy before flipping to enforce, and it
         is how we confirm the gate is even on this tool's execution path.
+
+        ``call_kwargs`` (BO-7 cheap win 1/3) is the tool's actual call
+        arguments — LLM tool-calling always produces keyword args (a JSON
+        object mapped onto the function signature), so this is effectively
+        the full call. Passed to build_tool_call_context so tools with a real
+        command/path shape (run_script) are checked against what they're
+        actually about to do, not just their name.
         """
         try:
-            from acb_skills.permission_policy import decide  # noqa: PLC0415
-            ok, code, _ = decide({"tool_name": tool_name})
+            from acb_skills.permission_policy import (  # noqa: PLC0415
+                build_tool_call_context, decide,
+            )
+            request = build_tool_call_context(tool_name, call_kwargs or {})
+            ok, code, _ = decide(request)
             mode = os.environ.get(
                 "AGENT_PERMISSION_MODE", "enforce"
             ).strip().lower()
@@ -223,7 +233,7 @@ def _gate_injected_tool(fn: Any) -> Any:
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def _agated(*args: Any, **kwargs: Any) -> Any:
-            allowed, reason = _gate()
+            allowed, reason = _gate(kwargs)
             if not allowed:
                 return f"[blocked by permission policy: {reason}]"
             return await fn(*args, **kwargs)
@@ -231,7 +241,7 @@ def _gate_injected_tool(fn: Any) -> Any:
 
     @functools.wraps(fn)
     def _sgated(*args: Any, **kwargs: Any) -> Any:
-        allowed, reason = _gate()
+        allowed, reason = _gate(kwargs)
         if not allowed:
             return f"[blocked by permission policy: {reason}]"
         return fn(*args, **kwargs)
@@ -495,8 +505,10 @@ Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
 """)
     sections.append(f"""{risk_block}
 Tools marked DESTRUCTIVE are irreversible or outward-facing: never call one
-without an explicit user instruction, and let its built-in confirmation card
-do the confirming (do not also double-confirm in prose).
+without an explicit user instruction. If it renders its own confirmation
+card, let that do the confirming (do not also double-confirm in prose) —
+not every destructive tool has one yet, so treat the instruction above as
+the real requirement, not the card's presence.
 
 ### Self-improvement & committing
 To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Never amend; one commit per task.

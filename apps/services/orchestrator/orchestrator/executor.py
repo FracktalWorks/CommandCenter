@@ -3258,11 +3258,20 @@ async def run_agent_stream(
                     # denies, audit logs-only). Named platform tools approve
                     # today; this is the enforcement point for any future
                     # denyable tool + gives audit parity across runtimes.
+                    #
+                    # BO-7 cheap win 1/3: reuse call_args (already bound above,
+                    # for the UI event) as the tool's real call context instead
+                    # of gating on tool_name alone — run_script's actual
+                    # path/args now reach decide()'s shell-denylist check here
+                    # too, not just on the injected-tool gate's path.
                     try:
                         from acb_skills.permission_policy import (  # noqa: PLC0415
+                            build_tool_call_context as _perm_context,
                             decide as _perm_decide,
                         )
-                        _ok, _code, _det = _perm_decide({"tool_name": tool_name})
+                        _ok, _code, _det = _perm_decide(
+                            _perm_context(tool_name, call_args)
+                        )
                         _pmode = os.environ.get(
                             "AGENT_PERMISSION_MODE", "enforce"
                         ).strip().lower()

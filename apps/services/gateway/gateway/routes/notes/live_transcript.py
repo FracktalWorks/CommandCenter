@@ -160,6 +160,13 @@ async def ingest_live_segment(
         data["speaker_id"] = resolved.speaker_id
         data["speaker_label"] = resolved.speaker_id
         reg.note_text(resolved.speaker_id, data.get("text") or "")
+        # Remember who held the floor when — the batch pass reconciles its own
+        # labels against this timeline on stop to carry live names across.
+        reg.note_span(
+            resolved.speaker_id,
+            float(data.get("start_s") or 0.0),
+            float(data.get("end_s") or 0.0),
+        )
         name = reg.name_of(resolved.speaker_id)
         if name:
             data["speaker_name"] = name

@@ -168,12 +168,29 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
         # destructive (never overwrites a name the user set); no-op when the
         # transcript isn't diarized. Runs before summary so names flow through.
         if result.segments and result.diarized:
+            # First carry across any identity already established during the
+            # LIVE pass: map this (authoritative) diarization's labels onto the
+            # live voiceprint gallery by time overlap and reuse its names. The
+            # LLM pass below then only has to fill what's still anonymous.
+            try:
+                from gateway.routes.notes.live_speakers import apply_live_names
+
+                await apply_live_names(meeting_id, result.segments)
+            except Exception as exc:
+                _log.warning("notes.live_names_apply_failed", error=str(exc)[:200])
             try:
                 from gateway.routes.notes.speaker_id import infer_speaker_names
 
                 await infer_speaker_names(meeting_id)
             except Exception as exc:
                 _log.warning("notes.speaker_id_enqueue_failed", error=str(exc)[:200])
+        # The meeting is over — free its live voiceprint gallery.
+        try:
+            from gateway.routes.notes.live_speakers import reset as reset_live_speakers
+
+            reset_live_speakers(meeting_id)
+        except Exception as exc:
+            _log.warning("notes.live_speakers_reset_failed", error=str(exc)[:200])
         # Chain straight into notes generation so a single upload yields
         # transcript → notes without a second user action.
         if result.segments:

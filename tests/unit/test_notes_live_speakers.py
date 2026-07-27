@@ -130,3 +130,64 @@ def test_registry_is_per_meeting_and_resettable() -> None:
     assert ls.registry("m-b").roster() == []   # isolated
     ls.reset("m-a")
     assert ls.registry("m-a").roster() == []   # cleared
+
+
+# ── reconciliation: live identity → authoritative batch labels ───────────────
+
+def test_reconcile_maps_batch_labels_to_live_speakers_by_overlap() -> None:
+    """Batch re-diarization uses its OWN labels; they're matched to the live
+    gallery by time overlap (here batch B1 is live S2, and vice versa)."""
+    live = [("S1", 0.0, 5.0), ("S2", 5.0, 10.0)]
+    batch = [("B1", 5.1, 9.9), ("B2", 0.1, 4.9)]
+    assert ls.reconcile_labels(batch, live) == {"B1": "S2", "B2": "S1"}
+
+
+def test_reconcile_uses_total_overlap_not_first_hit() -> None:
+    live = [("S1", 0.0, 1.0), ("S2", 1.0, 10.0)]
+    batch = [("B1", 0.0, 10.0)]  # touches both, but overlaps S2 far more
+    assert ls.reconcile_labels(batch, live) == {"B1": "S2"}
+
+
+def test_reconcile_is_one_to_one() -> None:
+    """If the live gallery merged two people, only the better-matching batch
+    label inherits that identity — the other is left unmapped, not mislabelled."""
+    live = [("S1", 0.0, 10.0)]
+    batch = [("B1", 0.0, 8.0), ("B2", 8.0, 10.0)]
+    assert ls.reconcile_labels(batch, live) == {"B1": "S1"}
+
+
+def test_reconcile_ignores_disjoint_spans() -> None:
+    assert ls.reconcile_labels([("B1", 50.0, 60.0)], [("S1", 0.0, 10.0)]) == {}
+    assert ls.reconcile_labels([], [("S1", 0.0, 1.0)]) == {}
+
+
+def test_live_names_carry_onto_batch_labels() -> None:
+    mid = "m-recon"
+    ls.reset(mid)
+    reg = ls.registry(mid)
+    r1 = reg.resolve([1.0, 0.0])
+    reg.note_text(r1.speaker_id, "Hi, I'm Priya")
+    reg.note_span(r1.speaker_id, 0.0, 5.0)
+    r2 = reg.resolve([0.0, 1.0])
+    reg.note_text(r2.speaker_id, "This is Alex")
+    reg.note_span(r2.speaker_id, 5.0, 10.0)
+
+    # The batch pass's labels differ from the live ones — names still land.
+    batch = [("B7", 0.2, 4.8), ("B9", 5.2, 9.8)]
+    assert ls.live_names_for_batch(mid, batch) == {"B7": "Priya", "B9": "Alex"}
+    ls.reset(mid)
+
+
+def test_live_names_empty_without_a_live_pass() -> None:
+    ls.reset("m-none")
+    assert ls.live_names_for_batch("m-none", [("B1", 0.0, 1.0)]) == {}
+
+
+def test_timeline_is_bounded_and_skips_empty_spans() -> None:
+    reg = ls.LiveSpeakerRegistry()
+    reg.note_span("S1", 1.0, 1.0)   # zero-length → ignored
+    reg.note_span("S1", 2.0, 1.0)   # inverted → ignored
+    assert reg.timeline() == []
+    for i in range(ls._TIMELINE_MAX + 25):
+        reg.note_span("S1", float(i), float(i) + 0.5)
+    assert len(reg.timeline()) == ls._TIMELINE_MAX

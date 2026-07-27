@@ -25,10 +25,14 @@ around it safely.
 
 from __future__ import annotations
 
+import json
 import math
 import os
 import re
 from dataclasses import dataclass
+
+from gateway.routes.notes.core import _log
+from sqlalchemy import text
 
 
 def _threshold() -> float:
@@ -136,12 +140,21 @@ class Resolved:
     score: float
 
 
+# How many (speaker, start, end) spans to keep per meeting. Three floats per
+# utterance is tiny — a 3-hour meeting is well under this — and it's what the
+# batch pass reconciles against on stop.
+_TIMELINE_MAX = 5000
+
+
 class LiveSpeakerRegistry:
     """Per-meeting running voiceprint gallery + live name/role binding."""
 
     def __init__(self) -> None:
         self._speakers: dict[str, _Speaker] = {}
         self._n = 0  # high-water mark for auto-assigned Sn ids
+        # (speaker_id, start_s, end_s) — who spoke when, per the LIVE pass. The
+        # batch re-pass reconciles its own labels against this on stop.
+        self._timeline: list[tuple[str, float, float]] = []
 
     # -- enrollment / matching --
 
@@ -237,6 +250,25 @@ class LiveSpeakerRegistry:
         sp = self._speakers.get(speaker_id)
         return sp.name if sp else None
 
+    # -- identity timeline (what the batch pass reconciles against) --
+
+    def note_span(self, speaker_id: str, start_s: float, end_s: float) -> None:
+        """Record that ``speaker_id`` held the floor over [start_s, end_s]."""
+        if end_s <= start_s:
+            return
+        self._timeline.append((speaker_id, float(start_s), float(end_s)))
+        if len(self._timeline) > _TIMELINE_MAX:
+            del self._timeline[:-_TIMELINE_MAX]
+
+    def timeline(self) -> list[tuple[str, float, float]]:
+        return list(self._timeline)
+
+    def names(self) -> dict[str, str]:
+        """speaker_id → live-bound name, for speakers that have one."""
+        return {
+            sp.speaker_id: sp.name for sp in self._speakers.values() if sp.name
+        }
+
     def roster(self) -> list[dict]:
         """Who's on the call so far — the compact identity context the copilot
         (and the console) consume. Ordered by first appearance."""
@@ -267,3 +299,120 @@ def registry(meeting_id: str) -> LiveSpeakerRegistry:
 def reset(meeting_id: str) -> None:
     """Drop a meeting's gallery (e.g. on a fresh join). Safe if absent."""
     _REGISTRIES.pop(meeting_id, None)
+
+
+# ── Reconciliation: carry live identity onto the authoritative transcript ────
+#
+# On stop the batch pass re-diarizes the WHOLE recording — better clustering,
+# but its labels are its own (batch "S1" need not be live "S1"). Rather than
+# discard the identity work done live, we map batch labels → live speakers by
+# **maximum time overlap** and carry the live-bound names across. Both clocks
+# start when the bot enters the call (ffmpeg and the live stream start together),
+# so they share an origin; the matching tolerates the small skew between them.
+
+def overlap(a0: float, a1: float, b0: float, b1: float) -> float:
+    """Seconds of overlap between [a0,a1] and [b0,b1] (0 if disjoint)."""
+    return max(0.0, min(a1, b1) - max(a0, b0))
+
+
+def reconcile_labels(
+    batch_spans: list[tuple[str, float, float]],
+    live_timeline: list[tuple[str, float, float]],
+) -> dict[str, str]:
+    """Map batch diarization labels → live speaker ids by max total overlap.
+
+    Both inputs are ``(id, start_s, end_s)`` spans. Greedy **one-to-one**
+    matching: the strongest pair wins first, and neither side is reused — so if
+    the live gallery merged two people, only the better-matching batch label
+    inherits that identity rather than both being mislabelled. Pairs with no
+    overlap are never matched."""
+    totals: dict[tuple[str, str], float] = {}
+    for label, b0, b1 in batch_spans:
+        for sid, l0, l1 in live_timeline:
+            ov = overlap(b0, b1, l0, l1)
+            if ov > 0:
+                totals[(label, sid)] = totals.get((label, sid), 0.0) + ov
+    mapping: dict[str, str] = {}
+    used_live: set[str] = set()
+    # Deterministic: strongest overlap first, ties broken by name.
+    for (label, sid), _ov in sorted(
+        totals.items(), key=lambda kv: (-kv[1], kv[0][0], kv[0][1])
+    ):
+        if label in mapping or sid in used_live:
+            continue
+        mapping[label] = sid
+        used_live.add(sid)
+    return mapping
+
+
+def live_names_for_batch(
+    meeting_id: str, batch_spans: list[tuple[str, float, float]]
+) -> dict[str, str]:
+    """batch label → live-bound name, for this meeting's live gallery."""
+    reg = _REGISTRIES.get(meeting_id)
+    if reg is None:
+        return {}
+    live_names = reg.names()
+    if not live_names:
+        return {}
+    mapping = reconcile_labels(batch_spans, reg.timeline())
+    return {
+        label: live_names[sid]
+        for label, sid in mapping.items()
+        if sid in live_names
+    }
+
+
+async def apply_live_names(meeting_id: str, segments: list) -> dict[str, str]:
+    """Merge names learned during the LIVE pass into ``meeting.speaker_names``,
+    keyed by the authoritative batch labels.
+
+    Runs before the LLM speaker-id pass so live-detected names are already in
+    place (that pass then only fills whatever is still anonymous). Non-
+    destructive — never overwrites a name the user set. Returns the names newly
+    applied; never raises."""
+    try:
+        spans = [
+            (str(s.speaker_label), float(s.start_s or 0.0), float(s.end_s or 0.0))
+            for s in segments
+            if getattr(s, "speaker_label", None)
+        ]
+        inferred = live_names_for_batch(meeting_id, spans)
+        if not inferred:
+            return {}
+
+        from gateway.routes.notes.core import _get_db
+        from gateway.routes.notes.speaker_id import merge_inferred
+
+        async with await _get_db() as db:
+            row = (
+                await db.execute(
+                    text("SELECT speaker_names FROM meeting WHERE id = :id"),
+                    {"id": meeting_id},
+                )
+            ).fetchone()
+            if row is None:
+                return {}
+            existing = row.speaker_names if isinstance(row.speaker_names, dict) else {}
+            merged, applied = merge_inferred(existing, inferred, overwrite=False)
+            if not applied:
+                return {}
+            await db.execute(
+                text(
+                    "UPDATE meeting SET speaker_names = CAST(:n AS JSONB) "
+                    "WHERE id = :id"
+                ),
+                {"n": json.dumps(merged), "id": meeting_id},
+            )
+            await db.commit()
+        _log.info(
+            "notes.live_names_reconciled",
+            meeting_id=meeting_id, applied=len(applied),
+        )
+        return applied
+    except Exception as exc:
+        _log.warning(
+            "notes.live_names_reconcile_failed",
+            meeting_id=meeting_id, error=str(exc)[:200],
+        )
+        return {}

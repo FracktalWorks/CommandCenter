@@ -131,9 +131,19 @@ judgment (coach our rep, not the prospect; tailor a point to who objected).
 re-pass (`pipeline.py`: full-file ASR + offline diarization + the LLM speaker-id
 pass) still runs — but its job shrinks from "transcribe everything from scratch"
 to *correcting* an already-good live transcript: global re-clustering fixes any
-online-diarization drift, and corrected speaker labels/names are back-propagated
-to earlier segments. Overlapping speech and early split/merge errors are the
+online-diarization drift. Overlapping speech and early split/merge errors are the
 residual it earns its keep on.
+
+**Reconciliation (built).** The batch re-diarization uses its *own* labels, so
+identity learned live would otherwise be thrown away. Instead
+`live_speakers.reconcile_labels()` maps batch labels → live speakers by **maximum
+time overlap** (greedy *one-to-one*, so a live merge-error can't mislabel two
+batch speakers with one name), and `apply_live_names()` merges those names into
+`meeting.speaker_names` **before** the LLM speaker-id pass — which then only has
+to fill whoever is still anonymous. Non-destructive: a name the user set always
+wins. Both clocks share an origin (ffmpeg and the live stream start together when
+the bot enters the call), so overlap matching tolerates the small skew. The live
+gallery is freed when the pipeline finishes.
 
 Cost note: running live + batch duplicates only the *ASR compute*, which on the
 **self-hosted** worker is just CPU (near-free beyond the box). On a **cloud** ASR

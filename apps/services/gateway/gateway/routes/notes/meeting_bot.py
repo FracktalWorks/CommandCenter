@@ -208,8 +208,11 @@ class RecallProvider:
             "Content-Type": "application/json",
         }
 
-    async def join(self, meeting_url: str, bot_name: str) -> str:
-        """Create a bot in the call; returns the provider bot id."""
+    async def join(
+        self, meeting_url: str, bot_name: str, live_callback: str | None = None
+    ) -> str:
+        """Create a bot in the call; returns the provider bot id. (Recall doesn't
+        do our live-callback streaming, so ``live_callback`` is ignored.)"""
         body: dict = {"meeting_url": meeting_url, "bot_name": bot_name}
         raw = os.environ.get("RECALL_RECORDING_CONFIG", "").strip()
         if raw:
@@ -281,12 +284,17 @@ class SelfHostedProvider:
         if tok:
             self._headers["Authorization"] = f"Bearer {tok}"
 
-    async def join(self, meeting_url: str, bot_name: str) -> str:
+    async def join(
+        self, meeting_url: str, bot_name: str, live_callback: str | None = None
+    ) -> str:
+        body: dict = {"meeting_url": meeting_url, "bot_name": bot_name}
+        # Tell the worker where to POST live transcript segments (per meeting) so
+        # the UI + agents get a live feed. Omitted → the worker just records.
+        if live_callback:
+            body["live_callback"] = live_callback
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
-                f"{self._base}/bots",
-                headers=self._headers,
-                json={"meeting_url": meeting_url, "bot_name": bot_name},
+                f"{self._base}/bots", headers=self._headers, json=body
             )
             resp.raise_for_status()
             data = resp.json()
@@ -317,6 +325,18 @@ class SelfHostedProvider:
             )
             if resp.status_code not in (200, 202, 204, 404):
                 resp.raise_for_status()
+
+    async def say(self, bot_id: str, text: str) -> None:
+        """Have the worker speak a line into the live call (TTS → virtual mic).
+        The seam for agent-driven interjections; only the self-hosted worker
+        can do this."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{self._base}/bots/{bot_id}/say",
+                headers=self._headers,
+                json={"text": text},
+            )
+            resp.raise_for_status()
 
     async def download(self, url: str) -> tuple[bytes, str]:
         async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
@@ -563,8 +583,15 @@ async def bot_join(
         await db.commit()
     bot_row_id = str(bot_row.id)
 
+    # Where the worker posts live transcript segments for this meeting (enables
+    # live captions + agent hooks). Only when a reachable gateway base is set.
+    live_callback = None
+    base = os.environ.get("NOTES_LIVE_CALLBACK_BASE", "").strip().rstrip("/")
+    if base:
+        live_callback = f"{base}/notes/meetings/{meeting_id}/live/segment"
+
     try:
-        provider_bot_id = await provider.join(url, bot_name)
+        provider_bot_id = await provider.join(url, bot_name, live_callback=live_callback)
     except Exception as exc:
         async with await _get_db() as db:
             await _set_bot(db, bot_row_id, status="failed",

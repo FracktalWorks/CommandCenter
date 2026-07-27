@@ -199,12 +199,44 @@ async def _leave(page) -> None:
     )
 
 
+async def _say_consumer(say_queue, stop: asyncio.Event) -> None:
+    """Drain queued interjections and speak them into the call while in-call."""
+    from . import live as livemod
+
+    while not stop.is_set():
+        try:
+            text = await asyncio.wait_for(say_queue.get(), timeout=1.0)
+        except TimeoutError:
+            continue
+        except Exception:
+            return
+        await livemod.speak(text)
+
+
+def _start_live_tasks(live_callback, say_queue, stop: asyncio.Event) -> list:
+    """Start the (optional) live-transcription stream + say consumer for the call.
+    Both are additive and gated — absent config just means no live feed / no
+    speaking, and the archival recording is unaffected."""
+    from . import live as livemod
+
+    tasks = []
+    if live_callback and livemod.live_enabled():
+        tasks.append(asyncio.create_task(
+            livemod.stream_transcription(live_callback, stop)
+        ))
+    if say_queue is not None:
+        tasks.append(asyncio.create_task(_say_consumer(say_queue, stop)))
+    return tasks
+
+
 async def join_and_record(
     meeting_url: str,
     bot_name: str,
     out_path: str,
     leave_event: asyncio.Event,
     on_status: Callable[[str], None],
+    live_callback: str | None = None,
+    say_queue=None,
 ) -> None:
     from playwright.async_api import async_playwright
 
@@ -242,7 +274,16 @@ async def join_and_record(
             on_status("in_call")
 
             rec = _start_ffmpeg(out_path)
-            await _wait_until_end(page, leave_event)
+            # Live transcription stream + interjection consumer run alongside the
+            # archival recording (both optional/gated).
+            live_stop = asyncio.Event()
+            aux = _start_live_tasks(live_callback, say_queue, live_stop)
+            try:
+                await _wait_until_end(page, leave_event)
+            finally:
+                live_stop.set()
+                for t in aux:
+                    t.cancel()
         finally:
             on_status("processing")
             if rec is not None:

@@ -41,14 +41,18 @@ app = FastAPI(title="CommandCenter Meeting Bot", version="0.1.0")
 
 
 class _Job:
-    def __init__(self, job_id: str, meeting_url: str, bot_name: str) -> None:
+    def __init__(
+        self, job_id: str, meeting_url: str, bot_name: str, live_callback: str | None
+    ) -> None:
         self.id = job_id
         self.meeting_url = meeting_url
         self.bot_name = bot_name
+        self.live_callback = live_callback  # gateway URL for live segments (or None)
         self.status = "requested"
         self.error: str | None = None
         self.recording: str | None = None
         self.leave = asyncio.Event()
+        self.say_queue: asyncio.Queue[str] = asyncio.Queue()
         self.task: asyncio.Task | None = None
 
 
@@ -63,6 +67,12 @@ def _auth(authorization: str | None) -> None:
 class JoinRequest(BaseModel):
     meeting_url: str
     bot_name: str = "AI Notetaker"
+    # Optional gateway URL to POST live transcript segments to (per meeting).
+    live_callback: str | None = None
+
+
+class SayRequest(BaseModel):
+    text: str
 
 
 async def _run(job: _Job) -> None:
@@ -75,7 +85,8 @@ async def _run(job: _Job) -> None:
 
     try:
         await join_and_record(
-            job.meeting_url, job.bot_name, out_path, job.leave, on_status
+            job.meeting_url, job.bot_name, out_path, job.leave, on_status,
+            live_callback=job.live_callback, say_queue=job.say_queue,
         )
         ok = os.path.isfile(out_path) and os.path.getsize(out_path) > 0
         job.recording = out_path if ok else None
@@ -105,11 +116,33 @@ async def create_bot(
     if not url.startswith("http"):
         raise HTTPException(status_code=400, detail="invalid meeting_url")
     job_id = uuid.uuid4().hex
-    job = _Job(job_id, url, (req.bot_name or "AI Notetaker").strip() or "AI Notetaker")
+    job = _Job(
+        job_id, url,
+        (req.bot_name or "AI Notetaker").strip() or "AI Notetaker",
+        (req.live_callback or None),
+    )
     job.status = "joining"
     _JOBS[job_id] = job
     job.task = asyncio.create_task(_run(job))
     return {"id": job_id, "status": job.status}
+
+
+@app.post("/bots/{bot_id}/say", status_code=202)
+async def say(
+    bot_id: str, req: SayRequest, authorization: str | None = Header(default=None)
+) -> dict:
+    """Queue a line for the bot to speak into the call (TTS → virtual mic).
+    The actuator for agent interjections; the runner drains this queue while
+    in-call."""
+    _auth(authorization)
+    job = _JOBS.get(bot_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown bot")
+    text = (req.text or "").strip()
+    if not text:
+        raise HTTPException(status_code=400, detail="empty text")
+    job.say_queue.put_nowait(text)
+    return {"ok": True}
 
 
 @app.get("/bots/{bot_id}")

@@ -22,14 +22,33 @@ standalone: run it on the upsized VPS or a dedicated box.
 
 | Method | Path | Body / Result |
 |---|---|---|
-| POST | `/bots` | `{meeting_url, bot_name}` → `{id, status}` |
+| POST | `/bots` | `{meeting_url, bot_name, live_callback?}` → `{id, status}` |
 | GET | `/bots/{id}` | → `{id, status, download_url\|null, error\|null}` |
 | POST | `/bots/{id}/leave` | leave now → `202` |
+| POST | `/bots/{id}/say` | `{text}` → speak into the call → `202` |
 | GET | `/bots/{id}/recording` | audio bytes (when `status == "done"`) |
 | GET | `/health` | `{ok: true, active: N}` |
 
 Statuses: `joining → waiting_room → in_call → processing → done` (or `failed` /
 `not_admitted`). Optional `Authorization: Bearer <MEETING_BOT_TOKEN>`.
+
+## Live streaming + speaking (optional, for real-time agents)
+
+Beyond batch record-then-transcribe, the worker can **stream** the transcript
+live and **speak** back into the call — the foundation for agents that act
+mid-meeting:
+
+- **Live transcript:** set `LIVE_ASR_URL` to a streaming ASR WebSocket
+  (self-hosted WhisperLive-style). While in-call the worker tees the audio to it
+  and POSTs each segment to the `live_callback` URL the gateway passes at join
+  (the gateway builds it from `NOTES_LIVE_CALLBACK_BASE`). The gateway fans those
+  out to live captions (`GET /notes/meetings/{id}/live`) and to agents.
+- **Speak into the call:** `POST /bots/{id}/say {text}` renders text via `TTS_CMD`
+  (a shell template with `{text}`/`{out}`, e.g. a piper invocation producing a
+  WAV) and plays it into the bot's **virtual microphone** so participants hear
+  it. With no `TTS_CMD` the request is logged, not spoken.
+
+Batch recording is unaffected by either — both are additive and gated.
 
 ## Run it
 
@@ -56,6 +75,9 @@ MEETING_BOT_TOKEN=<same secret as above>
 | `MEET_JOIN_TIMEOUT` | `150` | Seconds to wait in the waiting room before giving up. |
 | `MEET_MAX_DURATION` | `14400` | Hard cap (s) on a single recording (4 h). |
 | `MEET_ALONE_TIMEOUT` | `120` | Leave after being the only participant this long. |
+| `LIVE_ASR_URL` | _(none)_ | Streaming-ASR WebSocket for live transcript. Unset → batch only. |
+| `LIVE_CALLBACK_TOKEN` | `$MEETING_BOT_TOKEN` | Bearer for the worker→gateway live callback. |
+| `TTS_CMD` | _(none)_ | Shell template (`{text}`,`{out}`) that renders speech to WAV. Unset → can't speak. |
 
 ## Status & honest caveats
 

@@ -1,0 +1,209 @@
+"""Server-side live-transcript bus for in-progress meetings.
+
+The batch transcript (``transcript_segment``) stays **authoritative** — this is
+the fast, in-memory *live* stream produced *while a meeting is still happening*.
+It powers three things, all off one pipe:
+
+1. **Live captions** in the UI during a bot meeting (SSE, like the browser
+   recorder's caption band).
+2. **Acting on the transcript in real time** — an agent subscribes to
+   ``subscribe(meeting_id)`` server-side and can react as words arrive (the hook
+   the "interject speaking points" feature will build on).
+3. **Interjecting back into the meeting** — ``POST …/say`` forwards text to the
+   bot worker, which speaks it into the call (TTS → the bot's virtual mic).
+
+Producers push segments to ``POST …/live/segment`` (the meeting-bot worker's
+streaming ASR today; the browser recorder can feed the same bus later). Nothing
+here is persisted — the authoritative transcript is still the batch re-pass on
+completion, so live stays a disposable draft (spec §3.4 / §5.2 principle).
+
+Design: a per-meeting in-memory ring + asyncio fan-out. Single-process, best-
+effort; a gateway restart drops the live buffer (the recording + batch pass are
+unaffected). Spec: note_taker_app.md §3.13 (streaming extension).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import contextlib
+import json
+import os
+import time
+from collections import deque
+from collections.abc import AsyncIterator
+
+from acb_auth import UserContext, get_current_user
+from fastapi import Depends, Header, HTTPException
+from fastapi.responses import StreamingResponse
+from gateway.routes.notes.core import _get_db, _log, router
+from pydantic import BaseModel
+from sqlalchemy import text
+
+_RING = 200          # live segments kept per meeting for late subscribers
+_QUEUE_MAX = 500     # per-subscriber backlog before we drop oldest
+
+
+class LiveSegment(BaseModel):
+    text: str
+    start_s: float = 0.0
+    end_s: float = 0.0
+    speaker_label: str | None = None
+    is_final: bool = True
+    ts: float | None = None  # server stamp added on publish
+
+
+class _Bus:
+    """Per-meeting live fan-out: a ring of recent segments + live subscribers."""
+
+    def __init__(self) -> None:
+        self.ring: deque[dict] = deque(maxlen=_RING)
+        self.subs: set[asyncio.Queue] = set()
+
+    def publish(self, seg: dict) -> None:
+        self.ring.append(seg)
+        for q in list(self.subs):
+            if q.qsize() >= _QUEUE_MAX:
+                # drop oldest so a slow consumer can't wedge the bus
+                with contextlib.suppress(asyncio.QueueEmpty):
+                    q.get_nowait()
+            q.put_nowait(seg)
+
+    def subscribe(self) -> asyncio.Queue:
+        q: asyncio.Queue = asyncio.Queue()
+        self.subs.add(q)
+        return q
+
+    def unsubscribe(self, q: asyncio.Queue) -> None:
+        self.subs.discard(q)
+
+
+_BUSES: dict[str, _Bus] = {}
+
+
+def _bus(meeting_id: str) -> _Bus:
+    bus = _BUSES.get(meeting_id)
+    if bus is None:
+        bus = _Bus()
+        _BUSES[meeting_id] = bus
+    return bus
+
+
+def publish_segment(meeting_id: str, seg: dict) -> None:
+    """Publish one live segment to a meeting's bus (used by the ingest endpoint
+    and directly by any in-process producer)."""
+    _bus(meeting_id).publish(seg)
+
+
+async def subscribe(meeting_id: str) -> AsyncIterator[dict]:
+    """Server-side live feed — the seam an agent consumes to act on the meeting
+    as it happens. Yields recent history first, then new segments as they land."""
+    bus = _bus(meeting_id)
+    for seg in list(bus.ring):
+        yield seg
+    q = bus.subscribe()
+    try:
+        while True:
+            yield await q.get()
+    finally:
+        bus.unsubscribe(q)
+
+
+# ── Ingest (producer → bus) ──────────────────────────────────────────────────
+
+def _bot_token() -> str:
+    return os.environ.get("MEETING_BOT_TOKEN", "").strip()
+
+
+def _check_bot_auth(authorization: str | None) -> None:
+    """Machine-to-machine auth for the worker's callback. When a shared
+    MEETING_BOT_TOKEN is set it's required; unset → open (dev/self-hosted LAN)."""
+    tok = _bot_token()
+    if tok and authorization != f"Bearer {tok}":
+        raise HTTPException(status_code=401, detail="bad bot token")
+
+
+@router.post("/meetings/{meeting_id}/live/segment", status_code=202)
+async def ingest_live_segment(
+    meeting_id: str,
+    seg: LiveSegment,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Producer callback: the meeting-bot worker's streaming ASR posts a live
+    segment here as words are recognised. Fans out to captions + agents."""
+    _check_bot_auth(authorization)
+    data = seg.model_dump()
+    data["ts"] = time.time()
+    publish_segment(meeting_id, data)
+    return {"ok": True}
+
+
+# ── Live captions stream (bus → UI) ──────────────────────────────────────────
+
+async def _sse(meeting_id: str) -> AsyncIterator[bytes]:
+    yield b": connected\n\n"
+    # Streams until the client disconnects (StreamingResponse cancels this
+    # generator) — the browser closes it when leaving the meeting view.
+    async for seg in subscribe(meeting_id):
+        yield f"data: {json.dumps(seg, default=str)}\n\n".encode()
+
+
+@router.get("/meetings/{meeting_id}/live")
+async def live_stream(
+    meeting_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> StreamingResponse:
+    """SSE of the meeting's live transcript (captions while a bot is in-call)."""
+    return StreamingResponse(
+        _sse(meeting_id),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache, no-transform",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
+# ── Interjection (agent/user → back into the meeting) ────────────────────────
+
+class SayRequest(BaseModel):
+    text: str
+
+
+@router.post("/meetings/{meeting_id}/say", status_code=202)
+async def say_into_meeting(
+    meeting_id: str,
+    body: SayRequest,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Have the notetaker speak a line into the live call — the seam for
+    agent-driven interjections. Forwards to the bot worker's ``/say``; only the
+    self-hosted worker supports speaking back (managed Recall bots don't)."""
+    text_ = (body.text or "").strip()
+    if not text_:
+        raise HTTPException(status_code=400, detail="empty text")
+    async with await _get_db() as db:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT provider, provider_bot_id, status FROM meeting_bot "
+                    "WHERE meeting_id=:id ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"id": meeting_id},
+            )
+        ).fetchone()
+    if row is None or not row.provider_bot_id:
+        raise HTTPException(status_code=404, detail="no active bot for this meeting")
+    if row.provider != "selfhosted":
+        raise HTTPException(
+            status_code=409,
+            detail="Speaking into the call needs the self-hosted worker.",
+        )
+    from gateway.routes.notes.meeting_bot import SelfHostedProvider
+
+    try:
+        await SelfHostedProvider().say(row.provider_bot_id, text_)
+    except Exception as exc:
+        _log.warning("notes.bot_say_failed", meeting_id=meeting_id, error=str(exc)[:200])
+        raise HTTPException(status_code=502, detail="could not reach the bot worker") from exc
+    return {"ok": True}

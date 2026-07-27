@@ -16,8 +16,17 @@ Xvfb "$DISPLAY" -screen 0 1280x720x24 -ac -nolisten tcp >/tmp/xvfb.log 2>&1 &
 # Per-container PulseAudio (not the system daemon).
 pulseaudio -D --exit-idle-time=-1 --disallow-exit >/tmp/pulse.log 2>&1 || true
 sleep 1
+
+# Output sink: Chrome plays the meeting audio here; ffmpeg records meet.monitor.
 pactl load-module module-null-sink sink_name=meet \
     sink_properties=device.description=meet >/dev/null 2>&1 || true
 pactl set-default-sink meet >/dev/null 2>&1 || true
+
+# Virtual microphone: a null sink whose monitor becomes Chrome's mic input.
+# To speak into the call, TTS audio is played into the `vmic` sink -> it appears
+# on vmic.monitor -> Chrome transmits it as the bot's microphone.
+pactl load-module module-null-sink sink_name=vmic \
+    sink_properties=device.description=vmic >/dev/null 2>&1 || true
+pactl set-default-source vmic.monitor >/dev/null 2>&1 || true
 
 exec uvicorn app.main:app --host 0.0.0.0 --port "${PORT:-8080}"

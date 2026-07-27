@@ -9,6 +9,7 @@ from gateway.routes.notes import actions as _actions  # noqa: F401
 from gateway.routes.notes import events as _events  # noqa: F401
 from gateway.routes.notes import glossary as _glossary  # noqa: F401
 from gateway.routes.notes import live as _live  # noqa: F401
+from gateway.routes.notes import live_transcript as _live_transcript  # noqa: F401
 from gateway.routes.notes import meeting_bot as _meeting_bot  # noqa: F401
 from gateway.routes.notes import meetings as _meetings  # noqa: F401
 from gateway.routes.notes import qa as _qa  # noqa: F401

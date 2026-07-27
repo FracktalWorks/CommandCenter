@@ -126,8 +126,16 @@ are still *designed-not-enforced*, so "defend" partly means "finish."
   `orchestrator/copilot_sandbox.py` when `copilot_sandbox_scope` includes `code_task` — containerizes just
   the `copilot` CLI binary as a TCP JSON-RPC server (`Dockerfile.copilot-sandbox`), reusing the mutation
   container's hardening flags; host-side orchestration/permission-handling is unchanged. Off by default,
-  hard fallback to in-process on any spawn failure. **Still open**: the App Workshop app-builder's
-  interactive-chat call site (needs the sticky per-thread container reuse `copilot_sandbox.py` already
-  supports, just not yet wired into `executor.py`), and — the bulk of CH-1's own wording — `loader.py`'s
-  in-process `importlib` agent load path itself, which this pass did not touch. Row status stays ⚠️ until
-  those land.
+  hard fallback to in-process on any spawn failure.
+  **Copilot-SDK session containerization (App Workshop app-builder)**: same day, follow-up pass — the
+  interactive-chat call site now wired too, via a new `executor._maybe_sandbox_session_workspace()` gated on
+  the SAME `allow_session_workspace` hook `_session_workspace_override` already used (never a hardcoded
+  agent name) plus `"app_builder"` in `copilot_sandbox_scope`. Uses `copilot_sandbox.get_or_spawn_sticky`'s
+  per-`thread_id` container reuse — a fresh container every chat turn would have regressed the latency this
+  path doesn't have today. The T2 build step (`node build_t2.mjs`, a host-absolute path baked into the
+  agent's system prompt at import time) needed two extra read-only mounts: the app-builder's own repo
+  mounted at the IDENTICAL container path (so the baked-in path resolves with zero prompt changes) and the
+  shared T2 vendor cache mounted at a fresh path, pointed to via `CUSTOM_APPS_T2_VENDOR_DIR` (build_t2.mjs
+  already reads this env var on the host) — `Dockerfile.copilot-sandbox` also picked up `nodejs` for this.
+  **Still open**: the bulk of CH-1's own wording — `loader.py`'s in-process `importlib` agent load path
+  itself, which neither pass touched. Row status stays ⚠️ until that lands.

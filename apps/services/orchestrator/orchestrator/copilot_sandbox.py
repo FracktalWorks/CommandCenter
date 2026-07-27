@@ -126,9 +126,15 @@ async def spawn_copilot_sandbox(
     label: str,
     settings: Any,
     extra_mounts: dict[str, str] | None = None,
+    extra_env: dict[str, str] | None = None,
     thread_id: str | None = None,
 ) -> CopilotSandboxHandle | None:
     """Spawn a hardened ``copilot`` CLI sandbox container bound to *workspace*.
+
+    ``extra_env`` is for non-secret, call-site-specific config only (e.g. the
+    App Workshop app-builder's T2 vendor-cache path) — never credentials; BYOK
+    travels in the ``create_session`` RPC payload the host sends after
+    connecting, not container env (see Dockerfile.copilot-sandbox).
 
     Returns ``None`` (and logs a warning) on any failure — Docker unavailable,
     image missing, the container never opens its port in time, etc. Callers
@@ -160,6 +166,8 @@ async def spawn_copilot_sandbox(
     ]
     for host_path, container_path in (extra_mounts or {}).items():
         docker_cmd += ["-v", f"{host_path}:{container_path}:ro"]
+    for key, value in (extra_env or {}).items():
+        docker_cmd += ["-e", f"{key}={value}"]
     docker_cmd += [image, "--port", str(container_port), "--log-level", "info"]
 
     rc, _out, err = await _run(*docker_cmd, timeout=30.0)
@@ -221,6 +229,7 @@ async def get_or_spawn_sticky(
     label: str,
     settings: Any,
     extra_mounts: dict[str, str] | None = None,
+    extra_env: dict[str, str] | None = None,
 ) -> CopilotSandboxHandle | None:
     """Reuse a live sandbox for *thread_id*, or spawn a fresh one.
 
@@ -250,7 +259,7 @@ async def get_or_spawn_sticky(
 
     handle = await spawn_copilot_sandbox(
         workspace=workspace, label=label, settings=settings,
-        extra_mounts=extra_mounts, thread_id=thread_id,
+        extra_mounts=extra_mounts, extra_env=extra_env, thread_id=thread_id,
     )
     if handle is None:
         return None

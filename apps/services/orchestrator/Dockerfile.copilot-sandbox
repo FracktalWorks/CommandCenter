@@ -24,9 +24,16 @@ WORKDIR /workspace/repo
 # ca-certificates — HTTPS to the gateway's /v1 (BYOK provider) and any script
 #                   network calls
 # curl            — installs uv below
+# nodejs          — only the App Workshop app-builder call site needs this
+#                   (agent-app-builder/build/build_t2.mjs, run via `node`), but
+#                   one shared image is simpler than maintaining two; code_task
+#                   sessions just never invoke it. Debian's own nodejs package
+#                   (not NodeSource) — build_t2.mjs only uses long-stable
+#                   node:fs/node:module/node:path/node:url core APIs, nothing
+#                   version-sensitive.
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \
-        git ca-certificates curl \
+        git ca-certificates curl nodejs \
     && rm -rf /var/lib/apt/lists/*
 
 # uv — the harness instructions tell sessions "Python deps go through `uv pip

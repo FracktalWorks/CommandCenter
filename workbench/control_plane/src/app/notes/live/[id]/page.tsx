@@ -3,10 +3,11 @@
 /**
  * Copilot console — watch a meeting that is happening RIGHT NOW.
  *
- * Phase A of the Live Meeting Copilot (spec §7, §13): read-only presence +
- * a live transcript attributed by the speaker roster, plus the opt-in toggle
- * scaffold. No LLM runs yet — the copilot's suggestion stream arrives in Phase B;
- * this is the surface it will stream into, and the place you control it from.
+ * Presence + a live transcript attributed by the speaker roster, plus the
+ * copilot itself (spec §7, §13 Phases A-B): when it's opted in, its suggestions
+ * stream in on their OWN channel — deliberately separate from the transcript, so
+ * agent chatter never mixes into the record. Off by default; turning it off
+ * unsubscribes the orchestrator, so spend stops immediately.
  *
  * It works for BOTH capture sources because both feed one bus: a headless bot in
  * a Meet call, or your own mic on the recording screen. Reattaches to a running
@@ -28,7 +29,12 @@ import {
   getLiveSession,
   setCopilot,
 } from "../../lib/api";
-import type { LiveSegment, LiveSession, LiveSpeaker } from "../../lib/types";
+import type {
+  CopilotEvent,
+  LiveSegment,
+  LiveSession,
+  LiveSpeaker,
+} from "../../lib/types";
 
 /** Keep the rendered transcript bounded — this can run for hours. */
 const MAX_LINES = 300;
@@ -42,6 +48,7 @@ export default function LiveConsolePage({
   const [session, setSession] = useState<LiveSession | null>(null);
   const [roster, setRoster] = useState<LiveSpeaker[]>([]);
   const [lines, setLines] = useState<LiveSegment[]>([]);
+  const [suggestions, setSuggestions] = useState<CopilotEvent[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
@@ -85,6 +92,23 @@ export default function LiveConsolePage({
     return () => es.close();
   }, [id]);
 
+  // The copilot's output is its own channel, so its chatter never mixes into
+  // the transcript. Only subscribed while it's actually on.
+  useEffect(() => {
+    if (!session?.copilot_enabled) return;
+    const es = new EventSource(`/api/notes/meetings/${id}/copilot/stream`);
+    es.onmessage = (ev) => {
+      try {
+        const e = JSON.parse(ev.data) as CopilotEvent;
+        if (e?.text) setSuggestions((prev) => [...prev.slice(-49), e]);
+      } catch {
+        /* keepalive */
+      }
+    };
+    es.onerror = () => {};
+    return () => es.close();
+  }, [id, session?.copilot_enabled]);
+
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [lines]);
@@ -102,6 +126,8 @@ export default function LiveConsolePage({
   }
 
   const live = session?.status === "live";
+  const tips = suggestions.filter((e) => e.kind !== "status");
+  const lastStatus = [...suggestions].reverse().find((e) => e.kind === "status");
   const nameFor = (seg: LiveSegment) =>
     seg.speaker_name ?? seg.speaker_id ?? seg.speaker_label ?? "Speaker";
 
@@ -168,7 +194,7 @@ export default function LiveConsolePage({
           <p className="text-sm font-medium">Meeting copilot</p>
           <p className="text-xs text-muted-foreground">
             {session.copilot_enabled
-              ? "On — it will listen and suggest talking points once the orchestrator ships."
+              ? "On — listening, and it will chime in when a moment warrants it."
               : "Off. Opt in to let an agent listen and suggest talking points."}
           </p>
         </div>
@@ -180,6 +206,42 @@ export default function LiveConsolePage({
           {busy ? "…" : session.copilot_enabled ? "Turn off" : "Turn on"}
         </button>
       </div>
+
+      {/* What the copilot has surfaced. Only shown when it's on, so the console
+          stays uncluttered for plain transcript-watching. */}
+      {session.copilot_enabled && (
+        <div className="mb-5 rounded-xl border border-primary/30 bg-primary/5 p-3">
+          <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-primary">
+            <Sparkles className="h-3.5 w-3.5" /> Copilot
+          </p>
+          {tips.length === 0 ? (
+            <p className="text-sm text-muted-foreground">
+              {lastStatus?.text ?? "Listening — it stays quiet unless it has something specific."}
+            </p>
+          ) : (
+            <div className="space-y-2">
+              {tips.slice(-6).map((e, i) => (
+                <div key={i} className="rounded-lg border border-border bg-card p-2.5">
+                  <p className="text-sm text-foreground">{e.text}</p>
+                  {/* Grounding: what triggered it, so a suggestion is
+                      inspectable rather than an oracle. */}
+                  {e.refs?.trigger && (
+                    <p className="mt-1 text-[11px] text-muted-foreground">
+                      {e.refs.trigger}
+                      {e.refs.speakers?.length
+                        ? ` · ${e.refs.speakers.join(", ")}`
+                        : ""}
+                    </p>
+                  )}
+                </div>
+              ))}
+              {lastStatus && (
+                <p className="text-[11px] text-muted-foreground">{lastStatus.text}</p>
+              )}
+            </div>
+          )}
+        </div>
+      )}
 
       {/* Roster — who's on the call, per the live voiceprint gallery */}
       <div className="mb-5 rounded-xl border border-border bg-card p-3">

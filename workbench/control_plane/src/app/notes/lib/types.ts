@@ -200,3 +200,18 @@ export interface LiveSpeaker {
   role: string | null;
   utterances: number;
 }
+
+/** Something the copilot surfaced during a live session. */
+export interface CopilotEvent {
+  kind: "suggestion" | "question" | "answer" | "fact" | "status";
+  text: string;
+  /** What it was grounded in — the window, speakers and trigger. */
+  refs: {
+    window?: string;
+    speakers?: string[];
+    topic?: string;
+    trigger?: string;
+  };
+  token_cost: number;
+  ts: number | null;
+}

@@ -1,6 +1,6 @@
 # Live Meeting Copilot — architecture plan
 
-**Status:** PLAN ONLY (no implementation yet). A design to review before building.
+**Status:** Phases A-B BUILT (presence + console + passive copilot). Phases C-E (business context, bidirectional, speaking) still planned.
 **Builds on:** `note_taker_app.md` §3.13 (meeting bot + live-transcript bus),
 the browser recorder + live captions, `acb_llm` tiers, the agent/skills/connector
 layer, and the notes auth/scoping.
@@ -365,9 +365,18 @@ feed**.
   `failed`/`not_admitted`) so presence can't strand as "live".
   *Exit reached:* watch a live call's transcript, attributed by speaker, in
   Command Center.
-- **Phase B — Passive copilot (private suggestions).** Tiered cascade + rolling
-  state + budget guardrails; suggestions stream to the console. No business
-  context, no speaking. *Exit:* useful, cost-bounded talking points appear live.
+- **Phase B — Passive copilot (private suggestions). BUILT.** `copilot_policy.py`
+  holds the pure Stage 0/1 (windowing on speaker-turn/length; a no-LLM trigger
+  gate for questions, objections, decisions and numbers, with debounce + a
+  per-meeting cap checked BEFORE the triggers so a busy meeting can't run up
+  cost). `copilot.py` runs Stage 2 (tier-fast decide, strict JSON, confidence
+  floor) → Stage 3 (tier-balanced craft) only for what survives, dedups against
+  a bounded rolling state, and emits on a **separate** event bus (SSE +
+  `copilot_event`, migration 121) so agent chatter never pollutes the
+  transcript. Budget exhaustion pauses and says so. The `…/live/copilot` toggle
+  starts/cancels the orchestrator — off cancels the task, which unsubscribes it
+  from the transcript bus, so spend stops immediately. *Exit reached:*
+  cost-bounded talking points appear live in the console.
 - **Phase C — Business context.** Pre-meeting pack + scoped retrieval tools
   (email/ClickUp/CRM) → grounded suggestions. *Exit:* a suggestion cites a real
   deal/ticket/email.

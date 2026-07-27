@@ -196,6 +196,18 @@ async def set_copilot(
         if row is None:
             raise HTTPException(status_code=404, detail="no live session for this meeting")
         await db.commit()
+    # Start/stop the orchestrator to match. Turning it OFF cancels the task,
+    # which unsubscribes it from the transcript bus — spend stops immediately,
+    # which is the whole point of the toggle being cheap to hit.
+    try:
+        from gateway.routes.notes import copilot
+
+        if body.enabled:
+            copilot.start(meeting_id)
+        else:
+            copilot.stop(meeting_id)
+    except Exception as exc:
+        _log.warning("notes.copilot_toggle_failed", error=str(exc)[:200])
     _log.info(
         "notes.copilot_toggled",
         meeting_id=meeting_id, enabled=body.enabled, mode=row.mode,

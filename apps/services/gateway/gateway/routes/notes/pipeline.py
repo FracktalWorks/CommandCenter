@@ -187,9 +187,10 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
         # The meeting is over — free its live voiceprint gallery and clear
         # presence (both sources end here, so this is the one place to do it).
         try:
-            from gateway.routes.notes import live_session
+            from gateway.routes.notes import copilot, live_session
             from gateway.routes.notes.live_speakers import reset as reset_live_speakers
 
+            copilot.stop(meeting_id)
             reset_live_speakers(meeting_id)
             await live_session.end(meeting_id)
         except Exception as exc:

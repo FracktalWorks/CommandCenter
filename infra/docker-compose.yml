@@ -156,8 +156,50 @@ services:
     # Override entrypoint so `docker compose up` is a no-op for this service.
     entrypoint: ["true"]
 
+  # --- Self-hosted meeting bot (Note Taker §3.13). Profile: "meetingbot". ---
+  # A headless-Chrome participant that joins a Google Meet link, records the
+  # call, and (optionally) streams a live transcript back to the gateway. Kept
+  # OUT of the "core" profile on purpose: each in-call bot is a real Chrome
+  # instance (~1-3 GB RAM + up to 2 CPU), so it only runs where there's
+  # headroom, and only when explicitly enabled.
+  #
+  # The gateway reaches it over the host port below (MEETING_BOT_URL); the
+  # worker calls back to the gateway for live segments, which is why it needs
+  # host-gateway resolution.
+  #
+  #   docker compose --profile meetingbot up -d --build meeting-bot
+  meeting-bot:
+    build:
+      context: ../apps/services/meeting_bot
+    image: acb-meeting-bot:latest
+    container_name: acb-meeting-bot
+    profiles: ["meetingbot"]
+    <<: *restart
+    environment:
+      # Shared secret for gateway <-> worker calls, both directions.
+      MEETING_BOT_TOKEN: ${MEETING_BOT_TOKEN:-}
+      MEETING_BOT_DATA: /data
+      # Live transcript + speaking are additive and gated: unset -> the bot just
+      # records and the normal batch pipeline runs.
+      LIVE_ASR_URL: ${LIVE_ASR_URL:-}
+      EMBED_CMD: ${MEETING_BOT_EMBED_CMD:-}
+      TTS_CMD: ${MEETING_BOT_TTS_CMD:-}
+      MEET_MAX_DURATION: ${MEET_MAX_DURATION:-14400}
+    # Chrome needs more than Docker's default 64 MB of shared memory or it
+    # crashes on real pages.
+    shm_size: "1gb"
+    ports:
+      # Host 8095 — the gateway itself owns 8080 on the VPS. Bound to localhost
+      # only: nothing outside the box should be able to dispatch a bot.
+      - "127.0.0.1:8095:8080"
+    volumes:
+      - acb-meeting-bot-data:/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
 volumes:
   acb-postgres-data:
   acb-redis-data:
+  acb-meeting-bot-data:
   acb-neo4j-data:
   acb-neo4j-logs:

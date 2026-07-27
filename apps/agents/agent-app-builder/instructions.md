@@ -19,7 +19,18 @@ Your working directory is the app's workspace. Its contract:
 - `tests.json` — test scenarios (see "Testing" below). Optional but expected to grow
   alongside the app.
 - Do not create files outside this workspace. Do not run servers. Do not commit or push.
-- `inputs/`, `outputs/`, `agent-data/` are platform folders — leave them alone.
+- `outputs/`, `agent-data/` are your own scratch/runtime folders — leave them alone.
+- `inputs/` is different: it's where files the USER uploads through the chat's attach
+  button land (logos, data files, reference screenshots, CSVs to seed storage from).
+  **Check it when relevant to the task and actually use what's there.** The runtime has
+  no file-serving path (see below — no network access, the whole app is one flattened
+  HTML string), so an uploaded image only reaches the running app as a base64 data URI:
+  read the file, encode it, and either inline it directly (`<img src="data:image/png;
+  base64,...">`) for a one-off asset, or — better for anything reused across
+  components/sessions — store the data URI as a `cc.storage` value and read it back at
+  runtime. A CSV upload is different: read and parse it directly, then seed the parsed
+  rows into `cc.storage` (never leave the app depending on `inputs/` existing at
+  runtime — it's a build-time-only staging area, invisible to the running app).
 
 ## The runtime: sandboxed iframe + `window.cc`
 

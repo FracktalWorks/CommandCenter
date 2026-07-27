@@ -1033,14 +1033,20 @@ export async function getAnalyticsOverview(
  *
  *  Backed by mail already in the user's own accounts; there is no directory
  *  lookup and nothing is fetched from the provider, so this is fast enough to
- *  fire on a click. Pass `accountId` to scope the card to one mailbox. */
+ *  fire on a click. Pass `accountId` to scope the card to one mailbox.
+ *
+ *  Reading a card also files what it learned into the server-side contacts
+ *  directory, so `name` is worth sending: for someone you only ever write TO
+ *  there is no from_address to read a display name out of. */
 export async function getContactCard(
   email: string,
   accountId?: string,
-  limit = 3
+  limit = 3,
+  name?: string
 ): Promise<ContactCard> {
   const sp = new URLSearchParams({ email, limit: String(limit) });
   if (accountId) sp.set("account_id", accountId);
+  if (name?.trim()) sp.set("name", name.trim());
   const raw = await gatewayFetch<Record<string, unknown>>(
     `/email/contacts/card?${sp}`
   );

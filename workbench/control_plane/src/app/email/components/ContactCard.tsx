@@ -54,12 +54,13 @@ function cacheKey(email: string, accountId?: string): string {
 
 async function loadCard(
   email: string,
-  accountId?: string
+  accountId?: string,
+  name?: string
 ): Promise<ContactCardData> {
   const key = cacheKey(email, accountId);
   const hit = cache.get(key);
   if (hit && Date.now() - hit.at < CACHE_TTL_MS) return hit.data;
-  const data = await getContactCard(email, accountId);
+  const data = await getContactCard(email, accountId, 3, name);
   cache.set(key, { at: Date.now(), data });
   return data;
 }
@@ -152,6 +153,77 @@ export function ContactTrigger({
   );
 }
 
+/** Copy-to-clipboard control for one field on the card.
+ *
+ *  Every value the card shows is something you end up pasting somewhere — an
+ *  address into a form, a number into a dialler. Always visible (a hover-only
+ *  affordance is invisible on touch and undiscoverable everywhere else), dim
+ *  enough not to compete with the values, and it confirms in place with a tick
+ *  rather than throwing a toast across the screen. */
+function CopyButton({ value, label }: { value: string; label: string }) {
+  const [done, setDone] = useState(false);
+  return (
+    <button
+      type="button"
+      title={done ? "Copied" : `Copy ${label}`}
+      aria-label={done ? `${label} copied` : `Copy ${label}`}
+      onClick={(e) => {
+        e.stopPropagation();
+        navigator.clipboard?.writeText(value).then(
+          () => {
+            setDone(true);
+            setTimeout(() => setDone(false), 1500);
+          },
+          () => undefined
+        );
+      }}
+      className={`shrink-0 p-1 rounded-md tech-transition ${
+        done
+          ? "text-success opacity-100"
+          : "text-muted-foreground opacity-45 group-hover:opacity-80 hover:!opacity-100 hover:text-foreground hover:bg-secondary"
+      }`}
+    >
+      {done ? <Check size={12} /> : <Copy size={12} />}
+    </button>
+  );
+}
+
+/** One "icon · value · copy" line in the details block. */
+function DetailRow({
+  icon: Icon,
+  value,
+  label,
+  href,
+  display,
+}: {
+  icon: typeof Phone;
+  value: string;
+  label: string;
+  href?: string;
+  display?: string;
+}) {
+  return (
+    <div className="group flex items-center gap-2 min-w-0">
+      <Icon size={12} className="text-muted-foreground shrink-0" />
+      {href ? (
+        <a
+          href={href}
+          target={href.startsWith("http") ? "_blank" : undefined}
+          rel={href.startsWith("http") ? "noopener noreferrer" : undefined}
+          className="text-xs truncate flex-1 text-foreground/85 hover:text-primary tech-transition"
+        >
+          {display ?? value}
+        </a>
+      ) : (
+        <span className="text-xs truncate flex-1 text-foreground/85">
+          {display ?? value}
+        </span>
+      )}
+      <CopyButton value={value} label={label} />
+    </div>
+  );
+}
+
 /** A "To: a, b, c" line where every recipient opens their own card. */
 export function RecipientList({
   label,
@@ -195,7 +267,6 @@ function ContactPopover({
 }) {
   const [card, setCard] = useState<ContactCardData | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [copied, setCopied] = useState(false);
   const [pos, setPos] = useState<
     { top: number; left: number; maxHeight: number } | null
   >(null);
@@ -210,13 +281,16 @@ function ContactPopover({
 
   useEffect(() => {
     let alive = true;
-    loadCard(email, accountId)
+    // Hand the server the name we already have: for someone we only ever write
+    // TO, there is no received mail to read a display name out of, and the
+    // contacts directory would file them as a bare address.
+    loadCard(email, accountId, contact.name)
       .then((d) => alive && setCard(d))
       .catch((e) => alive && setError(e instanceof Error ? e.message : String(e)));
     return () => {
       alive = false;
     };
-  }, [email, accountId]);
+  }, [email, accountId, contact.name]);
 
   // Position against the anchor once the card has a measurable size, flipping
   // and clamping so it always lands fully on screen. Placement can only be
@@ -278,16 +352,6 @@ function ContactPopover({
     return () => window.removeEventListener("keydown", onKey);
   }, [onClose]);
 
-  const copyAddress = useCallback(() => {
-    navigator.clipboard?.writeText(email).then(
-      () => {
-        setCopied(true);
-        setTimeout(() => setCopied(false), 1500);
-      },
-      () => undefined
-    );
-  }, [email]);
-
   const mailTo = useCallback(() => {
     openCompose({ to: email, subject: "" });
     onClose();
@@ -346,22 +410,21 @@ function ContactPopover({
           {initials(name)}
         </div>
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-semibold text-foreground truncate">
-            {name}
+          <div className="group flex items-center gap-1 min-w-0">
+            <span className="text-sm font-semibold text-foreground truncate">
+              {name}
+            </span>
+            {name !== email && <CopyButton value={name} label="name" />}
           </div>
-          <button
-            type="button"
-            onClick={copyAddress}
-            title="Copy address"
-            className="group flex items-center gap-1 text-xs text-muted-foreground hover:text-primary tech-transition max-w-full"
-          >
-            <span className="truncate">{email}</span>
-            {copied ? (
-              <Check size={11} className="shrink-0 text-success" />
-            ) : (
-              <Copy size={11} className="shrink-0 opacity-0 group-hover:opacity-100" />
-            )}
-          </button>
+          <div className="group flex items-center gap-1 min-w-0 -mt-0.5">
+            <a
+              href={`mailto:${email}`}
+              className="text-xs text-muted-foreground truncate hover:text-primary tech-transition"
+            >
+              {email}
+            </a>
+            <CopyButton value={email} label="email address" />
+          </div>
           {subtitle && (
             <div className="text-[11px] text-muted-foreground mt-0.5 truncate">
               {subtitle}
@@ -408,40 +471,35 @@ function ContactPopover({
         <>
           {/* Contact details — only what the person's own signature carried. */}
           {(details?.phones.length || details?.links.length || card.domain) && (
-            <div className="border-t border-border px-4 py-3 space-y-1.5">
+            <div className="border-t border-border px-4 py-3 space-y-1">
               {details?.phones.map((phone) => (
-                <a
+                <DetailRow
                   key={phone}
+                  icon={Phone}
+                  value={phone}
+                  label="phone number"
                   href={`tel:${phone.replace(/[^\d+]/g, "")}`}
-                  className="flex items-center gap-2 text-xs text-foreground/85 hover:text-primary tech-transition"
-                >
-                  <Phone size={12} className="text-muted-foreground shrink-0" />
-                  <span className="truncate">{phone}</span>
-                </a>
+                />
               ))}
               {details?.organization && (
-                <div className="flex items-center gap-2 text-xs text-foreground/85">
-                  <Building2 size={12} className="text-muted-foreground shrink-0" />
-                  <span className="truncate">{details.organization}</span>
-                </div>
+                <DetailRow
+                  icon={Building2}
+                  value={details.organization}
+                  label="organization"
+                />
               )}
               {card.domain && !details?.organization && (
-                <div className="flex items-center gap-2 text-xs text-foreground/85">
-                  <AtSign size={12} className="text-muted-foreground shrink-0" />
-                  <span className="truncate">{card.domain}</span>
-                </div>
+                <DetailRow icon={AtSign} value={card.domain} label="domain" />
               )}
               {details?.links.map((link) => (
-                <a
+                <DetailRow
                   key={link}
+                  icon={ExternalLink}
+                  value={link}
+                  display={link.replace(/^https?:\/\//, "")}
+                  label="link"
                   href={link}
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="flex items-center gap-2 text-xs text-primary hover:opacity-80 tech-transition"
-                >
-                  <ExternalLink size={12} className="shrink-0" />
-                  <span className="truncate">{link.replace(/^https?:\/\//, "")}</span>
-                </a>
+                />
               ))}
             </div>
           )}

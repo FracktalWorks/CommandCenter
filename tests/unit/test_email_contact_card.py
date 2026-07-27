@@ -137,6 +137,64 @@ def test_the_users_own_drafts_are_not_correspondence_from_the_contact():
     assert "<> 'drafts'" in src
 
 
+# ── the contacts directory the card writes into ─────────────────────────────
+
+
+def test_a_hand_edited_field_is_never_overwritten_by_a_signature():
+    """`manual_fields` is the whole basis for trusting a Contacts view: a human
+    correction must outrank anything the next mail's sign-off says, forever.
+    Every writable column needs its own guard — one missed column is one field
+    that silently reverts."""
+    sql = C._REMEMBER_CONTACT_SQL
+    for col in ("display_name", "title", "organization", "phones", "links"):
+        assert f"'{col}' = ANY(email_contacts.manual_fields)" in sql, col
+
+
+def test_an_empty_parse_never_blanks_what_we_already_knew():
+    """A one-line reply carries no signature. Writing its empty parse over the
+    row would erase the phone number an earlier mail taught us — so scalars
+    COALESCE and arrays are only taken when they actually contain something."""
+    sql = C._REMEMBER_CONTACT_SQL
+    for col in ("display_name", "title", "organization"):
+        assert f"COALESCE(EXCLUDED.{col}, email_contacts.{col})" in sql, col
+    for col in ("phones", "links"):
+        assert f"cardinality(EXCLUDED.{col}) > 0" in sql, col
+
+
+def test_derived_facts_are_not_persisted():
+    """Counts and last-seen are a live query over email_messages. Freezing them
+    into the contact row would be wrong the moment the next mail arrives."""
+    sql = C._REMEMBER_CONTACT_SQL.lower()
+    for derived in ("received", "unread", "last_seen", "first_seen", "threads"):
+        assert derived not in sql, derived
+
+
+def test_the_domain_guess_is_shown_but_never_stored():
+    """'acme.com' → 'Acme' is a guess ABOUT the address, not something the
+    person told us. It fills the card when nothing better is known; writing it
+    would seed the directory with invented company names."""
+    src = inspect.getsource(C.contact_card)
+    remember = src.index("_remember_contact(db")
+    fallback = src.index("_org_from_domain(domain)")
+    assert fallback > remember, (
+        "the domain fallback must be applied AFTER the directory write, or "
+        "every contact on a corporate domain gets a fabricated organisation "
+        "persisted the first time their card is opened"
+    )
+
+
+def test_a_failed_directory_write_still_serves_the_card():
+    """The write is a side effect of a read. A missing table on an un-migrated
+    DB, or any other failure, must cost the user nothing."""
+    src = inspect.getsource(C._remember_contact)
+    assert "except Exception" in src and "return None" in src
+    card_src = inspect.getsource(C.contact_card)
+    assert "if merged is not None:" in card_src, (
+        "the card must fall back to the freshly parsed details when the "
+        "directory write returned nothing"
+    )
+
+
 def test_preview_prefers_the_snippet_and_truncates():
     assert _preview(_Row(snippet="  hello   there \n")) == "hello there"
     assert _preview(_Row(body_text="x" * 500)).endswith("…")

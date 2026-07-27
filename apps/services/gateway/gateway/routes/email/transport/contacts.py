@@ -23,7 +23,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Query
-from gateway.routes.email.core import _account_scope, _get_db, router
+from gateway.routes.email.core import _account_scope, _get_db, _log, router
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -291,18 +291,107 @@ def _preview(row: Any, max_chars: int = 180) -> str:
     return collapsed[:max_chars].rstrip() + "…"
 
 
+# One clause per column the signature writer may set. Each keeps a hand-edited
+# value (the column is listed in manual_fields) and otherwise takes the newly
+# parsed one — but only when the parse actually found something, so a reply with
+# no sign-off never blanks what an earlier signature taught us.
+_KEEP_MANUAL = """
+    {col} = CASE
+        WHEN '{col}' = ANY(email_contacts.manual_fields) THEN email_contacts.{col}
+        ELSE COALESCE(EXCLUDED.{col}, email_contacts.{col})
+    END"""
+_KEEP_MANUAL_ARRAY = """
+    {col} = CASE
+        WHEN '{col}' = ANY(email_contacts.manual_fields) THEN email_contacts.{col}
+        WHEN cardinality(EXCLUDED.{col}) > 0 THEN EXCLUDED.{col}
+        ELSE email_contacts.{col}
+    END"""
+
+_REMEMBER_CONTACT_SQL = f"""
+INSERT INTO email_contacts
+    (account_id, email, display_name, title, organization, phones, links,
+     source, source_message_id, parsed_at)
+VALUES
+    (:account_id, :email, :display_name, :title, :organization, :phones, :links,
+     'signature', :source_message_id, now())
+ON CONFLICT (account_id, email) DO UPDATE SET
+    {_KEEP_MANUAL.format(col='display_name')},
+    {_KEEP_MANUAL.format(col='title')},
+    {_KEEP_MANUAL.format(col='organization')},
+    {_KEEP_MANUAL_ARRAY.format(col='phones')},
+    {_KEEP_MANUAL_ARRAY.format(col='links')},
+    -- A row a human has touched is theirs, whatever wrote it last.
+    source = CASE WHEN cardinality(email_contacts.manual_fields) > 0
+                  THEN 'user' ELSE 'signature' END,
+    source_message_id = COALESCE(EXCLUDED.source_message_id,
+                                 email_contacts.source_message_id),
+    parsed_at = now(),
+    updated_at = now()
+RETURNING display_name, title, organization, phones, links, source_message_id
+"""
+
+
+async def _remember_contact(
+    db: Any,
+    account_id: str,
+    email: str,
+    name: str | None,
+    details: ContactDetails,
+) -> Any:
+    """Persist what this card learned into the ``email_contacts`` directory.
+
+    The card derives contact details on every open, which answers one question
+    and leaves nothing behind. Writing them makes the mailbox build a people
+    directory as a side effect of being read — the store a Contacts view, a
+    people picker, or a "who do we know at this company" query needs, none of
+    which can re-scan every message body on demand.
+
+    Never overwrites a column listed in ``manual_fields``: a human correction
+    outranks anything a signature says, permanently. Best-effort — a failure
+    here must never cost the caller their card.
+
+    Returns the MERGED row so the card can show exactly what the directory now
+    holds (a hand-edited title, or a phone an older signature taught us that
+    today's one-line reply doesn't repeat). Returns None if the write failed.
+    """
+    try:
+        row = (await db.execute(text(_REMEMBER_CONTACT_SQL), {
+            "account_id": account_id,
+            "email": email,
+            "display_name": name,
+            "title": details.title,
+            "organization": details.organization,
+            "phones": details.phones,
+            "links": details.links,
+            "source_message_id": details.source_message_id,
+        })).fetchone()
+        await db.commit()
+        return row
+    except Exception:
+        _log.debug("contact directory upsert failed for %s", email, exc_info=True)
+        return None
+
+
 @router.get("/contacts/card", response_model=ContactCardModel)
 async def contact_card(
     email: str = Query(..., description="The person's email address"),
     account_id: str | None = Query(
         None, description="Scope to one mailbox; omit to span the user's accounts"),
     limit: int = Query(3, ge=1, le=10, description="How many recent messages"),
+    name: str | None = Query(
+        None, description="Display name the caller already has — used when no "
+                          "mail was ever RECEIVED from this address (a "
+                          "recipient you only ever write to)"),
     user: UserContext = Depends(get_current_user),
 ) -> ContactCardModel:
     """Everything the mail app knows about one person, for the hover/click card.
 
     Scoped to the caller's own accounts throughout — an address is only ever
     resolved against mail that already belongs to this user.
+
+    Side effect by design: what the signature parse learns is written into the
+    ``email_contacts`` directory (see _remember_contact), so reading a card is
+    also how the mailbox builds its people store.
     """
     address = (email or "").strip().lower()
     domain = address.split("@")[-1] if "@" in address else None
@@ -358,7 +447,13 @@ async def contact_card(
             first_seen=_iso(getattr(stats_row, "first_seen", None)),
             last_seen=_iso(getattr(stats_row, "last_seen", None)),
         )
-        card.name = (getattr(stats_row, "display_name", None) or "").strip() or None
+        # The name they sign their mail with, else the one the caller already
+        # had (a recipient you only ever write TO has no from_address to read).
+        card.name = (
+            (getattr(stats_row, "display_name", None) or "").strip()
+            or (name or "").strip()
+            or None
+        )
 
         # Sender rollups: the category the classifier assigned, and whether the
         # Email Cleaner has a disposition on file.
@@ -423,6 +518,29 @@ async def contact_card(
                 source_message_id=str(r.id),
             )
             break
+
+        # Remember what we learned, and show what the directory now holds — the
+        # merged row, so a hand-edited title or a phone from an older signature
+        # survives a reply that carried no sign-off at all.
+        owner = account_id or (str(rows[0].account_id) if rows else None)
+        if owner and (card.name or details.phones or details.links
+                      or details.title or details.organization):
+            merged = await _remember_contact(db, owner, address, card.name, details)
+            if merged is not None:
+                card.name = (merged.display_name or "").strip() or card.name
+                details = ContactDetails(
+                    phones=list(merged.phones or []),
+                    links=list(merged.links or []),
+                    title=merged.title,
+                    organization=merged.organization,
+                    source_message_id=(
+                        str(merged.source_message_id)
+                        if merged.source_message_id else None
+                    ),
+                )
+
+        # The domain is a last-resort company name, never stored — it is a guess
+        # about the address, not something the person told us.
         if not details.organization:
             details.organization = _org_from_domain(domain)
         card.details = details

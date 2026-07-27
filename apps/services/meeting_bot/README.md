@@ -43,6 +43,13 @@ mid-meeting:
   and POSTs each segment to the `live_callback` URL the gateway passes at join
   (the gateway builds it from `NOTES_LIVE_CALLBACK_BASE`). The gateway fans those
   out to live captions (`GET /notes/meetings/{id}/live`) and to agents.
+- **Consistent live speakers (pause-chunked spine):** set `EMBED_CMD` to attach a
+  per-utterance speaker **embedding** to each segment. The worker runs a local
+  pause endpointer (VAD on natural pauses, not fixed windows — `endpointing.py`),
+  computes an embedding per utterance, and tags the overlapping ASR segment. The
+  gateway's voiceprint gallery (`live_speakers.py`) then keeps speaker ids stable
+  across chunks and binds names from self-intros — so an agent knows *who* is
+  speaking live. With no `EMBED_CMD`, segments are text-only (unchanged).
 - **Speak into the call:** `POST /bots/{id}/say {text}` renders text via `TTS_CMD`
   (a shell template with `{text}`/`{out}`, e.g. a piper invocation producing a
   WAV) and plays it into the bot's **virtual microphone** so participants hear
@@ -78,6 +85,8 @@ MEETING_BOT_TOKEN=<same secret as above>
 | `LIVE_ASR_URL` | _(none)_ | Streaming-ASR WebSocket for live transcript. Unset → batch only. |
 | `LIVE_CALLBACK_TOKEN` | `$MEETING_BOT_TOKEN` | Bearer for the worker→gateway live callback. |
 | `TTS_CMD` | _(none)_ | Shell template (`{text}`,`{out}`) that renders speech to WAV. Unset → can't speak. |
+| `EMBED_CMD` | _(none)_ | Shell template (`{in}` PCM s16le 16k mono → `{out}` JSON float array) that emits a per-utterance speaker embedding. Unset → text-only segments. |
+| `LIVE_VAD_RMS` | `300` | Energy-VAD threshold (RMS over s16le) for the pause endpointer. Tune per room/mic. |
 
 ## Status & honest caveats
 
@@ -92,3 +101,7 @@ MEETING_BOT_TOKEN=<same secret as above>
   legally require their consent depending on jurisdiction. Get it.
 - Not yet load-tested for many concurrent instances; start with 1–2 per host and
   size up.
+- **The live path (streaming ASR + embeddings + TTS) is plumbing.** The pause
+  endpointer's boundary logic is unit-tested, but the energy-VAD threshold, the
+  `EMBED_CMD` embedder, the streaming-ASR wiring and the `TTS_CMD` voice must be
+  verified against a real meeting on the box (and the VAD/threshold tuned there).

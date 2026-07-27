@@ -465,6 +465,11 @@ async def _refresh_bot(bot_row_id: str) -> None:
                         text("UPDATE meeting SET status='failed' WHERE id=:id"),
                         {"id": str(row.meeting_id)},
                     )
+                    # Never left the ground — clear presence (the pipeline that
+                    # normally ends a session won't run without a recording).
+                    from gateway.routes.notes import live_session
+
+                    await live_session.end(str(row.meeting_id))
                 elif new_status == "in_call":
                     await db.execute(
                         text("UPDATE meeting SET status='recording' "
@@ -608,6 +613,11 @@ async def bot_join(
     async with await _get_db() as db:
         await _set_bot(db, bot_row_id, provider_bot_id=provider_bot_id, status="joining")
         await db.commit()
+    # Register presence — a bot meeting shows as "live now" in Command Center
+    # from the moment it's dispatched, not just once audio starts flowing.
+    from gateway.routes.notes import live_session
+
+    await live_session.begin(meeting_id, "bot", user.email)
     _log.info("notes.bot_joined", meeting_id=meeting_id, platform=platform)
     _spawn(_poll_bot(bot_row_id))
 

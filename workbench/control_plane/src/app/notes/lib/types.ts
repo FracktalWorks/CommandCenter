@@ -162,3 +162,41 @@ export interface MeetingEvent {
     error: string | null;
   }[];
 }
+
+/** A meeting being captured right now — powers the "live now" presence dock. */
+export interface LiveSession {
+  id: string;
+  meeting_id: string;
+  source: "bot" | "browser";
+  owner_email: string | null;
+  status: "live" | "ended";
+  /** Opt-in, off by default; stored in Phase A, acted on by the orchestrator. */
+  copilot_enabled: boolean;
+  mode: "listening" | "interactive" | "speaking";
+  started_at: string | null;
+  ended_at: string | null;
+  title: string | null;
+}
+
+/** One live-transcript segment off the bus (bot or in-browser recorder). */
+export interface LiveSegment {
+  text: string;
+  start_s: number;
+  end_s: number;
+  /** Stable across chunks — assigned by the live voiceprint gallery. */
+  speaker_id: string | null;
+  speaker_label: string | null;
+  /** Bound live from a self-introduction ("I'm Priya"), when detected. */
+  speaker_name: string | null;
+  role: string | null;
+  is_final: boolean;
+  ts: number | null;
+}
+
+/** Who's on the call so far, per the live speaker registry. */
+export interface LiveSpeaker {
+  speaker_id: string;
+  name: string | null;
+  role: string | null;
+  utterances: number;
+}

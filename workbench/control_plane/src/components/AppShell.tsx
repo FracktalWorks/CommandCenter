@@ -35,6 +35,7 @@ import { NAV_SECTIONS } from "@/lib/nav";import { ThemeToggleMenuItem } from "@/
 import { FocusSession } from "@/app/tasks/components/FocusMode";
 // The note-taker's live recording dock — same shell-level pattern, so an
 // in-progress meeting recording follows the user across every app (spec §5.2).
+import { LiveDock } from "@/app/notes/components/LiveDock";
 import { RecordingDock } from "@/app/notes/components/RecordingDock";
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
@@ -84,6 +85,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         <main className="flex-1 min-w-0 overflow-auto">{children}</main>
         <FocusSession />
         <RecordingDock />
+        <LiveDock />
 
         {/* Floating "Mobile view" pill — only when desktop is forced on a phone. */}
         {isNarrow && forceDesktop && (
@@ -123,6 +125,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Live recording dock — sits above the bottom nav (and above the Focus
             pill when both are up), so the menu bar never clips it. */}
         <RecordingDock />
+        {/* Server-side "live now" presence (bot calls / other devices). */}
+        <LiveDock />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (

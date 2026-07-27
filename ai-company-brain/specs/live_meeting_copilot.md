@@ -353,11 +353,18 @@ feed**.
 
 ## 13. Phasing (each phase shippable + independently valuable)
 
-- **Phase A — Presence + console (read-only), no LLM.** Live-session registry,
-  "live now" dock, console showing the live transcript **with a stable speaker
-  roster** (`live_speakers.py`, built) for bot **and** browser (add the
-  browser→bus feed). Opt-in toggle scaffold. *Exit:* watch a live call's
-  transcript, correctly attributed by speaker, in Command Center.
+- **Phase A — Presence + console (read-only), no LLM. BUILT.** `live_session`
+  registry (migration 119) with a partial unique index making "begin" an
+  idempotent upsert; `GET /notes/live/sessions` presence + `…/live/session`
+  reattach; opt-in toggle `POST …/live/copilot` (stored, **off by default** —
+  Phase B acts on it). UI: `LiveDock` (shell-level "● Live now", covering what
+  the local `RecordingDock` can't see — bot calls and other devices) and the
+  console at `/notes/live/[id]` — live transcript over SSE, attributed by the
+  speaker roster, for bot **and** browser sources. Sessions begin at bot-join /
+  recording-start and end in the pipeline (success *and* failure paths, plus bot
+  `failed`/`not_admitted`) so presence can't strand as "live".
+  *Exit reached:* watch a live call's transcript, attributed by speaker, in
+  Command Center.
 - **Phase B — Passive copilot (private suggestions).** Tiered cascade + rolling
   state + budget guardrails; suggestions stream to the console. No business
   context, no speaking. *Exit:* useful, cost-bounded talking points appear live.

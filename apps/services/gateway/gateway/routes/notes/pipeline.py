@@ -184,13 +184,16 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
                 await infer_speaker_names(meeting_id)
             except Exception as exc:
                 _log.warning("notes.speaker_id_enqueue_failed", error=str(exc)[:200])
-        # The meeting is over — free its live voiceprint gallery.
+        # The meeting is over — free its live voiceprint gallery and clear
+        # presence (both sources end here, so this is the one place to do it).
         try:
+            from gateway.routes.notes import live_session
             from gateway.routes.notes.live_speakers import reset as reset_live_speakers
 
             reset_live_speakers(meeting_id)
+            await live_session.end(meeting_id)
         except Exception as exc:
-            _log.warning("notes.live_speakers_reset_failed", error=str(exc)[:200])
+            _log.warning("notes.live_teardown_failed", error=str(exc)[:200])
         # Chain straight into notes generation so a single upload yields
         # transcript → notes without a second user action.
         if result.segments:
@@ -202,6 +205,15 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
                 _log.warning("notes.autosummary_enqueue_failed", error=str(exc)[:200])
     except Exception as exc:
         _log.error("notes.transcription_failed", meeting_id=meeting_id, error=str(exc))
+        # A failed run still ends the meeting — don't strand presence as "live".
+        try:
+            from gateway.routes.notes import live_session
+            from gateway.routes.notes.live_speakers import reset as reset_live_speakers
+
+            reset_live_speakers(meeting_id)
+            await live_session.end(meeting_id)
+        except Exception as exc2:
+            _log.warning("notes.live_teardown_failed", error=str(exc2)[:200])
         try:
             async with await _get_db() as db:
                 await _set_run(db, run_id, status="failed", error=str(exc)[:2000])

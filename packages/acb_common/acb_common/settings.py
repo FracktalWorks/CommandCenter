@@ -193,6 +193,31 @@ class Settings(BaseSettings):
     # github_token when blank — see mutation_pr_token property below.
     mutation_pr_token: str = ""
 
+    # Copilot SDK session sandbox (BO-7 phase 2 — containerize Copilot-SDK-
+    # shaped agent execution: code_task and the App Workshop app-builder).
+    # Unlike the mutation-runner sandbox (ships the whole SDK + a task driver
+    # into the container, parsed via stdout sentinels), this containerizes
+    # ONLY the `copilot` CLI binary as a TCP JSON-RPC server (the SDK's own
+    # `cli_url` transport — see copilot/client.py). All host-side
+    # orchestration — CommandCenterCopilotAgent, event streaming, permission
+    # handling — is unchanged; it just talks to a socket instead of a local
+    # subprocess. See orchestrator/copilot_sandbox.py.
+    #
+    # Comma-separated subset of {"code_task", "app_builder"} — which call
+    # sites route through the sandbox. Empty (default) = fully off, in-process
+    # everywhere, zero behavior change. Spawn/readiness failure always falls
+    # back to the existing in-process path — never hard-fails a call because
+    # the sandbox didn't come up.
+    copilot_sandbox_scope: str = ""
+    copilot_sandbox_image: str = "acb-copilot-sandbox:latest"
+    copilot_sandbox_port: int = 41041           # container-internal CLI server port
+    copilot_sandbox_memory_limit: str = "768m"  # docker --memory (one interactive session, not a full self-mutation+pytest run)
+    copilot_sandbox_cpu_limit: str = "1"        # docker --cpus
+    copilot_sandbox_pids_limit: int = 256       # docker --pids-limit (fork-bomb backstop)
+    copilot_sandbox_ready_timeout_seconds: float = 8.0   # spawn+TCP-ready budget before falling back in-process
+    copilot_sandbox_idle_ttl_seconds: int = 600          # app-builder sticky-container reap window
+    copilot_sandbox_state_dir: str = ""         # "" resolves to {agents_clone_dir}/.copilot-sandbox-state
+
     # Agent dependency installs (packages/acb_skills/acb_skills/loader.py
     # _install_agent_deps) — RCE guard (BO-7 fast pass). Agent repos'
     # requirements.txt/pyproject.toml install straight into the SHARED

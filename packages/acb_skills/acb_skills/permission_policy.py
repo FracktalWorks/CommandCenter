@@ -93,7 +93,17 @@ def _workspace_root() -> str | None:
         from acb_skills.write_artifact import (
             _WRITE_ARTIFACT_CONTEXT,
         )
-        return _WRITE_ARTIFACT_CONTEXT.get("workspace_root") or None
+        # BO-7 phase 2: a sandboxed Copilot session (copilot_sandbox.py) reports
+        # PermissionRequest paths relative to the CONTAINER's fixed mount point
+        # (/workspace/repo), not the host workspace_root — the call site sets
+        # permission_check_root for the duration of that call so this containment
+        # check compares against the right root. Unset everywhere else, so this
+        # is a no-op for every non-sandboxed call.
+        return (
+            _WRITE_ARTIFACT_CONTEXT.get("permission_check_root")
+            or _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
+            or None
+        )
     except Exception:
         return None
 

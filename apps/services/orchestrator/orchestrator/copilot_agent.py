@@ -4,10 +4,11 @@ import asyncio
 import contextlib
 import logging
 import os
-from typing import Any, AsyncIterable
+from collections.abc import AsyncIterable
+from typing import Any
 
 from acb_llm import compress_tool_output
-from agent_framework import AgentResponseUpdate, Content, Message
+from agent_framework import AgentResponseUpdate, Content
 from agent_framework.exceptions import AgentException
 from agent_framework_github_copilot import GitHubCopilotAgent
 from copilot import CopilotClient, CopilotSession, SessionEvent
@@ -97,7 +98,22 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
         COPILOT_GITHUB_TOKEN (preferred) or GITHUB_COPILOT_TOKEN is set,
         construct the client with ``github_token`` so the SDK forwards it
         as COPILOT_SDK_AUTH_TOKEN to the CLI subprocess.
+
+        BO-7 phase 2: when ``self._sandbox_cli_url`` is set (by
+        ``code_session.py`` / ``executor.py`` after spawning a
+        ``copilot_sandbox`` container), connect to that external CLI server
+        over TCP instead — the SDK's ``cli_url`` transport — rather than
+        spawning a local subprocess. ``github_token``/``cli_url`` are mutually
+        exclusive per the SDK's own validation, so this branch and the token
+        branch below never both fire.
         """
+        sandbox_cli_url = getattr(self, "_sandbox_cli_url", None)
+        if self._client is None and sandbox_cli_url:
+            self._client = CopilotClient({"cli_url": sandbox_cli_url})
+            logger.info("Copilot client connected to sandbox", cli_url=sandbox_cli_url)
+            await GitHubCopilotAgent.start(self)
+            return
+
         token = (
             os.environ.get("COPILOT_GITHUB_TOKEN")
             or os.environ.get("GITHUB_COPILOT_TOKEN")
@@ -210,7 +226,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
             config["reasoning_effort"] = effort
             try:
                 return await self._client.create_session(config)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 # Model may not support reasoning_effort — retry without.
                 logger.warning(
                     "create_session failed with reasoning_effort=%s; "
@@ -296,7 +312,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
             config["reasoning_effort"] = effort
             try:
                 return await self._client.resume_session(session_id, config)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 logger.warning(
                     "resume_session failed with reasoning_effort=%s; "
                     "retrying without", effort,
@@ -643,7 +659,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
                         timeout=_STREAM_STALL_TIMEOUT,
                     )
                     last_event_time = asyncio.get_running_loop().time()
-                except asyncio.TimeoutError:
+                except TimeoutError:
                     elapsed = (
                         asyncio.get_running_loop().time()
                         - last_event_time
@@ -702,7 +718,7 @@ class CommandCenterCopilotAgent(GitHubCopilotAgent):
             # the abort RPC before the CLI receives it.
             try:
                 await asyncio.shield(copilot_session.abort())
-            except BaseException:  # noqa: BLE001
+            except BaseException:
                 pass
             raise
         finally:

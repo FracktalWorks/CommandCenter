@@ -1,0 +1,60 @@
+# ---- builder: extract the `copilot` CLI binary bundled in the SDK wheel ----
+# Only the CLI binary is needed at runtime (see copilot_sandbox.py) — the
+# Python SDK, agent_framework, and the rest of the orchestrator stay on the
+# HOST and talk to this container over the SDK's own `cli_url` TCP/JSON-RPC
+# transport (copilot/client.py, `_connect_via_tcp`). That's a deliberately
+# smaller surface than Dockerfile.mutation, which ships the whole SDK + a
+# Python task driver into the container.
+FROM python:3.12-slim AS builder
+
+RUN pip install --no-cache-dir github-copilot-sdk \
+    && cp "$(python3 -c 'import copilot, pathlib; print(pathlib.Path(copilot.__file__).parent / "bin" / "copilot")')" /copilot-cli \
+    && chmod +x /copilot-cli
+
+# ---- final: the CLI binary + the runtime its own shell/file/git tools need ----
+# Once containerized, THIS is the environment the session's shell commands,
+# script runs, and local git commits execute in (not the host) — so it needs
+# the same runtime the code_task/app-builder harness contracts assume today.
+FROM python:3.12-slim
+
+WORKDIR /workspace/repo
+
+# git             — the session commits its own edits locally (SCRIPT CONTRACT
+#                   step 6 in orchestrator/code_session.py's harness prompt)
+# ca-certificates — HTTPS to the gateway's /v1 (BYOK provider) and any script
+#                   network calls
+# curl            — installs uv below
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends \
+        git ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+
+# uv — the harness instructions tell sessions "Python deps go through `uv pip
+# install` into the current venv"; mirrors deploy/hostinger/bootstrap.sh's
+# install method so the two environments agree on where `uv` comes from.
+RUN curl -LsSf https://astral.sh/uv/install.sh | sh \
+    && mv /root/.local/bin/uv /root/.local/bin/uvx /usr/local/bin/
+
+COPY --from=builder /copilot-cli /usr/local/bin/copilot
+
+# No credentials baked into the image or the entrypoint: code_task and the
+# App Workshop app-builder are BYOK-only call sites (see code_session.py /
+# agent-app-builder/agents.py — both hardcode a `provider` block, never
+# `github_token`), and BYOK travels in the `create_session` RPC payload the
+# HOST constructs after connecting, not as `docker run -e`. Empirically
+# verified: `copilot --headless --no-auto-login --port <n>` boots and prints
+# "listening on port <n>" with no COPILOT_SDK_AUTH_TOKEN / --auth-token-env
+# present at all — the SDK only adds that flag on its own local-spawn path
+# when a `github_token` option is given, which these call sites never do.
+#
+# --port/--log-level are appended by the caller (copilot_sandbox.py) as
+# trailing `docker run` args — not fixed here — so the port and verbosity
+# stay orchestrator-configurable without an image rebuild.
+ENTRYPOINT ["copilot", "--headless", "--no-auto-update", "--no-auto-login", "--no-color"]
+
+# The agent's or Custom App's workspace is bind-mounted here at runtime
+# (-v <host-dir>:/workspace/repo). /root/.copilot is bind-mounted to a
+# shared, persistent host dir (settings.copilot_sandbox_state_dir) so
+# `resume_session` keeps working when a later chat turn spawns a *new*
+# container for the same thread_id.
+VOLUME ["/workspace/repo", "/root/.copilot"]

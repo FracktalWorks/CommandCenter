@@ -320,6 +320,32 @@ jobs:
             systemctl is-active --quiet acb-gateway || { echo "GATEWAY FAILED TO START"; exit 1; }
             echo "Gateway is active"
 
+            # ── App Workshop T2 (React) build vendor cache ────────────────────
+            # Shared, pinned react/react-dom/esbuild the app-builder agent's
+            # build script (apps/agents/agent-app-builder/build/build_t2.mjs)
+            # resolves against via esbuild's nodePaths — installed ONCE here,
+            # never per-app. Same default-resolution as CUSTOM_APPS_ROOT
+            # (already proven in production for the App Workshop): read an
+            # override from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+            echo "==> Provisioning T2 (React) vendor cache for the App Workshop builder"
+            T2_VENDOR_DIR="$(grep -E '^CUSTOM_APPS_T2_VENDOR_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+            if [ -z "$T2_VENDOR_DIR" ]; then
+              CLONE_DIR="$(grep -E '^AGENTS_CLONE_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+              T2_VENDOR_DIR="${CLONE_DIR:-$HOME/.acb/agents}/vendor/t2-react"
+            fi
+            mkdir -p "$T2_VENDOR_DIR"
+            printf '%s\n' \
+              '{ "name": "cc-app-workshop-t2-vendor", "private": true,' \
+              '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0" } }' \
+              > "$T2_VENDOR_DIR/package.json"
+            if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ]; then
+              (cd "$T2_VENDOR_DIR" && npm install --no-audit --no-fund --omit=dev) \
+                && echo "    + T2 vendor cache installed ($T2_VENDOR_DIR)" \
+                || echo "    ! T2 vendor install failed — T2 (React) apps will fail to build; T1 apps unaffected"
+            else
+              echo "    vendor cache already present, skipping install ($T2_VENDOR_DIR)"
+            fi
+
             echo "==> Rebuilding + restarting workbench (Next.js)"
             cd "$APP_DIR/workbench/control_plane"
             if [ -f package-lock.json ] || [ -f package.json ]; then

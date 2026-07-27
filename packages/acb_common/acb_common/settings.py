@@ -136,6 +136,13 @@ class Settings(BaseSettings):
     # resolve their paths).
     custom_apps_root: str = ""
 
+    # T2 (React) App Workshop build dependency cache — react/react-dom/esbuild,
+    # installed once at deploy time, never per-app. Empty (the default)
+    # resolves to {agents_clone_dir}/vendor/t2-react; override with
+    # CUSTOM_APPS_T2_VENDOR_DIR. Resolution lives in
+    # gateway.routes.apps.t2_vendor_dir().
+    custom_apps_t2_vendor_dir: str = ""
+
     # -- Bot git identity (written into every local clone via git config) --
     # Commits and PRs opened by Self_Mutation_Node carry this identity.
     # Create a dedicated GitHub machine user (or use the GitHub App's identity).

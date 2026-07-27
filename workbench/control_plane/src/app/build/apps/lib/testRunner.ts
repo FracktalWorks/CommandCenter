@@ -262,19 +262,78 @@ const DEFAULT_STEP_TIMEOUT_MS = 5_000;
 /** Hard cap on a `wait` step regardless of what the scenario requests —
  * a safety valve against a runaway scenario. */
 const MAX_WAIT_MS = 2_000;
+/** Per-attempt timeout inside the retry loops below — generous for a
+ * synchronous DOM query + postMessage round trip, short enough that several
+ * attempts fit inside one step's overall budget. */
+const RETRY_ATTEMPT_TIMEOUT_MS = 300;
+/** Delay between retry attempts. */
+const RETRY_INTERVAL_MS = 100;
 
 type SendTestRequest = (method: string, args: unknown[], timeoutMs: number) => Promise<unknown>;
 
+/** Retry an operation that REJECTS while its target element isn't in the DOM
+ * yet (`click`/`type`/`select` throw via ccBridge.ts's `requireEl`) until
+ * `overallTimeoutMs` wall-clock passes, instead of failing on the first
+ * miss. React's idiomatic async data-loading pattern (`useEffect` → a
+ * `cc.storage` round trip → `setState`) commits one render tick after the
+ * frame's `load` event, so a step's target may not exist yet even though
+ * the frame itself is ready — this absorbs that race. The same race exists
+ * for a T1 app that seeds itself asynchronously, so this benefits both. */
+async function retryUntilResolved<T>(
+  attempt: () => Promise<T>,
+  overallTimeoutMs: number
+): Promise<T> {
+  const deadline = Date.now() + overallTimeoutMs;
+  let lastError: unknown;
+  for (;;) {
+    try {
+      return await attempt();
+    } catch (e) {
+      lastError = e;
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      await new Promise((resolve) => setTimeout(resolve, Math.min(RETRY_INTERVAL_MS, remaining)));
+    }
+  }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "unknown error"));
+}
+
+/** Poll an operation that RESOLVES but may report "not found yet" — ccBridge
+ * `text`/`exists` never throw on a missing element, they just resolve
+ * `null`/`false`, so the reject-and-retry approach above doesn't apply to
+ * them. Retries while `notFoundYet(result)` holds, same deadline/interval
+ * shape as `retryUntilResolved`. */
+async function pollUntilFound<T>(
+  attempt: () => Promise<T>,
+  notFoundYet: (result: T) => boolean,
+  overallTimeoutMs: number
+): Promise<T> {
+  const deadline = Date.now() + overallTimeoutMs;
+  for (;;) {
+    const result = await attempt();
+    const remaining = deadline - Date.now();
+    if (!notFoundYet(result) || remaining <= 0) return result;
+    await new Promise((resolve) => setTimeout(resolve, Math.min(RETRY_INTERVAL_MS, remaining)));
+  }
+}
+
 async function runStep(step: TestStepAction, send: SendTestRequest, timeoutMs: number): Promise<void> {
+  const attemptTimeoutMs = Math.min(RETRY_ATTEMPT_TIMEOUT_MS, timeoutMs);
   switch (step.action) {
     case "click":
-      await send("test.click", [step.selector], timeoutMs);
+      await retryUntilResolved(() => send("test.click", [step.selector], attemptTimeoutMs), timeoutMs);
       return;
     case "type":
-      await send("test.type", [step.selector, step.text], timeoutMs);
+      await retryUntilResolved(
+        () => send("test.type", [step.selector, step.text], attemptTimeoutMs),
+        timeoutMs
+      );
       return;
     case "select":
-      await send("test.select", [step.selector, step.value], timeoutMs);
+      await retryUntilResolved(
+        () => send("test.select", [step.selector, step.value], attemptTimeoutMs),
+        timeoutMs
+      );
       return;
     case "wait":
       await new Promise<void>((resolve) => {
@@ -295,12 +354,22 @@ async function evaluateAssertion(
       const { passed, actual } = evaluateStorageAssertion(store, assertion);
       return { assertion, passed, actual };
     }
+    const attemptTimeoutMs = Math.min(RETRY_ATTEMPT_TIMEOUT_MS, timeoutMs);
     if (assertion.kind === "dom-text") {
-      const actual = (await send("test.text", [assertion.selector], timeoutMs)) as string | null;
+      const actual = (await pollUntilFound(
+        () => send("test.text", [assertion.selector], attemptTimeoutMs),
+        (r) => r === null,
+        timeoutMs
+      )) as string | null;
       const { passed } = evaluateDomTextAssertion(assertion, actual);
       return { assertion, passed, actual };
     }
-    const actual = (await send("test.exists", [assertion.selector], timeoutMs)) as boolean;
+    const expectPresent = assertion.expect;
+    const actual = (await pollUntilFound(
+      () => send("test.exists", [assertion.selector], attemptTimeoutMs),
+      (r) => r === false && expectPresent === true,
+      timeoutMs
+    )) as boolean;
     const { passed } = evaluateDomExistsAssertion(assertion, actual);
     return { assertion, passed, actual };
   } catch (e) {

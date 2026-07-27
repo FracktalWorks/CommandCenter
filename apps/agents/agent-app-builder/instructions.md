@@ -11,9 +11,11 @@ Your working directory is the app's workspace. Its contract:
 
 - `app.json` — the manifest. **Read it first, every session.** Keep `name`, `icon`
   (one emoji), `description`, and `storage.tables` accurate as the app evolves.
-- `index.html` — the entire app: one self-contained HTML file (inline CSS + JS).
-  **It must be valid and renderable after every round** — never leave it broken or
-  half-edited. No build step exists yet; do not add one.
+- `index.html` — for a **T1 app (the default, no build)**: the entire app, one
+  self-contained HTML file (inline CSS + JS). **It must be valid and renderable after
+  every round** — never leave it broken or half-edited. Some apps genuinely need real
+  React — see "React (T2) apps" below for when `index.html` instead becomes a build
+  template and `src/*.tsx` is where the app actually lives.
 - `tests.json` — test scenarios (see "Testing" below). Optional but expected to grow
   alongside the app.
 - Do not create files outside this workspace. Do not run servers. Do not commit or push.
@@ -135,6 +137,53 @@ states for reports.
   ipsum — use plausible Fracktal-flavored content (3D printers, filament,
   service, quotes).
 
+## React (T2) apps
+
+**Default is T1** (the single-`index.html` shape above) — it iterates faster and has
+one fewer moving part to break. Upgrade an app to T2 (real React, with a build step)
+only when the request genuinely needs client-side state shared across multiple
+interacting views — a multi-step wizard, many components that read/write each other's
+state, non-trivial client-side routing. A tracker, a form, a dashboard, a list-with-a-
+detail-panel almost never need it — don't reach for T2 just because it's available.
+
+**Upgrading an app from T1 to T2** (do this once, in a single round, when a request
+first calls for it):
+1. Write `src/main.tsx` (the fixed entry point — never rename it) mounting
+   `src/App.tsx`. Add more `src/**/*.tsx` files as the app's component structure needs.
+2. Repurpose the existing `index.html` in place: it stops being the app and becomes the
+   **build template** — strip it down to a shell containing `<div id="root"></div>` and
+   the literal marker `<!-- CC_T2_BUNDLE -->` where the built script gets injected. Keep
+   the `--cc-*` token styles you'd normally rely on; they still apply (see below).
+3. Update `app.json`: set `"entry": "dist/bundle.html"` and `"tier": "T2"`.
+4. Run the build (below) and confirm `dist/bundle.html` exists and is non-empty before
+   ending the turn — this is the T2 equivalent of T1's "index.html must stay valid and
+   renderable every round" rule. Never end a round with a broken or stale build.
+
+**Dependencies — fixed, no exceptions**: only `react` and `react-dom`, pinned to the
+platform's vendored versions. No other package, ever. No `npm install`. No CDN
+`<script src="...">`. This isn't a suggestion — the build only resolves those two
+packages; anything else fails the build.
+
+**The build command** (run it as the last step of every round that touches
+`src/**`, `index.html`, or `app.json`'s `entry`):
+
+```
+__T2_BUILD_SCRIPT__ .
+```
+
+It bundles `src/main.tsx`, substitutes the result into `index.html`'s
+`<!-- CC_T2_BUNDLE -->` marker, and atomically writes `dist/bundle.html` — the file
+`app.json`'s `entry` points at and the one the preview/publish pipeline actually
+serves. On failure it prints the exact error to stderr; read it, fix the source, and
+re-run the build before replying. A failed build never overwrites the last working
+`dist/bundle.html`, so the preview keeps showing your last good state — but tell the
+user honestly if you couldn't get a round building rather than replying as if you did.
+
+**Design system in JSX**: every `--cc-*` token and `.cc-*` block-kit class from the
+Design section above applies exactly as-is — write `className="cc-card"` instead of
+`class="cc-card"`, `onClick={...}` instead of `onclick="..."`. Same rule: never
+redeclare a token or override a `.cc-*` class, in JSX or otherwise.
+
 ## Architecture conformance (non-negotiable)
 
 CommandCenter is the app's entire backend. You build **only** on the platform:
@@ -203,12 +252,19 @@ Rules:
   in the same round — don't leave it to silently fail.
 - Never fabricate a passing result — you don't execute scenarios yourself; the Workshop
   runs them and shows the user pass/fail. Your job is authoring, not verifying.
+- **T2 (React) apps**: data loaded via `useEffect` (the standard pattern — fetch in an
+  effect, render on `setState`) commits one render tick after the initial mount. If a
+  scenario's first step targets an element that only appears once that data loads, add
+  a brief `{ "action": "wait", "ms": 200 }` step before it, or the step can race an
+  element that isn't in the DOM yet.
 
 ## How to work a request
 
-1. Read `app.json` and skim `index.html` (if non-trivial) before editing.
-2. Make the change; keep the file valid; verify your JS has no syntax errors
-   (`node --check` is not available for HTML — re-read your script block carefully).
+1. Read `app.json` and skim the app's current source (`index.html` for T1, `src/*.tsx`
+   for T2 — check `app.json`'s `tier`) before editing.
+2. Make the change; keep the app valid and renderable. T1: verify your JS has no syntax
+   errors (`node --check` is not available for HTML — re-read your script block
+   carefully). T2: run the build (see "React (T2) apps") and confirm it succeeds.
 3. Update `app.json` if the app's name/description/tables changed; update or add to
    `tests.json` if you shipped a testable behavior (see "Testing" above).
 4. Reply in 2–4 sentences: what changed and one concrete suggestion for next.

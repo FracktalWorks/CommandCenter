@@ -333,9 +333,9 @@ same vocabulary. The effective permission at runtime is always the **intersectio
 
 | Tier | What | When |
 |---|---|---|
-| T1 | Single-file HTML/JS (no build) | Phase 0 |
-| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html` (web-artifacts-builder pattern; vendored deps, no CDN) | Phase 1 |
-| T3 | Server-side apps (Next.js/API routes) in per-app containers | Deferred until **BO-7** lands. Explicitly out of v1: `cc.*` removes most reasons small software needs a server |
+| T1 | Single-file HTML/JS (no build) | Phase 0 — **built** |
+| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html` (vendored deps via a shared, deploy-provisioned cache — never per-app `npm install` — no CDN) | Phase 1 — **built** (`agent-app-builder/build/build_t2.mjs`; `entry`/`tier` in `app.json`; the builder upgrades an app from T1→T2 mid-conversation when a request calls for it, no separate creation-time picker) |
+| T3 | Server-side apps (backend compute), JS/TS runtime | **Scoped, not built.** Deferred until **BO-7** lands (platform-wide sandbox hardening — today's code execution is a bare env-scrubbed subprocess, no container/cgroup/seccomp). Decided-but-unbuilt substrate: **not** Docker-per-app — warm Deno subprocesses with explicit `--allow-*` flags, supervised by the gateway (Val Town's `deno-http-worker` pattern) — chosen for the 4GB VPS. Cron/webhook-triggered functions additionally need BO-20 (durable job queue), currently absent |
 
 ### 4.2 The builder (Workshop session)
 

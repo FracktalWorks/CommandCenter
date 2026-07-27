@@ -36,11 +36,19 @@ function, table, and seam; **read this before changing how persistence works**),
 
 ## 1. The two axes of agent durability
 
-> **Now three.** [`agent_architecture.md`](agent_architecture.md) §3 adds **Knowledge** — an
-> agent's authored KB/RAG corpus, which is neither Code (not executable) nor State (not
-> accumulated). It is git-backed and PR-reviewed like code, and compiles to a derived,
-> sha-pinned vector index. The two axes below remain exactly as stated; Knowledge sits
-> between them.
+> **Now three, and "Code" no longer implies Git.**
+> [`agent_architecture.md`](agent_architecture.md) §4 adds **Knowledge** — an agent's authored
+> KB/RAG corpus, which is neither Code (not executable) nor State (not accumulated). It is
+> review-gated like code and compiles to a derived, version-pinned index.
+>
+> That doc also narrows this one's scope. It targets agents that live **inside CommandCenter**
+> — first-party agents in `apps/agents/` and agents built by the Agent Creator — and splits
+> them into **declarative** (manifest + instructions + KB, stored in Postgres and published
+> like a Custom App) and **code** (a real `agents.py`, in the monorepo). Four of six
+> first-party agents are declarative in everything but form. For a declarative agent the
+> "Code goes to git, human-reviewed" rule below becomes *"the manifest is versioned and
+> published behind an approval gate"* — same intent, no PR, and it removes the DEV-ONLY
+> monorepo-mutation limitation in §6 for the majority case.
 
 Every agent has two fundamentally different kinds of persistent state. They are
 stored by two different mechanisms, and conflating them is the mistake this

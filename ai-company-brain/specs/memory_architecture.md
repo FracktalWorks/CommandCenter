@@ -7,8 +7,9 @@ survives a run, how it gets corrected, and how all of that holds up when several
 one agent.
 
 **Companions:**
-[`agent_architecture.md`](agent_architecture.md) (**the scope lattice, manifest, and the
-authored-Knowledge layer this doc's tiers sit inside**) ·
+[`agent_architecture.md`](agent_architecture.md) (**the scope lattice, the manifest, and the
+authored-Knowledge layer these tiers sit inside — read it first: it decides whether an agent
+is declarative or code, which is what keys every compartment below**) ·
 [`agent_file_and_memory_framework.md`](agent_file_and_memory_framework.md) (the durable-state
 contract — the three folders) ·
 [`agent_persistence_implementation.md`](agent_persistence_implementation.md) (the blob store,

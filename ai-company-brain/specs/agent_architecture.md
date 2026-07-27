@@ -1,508 +1,556 @@
-# Agent Architecture — scopes, manifest, and lifecycle
+# Agent Architecture — how agents are declared, stored, and run
 
 **Status:** Draft / RFC · **Date:** 2026-07-26 · **Owner:** vjvarada
+**Supersedes:** the distributed-repo framing in the 2026-07-26 first draft of this file.
 
-How an agent is declared, what it can see at each layer, how its knowledge is authored and
-reviewed, and how it gets permanently better. This is the foundation the multiplayer work
-sits on: every question the room model asks about an agent — can it be shared, whose memory
-does it hold, whose files are these — is answered by the manifest defined here.
+How an agent is defined, what it can see at each layer, how its knowledge is authored, and how
+it gets permanently better — for agents that live **inside CommandCenter**: first-party agents
+in `apps/agents/`, and agents built in-platform by the upcoming **Agent Creator**.
+
+Externally-hosted agents cloned from third-party GitHub repos were the VS Code-era model. They
+still load, but they are no longer the shape the architecture is designed around, and nothing
+new should be built that way.
 
 **Companions:**
 [`memory_architecture.md`](memory_architecture.md) (the six memory tiers) ·
 [`agent_file_and_memory_framework.md`](agent_file_and_memory_framework.md) (the three folders) ·
 [`agent_persistence_implementation.md`](agent_persistence_implementation.md) (the blob store) ·
+[`../../docs/app-workshop/README.md`](../../docs/app-workshop/README.md) (**the precedent this
+copies**) ·
 [`../../docs/multiplayer/agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing) ·
 [`../../docs/multiplayer/memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (clearance)
 
 ---
 
-## 1. The scope model, formalized
+## 1. The thesis: an agent is a declaration, not a program
 
-The four scopes proposed are the right decomposition, and they map cleanly onto machinery
-that mostly exists. Two changes make the lattice complete:
+Look at what our first-party agents actually contain:
 
-- **Agent Base splits in two.** Instructions and skills are *code*; a KB/RAG corpus is
-  *authored knowledge*. Both are git-backed and review-gated, but knowledge isn't executable
-  and compiles to a derived index rather than being imported. Conflating them means either
-  reviewing documents like code or shipping a corpus nobody reviewed. §3.
-- **A team/room layer is missing.** Between "one user" and "everyone using this agent" sits
-  the case the multiplayer work is built around: a sales team, or a live room working one
-  deal. Without it, a fact learned in a deal room has nowhere to go but the agent-wide bucket.
+| Agent | `agents.py` | What the code does |
+|---|---|---|
+| `agent-orchestrator` | **24 lines** | Calls `build_orchestrator_agent()`. Pure delegation. |
+| `agent-app-builder` | **48 lines** | Imports tools, reads `instructions.md`, returns an agent. |
+| `agent-apis-config` | **63 lines** | Same shape. |
+| `agent-task-manager` | **136 lines** | Imports 25 GTD tools, reads instructions, sets a model tier. |
+| `agent-whatsapp-assistant` | 480 lines | Real bespoke logic. |
+| `agent-email-assistant` | 1 954 lines | Real bespoke logic. |
 
-The full lattice, most-shared to most-private:
+**Four of six are boilerplate a manifest expresses exactly**: read `instructions.md`, import a
+named set of tools, pick a model tier, return one agent. There is no control flow. The Python
+is a costume.
+
+So the central split:
+
+| | **Declarative agent** *(the default)* | **Code agent** *(the exception)* |
+|---|---|---|
+| Defined by | manifest + instructions + KB | manifest + `agents.py` |
+| Authored in | the Agent Creator, or a manifest file in-repo | VS Code, in `apps/agents/` |
+| Stored in | Postgres — `agent_defs` + `agent_def_versions` | Git (the monorepo) |
+| Runs on | **one shared generic MAF builder** | its own factory |
+| Changed by | edit draft → publish version (approval-gated) | pull request |
+| Who can create one | anyone with the permission | engineers |
+| Reviewed by | the approval inbox (a manifest + prose diff) | code review |
+
+**The test for needing code:** does the agent need control flow a manifest can't express — a
+bespoke multi-step pipeline, a state machine, a non-tool integration? If the answer is
+"instructions plus tools plus knowledge," it's declarative. On today's roster that's four of
+six, and the two exceptions are the two with genuine logic.
+
+### Why this matters beyond ergonomics
+
+It resolves three separate problems at once:
+
+1. **It removes the production blocker in `DESIGN_LIMITATION_native_maf_mutation.md`.** A
+   declarative agent's change is a row version behind an approval gate — no monorepo PR, no
+   CI, no third-party pushing to a shared repo. The DEV-ONLY limitation then applies only to
+   **code agents**, which are first-party by definition. The hardest unresolved question about
+   the workbench stops applying to the majority case.
+2. **The Agent Creator never has to generate Python.** That is where agent builders usually
+   fail — generated code needs review, tests, and a sandbox. Generating a *manifest* needs a
+   schema validator.
+3. **The manifest becomes load-bearing instead of decorative** — see §3, where three agents
+   currently contradict their own config file and nothing notices.
+
+---
+
+## 2. The scope lattice
+
+The four proposed scopes are the right decomposition. Two changes complete them: **Agent Base
+splits into Code and Knowledge** (§4), and **a team/room layer** sits between one user and
+everyone.
 
 | # | Layer | Holds | Runtime-mutable | Reviewed | Store |
 |---|---|---|---|---|---|
-| 1 | **Global** | Injected skills · integrations (APIs/MCP) · other agents as skills · org KB + `org:global` memory | memory yes; registry admin-only | partial | registry, Mem0 `org:global` |
-| 2 | **Agent Base — Code** | `agents.py`, `config.json`, `instructions.md`, local skills | **no** — mutation opens a PR | ✅ human PR | Git |
-| 3 | **Agent Base — Knowledge** | Curated docs, templates, playbooks, the RAG corpus | **no** at runtime — the agent *proposes*, a human merges | ✅ human PR | Git → derived vector index |
-| 4 | **Agent Shared State** | What the agent learns across everyone who uses it | yes | ✗ | Mem0 `agent:<name>#<instance>` + blob `instance` |
+| 1 | **Global** | Injected skills · integrations (API/MCP) · other agents as skills · `org:global` memory | memory yes; registry admin-only | partial | registry, Mem0 `org:global` |
+| 2 | **Agent Base — Code** | Declarative: the manifest. Code agents: `agents.py`, skills | **no** — publish or PR | ✅ | `agent_defs` / Git |
+| 3 | **Agent Base — Knowledge** | Curated docs, templates, playbooks, the RAG corpus | **no** at runtime — the agent *proposes* | ✅ | Git or `agent_kb_source` → derived index |
+| 4 | **Agent Shared State** | What it learns across everyone who uses it | yes | ✗ | Mem0 `agent:<name>#<instance>` + blob `instance` |
 | 5 | **Team / Room** | Facts and artifacts belonging to a team or a live room | yes | ✗ | `t:<team>` · `room:<thread>` · `subject:<entity>` |
-| 6 | **User** | Private memory, private artifacts | yes | ✗ | `user:<email>`, `prefs:<email>`, blob `u:<email>` |
+| 6 | **User** | Private memory, private artifacts | yes | ✗ | `user:`, `prefs:`, blob `u:<email>` |
 
-Layers 4–6 are the compartments already designed in
-[`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md); layers 2–3 are new
-territory and are what this document is mostly about.
+> **"Shared with all users" is ambiguous** between *all users of this agent* (layer 4) and
+> *all users in this room* (layer 5). Different keys. And for a `personal`-instanced agent
+> layer 4 **does not exist** — there is no set of other users to share with. The manifest
+> states which, rather than leaving it implied.
 
-**One clarification worth pinning down.** "Shared User Scope — shared with all users" is
-ambiguous between *all users of this agent* and *all users in this room*. They're different
-layers (4 vs 5) and they need different keys. And for a `personal`-instanced agent, layer 4
-**does not exist at all** — there is no set of other users to share with. The manifest makes
-that explicit rather than leaving it implied.
-
----
-
-## 2. What already exists
-
-| Scope element | Status |
-|---|---|
-| Universal skill injection across all agents | ✅ `acb_skills` + `_tool_injection.py` |
-| Integrations (APIs, MCP servers) declared per agent | ✅ `config.json` `integrations` · `mcp_servers` (migration 13) |
-| Org / agent / user memory scopes | ✅ `scope_key()` — three scopes today, extended in `memory-clearance.md` |
-| Three folders + durable blob store | ✅ migration 71, `blob_store.py` |
-| Instructions / prompt as git-backed code | ✅ agent repos + `dynamic_agents` |
-| Approval-gated self-mutation | ✅ mutation sandbox → `pending_commits` → human approve |
-| Eval gate before promotion | ✅ migration 06 |
-| Agent-to-agent delegation | ⚠️ partial — `call_agent_background` exists, no declared contract |
-| **Agent Base Knowledge (KB/RAG)** | ❌ **not built** — §5 |
-| **A single manifest declaring all of it** | ❌ **not built** — §4 |
-| Team / room compartments · instancing | ❌ designed, not built (multiplayer Phase 3) |
-
-So the honest gap is two things: **a declared KB layer**, and **one manifest that ties the
-scopes together** so creating an agent is filling in a form rather than knowing which six
-subsystems to wire.
+**The per-user partition convention is already proven here.** `app_data` (migration 114) keys
+rows by `(table, key, user_scope)` where *"`user_scope` `''` = shared row, else a per-user
+partition."* That is exactly the instance key proposed for the blob store in
+[`memory_architecture.md`](memory_architecture.md) §6.1 — so it follows an existing
+CommandCenter convention rather than inventing one.
 
 ---
 
-## 3. Three durability axes
+## 3. Two findings in the current agents
 
-The framework doc has two — Code and State — and says *"conflating them is the mistake this
-framework exists to prevent."* A KB is a third thing, and conflating it with either is the
-next mistake.
+### 3.1 `runtime` is decorative — half the roster contradicts it
 
-| Axis | What it is | Store | Reviewed | Changes at runtime |
+Every first-party agent declares `"runtime": "maf"` in `config.json`. Three of them build a
+**Copilot SDK** agent anyway:
+
+| Agent | Declared | `agents.py` imports | Actually builds |
+|---|---|---|---|
+| `agent-apis-config` | `maf` | `agent_framework_github_copilot` ×6 | `GitHubCopilotAgent` |
+| `agent-app-builder` | `maf` | `agent_framework_github_copilot` ×6 | `GitHubCopilotAgent` |
+| `agent-task-manager` | `maf` | `agent_framework_github_copilot` ×6 | `GitHubCopilotAgent` |
+| `agent-email-assistant` | `maf` | `agent_framework` | MAF ✅ |
+| `agent-whatsapp-assistant` | `maf` | `agent_framework` | MAF ✅ |
+| `agent-orchestrator` | `maf` | (delegates) | MAF ✅ |
+
+The loader imports `agents.py` and uses whatever the factory returns, so `runtime` is never
+checked against reality. This contradicts AGENTS.md Global Constraints #6 and #9 (*"MAF is the
+PRIMARY native agent runtime… the Copilot SDK is not a general execution path for
+specialist agents"*) — the constraint is stated but nothing enforces it.
+
+Note the inversion: **the thin agents are Copilot; the agents with real logic are MAF.** The
+SDK isn't buying those three anything. It's VS Code-era scaffolding.
+
+### 3.2 Those same three silently bypass the B6 permission policy
+
+`permissions_sandbox_b6.md` replaced `approve_all` with a risk-aware handler. The executor
+applies it at five sites, all guarded the same way
+(`executor.py:609, 2139, 2633, 3513, 4042`):
+
+```python
+if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
+    _a._permission_handler = _copilot_permission_handler()
+```
+
+But those agents set it themselves in their factory:
+
+```python
+default_options={..., "on_permission_request": PermissionHandler.approve_all}
+```
+
+so `_permission_handler` is **not** None, the guard skips, and the risk-aware policy never
+applies. Every shell command, file write, and network call runs auto-approved. B6 shipped in
+the executor and is defeated in three agent factories.
+
+Both findings have the same root cause and the same fix: **an agent's own code is
+authoritative over platform policy.** Declarative agents remove the failure entirely, because
+there is no factory to override anything.
+
+---
+
+## 4. Three durability axes
+
+The framework doc has two — Code and State — and says conflating them is the mistake it exists
+to prevent. A KB is a third thing, and conflating it with either is the next mistake.
+
+| Axis | What | Store | Reviewed | Runtime-mutable |
 |---|---|---|---|---|
-| **Code** | What the agent *is* — executable | Git | ✅ PR | ✗ |
-| **Knowledge** | What the agent *has been taught* — authored, not executable | Git + a **derived** vector index | ✅ PR | ✗ (proposals only) |
-| **State** | What the agent *has accumulated* — runtime | Blob store + Mem0 | ✗ | ✓ |
+| **Code** | What the agent *is* | `agent_defs` (declarative) or Git (code agents) | ✅ | ✗ |
+| **Knowledge** | What it *has been taught* — authored, not executable | Git or `agent_kb_source`, plus a **derived** index | ✅ | ✗ (proposals only) |
+| **State** | What it *has accumulated* | Blob store + Mem0 | ✗ | ✓ |
 
-Why Knowledge must be git-backed rather than accumulated:
-
-- **Reviewable.** A pricing playbook or an escalation policy is closer to prompt than to
-  data — it changes behaviour on every run. It deserves the same gate as code, and a document
-  diff is *far easier* to review than a code diff, so the gate is cheap.
-- **Reproducible.** The vector index is a **build artifact**, keyed by the git sha. Retrieval
-  is reproducible, rollback is instant, and an eval result is meaningful because the corpus
-  behind it is pinned.
-- **Testable.** Golden question → expected-document pairs live beside the corpus and gate a
-  KB change the way trajectories gate a code change.
-- **No drift.** A corpus that accumulates at runtime is unreviewable and slowly rots. Freshness
-  becomes a pull-request problem, not a data-quality problem.
-
-State still flows *into* Knowledge — but through a human gate, which is the mechanism in §8
-and the thing that makes an agent permanently better rather than merely full.
+Knowledge must be reviewed and versioned because it changes behaviour on every run — it is
+closer to prompt than to data — and because a document diff is *far cheaper* to review than a
+code diff, so the gate costs almost nothing. The index is a build artifact keyed by the source
+version, which makes retrieval reproducible, rollback instant, and eval results meaningful.
 
 ---
 
-## 4. The agent manifest
+## 5. Storage — copy Custom Apps exactly
 
-Creating an agent should mean filling in one declaration. Everything else — compartment keys,
-blob instance, tool surface, KB index, room eligibility, delegation edges — is derived by the
-platform from this. Extends today's `config.json`, so existing agents remain valid.
+The App Workshop already solved "a non-engineer authors an artifact in-platform, it is
+versioned, publishable, shareable, and durable." An agent is the same problem.
+
+```sql
+-- migration 122_agent_definitions.sql  (mirrors 114/115)
+
+CREATE TABLE IF NOT EXISTS agent_defs (          -- the editable DRAFT (edit-model)
+    id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    slug               TEXT UNIQUE NOT NULL,     -- the stable agent_name key
+    name               TEXT NOT NULL,
+    owner_email        TEXT NOT NULL,
+    manifest           JSONB NOT NULL DEFAULT '{}',   -- §6
+    instructions       TEXT NOT NULL DEFAULT '',
+    status             TEXT NOT NULL DEFAULT 'draft'
+                         CHECK (status IN ('draft','live','archived')),
+    live_version       INT,                      -- NULL until first publish
+    builder_session_id TEXT,                     -- the Agent Creator chat that made it
+    created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+CREATE TABLE IF NOT EXISTS agent_def_versions (  -- immutable PUBLISHED snapshots (run-model)
+    id              UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+    agent_id        UUID NOT NULL REFERENCES agent_defs(id) ON DELETE CASCADE,
+    version         INT  NOT NULL,
+    manifest        JSONB NOT NULL,
+    instructions    TEXT NOT NULL,
+    kb_version      TEXT,                        -- the KB index this version runs against
+    scope_set_hash  TEXT,                        -- sha of sorted capability scopes — re-consent trigger
+    release_notes   TEXT DEFAULT '',
+    published_by    TEXT NOT NULL,
+    published_at    TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (agent_id, version)
+);
+
+CREATE TABLE IF NOT EXISTS agent_def_grants (    -- same subject vocabulary as app_grants
+    agent_id   UUID NOT NULL REFERENCES agent_defs(id) ON DELETE CASCADE,
+    subject    TEXT NOT NULL,        -- 'org' | '<email>' | 'team:<slug>' | 'agent:<name>'
+    granted_by TEXT,
+    granted_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    PRIMARY KEY (agent_id, subject)
+);
+```
+
+Three properties inherited from the Custom Apps model, all of which matter here:
+
+- **Edit-model / run-model split.** Runs execute a published *version*, never the draft. So
+  **publishing does not affect an in-flight run** — the same principle as clearance and acting
+  identity being fixed at run start in the multiplayer design. A room whose agent is
+  redefined mid-run is a bug, and this makes it impossible.
+- **`scope_set_hash`.** When a new version widens what the agent can touch, the hash changes
+  and consent is re-requested rather than silently inherited. Custom Apps already does this
+  for tool grants; agents need it more.
+- **Rollback is a pointer move.** `live_version` repoints to an older row.
+
+`dynamic_agents` (migration 15) stays as the **resolved runtime view** — one row per runnable
+agent, whether it came from `agent_defs`, `apps/agents/`, or a legacy clone — so every existing
+consumer keeps working.
+
+---
+
+## 6. The manifest
+
+One declaration, from which the platform derives everything. Declarative and code agents use
+the same schema; a code agent adds `"entrypoint"`.
 
 ```jsonc
 {
-  "name": "sales-assistant",
+  "schema_version": 1,
+  "slug": "sales-assistant",
+  "name": "Sales Assistant",
   "description": "Zoho pipeline, deals and follow-ups for the sales team.",
-  "runtime": "maf",
-  "model_tier": "tier-balanced",
 
-  // ── Who it's for and whose memory it keeps  → agent-kinds.md ──────────
-  "sharing": {
-    "instancing": "team",          // personal | team | shared
-    "visibility": "team",          // private | team | organization
+  "kind": "declarative",             // declarative | code
+  // "entrypoint": "apps/agents/agent-email-assistant/agents.py:build_agents",  // code only
+
+  "runtime": "maf",                  // maf | copilot — VALIDATED against the entrypoint (§3.1)
+  "model": { "tier": "tier-balanced", "fallback": "tier-fast" },
+
+  "sharing": {                       // → agent-kinds.md
+    "instancing": "team",            // personal | team | shared
+    "visibility": "team",            // private | team | organization
     "team": "sales",
-    "shareable": true,             // may its sessions become rooms?
-    "outputs_visibility": "instance"   // instance | room | org
+    "shareable": true,               // may its sessions become multiplayer rooms?
+    "outputs_visibility": "instance" // instance | room | org
   },
 
-  // ── Layer 1: what the platform lends it ──────────────────────────────
   "capabilities": {
     "skills": ["quoting", "zoho_pipeline"],
     "integrations": ["zoho-crm"],
     "optional_integrations": ["gmail-send"],
     "mcp_servers": ["drawio"],
-    "agents": [                     // other agents as skills → §6
-      { "name": "billing", "mode": "call",
+    "tool_scope": ["remember", "save_note", "emit_generative_ui"],
+    "agents": [                      // other agents as skills → §8
+      { "slug": "billing",  "mode": "call",
         "when": "invoice, payment or dunning questions" },
-      { "name": "delivery", "mode": "handoff",
+      { "slug": "delivery", "mode": "handoff",
         "when": "the conversation turns to project execution" }
     ]
   },
 
-  // ── Layer 3: authored knowledge → §5 ─────────────────────────────────
-  "knowledge": {
+  "knowledge": {                     // → §7
     "sources": [
-      { "path": "kb/PLAYBOOK.md",    "always_on": true  },
-      { "path": "kb/INDEX.md",       "always_on": true  },
-      { "path": "kb/pricing/**.md",  "always_on": false, "distill": false },
-      { "path": "kb/past-deals/**",  "always_on": false, "distill": true  }
+      { "path": "kb/INDEX.md",      "always_on": true },
+      { "path": "kb/PLAYBOOK.md",   "always_on": true },
+      { "path": "kb/pricing/**.md", "always_on": false },
+      { "path": "kb/past-deals/**", "always_on": false, "distill": true }
     ],
-    "index": {
-      "embed_model": "text-embedding-3-small",
-      "chunking": "source_aware",   // §5.2
-      "retrieval": "hybrid",        // semantic + lexical + age decay — §5.3
-      "top_k": 6
-    }
+    "index": { "chunking": "source_aware", "retrieval": "hybrid", "top_k": 6 }
   },
 
-  // ── Layers 4-6: what it may remember, and how ────────────────────────
   "memory": {
     "compartments": ["prefs", "user", "subject", "room", "agent", "org"],
     "always_on_budget_tokens": 2000,
-    "write": {
-      "gate": "decisions_only",     // extraction hygiene — §5.4
-      "distill": true               // never embed raw turns
-    }
+    "write": { "gate": "decisions_only", "distill": true }
   },
 
-  // ── The gate ─────────────────────────────────────────────────────────
-  "evals": { "trajectories": "evals/golden/*.yaml", "kb_recall": "evals/kb/*.yaml" },
-  "authority": "propose"            // propose | execute — outward writes
+  "permissions": { "mode": "enforce", "authority": "propose" },  // never approve_all (§3.2)
+  "evals": { "trajectories": "evals/golden/*.yaml", "kb_recall": "evals/kb/*.yaml" }
 }
 ```
 
-**What the platform derives from it** — the point of the exercise:
+**What the platform derives** — the point of the exercise:
 
 | Derived | From |
 |---|---|
-| `agent:sales#t:sales` memory compartment | `sharing.instancing` + `team` |
+| Memory compartment `agent:sales#t:sales` | `sharing.instancing` + `team` |
 | Blob-store instance `t:sales` | same |
 | Whether the Share button is enabled | `sharing.shareable` |
 | Which compartments enter the clearance set | `memory.compartments` ∩ the run's clearance |
 | The injected tool surface | `capabilities.*` |
-| The KB index name + build trigger | `knowledge` + the repo sha |
-| Which agents it may delegate to, and how | `capabilities.agents` |
-| The eval gate before it can be promoted | `evals` |
+| The KB index and when to rebuild it | `knowledge` + source version |
+| Delegation edges and their depth guard | `capabilities.agents` |
+| The permission handler | `permissions.mode` — **platform-owned, not agent-owned** |
+| The eval gate before publish | `evals` |
+
+### 6.1 One generic builder
+
+A declarative agent has no factory. The platform has exactly one:
+
+```python
+def build_declarative_agent(defn: AgentDefinition, ctx: RunContext) -> ChatAgent:
+    return ChatAgent(
+        instructions = assemble_context(defn, ctx),        # §9
+        tools        = resolve_tools(defn.capabilities, ctx),
+        chat_client  = gateway_v1_client(defn.model, ctx),
+    )
+```
+
+Every declarative agent runs the same code path, so observability, permissions, caching, and
+memory improvements land once for all of them — instead of being re-implemented, or quietly
+overridden, per factory.
 
 ---
 
-## 5. Agent Base Knowledge — the KB layer
+## 7. Knowledge — the KB layer
 
-The design borrows from [how Cerebras built their internal knowledge base][cer] (15k
-queries/day), which is the most useful public account of an enterprise KB that actually works,
-and from the `agent-startup-guru` index pattern (§9).
+Drawing on [how Cerebras built their internal knowledge base][cer] (15k queries/day) and the
+index-file pattern from `agent-startup-guru`.
 
-### 5.1 One table, many sources
-
-Cerebras put every source — Slack threads, PRs, Confluence, netlists — into **a single
-Postgres table** of embeddings + distilled summaries + metadata, queryable through one
-interface. That matches what we already do (`mem0_memories` is one collection partitioned by
-scope key) and it's the right call: one retrieval path to optimise, one place to add hybrid
-search, one index to evaluate.
-
-So the agent KB is **not** a new store. It's one more partition:
+**One table, many sources.** Cerebras put every source into a single Postgres table of
+embeddings + distilled summaries + metadata, queryable through one interface. That matches
+what `mem0_memories` already does. So the KB is one more partition, not a new store:
 
 ```sql
--- migration 121_agent_kb.sql
+-- migration 123_agent_kb.sql
 CREATE TABLE IF NOT EXISTS agent_kb_chunk (
     id           BIGSERIAL PRIMARY KEY,
-    agent_name   TEXT NOT NULL,
-    kb_version   TEXT NOT NULL,          -- the git sha the index was built from
-    source_path  TEXT NOT NULL,          -- kb/pricing/enterprise.md
-    source_kind  TEXT NOT NULL,          -- markdown | thread | issue | table | transcript
-    heading_path TEXT,                   -- "Pricing > Enterprise > Multi-year"
-    raw          TEXT NOT NULL,          -- the chunk as authored
-    distilled    TEXT,                   -- the LLM-rewritten record actually embedded (§5.4)
+    agent_slug   TEXT NOT NULL,
+    kb_version   TEXT NOT NULL,     -- git sha, or agent_def_versions.version
+    instance     TEXT NOT NULL DEFAULT '',   -- '' = base KB; u:<email> for a personal KB (§12.5)
+    source_path  TEXT NOT NULL,
+    source_kind  TEXT NOT NULL,     -- markdown | thread | issue | table | transcript
+    heading_path TEXT,
+    raw          TEXT NOT NULL,     -- as authored
+    distilled    TEXT,              -- the record actually embedded
     embedding    VECTOR(1536),
-    tsv          TSVECTOR,               -- lexical half of hybrid retrieval (§5.3)
-    valid_from   DATE,                   -- for age decay
+    tsv          TSVECTOR,          -- lexical half of hybrid retrieval
+    valid_from   DATE,              -- age decay
     metadata     JSONB NOT NULL DEFAULT '{}',
     created_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX ON agent_kb_chunk (agent_name, kb_version);
-CREATE INDEX ON agent_kb_chunk USING GIN (tsv);
--- plus the pgvector index on embedding
 ```
 
-`kb_version` is what makes this reviewable infrastructure rather than a pile: an index build
-is pinned to a commit, two versions can coexist during a rollout, and rollback is a pointer
-change.
+**Source-aware chunking.** Token-count chunking destroys structure. Chunk per `source_kind`:
+markdown on headings (carrying the full `heading_path`), threads kept whole because the
+resolution lives in the exchange, issues as one chunk with title/labels in metadata, tables as
+row groups with the header repeated, transcripts on speaker turns.
 
-### 5.2 Source-aware chunking
-
-Cerebras's finding: chunking by token count destroys structure. They chunk **per source
-type** — Slack threads kept whole because conversational context matters, GitHub issues split
-with title and labels preserved as metadata, Confluence chunked on headings rather than raw
-counts.
-
-Ours, by `source_kind`:
-
-| Kind | Rule |
-|---|---|
-| `markdown` | Split on headings; carry the full `heading_path` into every chunk |
-| `thread` (WhatsApp / email / meeting) | Keep the exchange whole — splitting it destroys the resolution |
-| `issue` / `task` | One chunk, title + labels + status in metadata not prose |
-| `table` / `csv` | Row-group chunks with the header repeated in each |
-| `transcript` | Speaker-turn boundaries, never mid-turn |
-
-### 5.3 Hybrid retrieval — and a reversal
-
-Cerebras fuses four signals: **full-text for exact tokens, embeddings for paraphrase, IDF to
-separate signal from filler, and age decay so stale answers rank lower.**
-
-> **This reverses a decision already recorded in this repo.**
-> `task_manager_hr_planning_and_memory.md` §9 and `agent_file_and_memory_framework.md` §8 both
-> concluded that because the external reference repos use lexical SQLite FTS5 and *"our Mem0 +
-> pgvector already exceeds them on semantic recall,"* the lexical layer was unnecessary and the
-> work was "protocol, not plumbing."
->
-> The protocol half of that was right and shipped. The retrieval half was framed as
-> vector-**versus**-lexical when the answer is **both**, because they fail differently.
-> Embeddings are weak exactly where a company brain lives: exact tokens. Deal IDs, invoice
-> numbers, ClickUp task IDs, error strings, SKUs, `ZOHO-4471`. A user searching an invoice
-> number wants that row, not five semantically similar rows. Cerebras runs both and fuses.
->
-> We should too — and it's cheap, because Postgres already has `tsvector`/`ts_rank` sitting
-> next to pgvector in the same table. This is an addition to the existing partition, not the
-> second store the earlier note (correctly) rejected.
-
-**Age decay** also does useful work we'd otherwise build separately: it partially solves the
-supersession problem in [`memory_architecture.md`](memory_architecture.md) §6.5 by ranking
-stale facts down, without waiting for the full bi-temporal treatment.
-
-### 5.4 Distillation — the biggest lesson
-
-Cerebras's largest accuracy gain came from **not embedding raw material**. Before indexing, an
-LLM reads each messy thread and rewrites it into a clean structured record — the underlying
-question, a summary, the resolution, the systems involved — and *that* is what gets embedded.
-
-This generalises past the KB and should become a platform-wide rule:
+**Distillation — the biggest lever.** Cerebras's largest accuracy gain came from *not
+embedding raw material*: an LLM rewrites each messy source into a clean structured record
+(the question, a summary, the resolution, the systems involved) and that is what gets embedded.
+Generalise it:
 
 > **Never embed raw conversation. Embed a distilled record.**
 
-It applies in two places, and in both we're currently doing the naive thing:
+This applies to KB ingestion (`distill: true`) **and** to memory extraction, where
+`add_memories_background` currently extracts from every turn indiscriminately. It is the same
+idea as the write-hygiene rule the framework doc §8 already proved — *save the committed
+outcome, never the proposal* — and Cerebras is evidence it dominates retrieval quality. Keep
+`raw` alongside `distilled` so re-distilling with a better model is a rebuild, not a re-ingest.
 
-1. **KB ingestion** — the `distill: true` flag in the manifest. Threads, transcripts, and
-   meeting notes get rewritten before embedding; already-clean authored markdown doesn't.
-2. **Memory extraction** — `add_memories_background` currently extracts from every turn
-   indiscriminately. Distillation is the same idea as the write-hygiene rule the framework doc
-   §8 already proved (*"save the committed outcome, never the proposal"*), and Cerebras is
-   evidence that it's the dominant factor in retrieval quality, not a nicety.
+**Hybrid retrieval — and a correction.** Cerebras fuses full-text for exact tokens, embeddings
+for paraphrase, IDF to separate signal from filler, and age decay so stale answers rank lower.
 
-The `raw` column is kept alongside `distilled` so a human can always see what the distillation
-came from — and so re-distilling with a better model is a rebuild, not a re-ingest.
+> This revises a conclusion already recorded here. `task_manager_hr_planning_and_memory.md` §9
+> and `agent_file_and_memory_framework.md` §8 reasoned that because the reference repos use
+> lexical SQLite FTS5 and *"our Mem0 + pgvector already exceeds them on semantic recall,"* the
+> lexical layer was unnecessary. The protocol half of that was right and shipped. The
+> retrieval half framed it as vector-**versus**-lexical when the answer is both: embeddings
+> are weakest exactly where a company brain lives — `ZOHO-4471`, invoice numbers, task IDs,
+> SKUs, error strings. Someone searching an invoice number wants *that row*. Adding `tsvector`
+> beside pgvector **in the same table** is not the second store that note correctly rejected.
 
-### 5.5 The index file — always-on, small
+Age decay also partly solves supersession ([`memory_architecture.md`](memory_architecture.md)
+§6.5) without waiting for full bi-temporal handling.
 
-From `agent-startup-guru`: alongside its long-term memory it keeps an
-**`agent_memory_index.json`** (§9). That pattern answers the open question left in
-[`memory_architecture.md`](memory_architecture.md) §10.1 about the always-on budget:
-
-> **Always-load the index. Load entries on demand.**
-
-`kb/INDEX.md` is a small curated map — *what this agent knows about, and where* — that fits in
-the always-on budget and costs a few hundred tokens. It tells the model what's retrievable so
-it knows when to reach for retrieval at all, which is the failure mode of pure RAG: the model
-doesn't know what it doesn't know, so it never queries.
-
-The index is generated from the corpus at build time and human-editable, so it doubles as the
-review surface for what the agent has been taught.
-
-### 5.6 Ingestion cadence
-
-Cerebras ingests continuously rather than in batch. For the **authored** KB that's not needed —
-it's git, so the trigger is a merge. For KB sources that point at *live* systems (a Confluence
-space, a shared drive, meeting transcripts) continuous ingestion matters, and that's the same
-webhook pipeline `apps/ingestion` already runs. Keep the two clearly separated: authored KB is
-versioned and reviewed; ingested KB is live and unreviewed, and it must carry that distinction
-in `metadata` so a room can be told which of the two an answer came from.
+**The index file.** `kb/INDEX.md` — a small curated map of *what this agent knows about and
+where* — is always-on and costs a few hundred tokens. It exists because the failure mode of
+pure RAG is that the model doesn't know what it doesn't know, so it never queries. This is the
+`agent_memory_index.json` pattern from `agent-startup-guru`, and it answers the always-on
+budget question left open in [`memory_architecture.md`](memory_architecture.md) §10.1:
+**always-load a small index, load entries on demand.**
 
 [cer]: https://www.cerebras.ai/blog/how-we-built-our-knowledge-base
 
 ---
 
-## 6. Other agents as skills
+## 8. Other agents as skills
 
-Three delegation modes, declared per edge in the manifest:
-
-| Mode | Semantics | Exists |
+| Mode | Semantics | Today |
 |---|---|---|
-| `call` | Synchronous sub-agent; returns a result into the caller's turn | partially |
+| `call` | Synchronous sub-agent; result returns into the caller's turn | partial |
 | `handoff` | Transfers the conversation; the target owns subsequent turns | ✗ |
-| `background` | Fire-and-forget; reports back when done | ✅ `call_agent_background` |
+| `background` | Fire-and-forget; reports back | ✅ `call_agent_background` |
 
-### The rule nobody asks about until it's a breach
+> **A delegated run executes at the caller's clearance, intersected with the callee's declared
+> scopes. Never wider.**
 
-> **A delegated run executes at the caller's clearance, intersected with the callee's own
-> declared scopes. Never wider.**
-
-If agent A runs in a room cleared for `subject:acme` and delegates to agent B, B must not read
-`subject:falcon` merely because B's manifest lists `subject` compartments — B inherits the
-*run's* clearance and narrows it by its own declaration. Without this, delegation is a
-privilege-escalation path: anything you can't ask A, you ask A to ask B.
-
-Three more constraints that follow:
-
-- **Writes land in the callee's compartments, tagged with the delegating run** — so provenance
-  survives a chain and "why does the agent know this" is answerable.
-- **Depth and cycle guard.** A `call` chain has a max depth (default 3) and a visited set; a
-  cycle is an error, not a hang. `background` children already cascade-cancel with the parent
-  (`_BACKGROUND_CHILDREN` in `stream_relay.py`), which is the right precedent.
-- **`handoff` in a room is a room event**, not a silent swap — the participants must see that
-  they're now talking to a different agent, with a different acting identity and a different
-  clearance.
+Without this, delegation is a privilege-escalation path: anything you can't ask agent A, you
+ask A to ask B. Three consequences: writes land in the callee's compartments **tagged with the
+delegating run** so provenance survives a chain; `call` chains carry a depth limit (default 3)
+and a visited set, so a cycle is an error rather than a hang — `background` children already
+cascade-cancel with their parent (`stream_relay._BACKGROUND_CHILDREN`), which is the right
+precedent; and a `handoff` inside a room is a **room event**, because the participants are now
+talking to a different agent with a different acting identity.
 
 ---
 
-## 7. Runtime context assembly
+## 9. Runtime context assembly
 
-Six scopes have to become one prompt, deterministically and within a budget. This is also
-where the existing prompt-caching work is either helped or wasted.
+Six scopes become one prompt, deterministically and within a budget — and either help or waste
+the existing prompt-caching work.
 
 ```
 ┌─ STABLE PREFIX (cacheable — byte-identical across a thread's turns) ─┐
-│ 1. Base instructions                      git            ~800 tok   │
+│ 1. Base instructions                    published version  ~800 tok │
 │ 2. Always-on knowledge: kb/INDEX.md + always_on docs
-│                                           git @ sha     ~1500 tok   │
-│ 3. Tool surface                           injection      ~900 tok   │
+│                                         kb_version        ~1500 tok │
+│ 3. Tool surface                         derived            ~900 tok │
 ├──────────────────── <!-- CACHE BREAK --> ───────────────────────────┤
-│ 4. org:global memory                                      ~300 tok   │
-│ 5. agent / team shared memory                             ~400 tok   │
-│ 6. room + subject memory (if in a room)                   ~700 tok   │
-│ 7. user + prefs memory (solo, or prefs only in a room)    ~400 tok   │
-│ 8. Retrieved KB chunks (top-k, hybrid)                   ~1200 tok   │
-│ 9. Session history                                       windowed    │
+│ 4. org:global memory                                        ~300 tok │
+│ 5. agent / team shared memory                               ~400 tok │
+│ 6. room + subject memory (in a room)                        ~700 tok │
+│ 7. user + prefs memory (solo; prefs only in a room)         ~400 tok │
+│ 8. Retrieved KB chunks (top-k hybrid)                      ~1200 tok │
+│ 9. Session history                                          windowed │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
-Three properties worth being deliberate about:
-
-- **The KB sits in the stable prefix, memory does not.** Authored knowledge is byte-stable for
-  a given sha, so it belongs above the `<!-- CACHE BREAK -->` sentinel the caching work already
-  uses (`prompt_cache.py`). This *grows* the cacheable prefix rather than eating it — the
-  opposite of what an always-growing `NOTES.md` does today.
-- **Budgets are fixed allocations, not first-come-first-served.** A scope that overruns is
-  truncated by relevance within its own allocation, so a chatty compartment can never starve
-  the others.
-- **Precedence on conflict: most-specific wins.** `user` > `room`/`subject` > `team` > `agent`
-  > `org` > `KB`. With provenance markers
-  ([`memory_architecture.md`](memory_architecture.md) §6.3) the model can say which layer it
-  used, and a user can see that their personal instruction overrode a company default rather
-  than wondering why the answer differs from a colleague's.
+- **The KB sits above the cache break, memory below.** A published version + a pinned
+  `kb_version` are byte-stable, so they belong in the stable block that `prompt_cache.py`
+  already marks. This **grows** the cacheable prefix — the opposite of what an
+  ever-growing `NOTES.md` does today.
+- **Budgets are fixed allocations**, so a chatty compartment can't starve the others.
+- **Precedence on conflict: most-specific wins** — `user` > `room`/`subject` > `team` >
+  `agent` > `org` > `KB` — with provenance markers so the model can say which layer it used.
 
 ---
 
-## 8. Lifecycle — how an agent is created and gets better
+## 10. Lifecycle
 
 ```
- scaffold ──► author ──► validate ──► eval gate ──► register ──► run
-                ▲                                                 │
-                │                                                 ▼
-          human review ◄── propose ◄── promote ◄──────────── accumulate
-             (PR)          (Code or Knowledge)                (State)
+  Agent Creator  ──►  draft  ──►  validate  ──►  eval gate  ──►  publish v(n)  ──►  run
+   (a chat)             ▲                                                           │
+                        │                                                           ▼
+                 human approval ◄── propose ◄── promote ◄──────────────────  accumulate
+                  (manifest /                (Knowledge or                      (State)
+                   prose diff)                instructions)
 ```
 
-1. **Scaffold** — `agent init` writes the manifest, the three folders, `kb/INDEX.md`, and a
-   golden eval stub. The App Workshop is the precedent for doing this in-platform.
-2. **Author** — instructions, skills, KB documents. In VS Code today; in the workbench later.
-   Either way the output is a reviewable diff.
-3. **Validate** — manifest schema, declared integrations resolve, KB sources exist, no skill
-   or agent edge dangles.
-4. **Eval gate** — golden trajectories *and* KB recall pairs. Migration 06 already gates
+1. **Create.** A conversation with the Agent Creator: *what should it do, who is it for, what
+   can it touch, what should it know.* It writes a **manifest + instructions + starter KB** —
+   never Python. Same shape as the App Workshop's describe-to-create bar.
+2. **Validate.** Manifest schema; declared integrations and skills resolve; delegation edges
+   exist and don't cycle; **`runtime` matches the entrypoint** (§3.1); KB sources exist.
+3. **Eval gate.** Golden trajectories plus KB-recall pairs. Migration 06 already gates
    promotion; the KB half is new.
-5. **Register** — `dynamic_agents` row derived from the manifest, KB index built at the sha.
-6. **Run** — context assembled per §7.
-7. **Accumulate** — State: memory compartments and `agent-data/`. Unreviewed by design.
-8. **Promote** — this is the loop that matters. A fact that has proven itself in State
-   (repeatedly retrieved, explicitly confirmed) becomes a **proposal** to Knowledge or Code.
-9. **Review** — the proposal is a PR: a diff to `kb/*.md` or to `instructions.md`. Merging it
-   moves the learning from unreviewed state into reviewed base scope, where it is versioned,
-   evaluated, and rolled back like anything else.
+4. **Publish.** Inserts an immutable `agent_def_versions` row and repoints `live_version`. A
+   changed `scope_set_hash` triggers re-consent.
+5. **Run.** Context assembled per §9, on the one generic builder.
+6. **Accumulate.** State: memory compartments and `agent-data/`. Unreviewed by design.
+7. **Promote.** A fact that has proven itself in State — repeatedly retrieved, explicitly
+   confirmed — becomes a *proposal* to Knowledge or to instructions.
+8. **Review.** The proposal is a diff. For a declarative agent it is a manifest/prose diff in
+   the approval inbox that already exists for pending commits — **no PR, no CI, no monorepo
+   write.** For a code agent it stays a pull request.
 
-Step 8→9 is the answer to *"deliberate hardening and development, learning from failures."*
-Today the mutation flow does this for **code** only. Extending the same gate to **knowledge**
-is a much smaller change — the sandbox already produces a commit and the approval inbox
-already reviews one — and it is where most real learning actually belongs. An agent that
-learned "always check the PO number before invoicing" should end up with that in its playbook,
-reviewed, not as a vector row nobody can see.
-
----
-
-## 9. What we already took from `agent-startup-guru`
-
-You asked whether we'd used it before. **Yes — it's not just a reference, it's a registered
-agent in this platform, and its memory pattern was reviewed and partly adopted, partly
-rejected on purpose.**
-
-| Trace | Where |
-|---|---|
-| Registered as a live external agent | `agent_repo_compatibility.md`, `agents-workspaces-artifacts.md:38` (`dynamic_agents`) |
-| Explicitly handled in the loader | `acb_skills/loader.py:1543` — "agents from external GitHub orgs (e.g. `vjvarada/agent-startup-guru`)" |
-| Drove a real rendering fix | The "startup-guru bug" — pre-tool answer text buried in the thinking pane — fixed across four parity layers (`chatStream.ts:232`, `e2e/chat.spec.ts:341`, `core_module_map.md:96`) |
-| Its memory **protocol** adopted | `agent_file_and_memory_framework.md` §8 (the five-step recipe) and `gateway/routes/tasks/task_memory.py` (the task-manager's clarification memory) |
-| Its memory **storage** rejected | `task_manager_hr_planning_and_memory.md` §9 — it uses lexical SQLite FTS5; we kept Mem0 + pgvector |
-| Its layout documented | `agent_repo_compatibility.md:667` — `outputs/_memory/` holding `agent_long_term_memory.json` + `agent_memory_index.json` |
-
-So the protocol layer — retrieval routing, write hygiene, decision→outcome — is already in.
-
-**What we did not take, and now should: the index file.** `agent_memory_index.json` sitting
-beside the long-term store is exactly the always-on-index pattern in §5.5, and it answers the
-budget question left open in `memory_architecture.md` §10.1. Small always-on map, large
-on-demand entries.
-
-**What we should still not take:** the SQLite FTS store as a *separate* store. But note the
-nuance in §5.3 — the earlier conclusion overshot from "don't add a second store" to "don't do
-lexical retrieval at all," and lexical belongs in the same table as a second ranking signal.
-
-> I could not read the repo directly for this pass — it's private and this session can't add a
-> repo from another owner — so the above is from traces in our own codebase and docs, which
-> turn out to be substantial. Still worth confirming from source: whether its
-> memory-management skill implements **compaction** when the bank grows. If it does, port that
-> instead of the design in `memory_architecture.md` §6.4.
+Step 7→8 is the loop that answers *"deliberate hardening, learning from failures."* Today the
+mutation flow does this for code only, through a sandbox that opens a monorepo PR. For
+declarative agents the same intent needs none of that machinery — an agent that learned
+"always check the PO number before invoicing" should end up with that line in its reviewed
+playbook, not as a vector row nobody can see.
 
 ---
 
-## 10. Phasing
+## 11. Migrating the roster
+
+The Copilot SDK keeps exactly two legitimate homes, both already stated in AGENTS.md #6:
+**genuine coding agents** and **the self-mutation sandbox**. Everything else moves to
+declarative MAF.
+
+| Agent | Now | Target | Why |
+|---|---|---|---|
+| `agent-task-manager` | Copilot, 136 ln | **Declarative** | Instructions + 25 GTD tools. No control flow. |
+| `agent-apis-config` | Copilot, 63 ln | **Declarative** | Same shape. |
+| `agent-orchestrator` | MAF, 24 ln | **Declarative** (delegation-heavy) | Its routing becomes `capabilities.agents` edges (§8). |
+| `agent-app-builder` | Copilot, 48 ln | **Code, stays Copilot** | It *is* a coding agent — the SDK is the point. |
+| `agent-whatsapp-assistant` | MAF, 480 ln | **Code** | Real bespoke logic. |
+| `agent-email-assistant` | MAF, 1 954 ln | **Code** | Real bespoke logic. |
+
+Independently of the migration, **remove `PermissionHandler.approve_all` from all three
+factories now** (§3.2) so the B6 risk-aware policy applies. That is a three-line fix and
+shouldn't wait for anything here.
+
+---
+
+## 12. Phasing
 
 | Phase | Work | Depends on |
 |---|---|---|
-| **A — Manifest** | Manifest schema + validator · derive `dynamic_agents` from it · backfill all 12 agents · `agent init` scaffold | — |
-| **B — Knowledge layer** | Migration 121 · build-at-sha indexer · source-aware chunking · `kb/INDEX.md` always-on injection · KB recall evals | A |
-| **C — Retrieval quality** | Hybrid semantic + lexical + IDF + age decay · distillation on ingest and on memory extraction | B |
-| **D — Delegation** | The three modes, declared edges, the clearance-intersection rule, depth/cycle guard | A + multiplayer 3a |
-| **E — Promotion loop** | State → Knowledge proposals through the existing mutation/approval gate | B + multiplayer 3a |
+| **A0** | Drop `approve_all` from the three factories; add a startup check that `runtime` matches the entrypoint | — |
+| **A** | Manifest schema + validator · `agent_defs`/`agent_def_versions`/`agent_def_grants` (122) · derive `dynamic_agents` from them · backfill all six | A0 |
+| **B** | The one generic `build_declarative_agent` · migrate task-manager and apis-config · retire their `agents.py` | A |
+| **C** | Agent Creator UI — describe-to-create, draft/publish/rollback, mirroring the Workshop | B |
+| **D** | Knowledge layer: migration 123 · source-aware chunking · `kb/INDEX.md` always-on · KB-recall evals | A |
+| **E** | Retrieval quality: hybrid + IDF + age decay · distillation on ingest and on memory extraction | D |
+| **F** | Delegation modes + the clearance-intersection rule | A + multiplayer 3a |
+| **G** | Promotion loop: State → Knowledge proposals into the approval inbox | D + multiplayer 3a |
 
-A and B are independent of the multiplayer work and can start now. D and E need compartments
-to exist first.
+A0 is a same-day fix. A–C are the Agent Creator's critical path and don't depend on the
+multiplayer work.
 
-**Acceptance for A** — every agent's runtime behaviour is derivable from its manifest alone:
-no compartment key, blob instance, tool surface, or room eligibility is computed from a
-hardcoded name anywhere in the codebase.
+**Acceptance for A:** every agent's runtime behaviour is derivable from its manifest alone —
+no compartment key, blob instance, tool surface, permission handler, or room eligibility is
+computed from a hardcoded agent name anywhere in the codebase.
 
 ---
 
-## 11. Open questions
+## 13. Open questions
 
-1. **Does the KB belong in the agent's repo or its own?** In-repo keeps knowledge versioned
-   with the code that uses it and makes one PR cover both. A separate repo lets
-   non-engineers edit a playbook without touching an agent repo — which is probably the
-   stronger argument for the agents most worth teaching.
-2. **Who may merge a Knowledge PR?** Code review needs an engineer; a pricing playbook needs
-   the sales lead. If the gate is the same, knowledge changes will queue behind engineering
-   review and stop happening. Likely a separate reviewer set keyed on path.
-3. **Distillation cost.** An LLM pass per chunk on ingest is real money on a large corpus.
-   Probably tier-1 model, cached by content hash, and only where `distill: true`.
-4. **Team identity.** `t:<team>` needs a real team object; the org research doc's `module` is
-   the natural home but isn't built. Interim: an explicit member list on the manifest.
-5. **Does a `personal` agent get a per-user KB?** The base KB is shared by construction (it's
-   git). But "my own documents this agent should always know" is a real want, and it is
-   layer 6 knowledge — which the current three-axis model has no slot for. Possibly
-   `agent-data/kb/` under the user's blob instance, indexed into the same table with the
-   instance as a partition key.
-6. **Manifest versioning.** When the schema changes, do old manifests migrate automatically or
-   fail validation? Fail-and-fix is safer while there are twelve agents; auto-migrate becomes
-   necessary once there are two hundred.
+1. **Where does a declarative agent's KB live?** `agent_kb_source` rows next to `agent_defs`
+   (editable in-platform, consistent with the rest of the model) or files in the monorepo
+   (diffable in Git)? In-platform is more consistent; Git is more reviewable. Probably
+   in-platform with an export, since the reviewer for a pricing playbook is not an engineer.
+2. **Who may publish?** Publishing changes what an agent does for everyone who uses it.
+   Owner-only is too narrow for a team agent, org-wide is too broad. Likely mirrors
+   `agent_def_grants` with a separate `can_publish` bit.
+3. **Can a declarative agent be forked to a code agent?** Almost certainly needed — someone
+   hits the ceiling of the manifest. Export a scaffolded `agents.py` from the manifest and
+   flip `kind`, one-way.
+4. **Do declarative agents need a sandbox at all?** They execute no custom code, so the
+   heaviest part of B6 (container isolation for arbitrary agent code) applies only to code
+   agents. That may be the strongest argument in this document.
+5. **Does a `personal` agent get a per-user KB?** The base KB is shared by construction. But
+   "my own documents this agent should always know" is the natural request after a week of
+   use — hence `instance` on `agent_kb_chunk` (§7). Needs a UI and a budget rule.
+6. **Manifest versioning.** `schema_version` is in the manifest; with six agents, fail-and-fix
+   on a schema change is safer than auto-migration. That flips somewhere around fifty.
 
-Question 5 is the one most likely to bite early — it's the natural next request after anyone
-uses a personal agent for a week.
+Question 4 is worth answering early — if declarative agents don't need container isolation,
+the sandboxing roadmap shrinks to the two code agents plus the mutation sandbox.

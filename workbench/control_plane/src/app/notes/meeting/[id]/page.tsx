@@ -364,11 +364,16 @@ export default function MeetingPage({
     meeting?.status === "processing" ||
     progress?.runs.some((r) => r.status === "queued" || r.status === "running");
 
-  // Diarization is only real when the STT model is Deepgram; Whisper returns no
-  // speakers. Surface that so "no named speakers" isn't a silent mystery.
+  // Diarization is only real on a provider that returns speakers (AssemblyAI,
+  // Deepgram, or a local sherpa pass); Whisper alone returns none. Surface that
+  // so "no named speakers" isn't a silent mystery.
   const diarized = speakerLabels.length > 0;
   const sttModel = meeting?.transcript_source ?? "";
-  const canDiarize = sttModel.startsWith("deepgram/");
+  const canDiarize =
+    sttModel.startsWith("assemblyai/") ||
+    sttModel.startsWith("deepgram/") ||
+    // The local diarization pass appends this to the model id when it ran.
+    sttModel.includes("sherpa-diar");
   const showDiarizeHint =
     !!meeting && meeting.segments.length > 0 && !diarized && !canDiarize && !busy;
 
@@ -653,7 +658,7 @@ export default function MeetingPage({
                           Speakers aren&apos;t separated.
                         </span>{" "}
                         Your current transcription model doesn&apos;t identify who
-                        said what. Switch to a Deepgram model in{" "}
+                        said what. Switch to an AssemblyAI (or Deepgram) model in{" "}
                         <Link
                           href="/settings/models"
                           className="text-primary underline underline-offset-2"

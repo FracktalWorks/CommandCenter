@@ -249,6 +249,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "mistral":     "MISTRAL_API_KEY",
     "together":    "TOGETHER_API_KEY",
     "deepgram":    "DEEPGRAM_API_KEY",  # speech-to-text w/ named speakers (Note Taker STT tier)
+    "assemblyai":  "ASSEMBLYAI_API_KEY",  # STT + live streaming, both with named speakers
     "ollama":      "",        # local — always "configured" if URL reachable
     "vllm":        "VLLM_BASE_URL",
 }
@@ -264,6 +265,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "mistral":     "Mistral AI",
     "together":    "Together AI",
     "deepgram":    "Deepgram (speech-to-text)",
+    "assemblyai":  "AssemblyAI (speech-to-text)",
     "ollama":      "Ollama (local)",
     "vllm":        "vLLM (local)",
 }
@@ -387,6 +389,12 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
     "deepgram": [
         "deepgram/nova-3",
         "deepgram/nova-2",
+    ],
+    # AssemblyAI is speech-to-text only too, and — unlike Deepgram — reaches us
+    # through a native provider rather than litellm (its API is submit-then-poll).
+    "assemblyai": [
+        "assemblyai/universal",
+        "assemblyai/nano",
     ],
     "vllm": [
         "openai/Qwen/Qwen3-8B-Instruct",
@@ -1121,6 +1129,7 @@ def _is_transcription_model(model_id: str) -> bool:
     return (
         "whisper" in mid
         or mid.startswith("deepgram/")
+        or mid.startswith("assemblyai/")
         or "transcribe" in mid
         or "/nova-" in mid
     )

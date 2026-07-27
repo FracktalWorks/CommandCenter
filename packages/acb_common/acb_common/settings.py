@@ -193,6 +193,18 @@ class Settings(BaseSettings):
     # github_token when blank — see mutation_pr_token property below.
     mutation_pr_token: str = ""
 
+    # Agent dependency installs (packages/acb_skills/acb_skills/loader.py
+    # _install_agent_deps) — RCE guard (BO-7 fast pass). Agent repos'
+    # requirements.txt/pyproject.toml install straight into the SHARED
+    # gateway venv via pip/uv, ahead of any tool-call permission gate; an
+    # sdist's setup.py / PEP 517 build backend can run arbitrary code during
+    # that install. Default False forces --only-binary=:all: (wheels only —
+    # a pure install has no code-execution step; the overwhelming majority of
+    # PyPI ships wheels). Set True only for a specific, vetted environment
+    # that genuinely needs a source-only package — this widens every agent's
+    # install, not just one.
+    agent_deps_allow_source_builds: bool = False
+
     # Copilot SDK chat (coworker sessions via /copilot/chat)
     # Auth order: LITELLM_MASTER_KEY → gateway /v1  |  GITHUB_TOKEN → api.githubcopilot.com
     # Model must be available in whichever provider is active.

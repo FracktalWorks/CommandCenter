@@ -7,6 +7,7 @@ import type {
   EmailDraft,
   LiveSession,
   LiveSpeaker,
+  MeetingContext,
   MeetingBot,
   MeetingDetail,
   MeetingListItem,
@@ -55,6 +56,43 @@ export async function postLiveSegment(
   } catch {
     /* best-effort: never let a live relay disturb the recording */
   }
+}
+
+/** What the copilot knows about this meeting (brief + history + systems). */
+export async function getMeetingContext(
+  meetingId: string
+): Promise<MeetingContext> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/context`, { cache: "no-store" })
+  );
+}
+
+/** Set the meeting briefing — the context only the human has. */
+export async function setMeetingBrief(
+  meetingId: string,
+  brief: string
+): Promise<{ brief: string }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/brief`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ brief }),
+    })
+  );
+}
+
+/** Opt this session into asking the business agents (CRM, tasks) for background. */
+export async function setDeepContext(
+  meetingId: string,
+  enabled: boolean
+): Promise<{ deep_context: boolean }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/context/deep`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled }),
+    })
+  );
 }
 
 /** Meetings being captured right now (bot or in-browser) — the presence dock. */

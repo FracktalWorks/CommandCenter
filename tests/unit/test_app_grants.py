@@ -363,7 +363,7 @@ def _detail_row(**overrides: Any) -> Any:
         "description": "", "status": "live", "visibility": "org",
         "live_version": 1, "owner_email": OWNER.email, "updated_at": None,
         "created_at": None, "manifest": {}, "workspace_path": "",
-        "builder_session_id": None,
+        "builder_session_id": None, "is_template": False,
     }
     defaults.update(overrides)
     return SimpleNamespace(**defaults)

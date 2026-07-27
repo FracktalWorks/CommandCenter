@@ -1,4 +1,4 @@
--- 122_meeting_brief.sql — the context a copilot needs to be useful.
+-- 124_meeting_brief.sql — the context a copilot needs to be useful.
 --
 -- What: `meeting.copilot_brief` — a short, user-written briefing for a meeting
 --   ("Pricing negotiation with Acme. They churned in 2024, price-sensitive.

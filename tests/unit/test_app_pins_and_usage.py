@@ -26,6 +26,7 @@ def _row(**overrides) -> types.SimpleNamespace:
         live_version=None,
         owner_email="owner@fracktal.in",
         updated_at=None,
+        is_template=False,
     )
     base.update(overrides)
     return types.SimpleNamespace(**base)
@@ -53,3 +54,13 @@ def test_usage_none_is_same_as_omitted():
     summary = _to_summary(_row(), OWNER, [], usage=None)
     assert summary.month_cost_usd == 0.0
     assert summary.month_calls == 0
+
+
+def test_is_template_defaults_false():
+    summary = _to_summary(_row(), OWNER, [])
+    assert summary.is_template is False
+
+
+def test_is_template_passes_through_from_row():
+    summary = _to_summary(_row(is_template=True), OWNER, [])
+    assert summary.is_template is True

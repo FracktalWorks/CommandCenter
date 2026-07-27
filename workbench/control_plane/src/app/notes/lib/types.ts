@@ -173,6 +173,8 @@ export interface LiveSession {
   /** Opt-in, off by default; stored in Phase A, acted on by the orchestrator. */
   copilot_enabled: boolean;
   mode: "listening" | "interactive" | "speaking";
+  /** May this session ask the business agents (CRM, tasks) for background? */
+  deep_context: boolean;
   started_at: string | null;
   ended_at: string | null;
   title: string | null;
@@ -214,4 +216,17 @@ export interface CopilotEvent {
   };
   token_cost: number;
   ts: number | null;
+}
+
+/** What the copilot knows about a meeting before anyone speaks. */
+export interface MeetingContext {
+  /** Layer 1 — what you told it. The highest-value source. */
+  brief: string;
+  attendees: string[];
+  /** Layer 2 — past meetings with the same people. */
+  past: string[];
+  open_actions: string[];
+  /** Layer 3 — what the business agents reported (CRM, tasks). */
+  systems: Record<string, string>;
+  is_empty: boolean;
 }

@@ -18,6 +18,7 @@ import { use, useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
+  BookOpen,
   Bot,
   Loader2,
   Mic,
@@ -27,10 +28,14 @@ import {
 import {
   getLiveRoster,
   getLiveSession,
+  getMeetingContext,
   setCopilot,
+  setDeepContext,
+  setMeetingBrief,
 } from "../../lib/api";
 import type {
   CopilotEvent,
+  MeetingContext,
   LiveSegment,
   LiveSession,
   LiveSpeaker,
@@ -49,17 +54,26 @@ export default function LiveConsolePage({
   const [roster, setRoster] = useState<LiveSpeaker[]>([]);
   const [lines, setLines] = useState<LiveSegment[]>([]);
   const [suggestions, setSuggestions] = useState<CopilotEvent[]>([]);
+  const [ctx, setCtx] = useState<MeetingContext | null>(null);
+  const [brief, setBrief] = useState("");
+  const [savingBrief, setSavingBrief] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
-    const [s, r] = await Promise.all([
+    const [s, r, c] = await Promise.all([
       getLiveSession(id).catch(() => null),
       getLiveRoster(id).catch(() => [] as LiveSpeaker[]),
+      getMeetingContext(id).catch(() => null),
     ]);
     setSession(s);
     setRoster(r);
+    if (c) {
+      setCtx(c);
+      // Don't clobber what the user is mid-way through typing.
+      setBrief((prev) => (prev ? prev : c.brief));
+    }
     setLoading(false);
   }, [id]);
 
@@ -125,6 +139,28 @@ export default function LiveConsolePage({
     }
   }
 
+  async function onSaveBrief() {
+    setSavingBrief(true);
+    try {
+      await setMeetingBrief(id, brief);
+      setCtx(await getMeetingContext(id).catch(() => ctx));
+    } catch {
+      /* left in the box so nothing is lost */
+    } finally {
+      setSavingBrief(false);
+    }
+  }
+
+  async function onToggleDeep() {
+    if (!session) return;
+    try {
+      await setDeepContext(id, !session.deep_context);
+      await refresh();
+    } catch {
+      /* surfaced by the unchanged toggle */
+    }
+  }
+
   const live = session?.status === "live";
   const tips = suggestions.filter((e) => e.kind !== "status");
   const lastStatus = [...suggestions].reverse().find((e) => e.kind === "status");
@@ -184,6 +220,78 @@ export default function LiveConsolePage({
           </span>
         ) : (
           <span className="text-xs text-muted-foreground">Ended</span>
+        )}
+      </div>
+
+      {/* Context — the difference between a generic observer and a useful one.
+          Shown first because it's what you'd want to fill in BEFORE turning the
+          copilot on. */}
+      <div className="mb-5 rounded-xl border border-border bg-card p-3">
+        <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <BookOpen className="h-3.5 w-3.5" /> What the copilot knows
+        </p>
+        <textarea
+          value={brief}
+          onChange={(e) => setBrief(e.target.value)}
+          rows={3}
+          placeholder="Why this meeting? e.g. Pricing negotiation with Acme. They churned in 2024 over cost. Goal: land the annual contract."
+          className="w-full resize-y rounded-lg border border-border bg-background p-2 text-sm outline-none focus:border-primary"
+        />
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <button
+            onClick={onSaveBrief}
+            disabled={savingBrief || brief === (ctx?.brief ?? "")}
+            className="rounded-lg border border-border px-2.5 py-1 text-xs font-medium hover:bg-accent disabled:opacity-50"
+          >
+            {savingBrief ? "Saving…" : "Save briefing"}
+          </button>
+          <button
+            onClick={onToggleDeep}
+            disabled={!live}
+            title="Ask your CRM and task agents for background on the attendees. Costs tokens before the meeting starts."
+            className="rounded-lg border border-border px-2.5 py-1 text-xs hover:bg-accent disabled:opacity-50"
+          >
+            {session.deep_context ? "✓ Asking your agents" : "Ask CRM + tasks"}
+          </button>
+          <span className="text-[11px] text-muted-foreground">
+            Takes effect on the next suggestion.
+          </span>
+        </div>
+
+        {/* What it actually assembled — so "why is it being generic?" is answerable. */}
+        {ctx && (
+          <div className="mt-3 space-y-1.5 border-t border-border pt-2 text-xs">
+            {ctx.is_empty && !brief ? (
+              <p className="text-muted-foreground">
+                No background yet — add a briefing above, or add attendees so it
+                can pull up your past meetings with them.
+              </p>
+            ) : (
+              <>
+                {ctx.attendees.length > 0 && (
+                  <p className="text-muted-foreground">
+                    <span className="text-foreground">Attendees:</span>{" "}
+                    {ctx.attendees.join(", ")}
+                  </p>
+                )}
+                {ctx.past.map((p, i) => (
+                  <p key={`p${i}`} className="text-muted-foreground">
+                    <span className="text-foreground">Previously:</span> {p}
+                  </p>
+                ))}
+                {ctx.open_actions.map((a, i) => (
+                  <p key={`a${i}`} className="text-muted-foreground">
+                    <span className="text-foreground">Still open:</span> {a}
+                  </p>
+                ))}
+                {Object.entries(ctx.systems).map(([k, v]) => (
+                  <p key={k} className="text-muted-foreground">
+                    <span className="text-foreground uppercase">{k}:</span> {v}
+                  </p>
+                ))}
+              </>
+            )}
+          </div>
         )}
       </div>
 

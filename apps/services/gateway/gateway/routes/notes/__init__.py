@@ -7,6 +7,7 @@ Spec: ai-company-brain/specs/note_taker_app.md §3.7.
 
 from gateway.routes.notes import actions as _actions  # noqa: F401
 from gateway.routes.notes import copilot as _copilot  # noqa: F401
+from gateway.routes.notes import copilot_context as _copilot_context  # noqa: F401
 from gateway.routes.notes import events as _events  # noqa: F401
 from gateway.routes.notes import glossary as _glossary  # noqa: F401
 from gateway.routes.notes import live as _live  # noqa: F401

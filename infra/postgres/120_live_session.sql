@@ -1,4 +1,4 @@
--- 119_live_session.sql — presence for in-progress meetings (Live Meeting Copilot).
+-- 120_live_session.sql — presence for in-progress meetings (Live Meeting Copilot).
 --
 -- What: adds `live_session`, one row per meeting that is CURRENTLY being
 --   captured — whether by the meeting bot (§3.13) or the in-browser recorder

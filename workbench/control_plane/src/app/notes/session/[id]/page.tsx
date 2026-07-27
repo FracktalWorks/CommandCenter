@@ -10,6 +10,7 @@
  */
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -18,6 +19,7 @@ import {
   Mic,
   Pause,
   Play,
+  Radio,
   Smartphone,
   Square,
 } from "lucide-react";
@@ -316,6 +318,16 @@ export default function SessionPage({
                   )}
                   <div ref={capEndRef} />
                 </div>
+                {/* The captions above are this device's draft; the console is
+                    the server-side view of the same live stream — speakers kept
+                    consistent and named, and where the copilot will appear. */}
+                <Link
+                  href={`/notes/live/${id}`}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  Open the live console
+                </Link>
               </div>
             )}
 

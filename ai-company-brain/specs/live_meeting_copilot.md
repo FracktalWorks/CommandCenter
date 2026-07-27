@@ -354,7 +354,7 @@ feed**.
 ## 13. Phasing (each phase shippable + independently valuable)
 
 - **Phase A — Presence + console (read-only), no LLM. BUILT.** `live_session`
-  registry (migration 119) with a partial unique index making "begin" an
+  registry (migration 120) with a partial unique index making "begin" an
   idempotent upsert; `GET /notes/live/sessions` presence + `…/live/session`
   reattach; opt-in toggle `POST …/live/copilot` (stored, **off by default** —
   Phase B acts on it). UI: `LiveDock` (shell-level "● Live now", covering what

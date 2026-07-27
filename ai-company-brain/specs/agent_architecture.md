@@ -134,7 +134,13 @@ specialist agents"*) — the constraint is stated but nothing enforces it.
 Note the inversion: **the thin agents are Copilot; the agents with real logic are MAF.** The
 SDK isn't buying those three anything. It's VS Code-era scaffolding.
 
-### 3.2 Those same three silently bypass the B6 permission policy
+### 3.2 Two of those three silently bypassed the B6 permission policy
+
+> **Fixed 2026-07-26.** Two agents did this — `agent-apis-config` and
+> `agent-task-manager`. `agent-app-builder` already carried the fix and a comment
+> explaining it. Both have been corrected; the analysis below is retained because it is
+> the clearest example of *why* an agent's own factory must not outrank platform policy,
+> which is the argument for the declarative model.
 
 `permissions_sandbox_b6.md` replaced `approve_all` with a risk-aware handler. The executor
 applies it at five sites, all guarded the same way

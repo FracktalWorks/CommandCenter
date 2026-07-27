@@ -97,6 +97,11 @@ makes it a privilege grant nobody made.
 **Fix:** default-deny for declarative/creator-authored agents. Keep fail-open only for
 in-repo agents, and log it.
 
+> **Update 2026-07-26 — fixed, and the count was wrong.** This was **two** agents, not three:
+> `agent-apis-config` and `agent-task-manager`. `agent-app-builder` already had the fix, with
+> a comment explaining it — someone had found this before. Both remaining factories now drop
+> `on_permission_request` and carry the same comment.
+
 #### C2 · Capabilities are self-declared, with no granting side
 `config.json` is authored by whoever wrote the agent, and `tool_scope` is read from it
 directly. In a world where anyone can create an agent, **self-declared capability is

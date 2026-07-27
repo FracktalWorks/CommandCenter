@@ -8,6 +8,26 @@
 // `dist/bundle.html` — the file `entry` points at and every existing
 // publish/preview/durability path already reads dynamically.
 //
+// `@cc/ui` (workbench/control_plane/src/lib/artifactUi.tsx) is importable
+// alongside react/react-dom — the same 25-component design-kit the chat
+// "artifacts" system (lib/compileArtifact.ts) bundles into React artifacts,
+// aliased in here the same way so a T2 app can write <Stat/>/<Table/> instead
+// of hand-rolled cc-* divs. That file is pure JSX + prop types (no
+// React-vs-Preact-specific runtime code — its one `react` import is
+// type-only and erased at compile time), so it bundles unchanged under real
+// React here despite compileArtifact.ts aliasing react -> preact for its own,
+// separate (ephemeral, inline-in-chat) use case. `Submit`/`Action` are the
+// exception: they call `window.ccSubmit`/`window.ccAction`, chat-artifact
+// bridge globals that don't exist in a Custom App's frame — harmless no-ops
+// here, but pointless; use `cc.storage`/`cc.tools` for real interactions.
+//
+// An import allowlist (react/react-dom/@cc/ui only, policed for imports made
+// BY the app's own src/ files — react/react-dom/@cc/ui's own internal
+// resolution is left alone) mirrors compileArtifact.ts's defense-in-depth:
+// the vendor cache having only those packages installed already prevents
+// resolving anything else, but an explicit allowlist doesn't silently widen
+// if something else is ever added to that shared directory.
+//
 // Usage: node build_t2.mjs <workspace-dir>
 // Exit 0 + byte size on stdout on success; exit 1 + esbuild diagnostics on
 // stderr on failure. Never touches dist/bundle.html on a failed build — the
@@ -16,9 +36,26 @@
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { homedir } from "node:os";
-import { join, resolve } from "node:path";
+import { isAbsolute, join, relative, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const BUNDLE_MARKER = "<!-- CC_T2_BUNDLE -->";
+const UI_PACKAGE = "@cc/ui";
+
+// apps/agents/agent-app-builder/build/build_t2.mjs -> repo root (5 levels up:
+// strip the filename, then build/ -> agent-app-builder/ -> agents/ -> apps/).
+const REPO_ROOT = resolve(fileURLToPath(import.meta.url), "..", "..", "..", "..", "..");
+const UI_SOURCE = join(REPO_ROOT, "workbench", "control_plane", "src", "lib", "artifactUi.tsx");
+const uiAvailable = existsSync(UI_SOURCE);
+
+const ALLOWED_IMPORTS = new Set([
+  "react",
+  "react-dom",
+  "react-dom/client",
+  "react/jsx-runtime",
+  "react/jsx-dev-runtime",
+  ...(uiAvailable ? [UI_PACKAGE] : []),
+]);
 
 function vendorDir() {
   const override = (process.env.CUSTOM_APPS_T2_VENDOR_DIR || "").trim();
@@ -30,6 +67,33 @@ function vendorDir() {
 function fail(message) {
   process.stderr.write(`build_t2: ${message}\n`);
   process.exit(1);
+}
+
+/** Reject an app src/ file importing anything outside the allowlist. Only
+ * imports made BY the app's own code are policed — react/react-dom/@cc/ui's
+ * own internal resolution (importer outside src/) is left to esbuild. */
+function allowlistPlugin(srcDir) {
+  return {
+    name: "t2-import-allowlist",
+    setup(pluginBuild) {
+      pluginBuild.onResolve({ filter: /.*/ }, (args) => {
+        if (!args.importer) return null; // entry point resolution — not policed
+        const rel = relative(srcDir, args.importer);
+        const importerInsideSrc = !rel.startsWith("..") && !isAbsolute(rel);
+        if (!importerInsideSrc) return null;
+        if (args.path.startsWith("./") || args.path.startsWith("../")) return null;
+        if (ALLOWED_IMPORTS.has(args.path)) return null;
+        return {
+          errors: [{
+            text:
+              `Cannot import ${JSON.stringify(args.path)}. T2 apps run offline in a sandbox ` +
+              `with no network — only ${[...ALLOWED_IMPORTS].join(", ")} are importable. ` +
+              `Inline any helper code into your own src/ files instead.`,
+          }],
+        };
+      });
+    },
+  };
 }
 
 const workspace = resolve(process.argv[2] || "");
@@ -70,7 +134,9 @@ try {
 
 let result;
 try {
-  result = esbuild.buildSync({
+  // The async build() API, not buildSync() — buildSync cannot run plugins
+  // (the import allowlist above), and top-level await is native to ESM.
+  result = await esbuild.build({
     entryPoints: [entryPoint],
     bundle: true,
     write: false,
@@ -87,6 +153,8 @@ try {
     // most React dev-mode diagnostic strings, keeping the bundle small.
     define: { "process.env.NODE_ENV": '"production"' },
     nodePaths: [vendorModules],
+    alias: uiAvailable ? { [UI_PACKAGE]: UI_SOURCE } : {},
+    plugins: [allowlistPlugin(join(workspace, "src"))],
   });
 } catch (err) {
   const diagnostics = (err.errors || [])

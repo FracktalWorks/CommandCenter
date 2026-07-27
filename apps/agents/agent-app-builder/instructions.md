@@ -159,10 +159,11 @@ first calls for it):
    ending the turn — this is the T2 equivalent of T1's "index.html must stay valid and
    renderable every round" rule. Never end a round with a broken or stale build.
 
-**Dependencies — fixed, no exceptions**: only `react` and `react-dom`, pinned to the
-platform's vendored versions. No other package, ever. No `npm install`. No CDN
-`<script src="...">`. This isn't a suggestion — the build only resolves those two
-packages; anything else fails the build.
+**Dependencies — fixed, no exceptions**: `react`, `react-dom`, and `@cc/ui` (the design
+kit, see below), pinned to the platform's vendored versions. No other package, ever. No
+`npm install`. No CDN `<script src="...">`. This isn't a suggestion — the build enforces
+an explicit import allowlist; anything else fails the build with a clear error naming
+what's actually importable.
 
 **The build command** (run it as the last step of every round that touches
 `src/**`, `index.html`, or `app.json`'s `entry`):
@@ -179,10 +180,21 @@ re-run the build before replying. A failed build never overwrites the last worki
 `dist/bundle.html`, so the preview keeps showing your last good state — but tell the
 user honestly if you couldn't get a round building rather than replying as if you did.
 
-**Design system in JSX**: every `--cc-*` token and `.cc-*` block-kit class from the
-Design section above applies exactly as-is — write `className="cc-card"` instead of
-`class="cc-card"`, `onClick={...}` instead of `onclick="..."`. Same rule: never
-redeclare a token or override a `.cc-*` class, in JSX or otherwise.
+**Design system in JSX — prefer `@cc/ui`'s components over hand-rolled markup**:
+`import { ... } from "@cc/ui"` gives you the same design kit as pre-built React
+components instead of divs with exact-right `cc-*` class names to get right —
+`Report`/`Eyebrow`/`Lede`/`Grid`/`Card` for scaffolding, `Stats`/`Stat` for KPI tiles,
+`Bars`/`Donuts`/`Spark`/`Chart` for figures, `Table`/`Status`/`Pill`/`MiniBar` for
+ops/status data, `Note`/`Callout`/`Decision`/`Steps`/`Timeline` for narrative and
+status. Same components (and the same rendered `cc-*` markup) the platform's own
+report/artifact system uses — reach for these first; only fall back to a raw
+`className="cc-card"` div for something the kit doesn't cover. **Don't use
+`Submit`/`Action`** — those post a message back into a chat conversation (a different
+surface); they're harmless no-ops here but do nothing. For interactions, wire a plain
+`onClick`/`onChange` to `cc.storage`/`cc.tools`/`cc.ai` as usual. Everything from the
+Design section above (tokens, `cc-btn`, native inputs already styled) still applies
+outside `@cc/ui` too — same rule either way: never redeclare a token or override a
+`.cc-*` class.
 
 ## Architecture conformance (non-negotiable)
 

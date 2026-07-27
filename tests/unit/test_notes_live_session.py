@@ -12,7 +12,7 @@ import types
 from gateway.routes.notes import live_session as lsess
 
 _MIGRATION = (
-    pathlib.Path(__file__).resolve().parents[2] / "infra/postgres/119_live_session.sql"
+    pathlib.Path(__file__).resolve().parents[2] / "infra/postgres/120_live_session.sql"
 )
 
 

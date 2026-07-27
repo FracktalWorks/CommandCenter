@@ -24,6 +24,14 @@ Interactive mockups live alongside this doc:
 
 **Companion docs:**
 
+- [`../../ai-company-brain/specs/agent_platform_hardening_2026-07.md`](../../ai-company-brain/specs/agent_platform_hardening_2026-07.md)
+  — **adversarial review of everything below.** 20 findings, the container-isolation
+  decision, and the ordered fix list. Two of them change this document's design rather than
+  its implementation: participant input must be **user-role** (steer is otherwise a
+  prompt-injection channel), and messages must carry the **clearance set of the run that
+  produced them** so replay can be filtered by label, not only by join cursor — otherwise the
+  model launders restricted content into a transcript that later joiners can read.
+
 - [`agent-kinds.md`](agent-kinds.md) — **personal vs shared agents.** Which agents are
   one-per-person (coach, email) and which are one-brain-for-a-team (sales assistant).
   Read this first: instancing decides what a memory compartment even is, and whether an

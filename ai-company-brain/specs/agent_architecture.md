@@ -12,6 +12,9 @@ still load, but they are no longer the shape the architecture is designed around
 new should be built that way.
 
 **Companions:**
+[`agent_platform_hardening_2026-07.md`](agent_platform_hardening_2026-07.md) (**adversarial
+review of this doc and the multiplayer design — 20 findings, the isolation decision, and the
+five things to fix first**) ·
 [`memory_architecture.md`](memory_architecture.md) (the six memory tiers) ·
 [`agent_file_and_memory_framework.md`](agent_file_and_memory_framework.md) (the three folders) ·
 [`agent_persistence_implementation.md`](agent_persistence_implementation.md) (the blob store) ·
@@ -543,9 +546,13 @@ computed from a hardcoded agent name anywhere in the codebase.
 3. **Can a declarative agent be forked to a code agent?** Almost certainly needed — someone
    hits the ceiling of the manifest. Export a scaffolded `agents.py` from the manifest and
    flip `kind`, one-way.
-4. **Do declarative agents need a sandbox at all?** They execute no custom code, so the
-   heaviest part of B6 (container isolation for arbitrary agent code) applies only to code
-   agents. That may be the strongest argument in this document.
+4. ~~**Do declarative agents need a sandbox at all?**~~ **Answered — and the answer is yes,
+   sometimes.** The premise was wrong: `_resolve_injected_scope` returns `None` when
+   `tool_scope` is absent, meaning *inject everything*, which includes `code_task` and
+   `run_script`. A declarative agent with shell is as dangerous as a code agent. Isolation is
+   tiered by the **resolved tool surface**, not by agent class — see
+   [`agent_platform_hardening_2026-07.md`](agent_platform_hardening_2026-07.md) Part 1, which
+   also flips the `tool_scope` default to deny.
 5. **Does a `personal` agent get a per-user KB?** The base KB is shared by construction. But
    "my own documents this agent should always know" is the natural request after a week of
    use — hence `instance` on `agent_kb_chunk` (§7). Needs a UI and a budget rule.

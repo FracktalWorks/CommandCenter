@@ -220,6 +220,30 @@ _AGENT_REGISTRY: list[dict] = [
         "integrations": [],
         "optional_integrations": [],
     },
+    {
+        "name": "orchestrator",
+        "description": (
+            "Orchestrator — the default chat agent. Routes to specialist agents, "
+            "retrieves company data across ClickUp/Zoho/Odoo, and carries "
+            "cross-session memory."
+        ),
+        "tags": ["orchestrator", "core", "routing"],
+        "status": "live",
+        # Native MAF: apps/agents/agent-orchestrator/agents.py returns
+        # build_orchestrator_agent(), a real agent_framework.Agent. Labelling it
+        # github-copilot would route it through the Copilot SDK and 402.
+        "agent_runtime": "maf",
+        "local_path": "apps/agents/agent-orchestrator",
+        "integrations": [],
+        "optional_integrations": [],
+        # Why this entry exists (agent_architecture.md §11.1.1): the wrapper at
+        # apps/agents/agent-orchestrator/ was written to "eliminate the separate
+        # /copilot/chat endpoint path in main.py and the isOrchestrator branching
+        # in route.ts" — but it was never registered, so _validate_agent_name
+        # 422'd "orchestrator" and the wrapper was unreachable. Registering it
+        # makes the named-agent path real; retiring /copilot/chat is a separate,
+        # frontend-side step that depends on this one.
+    },
 ]
 
 

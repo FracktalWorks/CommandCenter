@@ -1148,6 +1148,15 @@ def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
     Installed into ``sys.executable``'s environment via ``uv pip install``
     (falling back to ``pip``).
 
+    RCE guard (BO-7 fast pass): unless ``settings.agent_deps_allow_source_
+    builds`` is explicitly set, installs run with ``--only-binary=:all:`` —
+    wheels only. An sdist's ``setup.py``/PEP 517 build backend can run
+    arbitrary code at install time, in the gateway's own process, before any
+    tool-call permission gate is even relevant; a wheel install is just an
+    unzip. This runs BEFORE ``agents.py`` is ever imported, so it is not
+    covered by anything downstream in the loader — the wheel-only restriction
+    is the actual boundary here, not a defense in depth on top of one.
+
     Best-effort + idempotent: a SHA-256 of the dep sources is cached in
     ``.git/acb-deps-hash``; an unchanged set is skipped.  A failed install logs
     a warning and never blocks the agent run.  Runs under the caller's per-repo
@@ -1202,6 +1211,8 @@ def _install_agent_deps(agent_dir: Path, settings: Any) -> None:
             if uv
             else [sys.executable, "-m", "pip", "install"]
         )
+        if not bool(getattr(settings, "agent_deps_allow_source_builds", False)):
+            base = base + ["--only-binary", ":all:"]
         cmds: list[list[str]] = []
         if req.is_file():
             cmds.append(base + ["-r", str(req)])

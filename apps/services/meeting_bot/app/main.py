@@ -1,0 +1,147 @@
+"""CommandCenter Meeting Bot — a fully self-hosted meeting-joining worker.
+
+A headless-Chrome (Playwright) participant that joins a meeting link, records
+the call's audio, and serves it back over a small vendor-neutral HTTP contract.
+CommandCenter's ``selfhosted`` bot provider (gateway
+``routes/notes/meeting_bot.py``) drives this — so there is **no third-party
+cloud** in the loop; the only cost is the box this runs on.
+
+Contract (what the gateway provider speaks):
+    POST   /bots                {meeting_url, bot_name} -> {id, status}
+    GET    /bots/{id}           -> {id, status, download_url|null, error|null}
+    POST   /bots/{id}/leave     -> 202  (leave the call now)
+    GET    /bots/{id}/recording -> audio bytes (when status == "done")
+    GET    /health              -> {ok: true}
+
+Status vocabulary matches the gateway's lifecycle directly:
+    joining -> waiting_room -> in_call -> processing -> done
+    (or failed / not_admitted)
+
+Scope: this MVP targets **Google Meet** (the most automatable via a browser).
+Zoom/Teams are future work (they usually need their SDKs). One meeting per
+worker instance — scale by running more instances (each is ~1 headless Chrome).
+"""
+
+from __future__ import annotations
+
+import asyncio
+import os
+import uuid
+
+from fastapi import FastAPI, Header, HTTPException
+from fastapi.responses import FileResponse
+from pydantic import BaseModel
+
+from .meet import MeetingBotError, join_and_record
+
+DATA_DIR = os.environ.get("MEETING_BOT_DATA", "/data")
+TOKEN = os.environ.get("MEETING_BOT_TOKEN", "").strip()
+
+app = FastAPI(title="CommandCenter Meeting Bot", version="0.1.0")
+
+
+class _Job:
+    def __init__(self, job_id: str, meeting_url: str, bot_name: str) -> None:
+        self.id = job_id
+        self.meeting_url = meeting_url
+        self.bot_name = bot_name
+        self.status = "requested"
+        self.error: str | None = None
+        self.recording: str | None = None
+        self.leave = asyncio.Event()
+        self.task: asyncio.Task | None = None
+
+
+_JOBS: dict[str, _Job] = {}
+
+
+def _auth(authorization: str | None) -> None:
+    if TOKEN and authorization != f"Bearer {TOKEN}":
+        raise HTTPException(status_code=401, detail="unauthorized")
+
+
+class JoinRequest(BaseModel):
+    meeting_url: str
+    bot_name: str = "AI Notetaker"
+
+
+async def _run(job: _Job) -> None:
+    """Background driver: join + record, then mark the job terminal."""
+    os.makedirs(DATA_DIR, exist_ok=True)
+    out_path = os.path.join(DATA_DIR, f"{job.id}.ogg")
+
+    def on_status(s: str) -> None:
+        job.status = s
+
+    try:
+        await join_and_record(
+            job.meeting_url, job.bot_name, out_path, job.leave, on_status
+        )
+        ok = os.path.isfile(out_path) and os.path.getsize(out_path) > 0
+        job.recording = out_path if ok else None
+        job.status = "done" if ok else "failed"
+        if not ok and not job.error:
+            job.error = "no audio was captured"
+    except MeetingBotError as exc:
+        job.status = exc.status
+        job.error = str(exc)
+    except Exception as exc:  # never let a runner crash take down the worker
+        job.status = "failed"
+        job.error = str(exc)[:500]
+
+
+@app.get("/health")
+async def health() -> dict:
+    return {"ok": True, "active": sum(1 for j in _JOBS.values() if j.status in
+            ("joining", "waiting_room", "in_call", "processing"))}
+
+
+@app.post("/bots", status_code=201)
+async def create_bot(
+    req: JoinRequest, authorization: str | None = Header(default=None)
+) -> dict:
+    _auth(authorization)
+    url = (req.meeting_url or "").strip()
+    if not url.startswith("http"):
+        raise HTTPException(status_code=400, detail="invalid meeting_url")
+    job_id = uuid.uuid4().hex
+    job = _Job(job_id, url, (req.bot_name or "AI Notetaker").strip() or "AI Notetaker")
+    job.status = "joining"
+    _JOBS[job_id] = job
+    job.task = asyncio.create_task(_run(job))
+    return {"id": job_id, "status": job.status}
+
+
+@app.get("/bots/{bot_id}")
+async def get_bot(
+    bot_id: str, authorization: str | None = Header(default=None)
+) -> dict:
+    _auth(authorization)
+    job = _JOBS.get(bot_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown bot")
+    # download_url null → the gateway falls back to GET /bots/{id}/recording.
+    return {"id": bot_id, "status": job.status, "download_url": None, "error": job.error}
+
+
+@app.post("/bots/{bot_id}/leave", status_code=202)
+async def leave_bot(
+    bot_id: str, authorization: str | None = Header(default=None)
+) -> dict:
+    _auth(authorization)
+    job = _JOBS.get(bot_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown bot")
+    job.leave.set()  # the runner finalises the recording and leaves
+    return {"ok": True}
+
+
+@app.get("/bots/{bot_id}/recording")
+async def get_recording(
+    bot_id: str, authorization: str | None = Header(default=None)
+) -> FileResponse:
+    _auth(authorization)
+    job = _JOBS.get(bot_id)
+    if job is None or not job.recording or not os.path.isfile(job.recording):
+        raise HTTPException(status_code=404, detail="no recording")
+    return FileResponse(job.recording, media_type="audio/ogg")

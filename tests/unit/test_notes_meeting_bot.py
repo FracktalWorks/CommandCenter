@@ -103,3 +103,28 @@ def test_recall_base_url_from_region(monkeypatch) -> None:
     assert mb._recall_base() == "https://eu-central-1.recall.ai/api/v1"
     monkeypatch.setenv("RECALL_BASE_URL", "https://custom.example/api/v1/")
     assert mb._recall_base() == "https://custom.example/api/v1"
+
+
+# ── self-hosted provider (fully in-house, the default) ───────────────────────
+
+def test_default_provider_is_selfhosted_and_inert(monkeypatch) -> None:
+    monkeypatch.delenv("NOTES_BOT_PROVIDER", raising=False)
+    monkeypatch.delenv("MEETING_BOT_URL", raising=False)
+    # The default is the in-house worker; with no worker URL it stays inert.
+    assert mb._provider_name() == "selfhosted"
+    assert mb.bot_configured() is False
+    assert mb.resolve_bot_provider() is None
+
+
+def test_selfhosted_configured_requires_worker_url(monkeypatch) -> None:
+    monkeypatch.setenv("NOTES_BOT_PROVIDER", "selfhosted")
+    monkeypatch.delenv("MEETING_BOT_URL", raising=False)
+    assert mb.bot_configured() is False
+    assert mb.resolve_bot_provider() is None
+    monkeypatch.setenv("MEETING_BOT_URL", "http://meeting-bot:8080/")
+    assert mb.bot_configured() is True
+    prov = mb.resolve_bot_provider()
+    assert isinstance(prov, mb.SelfHostedProvider)
+    # Trailing slash is trimmed so path joins are clean.
+    assert prov._base == "http://meeting-bot:8080"
+

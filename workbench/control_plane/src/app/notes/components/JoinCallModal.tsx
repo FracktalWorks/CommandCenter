@@ -91,9 +91,9 @@ export default function JoinCallModal({ onClose, onJoined }: JoinCallModalProps)
             <span className="flex items-start gap-1.5">
               <AlertCircle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
               <span>
-                The meeting notetaker isn&apos;t set up yet. An admin needs to add
-                a Recall.ai API key (<code>RECALL_API_KEY</code>) on the server to
-                enable it.
+                The meeting notetaker isn&apos;t set up yet. An admin needs to
+                connect the self-hosted meeting-bot worker
+                (<code>MEETING_BOT_URL</code>) on the server to enable it.
               </span>
             </span>
           </div>

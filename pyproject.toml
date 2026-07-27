@@ -61,6 +61,10 @@ exclude = [
     # Non-Python services that live under apps/services/* but are not uv
     # workspace members (no pyproject.toml). The whatsmeow bridge is a Go module.
     "apps/services/whatsapp_bridge",
+    # The meeting-bot worker is a standalone Dockerized service (Playwright +
+    # headless Chrome); it pins its own deps in requirements.txt and is not part
+    # of the uv workspace (kept off the main app's dependency graph).
+    "apps/services/meeting_bot",
 ]
 
 [tool.uv.sources]

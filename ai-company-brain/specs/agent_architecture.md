@@ -87,9 +87,15 @@ everyone.
 | 1 | **Global** | Injected skills · integrations (API/MCP) · other agents as skills · `org:global` memory | memory yes; registry admin-only | partial | registry, Mem0 `org:global` |
 | 2 | **Agent Base — Code** | Declarative: the manifest. Code agents: `agents.py`, skills | **no** — publish or PR | ✅ | `agent_defs` / Git |
 | 3 | **Agent Base — Knowledge** | Curated docs, templates, playbooks, the RAG corpus | **no** at runtime — the agent *proposes* | ✅ | Git or `agent_kb_source` → derived index |
-| 4 | **Agent Shared State** | What it learns across everyone who uses it | yes | ✗ | Mem0 `agent:<name>#<instance>` + blob `instance` |
-| 5 | **Team / Room** | Facts and artifacts belonging to a team or a live room | yes | ✗ | `t:<team>` · `room:<thread>` · `subject:<entity>` |
-| 6 | **User** | Private memory, private artifacts | yes | ✗ | `user:`, `prefs:`, blob `u:<email>` |
+| 4 | **Agent Shared State + Knowledge** | What it learns across everyone who uses it, **and the runbooks, briefs and scripts it writes for them** | yes | not yet — promotable | Mem0 `agent:<name>#<instance>` + blob `instance` |
+| 5 | **Team / Room** | Facts, artifacts **and working knowledge** belonging to a team or a live room | yes | not yet — promotable | `t:<team>` · `room:<thread>` · `subject:<entity>` |
+| 6 | **User** | Private memory, private artifacts, **your own documents and what it drafted for you** | yes | not yet — promotable | `user:`, `prefs:`, blob `u:<email>` |
+
+> **Correction to the first draft: Knowledge is not confined to layer 3.** An agent working
+> with a team writes runbooks, deal briefs and reusable scripts constantly — that material is
+> knowledge no matter who authored it. Knowledge exists at *every* layer; what differs is
+> whether it has been reviewed yet. See §4.1: it is the one kind of material that legitimately
+> **climbs** the lattice.
 
 > **"Shared with all users" is ambiguous** between *all users of this agent* (layer 4) and
 > *all users in this room* (layer 5). Different keys. And for a `personal`-instanced agent
@@ -170,6 +176,36 @@ Knowledge must be reviewed and versioned because it changes behaviour on every r
 closer to prompt than to data — and because a document diff is *far cheaper* to review than a
 code diff, so the gate costs almost nothing. The index is a build artifact keyed by the source
 version, which makes retrieval reproducible, rollback instant, and eval results meaningful.
+
+### 4.1 Knowledge is the axis that climbs
+
+Capability never moves — an agent that can widen its own reach has no ceiling. Memory never
+moves — it is too granular and high-volume to review. **Knowledge is the one kind of material
+that starts unreviewed and graduates**, and that path is the mechanism by which an agent gets
+permanently better rather than merely fuller.
+
+```
+written into your instance  →  promoted to the team  →  proposed for the base
+      (unreviewed)                 (unreviewed)              (reviewed, versioned)
+```
+
+Three grades of self-made material, three different bars — because a note that is wrong is bad
+advice, and a script that is wrong runs on someone else's data:
+
+| Grade | Examples | Gate | Why that bar |
+|---|---|---|---|
+| **Notes & documents** | Runbooks, deal briefs, checklists, summaries | **Light review** — anyone who can see the target scope may promote one level | Prose. Readable, reversible, worst case it's wrong advice. |
+| **Scripts & tools** | Reusable code it wrote to do a job twice — already a live pattern here: `agent-data/SCRIPTS.md` catalogues `agent-data/scripts/`, run via `run_script` | **Code review**, and it runs at **T2 container** isolation | Promoting a script means it executes in someone else's context on their data. That is a capability change wearing a document's clothes. |
+| **New powers** | A new integration, a new peer agent, a wider `tool_scope` | **Admin grant only — never promotable** | §3.2's `approve_all` bypass is what self-granted capability looks like in practice. |
+
+Nothing skips a rung, and every promotion carries the name of the human who made it.
+
+**The scripts case deserves the sharpest line.** `SCRIPTS.md` + `scripts/` is the same
+index-plus-entries shape as `kb/INDEX.md` and `agent_memory_index.json` — the third instance of
+that pattern in this system, which is a good sign it's the right one. But a promoted script is
+the only piece of self-made material that is *executable*, so it inherits the isolation tier of
+whatever it does, and it can never be promoted by the same light gate as the runbook that
+describes it.
 
 ---
 
@@ -491,18 +527,68 @@ playbook, not as a vector row nobody can see.
 
 ---
 
-## 11. Migrating the roster
+## 11. One runtime: MAF. Copilot becomes a tool, not a runtime
 
-The Copilot SDK keeps exactly two legitimate homes, both already stated in AGENTS.md #6:
-**genuine coding agents** and **the self-mutation sandbox**. Everything else moves to
-declarative MAF.
+**Decision: there is exactly one agent runtime, and `runtime` stops being a variable.**
+
+The dual-runtime model was the VS Code era. Keeping it costs two of everything — two
+permission models, two streaming paths, two session models, two HITL implementations — and
+§3.1/§3.2 are what that costs in practice: three agents drifted to Copilot while declaring
+MAF, and in doing so silently disabled a security control the platform had already shipped.
+
+**Go further than "Copilot only for mutations."** Copilot shouldn't be a second runtime for a
+narrower purpose; it should stop being a runtime at all and become a **capability that MAF
+agents call**. The codebase already started this — `code_tools.py` describes `code_task` as
+*"a bounded, one-shot Copilot SDK session"* invoked as a tool, and its module header already
+frames it as *"MAF is the framework, the Copilot [SDK is the coding engine]."*
+
+```
+MAF agent ──► code_task ──► container ──► diff into the caller's
+                (tool)                    instance workspace ──► approval inbox
+```
+
+This unifies three things that are separate mechanisms today:
+
+| Today | Under one runtime |
+|---|---|
+| Agent self-mutation → Copilot sandbox → monorepo PR | `code_task` → instance workspace → approval |
+| Agent writes a reusable script | same |
+| App Workshop builds an app | same |
+
+All three become *"Copilot writes code into the caller's instance workspace; a human reviews;
+it promotes."* Which is exactly the scoping you asked for: **a mutation lives in user or team
+space until it is approved and merged.** It follows directly from §4.1's ladder rather than
+being a special case.
+
+### 11.1 What it costs — less than expected
+
+I assumed HITL would be the blocker, since the Copilot SDK's native `ask_user` is wired
+through an `on_user_input_request` handler (`executor.py:329-434`). It isn't:
+`acb_skills/ask_tools.py` already provides **`ask_questions` and `ask_user` as platform
+tools** that park on a Future and are injected into any agent, and the executor already treats
+them as long-running HITL alongside `request_confirmation` (`executor.py:3290-3296`).
+
+So MAF-only **deletes a duplicate HITL implementation** rather than needing a new one. What
+genuinely has to be checked before flipping: the three drifted agents' dependence on
+Copilot-native file tools (`code_tools.py:17` notes those bypass the durability mirror and are
+specially handled), and whatever the `/copilot/chat` Tier-1.5 path still serves that
+`/agent/run/stream` doesn't.
+
+### 11.2 Consequences for the manifest
+
+`runtime` drops out as an authored field and becomes a validated constant. `kind`
+(declarative | code) remains — it is orthogonal to runtime, and both kinds are MAF. The
+`agent_runtime` column on `dynamic_agents` becomes legacy, retained only to identify
+not-yet-migrated agents.
+
+## 11.3 Migrating the roster
 
 | Agent | Now | Target | Why |
 |---|---|---|---|
 | `agent-task-manager` | Copilot, 136 ln | **Declarative** | Instructions + 25 GTD tools. No control flow. |
 | `agent-apis-config` | Copilot, 63 ln | **Declarative** | Same shape. |
 | `agent-orchestrator` | MAF, 24 ln | **Declarative** (delegation-heavy) | Its routing becomes `capabilities.agents` edges (§8). |
-| `agent-app-builder` | Copilot, 48 ln | **Code, stays Copilot** | It *is* a coding agent — the SDK is the point. |
+| `agent-app-builder` | Copilot, 48 ln | **Declarative MAF that calls `code_task`** | It *is* a coding agent — but under §11 that means it holds the coding *tool*, not that it runs on a different runtime. |
 | `agent-whatsapp-assistant` | MAF, 480 ln | **Code** | Real bespoke logic. |
 | `agent-email-assistant` | MAF, 1 954 ln | **Code** | Real bespoke logic. |
 
@@ -512,11 +598,32 @@ shouldn't wait for anything here.
 
 ---
 
+## 11.4 How this surfaces in chat
+
+An agent that accumulates knowledge has one characteristic failure mode: **silent drift** — it
+knows things nobody chose to teach it, and nobody notices until an answer is wrong. So the
+control surface belongs in the chat, at the moment of writing, not in a settings page someone
+has to remember exists.
+
+| Surface | Behaviour |
+|---|---|
+| **Scope chip on the composer** | You always see which scope you're in and what identity the agent acts as. Already designed for rooms; it does double duty here. |
+| **Artifact card with a scope chooser** | Every document, script or note the agent writes appears inline as a card, defaulted to the **narrowest scope that fits** (your instance). One click widens: *Just me · Sales team · Propose for the agent*. Scope is a choice made at creation, not a setting configured later. |
+| **"What it used" chip on answers** | A quiet `used 4 memories · 2 documents` that expands to the provenance list from [`memory_architecture.md`](memory_architecture.md) §6.3, with **that's wrong** and **forget this** per line. Correction belongs where the mistake is visible. |
+| **Knowledge drawer in the side panel** | *What this agent knows*, grouped by the lattice — yours, the team's, the agent's, the company's — with promote/demote. Beside the chat, not a separate destination. |
+| **Promotions land in the approvals inbox** | Nothing new to build: a promoted runbook is a prose diff, a promoted script is a code diff, a widened capability is a grant request. Same queue, three different bars (§4.1). |
+| **"What changed" on a new base version** | Publishing changes behaviour for everyone using the agent. One line at the top of each user's next session — *"the sales agent learned 2 things last week"* — is what keeps a shared agent trustworthy. Without it, a silently improving agent is indistinguishable from an unpredictable one. |
+
+The scope chooser is the load-bearing element. It means the answer to *"who can see what the
+agent wrote"* is decided by the person who caused it to be written, in the moment, with the
+consequence stated — rather than being a default nobody chose.
+
 ## 12. Phasing
 
 | Phase | Work | Depends on |
 |---|---|---|
 | **A0** | Drop `approve_all` from the three factories; add a startup check that `runtime` matches the entrypoint | — |
+| **A1** | **Single runtime (§11):** audit what `/copilot/chat` still serves that `/agent/run/stream` doesn't; retire the Copilot-native `on_user_input_request` path in favour of the existing `ask_tools` platform tools; make `code_task` the only Copilot entry point | A0 |
 | **A** | Manifest schema + validator · `agent_defs`/`agent_def_versions`/`agent_def_grants` (122) · derive `dynamic_agents` from them · backfill all six | A0 |
 | **B** | The one generic `build_declarative_agent` · migrate task-manager and apis-config · retire their `agents.py` | A |
 | **C** | Agent Creator UI — describe-to-create, draft/publish/rollback, mirroring the Workshop | B |

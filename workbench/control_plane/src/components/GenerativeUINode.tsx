@@ -10,7 +10,7 @@
  * Prefab/FastMCP-Apps embody, but over our own AG-UI transport — no MCP-Apps
  * host, no arbitrary HTML/JS.
  *
- * Three tiers of richness, all safe:
+ * Four tiers of richness, all safe:
  *   • Tier 1 — the whitelisted primitives below (card/table/badge/…): inert data,
  *     no code path. The default and safest.
  *   • Tier 2 — `template` node: renders a pre-designed, animated React component
@@ -18,8 +18,12 @@
  *   • Tier 3 — `html` node: agent-GENERATED HTML/CSS/JS, executed inside a
  *     locked-down opaque-origin iframe (SandboxedHtml). Unlimited/animated but
  *     fully isolated — no ambient authority, actions bridged via postMessage.
+ *   • Tier 4 — `react` node: an agent-authored React COMPONENT, bundled
+ *     server-side (SandboxedReact) and run in that same isolated frame. Real
+ *     state/hooks/effects for immersive artifacts, same zero authority.
  * There is NO in-tree raw-markup injection: an unknown `type` renders as an inert
- * labelled fallback, and the `html` tier's code never touches our DOM/origin.
+ * labelled fallback, and neither the `html` nor `react` tier's code ever touches
+ * our DOM/origin.
  *
  * Interactivity: `button` nodes carry an `action` string; clicking one calls
  * onAction(action), which the chat wires to submit the action as a follow-up
@@ -34,6 +38,7 @@ import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 
 import SandboxedHtml from "@/components/SandboxedHtml";
+import SandboxedReact from "@/components/SandboxedReact";
 import { renderTemplate } from "@/components/genUITemplates";
 import { tableCells, tableColumns, text } from "@/lib/genUiText";
 import { resolveIcon } from "@/lib/icons";
@@ -52,7 +57,7 @@ export interface GenUINode {
 const KNOWN_TYPES = new Set([
   "card", "stack", "row", "heading", "text", "markdown", "badge",
   "divider", "keyValue", "table", "list", "code", "link", "button", "callout",
-  "template", "html", "icon",
+  "template", "html", "react", "icon",
 ]);
 
 /** tone → foreground color token for icons (matches badge/callout palette). */
@@ -312,6 +317,26 @@ function Node({
       return (
         <SandboxedHtml
           html={code}
+          height={height}
+          onAction={onAction}
+          theme={theme}
+          icons={icons}
+        />
+      );
+    }
+
+    case "react": {
+      // Tier 4 — a real React component. Compiled server-side into a
+      // self-contained bundle, then run in the SAME isolated frame as the html
+      // tier, with the same action bridge. Richer than `html` (state, hooks,
+      // effects) with no extra authority.
+      const code = s(props.code);
+      if (!code) return null;
+      const height = typeof props.height === "number" ? props.height : undefined;
+      const icons = buildIconMap(props.icons);
+      return (
+        <SandboxedReact
+          code={code}
           height={height}
           onAction={onAction}
           theme={theme}

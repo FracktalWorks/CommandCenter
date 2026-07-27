@@ -814,9 +814,11 @@ first-open consent screen · **manifest
 golden-trajectory-eval'd per harness rules) · by-app cost lens in Observability +
 per-app budgets · **usage stats on gallery cards** · **pinned apps in sidebar** ·
 **fork/remix** (source files only — never runtime data/sharing/history, fresh git
-history, forker becomes sole owner of a new private draft) · templates gallery
-(now cheap: a template is just "fork from a curated app") · suggest-a-change ·
-app-to-app data reads (quote calculator ← filament costs) — remaining.
+history, forker becomes sole owner of a new private draft) · **templates gallery**
+(`is_template` flag, editor-toggleable from the gallery card; a "Templates" filter
+pill over the existing app list; "Use" reuses fork/remix — no new copy mechanism)
+· suggest-a-change · app-to-app data reads (quote calculator ← filament costs) —
+remaining.
 
 **P2 — power (Phase 3+):**
 real URLs on a usercontent subdomain with CSP headers · scoped short-TTL app tokens ·
@@ -991,8 +993,12 @@ apps in the sidebar — **shipped** (a later pass, batched together since both w
 cheap and the data/infra — the usage endpoint, the sidebar's dynamic-badge pattern —
 already existed); fork/remix — **shipped** (`POST /{slug}/fork`, view access is
 enough — copies source files only, resets sharing/runtime data/history, fresh git
-history, forker owns the new private draft); templates gallery (now cheap: fork
-from a curated app); suggest-a-change — remaining.
+history, forker owns the new private draft); templates gallery — **shipped**
+(`apps.is_template`, toggled via the existing generic `PATCH /{slug}`; the
+gallery's "Templates" filter pill client-side-filters the already-fetched
+`GET /apps` list — no new listing endpoint; "Use" on a template card calls the
+same `POST /{slug}/fork` and lands in the new copy's editor); suggest-a-change —
+remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers

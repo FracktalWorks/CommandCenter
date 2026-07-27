@@ -30,6 +30,8 @@ export interface AppMeta {
   /** This viewer's own app_pins bookmark — list route only (the detail route
    * always returns false; the pin button lives on the gallery card). */
   pinned?: boolean;
+  /** Flagged by an editor as a starting point in the templates gallery. */
+  is_template?: boolean;
   /** This-month AI usage (app_audit, kind='ai') — list route only, batched
    * across every app in one query. See AppUsage for the fuller per-app
    * breakdown (incl. budget) the detail page's usage popover fetches. */

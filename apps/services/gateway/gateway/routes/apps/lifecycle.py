@@ -62,6 +62,7 @@ class AppSummary(BaseModel):
     updated_at: str = ""
     role: str = "use"          # the caller's relationship: own | edit | use
     pinned: bool = False       # this viewer's own app_pins bookmark
+    is_template: bool = False  # flagged as a starting point in the templates gallery
     # This-month AI usage (app_audit, kind='ai') — the same aggregate
     # GET /{slug}/usage computes, minus budget_tokens (that needs a manifest
     # read per app; too expensive to pay for every card in the list).
@@ -96,6 +97,7 @@ class AppPatch(BaseModel):
     description: str | None = None
     icon: str | None = None
     visibility: str | None = None
+    is_template: bool | None = None
 
 
 # ── Scaffold (sync — run in an executor) ─────────────────────────────────────
@@ -249,6 +251,7 @@ def _to_summary(
         updated_at=iso(row.updated_at) or "",
         role=role_for(row, user, grants),
         pinned=pinned,
+        is_template=bool(row.is_template),
         month_cost_usd=cost,
         month_calls=calls,
     )

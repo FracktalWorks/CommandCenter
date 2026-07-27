@@ -574,11 +574,52 @@ through an `on_user_input_request` handler (`executor.py:329-434`). It isn't:
 tools** that park on a Future and are injected into any agent, and the executor already treats
 them as long-running HITL alongside `request_confirmation` (`executor.py:3290-3296`).
 
-So MAF-only **deletes a duplicate HITL implementation** rather than needing a new one. What
-genuinely has to be checked before flipping: the three drifted agents' dependence on
+So MAF-only **deletes a duplicate HITL implementation** rather than needing a new one.
+
+### 11.1.1 Audit: what `/copilot/chat` still serves (2026-07-26)
+
+**It is not a Copilot endpoint.** Despite the name, `main.py:421` builds
+`build_orchestrator_agent()` — a **native MAF `Agent`** — and streams it through MAF's own
+AG-UI adapter (`agent_framework.ag_ui.AgentFrameworkAgent`). Its docstring says so outright:
+*"MAF orchestrator: per-request agent… The orchestrator is a native MAF agent."* The name is
+VS Code-era residue, and it has made the runtime split look larger than it is.
+
+**The wrapper that retires it already exists.** `apps/agents/agent-orchestrator/agents.py`
+(24 lines) says exactly why it was written: *"This thin wrapper lets the orchestrator go
+through the same `run_agent_stream()` path that all other named agents use, eliminating the
+separate `/copilot/chat` endpoint path in `main.py` and the `isOrchestrator` branching in
+`route.ts`."* The migration was designed and half-built; the frontend still branches
+(`route.ts:678` — `mode === "copilot" && isOrchestrator`).
+
+Only two things live solely on that path:
+
+| Only on `/copilot/chat` | Status |
+|---|---|
+| `think_mode` → `_apply_thinking_mode` | `AgentRunRequest` has no such field. Must be ported before the branch is deleted. |
+| `enrich_instructions_with_memory` | A **second, divergent** memory-injection implementation — see below. |
+
+### 11.1.2 Finding: the orchestrator gets less memory than every other agent
+
+The two memory paths do not inject the same thing:
+
+| Path | Injects |
+|---|---|
+| `routes/agent.py:1291` `_build_memory_block` (named agents) | Mem0 **user** + Mem0 **`agent:<name>`** + Mem0 **`org:global`** + Graphiti |
+| `agents.py:498` `enrich_instructions_with_memory` (orchestrator) | Mem0 **user** + Graphiti |
+
+So the orchestrator — the router that sees the most traffic — runs without agent-scope or
+org-scope memory. Company facts written via `save_org_memory` reach every named agent and not
+the orchestrator. That looks unintentional rather than designed.
+
+Two consequences: it is a live behaviour gap worth closing on its own, and it means the
+compartment/clearance work in [`memory_architecture.md`](memory_architecture.md) would
+otherwise have to be implemented **twice, in two divergent code paths**. Retiring
+`/copilot/chat` collapses them to one — which is the strongest single argument for doing the
+runtime unification *before* the memory work rather than after.
+
+What still needs checking before the branch is deleted: the drifted agents' dependence on
 Copilot-native file tools (`code_tools.py:17` notes those bypass the durability mirror and are
-specially handled), and whatever the `/copilot/chat` Tier-1.5 path still serves that
-`/agent/run/stream` doesn't.
+specially handled).
 
 ### 11.2 Consequences for the manifest
 

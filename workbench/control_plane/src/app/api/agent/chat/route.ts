@@ -672,85 +672,22 @@ export async function POST(req: NextRequest): Promise<Response> {
   // built-in orchestrator agent. Named agents (task-manager, sales-assistant,
   // any GitHub-registered agent) must go through /agent/run so the executor
   // can clone the repo, import agents.py, resolve integrations, and run via MAF.
-  const ORCHESTRATOR_NAMES = new Set(["orchestrator", "default", "commandcenter", ""]);
-  const isOrchestrator = ORCHESTRATOR_NAMES.has(agentName.toLowerCase().trim());
-
-  if (mode === "copilot" && isOrchestrator) {
-    let gatewayRes: Response;
-    try {
-      // AG-UI protocol: the current message must be part of the messages array.
-      // Append it after the history so the agent sees the full conversation.
-      // Lead with the caller's system context (persona + injected memories +
-      // frontend-tools addendum) as a system message so the orchestrator gets it
-      // too — the /copilot/chat body's other fields are parsed by a pydantic
-      // model that drops unknown keys, so a top-level `system_context` field
-      // would be stripped; a system message in `messages` survives.
-      const agUiMessages = [
-        ...(context ? [{ role: "system" as const, content: context }] : []),
-        ...withoutCurrentTurn(
-          (messages ?? []).map((m) => ({ role: m.role, content: m.content })),
-          message,
-        ),
-        { role: "user" as const, content: message },
-      ];
-      // The orchestrator is a native MAF agent; forward the selected LiteLLM
-      // tier as a query param so it (and any specialist it delegates to) runs on
-      // the chosen model instead of the build-time tier-balanced default.
-      // assistant_message_id rides as a query param too (the AG-UI body model
-      // drops unknown keys) so the gateway's run-end fold-and-persist (P0-3)
-      // writes the same row this translator checkpoints.
-      const copilotParams = new URLSearchParams();
-      if (model) copilotParams.set("model", model);
-      if (assistantMessageId) copilotParams.set("assistant_message_id", assistantMessageId);
-      const copilotQs = copilotParams.toString();
-      const copilotUrl = copilotQs
-        ? `${GATEWAY_URL}/copilot/chat?${copilotQs}`
-        : `${GATEWAY_URL}/copilot/chat`;
-      gatewayRes = await fetch(copilotUrl, {
-        method: "POST",
-        headers: await buildGatewayHeaders(),
-        body: JSON.stringify({
-          thread_id: threadId ?? "",
-          messages: agUiMessages,
-          think_mode: thinkMode ?? "auto",
-        }),
-        signal: AbortSignal.timeout(310_000),
-      });
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      return new Response(
-        `data: ${JSON.stringify({ type: "error", content: `Gateway unreachable: ${msg}` })}\n\n`,
-        { status: 502, headers: sseHeaders() }
-      );
-    }
-    if (!gatewayRes.ok || !gatewayRes.body) {
-      const text = await gatewayRes.text().catch(() => `status ${gatewayRes.status}`);
-      return new Response(
-        `data: ${JSON.stringify({ type: "error", content: text })}\n\n`,
-        { status: gatewayRes.status, headers: sseHeaders() }
-      );
-    }
-    // Translate AG-UI → frontend SSE, persisting to Postgres so messages
-    // survive client disconnect (tab close, browser quit, network drop).
-    // Memory extraction for this orchestrator path is OWNED BY THE GATEWAY at
-    // the run boundary (P1-9): it fires on finish/error/cancel/reconnect even
-    // when this reader is gone AND includes the folded answer. Firing here too
-    // would double-extract every turn.
-    const translated = new ReadableStream<Uint8Array>({
-      async start(controller) {
-        await translateAndPersistStream(
-          gatewayRes.body!, controller, threadId ?? "", assistantMessageId,
-        );
-      },
-    });
-    return new Response(translated, { headers: sseHeaders() });
-  }
+  // The orchestrator is now a REGISTERED agent (gateway _AGENT_REGISTRY), so it
+  // runs through /agent/run/stream like every other one — same executor, same
+  // permission handler, same memory injection. These aliases are what the UI
+  // and stored sessions can carry for it; normalise them to the registered slug
+  // so the named-agent path resolves instead of 422-ing.
+  // (agent_architecture.md §11.1.1 — retires the /copilot/chat branch.)
+  const ORCHESTRATOR_ALIASES = new Set(["orchestrator", "default", "commandcenter", ""]);
+  const resolvedAgentName = ORCHESTRATOR_ALIASES.has(agentName.toLowerCase().trim())
+    ? "orchestrator"
+    : agentName;
 
   // ── Executor path: named agents (copilot mode) + langgraph mode ──────────
   // Named agents (copilot mode): route through /agent/run/stream which returns
   // a real AG-UI SSE stream so the UI sees tool events live.
   // Legacy langgraph mode: falls back to batch /agent/run (no streaming).
-  if (mode === "copilot" && !isOrchestrator) {
+  if (mode === "copilot") {
     // /agent/run/stream returns the same AG-UI event format as /copilot/chat.
     let streamRes: Response;
     try {
@@ -758,7 +695,7 @@ export async function POST(req: NextRequest): Promise<Response> {
         method: "POST",
         headers: await buildGatewayHeaders(),
         body: JSON.stringify({
-          agent: agentName,
+          agent: resolvedAgentName,
           payload: {
             mode: "chat", message,
             messages: withoutCurrentTurn(

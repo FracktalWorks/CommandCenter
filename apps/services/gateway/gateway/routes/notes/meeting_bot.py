@@ -1,9 +1,16 @@
 """Meeting bot — send a notetaker to join a live Meet/Teams/Zoom call.
 
-Spec §3.13 / decision D10, Phase 1 (on-demand join by link). A *provider* runs
-the actual headless participant; we default to **Recall.ai** (managed API — the
-only fit for a single small VPS, since a self-hosted headless-Chromium fleet
-won't run here). The flow:
+Spec §3.13 / decision D10. A pluggable *provider* runs the actual headless
+participant. Two are built:
+
+- ``selfhosted`` (**default**, fully in-house): talks to our own worker service
+  (``apps/services/meeting-bot`` — headless Chrome via Playwright) over a small
+  vendor-neutral HTTP contract. No third-party cloud, no per-hour fee; the cost
+  is the box the worker runs on (needs real RAM/CPU — one Chrome per meeting).
+- ``recall`` (optional managed fallback): the Recall.ai API, for anyone who'd
+  rather not run the worker.
+
+The flow (identical for both):
 
     paste URL → create meeting + meeting_bot row → provider.join()
       → poll status (joining → waiting room → in call → done)
@@ -15,13 +22,13 @@ So a bot recording is just another audio source; everything downstream is
 unchanged. Because each bot is an independent server-side job, one user can fan
 several notetakers out to concurrent meetings.
 
-Config (all via env; nothing works until a key is set — the feature is inert but
-safe without it):
-- ``RECALL_API_KEY``     — the Recall.ai API token (required to enable).
-- ``RECALL_REGION``      — e.g. ``us-east-1`` / ``us-west-2`` / ``eu-central-1``
-                            (default ``us-east-1``); or set ``RECALL_BASE_URL``.
+Config (all via env; the feature is inert but safe until configured):
+- ``NOTES_BOT_PROVIDER`` — ``selfhosted`` (default) or ``recall``.
 - ``NOTES_BOT_NAME``     — default display name for the bot ("AI Notetaker").
-- ``NOTES_BOT_PROVIDER`` — provider id (default ``recall``).
+- self-hosted: ``MEETING_BOT_URL`` — the worker's base URL (required to enable);
+                ``MEETING_BOT_TOKEN`` — optional bearer for the worker.
+- recall:      ``RECALL_API_KEY`` (required); ``RECALL_REGION`` (default
+                ``us-east-1``) or ``RECALL_BASE_URL``.
 """
 
 from __future__ import annotations
@@ -62,6 +69,8 @@ _RECALL_STATUS = {
 
 # Bot statuses that are still running (drive polling + the "active" surface).
 ACTIVE_STATUSES = ("requested", "joining", "waiting_room", "in_call", "processing")
+# Every valid lifecycle status (a self-hosted worker reports these directly).
+_ALL_STATUSES = (*ACTIVE_STATUSES, "done", "failed", "left", "not_admitted")
 _AUDIO_EXT = {
     "audio/mp4": ".m4a", "audio/x-m4a": ".m4a", "audio/mpeg": ".mp3",
     "audio/webm": ".webm", "audio/ogg": ".ogg", "audio/wav": ".wav",
@@ -147,7 +156,9 @@ def latest_status_code(bot: dict) -> str | None:
 # ── Provider config + Recall client ──────────────────────────────────────────
 
 def _provider_name() -> str:
-    return os.environ.get("NOTES_BOT_PROVIDER", "recall").strip().lower()
+    # Default to the fully in-house worker; 'recall' remains an optional managed
+    # fallback for anyone who'd rather not run the worker.
+    return os.environ.get("NOTES_BOT_PROVIDER", "selfhosted").strip().lower()
 
 
 def _recall_key() -> str:
@@ -162,13 +173,28 @@ def _recall_base() -> str:
     return f"https://{region}.recall.ai/api/v1"
 
 
+def _selfhosted_url() -> str:
+    """Base URL of the self-hosted meeting-bot worker (apps/services/meeting-bot)."""
+    return os.environ.get("MEETING_BOT_URL", "").strip().rstrip("/")
+
+
+def _selfhosted_token() -> str:
+    return os.environ.get("MEETING_BOT_TOKEN", "").strip()
+
+
 def default_bot_name() -> str:
     return os.environ.get("NOTES_BOT_NAME", "AI Notetaker").strip() or "AI Notetaker"
 
 
 def bot_configured() -> bool:
-    """True when a provider is actually usable (key present)."""
-    return _provider_name() == "recall" and bool(_recall_key())
+    """True when a provider is actually usable.
+
+    - ``selfhosted`` (default goal — fully in-house): needs the worker URL.
+    - ``recall`` (optional managed fallback): needs the API key."""
+    provider = _provider_name()
+    if provider == "selfhosted":
+        return bool(_selfhosted_url())
+    return provider == "recall" and bool(_recall_key())
 
 
 class RecallProvider:
@@ -182,8 +208,11 @@ class RecallProvider:
             "Content-Type": "application/json",
         }
 
-    async def join(self, meeting_url: str, bot_name: str) -> str:
-        """Create a bot in the call; returns the provider bot id."""
+    async def join(
+        self, meeting_url: str, bot_name: str, live_callback: str | None = None
+    ) -> str:
+        """Create a bot in the call; returns the provider bot id. (Recall doesn't
+        do our live-callback streaming, so ``live_callback`` is ignored.)"""
         body: dict = {"meeting_url": meeting_url, "bot_name": bot_name}
         raw = os.environ.get("RECALL_RECORDING_CONFIG", "").strip()
         if raw:
@@ -211,6 +240,11 @@ class RecallProvider:
             resp.raise_for_status()
             return resp.json()
 
+    async def status(self, bot_id: str) -> tuple[str | None, str | None]:
+        """Provider-agnostic (lifecycle_status, download_url|None) for the poller."""
+        bot = await self.fetch(bot_id)
+        return normalize_status(latest_status_code(bot)), extract_download_url(bot)
+
     async def leave(self, bot_id: str) -> None:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.post(
@@ -229,9 +263,94 @@ class RecallProvider:
             return resp.content, ctype
 
 
-def resolve_bot_provider() -> RecallProvider | None:
+class SelfHostedProvider:
+    """Client for a *self-hosted* meeting-bot worker — a headless Chrome that
+    joins the call, running on our own box (apps/services/meeting-bot). Fully
+    in-house: no third-party cloud, no per-hour fee. Speaks a small
+    vendor-neutral HTTP contract, and the worker already reports our lifecycle
+    vocabulary so no per-provider status translation is needed.
+
+    Contract:
+      POST   {base}/bots                {meeting_url, bot_name} -> {id, status}
+      GET    {base}/bots/{id}           -> {id, status, download_url|null}
+      POST   {base}/bots/{id}/leave     -> 202
+      GET    {base}/bots/{id}/recording -> audio bytes (when status == done)
+    """
+
+    def __init__(self) -> None:
+        self._base = _selfhosted_url()
+        self._headers = {"Content-Type": "application/json"}
+        tok = _selfhosted_token()
+        if tok:
+            self._headers["Authorization"] = f"Bearer {tok}"
+
+    async def join(
+        self, meeting_url: str, bot_name: str, live_callback: str | None = None
+    ) -> str:
+        body: dict = {"meeting_url": meeting_url, "bot_name": bot_name}
+        # Tell the worker where to POST live transcript segments (per meeting) so
+        # the UI + agents get a live feed. Omitted → the worker just records.
+        if live_callback:
+            body["live_callback"] = live_callback
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{self._base}/bots", headers=self._headers, json=body
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        bot_id = data.get("id")
+        if not bot_id:
+            raise RuntimeError("meeting-bot worker did not return a bot id")
+        return str(bot_id)
+
+    async def status(self, bot_id: str) -> tuple[str | None, str | None]:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self._base}/bots/{bot_id}", headers=self._headers
+            )
+            resp.raise_for_status()
+            data = resp.json()
+        status = data.get("status")
+        status = status if status in _ALL_STATUSES else None
+        download = data.get("download_url") or None
+        # Worker may serve the file at a stable path instead of returning a URL.
+        if status == "done" and not download:
+            download = f"{self._base}/bots/{bot_id}/recording"
+        return status, download
+
+    async def leave(self, bot_id: str) -> None:
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{self._base}/bots/{bot_id}/leave", headers=self._headers
+            )
+            if resp.status_code not in (200, 202, 204, 404):
+                resp.raise_for_status()
+
+    async def say(self, bot_id: str, text: str) -> None:
+        """Have the worker speak a line into the live call (TTS → virtual mic).
+        The seam for agent-driven interjections; only the self-hosted worker
+        can do this."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.post(
+                f"{self._base}/bots/{bot_id}/say",
+                headers=self._headers,
+                json={"text": text},
+            )
+            resp.raise_for_status()
+
+    async def download(self, url: str) -> tuple[bytes, str]:
+        async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
+            resp = await client.get(url, headers=self._headers)
+            resp.raise_for_status()
+            ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
+            return resp.content, ctype
+
+
+def resolve_bot_provider() -> RecallProvider | SelfHostedProvider | None:
     if not bot_configured():
         return None
+    if _provider_name() == "selfhosted":
+        return SelfHostedProvider()
     return RecallProvider()
 
 
@@ -305,9 +424,7 @@ async def _refresh_bot(bot_row_id: str) -> None:
         if row is None or row.status not in ACTIVE_STATUSES or not row.provider_bot_id:
             return
 
-        bot = await provider.fetch(row.provider_bot_id)
-        new_status = normalize_status(latest_status_code(bot))
-        download_url = extract_download_url(bot)
+        new_status, download_url = await provider.status(row.provider_bot_id)
 
         # Terminal success: call finished AND media is downloadable → claim the
         # ingest atomically (only one caller flips out of an active status).
@@ -348,6 +465,11 @@ async def _refresh_bot(bot_row_id: str) -> None:
                         text("UPDATE meeting SET status='failed' WHERE id=:id"),
                         {"id": str(row.meeting_id)},
                     )
+                    # Never left the ground — clear presence (the pipeline that
+                    # normally ends a session won't run without a recording).
+                    from gateway.routes.notes import live_session
+
+                    await live_session.end(str(row.meeting_id))
                 elif new_status == "in_call":
                     await db.execute(
                         text("UPDATE meeting SET status='recording' "
@@ -433,8 +555,9 @@ async def bot_join(
     if provider is None:
         raise HTTPException(
             status_code=503,
-            detail="The meeting notetaker isn't set up yet — an admin needs to add "
-                   "a Recall.ai API key (RECALL_API_KEY).",
+            detail="The meeting notetaker isn't set up yet — an admin needs to "
+                   "point it at a self-hosted meeting-bot worker (MEETING_BOT_URL) "
+                   "or configure a provider key.",
         )
     platform = detect_platform(url)
     bot_name = (body.bot_name or "").strip() or default_bot_name()
@@ -465,8 +588,15 @@ async def bot_join(
         await db.commit()
     bot_row_id = str(bot_row.id)
 
+    # Where the worker posts live transcript segments for this meeting (enables
+    # live captions + agent hooks). Only when a reachable gateway base is set.
+    live_callback = None
+    base = os.environ.get("NOTES_LIVE_CALLBACK_BASE", "").strip().rstrip("/")
+    if base:
+        live_callback = f"{base}/notes/meetings/{meeting_id}/live/segment"
+
     try:
-        provider_bot_id = await provider.join(url, bot_name)
+        provider_bot_id = await provider.join(url, bot_name, live_callback=live_callback)
     except Exception as exc:
         async with await _get_db() as db:
             await _set_bot(db, bot_row_id, status="failed",
@@ -483,6 +613,11 @@ async def bot_join(
     async with await _get_db() as db:
         await _set_bot(db, bot_row_id, provider_bot_id=provider_bot_id, status="joining")
         await db.commit()
+    # Register presence — a bot meeting shows as "live now" in Command Center
+    # from the moment it's dispatched, not just once audio starts flowing.
+    from gateway.routes.notes import live_session
+
+    await live_session.begin(meeting_id, "bot", user.email)
     _log.info("notes.bot_joined", meeting_id=meeting_id, platform=platform)
     _spawn(_poll_bot(bot_row_id))
 

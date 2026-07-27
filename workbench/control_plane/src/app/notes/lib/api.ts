@@ -5,6 +5,8 @@ import type {
   Attendee,
   EmailAccount,
   EmailDraft,
+  LiveSession,
+  LiveSpeaker,
   MeetingBot,
   MeetingDetail,
   MeetingListItem,
@@ -23,6 +25,77 @@ async function json<T>(res: Response): Promise<T> {
     throw new Error(String(detail));
   }
   return (await res.json()) as T;
+}
+
+/**
+ * Relay one finalized live caption to the server-side live bus.
+ *
+ * Makes the in-browser recorder a producer on the SAME bus as the meeting bot,
+ * so the live transcript (and anything consuming it — the roster, and later the
+ * copilot) works for on-page recordings too, with no extra infrastructure.
+ * Deliberately best-effort: live is a draft, the batch re-pass on stop is
+ * authoritative, so a dropped relay must never disturb the recording.
+ */
+export async function postLiveSegment(
+  meetingId: string,
+  seg: {
+    text: string;
+    start_s: number;
+    end_s: number;
+    speaker_label: string | null;
+  }
+): Promise<void> {
+  try {
+    await fetch(`/api/notes/meetings/${meetingId}/live/browser-segment`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ ...seg, is_final: true }),
+      keepalive: true,
+    });
+  } catch {
+    /* best-effort: never let a live relay disturb the recording */
+  }
+}
+
+/** Meetings being captured right now (bot or in-browser) — the presence dock. */
+export async function listLiveSessions(): Promise<LiveSession[]> {
+  return json(await fetch("/api/notes/live/sessions", { cache: "no-store" }));
+}
+
+/** This meeting's live session, or null — how the console reattaches. */
+export async function getLiveSession(
+  meetingId: string
+): Promise<LiveSession | null> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/live/session`, {
+      cache: "no-store",
+    })
+  );
+}
+
+/** Who's on the call so far, per the live voiceprint gallery. */
+export async function getLiveRoster(meetingId: string): Promise<LiveSpeaker[]> {
+  const body = await json<{ speakers: LiveSpeaker[] }>(
+    await fetch(`/api/notes/meetings/${meetingId}/live/roster`, {
+      cache: "no-store",
+    })
+  );
+  return body.speakers ?? [];
+}
+
+/** Opt the copilot in/out for a live session — allowed mid-session, both ways. */
+export async function setCopilot(
+  meetingId: string,
+  enabled: boolean,
+  mode?: LiveSession["mode"]
+): Promise<LiveSession> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/live/copilot`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ enabled, mode: mode ?? null }),
+    })
+  );
 }
 
 export async function listMeetings(query?: string): Promise<MeetingListItem[]> {

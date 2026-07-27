@@ -14,6 +14,10 @@ export interface LiveCaption {
   text: string;
   isFinal: boolean;
   speaker: number | null;
+  /** Seconds from the start of the stream (Deepgram's own timings). Used when
+   *  relaying finals to the live bus, where spans drive speaker reconciliation. */
+  startS: number;
+  endS: number;
 }
 
 export interface DeepgramLiveCallbacks {
@@ -111,10 +115,14 @@ export class DeepgramLive {
         typeof alt?.words?.[0]?.speaker === "number"
           ? alt.words[0].speaker
           : null;
+      const startS = typeof msg.start === "number" ? msg.start : 0;
+      const duration = typeof msg.duration === "number" ? msg.duration : 0;
       this.cb.onCaption?.({
         text,
         isFinal: Boolean(msg.is_final),
         speaker,
+        startS,
+        endS: startS + duration,
       });
     } catch {
       /* non-JSON keepalive/metadata frame */

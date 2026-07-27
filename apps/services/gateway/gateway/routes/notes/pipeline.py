@@ -168,12 +168,32 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
         # destructive (never overwrites a name the user set); no-op when the
         # transcript isn't diarized. Runs before summary so names flow through.
         if result.segments and result.diarized:
+            # First carry across any identity already established during the
+            # LIVE pass: map this (authoritative) diarization's labels onto the
+            # live voiceprint gallery by time overlap and reuse its names. The
+            # LLM pass below then only has to fill what's still anonymous.
+            try:
+                from gateway.routes.notes.live_speakers import apply_live_names
+
+                await apply_live_names(meeting_id, result.segments)
+            except Exception as exc:
+                _log.warning("notes.live_names_apply_failed", error=str(exc)[:200])
             try:
                 from gateway.routes.notes.speaker_id import infer_speaker_names
 
                 await infer_speaker_names(meeting_id)
             except Exception as exc:
                 _log.warning("notes.speaker_id_enqueue_failed", error=str(exc)[:200])
+        # The meeting is over — free its live voiceprint gallery and clear
+        # presence (both sources end here, so this is the one place to do it).
+        try:
+            from gateway.routes.notes import live_session
+            from gateway.routes.notes.live_speakers import reset as reset_live_speakers
+
+            reset_live_speakers(meeting_id)
+            await live_session.end(meeting_id)
+        except Exception as exc:
+            _log.warning("notes.live_teardown_failed", error=str(exc)[:200])
         # Chain straight into notes generation so a single upload yields
         # transcript → notes without a second user action.
         if result.segments:
@@ -185,6 +205,15 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
                 _log.warning("notes.autosummary_enqueue_failed", error=str(exc)[:200])
     except Exception as exc:
         _log.error("notes.transcription_failed", meeting_id=meeting_id, error=str(exc))
+        # A failed run still ends the meeting — don't strand presence as "live".
+        try:
+            from gateway.routes.notes import live_session
+            from gateway.routes.notes.live_speakers import reset as reset_live_speakers
+
+            reset_live_speakers(meeting_id)
+            await live_session.end(meeting_id)
+        except Exception as exc2:
+            _log.warning("notes.live_teardown_failed", error=str(exc2)[:200])
         try:
             async with await _get_db() as db:
                 await _set_run(db, run_id, status="failed", error=str(exc)[:2000])

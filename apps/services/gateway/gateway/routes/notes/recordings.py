@@ -157,7 +157,7 @@ class CompleteRecordingRequest(BaseModel):
 async def start_recording(
     meeting_id: str,
     body: StartRecordingRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Open a live recording: create the row + empty file, mark the meeting
     'recording'. The client then streams MediaRecorder chunks to ``/chunk`` and
@@ -197,6 +197,11 @@ async def start_recording(
         )
         await db.commit()
     _REC_SEQ[recording_id] = -1
+    # Register presence so this shows up as "live now" across Command Center and
+    # the copilot console can attach to it. Additive + fail-safe.
+    from gateway.routes.notes import live_session
+
+    await live_session.begin(meeting_id, "browser", getattr(user, "email", None))
     _log.info("notes.recording_started", meeting_id=meeting_id, recording_id=recording_id)
     return {"recording_id": recording_id}
 

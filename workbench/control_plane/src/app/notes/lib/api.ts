@@ -13,6 +13,8 @@ import type {
   MeetingDetail,
   MeetingListItem,
   NoteDoc,
+  NotesSettings,
+  NotesSettingsPayload,
 } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
@@ -57,6 +59,24 @@ export async function postLiveSegment(
   } catch {
     /* best-effort: never let a live relay disturb the recording */
   }
+}
+
+/** Everything configurable about the Note Taker, plus the meeting-type
+ *  catalogue so the UI can show shipped defaults next to any overrides. */
+export async function getNotesSettings(): Promise<NotesSettingsPayload> {
+  return json(await fetch("/api/notes/settings", { cache: "no-store" }));
+}
+
+export async function saveNotesSettings(
+  settings: NotesSettings
+): Promise<{ settings: NotesSettings }> {
+  return json(
+    await fetch("/api/notes/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    })
+  );
 }
 
 /** The meeting's agenda — what the copilot measures the conversation against. */

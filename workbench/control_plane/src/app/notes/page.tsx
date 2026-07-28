@@ -17,7 +17,7 @@ import {
   Loader2,
   Mic,
   Search,
-  Sparkles,
+  Settings2,
   Upload,
   Users,
   Video,
@@ -30,7 +30,7 @@ import {
   uploadRecording,
 } from "./lib/api";
 import { useViewMode } from "@/components/ViewModeProvider";
-import CopilotInstructionsModal from "./components/CopilotInstructionsModal";
+import NotesSettingsModal from "./components/NotesSettingsModal";
 import GlossaryModal from "./components/GlossaryModal";
 import JoinCallModal from "./components/JoinCallModal";
 import ActiveBots from "./components/ActiveBots";
@@ -195,10 +195,10 @@ export default function NotesPage() {
           <button
             onClick={() => setShowCopilotPrompt(true)}
             className="shrink-0 p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
-            title="Copilot instructions — how the meeting copilot should behave, every time"
-            aria-label="Copilot instructions"
+            title="Note Taker settings — copilot behaviour, meeting types, defaults"
+            aria-label="Note Taker settings"
           >
-            <Sparkles className="w-4 h-4" />
+            <Settings2 className="w-4 h-4" />
           </button>
           {templates.length > 0 && (
             <select
@@ -348,7 +348,7 @@ export default function NotesPage() {
       </div>
 
       {showCopilotPrompt && (
-        <CopilotInstructionsModal onClose={() => setShowCopilotPrompt(false)} />
+        <NotesSettingsModal onClose={() => setShowCopilotPrompt(false)} />
       )}
       {showGlossary && <GlossaryModal onClose={() => setShowGlossary(false)} />}
       {showJoin && (

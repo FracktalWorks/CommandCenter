@@ -85,3 +85,44 @@ async def test_live_token_503_without_any_key(monkeypatch) -> None:
         await live.live_token(_user=None)  # type: ignore[arg-type]
     assert ei.value.status_code == 503
     assert "AssemblyAI" in ei.value.detail
+
+
+# ── the worker's own token endpoint ──────────────────────────────────────────
+
+async def test_bot_live_token_requires_the_shared_bot_token(monkeypatch) -> None:
+    """The worker runs in its own container and can't hold a user session, so it
+    authenticates with the shared bot token. This endpoint mints real provider
+    credentials — an unauthenticated caller must not reach it."""
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("MEETING_BOT_TOKEN", "s3cret")
+    for bad in (None, "", "Bearer wrong", "s3cret"):
+        with pytest.raises(HTTPException) as ei:
+            await live.bot_live_token(authorization=bad)
+        assert ei.value.status_code == 401
+
+
+async def test_bot_live_token_shares_the_browser_path(monkeypatch) -> None:
+    """Same credentials, same provider choice — live captions must not depend on
+    which producer asked, or a bot and a browser would transcribe differently."""
+    from fastapi import HTTPException
+
+    monkeypatch.setenv("MEETING_BOT_TOKEN", "s3cret")
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
+    # Authorised, but no key configured → the same 503 the browser gets.
+    with pytest.raises(HTTPException) as ei:
+        await live.bot_live_token(authorization="Bearer s3cret")
+    assert ei.value.status_code == 503
+
+
+async def test_bot_live_token_open_when_no_shared_secret_is_set(monkeypatch) -> None:
+    """Self-hosted LAN default (matches the live-segment callback's rule)."""
+    from fastapi import HTTPException
+
+    monkeypatch.delenv("MEETING_BOT_TOKEN", raising=False)
+    monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
+    monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
+    with pytest.raises(HTTPException) as ei:
+        await live.bot_live_token(authorization=None)
+    assert ei.value.status_code == 503  # reached the provider check, not 401

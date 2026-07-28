@@ -1,0 +1,20 @@
+[Unit]
+Description=Run the CommandCenter health watchdog
+Documentation=file:///opt/acb/app/deploy/hostinger/health-watchdog.sh
+
+[Timer]
+# Daily run, as requested — this is the guaranteed floor.
+OnCalendar=daily
+# ...but a daily-only check means an outage can sit unnoticed for ~24h, so also
+# run every 10 minutes. The script is cheap (a few curls) and only acts when
+# something is actually down, so the frequent run costs nothing when healthy.
+OnUnitActiveSec=10min
+# Cover the boot case: if a service fails to come up after a reboot, heal it
+# ~2 minutes in rather than waiting for the next scheduled tick.
+OnBootSec=2min
+Persistent=true
+AccuracySec=30s
+Unit=acb-health-watchdog.service
+
+[Install]
+WantedBy=timers.target

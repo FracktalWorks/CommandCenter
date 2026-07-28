@@ -1,0 +1,15 @@
+[Unit]
+# CommandCenter health watchdog — see health-watchdog.sh for the rationale.
+# Oneshot unit driven by acb-health-watchdog.timer.
+Description=CommandCenter health watchdog (check + self-heal services)
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+# Runs as root: needs systemctl restart, iptables/ufw and fail2ban reads.
+User=root
+ExecStart=/opt/acb/app/deploy/hostinger/health-watchdog.sh
+# A restart attempt plus probes can legitimately take a while; do not let a
+# wedged service hang the timer forever.
+TimeoutStartSec=600

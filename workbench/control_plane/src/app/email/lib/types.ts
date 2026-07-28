@@ -565,6 +565,11 @@ export interface AssistantSettings {
   account_id: string;
   about: string;
   signature: string;
+  /** The SERVER's plain-text rendering of the signature — the composers seed
+   *  this exact text into the body so the backend's idempotent re-signing
+   *  recognises it (a client-side re-derivation could drift by whitespace and
+   *  get double-signed). */
+  signature_text?: string;
   auto_run: boolean;
   cold_email_blocker: ColdBlockerMode;
   /** Model for rule evaluation / classification / labeling (default tier-fast). */

@@ -421,6 +421,12 @@ async def _apply_rule_actions(
                     _log.info("email.draft_skipped_low_confidence",
                               account_id=account_id, confidence=draft_conf)
                     continue
+                # Signature-in-body: the rule-created draft shows the signature
+                # upstream too (idempotent; send re-signing dedups).
+                from gateway.routes.email.signature import (  # noqa: PLC0415
+                    append_signature_text,
+                )
+                body = append_signature_text(signature, body)
                 subj = await _render_template(
                     a.get("subject") or f"Re: {email.get('subject', '')}", email)
                 to = a.get("to_address") or email.get("from", "")
@@ -457,6 +463,12 @@ async def _apply_rule_actions(
                     f"{(email.get('body', '') or '')[:4000]}"
                 )
                 fwd_subject = a.get("subject") or f"Fwd: {email.get('subject', '')}"
+                # Sign the forward note too — the splitter keeps the signature
+                # ABOVE the "---------- Forwarded message" block.
+                from gateway.routes.email.signature import (  # noqa: PLC0415
+                    append_signature_text,
+                )
+                fwd = append_signature_text(signature, fwd)
                 fwd_pid = await provider.create_draft(
                     to=[a["to_address"]],
                     subject=fwd_subject,

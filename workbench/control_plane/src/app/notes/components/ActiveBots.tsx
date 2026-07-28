@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Loader2, Square, Video } from "lucide-react";
+import { AlertTriangle, Loader2, Square, Video } from "lucide-react";
 import { listActiveBots, stopBot } from "../lib/api";
 import type { MeetingBot, MeetingBotStatus } from "../lib/types";
 
@@ -89,27 +89,46 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
 
   if (bots.length === 0) return null;
 
+  // A bot that never got into the call fails for reasons only a human can fix
+  // — admit it, sign it in, use a different link. Showing the status alone
+  // ("Failed") tells you none of that, so the worker's own explanation is
+  // rendered verbatim.
+  const explains = (b: MeetingBot) =>
+    b.error && (b.status === "failed" || b.status === "not_admitted");
+
+  const running = bots.filter((b) => !explains(b)).length;
+
   return (
     <div className="space-y-2">
       <div className="flex items-center gap-1.5 px-1">
         <Video className="h-3.5 w-3.5 text-primary" />
         <span className="text-[11px] font-semibold uppercase tracking-wide text-primary">
-          Notetakers in meetings ({bots.length})
+          Notetakers ({running} in meetings)
         </span>
       </div>
       {bots.map((b) => {
         const meta = BOT_META[b.status] ?? BOT_META.processing;
+        const bad = explains(b);
         return (
           <div
             key={b.id}
-            className="flex items-center gap-3 rounded-xl border border-primary/25 bg-primary/[0.04] p-3"
+            className={`rounded-xl border p-3 ${
+              bad
+                ? "border-destructive/30 bg-destructive/[0.04]"
+                : "border-primary/25 bg-primary/[0.04]"
+            }`}
           >
+          <div className="flex items-center gap-3">
             <button
               onClick={() => router.push(`/notes/meeting/${b.meeting_id}`)}
               className="flex min-w-0 flex-1 items-center gap-3 text-left"
               title="Open this meeting"
             >
-              <Video className="h-5 w-5 shrink-0 text-primary" />
+              <Video
+                className={`h-5 w-5 shrink-0 ${
+                  bad ? "text-destructive" : "text-primary"
+                }`}
+              />
               <div className="min-w-0">
                 <p className="truncate text-sm font-semibold text-foreground">
                   {b.meeting_title || "Live meeting"}
@@ -127,19 +146,28 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
               />
               {meta.label}
             </span>
-            <button
-              onClick={() => void onStop(b.meeting_id)}
-              disabled={stopping === b.meeting_id}
-              className="shrink-0 rounded-lg bg-destructive/15 p-1.5 text-destructive hover:bg-destructive/25 tech-transition disabled:opacity-50"
-              title="Remove the notetaker from this call"
-              aria-label="Stop notetaker"
-            >
-              {stopping === b.meeting_id ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
-              ) : (
-                <Square className="h-4 w-4 fill-current" />
-              )}
-            </button>
+            {!bad && (
+              <button
+                onClick={() => void onStop(b.meeting_id)}
+                disabled={stopping === b.meeting_id}
+                className="shrink-0 rounded-lg bg-destructive/15 p-1.5 text-destructive hover:bg-destructive/25 tech-transition disabled:opacity-50"
+                title="Remove the notetaker from this call"
+                aria-label="Stop notetaker"
+              >
+                {stopping === b.meeting_id ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Square className="h-4 w-4 fill-current" />
+                )}
+              </button>
+            )}
+          </div>
+          {bad && (
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-destructive">
+              <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+              <span>{b.error}</span>
+            </p>
+          )}
           </div>
         );
       })}

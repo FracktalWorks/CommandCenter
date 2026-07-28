@@ -146,3 +146,35 @@ not inferred:
 end-to-end capture of an actual call. Meet's DOM is not a public API, so expect
 to tune those selectors on first run. A real `EMBED_CMD` model (CAM++/pyannote)
 and a `TTS_CMD` voice also still need to be installed and pointed at.
+
+## When a join fails
+
+Since the selectors *will* drift, the worker is built to explain itself rather
+than to be guessed at. Every failure path captures a snapshot before raising:
+the page URL and title, a body excerpt, **and the label of every button Meet
+actually rendered** — which is what tells you the next selector to write.
+
+```bash
+# What the worker did, step by step
+docker logs --tail 100 acb-meeting-bot
+
+# Structured detail for one bot (controls list, page text)
+curl -s -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
+  localhost:8095/bots/<bot-id>/diagnostics | jq
+
+# The green room exactly as the bot saw it
+curl -s -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
+  localhost:8095/bots/<bot-id>/screenshot -o /tmp/bot.png
+```
+
+From CommandCenter itself the same detail is at
+`GET /notes/meetings/{meeting_id}/bot/diagnostics`, and the failure text now
+shows on the Notes screen for 30 minutes after it happens.
+
+The three failures that look identical from outside, and their fixes:
+
+| Symptom | What it means | Fix |
+|---|---|---|
+| `Nobody admitted the notetaker within 150s` | It knocked; no one answered. | Click **Admit** when it knocks, or raise `MEET_JOIN_TIMEOUT`. |
+| `Google Meet refused the join` | Signed-out guests can't enter this call. | Host starts the call first, or loosen the meeting's access setting. |
+| `No join button on the meeting page` | A selector missed, or a dialog covered it. | Read the `controls` list in the error — it names the buttons that *were* there. |

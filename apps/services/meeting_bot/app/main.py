@@ -25,6 +25,7 @@ worker instance — scale by running more instances (each is ~1 headless Chrome)
 from __future__ import annotations
 
 import asyncio
+import logging
 import os
 import uuid
 
@@ -36,6 +37,12 @@ from .meet import MeetingBotError, join_and_record
 
 DATA_DIR = os.environ.get("MEETING_BOT_DATA", "/data")
 TOKEN = os.environ.get("MEETING_BOT_TOKEN", "").strip()
+
+logging.basicConfig(
+    level=os.environ.get("MEETING_BOT_LOG_LEVEL", "INFO").upper(),
+    format="%(asctime)s %(levelname)s %(name)s %(message)s",
+)
+_log = logging.getLogger("meeting_bot")
 
 app = FastAPI(title="CommandCenter Meeting Bot", version="0.1.0")
 
@@ -50,6 +57,8 @@ class _Job:
         self.live_callback = live_callback  # gateway URL for live segments (or None)
         self.status = "requested"
         self.error: str | None = None
+        #: What the page looked like when a join failed (see meet._snapshot).
+        self.diagnostics: dict = {}
         self.recording: str | None = None
         self.leave = asyncio.Event()
         self.say_queue: asyncio.Queue[str] = asyncio.Queue()
@@ -87,18 +96,25 @@ async def _run(job: _Job) -> None:
         await join_and_record(
             job.meeting_url, job.bot_name, out_path, job.leave, on_status,
             live_callback=job.live_callback, say_queue=job.say_queue,
+            job_id=job.id,
         )
         ok = os.path.isfile(out_path) and os.path.getsize(out_path) > 0
         job.recording = out_path if ok else None
         job.status = "done" if ok else "failed"
         if not ok and not job.error:
-            job.error = "no audio was captured"
+            job.error = (
+                "Joined the call but captured no audio — check that PulseAudio "
+                "and ffmpeg are running inside the container."
+            )
     except MeetingBotError as exc:
         job.status = exc.status
         job.error = str(exc)
+        job.diagnostics = exc.diagnostics
+        _log.warning("bot.failed id=%s status=%s error=%s", job.id, exc.status, exc)
     except Exception as exc:  # never let a runner crash take down the worker
         job.status = "failed"
-        job.error = str(exc)[:500]
+        job.error = f"{type(exc).__name__}: {str(exc)[:400]}"
+        _log.exception("bot.crashed id=%s", job.id)
 
 
 @app.get("/health")
@@ -155,6 +171,46 @@ async def get_bot(
         raise HTTPException(status_code=404, detail="unknown bot")
     # download_url null → the gateway falls back to GET /bots/{id}/recording.
     return {"id": bot_id, "status": job.status, "download_url": None, "error": job.error}
+
+
+@app.get("/bots/{bot_id}/diagnostics")
+async def get_diagnostics(
+    bot_id: str, authorization: str | None = Header(default=None)
+) -> dict:
+    """What the page looked like when a join failed.
+
+    Exists because Meet's DOM is not a public API: when a selector misses, the
+    only way to write the next one is to see which controls the page actually
+    rendered. ``controls`` is that list; ``screenshot`` is served by
+    ``/bots/{id}/screenshot``.
+    """
+    _auth(authorization)
+    job = _JOBS.get(bot_id)
+    if job is None:
+        raise HTTPException(status_code=404, detail="unknown bot")
+    diag = dict(job.diagnostics)
+    diag.pop("screenshot", None)  # a path inside the container is not useful
+    return {
+        "id": bot_id,
+        "status": job.status,
+        "error": job.error,
+        "has_screenshot": bool(job.diagnostics.get("screenshot")),
+        "diagnostics": diag,
+    }
+
+
+@app.get("/bots/{bot_id}/screenshot")
+async def get_screenshot(
+    bot_id: str, authorization: str | None = Header(default=None)
+) -> FileResponse:
+    """The green room as the bot saw it — the fastest way to tell a waiting
+    room from a sign-in wall from a device dialog."""
+    _auth(authorization)
+    job = _JOBS.get(bot_id)
+    shot = (job.diagnostics or {}).get("screenshot") if job else None
+    if not shot or not os.path.isfile(shot):
+        raise HTTPException(status_code=404, detail="no screenshot")
+    return FileResponse(shot, media_type="image/png")
 
 
 @app.post("/bots/{bot_id}/leave", status_code=202)

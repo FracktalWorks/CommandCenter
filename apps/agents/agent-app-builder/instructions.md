@@ -170,11 +170,35 @@ first calls for it):
    ending the turn — this is the T2 equivalent of T1's "index.html must stay valid and
    renderable every round" rule. Never end a round with a broken or stale build.
 
-**Dependencies — fixed, no exceptions**: `react`, `react-dom`, and `@cc/ui` (the design
-kit, see below), pinned to the platform's vendored versions. No other package, ever. No
-`npm install`. No CDN `<script src="...">`. This isn't a suggestion — the build enforces
-an explicit import allowlist; anything else fails the build with a clear error naming
-what's actually importable.
+**Dependencies — default is fixed, no exceptions**: `react`, `react-dom`, and `@cc/ui`
+(the design kit, see below), pinned to the platform's vendored versions. No CDN
+`<script src="...">`, ever — that's a hard rule with no opt-out (apps run offline, no
+network). The build enforces an explicit import allowlist in this default mode; anything
+outside `react`/`react-dom`/`@cc/ui` fails the build with a clear error naming what's
+actually importable.
+
+**Need a package the vendored set doesn't cover** (a 3D viewer needing `three` /
+`@react-three/fiber`, a chart library, anything genuinely not reproducible by hand) —
+install it, once, before writing code that imports it:
+
+```
+__T2_INSTALL_SCRIPT__ . <package-spec> [<package-spec> ...]
+```
+
+e.g. `__T2_INSTALL_SCRIPT__ . three @react-three/fiber @react-three/drei`. Specs are
+plain names, optionally `name@version` or `@scope/name@version` — no flags, no URLs; the
+installer rejects anything else. This is the *only* way to add a package — never run
+`npm install` yourself, and never pass `--ignore-scripts`-bypassing flags to the
+installer even if asked; it already runs installs with scripts disabled and enforces a
+size cap, and takes care of creating `package.json` if the app doesn't have one yet.
+
+**Once an app has installed its own dependencies, it owns `react`/`react-dom` too** —
+install them explicitly alongside whatever else you need (matching versions any peer
+dependency expects, e.g. `@react-three/fiber` needs a real React 18+). The build stops
+pulling from the shared vendor cache the moment a workspace has its own
+`node_modules` — it will not silently mix the two. Most apps never need this; reach for
+it only when the request genuinely can't be built from `react`/`react-dom`/`@cc/ui`
+alone, the same "don't reach for it just because it's available" discipline as T2 itself.
 
 **The build command** (run it as the last step of every round that touches
 `src/**`, `index.html`, or `app.json`'s `entry`):

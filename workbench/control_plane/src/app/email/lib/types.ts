@@ -180,6 +180,9 @@ export interface DigestData {
     overdue: boolean;
     task_id?: string;
     thread_id?: string | null;
+    /** Latest message of the linked thread — lets the row open the email the
+     *  commitment came from. Null when the thread has no mirrored mail. */
+    message_id?: string | null;
   }[];
   /** Opt-in LLM one-liner orienting the day ("2 urgent: X's quote, Y's
    *  contract"). Empty unless morning_brief_enabled is on. */

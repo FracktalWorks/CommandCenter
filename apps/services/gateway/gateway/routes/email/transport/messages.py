@@ -95,15 +95,22 @@ async def message_facets(
         params["known_labels"] = KNOWN_LABELS_LOWER
 
         # One pass over the folder: per-label tallies via LATERAL unnest, and
-        # the two scalar buckets that aren't labels at all.
+        # the two scalar buckets that aren't labels at all. EVERY label the
+        # rules wrote is tallied — not just the built-in vocabulary — so a rule
+        # with a custom label still gets its chip in the inbox (the old
+        # ANY(:known_labels) restriction made custom-labelled mail filterable
+        # but its chip invisible). Capped by count so a runaway AI-resolved
+        # {{...}} label can't flood the row.
         rows = (await db.execute(text(
             f"""SELECT LOWER(TRIM(c)) AS label, COUNT(*) AS n
                   FROM email_messages em
                   JOIN email_accounts ea ON em.account_id = ea.id
                   CROSS JOIN LATERAL unnest(COALESCE(em.categories, '{{}}')) AS c
                  WHERE {where_sql}
-                   AND LOWER(TRIM(c)) = ANY(:known_labels)
-                 GROUP BY 1"""
+                   AND TRIM(c) <> ''
+                 GROUP BY 1
+                 ORDER BY n DESC
+                 LIMIT 40"""
         ), params)).fetchall()
 
         totals = (await db.execute(text(

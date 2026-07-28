@@ -35,6 +35,8 @@ const CHIPS: { label: string; facet: string; f: SearchFilter }[] = [
     f: { kind: "tag", value: "Awaiting Reply" } },
   { label: "Follow-up", facet: "follow-up",
     f: { kind: "tag", value: "Follow-up" } },
+  { label: "FYI", facet: "fyi", f: { kind: "tag", value: "FYI" } },
+  { label: "Done", facet: "done", f: { kind: "tag", value: "Done" } },
   // Cleanup categories the rules engine writes to em.categories.
   { label: "Newsletter", facet: "newsletter",
     f: { kind: "tag", value: "Newsletter" } },
@@ -58,6 +60,37 @@ function facetCount(facets: MessageFacets | null, key: string): number {
   if (key === "unread") return facets.unread;
   if (key === "uncategorized") return facets.uncategorized;
   return facets.labels?.[key] ?? 0;
+}
+
+// Facet keys the curated chips already represent, plus the legacy Reply-Zero
+// names ("Reply"/"To Reply" → Needs Reply, "Actioned" → Done) — old-labelled
+// mail must light up the modern chip, not spawn a duplicate legacy one.
+const CURATED_FACETS = new Set(CHIPS.map((c) => c.facet));
+const LEGACY_ALIASES = new Set(["reply", "to reply", "actioned"]);
+
+const titleCase = (s: string) =>
+  s.replace(/\b\w/g, (ch) => ch.toUpperCase());
+
+/** Chips for the CUSTOM rule labels present in this folder — every filter the
+ *  user's rules write gets a pill, not only the built-in vocabulary. Facet keys
+ *  are lowercased; tag matching server-side is case-insensitive, so the
+ *  title-cased value filters correctly. Busiest first, capped to keep the row
+ *  scannable. */
+function extraChips(
+  facets: MessageFacets | null,
+): { label: string; facet: string; f: SearchFilter }[] {
+  if (!facets?.labels) return [];
+  return Object.entries(facets.labels)
+    .filter(
+      ([key, n]) => n > 0 && !CURATED_FACETS.has(key) && !LEGACY_ALIASES.has(key)
+    )
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, 12)
+    .map(([key]) => ({
+      label: titleCase(key),
+      facet: key,
+      f: { kind: "tag", value: titleCase(key) } as SearchFilter,
+    }));
 }
 
 export function QuickFilters() {
@@ -103,10 +136,14 @@ export function QuickFilters() {
 
   // Show a chip when it has mail behind it — or when it's already on, because
   // silently removing the control that produced the current view would strand
-  // the user in a filtered list with no visible way back out.
-  const visible = CHIPS.filter(
-    ({ facet, f }) => !facets || facetCount(facets, facet) > 0 || isActive(f)
-  );
+  // the user in a filtered list with no visible way back out. Custom rule
+  // labels follow the curated chips.
+  const visible = [
+    ...CHIPS.filter(
+      ({ facet, f }) => !facets || facetCount(facets, facet) > 0 || isActive(f)
+    ),
+    ...extraChips(facets),
+  ];
 
   if (visible.length === 0) return null;
 

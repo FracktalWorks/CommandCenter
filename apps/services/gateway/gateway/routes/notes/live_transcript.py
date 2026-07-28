@@ -164,6 +164,11 @@ def _resolve_and_publish(meeting_id: str, seg: LiveSegment) -> dict:
         name = reg.name_of(resolved.speaker_id)
         if name:
             data["speaker_name"] = name
+        # Feed agenda coverage from the bus, not from the copilot — so "you
+        # haven't reached pricing yet" works whether or not the copilot is on.
+        from gateway.routes.notes import agenda_progress
+
+        agenda_progress.note(meeting_id, data.get("text") or "")
         if resolved.role:
             data["role"] = resolved.role
     except Exception as exc:

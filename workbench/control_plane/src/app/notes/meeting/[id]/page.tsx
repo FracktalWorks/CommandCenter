@@ -30,6 +30,7 @@ import MarkdownMessage from "@/components/MarkdownMessage";
 import AskPanel from "../../components/AskPanel";
 import FollowupEmailModal from "../../components/FollowupEmailModal";
 import JoinCallModal from "../../components/JoinCallModal";
+import MeetingOutcomes from "../../components/MeetingOutcomes";
 import MeetingPrep from "../../components/MeetingPrep";
 import {
   approveAction,
@@ -634,6 +635,19 @@ export default function MeetingPage({
                   "No error detail recorded."}
               </p>
             </div>
+          )}
+
+          {/* What came out of it, before the tabs — the yield of a meeting is
+              its notes, actions and follow-up, and actions used to be tab
+              three. */}
+          {!isPrep && meeting && meeting.segments.length > 0 && (
+            <MeetingOutcomes
+              meeting={meeting}
+              actions={actions}
+              hasNotes={!!notesMd}
+              onOpenActions={() => setTab("actions")}
+              onDraftFollowup={() => setShowEmail(true)}
+            />
           )}
 
           {/* Tabbed workspace — the summary is the hero */}

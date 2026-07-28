@@ -70,13 +70,32 @@ export function PlanDayPanel({
     }
     return "work";
   });
+  // "Custom time…" — an exact clock time to work through (HH:MM, 24h). Defaults
+  // to the working-hours end; a time already past today rolls to the next day so
+  // a late-night pick (e.g. 1:00 at 11pm) plans into the small hours.
+  const [customTime, setCustomTime] = useState<string>(
+    `${String(dayEnd % 24).padStart(2, "0")}:00`,
+  );
   const workEndAt = () => {
     const d = new Date(target);
     d.setHours(dayEnd, 0, 0, 0);
     return d;
   };
+  const customEndAt = () => {
+    const [hh, mm] = customTime.split(":").map(Number);
+    const d = new Date(target);
+    d.setHours(hh || 0, mm || 0, 0, 0);
+    // Wrap a past clock time to tomorrow (only makes sense for "today").
+    if (planningToday && d.getTime() <= Date.now())
+      d.setDate(d.getDate() + 1);
+    return d;
+  };
   const endForHorizon = (hz: string) =>
-    hz === "work" ? workEndAt() : new Date(Date.now() + Number(hz) * 3600_000);
+    hz === "work"
+      ? workEndAt()
+      : hz === "custom"
+        ? customEndAt()
+        : new Date(Date.now() + Number(hz) * 3600_000);
 
   const run = async (n: string, hz: string = horizon) => {
     setLoading(true);
@@ -229,38 +248,70 @@ export function PlanDayPanel({
         </div>
 
         {/* Plan-through horizon — how far into the day (or night) to schedule.
-            Defaults to your working hours; extend it to work 24/7, e.g. a couple
-            hours from now if you're up late. Changing it re-plans immediately. */}
-        <div className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-2">
-          <CalendarClock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-          <label
-            htmlFor="plan-horizon"
-            className="shrink-0 text-[11px] font-medium text-foreground"
-          >
-            Plan through
-          </label>
-          <select
-            id="plan-horizon"
-            value={horizon}
-            onChange={(e) => {
-              const v = e.target.value;
-              setHorizon(v);
-              void run(note, v);
-            }}
-            disabled={loading}
-            className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
-          >
-            <option value="work">
-              Working hours · till {fmt(workEndAt().toISOString())}
-            </option>
-            {planningToday &&
-              [1, 2, 3, 4, 6].map((h) => (
-                <option key={h} value={String(h)}>
-                  {h} more hour{h === 1 ? "" : "s"} · till{" "}
-                  {fmt(endForHorizon(String(h)).toISOString())}
-                </option>
-              ))}
-          </select>
+            Defaults to your working hours; a preset works "N hours from now", or
+            pick "Custom time…" for an exact end time (any time up to — and past —
+            midnight, so late-night sessions plan 24/7). Re-plans on change. */}
+        <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-2">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <label
+              htmlFor="plan-horizon"
+              className="shrink-0 text-[11px] font-medium text-foreground"
+            >
+              Plan through
+            </label>
+            <select
+              id="plan-horizon"
+              value={horizon}
+              onChange={(e) => {
+                const v = e.target.value;
+                setHorizon(v);
+                // "custom" runs with the current time (defaults to working-hours
+                // end) and reveals the picker; editing the time re-plans.
+                void run(note, v);
+              }}
+              disabled={loading}
+              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
+            >
+              <option value="work">
+                Working hours · till {fmt(workEndAt().toISOString())}
+              </option>
+              {planningToday &&
+                [1, 2, 3, 4, 6].map((h) => (
+                  <option key={h} value={String(h)}>
+                    {h} more hour{h === 1 ? "" : "s"} · till{" "}
+                    {fmt(endForHorizon(String(h)).toISOString())}
+                  </option>
+                ))}
+              <option value="custom">Custom time…</option>
+            </select>
+          </div>
+          {horizon === "custom" && (
+            <div className="flex items-center gap-2 pl-[22px]">
+              <label
+                htmlFor="plan-horizon-time"
+                className="shrink-0 text-[11px] text-muted-foreground"
+              >
+                Work until
+              </label>
+              <input
+                id="plan-horizon-time"
+                type="time"
+                value={customTime}
+                onChange={(e) => {
+                  setCustomTime(e.target.value);
+                  void run(note, "custom");
+                }}
+                disabled={loading}
+                className="rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
+              />
+              <span className="truncate text-[11px] text-muted-foreground">
+                {planningToday && customEndAt().getDate() !== target.getDate()
+                  ? "tomorrow"
+                  : "today"}
+              </span>
+            </div>
+          )}
         </div>
 
         {/* Today's note — steers the AI's selection/order for THIS run, on top of

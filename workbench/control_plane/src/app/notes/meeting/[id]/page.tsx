@@ -29,6 +29,8 @@ import Link from "next/link";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import AskPanel from "../../components/AskPanel";
 import FollowupEmailModal from "../../components/FollowupEmailModal";
+import JoinCallModal from "../../components/JoinCallModal";
+import MeetingPrep from "../../components/MeetingPrep";
 import {
   approveAction,
   approveAllActions,
@@ -100,6 +102,7 @@ export default function MeetingPage({
   const [actioning, setActioning] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showEmail, setShowEmail] = useState(false);
+  const [showJoin, setShowJoin] = useState(false);
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
   const [scratch, setScratch] = useState("");
@@ -386,6 +389,18 @@ export default function MeetingPage({
     (d) => d && d.text && (d.refs?.length ?? 0) > 0
   );
 
+  // A meeting exists before it happens. With no audio and nothing captured,
+  // the workspace below (audio scrubber, transcript, actions) has nothing to
+  // show — what you actually want is to get ready. Keyed on "has any
+  // recording" rather than on status, because status advances the moment
+  // capture starts while a draft can also be an upload mid-flight.
+  const isPrep =
+    !!meeting &&
+    meeting.recordings.length === 0 &&
+    meeting.segments.length === 0 &&
+    !busy &&
+    meeting.status !== "recording";
+
   return (
     <div className="flex flex-col h-full">
       <div className="flex items-center justify-between px-4 sm:px-6 py-3 sm:py-4 border-b border-border shrink-0">
@@ -477,7 +492,18 @@ export default function MeetingPage({
             </div>
           )}
 
-          {meeting?.recordings.length ? (
+          {/* Before the meeting: prepare it. The workspace below has nothing to
+              show yet, and this is the only moment you can actually brief the
+              copilot. */}
+          {isPrep && meeting && (
+            <MeetingPrep
+              meeting={meeting}
+              onChanged={() => void refresh()}
+              onSendBot={() => setShowJoin(true)}
+            />
+          )}
+
+          {!isPrep && meeting?.recordings.length ? (
             <audio
               ref={audioRef}
               controls
@@ -488,7 +514,7 @@ export default function MeetingPage({
           ) : null}
 
           {/* At-a-glance meta strip */}
-          {meeting && (meeting.duration_s != null || meeting.transcript_source) && (
+          {!isPrep && meeting && (meeting.duration_s != null || meeting.transcript_source) && (
             <div className="flex flex-wrap items-center gap-2">
               {meeting.created_at && (
                 <span className={chipCls}>
@@ -522,7 +548,7 @@ export default function MeetingPage({
             </div>
           )}
 
-          {meeting && (
+          {!isPrep && meeting && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Attendees
@@ -611,6 +637,8 @@ export default function MeetingPage({
           )}
 
           {/* Tabbed workspace — the summary is the hero */}
+          {!isPrep && (
+          <>
           <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
             {(
               [
@@ -1005,8 +1033,22 @@ export default function MeetingPage({
                 </p>
               ))}
           </div>
+          </>
+          )}
         </div>
       </div>
+
+      {showJoin && meeting && (
+        <JoinCallModal
+          meetingId={id}
+          defaultTitle={meeting.title ?? ""}
+          onClose={() => setShowJoin(false)}
+          onJoined={() => {
+            setShowJoin(false);
+            void refresh();
+          }}
+        />
+      )}
 
       {showEmail && (
         <FollowupEmailModal

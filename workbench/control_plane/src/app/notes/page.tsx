@@ -12,6 +12,7 @@ import { useRouter } from "next/navigation";
 import {
   AudioLines,
   BookMarked,
+  CalendarPlus,
   Clock,
   FileAudio,
   Loader2,
@@ -110,6 +111,19 @@ export default function NotesPage() {
     try {
       const meeting = await createMeeting(undefined, "in_person", templateKey);
       router.push(`/notes/session/${meeting.id}`);
+    } catch (e) {
+      setError(String(e instanceof Error ? e.message : e));
+    }
+  }, [router, templateKey]);
+
+  // Create a meeting and open it for preparation. The distinction from Record
+  // is the whole point: this is the path where you write the agenda and brief
+  // the copilot BEFORE anyone is talking.
+  const onPrepare = useCallback(async () => {
+    setError(null);
+    try {
+      const meeting = await createMeeting(undefined, "other", templateKey);
+      router.push(`/notes/meeting/${meeting.id}`);
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     }
@@ -216,8 +230,18 @@ export default function NotesPage() {
             </select>
           )}
           <button
-            onClick={onRecord}
+            onClick={onPrepare}
             className="shrink-0 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:opacity-90 tech-transition"
+            title="Set up a meeting — agenda, briefing, who's coming — before it starts"
+          >
+            <span className="flex items-center gap-1.5">
+              <CalendarPlus className="w-4 h-4" /> New meeting
+            </span>
+          </button>
+          <button
+            onClick={onRecord}
+            className="shrink-0 rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition"
+            title="Start recording straight away"
           >
             <span className="flex items-center gap-1.5">
               <Mic className="w-4 h-4" /> Record

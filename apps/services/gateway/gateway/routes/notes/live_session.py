@@ -95,6 +95,55 @@ async def begin(meeting_id: str, source: str, owner_email: str | None) -> None:
             "notes.live_session_begin_failed",
             meeting_id=meeting_id, error=str(exc)[:200],
         )
+        return
+    await _apply_prepared_copilot(meeting_id)
+
+
+async def _apply_prepared_copilot(meeting_id: str) -> None:
+    """Honour what was decided in prep, now that the meeting is actually live.
+
+    This is the seam that makes preparing a meeting worth doing: you turn the
+    copilot on beforehand — when you have time to give it an agenda and a
+    briefing — and it is already listening when the call starts, rather than
+    needing you to find the console and flip a switch mid-conversation.
+
+    Never raises: a copilot that fails to auto-start must not take the recording
+    with it."""
+    try:
+        from gateway.routes.notes import copilot
+        from gateway.routes.notes.settings import copilot_should_run, load_for_meeting
+
+        async with await _get_db() as db:
+            row = (
+                await db.execute(
+                    text(
+                        "SELECT copilot_enabled FROM meeting "
+                        "WHERE id = CAST(:m AS UUID)"
+                    ),
+                    {"m": meeting_id},
+                )
+            ).fetchone()
+        per_meeting = None if row is None else row.copilot_enabled
+        settings, _ = await load_for_meeting(meeting_id)
+        if not copilot_should_run(per_meeting, settings.copilot_default_on):
+            return
+        async with await _get_db() as db:
+            await db.execute(
+                text(
+                    "UPDATE live_session SET copilot_enabled = TRUE, "
+                    "updated_at = now() WHERE meeting_id = CAST(:m AS UUID) "
+                    "AND status = 'live'"
+                ),
+                {"m": meeting_id},
+            )
+            await db.commit()
+        copilot.start(meeting_id)
+        _log.info("notes.copilot_autostarted", meeting_id=meeting_id)
+    except Exception as exc:
+        _log.warning(
+            "notes.copilot_autostart_failed",
+            meeting_id=meeting_id, error=str(exc)[:200],
+        )
 
 
 async def end(meeting_id: str) -> None:

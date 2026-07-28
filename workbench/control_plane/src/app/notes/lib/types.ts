@@ -20,6 +20,11 @@ export interface MeetingListItem {
   template_key: string | null;
   start_at: string | null;
   created_at: string | null;
+  /** When the meeting is planned for. Distinct from start_at (when capture
+   *  actually began) — a meeting being prepared has one but not the other. */
+  scheduled_at?: string | null;
+  /** Per-meeting copilot decision. null = follow the account default. */
+  copilot_enabled?: boolean | null;
 }
 
 /** A meeting-notes template (shapes the generated summary). */

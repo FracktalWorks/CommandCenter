@@ -24,7 +24,8 @@ from sqlalchemy import text
 
 _LIST_SQL = """
 SELECT m.id, m.title, m.platform, m.status, m.language, m.duration_s,
-       m.owner_email, m.start_at, m.created_at,
+       m.owner_email, m.start_at, m.created_at, m.template_key,
+       m.scheduled_at, m.copilot_enabled,
        (SELECT count(*) FROM transcript_segment ts WHERE ts.meeting_id = m.id)
            AS segment_count,
        EXISTS (SELECT 1 FROM meeting_note mn WHERE mn.meeting_id = m.id)
@@ -64,10 +65,12 @@ async def create_meeting(
                 text(
                     """
                     INSERT INTO meeting (platform, start_at, title, status,
-                                         owner_email, template_key)
-                    VALUES (:platform, now(), :title, 'draft', :owner, :template)
+                                         owner_email, template_key, scheduled_at)
+                    VALUES (:platform, now(), :title, 'draft', :owner, :template,
+                            CAST(:scheduled AS TIMESTAMPTZ))
                     RETURNING id, title, platform, status, language, duration_s,
-                              owner_email, start_at, created_at
+                              owner_email, start_at, created_at, template_key,
+                              scheduled_at, copilot_enabled
                     """
                 ),
                 {
@@ -75,6 +78,7 @@ async def create_meeting(
                     "title": body.title,
                     "owner": user.email,
                     "template": body.template_key,
+                    "scheduled": body.scheduled_at,
                 },
             )
         ).fetchone()
@@ -253,11 +257,20 @@ async def patch_meeting(
                 """
                 UPDATE meeting SET
                     title = COALESCE(:title, title),
-                    template_key = COALESCE(:template, template_key)
+                    template_key = COALESCE(:template, template_key),
+                    scheduled_at = COALESCE(CAST(:scheduled AS TIMESTAMPTZ),
+                                            scheduled_at),
+                    copilot_enabled = COALESCE(:copilot, copilot_enabled)
                 WHERE id = :id
                 """
             ),
-            {"id": meeting_id, "title": body.title, "template": body.template_key},
+            {
+                "id": meeting_id,
+                "title": body.title,
+                "template": body.template_key,
+                "scheduled": body.scheduled_at,
+                "copilot": body.copilot_enabled,
+            },
         )
         await db.commit()
         row = await _load_meeting(db, meeting_id)

@@ -38,11 +38,24 @@ Beyond batch record-then-transcribe, the worker can **stream** the transcript
 live and **speak** back into the call — the foundation for agents that act
 mid-meeting:
 
-- **Live transcript:** set `LIVE_ASR_URL` to a streaming ASR WebSocket
-  (self-hosted WhisperLive-style). While in-call the worker tees the audio to it
-  and POSTs each segment to the `live_callback` URL the gateway passes at join
-  (the gateway builds it from `NOTES_LIVE_CALLBACK_BASE`). The gateway fans those
-  out to live captions (`GET /notes/meetings/{id}/live`) and to agents.
+- **Live transcript:** while in-call the worker tees the audio to a streaming
+  ASR and POSTs each segment to the `live_callback` URL the gateway passes at
+  join (built from `NOTES_LIVE_CALLBACK_BASE`). The gateway fans those out to
+  live captions (`GET /notes/meetings/{id}/live`) and to agents. Two ways to
+  get an ASR, checked in this order:
+
+  1. **`LIVE_ASR_URL`** — your own streaming ASR WebSocket (WhisperLive-style).
+     Free per minute if you run one; wins when set.
+  2. **`LIVE_TOKEN_URL`** (the normal path, wired by the deploy) — the worker
+     asks the gateway for a short-lived token for whichever provider is keyed
+     in **Settings → Models**, and streams to AssemblyAI directly. The master
+     key never enters this container, and switching providers in Settings
+     applies to the bot with no redeploy.
+
+  With neither, the bot records and the batch pipeline transcribes after the
+  call — but there are **no live captions**, which looks like success until the
+  meeting ends. Only completed turns are forwarded; partials would stutter the
+  same sentence down the console a word at a time.
 - **Consistent live speakers (pause-chunked spine):** set `EMBED_CMD` to attach a
   per-utterance speaker **embedding** to each segment. The worker runs a local
   pause endpointer (VAD on natural pauses, not fixed windows — `endpointing.py`),
@@ -104,7 +117,8 @@ MEETING_BOT_TOKEN=<same secret as above>
 | `MEET_JOIN_TIMEOUT` | `150` | Seconds to wait in the waiting room before giving up. |
 | `MEET_MAX_DURATION` | `14400` | Hard cap (s) on a single recording (4 h). |
 | `MEET_ALONE_TIMEOUT` | `120` | Leave after being the only participant this long. |
-| `LIVE_ASR_URL` | _(none)_ | Streaming-ASR WebSocket for live transcript. Unset → batch only. |
+| `LIVE_ASR_URL` | _(none)_ | Self-hosted streaming-ASR WebSocket. Takes priority over `LIVE_TOKEN_URL`. |
+| `LIVE_TOKEN_URL` | _(set by deploy)_ | Gateway endpoint that mints streaming credentials from the key in Settings → Models. Unset **and** no `LIVE_ASR_URL` → no live captions. |
 | `LIVE_CALLBACK_TOKEN` | `$MEETING_BOT_TOKEN` | Bearer for the worker→gateway live callback. |
 | `TTS_CMD` | _(none)_ | Shell template (`{text}`,`{out}`) that renders speech to WAV. Unset → can't speak. |
 | `EMBED_CMD` | _(none)_ | Shell template (`{in}` PCM s16le 16k mono → `{out}` JSON float array) that emits a per-utterance speaker embedding. Unset → text-only segments. |

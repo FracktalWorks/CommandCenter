@@ -31,7 +31,7 @@ import os
 
 import httpx
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 from gateway.routes.notes.core import _log, router
 from pydantic import BaseModel
 
@@ -152,8 +152,14 @@ async def _mint_ephemeral_key(api_key: str) -> str:
         return str(key)
 
 
-@router.post("/stt/live-token", response_model=LiveToken)
-async def live_token(_user: UserContext = Depends(get_current_user)) -> LiveToken:
+async def _issue_live_token() -> LiveToken:
+    """Mint streaming credentials for whichever provider is configured.
+
+    Shared by the browser recorder and the meeting-bot worker so both get live
+    captions from the same key you set in Settings -> Models. The worker can't
+    read that key (it runs in its own container), and shipping the master key
+    into the container would be both a duplicate source of truth and a wider
+    blast radius — so it asks for a short-lived token instead."""
     aai, dg = _assemblyai_key(), _deepgram_key()
     provider = choose_provider(_configured_stt_model(), bool(aai), bool(dg))
     if provider is None:
@@ -188,3 +194,26 @@ async def live_token(_user: UserContext = Depends(get_current_user)) -> LiveToke
     return LiveToken(
         provider=provider, token=token, model=model, expires_in=_TOKEN_TTL_S
     )
+
+
+@router.post("/stt/live-token", response_model=LiveToken)
+async def live_token(_user: UserContext = Depends(get_current_user)) -> LiveToken:
+    """Streaming credentials for the browser recorder (user-authenticated)."""
+    return await _issue_live_token()
+
+
+@router.post("/stt/bot-live-token", response_model=LiveToken)
+async def bot_live_token(
+    authorization: str | None = Header(default=None),
+) -> LiveToken:
+    """The same credentials for the meeting-bot worker (machine-authenticated).
+
+    Separate endpoint rather than a shared one because the callers authenticate
+    differently — a browser has a user session, the worker has the shared bot
+    token — and a re-fetchable endpoint (rather than a token handed over at
+    join time) is what lets a worker reconnect mid-meeting: these tokens live
+    about a minute, meetings run hours."""
+    from gateway.routes.notes.live_transcript import _check_bot_auth
+
+    _check_bot_auth(authorization)
+    return await _issue_live_token()

@@ -87,3 +87,18 @@ def test_meeting_bot_failure_cannot_fail_the_deploy() -> None:
     """A bot build hiccup must skip the bot, never take down a deploy."""
     deploy = _DEPLOY.read_text()
     assert "meeting bot build/start failed" in deploy
+
+
+def test_live_caption_credentials_are_wired_by_default() -> None:
+    """Without a token URL the bot joins, records, and emits no captions — a
+    failure that looks like success until the meeting ends. The deploy sets it
+    rather than leaving it opt-in, and compose has to pass it through."""
+    env = _service()["environment"]
+    assert "LIVE_TOKEN_URL" in env, "compose must pass the token URL to the worker"
+
+    deploy = _DEPLOY.read_text()
+    assert "NOTES_LIVE_TOKEN_URL" in deploy
+    assert "/notes/stt/bot-live-token" in deploy
+    # The worker calls the gateway from inside its container, so it can't use
+    # 127.0.0.1 (that would be the container itself).
+    assert "host.docker.internal:8080/notes/stt/bot-live-token" in deploy

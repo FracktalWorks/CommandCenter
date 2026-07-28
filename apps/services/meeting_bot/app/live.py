@@ -38,6 +38,12 @@ PULSE_MONITOR = os.environ.get("PULSE_MONITOR", "meet.monitor")
 # into its sink so the meeting hears the bot.
 VIRTUAL_MIC_SINK = os.environ.get("VIRTUAL_MIC_SINK", "vmic")
 LIVE_ASR_URL = os.environ.get("LIVE_ASR_URL", "").strip()
+# Where to ask CommandCenter for streaming-ASR credentials when no self-hosted
+# LIVE_ASR_URL is set. This is the normal path: the key lives in Settings ->
+# Models, the gateway mints a short-lived token, and the worker never holds the
+# master key. Unset AND no LIVE_ASR_URL -> the bot records but has no captions.
+LIVE_TOKEN_URL = os.environ.get("LIVE_TOKEN_URL", "").strip()
+_AAI_WS = "wss://streaming.assemblyai.com/v3/ws"
 # The per-meeting callback URL comes from the join request; this token authents
 # the worker → gateway callback (defaults to the shared bot token).
 LIVE_CALLBACK_TOKEN = os.environ.get(
@@ -121,9 +127,60 @@ async def _embed_pcm(pcm: bytes) -> list[float] | None:
 
 
 def live_enabled() -> bool:
-    """Live streaming is possible when a streaming ASR service is configured.
-    The per-meeting callback (where segments go) is supplied at join time."""
-    return bool(LIVE_ASR_URL)
+    """Live streaming is possible when *some* streaming ASR is reachable —
+    either a self-hosted WebSocket, or CommandCenter's token endpoint (which
+    fronts whichever provider is keyed in Settings -> Models). The per-meeting
+    callback (where segments go) is supplied at join time."""
+    return bool(LIVE_ASR_URL or LIVE_TOKEN_URL)
+
+
+async def _resolve_asr() -> tuple[str, str] | None:
+    """(websocket_url, protocol) for this call, or None if live isn't possible.
+
+    A self-hosted ``LIVE_ASR_URL`` wins when set — it costs nothing per minute.
+    Otherwise ask the gateway for a short-lived provider token. Returns the
+    protocol so the reader knows which message shape to expect; they differ
+    enough that guessing from the payload would be fragile.
+    """
+    if LIVE_ASR_URL:
+        return LIVE_ASR_URL, "whisperlive"
+    if not LIVE_TOKEN_URL:
+        return None
+    try:
+        import httpx
+
+        headers = {}
+        if LIVE_CALLBACK_TOKEN:
+            headers["Authorization"] = f"Bearer {LIVE_CALLBACK_TOKEN}"
+        async with httpx.AsyncClient(timeout=10) as client:
+            r = await client.post(LIVE_TOKEN_URL, headers=headers)
+            r.raise_for_status()
+            data = r.json()
+    except Exception as exc:
+        log.warning("live token fetch failed: %s", str(exc)[:200])
+        return None
+
+    provider = (data.get("provider") or "").strip()
+    token = (data.get("token") or "").strip()
+    if not token:
+        log.warning("live token response carried no token")
+        return None
+    if provider != "assemblyai":
+        # Deepgram streaming from the worker isn't wired yet; say so plainly
+        # rather than opening a socket that will never produce a transcript.
+        log.warning(
+            "live captions need an AssemblyAI key (got provider=%r) — "
+            "the bot will still record and transcribe after the call",
+            provider,
+        )
+        return None
+    # Ephemeral tokens go in the query string (the browser can't set headers on
+    # a WebSocket, and AssemblyAI kept one scheme for both callers).
+    url = (
+        f"{_AAI_WS}?sample_rate={_SAMPLE_RATE}"
+        f"&encoding=pcm_s16le&format_turns=true&token={token}"
+    )
+    return url, "assemblyai"
 
 
 def _pcm_ffmpeg() -> subprocess.Popen:
@@ -152,8 +209,35 @@ async def _forward_segment(meeting_callback: str, seg: dict) -> None:
         log.warning("live forward failed: %s", str(exc)[:200])
 
 
-def _parse_asr_message(raw: str) -> list[dict]:
-    """Normalise a WhisperLive-style ASR message into our segment shape.
+def _parse_assemblyai_message(data: dict) -> list[dict]:
+    """AssemblyAI streaming v3 ``Turn`` -> our segment shape.
+
+    Only completed turns are emitted. AssemblyAI streams a growing partial for
+    every turn, and the live bus appends rather than replaces — forwarding
+    partials would stutter the same sentence down the console a word at a time.
+    This matches what the browser recorder already relays.
+
+    Word timings are milliseconds from stream start; the bus works in seconds,
+    and the spans matter because they drive speaker reconciliation.
+    """
+    if data.get("type") != "Turn" or not data.get("end_of_turn"):
+        return []
+    text = (data.get("transcript") or "").strip()
+    if not text:
+        return []
+    words = data.get("words") or []
+    start_ms = words[0].get("start", 0) if words else 0
+    end_ms = words[-1].get("end", 0) if words else 0
+    return [{
+        "text": text,
+        "start_s": float(start_ms or 0) / 1000.0,
+        "end_s": float(end_ms or 0) / 1000.0,
+        "is_final": True,
+    }]
+
+
+def _parse_asr_message(raw: str, protocol: str = "whisperlive") -> list[dict]:
+    """Normalise an ASR message into our segment shape.
     Defensive: protocols differ, so accept the common shapes and ignore the
     rest."""
     out: list[dict] = []
@@ -161,6 +245,10 @@ def _parse_asr_message(raw: str) -> list[dict]:
         data = json.loads(raw)
     except (ValueError, TypeError):
         return out
+    if not isinstance(data, dict):
+        return out
+    if protocol == "assemblyai":
+        return _parse_assemblyai_message(data)
     segments = data.get("segments") if isinstance(data, dict) else None
     if isinstance(segments, list):
         for s in segments:
@@ -217,12 +305,12 @@ async def _flush_pending(
 
 
 async def _asr_reader(ws, meeting_callback: str, chunking: bool, windows: list,
-                      pending: list) -> None:
+                      pending: list, protocol: str = "whisperlive") -> None:
     """Read ASR messages and forward them to the gateway live bus — immediately
     when not chunking, else queued so an embedding can be attached (above)."""
     async for message in ws:
         for seg in _parse_asr_message(
-            message if isinstance(message, str) else message.decode()
+            message if isinstance(message, str) else message.decode(), protocol
         ):
             if chunking:
                 pending.append((seg, time.monotonic()))
@@ -269,11 +357,19 @@ async def stream_transcription(meeting_callback: str, stop: asyncio.Event) -> No
         tasks.add(t)
         t.add_done_callback(tasks.discard)
 
+    resolved = await _resolve_asr()
+    if resolved is None:
+        return
+    asr_url, protocol = resolved
+    log.info("live transcription starting (protocol=%s)", protocol)
+
     proc = _pcm_ffmpeg()
     try:
-        async with websockets.connect(LIVE_ASR_URL, max_size=None) as ws:
+        async with websockets.connect(asr_url, max_size=None) as ws:
             reader = asyncio.create_task(
-                _asr_reader(ws, meeting_callback, chunking, windows, pending)
+                _asr_reader(
+                    ws, meeting_callback, chunking, windows, pending, protocol
+                )
             )
             loop = asyncio.get_event_loop()
             while not stop.is_set():

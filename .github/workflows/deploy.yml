@@ -472,8 +472,10 @@ jobs:
             # Self-heals services between deploys and captures network forensics
             # every 10 min. Deliberately installed here so it can never drift
             # from the repo. See deploy/hostinger/health-watchdog.sh.
-            sudo install -m 0755 "$APP_DIR/deploy/hostinger/health-watchdog.sh" \
-              /opt/acb/app/deploy/hostinger/health-watchdog.sh 2>/dev/null || true
+            # The script is already in place via git reset; just make sure it is
+            # executable. (Do NOT `install` it onto itself — src == dest is an
+            # error, which is how it ended up non-executable the first time.)
+            sudo chmod 0755 "$APP_DIR/deploy/hostinger/health-watchdog.sh" || true
             sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.service" /etc/systemd/system/
             sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.timer"   /etc/systemd/system/
             sudo systemctl daemon-reload

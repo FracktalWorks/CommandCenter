@@ -9,7 +9,10 @@ Wants=network-online.target
 Type=oneshot
 # Runs as root: needs systemctl restart, iptables/ufw and fail2ban reads.
 User=root
-ExecStart=/opt/acb/app/deploy/hostinger/health-watchdog.sh
+# Invoked through bash on purpose: a checkout that loses the executable bit
+# (Windows contributors, archive exports) would otherwise make ExecStart fail
+# with a bare "Permission denied" and the watchdog would silently never run.
+ExecStart=/bin/bash /opt/acb/app/deploy/hostinger/health-watchdog.sh
 # A restart attempt plus probes can legitimately take a while; do not let a
 # wedged service hang the timer forever.
 TimeoutStartSec=600

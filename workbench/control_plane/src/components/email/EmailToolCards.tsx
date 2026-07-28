@@ -424,6 +424,19 @@ export default function EmailToolCards({
       items.push(<PatternListCard key={e.id} event={e} meta={patternMeta(e)} />);
       continue;
     }
+    // Structured overview cards — these parse the tool's text into real UI
+    // (rule rows with state + actions; label chips) instead of dumping the raw
+    // "id=… | …" lines. InfoResultCard is their fallback for unparseable output.
+    if (e.name === "get_rules_and_settings") {
+      items.push(
+        <RulesOverviewCard key={e.id} event={e} accountId={accountId} />,
+      );
+      continue;
+    }
+    if (e.name === "list_labels") {
+      items.push(<LabelsCard key={e.id} event={e} />);
+      continue;
+    }
     // Info/list cards bring their own ToolCardShell chrome (collapse + X), so
     // render them directly rather than inside a DismissableCard.
     if (INFO_TOOLS.has(e.name)) {
@@ -1710,6 +1723,245 @@ function PatternListCard({
           Couldn&apos;t forget that one — try again.
         </div>
       )}
+    </ToolCardShell>
+  );
+}
+
+// ── Rules overview card (get_rules_and_settings) ─────────────────────────────
+
+interface ParsedRuleRow {
+  id: string;
+  name: string;
+  auto: boolean;
+  enabled: boolean;
+  condition: string;
+  actions: string[];
+}
+
+/** Parse get_rules_and_settings output into structured rule rows:
+ *    N rule(s):
+ *    • id=<id> | <name> [auto|manual/on|off] — if: <condition> → ACT[:label], …
+ *    Settings: auto-run=…, cold-blocker=…, about set=…
+ *  "(static)" (no AI condition) parses as an empty condition. */
+function parseRulesOverview(
+  result: string,
+): { rules: ParsedRuleRow[]; settings: string } {
+  const rules: ParsedRuleRow[] = [];
+  let settings = "";
+  for (const raw of (result || "").split("\n")) {
+    const line = raw.trim();
+    if (line.startsWith("Settings:")) {
+      settings = line.replace(/^Settings:\s*/, "");
+      continue;
+    }
+    const m = line.match(
+      /^•\s*id=(\S+)\s*\|\s*(.+?)\s*\[(auto|manual)\/(on|off)\]\s*—\s*if:\s*(.*)$/,
+    );
+    if (!m) continue;
+    let condition = m[5].trim();
+    let actions: string[] = [];
+    const arrow = condition.lastIndexOf("→");
+    if (arrow !== -1) {
+      actions = condition
+        .slice(arrow + 1)
+        .split(",")
+        .map((a) => a.trim())
+        .filter(Boolean);
+      condition = condition.slice(0, arrow).trim();
+    }
+    rules.push({
+      id: m[1],
+      name: m[2],
+      auto: m[3] === "auto",
+      enabled: m[4] === "on",
+      condition: condition === "(static)" ? "" : condition,
+      actions,
+    });
+  }
+  return { rules, settings };
+}
+
+/** One "Then" chip: "MOVE_FOLDER:Newsletter" → "move folder: Newsletter". */
+function ActionChip({ action }: { action: string }) {
+  const colon = action.indexOf(":");
+  const type = (colon === -1 ? action : action.slice(0, colon))
+    .replace(/_/g, " ")
+    .toLowerCase();
+  const val = colon === -1 ? "" : action.slice(colon + 1).trim();
+  return (
+    <span className="px-1.5 py-0.5 rounded bg-secondary/70 text-foreground">
+      {type}
+      {val ? `: ${val}` : ""}
+    </span>
+  );
+}
+
+/** The account's rules as structured rows — name, approval/On-Off state, its
+ *  "If → Then", with per-rule toggle + delete — instead of the raw "id=… | …"
+ *  dump the tool emits (which is for the MODEL to reference, not for people). */
+function RulesOverviewCard({
+  event: e,
+  accountId,
+}: {
+  event: ToolEvent;
+  accountId?: string | null;
+}) {
+  const args = e.args as Record<string, unknown> | undefined;
+  const acctId = (args?.account_id as string) || accountId || "";
+  const [parsed] = useState(() => parseRulesOverview(e.result || ""));
+  const [rules, setRules] = useState(parsed.rules);
+  const [busy, setBusy] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+
+  // Unparseable output (error text, older format) → the plain-text card.
+  if (parsed.rules.length === 0) return <InfoResultCard event={e} />;
+
+  const toggle = async (row: ParsedRuleRow) => {
+    if (!acctId || busy) return;
+    setBusy(row.id);
+    setError(false);
+    try {
+      const all = await listRules(acctId);
+      const full = all.find((r) => r.id === row.id);
+      if (!full) throw new Error("rule not found");
+      await updateRule(row.id, { ...full, enabled: !row.enabled });
+      setRules((rs) =>
+        rs.map((r) => (r.id === row.id ? { ...r, enabled: !row.enabled } : r)),
+      );
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  const del = async (row: ParsedRuleRow) => {
+    if (busy || !confirm(`Delete rule "${row.name}"?`)) return;
+    setBusy(row.id);
+    setError(false);
+    try {
+      await deleteRule(row.id);
+      setRules((rs) => rs.filter((r) => r.id !== row.id));
+    } catch {
+      setError(true);
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <ToolCardShell
+      title={`Rules & settings (${rules.length})`}
+      icon={<Sparkles size={12} />}
+      onDismiss={() => dismissToolCard(e.id)}
+    >
+      <div className="space-y-1 max-h-80 overflow-y-auto overflow-x-hidden scrollbar-thin pr-0.5">
+        {rules.map((r) => (
+          <div
+            key={r.id}
+            className="rounded-md border border-border/70 bg-background/40 px-2 py-1.5"
+          >
+            <div className="flex items-center gap-1.5 min-w-0">
+              <span className="text-[11px] font-medium text-foreground truncate flex-1 min-w-0">
+                {r.name}
+              </span>
+              {!r.auto && (
+                <span
+                  className="text-[9px] px-1.5 py-0.5 rounded-full bg-amber-500/15 text-amber-500 flex-shrink-0"
+                  title="Proposes for approval (not auto-applied)"
+                >
+                  Approval
+                </span>
+              )}
+              {busy === r.id ? (
+                <Loader2
+                  size={11}
+                  className="animate-spin text-muted-foreground flex-shrink-0"
+                />
+              ) : (
+                <>
+                  <button
+                    onClick={() => toggle(r)}
+                    disabled={!acctId}
+                    title={
+                      acctId
+                        ? r.enabled
+                          ? "Turn this rule off"
+                          : "Turn this rule on"
+                        : undefined
+                    }
+                    className={`text-[9px] px-1.5 py-0.5 rounded-full flex-shrink-0 transition-colors ${
+                      r.enabled
+                        ? "bg-emerald-500/15 text-emerald-500 hover:bg-emerald-500/25"
+                        : "bg-secondary text-muted-foreground hover:text-foreground"
+                    } ${acctId ? "" : "cursor-default"}`}
+                  >
+                    {r.enabled ? "On" : "Off"}
+                  </button>
+                  <button
+                    onClick={() => del(r)}
+                    title="Delete this rule"
+                    aria-label="Delete this rule"
+                    className="p-0.5 rounded text-muted-foreground hover:text-destructive hover:bg-destructive/10 flex-shrink-0"
+                  >
+                    <Trash2 size={11} />
+                  </button>
+                </>
+              )}
+            </div>
+            {r.condition && (
+              <div className="mt-0.5 text-[10px] text-muted-foreground leading-relaxed line-clamp-2">
+                <span className="text-muted-foreground/70">If</span>{" "}
+                {r.condition}
+              </div>
+            )}
+            {r.actions.length > 0 && (
+              <div className="mt-1 flex flex-wrap items-center gap-1 text-[10px]">
+                <span className="text-muted-foreground/70">Then</span>
+                {r.actions.map((a, i) => (
+                  <ActionChip key={i} action={a} />
+                ))}
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      {parsed.settings && (
+        <div className="mt-1.5 text-[10px] text-muted-foreground">
+          {parsed.settings}
+        </div>
+      )}
+      {error && (
+        <div className="mt-1 text-[10px] text-destructive">
+          Something went wrong — try again.
+        </div>
+      )}
+    </ToolCardShell>
+  );
+}
+
+// ── Labels card (list_labels) ─────────────────────────────────────────────────
+
+/** The account's labels as their coloured chips instead of one comma-run line. */
+function LabelsCard({ event: e }: { event: ToolEvent }) {
+  const text = (e.result || "").trim();
+  const m = text.match(/^Labels:\s*([\s\S]*)$/);
+  const names = m
+    ? m[1].split(",").map((s) => s.trim()).filter(Boolean)
+    : [];
+  // "No user labels…" or an unexpected format → the plain-text card.
+  if (names.length === 0) return <InfoResultCard event={e} />;
+  return (
+    <ToolCardShell
+      title={`Labels (${names.length})`}
+      icon={<Tag size={12} />}
+      onDismiss={() => dismissToolCard(e.id)}
+    >
+      <div className="flex flex-wrap gap-1">
+        {names.map((n) => (
+          <LabelChip key={n} name={n} icon className="text-[10px] px-2 py-0.5" />
+        ))}
+      </div>
     </ToolCardShell>
   );
 }

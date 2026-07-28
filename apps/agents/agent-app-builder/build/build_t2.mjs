@@ -1,12 +1,20 @@
 #!/usr/bin/env node
 // App Workshop · T2 (React) build — platform-owned, not authored by the
 // builder agent (docs/app-workshop/README.md §4.1/§9). Bundles a T2 app's
-// `src/main.tsx` against the shared, deploy-provisioned vendor cache
-// (react/react-dom/esbuild — never a per-app `npm install`, RFC §7 point 6:
-// no package.json/node_modules footprint inside any app workspace) and
-// injects the result into the workspace's `index.html` template, producing
-// `dist/bundle.html` — the file `entry` points at and every existing
-// publish/preview/durability path already reads dynamically.
+// `src/main.tsx` and injects the result into the workspace's `index.html`
+// template, producing `dist/bundle.html` — the file `entry` points at and
+// every existing publish/preview/durability path already reads dynamically.
+//
+// Two dependency modes, auto-detected per workspace:
+//   - Default (no app-local `node_modules`): resolve react/react-dom/esbuild
+//     from the shared, deploy-provisioned vendor cache; an import allowlist
+//     blocks anything else. Zero per-app install/disk cost — most T2 apps
+//     stay on this path.
+//   - Custom deps (app-local `node_modules` present, via
+//     `install_t2_deps.mjs`): standard npm resolution rooted at the
+//     workspace, no allowlist — the app can import anything it explicitly
+//     installed (e.g. three.js for a 3D viewer). esbuild itself still comes
+//     from the vendor cache either way; only runtime deps move per-app.
 //
 // `@cc/ui` (workbench/control_plane/src/lib/artifactUi.tsx) is importable
 // alongside react/react-dom — the same 25-component design-kit the chat
@@ -21,12 +29,14 @@
 // bridge globals that don't exist in a Custom App's frame — harmless no-ops
 // here, but pointless; use `cc.storage`/`cc.tools` for real interactions.
 //
-// An import allowlist (react/react-dom/@cc/ui only, policed for imports made
-// BY the app's own src/ files — react/react-dom/@cc/ui's own internal
-// resolution is left alone) mirrors compileArtifact.ts's defense-in-depth:
-// the vendor cache having only those packages installed already prevents
-// resolving anything else, but an explicit allowlist doesn't silently widen
-// if something else is ever added to that shared directory.
+// In default mode, an import allowlist (react/react-dom/@cc/ui only, policed
+// for imports made BY the app's own src/ files — react/react-dom/@cc/ui's own
+// internal resolution is left alone) mirrors compileArtifact.ts's
+// defense-in-depth: the vendor cache having only those packages installed
+// already prevents resolving anything else, but an explicit allowlist
+// doesn't silently widen if something else is ever added to that shared
+// directory. In custom-deps mode the allowlist is skipped entirely — the app
+// can only import what it explicitly `npm install`ed, which is its own gate.
 //
 // Usage: node build_t2.mjs <workspace-dir>
 // Exit 0 + byte size on stdout on success; exit 1 + esbuild diagnostics on
@@ -124,6 +134,11 @@ if (!existsSync(join(vendorModules, "esbuild"))) {
   );
 }
 
+// esbuild itself is always the vendored copy (a build tool, not a runtime
+// dep). Whether react/react-dom/etc. resolve from the vendor cache or the
+// app's own npm-installed node_modules depends on which the app has.
+const hasAppDeps = existsSync(join(workspace, "node_modules"));
+
 const require = createRequire(import.meta.url);
 let esbuild;
 try {
@@ -152,9 +167,13 @@ try {
     // browser frame (no Node globals there) — also dead-code-eliminates
     // most React dev-mode diagnostic strings, keeping the bundle small.
     define: { "process.env.NODE_ENV": '"production"' },
-    nodePaths: [vendorModules],
+    // Default mode: resolve react/react-dom against the shared vendor cache,
+    // policed by the allowlist plugin. Custom-deps mode: standard resolution
+    // rooted at the workspace's own node_modules (esbuild's default
+    // algorithm — no nodePaths override needed), no allowlist.
+    nodePaths: hasAppDeps ? [] : [vendorModules],
     alias: uiAvailable ? { [UI_PACKAGE]: UI_SOURCE } : {},
-    plugins: [allowlistPlugin(join(workspace, "src"))],
+    plugins: hasAppDeps ? [] : [allowlistPlugin(join(workspace, "src"))],
   });
 } catch (err) {
   const diagnostics = (err.errors || [])
@@ -191,4 +210,7 @@ try {
   fail(`failed to write dist/bundle.html: ${err.message}`);
 }
 
-process.stdout.write(`build_t2: ok, dist/bundle.html (${finalHtml.length} bytes)\n`);
+process.stdout.write(
+  `build_t2: ok, dist/bundle.html (${finalHtml.length} bytes, ` +
+    `${hasAppDeps ? "custom deps" : "vendor cache"})\n`,
+);

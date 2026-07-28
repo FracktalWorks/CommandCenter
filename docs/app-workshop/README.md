@@ -339,7 +339,7 @@ same vocabulary. The effective permission at runtime is always the **intersectio
 | Tier | What | When |
 |---|---|---|
 | T1 | Single-file HTML/JS (no build) | Phase 0 — **built** |
-| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html` (vendored deps via a shared, deploy-provisioned cache — never per-app `npm install` — no CDN) | Phase 1 — **built** (`agent-app-builder/build/build_t2.mjs`; `entry`/`tier` in `app.json`; the builder upgrades an app from T1→T2 mid-conversation when a request calls for it, no separate creation-time picker). Reuses `@cc/ui` — the same 25-component design kit the chat "artifacts" system (`lib/compileArtifact.ts`) bundles into React artifacts — aliased in via an explicit import allowlist, so a T2 app writes `<Stat/>`/`<Table/>` instead of hand-rolled `cc-*` divs |
+| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html`. Default: vendored deps via a shared, deploy-provisioned cache, no per-app install, no CDN. Opt-in: per-app `npm install` for anything the vendored set doesn't cover (e.g. `three`/`@react-three/fiber` for 3D) — see below | Phase 1 — **built** (`agent-app-builder/build/build_t2.mjs`; `entry`/`tier` in `app.json`; the builder upgrades an app from T1→T2 mid-conversation when a request calls for it, no separate creation-time picker). Reuses `@cc/ui` — the same 25-component design kit the chat "artifacts" system (`lib/compileArtifact.ts`) bundles into React artifacts — aliased in via an explicit import allowlist, so a T2 app writes `<Stat/>`/`<Table/>` instead of hand-rolled `cc-*` divs. Per-app custom dependencies — **built** (`agent-app-builder/build/install_t2_deps.mjs`: `--ignore-scripts` + a package-spec allowlist + a `node_modules` size cap; `build_t2.mjs` auto-detects an app-local `node_modules` and switches from the vendor cache + import allowlist to standard npm resolution, no per-app container) |
 | T3 | Server-side apps (backend compute), JS/TS runtime | **Scoped, not built.** Deferred until **BO-7** lands (platform-wide sandbox hardening — today's code execution is a bare env-scrubbed subprocess, no container/cgroup/seccomp). Decided-but-unbuilt substrate: **not** Docker-per-app — warm Deno subprocesses with explicit `--allow-*` flags, supervised by the gateway (Val Town's `deno-http-worker` pattern) — chosen for the 4GB VPS. Cron/webhook-triggered functions additionally need BO-20 (durable job queue), currently absent. BO-7 progress so far (2026-07-27, `competitive_hardening_2026-07.md`'s status log): dep-install RCE fix, permission-context/destructive-tool cheap wins, and Copilot-SDK session containerization for both `code_task` and the App Workshop builder's own interactive chat session — but the loader-level agent-import path T3's own gate references is separate and still untouched, so this row's status doesn't move yet |
 
 ### 4.2 The builder (Workshop session)
@@ -879,24 +879,46 @@ trust, never sanitize-and-inline (sanitizers neutralize markup; apps *are* scrip
    app shipped through Phase 2a) there is **no per-app server-side execution to sandbox in
    the first place**: an app's JS never runs on the gateway/orchestrator — it only ever
    runs client-side, in the viewer's own browser tab, contained by layer 1 before it can
-   touch anything shared. Consequently app-to-app and app-to-platform *dependency*
-   isolation is airtight by construction: no `package.json`, no `node_modules`, no system
-   package, nothing installed anywhere per app — CSP already forbids loading one (§4's
-   "never bake into the app" table). `cc.tools` handlers are hand-written platform Python
-   using dependencies the gateway already has; apps never supply code that runs
-   server-side, so no app can ever introduce a package requirement there either. This is
-   also why the model is cheap, not just safe: zero idle-container memory floor, zero
+   touch anything shared. This is unchanged by per-app npm dependencies (below) — a T2
+   app that installs `three` still only ever ships bundled client-side JS to the browser,
+   with the exact same CSP/srcDoc containment as the vendored-only default; nothing it
+   installs ever runs on the gateway/orchestrator. `cc.tools` handlers are hand-written
+   platform Python using dependencies the gateway already has; apps never supply code
+   that runs server-side, so no app can ever introduce a package requirement there. This
+   is also why the model is cheap, not just safe: zero idle-container memory floor, zero
    per-app image/cold-start cost — the compute for running an app is donated by whoever is
    viewing it, not reserved on the VPS. A container-per-app model would be the *lossy*
    choice here, paying a fixed resource tax per app for isolation the browser already
    provides for free.
+   *Per-app build-time dependencies (T2, opt-in):* an app MAY `npm install` its own
+   packages beyond the vendored react/react-dom/`@cc/ui` — e.g. `three`/
+   `@react-three/fiber` for a 3D viewer — via `install_t2_deps.mjs`, the only sanctioned
+   path (never a raw `npm install`). Isolation between apps is structural: each app's
+   `node_modules` lives inside that app's own workspace directory, already the
+   durability/build/publish unit for exactly one app, so nothing installed for one app is
+   ever reachable from another's. The install script is the mitigation for what's
+   actually new here — build-time code execution and disk, not runtime app isolation:
+   `--ignore-scripts` blocks the standard npm supply-chain RCE vector (a malicious
+   package's install/postinstall script running arbitrary code before any of it ships
+   anywhere — same rationale as `acb_skills/loader.py`'s wheel-only installs for the
+   gateway's own Python deps), a package-spec allowlist regex rejects anything that isn't
+   a plain name/version token (no flags, no URLs), and a `node_modules` size cap stops
+   one app from eating a meaningful fraction of the VPS's disk. `node_modules` was
+   already excluded from the durability mirror and file-tree UI (`WORKSPACE_SKIP_DIRS`)
+   before this — a lost/rehydrated workspace recovers `dist/bundle.html` (the durable
+   entry-file carve-out) but not `node_modules`, so further edits need a fresh install
+   before the next build, an accepted tradeoff for staying container-free per app.
    *The one honest nuance:* the **builder's own coding session** (writing the app, not
    running it) shares the gateway's Python process with every other first-party agent —
    unchanged from how `task-manager`/`apis-config` already work, not something Custom
    Apps introduces or worsens. `agent-app-builder`'s `tool_scope` deliberately excludes
    `install_dependency`/`run_script`/`code_task`, so no Workshop conversation can trigger
    a `pip install` into that shared venv — the theoretical shared-venv risk items 5/`BO-7`
-   already track platform-wide are not reachable from an app conversation today.
+   already track platform-wide are not reachable from an app conversation today. This is
+   unrelated to `install_t2_deps.mjs` above: that's `npm`, not `pip`, runs via the same
+   native shell the builder's own coding session already uses to run `build_t2.mjs`
+   (never the Python `install_dependency` MAF tool), and writes only into the one app's
+   own workspace `node_modules` — never the gateway's shared Python venv.
    *Where this actually changes:* **T3** (server-side app code, still deferred) is the one
    point where per-app dependency isolation becomes a real, new question, because app code
    would then execute on the VPS. The answer on record is still **not** Docker-per-app —

@@ -530,8 +530,13 @@ async def put_gtd_settings(
                 _energy_windows(fields["energy_windows"]))
         if fields:
             # JSONB columns need an explicit ::jsonb cast on the bind param.
+            # The space before the cast matters — SQLAlchemy's bind-param
+            # scanner mis-parses a bind name immediately followed by a
+            # Postgres "::" cast (drops the last character of the name,
+            # leaves literal cast text the driver can't parse); see
+            # tests/unit/test_sql_bindparam_jsonb_cast.py.
             def _ph(k: str) -> str:
-                return f":{k}::jsonb" if k in _jsonb_cols else f":{k}"
+                return f":{k} ::jsonb" if k in _jsonb_cols else f":{k}"
             cols = ", ".join(fields)
             vals = ", ".join(_ph(k) for k in fields)
             sets = ", ".join(f"{k} = EXCLUDED.{k}" for k in fields)

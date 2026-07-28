@@ -367,7 +367,7 @@ async def create_app(
                    (slug, name, icon, description, owner_email,
                     manifest, workspace_path)
                    VALUES (:slug, :name, :icon, :description, :owner,
-                           :manifest::jsonb, :workspace_path)
+                           :manifest ::jsonb, :workspace_path)
                    RETURNING *"""
             ),
             {
@@ -442,7 +442,7 @@ async def fork_app(
                    (slug, name, icon, description, owner_email,
                     manifest, workspace_path)
                    VALUES (:slug, :name, :icon, :description, :owner,
-                           :manifest::jsonb, :workspace_path)
+                           :manifest ::jsonb, :workspace_path)
                    RETURNING *"""
             ),
             {

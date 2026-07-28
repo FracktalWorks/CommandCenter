@@ -236,3 +236,28 @@ export interface AgendaItem {
   title: string;
   notes: string;
 }
+
+/** Note Taker settings — one row per user, read/written whole. */
+export interface NotesSettings {
+  copilot_instructions: string;
+  copilot_default_on: boolean;
+  copilot_sensitivity: "low" | "normal" | "high";
+  /** Per-meeting-type overrides. Absent key = use the shipped default. */
+  template_instructions: Record<string, string>;
+  default_template: string | null;
+  bot_name: string | null;
+}
+
+/** A meeting type, with the copilot guidance shipped for it. */
+export interface TemplateInfo {
+  key: string;
+  label: string;
+  copilot_default: string;
+  agenda_hint: string;
+}
+
+export interface NotesSettingsPayload {
+  settings: NotesSettings;
+  templates: TemplateInfo[];
+  sensitivities: string[];
+}

@@ -18,6 +18,7 @@ from gateway.routes.notes import meeting_bot as _meeting_bot  # noqa: F401
 from gateway.routes.notes import meetings as _meetings  # noqa: F401
 from gateway.routes.notes import qa as _qa  # noqa: F401
 from gateway.routes.notes import recordings as _recordings  # noqa: F401
+from gateway.routes.notes import settings as _settings  # noqa: F401
 from gateway.routes.notes import share as _share  # noqa: F401
 from gateway.routes.notes import speaker_id as _speaker_id  # noqa: F401
 from gateway.routes.notes import summaries as _summaries  # noqa: F401

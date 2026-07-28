@@ -284,7 +284,15 @@ async def _run(meeting_id: str) -> None:
     # The agenda is what the copilot measures the conversation against, and the
     # standing instructions are how this user wants it to behave.
     agenda = await copilot_agenda.get_agenda(meeting_id)
-    instructions = await copilot_agenda.instructions_for_meeting(meeting_id)
+    # Standing instructions PLUS whatever applies to this meeting type — a 1:1
+    # and a sales call want very different things flagged.
+    from gateway.routes.notes import settings as notes_settings
+
+    cfg, template_key = await notes_settings.load_for_meeting(meeting_id)
+    instructions = notes_settings.effective_instructions(cfg, template_key)
+    min_gap, max_per_meeting = notes_settings.SENSITIVITY_LEVELS.get(
+        cfg.copilot_sensitivity, notes_settings.SENSITIVITY_LEVELS["normal"]
+    )
     said: list[str] = []          # everything heard, for agenda coverage
 
     def _background() -> str:
@@ -327,7 +335,8 @@ async def _run(meeting_id: str) -> None:
             now = time.monotonic()
             since = now - last_interjection if last_interjection else 1e9
             decision = gate(
-                window, seconds_since_last=since, interjections_so_far=count
+                window, seconds_since_last=since, interjections_so_far=count,
+                min_gap_seconds=min_gap, max_per_meeting=max_per_meeting,
             )
             if not decision.consider:
                 continue

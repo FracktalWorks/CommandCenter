@@ -338,6 +338,17 @@ class SelfHostedProvider:
             )
             resp.raise_for_status()
 
+    async def diagnostics(self, bot_id: str) -> dict:
+        """What the worker's browser saw when a join failed. Meet's DOM isn't a
+        public API, so when a selector misses this is the only way to know which
+        one to write next."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self._base}/bots/{bot_id}/diagnostics", headers=self._headers
+            )
+            resp.raise_for_status()
+            return resp.json()
+
     async def download(self, url: str) -> tuple[bytes, str]:
         async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
             resp = await client.get(url, headers=self._headers)
@@ -628,10 +639,20 @@ async def bot_join(
     )
 
 
+# Running bots, PLUS ones that failed in the last half hour.
+#
+# A bot that fails leaves the active set instantly, so the surface the user was
+# watching just empties — the single most confusing outcome, because "it didn't
+# work" is indistinguishable from "nothing happened". Keeping recent failures
+# visible is what makes the error text reachable at all.
+_RECENT_FAILURE_WINDOW = "30 minutes"
 _ACTIVE_SQL = (
     "SELECT b.*, m.title AS meeting_title FROM meeting_bot b "
     "JOIN meeting m ON m.id = b.meeting_id "
-    "WHERE b.status IN :active ORDER BY b.created_at DESC"
+    "WHERE b.status IN :active "
+    "   OR (b.status IN ('failed', 'not_admitted') "
+    f"       AND b.updated_at > now() - interval '{_RECENT_FAILURE_WINDOW}') "
+    "ORDER BY b.created_at DESC"
 )
 
 
@@ -689,6 +710,39 @@ async def get_meeting_bot(
                 )
             ).fetchone()
     return _row_to_bot(r)
+
+
+@router.get("/meetings/{meeting_id}/bot/diagnostics")
+async def meeting_bot_diagnostics(
+    meeting_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Why a notetaker couldn't join, in enough detail to act on.
+
+    Browser automation against a UI that isn't a public API breaks in ways a
+    status code can't express — a sign-in wall, a device dialog covering the
+    green room and a host who never clicked Admit all end as "didn't join".
+    This returns the page the bot actually saw."""
+    async with await _get_db() as db:
+        r = (
+            await db.execute(
+                text("SELECT id, provider, provider_bot_id, status, error "
+                     "FROM meeting_bot WHERE meeting_id=:id "
+                     "ORDER BY created_at DESC LIMIT 1"),
+                {"id": meeting_id},
+            )
+        ).fetchone()
+    if r is None:
+        raise HTTPException(status_code=404, detail="no bot for this meeting")
+    out: dict = {"status": r.status, "error": r.error, "diagnostics": None}
+    provider = resolve_bot_provider()
+    # Only the self-hosted worker keeps page-level diagnostics; Recall doesn't.
+    if isinstance(provider, SelfHostedProvider) and r.provider_bot_id:
+        try:
+            out["diagnostics"] = await provider.diagnostics(str(r.provider_bot_id))
+        except Exception as exc:
+            out["diagnostics_error"] = str(exc)[:200]
+    return out
 
 
 @router.post("/meetings/{meeting_id}/bot/stop", status_code=202)

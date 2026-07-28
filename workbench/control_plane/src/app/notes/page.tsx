@@ -17,6 +17,7 @@ import {
   Loader2,
   Mic,
   Search,
+  Settings2,
   Upload,
   Users,
   Video,
@@ -29,6 +30,7 @@ import {
   uploadRecording,
 } from "./lib/api";
 import { useViewMode } from "@/components/ViewModeProvider";
+import NotesSettingsModal from "./components/NotesSettingsModal";
 import GlossaryModal from "./components/GlossaryModal";
 import JoinCallModal from "./components/JoinCallModal";
 import ActiveBots from "./components/ActiveBots";
@@ -54,6 +56,7 @@ export default function NotesPage() {
   const [error, setError] = useState<string | null>(null);
   const [query, setQuery] = useState("");
   const [showGlossary, setShowGlossary] = useState(false);
+  const [showCopilotPrompt, setShowCopilotPrompt] = useState(false);
   const [showJoin, setShowJoin] = useState(false);
   const [botReload, setBotReload] = useState(0);
   const [templates, setTemplates] = useState<NoteTemplate[]>([]);
@@ -188,6 +191,14 @@ export default function NotesPage() {
             aria-label="Glossary"
           >
             <BookMarked className="w-4 h-4" />
+          </button>
+          <button
+            onClick={() => setShowCopilotPrompt(true)}
+            className="shrink-0 p-2 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+            title="Note Taker settings — copilot behaviour, meeting types, defaults"
+            aria-label="Note Taker settings"
+          >
+            <Settings2 className="w-4 h-4" />
           </button>
           {templates.length > 0 && (
             <select
@@ -336,6 +347,9 @@ export default function NotesPage() {
         </div>
       </div>
 
+      {showCopilotPrompt && (
+        <NotesSettingsModal onClose={() => setShowCopilotPrompt(false)} />
+      )}
       {showGlossary && <GlossaryModal onClose={() => setShowGlossary(false)} />}
       {showJoin && (
         <JoinCallModal

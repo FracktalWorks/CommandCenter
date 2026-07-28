@@ -116,7 +116,9 @@ _DECISION = re.compile(
 )
 _NUMERIC = re.compile(r"(?:[$₹€£]\s?\d|\b\d+\s?(?:%|percent|k\b|lakh|crore|million)|\b\d{1,2}[:/]\d{2})", re.I)
 
-# How long the copilot stays quiet after speaking, and the ceiling per meeting.
+# Defaults for how long the copilot stays quiet after speaking and the ceiling
+# per meeting. Both are overridable per call — Settings maps its three
+# sensitivity levels onto sane pairs (settings.SENSITIVITY_LEVELS).
 MIN_GAP_SECONDS = 45.0
 MAX_PER_MEETING = 12
 # Too short to carry a thought — never worth a model call.
@@ -134,15 +136,17 @@ def gate(
     *,
     seconds_since_last: float,
     interjections_so_far: int,
+    min_gap_seconds: float = MIN_GAP_SECONDS,
+    max_per_meeting: int = MAX_PER_MEETING,
 ) -> GateDecision:
     """Stage 1. Decide whether this window is even worth a model call.
 
     Pure and cheap by design: most speech dies here, which is what makes the
     whole feature affordable. Budget/debounce checks come FIRST so a busy
     meeting can't run up cost through the trigger patterns."""
-    if interjections_so_far >= MAX_PER_MEETING:
+    if interjections_so_far >= max_per_meeting:
         return GateDecision(False, "per-meeting cap reached")
-    if seconds_since_last < MIN_GAP_SECONDS:
+    if seconds_since_last < min_gap_seconds:
         return GateDecision(False, "too soon since the last interjection")
     if window.words < MIN_WINDOW_WORDS:
         return GateDecision(False, "window too short to carry a thought")

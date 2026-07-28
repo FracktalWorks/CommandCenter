@@ -181,7 +181,14 @@ services:
       MEETING_BOT_DATA: /data
       # Live transcript + speaking are additive and gated: unset -> the bot just
       # records and the normal batch pipeline runs.
+      #
+      # LIVE_ASR_URL is a self-hosted streaming ASR (free per minute, if you run
+      # one). With none, the worker asks the gateway for a short-lived token for
+      # whichever provider is keyed in Settings -> Models — so live captions
+      # follow the key you already set, and the master key stays out of this
+      # container.
       LIVE_ASR_URL: ${LIVE_ASR_URL:-}
+      LIVE_TOKEN_URL: ${NOTES_LIVE_TOKEN_URL:-}
       EMBED_CMD: ${MEETING_BOT_EMBED_CMD:-}
       TTS_CMD: ${MEETING_BOT_TTS_CMD:-}
       MEET_MAX_DURATION: ${MEET_MAX_DURATION:-14400}

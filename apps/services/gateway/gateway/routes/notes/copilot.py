@@ -165,8 +165,15 @@ _CRAFT_SYSTEM = (
 _MIN_CONFIDENCE = 0.6
 
 
+def _system(base: str, instructions: str) -> str:
+    """Prepend the user's standing instructions to a stage's system prompt, so
+    every run inherits how THEY want the copilot to behave."""
+    return f"{base}\n\nABOUT THE USER (always apply):\n{instructions}" if instructions else base
+
+
 async def _decide(
-    state: RollingState, window_text: str, background: str = ""
+    state: RollingState, window_text: str, background: str = "",
+    instructions: str = "",
 ) -> tuple[bool, str, int]:
     """Stage 2 — cheap model, tiny context. Returns (act, topic, tokens)."""
     try:
@@ -176,7 +183,7 @@ async def _decide(
             model="tier-fast",
             fallback_model="tier-fast",
             messages=[
-                {"role": "system", "content": _DECIDE_SYSTEM},
+                {"role": "system", "content": _system(_DECIDE_SYSTEM, instructions)},
                 {"role": "user", "content": (
                     (f"BACKGROUND:\n{background}\n\n" if background else "")
                     + f"MEETING STATE:\n{state.as_prompt()}\n\n"
@@ -202,7 +209,8 @@ async def _decide(
 
 
 async def _craft(
-    state: RollingState, window_text: str, topic: str, background: str = ""
+    state: RollingState, window_text: str, topic: str, background: str = "",
+    instructions: str = "",
 ) -> tuple[str, int]:
     """Stage 3 — only runs when we've decided to act."""
     try:
@@ -212,7 +220,7 @@ async def _craft(
             model="tier-balanced",
             fallback_model="tier-fast",
             messages=[
-                {"role": "system", "content": _CRAFT_SYSTEM},
+                {"role": "system", "content": _system(_CRAFT_SYSTEM, instructions)},
                 {"role": "user", "content": (
                     (f"BACKGROUND:\n{background}\n\n" if background else "")
                     + f"MEETING STATE:\n{state.as_prompt()}\n\n"
@@ -266,14 +274,35 @@ async def _run(meeting_id: str) -> None:
 
     Never raises: this task is spawned fire-and-forget, and the meeting must be
     unaffected by anything that happens in here."""
-    from gateway.routes.notes import copilot_context
+    from gateway.routes.notes import copilot_agenda, copilot_context
     from gateway.routes.notes.live_transcript import subscribe
 
     # Context is assembled ONCE, before the conversation — an agent lookup takes
     # seconds and a meeting moves faster than that. From here it rides along as
     # compact background rather than being re-fetched per suggestion.
     pack = await copilot_context.get(meeting_id, deep=await _deep_context(meeting_id))
-    background = pack.as_prompt()
+    # The agenda is what the copilot measures the conversation against, and the
+    # standing instructions are how this user wants it to behave.
+    agenda = await copilot_agenda.get_agenda(meeting_id)
+    # Standing instructions PLUS whatever applies to this meeting type — a 1:1
+    # and a sales call want very different things flagged.
+    from gateway.routes.notes import settings as notes_settings
+
+    cfg, template_key = await notes_settings.load_for_meeting(meeting_id)
+    instructions = notes_settings.effective_instructions(cfg, template_key)
+    min_gap, max_per_meeting = notes_settings.SENSITIVITY_LEVELS.get(
+        cfg.copilot_sensitivity, notes_settings.SENSITIVITY_LEVELS["normal"]
+    )
+    said: list[str] = []          # everything heard, for agenda coverage
+
+    def _background() -> str:
+        """Rebuilt per suggestion so agenda coverage stays current — the pack
+        itself is cached, only the cheap coverage marks are recomputed."""
+        parts = [pack.as_prompt()]
+        if agenda:
+            marks = copilot_agenda.coverage(agenda, " ".join(said[-400:]))
+            parts.append(copilot_agenda.agenda_prompt(agenda, marks))
+        return "\n\n".join(p for p in parts if p)
 
     windower = Windower()
     state = RollingState()
@@ -281,7 +310,7 @@ async def _run(meeting_id: str) -> None:
     count = 0
     spent = 0
     budget = _budget_tokens()
-    if pack.is_empty:
+    if pack.is_empty and not agenda:
         emit(meeting_id, "status",
              "Copilot is listening. It has no background for this meeting — add "
              "a briefing to make its suggestions specific.")
@@ -290,6 +319,7 @@ async def _run(meeting_id: str) -> None:
             ("your briefing", bool(pack.brief)),
             ("past meetings", bool(pack.past)),
             ("open actions", bool(pack.open_actions)),
+            (f"an agenda ({len(agenda)} items)", bool(agenda)),
             *((k, True) for k in pack.systems),
         ) if ok]
         emit(meeting_id, "status", f"Copilot is listening, with {', '.join(have)}.")
@@ -299,12 +329,14 @@ async def _run(meeting_id: str) -> None:
             if window is None:
                 continue
             state.note_window(window)
+            said.append(window.text)
 
             # Stage 1 — free. Most windows stop here.
             now = time.monotonic()
             since = now - last_interjection if last_interjection else 1e9
             decision = gate(
-                window, seconds_since_last=since, interjections_so_far=count
+                window, seconds_since_last=since, interjections_so_far=count,
+                min_gap_seconds=min_gap, max_per_meeting=max_per_meeting,
             )
             if not decision.consider:
                 continue
@@ -315,13 +347,18 @@ async def _run(meeting_id: str) -> None:
                 return
 
             # Stage 2 — cheap model.
-            act, topic, t2 = await _decide(state, window.text, background)
+            background = _background()
+            act, topic, t2 = await _decide(
+                state, window.text, background, instructions
+            )
             spent += t2
             if not act:
                 continue
 
             # Stage 3 — craft, then dedup before it ever reaches the user.
-            suggestion, t3 = await _craft(state, window.text, topic, background)
+            suggestion, t3 = await _craft(
+                state, window.text, topic, background, instructions
+            )
             spent += t3
             if not suggestion or is_duplicate(suggestion, state.raised):
                 continue

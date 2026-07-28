@@ -20,12 +20,15 @@ import {
   ArrowLeft,
   BookOpen,
   Bot,
+  ListChecks,
   Loader2,
   Mic,
   Sparkles,
   Users,
 } from "lucide-react";
 import {
+  chatAgenda,
+  getAgenda,
   getLiveRoster,
   getLiveSession,
   getMeetingContext,
@@ -34,6 +37,7 @@ import {
   setMeetingBrief,
 } from "../../lib/api";
 import type {
+  AgendaItem,
   CopilotEvent,
   MeetingContext,
   LiveSegment,
@@ -57,16 +61,22 @@ export default function LiveConsolePage({
   const [ctx, setCtx] = useState<MeetingContext | null>(null);
   const [brief, setBrief] = useState("");
   const [savingBrief, setSavingBrief] = useState(false);
+  const [agenda, setAgenda] = useState<AgendaItem[]>([]);
+  const [agendaMsg, setAgendaMsg] = useState("");
+  const [agendaReply, setAgendaReply] = useState("");
+  const [planning, setPlanning] = useState(false);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
 
   const refresh = useCallback(async () => {
-    const [s, r, c] = await Promise.all([
+    const [s, r, c, a] = await Promise.all([
       getLiveSession(id).catch(() => null),
       getLiveRoster(id).catch(() => [] as LiveSpeaker[]),
       getMeetingContext(id).catch(() => null),
+      getAgenda(id).catch(() => [] as AgendaItem[]),
     ]);
+    setAgenda(a);
     setSession(s);
     setRoster(r);
     if (c) {
@@ -151,6 +161,22 @@ export default function LiveConsolePage({
     }
   }
 
+  async function onPlan() {
+    const msg = agendaMsg.trim();
+    if (!msg) return;
+    setPlanning(true);
+    try {
+      const res = await chatAgenda(id, msg);
+      setAgenda(res.agenda);
+      setAgendaReply(res.reply);
+      setAgendaMsg("");
+    } catch {
+      setAgendaReply("Couldn't reach the copilot — your agenda is unchanged.");
+    } finally {
+      setPlanning(false);
+    }
+  }
+
   async function onToggleDeep() {
     if (!session) return;
     try {
@@ -221,6 +247,59 @@ export default function LiveConsolePage({
         ) : (
           <span className="text-xs text-muted-foreground">Ended</span>
         )}
+      </div>
+
+      {/* Agenda — planned by talking to the copilot, then measured against
+          during the call. Structured (not prose) precisely so it CAN be
+          measured: "you haven't touched pricing and you're 40 minutes in". */}
+      <div className="mb-5 rounded-xl border border-border bg-card p-3">
+        <p className="mb-2 flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+          <ListChecks className="h-3.5 w-3.5" /> Agenda
+        </p>
+        {agenda.length > 0 ? (
+          <ol className="mb-2 space-y-1">
+            {agenda.map((item, i) => (
+              <li key={i} className="text-sm">
+                <span className="mr-1.5 text-muted-foreground">{i + 1}.</span>
+                {item.title}
+                {item.notes ? (
+                  <span className="text-muted-foreground"> — {item.notes}</span>
+                ) : null}
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="mb-2 text-sm text-muted-foreground">
+            No agenda yet. Describe the meeting below and the copilot will draft one.
+          </p>
+        )}
+        {agendaReply && (
+          <p className="mb-2 rounded-lg bg-muted/50 p-2 text-xs text-muted-foreground">
+            {agendaReply}
+          </p>
+        )}
+        <div className="flex gap-2">
+          <input
+            value={agendaMsg}
+            onChange={(e) => setAgendaMsg(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !planning) void onPlan();
+            }}
+            placeholder={
+              agenda.length
+                ? "Refine it — e.g. drop the demo, add pricing"
+                : "e.g. 30-min call with Acme to close the annual renewal"
+            }
+            className="flex-1 rounded-lg border border-border bg-background px-2 py-1.5 text-sm outline-none focus:border-primary"
+          />
+          <button
+            onClick={onPlan}
+            disabled={planning || !agendaMsg.trim()}
+            className="rounded-lg border border-border px-3 py-1.5 text-sm font-medium hover:bg-accent disabled:opacity-50"
+          >
+            {planning ? "…" : agenda.length ? "Refine" : "Draft"}
+          </button>
+        </div>
       </div>
 
       {/* Context — the difference between a generic observer and a useful one.

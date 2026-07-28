@@ -2,6 +2,7 @@
 
 import type {
   ActionItem,
+  AgendaItem,
   Attendee,
   EmailAccount,
   EmailDraft,
@@ -12,6 +13,8 @@ import type {
   MeetingDetail,
   MeetingListItem,
   NoteDoc,
+  NotesSettings,
+  NotesSettingsPayload,
 } from "./types";
 
 async function json<T>(res: Response): Promise<T> {
@@ -56,6 +59,80 @@ export async function postLiveSegment(
   } catch {
     /* best-effort: never let a live relay disturb the recording */
   }
+}
+
+/** Everything configurable about the Note Taker, plus the meeting-type
+ *  catalogue so the UI can show shipped defaults next to any overrides. */
+export async function getNotesSettings(): Promise<NotesSettingsPayload> {
+  return json(await fetch("/api/notes/settings", { cache: "no-store" }));
+}
+
+export async function saveNotesSettings(
+  settings: NotesSettings
+): Promise<{ settings: NotesSettings }> {
+  return json(
+    await fetch("/api/notes/settings", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(settings),
+    })
+  );
+}
+
+/** The meeting's agenda — what the copilot measures the conversation against. */
+export async function getAgenda(meetingId: string): Promise<AgendaItem[]> {
+  const body = await json<{ agenda: AgendaItem[] }>(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda`, { cache: "no-store" })
+  );
+  return body.agenda ?? [];
+}
+
+/** Talk to the copilot to build the agenda; it replies and returns the full
+ *  updated agenda (never a diff), which is saved server-side. */
+export async function chatAgenda(
+  meetingId: string,
+  message: string
+): Promise<{ reply: string; agenda: AgendaItem[] }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    })
+  );
+}
+
+export async function saveAgenda(
+  meetingId: string,
+  agenda: AgendaItem[]
+): Promise<{ agenda: AgendaItem[] }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agenda }),
+    })
+  );
+}
+
+/** Standing instructions prepended to EVERY copilot run — set once. */
+export async function getCopilotInstructions(): Promise<string> {
+  const body = await json<{ instructions: string }>(
+    await fetch("/api/notes/copilot/instructions", { cache: "no-store" })
+  );
+  return body.instructions ?? "";
+}
+
+export async function saveCopilotInstructions(
+  instructions: string
+): Promise<{ instructions: string }> {
+  return json(
+    await fetch("/api/notes/copilot/instructions", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instructions }),
+    })
+  );
 }
 
 /** What the copilot knows about this meeting (brief + history + systems). */

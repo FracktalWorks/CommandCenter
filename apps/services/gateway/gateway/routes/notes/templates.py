@@ -24,6 +24,14 @@ class Template:
     key: str
     label: str
     sections: tuple[Section, ...]
+    # How the LIVE copilot should behave in this kind of meeting. What deserves
+    # an interruption in a sales call (a buying signal, an unanswered objection)
+    # is not what deserves one in a 1:1 (an unspoken concern, a skipped career
+    # topic), so the guidance is per meeting type rather than global.
+    copilot: str = ""
+    # What a good agenda looks like here — seeds the agenda drafter so "draft an
+    # agenda" produces something shaped like this meeting type.
+    agenda_hint: str = ""
 
 
 _STANDARD = Template(
@@ -59,6 +67,12 @@ _STANDARD = Template(
             "list if none.",
         ),
     ),
+    copilot=(
+        "Watch for decisions made without an owner, action items nobody claimed, and questions raised but never answered."
+    ),
+    agenda_hint=(
+        "Topics to cover, decisions needed, and who owns what next."
+    ),
 )
 
 _STANDUP = Template(
@@ -86,6 +100,12 @@ _STANDUP = Template(
             "Concrete follow-ups someone committed to, '<owner> — <action>'. "
             "Only what the transcript supports.",
         ),
+    ),
+    copilot=(
+        "Keep it moving. Flag blockers that nobody offered help on, and work that has been 'almost done' across multiple updates. Interrupt rarely — standups are short."
+    ),
+    agenda_hint=(
+        "Per-person: what shipped, what's next, what's blocked."
     ),
 )
 
@@ -121,6 +141,12 @@ _ONE_ON_ONE = Template(
             "none.",
         ),
     ),
+    copilot=(
+        "This is a trust conversation, not a status report. Notice concerns raised obliquely and dropped, career or growth topics skipped again, and workload signals. Never surface anything that would embarrass the report if read aloud."
+    ),
+    agenda_hint=(
+        "Wins since last time, blockers, feedback both ways, growth/career, workload."
+    ),
 )
 
 _CUSTOMER_CALL = Template(
@@ -152,6 +178,12 @@ _CUSTOMER_CALL = Template(
             "open_questions", "Risks & open questions",
             "Open objections, unknowns, or blockers to the deal moving forward.",
         ),
+    ),
+    copilot=(
+        "Commercial lens. Flag unanswered objections, buying signals nobody followed up, pricing or scope commitments being made loosely, and next steps left vague."
+    ),
+    agenda_hint=(
+        "Their situation and goals, the objection or gap, what we propose, pricing, and a concrete next step with a date."
     ),
 )
 
@@ -189,6 +221,12 @@ _INTERVIEW = Template(
             "Unresolved concerns worth digging into in later rounds.",
         ),
     ),
+    copilot=(
+        "Flag competencies on the plan not yet probed, answers that were vague and not followed up, and time spent lopsidedly on one area. Never suggest anything about a protected characteristic."
+    ),
+    agenda_hint=(
+        "Role context, the competencies to assess, candidate questions, next steps."
+    ),
 )
 
 _RETRO = Template(
@@ -219,6 +257,12 @@ _RETRO = Template(
             "open_questions", "Parked",
             "Unresolved tensions or topics deliberately deferred.",
         ),
+    ),
+    copilot=(
+        "Watch for problems raised without an owner or experiment attached, blame aimed at people rather than systems, and themes recurring from last retro."
+    ),
+    agenda_hint=(
+        "What went well, what didn't, root causes, and experiments to try next."
     ),
 )
 

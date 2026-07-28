@@ -128,3 +128,24 @@ def test_selfhosted_configured_requires_worker_url(monkeypatch) -> None:
     # Trailing slash is trimmed so path joins are clean.
     assert prov._base == "http://meeting-bot:8080"
 
+
+
+# ── a failure has to stay visible ────────────────────────────────────────────
+
+def test_active_query_keeps_recent_failures_visible() -> None:
+    """A bot that fails leaves the active set instantly, so the surface the user
+    was watching just empties — "it didn't work" becomes indistinguishable from
+    "nothing happened", and the error text becomes unreachable. Recent failures
+    stay in the query so there is somewhere for the explanation to appear."""
+    sql = mb._ACTIVE_SQL
+    assert "'failed'" in sql
+    assert "'not_admitted'" in sql
+    assert mb._RECENT_FAILURE_WINDOW in sql
+    # Still bounded — a week-old failure must not haunt the live surface.
+    assert "updated_at >" in sql
+
+
+def test_terminal_failure_statuses_are_not_active() -> None:
+    """The window above is a display concern only; polling must still stop."""
+    assert "failed" not in mb.ACTIVE_STATUSES
+    assert "not_admitted" not in mb.ACTIVE_STATUSES

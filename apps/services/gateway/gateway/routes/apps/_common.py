@@ -475,7 +475,7 @@ async def record_app_audit(
                        (app_id, app_version, user_email, kind, detail,
                         tokens_in, tokens_out, cost_usd, model)
                        VALUES (:app_id, :app_version, :user_email, :kind,
-                               :detail::jsonb, :tokens_in, :tokens_out,
+                               :detail ::jsonb, :tokens_in, :tokens_out,
                                :cost_usd, :model)"""
                 ),
                 {

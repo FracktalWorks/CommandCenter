@@ -174,7 +174,7 @@ async def publish_app(
                 """INSERT INTO app_versions
                    (app_id, version, manifest, bundle_html, bundle_sha256,
                     release_notes, scope_set_hash, published_by, review_status)
-                   VALUES (:app_id, :version, :manifest::jsonb, :bundle,
+                   VALUES (:app_id, :version, :manifest ::jsonb, :bundle,
                            :sha256, :notes, :scope_hash, :published_by,
                            :review_status)"""
             ),

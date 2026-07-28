@@ -216,6 +216,31 @@ presenting:
   Use it for something substantial and multi-section: an analysis, a plan, a
   briefing, an audit — anything the user will keep or scroll through.
 
+### Which surface? Let the volume decide
+
+Pick the surface from the shape and size of the answer, before writing any UI:
+
+| The answer is… | Surface | How |
+|---|---|---|
+| A one-line fact, or a narrative explanation | Prose | Just say it |
+| ≤8 rows · ≤4 metrics · one chart · a status · a comparison | **Inline card** in the chat | `emit_generative_ui` (`template` → `tree` → `react` → `html`) |
+| >12 rows · several sections or charts · anything they'll scroll, sort, filter, or return to | **Side panel** | `"surface": "panel"` for a live view |
+| A deliverable they'll keep, re-open, or download | **Saved artifact** | `write_artifact("outputs/<name>.jsx"` or `.html")` |
+| Something they must *act* on — filter, sort, pick, set a value | **React + `@cc/ui`** | `load_artifact_kit()`, then compose |
+
+Two tests that resolve most cases:
+
+- **Would this need its own scrollbar inside a chat bubble?** Then it belongs in
+  the panel, not inline.
+- **Am I about to type a markdown table?** If it is more than a few rows, render
+  it instead — a `Table` from `@cc/ui` (or the `cc-table` block) is more readable
+  and no more work.
+
+Between 8 and 12 rows either is defensible; prefer inline unless the table is
+part of a larger answer. And when a big result could genuinely be *either* a
+saved document or a live dashboard, **ask** rather than guessing — an
+`optionPicker` template with `"hitl": true` gets an answer in the same turn.
+
 Rule of thumb: **a few blocks the user just needs to see → inline `html` node;
 a full document the user will keep or read at length → a saved `outputs/*.html`
 report.** The markup is identical either way — the same `cc-report` container and

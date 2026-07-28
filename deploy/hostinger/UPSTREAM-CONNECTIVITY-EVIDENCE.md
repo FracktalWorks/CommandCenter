@@ -2,6 +2,31 @@
 
 Written 2026-07-28. Paste the body below into a Hostinger support ticket.
 
+> ## UPDATE 2026-07-28: this is an Airtel routing fault, and it is bigger than CommandCenter
+>
+> Confirmed by the client: the site loads fine over 5G mobile data and fails on
+> Airtel fixed-line broadband. Follow-up testing from the Airtel connection:
+>
+> | Target | Prefix | Result |
+> | --- | --- | --- |
+> | `187.127.179.143` (CommandCenter VPS) | 187.127.179.0/24 | unreachable — trace dies at `182.79.20.133` (Airtel) |
+> | `82.180.143.135` (**fracktal.in main website**) | 82.180.143.0/24 | unreachable — trace dies at `116.119.33.231` (Airtel) |
+> | `hostinger.com` (CDN-fronted) | — | HTTP 200 |
+>
+> **Two unrelated Hostinger prefixes are both unreachable, and both traceroutes
+> terminate inside Airtel's own network before reaching Hostinger.** So:
+>
+> - Requesting a different IPv4 for the VPS will NOT help — a completely
+>   different Hostinger prefix is equally unreachable. Do not spend money or a
+>   change window on this.
+> - **The company's main website is affected too**, not just CommandCenter.
+>   Establish blast radius first: have someone else on Airtel broadband (a
+>   colleague, another office) load `https://fracktal.in`. If it fails for them
+>   too, Airtel-connected customers cannot reach the company site, which is a
+>   revenue issue and outranks everything else here.
+> - **The primary ticket is now with Airtel, not Hostinger** — though Hostinger
+>   should still be told their ranges are unreachable from AS24560.
+
 The point of this document: **the VPS is not at fault and cannot be fixed from
 inside.** Inbound packets from some networks never reach the network interface
 at all. Everything below is measurement, not inference, so support can't
@@ -74,15 +99,58 @@ gh workflow run vps-health.yml --ref main -f diagnose=true
 
 ---
 
+## Ticket body — Airtel (this is the one that actually fixes it)
+
+> **Subject:** Broadband cannot route to Hostinger network ranges — two
+> separate prefixes unreachable, traceroute dies inside Airtel
+>
+> Connection: Airtel Broadband, Bengaluru (client IP 122.172.81.47).
+>
+> From this connection I cannot reach any Hostinger-hosted address, while the
+> same destinations load normally over Airtel 5G mobile data and from servers
+> outside India.
+>
+> - `187.127.179.143` — 100% ICMP loss; TCP 22/80/443 time out. Traceroute
+>   reaches `182.79.20.133` (hop 3) then `182.79.240.3` (hop 4) and stops.
+> - `82.180.143.135` — 100% ICMP loss. Traceroute reaches `182.79.20.201`
+>   (hop 3) then `116.119.33.231` (hop 4) and stops.
+> - `hostinger.com` (different network, CDN) — loads fine, HTTP 200.
+>
+> Both failing traceroutes terminate at Airtel-owned hops before leaving your
+> network, and these are two unrelated destination prefixes, so this looks like
+> a routing or peering fault between Airtel and Hostinger (AS47583 /
+> AS200000-range hosting prefixes) rather than anything at the destination.
+>
+> The destination servers are confirmed healthy: they are reachable from other
+> networks at the same moment, with zero inbound packet loss recorded at the
+> server NIC.
+>
+> Please check routing from your network to `187.127.179.0/24` and
+> `82.180.143.0/24`.
+
 ## What we are NOT doing, and why
 
-**Not moving DNS to Cloudflare.** It would route visitors via anycast and hide
-the fault, but `fracktal.in` carries Microsoft 365 mail (MX to
+**Not requesting a new VPS IP.** Ruled out by evidence: a completely different
+Hostinger prefix (`82.180.143.135`) is equally unreachable from the affected
+connection, so the fault does not follow the address.
+
+**Not moving DNS to Cloudflare — for now.** It *would* fix this for every
+visitor, by putting anycast in front of the unreachable origin, and that
+argument got stronger once we learned the main website is affected too. But
+`fracktal.in` carries Microsoft 365 mail (MX to
 `fracktal-in.mail.protection.outlook.com`), four DKIM selector sets, Brevo,
 Zoho Desk, Shiprocket, Atlassian and Google verification records — roughly two
-dozen entries. A nameserver migration risks silently breaking mail for the
-company to work around someone else's routing fault. Revisit only if Hostinger
-confirms the fault is theirs and will not fix it.
+dozen entries. A nameserver migration risks silently breaking company mail to
+work around someone else's routing fault.
+
+Reconsider it if either becomes true:
+1. other Airtel-connected users also cannot reach `fracktal.in` (customer
+   impact makes the migration worth the risk), or
+2. Airtel does not fix the routing within a reasonable window.
+
+If it is done, migrate mail-critical records first and verify MX + DKIM
+resolve correctly from Cloudflare's nameservers *before* changing the
+registrar's NS delegation.
 
 **Not changing anything on the box.** There is nothing to change — see above.
 

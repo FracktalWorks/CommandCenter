@@ -15,11 +15,22 @@ interface JoinCallModalProps {
   onClose: () => void;
   /** Called after at least one bot was dispatched, so the page can refresh. */
   onJoined: () => void;
+  /** Send the bot to a meeting that already exists (one you prepared), rather
+   *  than creating a fresh one — otherwise its agenda and briefing are
+   *  stranded on a different meeting. Only one link may be sent this way: a
+   *  prepared meeting is one meeting. */
+  meetingId?: string;
+  defaultTitle?: string;
 }
 
 type LineResult = { url: string; ok: boolean; error?: string };
 
-export default function JoinCallModal({ onClose, onJoined }: JoinCallModalProps) {
+export default function JoinCallModal({
+  onClose,
+  onJoined,
+  meetingId,
+  defaultTitle,
+}: JoinCallModalProps) {
   const [urls, setUrls] = useState("");
   const [busy, setBusy] = useState(false);
   const [configured, setConfigured] = useState<boolean | null>(null);
@@ -32,17 +43,20 @@ export default function JoinCallModal({ onClose, onJoined }: JoinCallModalProps)
   }, []);
 
   async function dispatch() {
-    const links = urls
+    const all = urls
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
+    // Attaching to a prepared meeting is inherently single-link — fanning out
+    // would point several bots at the same meeting row.
+    const links = meetingId ? all.slice(0, 1) : all;
     if (links.length === 0) return;
     setBusy(true);
     setResults(null);
     const settled = await Promise.all(
       links.map(async (url): Promise<LineResult> => {
         try {
-          await botJoin(url);
+          await botJoin(url, defaultTitle, meetingId);
           return { url, ok: true };
         } catch (e) {
           return { url, ok: false, error: String(e instanceof Error ? e.message : e) };

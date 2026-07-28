@@ -103,6 +103,20 @@ def effective_instructions(
     return "\n".join(parts)
 
 
+def copilot_should_run(
+    per_meeting: bool | None, account_default: bool
+) -> bool:
+    """Whether the copilot starts for this meeting.
+
+    Three states, not two: a meeting can say *on*, say *off*, or say nothing.
+    Only the last defers to the account default — otherwise turning the copilot
+    off for one sensitive meeting would be silently undone by the global
+    setting, which is the opposite of what "off" means. Pure, so the precedence
+    is testable without a session.
+    """
+    return account_default if per_meeting is None else per_meeting
+
+
 def _row_to_settings(row) -> NotesSettings:
     raw = row.template_instructions
     if isinstance(raw, str):

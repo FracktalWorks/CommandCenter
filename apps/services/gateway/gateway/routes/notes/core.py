@@ -73,6 +73,11 @@ class MeetingListItem(BaseModel):
     template_key: str | None = None
     start_at: str | None = None
     created_at: str | None = None
+    #: When this meeting is planned for. Distinct from start_at, which is when
+    #: capture actually began — an unstarted meeting has one but not the other.
+    scheduled_at: str | None = None
+    #: Per-meeting copilot decision. None = follow the account default.
+    copilot_enabled: bool | None = None
 
 
 class Attendee(BaseModel):
@@ -99,11 +104,18 @@ class CreateMeetingRequest(BaseModel):
     title: str | None = None
     platform: str = "upload"        # 'in_person' once the recorder ships
     template_key: str | None = None
+    scheduled_at: str | None = None
 
 
 class PatchMeetingRequest(BaseModel):
     title: str | None = None
     template_key: str | None = None
+    scheduled_at: str | None = None
+    #: Tri-state on the wire too: omit to leave the decision alone, send
+    #: true/false to pin it. There is no way to clear it back to "use the
+    #: default" yet — nothing needs that, and inventing a sentinel for it now
+    #: would be guessing at the shape.
+    copilot_enabled: bool | None = None
 
 
 # ── DB (shared pooled async engine, same recipe as tasks/core.py) ────────────
@@ -187,4 +199,6 @@ def row_to_list_item(r: Any) -> MeetingListItem:
         template_key=getattr(r, "template_key", None),
         start_at=_iso(r.start_at),
         created_at=_iso(r.created_at),
+        scheduled_at=_iso(getattr(r, "scheduled_at", None)),
+        copilot_enabled=getattr(r, "copilot_enabled", None),
     )

@@ -517,6 +517,10 @@ class BotJoinRequest(BaseModel):
     meeting_url: str
     title: str | None = None
     bot_name: str | None = None
+    #: Send the bot to a meeting you already prepared. Without this a fresh
+    #: meeting is created, which would strand the agenda, briefing, attendees
+    #: and copilot decision you just set up on a different row.
+    meeting_id: str | None = None
 
 
 class MeetingBotModel(BaseModel):
@@ -575,16 +579,34 @@ async def bot_join(
     title = (body.title or "").strip() or None
 
     async with await _get_db() as db:
-        m = (
-            await db.execute(
-                text(
-                    "INSERT INTO meeting (platform, start_at, title, status, owner_email) "
-                    "VALUES (:p, now(), :t, 'recording', :o) RETURNING id"
-                ),
-                {"p": platform, "t": title, "o": user.email},
-            )
-        ).fetchone()
-        meeting_id = str(m.id)
+        if body.meeting_id:
+            # Attaching to a prepared meeting: keep its agenda/brief/attendees
+            # and just mark it recording.
+            existing = (
+                await db.execute(
+                    text(
+                        "UPDATE meeting SET status = 'recording', platform = :p, "
+                        "start_at = now(), title = COALESCE(:t, title) "
+                        "WHERE id = CAST(:id AS UUID) RETURNING id"
+                    ),
+                    {"p": platform, "t": title, "id": body.meeting_id},
+                )
+            ).fetchone()
+            if existing is None:
+                raise HTTPException(status_code=404, detail="unknown meeting")
+            meeting_id = str(existing.id)
+        else:
+            m = (
+                await db.execute(
+                    text(
+                        "INSERT INTO meeting (platform, start_at, title, status, "
+                        "owner_email) "
+                        "VALUES (:p, now(), :t, 'recording', :o) RETURNING id"
+                    ),
+                    {"p": platform, "t": title, "o": user.email},
+                )
+            ).fetchone()
+            meeting_id = str(m.id)
         bot_row = (
             await db.execute(
                 text(

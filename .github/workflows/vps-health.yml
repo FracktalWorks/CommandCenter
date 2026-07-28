@@ -100,10 +100,11 @@ jobs:
         run: |
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$SSH_KEY" > ~/.ssh/k && chmod 600 ~/.ssh/k
-          timeout 180 ssh -i ~/.ssh/k \
-            -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
-            -o ConnectTimeout=25 -o BatchMode=yes \
-            "${SSH_USER}@${SSH_HOST}" 'bash -s' <<'REMOTE' || echo "SSH FAILED — box unreachable from GitHub runners too"
+
+          # Reachability FLAPS minute to minute (observed: deploy SSH'd in at
+          # 13:39, this job timed out at 13:43). One attempt proves nothing, so
+          # retry across several minutes before concluding the box is cut off.
+          cat > /tmp/remote.sh <<'REMOTE'
           echo "## uptime";        uptime
           echo "## units";         systemctl is-active acb.service acb-gateway acb-workbench caddy 2>&1
           echo "## enabled";       systemctl is-enabled acb.service acb-gateway acb-workbench caddy 2>&1
@@ -113,9 +114,25 @@ jobs:
           echo "## iptables";      sudo iptables -S INPUT 2>/dev/null | head -40 || echo "(no iptables)"
           echo "## fail2ban";      sudo fail2ban-client status 2>/dev/null || echo "(no fail2ban)"
           echo "## sshd bans";     sudo fail2ban-client status sshd 2>/dev/null || true
+          echo "## recidive bans"; sudo fail2ban-client status recidive 2>/dev/null || true
           echo "## watchdog log";  sudo tail -40 /var/log/acb/health-watchdog.log 2>/dev/null || echo "(none yet)"
-          echo "## forensics";     sudo tail -60 /var/log/acb/net-forensics.log 2>/dev/null || echo "(none yet)"
+          echo "## forensics";     sudo tail -80 /var/log/acb/net-forensics.log 2>/dev/null || echo "(none yet)"
           REMOTE
+
+          for attempt in 1 2 3 4 5 6; do
+            echo "───── SSH attempt ${attempt}/6 ─────"
+            if timeout 120 ssh -i ~/.ssh/k \
+                 -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null \
+                 -o ConnectTimeout=20 -o BatchMode=yes \
+                 "${SSH_USER}@${SSH_HOST}" 'bash -s' < /tmp/remote.sh; then
+              echo "───── diagnostics collected on attempt ${attempt} ─────"
+              exit 0
+            fi
+            echo "  attempt ${attempt} failed — waiting 45s"
+            sleep 45
+          done
+          echo "SSH FAILED after 6 attempts — box unreachable from GitHub runners too"
+          exit 0
 
   # Open one issue on outage, close it on recovery. Keeping a single issue
   # (rather than one per run) stops a multi-day outage burying the repo.

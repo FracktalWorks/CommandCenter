@@ -32,6 +32,7 @@ import FollowupEmailModal from "../../components/FollowupEmailModal";
 import JoinCallModal from "../../components/JoinCallModal";
 import MeetingOutcomes from "../../components/MeetingOutcomes";
 import MeetingPrep from "../../components/MeetingPrep";
+import { speakerAvatar, speakerText } from "../../lib/speakers";
 import {
   approveAction,
   approveAllActions,
@@ -59,33 +60,10 @@ import type {
   MeetingEvent,
 } from "../../lib/types";
 
-const SPEAKER_COLORS = [
-  "text-primary",
-  "text-accent",
-  "text-success",
-  "text-warning",
-  "text-destructive",
-];
-
-function speakerColor(label: string | null): string {
-  if (!label) return "text-muted-foreground";
-  const n = parseInt(label.replace(/\D/g, ""), 10);
-  return SPEAKER_COLORS[(isNaN(n) ? 0 : n - 1) % SPEAKER_COLORS.length];
-}
-
-const SPEAKER_AV = [
-  "bg-primary/15 text-primary",
-  "bg-accent/15 text-accent",
-  "bg-success/15 text-success",
-  "bg-warning/15 text-warning",
-  "bg-destructive/15 text-destructive",
-];
-
-function speakerAv(label: string | null): string {
-  if (!label) return "bg-muted text-muted-foreground";
-  const n = parseInt(label.replace(/\D/g, ""), 10);
-  return SPEAKER_AV[(isNaN(n) ? 0 : n - 1) % SPEAKER_AV.length];
-}
+// Speaker colour is shared with the live console and roster (lib/speakers.ts),
+// so the same person reads as the same person on every surface.
+const speakerColor = speakerText;
+const speakerAv = speakerAvatar;
 
 export default function MeetingPage({
   params,

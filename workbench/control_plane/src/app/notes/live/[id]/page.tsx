@@ -35,6 +35,7 @@ import {
   Sparkles,
   Users,
 } from "lucide-react";
+import { speakerEdge, speakerText } from "../../lib/speakers";
 import {
   getAgendaProgress,
   getLiveRoster,
@@ -51,29 +52,6 @@ import type {
 
 /** Keep the rendered transcript bounded — this can run for hours. */
 const MAX_LINES = 300;
-
-/** Speaker hues, shared with the roster so a wall of text becomes scannable:
- *  you can see who dominated before reading a word. */
-const SPEAKER_HUES = [
-  "text-primary",
-  "text-accent",
-  "text-success",
-  "text-warning",
-  "text-destructive",
-];
-const SPEAKER_EDGE = [
-  "border-primary",
-  "border-accent",
-  "border-success",
-  "border-warning",
-  "border-destructive",
-];
-
-function hueIndex(key: string | null | undefined): number {
-  if (!key) return 0;
-  const n = parseInt(key.replace(/\D/g, ""), 10);
-  return (Number.isNaN(n) ? 0 : Math.max(0, n - 1)) % SPEAKER_HUES.length;
-}
 
 function clock(seconds: number): string {
   const s = Math.max(0, Math.floor(seconds));
@@ -285,7 +263,7 @@ export default function LiveConsolePage({
           ) : (
             <div className="space-y-3">
               {lines.map((seg, i) => {
-                const h = hueIndex(seg.speaker_id ?? seg.speaker_label);
+                const key = seg.speaker_id ?? seg.speaker_label;
                 const prev = lines[i - 1];
                 const sameSpeaker =
                   prev &&
@@ -296,10 +274,10 @@ export default function LiveConsolePage({
                     <span className="pt-0.5 font-mono text-[10px] tabular-nums text-muted-foreground/70">
                       {seg.start_s ? clock(seg.start_s) : ""}
                     </span>
-                    <div className={`border-l-2 pl-3 ${SPEAKER_EDGE[h]}`}>
+                    <div className={`border-l-2 pl-3 ${speakerEdge(key)}`}>
                       {!sameSpeaker && (
                         <span
-                          className={`mb-0.5 block text-[11px] font-bold ${SPEAKER_HUES[h]}`}
+                          className={`mb-0.5 block text-[11px] font-bold ${speakerText(key)}`}
                         >
                           {nameFor(seg)}
                         </span>
@@ -433,7 +411,6 @@ export default function LiveConsolePage({
             ) : (
               <div className="flex flex-wrap gap-1.5">
                 {roster.map((s) => {
-                  const h = hueIndex(s.speaker_id);
                   return (
                     <span
                       key={s.speaker_id}
@@ -442,7 +419,7 @@ export default function LiveConsolePage({
                         s.utterances === 1 ? "" : "s"
                       }`}
                     >
-                      <span className={`text-[8px] ${SPEAKER_HUES[h]}`}>●</span>
+                      <span className={`text-[8px] ${speakerText(s.speaker_id)}`}>●</span>
                       {s.name ?? s.speaker_id}
                       {s.role ? (
                         <span className="text-xs text-muted-foreground">

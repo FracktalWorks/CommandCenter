@@ -25,6 +25,9 @@ LOG=$LOG_DIR/health-watchdog.log
 FORENSICS=$LOG_DIR/net-forensics.log
 mkdir -p "$LOG_DIR"
 
+# Gateway hostname as served by Caddy — see deploy/hostinger/caddy/Caddyfile.
+CADDY_VHOST="${CADDY_VHOST:-api.commandcenter.fracktal.in}"
+
 ts() { date -u '+%Y-%m-%dT%H:%M:%SZ'; }
 log() { echo "$(ts) $*" | tee -a "$LOG"; }
 
@@ -64,11 +67,18 @@ done
 #   gateway   127.0.0.1:8080/health   (FastAPI)
 #   workbench 127.0.0.1:3001          (Next.js — any HTTP status means alive)
 #   caddy     127.0.0.1:443           (TLS front door for both hostnames)
+# A response counts ONLY if curl reported a real 3-digit HTTP status. Testing
+# `!= 000` is not enough: a failed probe can yield an empty or repeated value
+# (we observed "000000"), which would sail through and report a false OK — a
+# watchdog that lies is worse than no watchdog.
+http_ok() { case "$1" in [1-5][0-9][0-9]) return 0 ;; *) return 1 ;; esac; }
+
 probe_http() {
-  # $1 unit, $2 url, $3 human label
+  # $1 unit, $2 url, $3 human label, $4... extra curl args (e.g. --resolve)
   local unit="$1" url="$2" label="$3" code
-  code="$(curl -s -k -o /dev/null -m 15 -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
-  if [ "$code" != "000" ]; then
+  shift 3
+  code="$(curl -s -k -o /dev/null -m 15 -w '%{http_code}' "$@" "$url" 2>/dev/null || echo 000)"
+  if http_ok "$code"; then
     log "OK      $label responding (HTTP $code)"
     return 0
   fi
@@ -80,8 +90,8 @@ probe_http() {
   log "ACTION  restarting $unit (unresponsive listener)"
   systemctl restart "$unit" && ACTIONS=$((ACTIONS+1)) || true
   sleep 8
-  code="$(curl -s -k -o /dev/null -m 15 -w '%{http_code}' "$url" 2>/dev/null || echo 000)"
-  if [ "$code" != "000" ]; then
+  code="$(curl -s -k -o /dev/null -m 15 -w '%{http_code}' "$@" "$url" 2>/dev/null || echo 000)"
+  if http_ok "$code"; then
     log "FIXED   $label responding again (HTTP $code)"
   else
     log "FAIL    $label STILL not responding after restart"
@@ -92,7 +102,12 @@ probe_http() {
 
 probe_http acb-gateway   http://127.0.0.1:8080/health "gateway"
 probe_http acb-workbench http://127.0.0.1:3001/       "workbench"
-probe_http caddy         https://127.0.0.1/           "caddy TLS"
+# Caddy must be probed through a hostname it actually serves. A bare
+# https://127.0.0.1/ matches no site block in the Caddyfile, so it fails even
+# when Caddy is perfectly healthy. --resolve keeps the request local (no DNS,
+# no round trip to the public internet) while presenting the right SNI+Host.
+probe_http caddy "https://${CADDY_VHOST}/health" "caddy TLS" \
+  --resolve "${CADDY_VHOST}:443:127.0.0.1"
 
 # ── Forensic snapshot ─────────────────────────────────────────────────────
 # The recurring failure is "box alive, internet cannot reach it". That leaves

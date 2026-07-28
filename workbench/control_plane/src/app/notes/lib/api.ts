@@ -2,6 +2,7 @@
 
 import type {
   ActionItem,
+  AgendaItem,
   Attendee,
   EmailAccount,
   EmailDraft,
@@ -56,6 +57,62 @@ export async function postLiveSegment(
   } catch {
     /* best-effort: never let a live relay disturb the recording */
   }
+}
+
+/** The meeting's agenda — what the copilot measures the conversation against. */
+export async function getAgenda(meetingId: string): Promise<AgendaItem[]> {
+  const body = await json<{ agenda: AgendaItem[] }>(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda`, { cache: "no-store" })
+  );
+  return body.agenda ?? [];
+}
+
+/** Talk to the copilot to build the agenda; it replies and returns the full
+ *  updated agenda (never a diff), which is saved server-side. */
+export async function chatAgenda(
+  meetingId: string,
+  message: string
+): Promise<{ reply: string; agenda: AgendaItem[] }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda/chat`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ message }),
+    })
+  );
+}
+
+export async function saveAgenda(
+  meetingId: string,
+  agenda: AgendaItem[]
+): Promise<{ agenda: AgendaItem[] }> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda`, {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ agenda }),
+    })
+  );
+}
+
+/** Standing instructions prepended to EVERY copilot run — set once. */
+export async function getCopilotInstructions(): Promise<string> {
+  const body = await json<{ instructions: string }>(
+    await fetch("/api/notes/copilot/instructions", { cache: "no-store" })
+  );
+  return body.instructions ?? "";
+}
+
+export async function saveCopilotInstructions(
+  instructions: string
+): Promise<{ instructions: string }> {
+  return json(
+    await fetch("/api/notes/copilot/instructions", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ instructions }),
+    })
+  );
 }
 
 /** What the copilot knows about this meeting (brief + history + systems). */

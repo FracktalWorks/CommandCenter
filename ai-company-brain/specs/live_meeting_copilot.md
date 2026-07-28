@@ -1,6 +1,6 @@
 # Live Meeting Copilot — architecture plan
 
-**Status:** Phases A-C BUILT (presence + console + passive copilot + business context). Phases D-E (bidirectional Q&A, speaking into the call) still planned.
+**Status:** Phases A-D BUILT (presence, console, passive copilot, business context, agenda + standing instructions). Phase E (speaking into the call) still planned.
 **Builds on:** `note_taker_app.md` §3.13 (meeting bot + live-transcript bus),
 the browser recorder + live captions, `acb_llm` tiers, the agent/skills/connector
 layer, and the notes auth/scoping.
@@ -392,8 +392,20 @@ feed**.
   fan-out spends tokens before a word is spoken. Capped on every axis because
   the pack rides in *every* prompt. Migration 122. *Exit reached:* a suggestion
   can cite the brief, a past decision, or a CRM fact.
-- **Phase D — Bidirectional.** Agent questions + user answers (typed/spoken) +
-  steering. *Exit:* the agent asks, you answer by speaking, it adapts.
+- **Phase D — Bidirectional (agenda + standing instructions). BUILT.**
+  `copilot_agenda.py`: (a) **standing instructions** (`copilot_config`) — a
+  per-user system prompt prepended to EVERY run, because the brief changes per
+  meeting but how you want the copilot to behave doesn't; (b) **conversational
+  agenda building** — describe the meeting in plain language and the copilot
+  drafts a structured agenda, refined by talking to it ("drop the demo, add
+  pricing"); (c) **live coverage** — because the agenda is a list rather than
+  prose it can be *measured*, so the copilot sees which items are still
+  outstanding and can nudge. Coverage is a pure token-overlap function, not a
+  model call, since it runs on every window. A model failure or an empty/malformed
+  response never destroys an agenda the user built. Migration 125.
+  *Exit reached:* you plan the meeting by talking to the agent, and it gives
+  agenda-aware feedback during the call. Spoken answers back to the agent remain
+  future work.
 - **Phase E — Speak into the call (opt-in).** Public interjection via bot `/say`,
   explicit consent/gating. *Exit:* with permission, the moderator talks.
 

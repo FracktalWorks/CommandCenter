@@ -230,3 +230,9 @@ export interface MeetingContext {
   systems: Record<string, string>;
   is_empty: boolean;
 }
+
+/** One thing to cover in a meeting. Structured so it can be measured live. */
+export interface AgendaItem {
+  title: string;
+  notes: string;
+}

@@ -200,6 +200,15 @@ async def load_artifact_kit(components: str = "") -> str:
     so you write ``<Stat label="Revenue" value={18} unit="%" delta={12} />``
     instead of six nested divs of exact class names.
 
+    REACH FOR THIS WITHOUT BEING ASKED whenever you are about to present real
+    data — more than a handful of rows or metrics, anything with a trend, a
+    breakdown, a status per row, or a comparison. A rendered artifact beats a
+    markdown table at that size, and composing these components costs a fraction
+    of the tokens of hand-writing the markup (and cannot typo a class name).
+    Volume also picks the surface: a few rows belong inline in the chat, a large
+    or explorable set belongs in the side panel (``"surface": "panel"``, or a
+    saved ``outputs/*.jsx``).
+
     Args:
         components: Empty for the INDEX (every component, one line each — start
             here). Or a comma-separated list of names

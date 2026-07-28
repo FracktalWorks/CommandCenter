@@ -16,9 +16,13 @@ name: vps-health
 
 on:
   schedule:
-    # Daily at 06:15 UTC. Deliberately not on the hour — shared runner capacity
-    # is tightest at :00 and scheduled jobs get queued.
-    - cron: "15 6 * * *"
+    # Hourly at :17. Was daily, but a daily probe cannot answer "is it still
+    # happening?" — an outage could start and clear between two checks and
+    # leave no trace. Hourly builds an actual reachability record from outside
+    # the network, which is the only way to prove recurrence (or its absence)
+    # to Hostinger. Deliberately off the hour: shared runner capacity is
+    # tightest at :00 and scheduled jobs get queued there.
+    - cron: "17 * * * *"
   workflow_dispatch:
     inputs:
       diagnose:

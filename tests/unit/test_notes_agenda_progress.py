@@ -92,3 +92,41 @@ def test_elapsed_starts_at_the_first_word_not_at_import() -> None:
     ap.note("m1", "first thing said")
     assert ap.elapsed_s("m1") >= 0.0
     assert ap.elapsed_s("never-seen") == 0.0
+
+
+# ── the post-meeting recap ───────────────────────────────────────────────────
+
+def test_coverage_survives_the_meeting_ending() -> None:
+    """The bug this guards: live coverage is in-memory and dropped when a
+    meeting ends, so the post-meeting recap read it back as zero and reported
+    every agenda item as missed on every completed meeting — the opposite of
+    what happened."""
+    ap.note("m1", "the volume pricing tiers look fine to us")
+    assert ap.mark("m1", AGENDA)[0] is True
+    assert ap.is_tracking("m1") is True
+
+    ap.reset("m1")                       # what the pipeline does on completion
+    assert ap.is_tracking("m1") is False
+
+    # The stored transcript is now the source, and it still knows.
+    transcript = "so the volume pricing tiers look fine to us at scale"
+    assert ap.coverage_for(AGENDA, transcript)[0] is True
+
+
+def test_stored_coverage_needs_no_latch() -> None:
+    """A finished transcript contains the whole conversation, so nothing has to
+    be remembered across calls — every mention is already in the text."""
+    transcript = (
+        "the volume pricing tiers are fine ... much later ... "
+        "and the maintenance window works for our shifts"
+    )
+    marks = ap.coverage_for(AGENDA, transcript)
+    assert marks[0] is True and marks[1] is True
+    assert marks[2] is False           # pilot sign-off never came up
+    # Repeatable — no hidden state.
+    assert ap.coverage_for(AGENDA, transcript) == marks
+
+
+def test_coverage_for_is_survivable_on_empty_input() -> None:
+    assert ap.coverage_for([], "anything") == []
+    assert ap.coverage_for(AGENDA, "") == [False, False, False]

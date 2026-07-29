@@ -54,6 +54,8 @@ class WhatsAppChatModel(BaseModel):
     snoozed_until: str | None = None    # set while the chat is snoozed (W6)
     # Native WhatsApp labels the chat carries, mirrored read-only (W16).
     labels: list[dict[str, Any]] = []
+    # Native WhatsApp profile-picture URL, synced from the number (W17).
+    avatar_url: str | None = None
 
 
 class WhatsAppMessageModel(BaseModel):

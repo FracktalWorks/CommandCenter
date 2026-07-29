@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"go.mau.fi/whatsmeow/proto/waWeb"
+	"go.mau.fi/whatsmeow/types"
 	"go.mau.fi/whatsmeow/types/events"
 	"google.golang.org/protobuf/proto"
 )
@@ -62,6 +63,11 @@ func (m *SessionManager) onHistorySync(s *Session, e *events.HistorySync) {
 			if u := jidUser(chatID); u != "" {
 				contacts[u] = bridgeContact{WAID: u, PhoneNumber: phoneFromUserJID(chatID), Name: name}
 			}
+		}
+		// One check per conversation (not per message) — a fresh number's whole
+		// history backfills here, so this is the main way avatars populate.
+		if jid, err := types.ParseJID(chatID); err == nil {
+			m.enqueueAvatarCheck(s, jid)
 		}
 		for _, hm := range conv.GetMessages() {
 			bm, ok := m.webMsgToBridge(ctx, s.accountID, chatID, isGroup, groupSubject, hm.GetMessage())

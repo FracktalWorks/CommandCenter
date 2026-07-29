@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"fmt"
+	"time"
 
 	_ "modernc.org/sqlite" // pure-Go sqlite driver, registered as "sqlite"
 )
@@ -43,6 +44,13 @@ func OpenMetaStore(ctx context.Context, path string) (*MetaStore, error) {
 		account_id TEXT NOT NULL,
 		key        TEXT NOT NULL,
 		PRIMARY KEY (account_id, key)
+	);
+	CREATE TABLE IF NOT EXISTS avatar_checks (
+		account_id TEXT NOT NULL,
+		wa_chat_id TEXT NOT NULL,
+		hash       TEXT NOT NULL DEFAULT '',
+		checked_at INTEGER NOT NULL,
+		PRIMARY KEY (account_id, wa_chat_id)
 	);`
 	if _, err := db.ExecContext(ctx, schema); err != nil {
 		_ = db.Close()
@@ -132,5 +140,35 @@ func (m *MetaStore) SetFlag(ctx context.Context, accountID, key string) error {
 func (m *MetaStore) ClearFlag(ctx context.Context, accountID, key string) error {
 	_, err := m.db.ExecContext(ctx,
 		`DELETE FROM flags WHERE account_id = ? AND key = ?`, accountID, key)
+	return err
+}
+
+// AvatarCheckState returns the last-known profile-picture hash for a chat and
+// whether that answer is older than ttl (never-checked counts as stale, with an
+// empty hash). The hash doubles as whatsmeow's ExistingID param — passing it lets
+// the server reply "unchanged" instead of re-sending a URL we already have.
+func (m *MetaStore) AvatarCheckState(ctx context.Context, accountID, jid string, ttl time.Duration) (hash string, stale bool, err error) {
+	var checkedAt int64
+	err = m.db.QueryRowContext(ctx,
+		`SELECT hash, checked_at FROM avatar_checks WHERE account_id = ? AND wa_chat_id = ?`,
+		accountID, jid).Scan(&hash, &checkedAt)
+	if err == sql.ErrNoRows {
+		return "", true, nil
+	}
+	if err != nil {
+		return "", false, err
+	}
+	return hash, time.Since(time.Unix(checkedAt, 0)) > ttl, nil
+}
+
+// MarkAvatarChecked records that a chat's profile picture was just checked
+// (found, unchanged, not-set, or hidden — any definitive answer), resetting its
+// TTL. hash is whatever whatsmeow reported, or "" if there is no picture.
+func (m *MetaStore) MarkAvatarChecked(ctx context.Context, accountID, jid, hash string) error {
+	_, err := m.db.ExecContext(ctx,
+		`INSERT INTO avatar_checks (account_id, wa_chat_id, hash, checked_at)
+		 VALUES (?, ?, ?, ?)
+		 ON CONFLICT(account_id, wa_chat_id) DO UPDATE SET hash = excluded.hash, checked_at = excluded.checked_at`,
+		accountID, jid, hash, time.Now().Unix())
 	return err
 }

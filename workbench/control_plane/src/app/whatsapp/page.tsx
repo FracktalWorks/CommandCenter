@@ -121,6 +121,46 @@ function initials(name: string, fallback: string): string {
   return src.slice(0, 2).toUpperCase();
 }
 
+// The real WhatsApp profile picture once one's synced (W17); falls back to
+// colored initials — same look as before — while it's missing or if the CDN
+// URL 404s (WhatsApp's picture URLs do rotate). no-referrer keeps our domain
+// out of Meta's request logs for what is otherwise a plain public image fetch.
+function ChatAvatar({
+  name,
+  jid,
+  url,
+  size,
+  initialsSize,
+}: {
+  name: string;
+  jid: string;
+  url: string | null;
+  size: string; // e.g. "h-9 w-9"
+  initialsSize: string; // e.g. "text-[11px]"
+}) {
+  const [failed, setFailed] = useState(false);
+  if (url && !failed) {
+    return (
+      <img
+        src={url}
+        alt=""
+        referrerPolicy="no-referrer"
+        loading="lazy"
+        decoding="async"
+        onError={() => setFailed(true)}
+        className={`${size} shrink-0 rounded-full object-cover`}
+      />
+    );
+  }
+  return (
+    <span
+      className={`${size} ${initialsSize} flex shrink-0 items-center justify-center rounded-full bg-muted font-bold text-foreground/80`}
+    >
+      {initials(name, jid)}
+    </span>
+  );
+}
+
 export default function WhatsAppPage() {
   const { isMobile } = useViewMode();
   const { open: openDrawer, close: closeDrawer } = useMobileDrawer();
@@ -740,9 +780,13 @@ function ChatRow({
         selected ? "bg-muted" : "hover:bg-muted/40"
       }`}
     >
-      <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-muted text-[11px] font-bold text-foreground/80">
-        {initials(chat.name, chat.wa_chat_id)}
-      </span>
+      <ChatAvatar
+        name={chat.name}
+        jid={chat.wa_chat_id}
+        url={chat.avatar_url}
+        size="h-9 w-9"
+        initialsSize="text-[11px]"
+      />
       <div className="min-w-0 flex-1">
         <div
           className={`truncate text-[13px] ${
@@ -879,9 +923,13 @@ function Conversation({
               <ArrowLeft className="h-4 w-4" />
             </button>
           )}
-          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-bold text-foreground/80">
-            {initials(chat.name, chat.wa_chat_id)}
-          </span>
+          <ChatAvatar
+            name={chat.name}
+            jid={chat.wa_chat_id}
+            url={chat.avatar_url}
+            size="h-8 w-8"
+            initialsSize="text-[10px]"
+          />
           <div className="flex min-w-0 flex-1 items-center gap-2">
             <b className="truncate text-[13px]">{chat.name || chat.wa_chat_id}</b>
             {chat.window_open ? (

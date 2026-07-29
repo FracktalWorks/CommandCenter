@@ -50,6 +50,7 @@ def _chat_model(
         ),
         snoozed_until=snoozed_until.isoformat() if snoozed_until else None,
         labels=labels or [],
+        avatar_url=getattr(row, "avatar_url", None),
     )
 
 
@@ -157,16 +158,19 @@ async def list_chats(
                   AND cl.wa_chat_id = c.wa_chat_id AND cl.wa_label_id = :label)""")
             params["label"] = label
 
-        # Last message snippet via a lateral pull of the most recent body.
+        # Last message snippet via a lateral pull of the most recent body. Avatar
+        # is a plain LEFT JOIN (one row per chat, unlike labels' one-to-many).
         q = f"""
             SELECT c.id, c.account_id, c.wa_chat_id, c.kind, c.name, c.category,
                    c.last_message_at, c.service_window_expires_at,
                    (c.service_window_expires_at > now()) AS window_open,
                    s.status AS status, s.snoozed_until AS snoozed_until,
-                   lm.body_text AS last_snippet
+                   lm.body_text AS last_snippet, av.avatar_url AS avatar_url
             FROM wa_chats c
             LEFT JOIN wa_chat_status s
               ON s.account_id = c.account_id AND s.chat_id = c.id
+            LEFT JOIN wa_chat_avatars av
+              ON av.account_id = c.account_id AND av.wa_chat_id = c.wa_chat_id
             LEFT JOIN LATERAL (
                 SELECT body_text FROM wa_messages m
                 WHERE m.chat_id = c.id

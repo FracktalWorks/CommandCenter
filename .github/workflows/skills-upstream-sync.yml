@@ -31,6 +31,11 @@ jobs:
             cp -r "$tmp/." skills/upstream/anthropics/
           fi
           (cd "$tmp" && git rev-parse HEAD) > skills/upstream/anthropics/.upstream_sha
+          # Never let the clone's own .git survive the copy: git would record
+          # the directory as a nested-repo gitlink with no .gitmodules entry,
+          # and every actions/checkout in EVERY workflow then fails cleanup
+          # with "No url found for submodule path ... exit code 128".
+          rm -rf skills/upstream/anthropics/.git
 
       - name: Pull VoltAgent/awesome-agent-skills
         continue-on-error: true
@@ -41,6 +46,9 @@ jobs:
           mkdir -p skills/upstream/voltagent
           cp -r "$tmp/." skills/upstream/voltagent/
           (cd "$tmp" && git rev-parse HEAD) > skills/upstream/voltagent/.upstream_sha
+          # See the note above — this copy is what originally created the
+          # broken gitlink, because "$tmp/." includes the clone's .git.
+          rm -rf skills/upstream/voltagent/.git
 
       - name: Open PR if changes
         uses: peter-evans/create-pull-request@v6

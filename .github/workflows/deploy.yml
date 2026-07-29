@@ -88,8 +88,15 @@ jobs:
   deploy:
     name: "Deploy to Hostinger"
     runs-on: ubuntu-latest
-    needs: test
-    if: success()
+    needs: [lint, test]
+    # NOT `if: success()`. With skip_tests=true the `test` job is SKIPPED, and a
+    # dependent guarded by success() is skipped along with it — so the emergency
+    # hotfix path silently deployed nothing, exactly when it was needed most.
+    # Treat a skipped test job as acceptable; a FAILED one still blocks.
+    if: >-
+      ${{ always()
+      && needs.lint.result == 'success'
+      && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     env:
       # Runner-reachable public URLs used to VERIFY the deploy by outcome
       # (see the deploy step's rationale).
@@ -314,11 +321,102 @@ jobs:
               sudo systemctl disable --now acb-whatsapp-bridge >/dev/null 2>&1 || true
             fi
 
+            # ── Self-hosted meeting bot (Note Taker §3.13) ────────────────────
+            # A headless-Chrome participant that joins a Meet link, records the
+            # call, and feeds the normal transcribe → diarize → notes pipeline.
+            # Runs as a Docker service (profile "meetingbot") because each in-call
+            # bot is a real Chrome (~1-3 GB RAM + up to 2 CPU) — it needs a box
+            # with headroom, which is why this is opt-out-able rather than core.
+            # Env is written BEFORE the gateway restart so the gateway picks up
+            # MEETING_BOT_URL/TOKEN. Fail-safe: a build or start hiccup skips the
+            # bot only — the rest of the deploy (and the whole app) is unaffected.
+            echo "==> Meeting bot (self-hosted, headless Chrome)"
+            grep -qE '^MEETING_BOT_ENABLED=' "$ENV_FILE" || echo "MEETING_BOT_ENABLED=1" >> "$ENV_FILE"
+            # The gateway talks to the worker over the host-published port; the
+            # worker calls back to the gateway from inside its container.
+            upsert_env MEETING_BOT_URL "http://127.0.0.1:8095"
+            upsert_env NOTES_BOT_PROVIDER "selfhosted"
+            upsert_env NOTES_LIVE_CALLBACK_BASE "http://host.docker.internal:8080"
+            # Where the worker fetches streaming-ASR credentials. Without this
+            # the bot records fine but produces no live captions — the failure
+            # mode is silent, so it is wired by default rather than left opt-in.
+            upsert_env NOTES_LIVE_TOKEN_URL \
+              "http://host.docker.internal:8080/notes/stt/bot-live-token"
+            # One shared secret, both directions (gateway -> worker, and the
+            # worker's live-segment callback). Generated once, then reused.
+            if ! grep -qE '^MEETING_BOT_TOKEN=.+' "$ENV_FILE"; then
+              _mbtoken="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"
+              grep -vE '^MEETING_BOT_TOKEN=' "$ENV_FILE" > "$ENV_FILE.mb.tmp" && mv "$ENV_FILE.mb.tmp" "$ENV_FILE"
+              echo "MEETING_BOT_TOKEN=$_mbtoken" >> "$ENV_FILE"
+              echo "    + generated MEETING_BOT_TOKEN"
+            fi
+
+            MB_ENABLED="$(grep -E '^MEETING_BOT_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
+            if [ "$MB_ENABLED" = "1" ]; then
+              # --build is cheap after the first run (layer cache); the first
+              # deploy pulls the Playwright base image, which is large.
+              # --env-file is explicit on purpose: compose resolves a bare .env
+              # against the project directory (infra/), not the app root.
+              if docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml \
+                   --profile meetingbot up -d --build meeting-bot 2>&1 | tail -5; then
+                sleep 5
+                if curl -fsS --max-time 10 http://127.0.0.1:8095/health >/dev/null 2>&1; then
+                  echo "    meeting bot UP on 127.0.0.1:8095"
+                else
+                  echo "    ! meeting bot started but /health not answering yet"
+                  docker logs --tail 20 acb-meeting-bot 2>&1 | sed 's/^/      /' || true
+                fi
+              else
+                echo "    ! meeting bot build/start failed — join-by-link stays unavailable"
+              fi
+            else
+              echo "    MEETING_BOT_ENABLED=0 — meeting bot OFF (join-by-link unavailable)"
+              docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml \
+                --profile meetingbot rm -sf meeting-bot >/dev/null 2>&1 || true
+            fi
+
             echo "==> Restarting gateway (systemd)"
+            # `restart` alone does NOT survive a reboot — without the enable
+            # symlink the box comes back with the gateway down until the next
+            # deploy. Install + enable the unit every time so boot is covered.
+            sudo cp "$APP_DIR/deploy/hostinger/acb-gateway.service" /etc/systemd/system/acb-gateway.service
+            sudo systemctl daemon-reload
+            sudo systemctl enable acb-gateway >/dev/null 2>&1 || true
             sudo systemctl restart acb-gateway
             sleep 3
             systemctl is-active --quiet acb-gateway || { echo "GATEWAY FAILED TO START"; exit 1; }
             echo "Gateway is active"
+
+            # ── App Workshop T2 (React) build vendor cache ────────────────────
+            # Shared, pinned react/react-dom/esbuild/lucide-react the
+            # app-builder agent's build script
+            # (apps/agents/agent-app-builder/build/build_t2.mjs) resolves
+            # against via esbuild's nodePaths — installed ONCE here, never
+            # per-app. Same default-resolution as CUSTOM_APPS_ROOT (already
+            # proven in production for the App Workshop): read an override
+            # from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+            # lucide-react: zero runtime deps of its own (only a react peer
+            # dep, already here) — pinned to the exact version
+            # workbench/control_plane itself uses, so every T2 app gets real
+            # icon components for free instead of hand-rolled SVGs.
+            echo "==> Provisioning T2 (React) vendor cache for the App Workshop builder"
+            T2_VENDOR_DIR="$(grep -E '^CUSTOM_APPS_T2_VENDOR_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+            if [ -z "$T2_VENDOR_DIR" ]; then
+              CLONE_DIR="$(grep -E '^AGENTS_CLONE_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
+              T2_VENDOR_DIR="${CLONE_DIR:-$HOME/.acb/agents}/vendor/t2-react"
+            fi
+            mkdir -p "$T2_VENDOR_DIR"
+            printf '%s\n' \
+              '{ "name": "cc-app-workshop-t2-vendor", "private": true,' \
+              '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0", "lucide-react": "1.17.0" } }' \
+              > "$T2_VENDOR_DIR/package.json"
+            if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/lucide-react" ]; then
+              (cd "$T2_VENDOR_DIR" && npm install --no-audit --no-fund --omit=dev) \
+                && echo "    + T2 vendor cache installed ($T2_VENDOR_DIR)" \
+                || echo "    ! T2 vendor install failed — T2 (React) apps will fail to build; T1 apps unaffected"
+            else
+              echo "    vendor cache already present, skipping install ($T2_VENDOR_DIR)"
+            fi
 
             echo "==> Rebuilding + restarting workbench (Next.js)"
             cd "$APP_DIR/workbench/control_plane"
@@ -332,6 +430,8 @@ jobs:
             # Reload systemd unit in case acb-workbench.service changed (adds PATH for uv etc.)
             sudo cp "$APP_DIR/deploy/hostinger/acb-workbench.service" /etc/systemd/system/acb-workbench.service
             sudo systemctl daemon-reload
+            # See the gateway note above — enable so the workbench survives reboots.
+            sudo systemctl enable acb-workbench >/dev/null 2>&1 || true
             sudo systemctl restart acb-workbench
             sleep 3
             systemctl is-active --quiet acb-workbench || { echo "WORKBENCH FAILED TO START"; exit 1; }
@@ -358,6 +458,7 @@ jobs:
               sudo install -m 0644 "$CADDY_REPO" "$CADDY_LIVE"
               sudo caddy validate --config "$CADDY_LIVE"
             fi
+            sudo systemctl enable caddy >/dev/null 2>&1 || true
             if systemctl is-active --quiet caddy; then
               sudo systemctl reload caddy || sudo systemctl restart caddy
             else
@@ -371,6 +472,26 @@ jobs:
               exit 1
             }
             echo "Caddy is active"
+
+            echo "==> Installing health watchdog (systemd timer)"
+            # Self-heals services between deploys and captures network forensics
+            # every 10 min. Deliberately installed here so it can never drift
+            # from the repo. See deploy/hostinger/health-watchdog.sh.
+            # The script is already in place via git reset; just make sure it is
+            # executable. (Do NOT `install` it onto itself — src == dest is an
+            # error, which is how it ended up non-executable the first time.)
+            sudo chmod 0755 "$APP_DIR/deploy/hostinger/health-watchdog.sh" || true
+            sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.service" /etc/systemd/system/
+            sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.timer"   /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now acb-health-watchdog.timer || true
+            if systemctl is-active --quiet acb-health-watchdog.timer; then
+              echo "    watchdog timer active — next: $(systemctl show acb-health-watchdog.timer -p NextElapseUSecRealtime --value 2>/dev/null || echo '?')"
+            else
+              # Non-fatal: a missing watchdog must never block shipping the app.
+              echo "    ! watchdog timer NOT active (non-fatal)"
+              sudo systemctl status acb-health-watchdog.timer --no-pager 2>&1 | head -15 || true
+            fi
 
             echo "==> Running infra health probe"
             cd "$APP_DIR"

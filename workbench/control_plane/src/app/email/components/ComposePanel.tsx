@@ -10,6 +10,7 @@ import {
 import { useDraftSession } from "../lib/useDraftSession";
 import { DraftAssistant } from "./DraftAssistant";
 import { splitQuotedText } from "../lib/quoting";
+import { appendSignature, getSignatureText, stripSignature } from "../lib/signature";
 import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
 import { ComposerQuote, AiButton } from "./ComposerAI";
 
@@ -88,6 +89,19 @@ export function ComposePanel({
     onError: setSendError,
   });
 
+  // The signature's plain text — it lives IN the editable body (seeded below),
+  // not a separate card, so the auto-saved draft carries it upstream too.
+  const [sigText, setSigText] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void getSignatureText(accountId).then((s) => {
+      if (alive) setSigText(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [accountId]);
+
   // A fresh compose session each time the window opens: re-sync fields from the
   // (possibly new) props and forget any prior draft so we don't update it.
   useEffect(() => {
@@ -96,6 +110,11 @@ export function ComposePanel({
     setCc(defaultCc);
     setSubject(defaultSubject);
     setBody(replyToBody || "");
+    // Seed the signature into the body (idempotent — a popped-out reply or an
+    // undo-send reopen may already carry it). Async: never clobber typing.
+    void getSignatureText(accountId).then((sig) => {
+      if (sig) setBody((prev) => appendSignature(prev, sig));
+    });
     draftIdRef.current = null;
     dirty.current = false;
     setDraftStatus("idle");
@@ -346,7 +365,7 @@ export function ComposePanel({
             instruction={aiInstruction}
             onInstruction={setAiInstruction}
             busy={ai.busy}
-            hasText={body.trim().length > 0}
+            hasText={stripSignature(body, sigText).trim().length > 0}
             hasDraft={ai.hasDraft}
             steps={ai.steps}
             thinking={ai.thinking}

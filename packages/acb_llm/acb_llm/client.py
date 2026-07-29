@@ -239,6 +239,7 @@ async def _ensure_keys_loaded() -> None:
                 "MISTRAL_API_KEY": "mistral",
                 "TOGETHER_API_KEY": "together",
                 "DEEPGRAM_API_KEY": "deepgram",
+                "ASSEMBLYAI_API_KEY": "assemblyai",
             }
             for env_var, provider in _env_to_provider.items():
                 val = os.environ.get(env_var, "")

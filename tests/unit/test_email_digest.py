@@ -259,6 +259,22 @@ async def test_thread_lists_ignore_trashed_threads() -> None:
     assert "'trash'" in str(db2.execute.call_args[0][0])
 
 
+async def test_thread_lists_ignore_snoozed_threads() -> None:
+    """A currently-snoozed conversation is not a live open loop: the inbox hides
+    it, and the dashboard's Snooze action must actually remove the row — before
+    this, the optimistic drop was undone by the quiet re-sync and the thread
+    (and its count) came straight back. It reappears once snoozed_until passes."""
+    db = _thread_list_db([])
+    await m.digest._digest_backlog_aging(db, "acc-1")
+    sql = str(db.execute.call_args_list[0][0][0])
+    assert "snoozed_until > now()" in sql
+    # The stat-row counts share the same predicate.
+    db2 = AsyncMock()
+    db2.execute.return_value = MagicMock(scalar=MagicMock(return_value=0))
+    await m.digest._digest_needs_reply(db2, "acc-1")
+    assert "snoozed_until > now()" in str(db2.execute.call_args[0][0])
+
+
 async def test_awaiting_reads_the_other_side_of_the_ledger() -> None:
     """"Waiting on them" = AWAITING threads; when the last message is the
     user's own, the counterparty shown is its recipient."""
@@ -285,7 +301,7 @@ async def test_commitments_are_best_effort_when_tasks_absent() -> None:
 
 async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> None:
     rows = [SimpleNamespace(title="Send quote", due_label="Jul 25", overdue=True,
-                            task_id="task-1", thread_id="t9")]
+                            task_id="task-1", thread_id="t9", message_id="m9")]
     db = _one_shot_db(rows)
     out = await m.digest._digest_commitments(db, "acc-1")
     sql = str(db.execute.call_args[0][0])
@@ -295,8 +311,12 @@ async def test_commitments_query_scopes_to_open_due_tasks_on_this_account() -> N
     # deduce uuid for it and fail ("operator does not exist: text = uuid").
     assert "origin->>'account_id' = ea.id::text" in sql
     assert sql.count(":aid") == 1
+    # message_id (latest message of the linked thread, via the LATERAL join)
+    # lets the dashboard open the email the commitment came from.
+    assert "LEFT JOIN LATERAL" in sql
     assert out == [{"title": "Send quote", "due": "Jul 25", "overdue": True,
-                    "task_id": "task-1", "thread_id": "t9"}]
+                    "task_id": "task-1", "thread_id": "t9",
+                    "message_id": "m9"}]
 
 
 async def test_dashboard_mode_includes_undated_commitments() -> None:
@@ -305,12 +325,14 @@ async def test_dashboard_mode_includes_undated_commitments() -> None:
     brief keeps the due-soon horizon."""
     db = _one_shot_db([SimpleNamespace(
         title="Call back", due_label=None, overdue=None,
-        task_id="task-2", thread_id=None)])
+        task_id="task-2", thread_id=None, message_id=None)])
     out = await m.digest._digest_commitments(
         db, "acc-1", include_undated=True)
     _, params = db.execute.call_args[0][0], db.execute.call_args[0][1]
     assert params["undated"] is True
     assert out[0]["due"] is None and out[0]["overdue"] is False
+    # No mirrored mail in the linked thread → message_id null, row not openable.
+    assert out[0]["message_id"] is None
     # …and the renderers say "no due date" instead of crashing on None.
     assert "no due date" in m.digest._due_phrase(out[0])
 

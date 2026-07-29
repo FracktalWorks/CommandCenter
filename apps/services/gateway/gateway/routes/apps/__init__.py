@@ -5,10 +5,18 @@ register their routes on the shared ``router`` as an import side effect.
 RFC: docs/app-workshop/README.md §4.10.
 """
 
+# NOT alphabetical, deliberately (ruff's import-sort disabled below): pins
+# BEFORE lifecycle. pins.py registers the literal "GET /pins" route, which
+# must be added to the router before lifecycle.py's "GET /{slug}" —
+# FastAPI/Starlette matches routes in registration order, so {slug} would
+# otherwise swallow "/pins" (treating "pins" as a slug) since it's the more
+# general pattern.
+# ruff: noqa: I001
 from gateway.routes.apps import actions as _actions  # noqa: F401
 from gateway.routes.apps import durability as _durability  # noqa: F401
 from gateway.routes.apps import files as _files  # noqa: F401
 from gateway.routes.apps import grants as _grants  # noqa: F401
+from gateway.routes.apps import pins as _pins  # noqa: F401
 from gateway.routes.apps import lifecycle as _lifecycle  # noqa: F401
 from gateway.routes.apps import publish as _publish  # noqa: F401
 from gateway.routes.apps import runtime as _runtime  # noqa: F401

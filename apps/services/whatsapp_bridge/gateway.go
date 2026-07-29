@@ -79,6 +79,36 @@ type pairedPayload struct {
 	JID         string `json:"jid"`
 }
 
+// bridgeLabel mirrors one native WhatsApp label/list the user created, as the
+// gateway's /bridge/labels handler expects. Colour is both the raw whatsmeow
+// palette index and a resolved hex so the UI can render the same swatch.
+type bridgeLabel struct {
+	WALabelID    string `json:"wa_label_id"`
+	Name         string `json:"name"`
+	Color        string `json:"color,omitempty"`     // resolved hex (#RRGGBB)
+	ColorIndex   int32  `json:"color_index"`         // raw whatsmeow palette index
+	ListType     string `json:"list_type,omitempty"` // CUSTOM|PREDEFINED|LEAD|…
+	PredefinedID int32  `json:"predefined_id,omitempty"`
+	SortOrder    int32  `json:"sort_order,omitempty"`
+	Active       bool   `json:"active"`
+	Deleted      bool   `json:"deleted"`
+}
+
+// bridgeLabelAssoc mirrors a chat↔label (un)labeling, keyed by the chat JID.
+type bridgeLabelAssoc struct {
+	WALabelID string `json:"wa_label_id"`
+	ChatID    string `json:"wa_chat_id"` // the chat JID
+	Labeled   bool   `json:"labeled"`
+}
+
+// labelsPayload is the body POSTed to /whatsapp/bridge/labels. Either array may
+// be empty — a LabelEdit sends one label, a LabelAssociationChat sends one assoc.
+type labelsPayload struct {
+	AccountID    string             `json:"account_id"`
+	Labels       []bridgeLabel      `json:"labels,omitempty"`
+	Associations []bridgeLabelAssoc `json:"associations,omitempty"`
+}
+
 func (g *GatewayClient) post(ctx context.Context, path string, body any) error {
 	buf, err := json.Marshal(body)
 	if err != nil {
@@ -124,4 +154,31 @@ func (g *GatewayClient) Paired(ctx context.Context, p pairedPayload) error {
 func (g *GatewayClient) Reclassify(ctx context.Context, accountID string) error {
 	return g.post(ctx, "/whatsapp/bridge/reclassify",
 		map[string]string{"account_id": accountID})
+}
+
+// IngestLabels streams native WhatsApp labels and/or chat associations to the
+// gateway, where they are upserted into wa_labels + wa_chat_labels and mirrored
+// (read-only) into the triage inbox.
+func (g *GatewayClient) IngestLabels(ctx context.Context, p labelsPayload) error {
+	return g.post(ctx, "/whatsapp/bridge/labels", p)
+}
+
+// bridgeAvatar mirrors one chat's fetched profile-picture URL, as the gateway's
+// /bridge/avatars handler expects. avatar_url is WhatsApp's own CDN URL — the
+// gateway stores the pointer, not the bytes (same posture as labels).
+type bridgeAvatar struct {
+	WAChatID   string `json:"wa_chat_id"`
+	AvatarURL  string `json:"avatar_url"`
+	AvatarHash string `json:"avatar_hash,omitempty"`
+}
+
+// avatarsPayload is the body POSTed to /whatsapp/bridge/avatars.
+type avatarsPayload struct {
+	AccountID string         `json:"account_id"`
+	Avatars   []bridgeAvatar `json:"avatars"`
+}
+
+// IngestAvatars reports one or more freshly-fetched profile-picture URLs.
+func (g *GatewayClient) IngestAvatars(ctx context.Context, p avatarsPayload) error {
+	return g.post(ctx, "/whatsapp/bridge/avatars", p)
 }

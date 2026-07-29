@@ -33,11 +33,16 @@ from gateway.routes.apps._common import (
     parse_db_manifest,
     publish_app_activity,
     read_workspace_manifest,
+    require_app_author,
     require_app_user,
     role_for,
     router,
 )
-from gateway.routes.apps.durability import sync_workspace_best_effort
+from gateway.routes.apps.durability import (
+    _read_workspace_files,
+    ensure_workspace,
+    sync_workspace_best_effort,
+)
 from pydantic import BaseModel
 from sqlalchemy import text
 
@@ -57,6 +62,13 @@ class AppSummary(BaseModel):
     owner_email: str
     updated_at: str = ""
     role: str = "use"          # the caller's relationship: own | edit | use
+    pinned: bool = False       # this viewer's own app_pins bookmark
+    is_template: bool = False  # flagged as a starting point in the templates gallery
+    # This-month AI usage (app_audit, kind='ai') — the same aggregate
+    # GET /{slug}/usage computes, minus budget_tokens (that needs a manifest
+    # read per app; too expensive to pay for every card in the list).
+    month_cost_usd: float = 0.0
+    month_calls: int = 0
 
 
 class AppDetail(AppSummary):
@@ -86,6 +98,7 @@ class AppPatch(BaseModel):
     description: str | None = None
     icon: str | None = None
     visibility: str | None = None
+    is_template: bool | None = None
 
 
 # ── Scaffold (sync — run in an executor) ─────────────────────────────────────
@@ -180,6 +193,29 @@ def _scaffold_workspace(
     _git_init(workspace)
 
 
+def _fork_workspace(
+    new_workspace: Path,
+    files: dict[str, tuple[str, str]],
+    manifest: dict[str, Any],
+) -> None:
+    """Copy a source app's SOURCE FILES into a fresh workspace — never its
+    runtime data/sharing/history (those stay DB-side, keyed to the source
+    app_id, and simply aren't touched). ``app.json`` is overwritten with the
+    corrected slug/name after the copy (the source's copy still names
+    itself). Fresh ``git init`` — the new app gets its own history, not the
+    source's, matching ``_scaffold_workspace``'s convention for every other
+    newly-created app."""
+    new_workspace.mkdir(parents=True, exist_ok=True)
+    for rel, (content, _sha) in files.items():
+        target = new_workspace / rel
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_text(content, encoding="utf-8")
+    (new_workspace / "app.json").write_text(
+        json.dumps(manifest, indent=2) + "\n", encoding="utf-8",
+    )
+    _git_init(new_workspace)
+
+
 def _sync_workspace_manifest(workspace: Path, fields: dict[str, Any]) -> None:
     """Best-effort mirror of name/icon/description edits into app.json so the
     DB row and manifest don't drift on a PATCH."""
@@ -199,7 +235,11 @@ def _sync_workspace_manifest(workspace: Path, fields: dict[str, Any]) -> None:
 
 def _to_summary(
     row: Any, user: UserContext, grants: list[tuple[str, str]],
+    *,
+    pinned: bool = False,
+    usage: tuple[float, int] | None = None,
 ) -> AppSummary:
+    cost, calls = usage or (0.0, 0)
     return AppSummary(
         slug=row.slug,
         name=row.name,
@@ -211,6 +251,10 @@ def _to_summary(
         owner_email=row.owner_email,
         updated_at=iso(row.updated_at) or "",
         role=role_for(row, user, grants),
+        pinned=pinned,
+        is_template=bool(row.is_template),
+        month_cost_usd=cost,
+        month_calls=calls,
     )
 
 
@@ -255,23 +299,48 @@ async def list_apps(
         grant_rows = (await db.execute(
             text("SELECT app_id, subject, role FROM app_grants"),
         )).fetchall()
+        pin_rows = (await db.execute(
+            text("SELECT app_id FROM app_pins WHERE user_email = :email"),
+            {"email": _uid(user)},
+        )).fetchall()
+        # One aggregate query for every app's this-month AI usage, mirroring
+        # runtime.py's _month_ai_usage but batched — an N+1 per-app query
+        # here would mean one extra round-trip per card on every gallery load.
+        usage_rows = (await db.execute(
+            text(
+                """SELECT app_id,
+                          COALESCE(SUM(cost_usd), 0) AS cost,
+                          COUNT(*) AS calls
+                   FROM app_audit
+                   WHERE kind = 'ai' AND at >= date_trunc('month', now())
+                   GROUP BY app_id"""
+            ),
+        )).fetchall()
     finally:
         await db.close()
     by_app: dict[str, list[tuple[str, str]]] = {}
     for g in grant_rows:
         by_app.setdefault(str(g.app_id), []).append((g.subject, g.role))
+    pinned_ids = {str(p.app_id) for p in pin_rows}
+    usage_by_app = {
+        str(u.app_id): (float(u.cost or 0), int(u.calls or 0)) for u in usage_rows
+    }
     out: list[AppSummary] = []
     for row in rows:
         grants = by_app.get(str(row.id), [])
         if can_view(row, user, grants):
-            out.append(_to_summary(row, user, grants))
+            out.append(_to_summary(
+                row, user, grants,
+                pinned=str(row.id) in pinned_ids,
+                usage=usage_by_app.get(str(row.id)),
+            ))
     return out
 
 
 @router.post("", response_model=AppDetail)
 async def create_app(
     body: AppCreate,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> AppDetail:
     """Create the row + scaffold the workspace (manifest, starter, git)."""
     name = body.name.strip()
@@ -299,7 +368,7 @@ async def create_app(
                    (slug, name, icon, description, owner_email,
                     manifest, workspace_path)
                    VALUES (:slug, :name, :icon, :description, :owner,
-                           :manifest::jsonb, :workspace_path)
+                           :manifest ::jsonb, :workspace_path)
                    RETURNING *"""
             ),
             {
@@ -320,6 +389,79 @@ async def create_app(
     await sync_workspace_best_effort(row)
     _log.info("apps.created", slug=slug, owner=owner)
     publish_app_activity(slug, user=owner, action="created")
+    return _to_detail(row, user, [])
+
+
+@router.post("/{slug}/fork", response_model=AppDetail)
+async def fork_app(
+    slug: str,
+    user: UserContext = Depends(require_app_author),
+) -> AppDetail:
+    """Duplicate *slug*'s current SOURCE FILES into a brand-new app, owned
+    by the caller — view access is enough (no edit grant required), the same
+    "duplicate a shared team app as your own starting point" use case every
+    surveyed fork/remix feature supports.
+
+    Copies workspace files only. Deliberately NOT copied: app_data (runtime
+    storage — the fork starts empty), app_grants (sharing resets — the
+    forker is sole owner), app_audit (usage history stays with the
+    original), app_versions (the fork is an unpublished, private draft with
+    no publish history of its own).
+    """
+    owner = _uid(user)
+    db = await _get_db()
+    try:
+        source_row, _source_grants = await get_app_or_404(db, slug, user)
+        source_workspace = await ensure_workspace(db, source_row)
+        files = await asyncio.get_event_loop().run_in_executor(
+            None, _read_workspace_files, source_workspace,
+        )
+        taken = {
+            r.slug for r in (await db.execute(
+                text("SELECT slug FROM apps"),
+            )).fetchall()
+        }
+        name = f"{source_row.name} (fork)"
+        new_slug = generate_slug(name, taken)
+        new_workspace = apps_root() / new_slug
+
+        manifest = dict(
+            read_workspace_manifest(source_workspace)
+            or parse_db_manifest(source_row.manifest)
+            or {}
+        )
+        manifest["slug"] = new_slug
+        manifest["name"] = name
+
+        await asyncio.get_event_loop().run_in_executor(
+            None, _fork_workspace, new_workspace, files, manifest,
+        )
+
+        row = (await db.execute(
+            text(
+                """INSERT INTO apps
+                   (slug, name, icon, description, owner_email,
+                    manifest, workspace_path)
+                   VALUES (:slug, :name, :icon, :description, :owner,
+                           :manifest ::jsonb, :workspace_path)
+                   RETURNING *"""
+            ),
+            {
+                "slug": new_slug,
+                "name": name,
+                "icon": source_row.icon or "",
+                "description": source_row.description or "",
+                "owner": owner,
+                "manifest": json.dumps(manifest),
+                "workspace_path": str(new_workspace),
+            },
+        )).fetchone()
+        await db.commit()
+    finally:
+        await db.close()
+    await sync_workspace_best_effort(row)
+    _log.info("apps.forked", source_slug=slug, slug=new_slug, owner=owner)
+    publish_app_activity(new_slug, user=owner, action="created")
     return _to_detail(row, user, [])
 
 
@@ -375,7 +517,7 @@ async def get_app(
 async def patch_app(
     slug: str,
     body: AppPatch,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> AppDetail:
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     if "visibility" in fields and fields["visibility"] not in VISIBILITIES:
@@ -414,7 +556,7 @@ async def patch_app(
 @router.delete("/{slug}")
 async def delete_app(
     slug: str,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Soft-archive (edit-gated); a second delete by the OWNER of an already
     archived app removes the row (cascades) and its workspace folder."""

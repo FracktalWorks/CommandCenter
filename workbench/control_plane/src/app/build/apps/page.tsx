@@ -13,12 +13,17 @@ import { useRouter } from "next/navigation";
 import { useSession } from "next-auth/react";
 import {
   Clock,
+  GitFork,
   Hammer,
+  LayoutTemplate,
   Loader2,
+  Pin,
+  PinOff,
   Plus,
   RefreshCw,
   Sparkles,
   X,
+  Zap,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
 import type { AppMeta } from "./lib/types";
@@ -42,6 +47,11 @@ function formatRelative(iso: string): string {
   } catch {
     return iso;
   }
+}
+
+function formatCost(usd: number): string {
+  if (usd < 0.01) return "<$0.01";
+  return `$${usd.toFixed(usd < 10 ? 2 : 0)}`;
 }
 
 /** Derive a short app name from a free-form description (first ~5 words). */
@@ -73,7 +83,7 @@ const HINTS = [
   "Dashboard for open service tickets by printer model",
 ];
 
-type Filter = "all" | "mine" | "team" | "drafts";
+type Filter = "all" | "mine" | "team" | "drafts" | "templates";
 
 // ─── App card ─────────────────────────────────────────────────────────────
 
@@ -81,26 +91,85 @@ function AppCard({
   app,
   onOpen,
   onWorkshop,
+  onTogglePin,
+  onToggleTemplate,
+  onUseTemplate,
 }: {
   app: AppMeta;
   onOpen: () => void;
   onWorkshop: () => void;
+  onTogglePin: () => void;
+  onToggleTemplate: () => void;
+  onUseTemplate: () => void;
 }) {
   const isLive = !!app.live_version;
   const canEdit = app.role === "own" || app.role === "edit";
   const showWorkshop = !isLive || canEdit;
+  const hasUsage = (app.month_calls ?? 0) > 0;
   return (
     <button
       onClick={isLive ? onOpen : showWorkshop ? onWorkshop : undefined}
-      className="text-left w-full p-3 sm:p-4 rounded-xl border tech-transition flex flex-col gap-2.5 border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
+      className="group relative text-left w-full p-3 sm:p-4 rounded-xl border tech-transition flex flex-col gap-2.5 border-border bg-card hover:border-primary/40 hover:bg-secondary/30"
     >
+      <div className="absolute top-2 right-2 flex items-center gap-0.5">
+        {canEdit && (
+          <span
+            role="button"
+            tabIndex={0}
+            title={app.is_template ? "Remove from templates gallery" : "Mark as template"}
+            onClick={(e) => {
+              e.stopPropagation();
+              onToggleTemplate();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                onToggleTemplate();
+              }
+            }}
+            className={`p-1.5 rounded-lg tech-transition ${
+              app.is_template
+                ? "text-accent opacity-100"
+                : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground"
+            }`}
+          >
+            <LayoutTemplate className="w-3.5 h-3.5" />
+          </span>
+        )}
+        <span
+          role="button"
+          tabIndex={0}
+          title={app.pinned ? "Unpin" : "Pin to sidebar"}
+          onClick={(e) => {
+            e.stopPropagation();
+            onTogglePin();
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.stopPropagation();
+              onTogglePin();
+            }
+          }}
+          className={`p-1.5 rounded-lg tech-transition ${
+            app.pinned
+              ? "text-primary opacity-100"
+              : "text-muted-foreground opacity-0 group-hover:opacity-100 hover:text-foreground"
+          }`}
+        >
+          {app.pinned ? (
+            <Pin className="w-3.5 h-3.5 fill-current" />
+          ) : (
+            <PinOff className="w-3.5 h-3.5" />
+          )}
+        </span>
+      </div>
       <div className="flex items-start gap-3">
         <div
           className={`w-9 h-9 rounded-lg border border-border flex items-center justify-center text-lg shrink-0 ${glyphGradient(app.slug)}`}
         >
           {app.icon || "▦"}
         </div>
-        <div className="min-w-0 flex-1">
+        <div className="min-w-0 flex-1 pr-5">
           <div className="flex items-center gap-2">
             <h3 className="text-sm font-semibold text-foreground truncate">
               {app.name}
@@ -134,7 +203,42 @@ function AppCard({
             Draft
           </span>
         )}
+        {app.is_template && (
+          <span className="text-[9px] font-bold uppercase tracking-wide px-2 py-0.5 rounded-full text-accent bg-accent/10">
+            Template
+          </span>
+        )}
+        {hasUsage && (
+          <span
+            title={`${app.month_calls} AI call${app.month_calls === 1 ? "" : "s"} this month`}
+            className="flex items-center gap-1 text-[10.5px] text-muted-foreground"
+          >
+            <Zap className="w-3 h-3 shrink-0" />
+            {formatCost(app.month_cost_usd ?? 0)}
+          </span>
+        )}
         <div className="flex-1" />
+        {app.is_template && (
+          <span
+            role="link"
+            tabIndex={0}
+            title="Start a new app from this template"
+            onClick={(e) => {
+              e.stopPropagation();
+              onUseTemplate();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Enter") {
+                e.stopPropagation();
+                onUseTemplate();
+              }
+            }}
+            className="flex items-center gap-1 text-[11px] font-semibold text-accent hover:opacity-80 tech-transition"
+          >
+            <GitFork className="w-3 h-3" />
+            Use
+          </span>
+        )}
         {showWorkshop && (
           <span
             role="link"
@@ -243,13 +347,92 @@ export default function CustomAppsPage() {
     [creating, router]
   );
 
+  /** Optimistic — the button's own state must not lag a round-trip; a
+   * failure just refetches to correct it rather than surfacing an error for
+   * something this low-stakes. */
+  const togglePin = useCallback(
+    async (slug: string, currentlyPinned: boolean) => {
+      setApps((prev) =>
+        prev.map((a) => (a.slug === slug ? { ...a, pinned: !currentlyPinned } : a))
+      );
+      try {
+        const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/pin`, {
+          method: currentlyPinned ? "DELETE" : "POST",
+        });
+        if (!res.ok) fetchApps();
+      } catch {
+        fetchApps();
+      }
+    },
+    [fetchApps]
+  );
+
+  /** Same optimistic-toggle shape as togglePin, via the generic PATCH
+   * endpoint (AppPatch.is_template) rather than a dedicated route. */
+  const toggleTemplate = useCallback(
+    async (slug: string, currentlyTemplate: boolean) => {
+      setApps((prev) =>
+        prev.map((a) =>
+          a.slug === slug ? { ...a, is_template: !currentlyTemplate } : a
+        )
+      );
+      try {
+        const res = await fetch(`/api/apps/${encodeURIComponent(slug)}`, {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ is_template: !currentlyTemplate }),
+        });
+        if (!res.ok) fetchApps();
+      } catch {
+        fetchApps();
+      }
+    },
+    [fetchApps]
+  );
+
+  // "Start from this template" — duplicates the template via the same
+  // fork/remix endpoint the run page's Fork button uses, then jumps
+  // straight into the new copy's Workshop editor.
+  const [forkingSlug, setForkingSlug] = useState<string | null>(null);
+  const [forkError, setForkError] = useState<string | null>(null);
+  const startFromTemplate = useCallback(
+    async (slug: string) => {
+      if (forkingSlug) return;
+      setForkingSlug(slug);
+      setForkError(null);
+      try {
+        const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/fork`, {
+          method: "POST",
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          slug?: string;
+          detail?: string;
+        };
+        if (!res.ok || !data.slug) {
+          setForkError(
+            (typeof data.detail === "string" && data.detail) ||
+              `Couldn't start from template (HTTP ${res.status})`
+          );
+          return;
+        }
+        router.push(`/build/apps/${data.slug}/edit`);
+      } catch (e) {
+        setForkError(String(e));
+      } finally {
+        setForkingSlug(null);
+      }
+    },
+    [forkingSlug, router]
+  );
+
   const counts = useMemo(() => {
     const mine = apps.filter(
       (a) => a.role === "own" || a.owner_email.toLowerCase() === myEmail
     ).length;
     const team = apps.filter((a) => a.visibility === "org").length;
     const drafts = apps.filter((a) => !a.live_version).length;
-    return { all: apps.length, mine, team, drafts };
+    const templates = apps.filter((a) => a.is_template).length;
+    return { all: apps.length, mine, team, drafts, templates };
   }, [apps, myEmail]);
 
   const visible = useMemo(() => {
@@ -262,6 +445,8 @@ export default function CustomAppsPage() {
         return apps.filter((a) => a.visibility === "org");
       case "drafts":
         return apps.filter((a) => !a.live_version);
+      case "templates":
+        return apps.filter((a) => a.is_template);
       default:
         return apps;
     }
@@ -309,10 +494,24 @@ export default function CustomAppsPage() {
           { id: "mine", label: "Mine", count: counts.mine },
           { id: "team", label: "Team", count: counts.team },
           { id: "drafts", label: "Drafts", count: counts.drafts },
+          { id: "templates", label: "Templates", count: counts.templates },
         ]}
         activeId={filter}
         onChange={(id) => setFilter(id as Filter)}
       />
+
+      {forkError && (
+        <div className="flex items-center gap-2 mx-4 sm:mx-6 mt-3 rounded-lg border border-destructive/30 bg-destructive/5 px-3 py-2 text-xs text-destructive shrink-0">
+          <X className="w-3.5 h-3.5 shrink-0" />
+          {forkError}
+          <button
+            onClick={() => setForkError(null)}
+            className="ml-auto text-muted-foreground hover:text-foreground"
+          >
+            ✕
+          </button>
+        </div>
+      )}
 
       {/* ── Content ─────────────────────────────────────────────────── */}
       <div className="flex-1 overflow-y-auto">
@@ -407,6 +606,11 @@ export default function CustomAppsPage() {
                   onWorkshop={() =>
                     router.push(`/build/apps/${app.slug}/edit`)
                   }
+                  onTogglePin={() => togglePin(app.slug, !!app.pinned)}
+                  onToggleTemplate={() =>
+                    toggleTemplate(app.slug, !!app.is_template)
+                  }
+                  onUseTemplate={() => startFromTemplate(app.slug)}
                 />
               ))}
             </div>

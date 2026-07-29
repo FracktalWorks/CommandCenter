@@ -10,6 +10,7 @@
  */
 
 import { use, useCallback, useEffect, useRef, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import {
   AlertTriangle,
@@ -18,6 +19,7 @@ import {
   Mic,
   Pause,
   Play,
+  Radio,
   Smartphone,
   Square,
 } from "lucide-react";
@@ -29,6 +31,7 @@ import {
 } from "../../lib/recordingStore";
 import { formatClock, getMeeting, saveScratchNotes } from "../../lib/api";
 import { MicPicker, loadPreferredMic } from "../../components/MicPicker";
+import LiveCopilotStrip from "../../components/LiveCopilotStrip";
 
 const BARS = LEVEL_BARS;
 
@@ -316,8 +319,25 @@ export default function SessionPage({
                   )}
                   <div ref={capEndRef} />
                 </div>
+                {/* The captions above are this device's draft; the console is
+                    the server-side view of the same live stream — speakers kept
+                    consistent and named, alongside the copilot and agenda
+                    coverage. Recording survives the navigation (the dock keeps
+                    it running), so following that link mid-meeting is safe. */}
+                <Link
+                  href={`/notes/live/${id}`}
+                  className="mt-2 inline-flex items-center gap-1.5 text-xs text-primary hover:underline"
+                >
+                  <Radio className="h-3.5 w-3.5" />
+                  Open the live console
+                </Link>
               </div>
             )}
+
+            {/* Copilot state belongs on the screen you're looking at while the
+                meeting runs — a suggestion you never see is the same as no
+                copilot at all. */}
+            <LiveCopilotStrip meetingId={id} />
 
             <div className="flex items-center gap-4">
               <button

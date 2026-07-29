@@ -6,9 +6,16 @@ Control Plane (Next.js browser UI) and local development tools.
 ## Structure
 - control_plane/ -- Next.js app (chat, email, agents, integrations, settings)
 - control_plane/src/app/email/ -- Email AI Assistant: 4-panel email client (accounts sidebar, email list, email detail, AI chat) with multi-account Gmail/Microsoft support
+- control_plane/src/app/email/components/ContactCard.tsx -- People card (Outlook parity). `ContactTrigger` wraps any avatar/name/recipient to open it; `RecipientList` renders a clickable To:/Cc: line; every field carries a `CopyButton`. Backed by GET /email/contacts/card, which also files what it learns into the server-side contacts directory — pass the display name you already have so recipients you only ever write TO are filed under a name, not a bare address. The trigger renders a real <button> and stops propagation, so a row that contains one must be a div (see ConversationView's message header), never a <button>
 - control_plane/src/components/AppShell.tsx -- Responsive shell: desktop Sidebar vs mobile top bar + unified slide-in drawer via useMobileDrawer() context
 - control_plane/src/components/ViewModeProvider.tsx -- Mobile/desktop view decision + "Request desktop" toggle (persisted)
-- control_plane/src/lib/nav.ts -- Shared primary navigation config (used by Sidebar + mobile drawer)
+- control_plane/src/lib/nav.ts -- Shared primary navigation config (used by Sidebar + mobile drawer). Each pane carries a `feature` slug; `visibleSections(allowedFeatures)` drops panes the member cannot reach and any section left empty. Passing `null` (access not yet resolved) returns everything, so the nav does not visibly shrink on first paint
+- control_plane/src/lib/access.ts -- Org access control client helpers: the `Access` shape, href→feature mapping, and `canSeePath`. It deliberately does NOT re-implement wildcard matching — the gateway returns resolved outcomes and this is a lookup. Nothing here is a security boundary
+- control_plane/src/lib/gateway.ts -- THE shared gateway proxy helper (`gatewayHeaders`, `proxyToGateway`). Header building was copy-pasted into ~50 route files, each with its own EXECUTIVE_EMAILS parsing; new routes use this one, and the existing copies are being migrated onto it
+- control_plane/src/components/AccessProvider.tsx -- Fetches /api/auth/me once and shares the member's effective access (`useAccess()`); mounted inside SessionProvider, re-resolves every 2 min
+- control_plane/src/components/AccessGate.tsx -- Blocks direct navigation to a route the member cannot reach. Presentation only: the gateway re-authorizes every request
+- control_plane/src/app/settings/members/ -- Org admin: roster, invite, suspend, role assignment, and the per-member access editor (feature/agent/capability rows with an Inherit·Allow·Deny control and the provenance of every decision)
+- control_plane/src/app/settings/roles/ -- Role definitions. System roles are read-only; the copy steers toward per-user overrides, because the failure mode of any role system is one role per employee
 - control_plane/src/middleware.ts -- Route protection via NextAuth
 - control_plane/src/auth.ts -- NextAuth v5 config (Google SSO, JWT callbacks)
 - control_plane/src/app/api/agent/chat/route.ts -- UNIFIED AG-UI to frontend SSE translation. ALL agents (orchestrator, task-manager, cc-dev, any named/dynamic) go through the same /agent/run/stream gateway endpoint. No more isOrchestrator branching — one code path for all.
@@ -25,7 +32,7 @@ Control Plane (Next.js browser UI) and local development tools.
 - Google SSO (NextAuth v5) restricted to org domain
 - Route protection via middleware.ts (auth-gated when Google credentials are set)
 - Identity chain: NextAuth session → X-User-Email / X-User-Role headers → gateway UserContext
-- Role resolution: EXECUTIVE_EMAILS env var (comma-separated) → employee by default
+- Role resolution: DB-backed org roles + per-user overrides, resolved server-side per request by the gateway (spec: ai-company-brain/specs/org_access_control.md). EXECUTIVE_EMAILS remains only as the bootstrap path for a deployment whose access tables have not been migrated yet. Permissions are deliberately NOT put in the NextAuth JWT — a JWT outlives an access change, and access revoked an hour ago must not still work
 - All API routes that proxy to gateway forward user identity headers alongside Bearer token
 - Agent-generated files (artefacts) are proxied via /api/agent/workspace/{sessionId}/file?path=
 - Image URLs in markdown are rewritten through the workspace file proxy automatically

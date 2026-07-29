@@ -229,7 +229,7 @@ async def _run_storage_set(
             text(
                 """INSERT INTO app_data
                    (app_id, table_name, key, value, user_scope, updated_by)
-                   VALUES (:app_id, :table, :key, :value::jsonb, '', :by)
+                   VALUES (:app_id, :table, :key, :value ::jsonb, '', :by)
                    ON CONFLICT (app_id, table_name, key, user_scope)
                    DO UPDATE SET value = EXCLUDED.value,
                                  updated_by = EXCLUDED.updated_by,

@@ -38,13 +38,13 @@ const STATIC_LABELS: Record<string, string> = {
   gemini: "Google Gemini", openai: "OpenAI", anthropic: "Anthropic",
   openrouter: "OpenRouter", github: "GitHub Copilot", groq: "Groq",
   mistral: "Mistral AI", together: "Together AI", deepseek: "DeepSeek",
-  deepgram: "Deepgram (speech-to-text)",
+  deepgram: "Deepgram (speech-to-text)", assemblyai: "AssemblyAI (speech-to-text)",
 };
 const STATIC_ENV: Record<string, string> = {
   gemini: "GEMINI_API_KEY", openai: "OPENAI_API_KEY", anthropic: "ANTHROPIC_API_KEY",
   openrouter: "OPENROUTER_API_KEY", github: "GITHUB_TOKEN", groq: "GROQ_API_KEY",
   deepseek: "DEEPSEEK_API_KEY", mistral: "MISTRAL_API_KEY", together: "TOGETHER_API_KEY",
-  deepgram: "DEEPGRAM_API_KEY",
+  deepgram: "DEEPGRAM_API_KEY", assemblyai: "ASSEMBLYAI_API_KEY",
 };
 
 /** Tier metadata by tier_name ("tier-fast"/"tier-stt") → ALL_TIERS entry. */
@@ -379,7 +379,7 @@ export default function ModelsPage() {
                         <div className="text-[9px] text-muted-foreground font-mono truncate">{m.id}</div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0 ml-2">
-                        {isStt && m.provider === "deepgram" && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">names speakers</span>}
+                        {isStt && (m.provider === "deepgram" || m.provider === "assemblyai") && <span className="text-[9px] px-1.5 py-0.5 rounded-full bg-emerald-500/10 text-emerald-600 border border-emerald-500/30">names speakers</span>}
                         <span className={`text-[9px] px-1.5 py-0.5 rounded border ${PROVIDER_COLOURS[m.provider] ?? PROVIDER_COLOURS.unknown}`}>{m.provider}</span>
                         {editModel === m.id && <span className="text-primary text-[10px]">&#10003;</span>}
                       </div>
@@ -656,7 +656,7 @@ export default function ModelsPage() {
                   <div>
                     <div className="text-[10px] font-medium uppercase tracking-wider text-muted-foreground/60 mb-1">Speech-to-text</div>
                     <p className="text-[11px] text-muted-foreground/80 mb-3">
-                      Which model the Note Taker uses to transcribe recordings. Deepgram also names speakers (diarization) in multi-speaker meetings.
+                      Which model the Note Taker uses to transcribe recordings. AssemblyAI and Deepgram also name speakers (diarization) in multi-speaker meetings — AssemblyAI does it on live captions too.
                     </p>
                     {sttEnabledModels.length === 0 && !loadingModels && (
                       <div className="mb-2 rounded-lg border border-warning/25 bg-warning/5 px-4 py-3 text-xs text-warning/80">

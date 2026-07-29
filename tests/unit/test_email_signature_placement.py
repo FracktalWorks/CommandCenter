@@ -146,6 +146,51 @@ def test_unrecognised_html_falls_back_to_appending() -> None:
     assert html is not None and html.startswith(raw)
 
 
+# ── signature lives IN the draft body ───────────────────────────────────────
+# Drafts are signed at draft-write time (visible in upstream Gmail/Outlook
+# drafts, not only after send); send stays the idempotent safety net.
+
+
+def test_append_signature_text_is_idempotent_and_quote_aware() -> None:
+    from gateway.routes.email.signature import append_signature_text
+
+    body = f"{_REPLY}\n\n{_QUOTE}"
+    once = append_signature_text(_SIG, body)
+    assert once.count(_SIG) == 1
+    assert once.index(_SIG) < once.index("On 2026-07-19")  # above the quote
+    # Re-signing (autosave loops, save-then-send) never stacks a second copy.
+    assert append_signature_text(_SIG, once) == once
+
+
+def test_strip_signature_text_removes_only_the_signature() -> None:
+    from gateway.routes.email.signature import (
+        append_signature_text,
+        strip_signature_text,
+    )
+
+    signed = append_signature_text(_SIG, _REPLY)
+    assert strip_signature_text(_SIG, signed) == _REPLY
+    assert strip_signature_text(_SIG, _REPLY) == _REPLY  # absent → unchanged
+    assert strip_signature_text("", signed) == signed    # no signature set
+
+
+def test_presigned_body_sends_with_rich_html_signature() -> None:
+    """A draft that already carries the PLAIN signature must still go out with
+    the rendered HTML block — swapped in place, not the escaped text, and never
+    doubled."""
+    from gateway.routes.email.signature import append_signature_text
+
+    sig_html = '<b>Vijay</b> · <a href="https://fracktal.in">fracktal.in</a>'
+    body = append_signature_text(sig_html, "Thanks — sending now.")
+    assert "Vijay · fracktal.in" in body  # the plain rendering, in the draft
+
+    text, html = build_signed_bodies(sig_html, body)
+    assert text == body  # not doubled
+    assert html is not None
+    assert '<a href="https://fracktal.in">' in html  # the RICH block
+    assert "Vijay · fracktal.in" not in html  # not the escaped plain rendering
+
+
 # ── the drafter ─────────────────────────────────────────────────────────────
 
 

@@ -42,13 +42,16 @@ class Settings(BaseSettings):
     # All LLM calls use the litellm Python SDK directly (no separate proxy).
     litellm_base_url: str = "http://127.0.0.1:8080"
     litellm_master_key: str = "sk-local"
-    # Internal service token the gateway's /v1 + server-to-server endpoints
-    # authenticate against (acb_auth.require_internal_auth). Reads
-    # GATEWAY_INTERNAL_TOKEN; when unset the gateway falls back to
-    # litellm_master_key. Every BYOK/internal caller MUST present this token
-    # with the SAME precedence (gateway_internal_token → litellm_master_key),
-    # else a divergence between the two values yields a 401 that surfaces on
-    # Copilot BYOK agents as the misleading "Authorization error, run /login".
+    # SERVICE IDENTITY token — proves a caller *is* the platform and grants
+    # full authority (acb_auth.require_internal_auth / SERVICE_ACCESS). Reads
+    # GATEWAY_INTERNAL_TOKEN. Distinct from litellm_master_key ON PURPOSE:
+    # the LLM key is handed to every agent's BYOK client, so while the two
+    # were one value any agent could authenticate as the platform (BO-2
+    # residual #4). When this is unset the gateway still falls back to
+    # litellm_master_key so an un-migrated deployment keeps working, but it
+    # logs a warning on every resolution because the separation is then absent.
+    #
+    # Never hand this to a /v1 client — use `llm_api_key` below.
     gateway_internal_token: str = ""
 
     # Master encryption key for the provider key store (ADR-008).
@@ -136,6 +139,13 @@ class Settings(BaseSettings):
     # resolve their paths).
     custom_apps_root: str = ""
 
+    # T2 (React) App Workshop build dependency cache — react/react-dom/esbuild,
+    # installed once at deploy time, never per-app. Empty (the default)
+    # resolves to {agents_clone_dir}/vendor/t2-react; override with
+    # CUSTOM_APPS_T2_VENDOR_DIR. Resolution lives in
+    # gateway.routes.apps.t2_vendor_dir().
+    custom_apps_t2_vendor_dir: str = ""
+
     # -- Bot git identity (written into every local clone via git config) --
     # Commits and PRs opened by Self_Mutation_Node carry this identity.
     # Create a dedicated GitHub machine user (or use the GitHub App's identity).
@@ -153,6 +163,17 @@ class Settings(BaseSettings):
     mutation_sandbox_image: str = "acb-mutation-runner:latest"
     mutation_timeout_seconds: int = 600              # hard cap on a single mutation run
     mutation_auto_pr: bool = True                    # open a GitHub PR after a successful fix
+
+    # Resource/capability limits on the `docker run` invocation (BO-7 cheap
+    # win 3/3 — the mutation-runner was the concrete precedent BO-7 wants
+    # generalized to the normal agent load path, but it shipped with none of
+    # its own: no --cap-drop, no --memory/--cpus, unrestricted on a 4GB VPS).
+    # Conservative defaults sized for that box — mutation is an occasional,
+    # on-demand run, not a resident service, so it doesn't need to compete
+    # with Postgres/Redis/gateway/workbench for the whole machine.
+    mutation_memory_limit: str = "2g"                # docker --memory
+    mutation_cpu_limit: str = "2"                    # docker --cpus
+    mutation_pids_limit: int = 512                   # docker --pids-limit (fork-bomb backstop)
 
     # Native-MAF mutation → monorepo PR (Part 1).
     # A native MAF agent (local_path, no git remote) can't push its self-mutation
@@ -174,6 +195,43 @@ class Settings(BaseSettings):
     # the broader monorepo-write credential is explicit. Falls back to
     # github_token when blank — see mutation_pr_token property below.
     mutation_pr_token: str = ""
+
+    # Copilot SDK session sandbox (BO-7 phase 2 — containerize Copilot-SDK-
+    # shaped agent execution: code_task and the App Workshop app-builder).
+    # Unlike the mutation-runner sandbox (ships the whole SDK + a task driver
+    # into the container, parsed via stdout sentinels), this containerizes
+    # ONLY the `copilot` CLI binary as a TCP JSON-RPC server (the SDK's own
+    # `cli_url` transport — see copilot/client.py). All host-side
+    # orchestration — CommandCenterCopilotAgent, event streaming, permission
+    # handling — is unchanged; it just talks to a socket instead of a local
+    # subprocess. See orchestrator/copilot_sandbox.py.
+    #
+    # Comma-separated subset of {"code_task", "app_builder"} — which call
+    # sites route through the sandbox. Empty (default) = fully off, in-process
+    # everywhere, zero behavior change. Spawn/readiness failure always falls
+    # back to the existing in-process path — never hard-fails a call because
+    # the sandbox didn't come up.
+    copilot_sandbox_scope: str = ""
+    copilot_sandbox_image: str = "acb-copilot-sandbox:latest"
+    copilot_sandbox_port: int = 41041           # container-internal CLI server port
+    copilot_sandbox_memory_limit: str = "768m"  # docker --memory (one interactive session, not a full self-mutation+pytest run)
+    copilot_sandbox_cpu_limit: str = "1"        # docker --cpus
+    copilot_sandbox_pids_limit: int = 256       # docker --pids-limit (fork-bomb backstop)
+    copilot_sandbox_ready_timeout_seconds: float = 8.0   # spawn+TCP-ready budget before falling back in-process
+    copilot_sandbox_idle_ttl_seconds: int = 600          # app-builder sticky-container reap window
+    copilot_sandbox_state_dir: str = ""         # "" resolves to {agents_clone_dir}/.copilot-sandbox-state
+
+    # Agent dependency installs (packages/acb_skills/acb_skills/loader.py
+    # _install_agent_deps) — RCE guard (BO-7 fast pass). Agent repos'
+    # requirements.txt/pyproject.toml install straight into the SHARED
+    # gateway venv via pip/uv, ahead of any tool-call permission gate; an
+    # sdist's setup.py / PEP 517 build backend can run arbitrary code during
+    # that install. Default False forces --only-binary=:all: (wheels only —
+    # a pure install has no code-execution step; the overwhelming majority of
+    # PyPI ships wheels). Set True only for a specific, vetted environment
+    # that genuinely needs a source-only package — this widens every agent's
+    # install, not just one.
+    agent_deps_allow_source_builds: bool = False
 
     # Copilot SDK chat (coworker sessions via /copilot/chat)
     # Auth order: LITELLM_MASTER_KEY → gateway /v1  |  GITHUB_TOKEN → api.githubcopilot.com
@@ -294,6 +352,25 @@ class Settings(BaseSettings):
     # embedding history costs tokens + a background sweep. Turn on once migration
     # 111 has run. Reuses email_embedding_model/dim (one embedder for the app).
     whatsapp_semantic_search_enabled: bool = False
+
+    # ── Token accessors ────────────────────────────────────────────────────
+
+    @property
+    def llm_api_key(self) -> str:
+        """The key a ``/v1`` client should present. **Never the identity token.**
+
+        Use this for anything whose only job is routing LLM completions
+        through the gateway — BYOK clients, the Copilot SDK provider config,
+        the mutation container's env. Those all run (or execute) model-authored
+        code, so handing them ``gateway_internal_token`` would let an agent
+        authenticate as the platform.
+
+        Callers that hit gateway *business* APIs (``/tasks``, ``/email``,
+        ``/whatsapp``, workspace upload) still need
+        ``gateway_internal_token`` — until they act on behalf of a member
+        instead. See ai-company-brain/specs/org_access_control.md §8b.
+        """
+        return (self.litellm_master_key or "").strip() or "sk-local"
 
 
 @lru_cache(maxsize=1)

@@ -20,6 +20,18 @@ export interface MeetingListItem {
   template_key: string | null;
   start_at: string | null;
   created_at: string | null;
+  /** When the meeting is planned for. Distinct from start_at (when capture
+   *  actually began) — a meeting being prepared has one but not the other. */
+  scheduled_at?: string | null;
+  /** Per-meeting copilot decision. null = follow the account default. */
+  copilot_enabled?: boolean | null;
+  /** Signals the library bands on — see lib/bands.ts. */
+  pending_actions?: number;
+  action_count?: number;
+  agenda_count?: number;
+  has_brief?: boolean;
+  attendee_count?: number;
+  is_live?: boolean;
 }
 
 /** A meeting-notes template (shapes the generated summary). */
@@ -123,6 +135,31 @@ export interface NoteDoc {
   updated_at: string | null;
 }
 
+/** A notetaker bot dispatched to join a live call (spec §3.13). */
+export type MeetingBotStatus =
+  | "requested"
+  | "joining"
+  | "waiting_room"
+  | "in_call"
+  | "processing"
+  | "done"
+  | "failed"
+  | "left"
+  | "not_admitted";
+
+export interface MeetingBot {
+  id: string;
+  meeting_id: string;
+  status: MeetingBotStatus;
+  provider: string;
+  meeting_url: string;
+  bot_name: string | null;
+  error: string | null;
+  meeting_title: string | null;
+  created_at: string | null;
+  updated_at: string | null;
+}
+
 /** Snapshot pushed over the per-meeting SSE progress stream. */
 export interface MeetingEvent {
   status: MeetingStatus;
@@ -136,4 +173,111 @@ export interface MeetingEvent {
     chunk_total: number;
     error: string | null;
   }[];
+}
+
+/** A meeting being captured right now — powers the "live now" presence dock. */
+export interface LiveSession {
+  id: string;
+  meeting_id: string;
+  source: "bot" | "browser";
+  owner_email: string | null;
+  status: "live" | "ended";
+  /** Opt-in, off by default; stored in Phase A, acted on by the orchestrator. */
+  copilot_enabled: boolean;
+  mode: "listening" | "interactive" | "speaking";
+  /** May this session ask the business agents (CRM, tasks) for background? */
+  deep_context: boolean;
+  started_at: string | null;
+  ended_at: string | null;
+  title: string | null;
+}
+
+/** One live-transcript segment off the bus (bot or in-browser recorder). */
+export interface LiveSegment {
+  text: string;
+  start_s: number;
+  end_s: number;
+  /** Stable across chunks — assigned by the live voiceprint gallery. */
+  speaker_id: string | null;
+  speaker_label: string | null;
+  /** Bound live from a self-introduction ("I'm Priya"), when detected. */
+  speaker_name: string | null;
+  role: string | null;
+  is_final: boolean;
+  ts: number | null;
+}
+
+/** Who's on the call so far, per the live speaker registry. */
+export interface LiveSpeaker {
+  speaker_id: string;
+  name: string | null;
+  role: string | null;
+  utterances: number;
+}
+
+/** Something the copilot surfaced during a live session. */
+export interface CopilotEvent {
+  kind: "suggestion" | "question" | "answer" | "fact" | "status";
+  text: string;
+  /** What it was grounded in — the window, speakers and trigger. */
+  refs: {
+    window?: string;
+    speakers?: string[];
+    topic?: string;
+    trigger?: string;
+  };
+  token_cost: number;
+  ts: number | null;
+}
+
+/** What the copilot knows about a meeting before anyone speaks. */
+export interface MeetingContext {
+  /** Layer 1 — what you told it. The highest-value source. */
+  brief: string;
+  attendees: string[];
+  /** Layer 2 — past meetings with the same people. */
+  past: string[];
+  open_actions: string[];
+  /** Layer 3 — what the business agents reported (CRM, tasks). */
+  systems: Record<string, string>;
+  is_empty: boolean;
+}
+
+/** One thing to cover in a meeting. Structured so it can be measured live. */
+export interface AgendaItem {
+  title: string;
+  notes: string;
+}
+
+/** Live agenda coverage — what's been discussed, and how long you've had. */
+export interface AgendaProgress {
+  items: { title: string; notes: string; covered: boolean }[];
+  covered_count: number;
+  total: number;
+  elapsed_s: number;
+}
+
+/** Note Taker settings — one row per user, read/written whole. */
+export interface NotesSettings {
+  copilot_instructions: string;
+  copilot_default_on: boolean;
+  copilot_sensitivity: "low" | "normal" | "high";
+  /** Per-meeting-type overrides. Absent key = use the shipped default. */
+  template_instructions: Record<string, string>;
+  default_template: string | null;
+  bot_name: string | null;
+}
+
+/** A meeting type, with the copilot guidance shipped for it. */
+export interface TemplateInfo {
+  key: string;
+  label: string;
+  copilot_default: string;
+  agenda_hint: string;
+}
+
+export interface NotesSettingsPayload {
+  settings: NotesSettings;
+  templates: TemplateInfo[];
+  sensitivities: string[];
 }

@@ -1169,6 +1169,19 @@ export default function AgentChat({
     inputRef.current?.focus();
   };
 
+  // Collapse the auto-grown textarea back to one line whenever the input is
+  // cleared. The auto-grow sets the height IMPERATIVELY on the `onInput` event
+  // (see the textarea below); clearing `input` via React state does NOT fire
+  // `onInput`, so without this the empty composer stays as tall as the
+  // just-sent multi-line message — it looks like a giant blank box while the
+  // agent is processing. Keyed on `input === ""` so it never fights the
+  // grow-on-type path.
+  useEffect(() => {
+    if (input === "" && inputRef.current) {
+      inputRef.current.style.height = "auto";
+    }
+  }, [input]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
     if (e.key === "Enter" && !e.shiftKey) {
       e.preventDefault();

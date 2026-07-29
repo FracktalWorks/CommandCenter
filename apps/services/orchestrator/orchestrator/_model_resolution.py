@@ -94,7 +94,7 @@ def _apply_byok_provider_for_copilot_sdk(
         # master key 401s when the two values diverge, which surfaces on the
         # Copilot session as "Authorization error, run /login".
         gw_key = (
-            getattr(settings, "gateway_internal_token", "")
+            getattr(settings, "llm_api_key", "")
             or getattr(settings, "litellm_master_key", "")
             or "sk-local"
         ).strip()

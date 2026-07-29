@@ -5,7 +5,8 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from acb_auth import UserContext, UserRole, get_current_user, require_role
+from acb_auth import (UserContext, UserRole, get_current_user,
+                      require_authenticated, require_role)
 from acb_common import configure_logging, get_logger, get_settings
 from fastapi import BackgroundTasks, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -102,6 +103,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
 
     import asyncio as _asyncio
     _asyncio.ensure_future(_warmup_copilot_models())
+
+    # Sweep any `cc-copilot-*` sandbox containers (BO-7 phase 2 —
+    # copilot_sandbox.py) left running by a prior crashed gateway process.
+    # Cheap no-op when copilot_sandbox_scope has never been enabled (docker ps
+    # finds nothing) or Docker itself isn't available (best-effort, never raises).
+    async def _sweep_copilot_sandboxes() -> None:
+        try:
+            from orchestrator.copilot_sandbox import sweep_orphaned_sandboxes
+            await sweep_orphaned_sandboxes()
+        except Exception as _e:
+            _log.warning("gateway.copilot_sandbox_sweep_failed", error=str(_e))
+
+    _asyncio.ensure_future(_sweep_copilot_sandboxes())
 
     # Warm-clone every live agent that has a source (GitHub repo or local path)
     # but no clone on disk yet.  Clones are created lazily on first run, so a
@@ -359,11 +373,80 @@ async def _prewarm_prompt_cache() -> None:
         _log.debug("gateway.cache_prewarm_skipped", error=str(exc)[:150])
 
 
+# ── Public routes (BO-2 residual #1) ────────────────────────────────────────
+#
+# Everything not listed here requires authentication — a valid internal bearer
+# token, or a domain-verified X-User-Email that arrived with one. Default-deny
+# is applied once at the app level so a route added tomorrow is covered without
+# anyone remembering to add a guard. The failure mode of opt-in security is the
+# route nobody opted in, and that is exactly what happened to
+# /agent/workspace/{id}/history and /promote, which were reading and writing
+# agent workspaces anonymously until this landed.
+#
+# Every entry below either authenticates itself by another means or is a
+# liveness probe. Gating one would not restrict access — it would break
+# ingestion, sign-in, or the health check. Matching is on the route TEMPLATE,
+# so a path parameter cannot be crafted to spell a public path.
+PUBLIC_ROUTES: frozenset[str] = frozenset({
+    # Liveness. Deliberately says nothing beyond status + env name.
+    "/health",
+
+    # Provider webhook receivers — each verifies its own signature in
+    # ingestion/sources/*/webhook.py.
+    "/webhooks/clickup",
+    "/webhooks/gmail",
+    "/webhooks/zoho",
+
+    # Agent dispatch — HMAC-SHA256 over the raw body (X-CC-Signature), and it
+    # fails closed when unconfigured. See routes/agent.verify_webhook_signature.
+    "/agent/webhook/{source}",
+
+    # OAuth callbacks: browser redirects from the provider carrying no session.
+    # Trust comes from the HMAC-signed `state`. The authorize legs are
+    # user-initiated and stay gated.
+    "/integrations/oauth/callback/{service}",
+    "/email/oauth/{provider}/callback",
+
+    # Microsoft Graph change notification — validationToken echo + clientState.
+    "/email/webhook/microsoft",
+
+    # Meta webhook — verify-token on GET, signature on POST.
+    "/whatsapp/webhook",
+
+    # The Go bridge posts inbound messages with X-Bridge-Secret (constant-time
+    # compare in whatsapp/transport/bridge.bridge_secret_ok).
+    "/whatsapp/bridge/ingest",
+    "/whatsapp/bridge/reclassify",
+    "/whatsapp/bridge/labels",
+    "/whatsapp/bridge/paired",
+
+    # Meeting-bot worker callbacks — machine-authed by MEETING_BOT_TOKEN.
+    "/notes/meetings/{meeting_id}/live/segment",
+    "/notes/stt/bot-live-token",
+})
+
+def docs_enabled(env: str) -> bool:
+    """Whether to serve Swagger/ReDoc/openapi.json.
+
+    Swagger and ReDoc are the one surface the app-level auth dependency cannot
+    reach: FastAPI mounts them as plain Starlette routes with no dependency
+    chain. They publish the entire API surface, so outside dev the endpoints
+    simply do not exist. Read the schema against a local instance instead.
+    """
+    return env == "dev"
+
+
+_docs_enabled = docs_enabled(get_settings().acb_env)
+
 app = FastAPI(
     title="AI Company Brain — Gateway",
     version="0.0.1",
     description="Pull queries, push notifications, approvals. See ai-company-brain/system_architecture.md §3.",
     lifespan=lifespan,
+    dependencies=[require_authenticated(public=PUBLIC_ROUTES)],
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # ── CORS ── allow workbench dev server (port 3001) and production origin
@@ -845,6 +928,19 @@ try:
     from gateway.routes.apps import router as _apps_router
 
     app.include_router(_apps_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # Org access control (ai-company-brain/specs/org_access_control.md) —
+    # member roster + lifecycle, roles, per-user overrides (prefix /admin),
+    # plus /auth/me, which every signed-in member calls to resolve their own
+    # feature and agent access.
+    from gateway.routes.admin import me_router as _me_router
+    from gateway.routes.admin import router as _admin_router
+
+    app.include_router(_admin_router)
+    app.include_router(_me_router)
 except Exception:  # pragma: no cover
     pass
 

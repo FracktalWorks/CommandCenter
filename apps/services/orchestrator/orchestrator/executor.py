@@ -702,17 +702,11 @@ async def _run_sub_agent_streaming(
                                     )
                                     or "http://127.0.0.1:8080"
                                 ).rstrip("/")
-                                # Present the gateway's internal token with the
-                                # SAME precedence as require_internal_auth
-                                # (gateway_internal_token → litellm_master_key),
-                                # else a token divergence 401s the BYOK call.
+                                # /v1 only — LLM API key, not the identity
+                                # token: this provider config is attached to
+                                # agent code (BO-2 residual #4).
                                 _gw_key = (
-                                    getattr(
-                                        settings, "gateway_internal_token", ""
-                                    )
-                                    or getattr(
-                                        settings, "litellm_master_key", ""
-                                    )
+                                    getattr(settings, "llm_api_key", "")
                                     or "sk-local"
                                 ).strip()
                                 agent._default_options["provider"] = {
@@ -921,6 +915,75 @@ def _resolve_effective_agent_dir(
         fallback=str(agent_dir),
     )
     return str(agent_dir)
+
+
+async def _maybe_sandbox_session_workspace(
+    *,
+    thread_id: str | None,
+    session_ws: str | None,
+    effective_agent_dir: str,
+    agent_dir: Path,
+    agent: Any,
+    settings: Any,
+) -> None:
+    """BO-7 phase 2: containerize a session-workspace-override agent's Copilot
+    CLI (the App Workshop app-builder — identified via the SAME
+    ``allow_session_workspace`` hook :func:`_session_workspace_override` gates
+    on, never a hardcoded agent name) when ``"app_builder"`` is in
+    ``settings.copilot_sandbox_scope``.
+
+    Sticky per-``thread_id`` reuse (``copilot_sandbox.get_or_spawn_sticky``) —
+    a fresh container on every chat turn would regress the latency this
+    interactive path doesn't have today.
+
+    Mutates *agent* (``_sandbox_cli_url``, ``_default_options
+    ["working_directory"]``) and ``_WRITE_ARTIFACT_CONTEXT
+    ["permission_check_root"]`` in place on success. Off by default (empty
+    scope); any spawn failure leaves *agent* untouched, falling back to the
+    in-process ``working_directory`` the caller already set. Never raises.
+    """
+    try:
+        from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT
+        scope = str(getattr(settings, "copilot_sandbox_scope", "") or "")
+        if not (
+            session_ws
+            and thread_id
+            and "app_builder" in {s.strip() for s in scope.split(",") if s.strip()}
+        ):
+            _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
+            return
+
+        from gateway.routes.apps._common import t2_vendor_dir
+
+        from orchestrator.copilot_sandbox import CONTAINER_WORKSPACE, get_or_spawn_sticky
+
+        # T2 builds run `node build_t2.mjs` — a host-absolute path already
+        # baked into this agent's system prompt at import time
+        # (agent-app-builder/agents.py). Mounting its own repo clone at the
+        # IDENTICAL container path makes that baked-in path resolve correctly
+        # with no prompt/agent changes. The vendor cache (react/react-dom/
+        # esbuild) is mounted at a fresh container path and pointed to via
+        # the same env var build_t2.mjs already reads on the host.
+        abuilder_dir = str(agent_dir)
+        sandbox = await get_or_spawn_sticky(
+            thread_id=thread_id,
+            workspace=effective_agent_dir,
+            label="app_builder",
+            settings=settings,
+            extra_mounts={
+                abuilder_dir: abuilder_dir,
+                str(t2_vendor_dir()): "/opt/t2-vendor",
+            },
+            extra_env={"CUSTOM_APPS_T2_VENDOR_DIR": "/opt/t2-vendor"},
+        )
+        if sandbox is not None:
+            agent._sandbox_cli_url = sandbox.cli_url
+            agent._default_options["working_directory"] = CONTAINER_WORKSPACE
+            _WRITE_ARTIFACT_CONTEXT["permission_check_root"] = CONTAINER_WORKSPACE
+        else:
+            _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
+    except Exception:
+        pass
 
 
 def _apply_agent_md_overrides(
@@ -1410,6 +1473,68 @@ async def _detect_agent_commits(
         )
 
 
+async def _integration_authorizer(event_payload: Any):
+    """Build the per-run integration filter for the acting member, or None.
+
+    Org access control (spec §5, seam 3). An agent's ``config.json`` declares
+    which integrations it *wants*; this decides which the caller may actually
+    hand it, so a member denied `integrations:use:zoho-crm` cannot reach Zoho
+    by picking an agent that declares it.
+
+    Returns ``None`` — meaning no filtering, the pre-org-access-control
+    behaviour — whenever the run is **not** attributable to an active member:
+
+    * no ``user_email`` in the payload (cron, reconciler, webhook-triggered
+      runs: the platform acting on its own behalf, not a person's);
+    * a synthetic principal such as ``system:internal``;
+    * an address that does not resolve to an ACTIVE member.
+
+    That last case is the important one. This feature exists to restrict a
+    known member's reach — it must never become a new way for a background
+    run to silently lose its credentials because the address in the payload
+    happened not to be a provisioned member. Who may start a run at all is
+    already enforced upstream by ``assert_can_run_agent``, so an
+    unidentifiable address here means "platform-initiated", not "attacker".
+    """
+    email = ""
+    if isinstance(event_payload, dict):
+        email = str(
+            event_payload.get("user_email") or event_payload.get("user_id") or ""
+        ).strip()
+    if not email or ":" in email:
+        return None
+
+    try:
+        from acb_auth import (  # noqa: PLC0415
+            integration_use_permission,
+            resolve_access,
+        )
+
+        access = await resolve_access(email)
+        if not access.is_active:
+            return None
+
+        # Same resolution also arms the memory tools' permission gate, so
+        # org-memory writes are checked against the same member. Done here so
+        # there is exactly one access lookup per run.
+        try:
+            from acb_skills.memory_tools import (  # noqa: PLC0415
+                _set_memory_permission,
+            )
+
+            _set_memory_permission(access.has)
+        except Exception:  # noqa: BLE001
+            pass
+
+        return lambda service: access.has(integration_use_permission(service))
+    except Exception as exc:  # noqa: BLE001
+        # resolve_access is documented never to raise, so reaching here is a
+        # bug rather than a misconfiguration. Preserve the prior behaviour
+        # rather than failing every integration on a transient fault.
+        _log.warning("executor.integration_authorizer_failed", error=str(exc))
+        return None
+
+
 async def run_agent(
     agent_name: str,
     event_payload: dict[str, Any],
@@ -1533,7 +1658,8 @@ async def run_agent(
             mandatory_integrations: list[str] = loaded.config.get("integrations", [])
             optional_integrations: list[str] = loaded.config.get("optional_integrations", [])
             integrations, integration_warnings = build_integrations(
-                mandatory_integrations, optional_integrations, settings
+                mandatory_integrations, optional_integrations, settings,
+                is_authorized=await _integration_authorizer(event_payload),
             )
             if integration_warnings:
                 _log.warning(
@@ -2021,8 +2147,12 @@ async def run_agent_stream(
         ) as loaded:
             mandatory = loaded.config.get("integrations", [])
             optional = loaded.config.get("optional_integrations", [])
+            # Filter BEFORE the env injection below, so a credential the
+            # acting member may not use never enters the run's environment at
+            # all — not merely absent from state["integrations"].
             integrations, integration_warnings = build_integrations(
-                mandatory, optional, settings
+                mandatory, optional, settings,
+                is_authorized=await _integration_authorizer(event_payload),
             )
             # B6 Phase-5 Tier 0: scope creds to this run; token restored in the
             # finally below so they don't linger in the shared process env.
@@ -2637,6 +2767,21 @@ async def run_agent_stream(
                 )
                 agent._stream_updates = CommandCenterCopilotAgent._stream_updates.__get__(
                     agent, type(agent)
+                )
+
+                # BO-7 phase 2: containerize the App Workshop app-builder's
+                # session (no-op for every other agent — see docstring).
+                # _effective_agent_dir IS _session_ws here whenever it applies
+                # (_resolve_effective_agent_dir gives the session override
+                # full precedence), so it's always the Custom App workspace,
+                # never the app-builder's own clone.
+                await _maybe_sandbox_session_workspace(
+                    thread_id=thread_id,
+                    session_ws=_session_ws,
+                    effective_agent_dir=_effective_agent_dir,
+                    agent_dir=loaded.agent_dir,
+                    agent=agent,
+                    settings=settings,
                 )
 
                 # Install push guard + capture HEAD for post-run commit detection.
@@ -3279,11 +3424,20 @@ async def run_agent_stream(
                     # denies, audit logs-only). Named platform tools approve
                     # today; this is the enforcement point for any future
                     # denyable tool + gives audit parity across runtimes.
+                    #
+                    # BO-7 cheap win 1/3: reuse call_args (already bound above,
+                    # for the UI event) as the tool's real call context instead
+                    # of gating on tool_name alone — run_script's actual
+                    # path/args now reach decide()'s shell-denylist check here
+                    # too, not just on the injected-tool gate's path.
                     try:
                         from acb_skills.permission_policy import (  # noqa: PLC0415
+                            build_tool_call_context as _perm_context,
                             decide as _perm_decide,
                         )
-                        _ok, _code, _det = _perm_decide({"tool_name": tool_name})
+                        _ok, _code, _det = _perm_decide(
+                            _perm_context(tool_name, call_args)
+                        )
                         _pmode = os.environ.get(
                             "AGENT_PERMISSION_MODE", "enforce"
                         ).strip().lower()

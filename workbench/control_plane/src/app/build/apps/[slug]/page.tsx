@@ -15,6 +15,7 @@ import { useTheme } from "next-themes";
 import {
   AlertTriangle,
   Database,
+  GitFork,
   Hammer,
   HelpCircle,
   Info,
@@ -28,10 +29,12 @@ import {
 import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   buildAppSrcDoc,
+  extractCcIconNames,
   useCcBridge,
   type CcToolConfirmDecision,
   type CcToolConfirmRequest,
 } from "../lib/ccBridge";
+import { buildIconMap } from "@/lib/iconSvg";
 import type { AppMeta, AppUsage, AppVersion } from "../lib/types";
 
 /** A pending `cc.tools.call()` confirm, waiting on the viewer's decision. */
@@ -172,6 +175,37 @@ export default function AppRunPage({
   // "Make live" (rollback) two-step confirm, editors only.
   const [confirmVersion, setConfirmVersion] = useState<number | null>(null);
   const [rollbackBusy, setRollbackBusy] = useState(false);
+
+  // Fork/remix — duplicate this app's current source as a new app owned by
+  // the viewer (works for anyone who can see the app, not just editors).
+  const [forking, setForking] = useState(false);
+  const [forkError, setForkError] = useState<string | null>(null);
+  const forkApp = useCallback(async () => {
+    if (forking) return;
+    setForking(true);
+    setForkError(null);
+    try {
+      const res = await fetch(`/api/apps/${encodeURIComponent(slug)}/fork`, {
+        method: "POST",
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        slug?: string;
+        detail?: string;
+      };
+      if (!res.ok || !data.slug) {
+        setForkError(
+          (typeof data.detail === "string" && data.detail) ||
+            `Fork failed (HTTP ${res.status})`
+        );
+        return;
+      }
+      router.push(`/build/apps/${data.slug}/edit`);
+    } catch (e) {
+      setForkError(String(e));
+    } finally {
+      setForking(false);
+    }
+  }, [slug, forking, router]);
 
   // Tool-confirm toast (bottom-right) — a cc.tools.call() hit a destructive
   // tool with no remembered grant; resolve() unblocks the app frame's call.
@@ -367,6 +401,12 @@ export default function AppRunPage({
     () => (bundle ? buildAppSrcDoc(bundle, { slug, mode: "live" }) : null),
     [bundle, slug]
   );
+  // Same icon pre-resolution as the Workshop's preview — the published run
+  // page goes through the exact same sandboxed frame.
+  const runIcons = useMemo(
+    () => (srcDoc ? buildIconMap(extractCcIconNames(srcDoc)) : {}),
+    [srcDoc]
+  );
 
   const canEdit = app?.role === "own" || app?.role === "edit";
 
@@ -423,12 +463,27 @@ export default function AppRunPage({
         <span className="hidden sm:flex items-center gap-1.5 text-[11px] text-muted-foreground border border-border rounded-full px-2.5 py-1 shrink-0">
           runs as {viewerEmail}
         </span>
+        <button
+          onClick={forkApp}
+          disabled={forking}
+          title="Duplicate this app as your own editable copy"
+          className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+        >
+          {forking ? (
+            <Loader2 className="w-3.5 h-3.5 animate-spin" />
+          ) : (
+            <GitFork className="w-3.5 h-3.5" />
+          )}
+          <span className="hidden sm:inline">Fork</span>
+        </button>
         {canEdit && (
           <button
             onClick={() => router.push(`/build/apps/${slug}/edit`)}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
+            title="Open in Workshop"
+            className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
           >
-            <Wrench className="w-3.5 h-3.5" /> Open in Workshop
+            <Wrench className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Open in Workshop</span>
           </button>
         )}
         <div className="relative shrink-0" ref={infoRef}>
@@ -446,7 +501,7 @@ export default function AppRunPage({
 
           {/* Info popover */}
           {showInfo && (
-            <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-border bg-card shadow-lg z-40 p-4 flex flex-col gap-3 text-xs">
+            <div className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-card shadow-lg z-40 p-4 flex flex-col gap-3 text-xs">
               <div className="flex justify-between gap-3">
                 <span className="text-muted-foreground">Owner</span>
                 <span className="text-foreground truncate">
@@ -532,10 +587,23 @@ export default function AppRunPage({
         </div>
       </div>
 
+      {forkError && (
+        <div className="flex items-center gap-2 px-4 py-2 border-b border-border bg-destructive/5 text-xs text-destructive shrink-0">
+          <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+          {forkError}
+          <button
+            onClick={() => setForkError(null)}
+            className="ml-auto text-muted-foreground hover:text-foreground"
+          >
+            ✕
+          </button>
+        </div>
+      )}
+
       {/* ── The app, in the sandboxed frame ─────────────────────────── */}
       <div className="flex-1 min-h-0 flex flex-col">
         {srcDoc ? (
-          <SandboxedHtml chromeless html={srcDoc} theme={theme} />
+          <SandboxedHtml chromeless html={srcDoc} theme={theme} icons={runIcons} />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
             <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">

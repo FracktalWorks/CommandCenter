@@ -117,3 +117,25 @@ are still *designed-not-enforced*, so "defend" partly means "finish."
   annotated with competitive references; **BO-20** (event-bus consumer + durable job queue) and **BO-21**
   (memory activation + local-embeddings fallback) added as new foundational items; Phase-5 Annealer flagged
   as the home for the self-improving-skills (Hermes Curator) learning. No code changes.
+- 2026-07-27 — BO-7 progress, in two passes. **Cheap wins**: full call context (not just tool name) now
+  reaches `permission_policy.decide()`; `install_dependency` flagged destructive via `tool_annotations`;
+  the mutation-runner container got `--cap-drop ALL`/`no-new-privileges`/resource limits it was missing.
+  **Dep-install RCE fix**: `loader.py`'s agent dependency install now defaults to `--only-binary=:all:`
+  (wheels only) — closes the arbitrary-code-at-install-time gap that ran ahead of any tool-call gate.
+  **Copilot-SDK session containerization (code_task)**: `code_task` sessions now route through
+  `orchestrator/copilot_sandbox.py` when `copilot_sandbox_scope` includes `code_task` — containerizes just
+  the `copilot` CLI binary as a TCP JSON-RPC server (`Dockerfile.copilot-sandbox`), reusing the mutation
+  container's hardening flags; host-side orchestration/permission-handling is unchanged. Off by default,
+  hard fallback to in-process on any spawn failure.
+  **Copilot-SDK session containerization (App Workshop app-builder)**: same day, follow-up pass — the
+  interactive-chat call site now wired too, via a new `executor._maybe_sandbox_session_workspace()` gated on
+  the SAME `allow_session_workspace` hook `_session_workspace_override` already used (never a hardcoded
+  agent name) plus `"app_builder"` in `copilot_sandbox_scope`. Uses `copilot_sandbox.get_or_spawn_sticky`'s
+  per-`thread_id` container reuse — a fresh container every chat turn would have regressed the latency this
+  path doesn't have today. The T2 build step (`node build_t2.mjs`, a host-absolute path baked into the
+  agent's system prompt at import time) needed two extra read-only mounts: the app-builder's own repo
+  mounted at the IDENTICAL container path (so the baked-in path resolves with zero prompt changes) and the
+  shared T2 vendor cache mounted at a fresh path, pointed to via `CUSTOM_APPS_T2_VENDOR_DIR` (build_t2.mjs
+  already reads this env var on the host) — `Dockerfile.copilot-sandbox` also picked up `nodejs` for this.
+  **Still open**: the bulk of CH-1's own wording — `loader.py`'s in-process `importlib` agent load path
+  itself, which neither pass touched. Row status stays ⚠️ until that lands.

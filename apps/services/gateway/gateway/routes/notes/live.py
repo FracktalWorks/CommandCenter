@@ -1,15 +1,27 @@
-"""Live transcription — mint a short-lived Deepgram token for the browser.
+"""Live transcription — mint a short-lived streaming token for the browser.
 
-Live captions during a recording use Deepgram's streaming WebSocket. To keep the
-gateway out of the audio path (spec §7 D7: "gateway stays SSE-only; it mints
-tokens, the WS terminates elsewhere"), the browser connects to Deepgram
-directly — but with an EPHEMERAL, ~1-minute, usage-scoped key minted here from
-the long-lived ``DEEPGRAM_API_KEY``, never the real key. The authoritative
-transcript is still the batch re-pass on stop; live is a fast draft.
+Live captions stream over a WebSocket. To keep the gateway out of the audio path
+(spec §7 D7: "gateway stays SSE-only; it mints tokens, the WS terminates
+elsewhere"), the browser connects to the STT provider directly — but with an
+EPHEMERAL, short-lived token minted here from the long-lived API key, never the
+real key. The authoritative transcript is still the batch re-pass on stop; live
+is a fast draft.
 
-Everything is best-effort and gated: if Deepgram isn't configured (or the key
-lacks key-management scope), this returns 503 and the recorder silently falls
-back to the existing chunked-upload → batch path — live captions just don't
+Two providers, chosen automatically:
+
+- **AssemblyAI** (preferred): diarizes on the live stream too, handles Hindi/
+  English code-switching, and is the cheaper of the two per hour. Token:
+  ``GET /v3/token`` on the streaming host, authed with the raw API key.
+- **Deepgram** (fallback): mints a usage-scoped ephemeral key via its
+  key-management API — which means the master key needs that scope.
+
+Selection follows the configured STT tier when it names a provider we can stream
+(so "everything via AssemblyAI" needs no second setting), otherwise it falls back
+to whichever key is present. The response tells the browser which protocol to
+speak, so adding a provider later doesn't change the endpoint's shape.
+
+Everything is best-effort and gated: with no usable key this returns 503 and the
+recorder silently falls back to chunked-upload → batch — live captions just don't
 appear. Spec: note_taker_app.md §5.2 / §6 (live captions).
 """
 
@@ -19,11 +31,12 @@ import os
 
 import httpx
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import Depends, Header, HTTPException
 from gateway.routes.notes.core import _log, router
 from pydantic import BaseModel
 
 _DG_API = "https://api.deepgram.com/v1"
+_AAI_STREAM = "https://streaming.assemblyai.com/v3"
 _TOKEN_TTL_S = 60  # short — the browser refreshes if a recording runs long
 
 
@@ -35,25 +48,85 @@ def _deepgram_key() -> str:
     return os.environ.get("DEEPGRAM_API_KEY", "").strip()
 
 
-def _live_model() -> str:
-    """The Deepgram model for live captions — the configured tier-stt model when
-    it's a Deepgram one, else nova-3 (whisper can't stream, so live always uses
-    Deepgram regardless of the batch model)."""
+def _assemblyai_key() -> str:
+    return os.environ.get("ASSEMBLYAI_API_KEY", "").strip()
+
+
+def _configured_stt_model() -> str:
+    """The concrete model behind the ``tier-stt`` alias ('' if unresolvable)."""
     try:
         from acb_llm.context import resolve_underlying_model
 
-        resolved = resolve_underlying_model("tier-stt") or ""
-        if resolved.startswith("deepgram/"):
-            return resolved.split("/", 1)[1]
+        return (resolve_underlying_model("tier-stt") or "").lower()
     except Exception:
-        pass
+        return ""
+
+
+def choose_provider(model: str, has_aai: bool, has_dg: bool) -> str | None:
+    """Which provider should serve live captions (pure, so it's testable).
+
+    Follow the configured STT tier when that provider can stream and is keyed —
+    so picking an AssemblyAI model for batch gets you AssemblyAI live too, with
+    no second setting. Otherwise use whichever key exists, preferring AssemblyAI
+    (cheaper, and it diarizes live). ``None`` → live isn't available.
+    """
+    if model.startswith("assemblyai/") and has_aai:
+        return "assemblyai"
+    if model.startswith("deepgram/") and has_dg:
+        return "deepgram"
+    if has_aai:
+        return "assemblyai"
+    if has_dg:
+        return "deepgram"
+    return None
+
+
+def _live_model(provider: str) -> str:
+    """The streaming model id the browser should request."""
+    if provider == "assemblyai":
+        # AssemblyAI's streaming models are a SEPARATE family from the batch
+        # ones — the valid ids are `universal-streaming-english`,
+        # `universal-streaming-multilingual` and `u3-rt-pro`. A batch id like
+        # "universal-2" is not a streaming model at all, so picking it in
+        # Settings -> Models never affected live transcription.
+        #
+        # Default to u3-rt-pro (Universal-3 Pro Streaming) because it is the
+        # model that supports live speaker diarization; the plain
+        # english-streaming model does not, and the symptom is a working
+        # transcript with every voice merged into one speaker rather than an
+        # error. Override per-deployment if the cost tradeoff isn't worth it —
+        # live captions still work on the others, just without speakers.
+        return os.environ.get("ASSEMBLYAI_LIVE_MODEL", "u3-rt-pro").strip()
+    resolved = _configured_stt_model()
+    if resolved.startswith("deepgram/"):
+        return resolved.split("/", 1)[1]
+    # Whisper can't stream, so live always uses a Deepgram model regardless of
+    # what the batch tier is set to.
     return "nova-3"
 
 
 class LiveToken(BaseModel):
-    token: str          # ephemeral Deepgram key (used as the WS auth subprotocol)
-    model: str          # Deepgram model id, e.g. "nova-3"
+    provider: str       # 'assemblyai' | 'deepgram' — which protocol to speak
+    token: str          # ephemeral credential (never the master key)
+    model: str          # provider model id ('' → provider default)
     expires_in: int     # seconds
+
+
+async def _mint_assemblyai_token(api_key: str) -> str:
+    """Short-lived AssemblyAI streaming token. The API key goes in a raw
+    ``authorization`` header (NOT ``Bearer``)."""
+    async with httpx.AsyncClient(timeout=8.0) as client:
+        r = await client.get(
+            f"{_AAI_STREAM}/token",
+            params={"expires_in_seconds": _TOKEN_TTL_S},
+            headers={"authorization": api_key},
+        )
+        r.raise_for_status()
+        data = r.json()
+        token = data.get("token") or data.get("access_token")
+        if not token:
+            raise RuntimeError("AssemblyAI returned no token")
+        return str(token)
 
 
 async def _mint_ephemeral_key(api_key: str) -> str:
@@ -89,23 +162,68 @@ async def _mint_ephemeral_key(api_key: str) -> str:
         return str(key)
 
 
-@router.post("/stt/live-token", response_model=LiveToken)
-async def live_token(_user: UserContext = Depends(get_current_user)) -> LiveToken:
-    api_key = _deepgram_key()
-    if not api_key:
+async def _issue_live_token() -> LiveToken:
+    """Mint streaming credentials for whichever provider is configured.
+
+    Shared by the browser recorder and the meeting-bot worker so both get live
+    captions from the same key you set in Settings -> Models. The worker can't
+    read that key (it runs in its own container), and shipping the master key
+    into the container would be both a duplicate source of truth and a wider
+    blast radius — so it asks for a short-lived token instead."""
+    aai, dg = _assemblyai_key(), _deepgram_key()
+    provider = choose_provider(_configured_stt_model(), bool(aai), bool(dg))
+    if provider is None:
         raise HTTPException(
             status_code=503,
-            detail="Live captions need Deepgram — add a DEEPGRAM_API_KEY in "
-            "Settings → Models. Recording still works without it.",
+            detail="Live captions need a streaming speech-to-text key — add an "
+            "AssemblyAI (recommended) or Deepgram key in Settings → Models. "
+            "Recording still works without it.",
         )
     try:
-        token = await _mint_ephemeral_key(api_key)
+        token = (
+            await _mint_assemblyai_token(aai)
+            if provider == "assemblyai"
+            else await _mint_ephemeral_key(dg)
+        )
     except Exception as exc:
-        _log.warning("notes.live_token_failed", error=str(exc)[:200])
+        _log.warning(
+            "notes.live_token_failed", provider=provider, error=str(exc)[:200]
+        )
+        hint = (
+            "the AssemblyAI key may be invalid"
+            if provider == "assemblyai"
+            else "the Deepgram key may lack key-management scope"
+        )
         raise HTTPException(
             status_code=503,
-            detail="Could not start live captions (the Deepgram key may lack "
-            "key-management scope). Recording continues without them.",
+            detail=f"Could not start live captions ({hint}). Recording continues "
+            "without them.",
         ) from exc
-    _log.info("notes.live_token_minted", model=_live_model())
-    return LiveToken(token=token, model=_live_model(), expires_in=_TOKEN_TTL_S)
+    model = _live_model(provider)
+    _log.info("notes.live_token_minted", provider=provider, model=model or "default")
+    return LiveToken(
+        provider=provider, token=token, model=model, expires_in=_TOKEN_TTL_S
+    )
+
+
+@router.post("/stt/live-token", response_model=LiveToken)
+async def live_token(_user: UserContext = Depends(get_current_user)) -> LiveToken:
+    """Streaming credentials for the browser recorder (user-authenticated)."""
+    return await _issue_live_token()
+
+
+@router.post("/stt/bot-live-token", response_model=LiveToken)
+async def bot_live_token(
+    authorization: str | None = Header(default=None),
+) -> LiveToken:
+    """The same credentials for the meeting-bot worker (machine-authenticated).
+
+    Separate endpoint rather than a shared one because the callers authenticate
+    differently — a browser has a user session, the worker has the shared bot
+    token — and a re-fetchable endpoint (rather than a token handed over at
+    join time) is what lets a worker reconnect mid-meeting: these tokens live
+    about a minute, meetings run hours."""
+    from gateway.routes.notes.live_transcript import _check_bot_auth
+
+    _check_bot_auth(authorization)
+    return await _issue_live_token()

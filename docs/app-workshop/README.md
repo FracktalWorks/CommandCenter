@@ -214,10 +214,15 @@ model, the build/publish pipeline, the runtime bridge, and the sharing UX.
 
 1. *"No in-app agent/skill editing" (ADR-014 / root constraint #1).* Custom apps are
    **not agents or skills** — they are end-user artifacts (a workspace + manifest +
-   static bundle), authored through chat, not an IDE. The Control Plane gains no code
-   editor; the code view is read-only (edits happen through chat; power users round-trip
-   via download/git). Platform agents and skills remain VS-Code-and-Git-only. Draft
-   ADR-027 in §9 scopes this precisely.
+   static bundle), authored through chat. ADR-014's actual, load-bearing constraint —
+   *platform* code (agents, skills, orchestrator) stays VS-Code-and-Git-only, no in-app
+   editor, ever — is untouched. What changed: the RFC originally extended that same
+   stance to Custom Apps too ("no code editor; the code view is read-only, edits happen
+   through chat"). The Workshop's **Advanced view now ships a real hand-editable Monaco
+   IDE** scoped strictly to one app's own workspace (file tree, save, create/delete —
+   see §6/roadmap; "Monaco round-trip for developers" landed ahead of the rest of
+   Phase 3). Simple view (the default) still stays chat-only, matching the original
+   intent for casual use. Draft ADR-027 in §9 scopes this precisely.
 2. *`project_plan.md` non-goal: "visual workflow canvas".* Untouched — this is not a
    canvas and not workflows. But the non-goals line should be amended to say what IS in
    scope: *"user-space small software (App Workshop) — see docs/app-workshop/"*.
@@ -333,9 +338,9 @@ same vocabulary. The effective permission at runtime is always the **intersectio
 
 | Tier | What | When |
 |---|---|---|
-| T1 | Single-file HTML/JS (no build) | Phase 0 |
-| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html` (web-artifacts-builder pattern; vendored deps, no CDN) | Phase 1 |
-| T3 | Server-side apps (Next.js/API routes) in per-app containers | Deferred until **BO-7** lands. Explicitly out of v1: `cc.*` removes most reasons small software needs a server |
+| T1 | Single-file HTML/JS (no build) | Phase 0 — **built** |
+| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html`. Default: vendored deps (react/react-dom/**lucide-react**) via a shared, deploy-provisioned cache, no per-app install, no CDN. Opt-in: per-app `npm install` for anything the vendored set doesn't cover (e.g. `three`/`@react-three/fiber` for 3D) — see below | Phase 1 — **built** (`agent-app-builder/build/build_t2.mjs`; `entry`/`tier` in `app.json`; the builder upgrades an app from T1→T2 mid-conversation when a request calls for it, no separate creation-time picker). Reuses `@cc/ui` — the same 25-component design kit the chat "artifacts" system (`lib/compileArtifact.ts`) bundles into React artifacts — aliased in via an explicit import allowlist, so a T2 app writes `<Stat/>`/`<Table/>` instead of hand-rolled `cc-*` divs. Per-app custom dependencies — **built** (`agent-app-builder/build/install_t2_deps.mjs`: `--ignore-scripts` + a package-spec allowlist + a `node_modules` size cap; `build_t2.mjs` auto-detects an app-local `node_modules` and switches from the vendor cache + import allowlist to standard npm resolution, no per-app container). Real icons for every app, T1 and T2 — **built**: `lucide-react` is now a default-vendored T2 dependency (same version workbench/control_plane itself uses), and T1's `ccIcon('Name')`/`data-cc-icon` bridge — documented in `design.md` since the chat-artifacts system, but never actually wired up for Custom Apps — now gets its `icons` prop pre-resolved (`extractCcIconNames` + `buildIconMap`, in both the Workshop's preview and the published run page), so it isn't silently a no-op |
+| T3 | Server-side apps (backend compute), JS/TS runtime | **Scoped, not built.** Deferred until **BO-7** lands (platform-wide sandbox hardening — today's code execution is a bare env-scrubbed subprocess, no container/cgroup/seccomp). Decided-but-unbuilt substrate: **not** Docker-per-app — warm Deno subprocesses with explicit `--allow-*` flags, supervised by the gateway (Val Town's `deno-http-worker` pattern) — chosen for the 4GB VPS. Cron/webhook-triggered functions additionally need BO-20 (durable job queue), currently absent. BO-7 progress so far (2026-07-27, `competitive_hardening_2026-07.md`'s status log): dep-install RCE fix, permission-context/destructive-tool cheap wins, and Copilot-SDK session containerization for both `code_task` and the App Workshop builder's own interactive chat session — but the loader-level agent-import path T3's own gate references is separate and still untouched, so this row's status doesn't move yet |
 
 ### 4.2 The builder (Workshop session)
 
@@ -807,20 +812,28 @@ badge, "Fix with AI" on regression, publish-modal status** · share-with-specifi
 first-open consent screen · **manifest
 `actions` + agent grants + `app_<slug>_<action>` tool registration** (risk-annotated,
 golden-trajectory-eval'd per harness rules) · by-app cost lens in Observability +
-per-app budgets · templates gallery · fork/remix · suggest-a-change · usage stats on
-cards · pinned apps in sidebar · app-to-app data reads (quote calculator ← filament
-costs).
+per-app budgets · **usage stats on gallery cards** · **pinned apps in sidebar** ·
+**fork/remix** (source files only — never runtime data/sharing/history, fresh git
+history, forker becomes sole owner of a new private draft) · **templates gallery**
+(`is_template` flag, editor-toggleable from the gallery card; a "Templates" filter
+pill over the existing app list; "Use" reuses fork/remix — no new copy mechanism)
+· suggest-a-change · app-to-app data reads (quote calculator ← filament costs) —
+remaining.
 
 **P2 — power (Phase 3+):**
 real URLs on a usercontent subdomain with CSP headers · scoped short-TTL app tokens ·
 `cc.agents.run` + app-triggered workflows (ties into the Workflow Editor RFC) · cron/
-webhook-triggered `run_as: author` automations · `cc.fetch` egress allowlists · Monaco
-read/edit round-trip for developers · element↔source "edit this button" targeting ·
-container runtime for server-side apps (post-BO-7) · export/import an app as a folder.
+webhook-triggered `run_as: author` automations · `cc.fetch` egress allowlists ·
+element↔source "edit this button" targeting · container runtime for server-side apps
+(post-BO-7) · export/import an app as a folder. **Monaco read/edit round-trip for
+developers — shipped** (Advanced view, ahead of the rest of P2 — see §3 item 1).
 
 **Explicit non-features:** a drag-and-drop editor (chat is the editor) · a browser IDE
-(ADR-014 stands) · customer-facing/external hosting (internal-only, like everything else)
-· a second integration/credential system (the Registry is the only one).
+**for platform code** (ADR-014 stands — agents/skills/orchestrator stay VS-Code-and-
+Git-only; the Advanced view's Monaco editor is scoped strictly to one Custom App's own
+workspace, a fundamentally different surface — see §3, item 1) · customer-facing/
+external hosting (internal-only, like everything else) · a second integration/
+credential system (the Registry is the only one).
 
 ---
 
@@ -866,24 +879,46 @@ trust, never sanitize-and-inline (sanitizers neutralize markup; apps *are* scrip
    app shipped through Phase 2a) there is **no per-app server-side execution to sandbox in
    the first place**: an app's JS never runs on the gateway/orchestrator — it only ever
    runs client-side, in the viewer's own browser tab, contained by layer 1 before it can
-   touch anything shared. Consequently app-to-app and app-to-platform *dependency*
-   isolation is airtight by construction: no `package.json`, no `node_modules`, no system
-   package, nothing installed anywhere per app — CSP already forbids loading one (§4's
-   "never bake into the app" table). `cc.tools` handlers are hand-written platform Python
-   using dependencies the gateway already has; apps never supply code that runs
-   server-side, so no app can ever introduce a package requirement there either. This is
-   also why the model is cheap, not just safe: zero idle-container memory floor, zero
+   touch anything shared. This is unchanged by per-app npm dependencies (below) — a T2
+   app that installs `three` still only ever ships bundled client-side JS to the browser,
+   with the exact same CSP/srcDoc containment as the vendored-only default; nothing it
+   installs ever runs on the gateway/orchestrator. `cc.tools` handlers are hand-written
+   platform Python using dependencies the gateway already has; apps never supply code
+   that runs server-side, so no app can ever introduce a package requirement there. This
+   is also why the model is cheap, not just safe: zero idle-container memory floor, zero
    per-app image/cold-start cost — the compute for running an app is donated by whoever is
    viewing it, not reserved on the VPS. A container-per-app model would be the *lossy*
    choice here, paying a fixed resource tax per app for isolation the browser already
    provides for free.
+   *Per-app build-time dependencies (T2, opt-in):* an app MAY `npm install` its own
+   packages beyond the vendored react/react-dom/`@cc/ui` — e.g. `three`/
+   `@react-three/fiber` for a 3D viewer — via `install_t2_deps.mjs`, the only sanctioned
+   path (never a raw `npm install`). Isolation between apps is structural: each app's
+   `node_modules` lives inside that app's own workspace directory, already the
+   durability/build/publish unit for exactly one app, so nothing installed for one app is
+   ever reachable from another's. The install script is the mitigation for what's
+   actually new here — build-time code execution and disk, not runtime app isolation:
+   `--ignore-scripts` blocks the standard npm supply-chain RCE vector (a malicious
+   package's install/postinstall script running arbitrary code before any of it ships
+   anywhere — same rationale as `acb_skills/loader.py`'s wheel-only installs for the
+   gateway's own Python deps), a package-spec allowlist regex rejects anything that isn't
+   a plain name/version token (no flags, no URLs), and a `node_modules` size cap stops
+   one app from eating a meaningful fraction of the VPS's disk. `node_modules` was
+   already excluded from the durability mirror and file-tree UI (`WORKSPACE_SKIP_DIRS`)
+   before this — a lost/rehydrated workspace recovers `dist/bundle.html` (the durable
+   entry-file carve-out) but not `node_modules`, so further edits need a fresh install
+   before the next build, an accepted tradeoff for staying container-free per app.
    *The one honest nuance:* the **builder's own coding session** (writing the app, not
    running it) shares the gateway's Python process with every other first-party agent —
    unchanged from how `task-manager`/`apis-config` already work, not something Custom
    Apps introduces or worsens. `agent-app-builder`'s `tool_scope` deliberately excludes
    `install_dependency`/`run_script`/`code_task`, so no Workshop conversation can trigger
    a `pip install` into that shared venv — the theoretical shared-venv risk items 5/`BO-7`
-   already track platform-wide are not reachable from an app conversation today.
+   already track platform-wide are not reachable from an app conversation today. This is
+   unrelated to `install_t2_deps.mjs` above: that's `npm`, not `pip`, runs via the same
+   native shell the builder's own coding session already uses to run `build_t2.mjs`
+   (never the Python `install_dependency` MAF tool), and writes only into the one app's
+   own workspace `node_modules` — never the gateway's shared Python venv.
    *Where this actually changes:* **T3** (server-side app code, still deferred) is the one
    point where per-app dependency isolation becomes a real, new question, because app code
    would then execute on the VPS. The answer on record is still **not** Docker-per-app —
@@ -967,19 +1002,54 @@ auto-repair; checkpoint/restore chips; console drawer + Fix-with-AI; `cc-sdk` br
 (`user` / `storage` / `ai`) + App Runtime API + `app_data`/`app_audit`; **full publish
 conformance scan** (external-URL/key/service-worker/storage-reliance checks — a basic
 external-URL scan ships in Phase 0); versions + rollback UI; visibility private/org;
-sidebar Custom Apps section with pins; blob-store durability sweeps.
+sidebar Custom Apps section (a static nav link at this point — pins landed later, see
+Phase 2 note below); blob-store durability sweeps — remaining, only on-demand
+sync + lazy rehydrate exist.
 
 **Phase 2 — Capabilities & sharing (3–5 wk).** `cc.tools` proxy over the Integration
 Registry with manifest scopes + Action-Broker gating + per-use confirm toast; publish
 review row in Approvals for org+write apps; testing & evaluation (§4.9); share-with-people
 + first-open consent (scope-set-hash rule); manifest `actions` + registration as
-orchestrator agent tools (§4.7) — **shipped**; templates gallery; fork/remix +
-suggest-a-change; usage stats — remaining.
+orchestrator agent tools (§4.7) — **shipped**; usage stats on gallery cards + pinned
+apps in the sidebar — **shipped** (a later pass, batched together since both were
+cheap and the data/infra — the usage endpoint, the sidebar's dynamic-badge pattern —
+already existed); fork/remix — **shipped** (`POST /{slug}/fork`, view access is
+enough — copies source files only, resets sharing/runtime data/history, fresh git
+history, forker owns the new private draft); templates gallery — **shipped**
+(`apps.is_template`, toggled via the existing generic `PATCH /{slug}`; the
+gallery's "Templates" filter pill client-side-filters the already-fetched
+`GET /apps` list — no new listing endpoint; "Use" on a template card calls the
+same `POST /{slug}/fork` and lands in the new copy's editor); mobile design
+philosophy — **shipped** (a "Mobile & responsive layout" section in
+`agent-app-builder/instructions.md` — keep the viewport meta, reflow over
+fixed widths, the block-kit classes already do this; a desktop/phone-width
+preview toggle in the Workshop's Preview tab, so it can be checked before a
+round ends; a touch-target `min-height` bump on the injected design-token CSS
+that every app already gets for free); the Workshop editor's OWN UI is
+mobile-responsive too (§4.2, separate from apps-being-built — see the App
+Workshop mobile-layout work above); proper icons + a UI/UX quality bar —
+**shipped**: `lucide-react` joins the T2 default vendor set (real icon
+components, not hand-rolled SVGs), and the `ccIcon`/`data-cc-icon` bridge T1
+apps already had documented access to is now actually wired up end to end
+(`extractCcIconNames` + `buildIconMap`, both the Workshop preview and the
+published run page) — it silently resolved to nothing before this.
+`instructions.md` gained a "Quality bar" section translating Apple's HIG
+principles (one primary action, hierarchy from size/weight not color alone,
+chrome defers to content, generous spacing, purposeful motion) and a finding
+from Anthropic's own research on agent harnesses for app-building — a
+generator grading its own UI "confidently praises the work even when...
+obviously mediocre," so the instruction is to actually LOOK at the preview
+(the new desktop/phone toggle) rather than trust the code read, and to judge
+against four concrete criteria (coherent, original — avoid "purple gradients
+over white cards" — craft, functional) instead of a vague "does it look
+good"; suggest-a-change — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers
 with `run_as: author` (persistent banner; joins the Workflow Editor's trigger table
-thinking); `cc.fetch` allowlists; Monaco round-trip for developers.
+thinking); `cc.fetch` allowlists — remaining (deliberately deferred). Monaco round-trip
+for developers — **shipped** ahead of the rest of this phase, as the Workshop's
+Advanced view (§3 item 1).
 
 **Phase 4 — Hardening & headroom (ongoing).** BO-7 container for the build step, then the
 T3 container runtime for server-side apps; element↔source targeting; MCP-UI/A2UI interop

@@ -20,8 +20,14 @@ func (m *SessionManager) handler(s *Session) func(any) {
 			m.onMessage(s, e)
 		case *events.HistorySync:
 			m.onHistorySync(s, e)
+		case *events.LabelEdit:
+			m.onLabelEdit(s, e)
+		case *events.LabelAssociationChat:
+			m.onLabelAssocChat(s, e)
 		case *events.Connected:
 			s.setStatus(statusLive)
+			// Backfill the number's existing labels once (guarded by a flag).
+			go m.ensureLabelSync(s)
 		case *events.LoggedOut:
 			s.setStatus(statusLoggedOut)
 			_ = m.meta.PutSession(context.Background(), s.accountID, "")
@@ -79,6 +85,9 @@ func (m *SessionManager) onMessage(s *Session, e *events.Message) {
 	}); err != nil {
 		m.log.Errorf("ingest %s msg %s: %v", s.accountID, e.Info.ID, err)
 	}
+
+	// Best-effort, TTL-cached — see avatars.go. Non-blocking.
+	m.enqueueAvatarCheck(s, e.Info.Chat)
 }
 
 func directionOf(fromMe bool) string {

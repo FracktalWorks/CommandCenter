@@ -24,17 +24,21 @@ import {
   type ReactNode,
 } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked } from "lucide-react";
+import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, Plus, Sparkles, Mic, Upload, BookMarked, Video } from "lucide-react";
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
-import { NAV_SECTIONS } from "@/lib/nav";import { ThemeToggleMenuItem } from "@/components/ThemeToggle";
+import { visibleSections } from "@/lib/nav";
+import AccessGate from "@/components/AccessGate";
+import { useAccess } from "@/components/AccessProvider";
+import { ThemeToggleMenuItem } from "@/components/ThemeToggle";
 // The task manager's Focus Mode session (room + minimizable timer dock). Lives
 // in the SHELL so the running timer stays visible across every app in the
 // control plane; renders nothing when no focus session is active.
 import { FocusSession } from "@/app/tasks/components/FocusMode";
 // The note-taker's live recording dock — same shell-level pattern, so an
 // in-progress meeting recording follows the user across every app (spec §5.2).
+import { LiveDock } from "@/app/notes/components/LiveDock";
 import { RecordingDock } from "@/app/notes/components/RecordingDock";
 // ---------------------------------------------------------------------------
 // Mobile drawer context — lets child pages inject content into the hamburger
@@ -81,9 +85,12 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
-        <main className="flex-1 min-w-0 overflow-auto">{children}</main>
+        <main className="flex-1 min-w-0 overflow-auto">
+          <AccessGate>{children}</AccessGate>
+        </main>
         <FocusSession />
         <RecordingDock />
+        <LiveDock />
 
         {/* Floating "Mobile view" pill — only when desktop is forced on a phone. */}
         {isNarrow && forceDesktop && (
@@ -110,7 +117,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col overflow-hidden bg-background pt-safe" style={{ height: "100dvh" }}>
         {/* Page content — pb-nav reserves the fixed bottom bar's FULL height
             (content + safe-area inset), so nothing hides under it */}
-        <main className="flex-1 min-h-0 overflow-y-auto pb-nav">{children}</main>
+        <main className="flex-1 min-h-0 overflow-y-auto pb-nav">
+          <AccessGate>{children}</AccessGate>
+        </main>
 
         {/* Bottom navigation bar — fixed at viewport bottom, never scrolls. pb-safe lifts it above the iOS home indicator */}
         <div className="fixed bottom-0 inset-x-0 z-50 border-t border-border bg-card/90 backdrop-blur pb-safe">
@@ -123,6 +132,8 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
         {/* Live recording dock — sits above the bottom nav (and above the Focus
             pill when both are up), so the menu bar never clips it. */}
         <RecordingDock />
+        {/* Server-side "live now" presence (bot calls / other devices). */}
+        <LiveDock />
 
         {/* Unified drawer (slide-up panel for bottom-nav tab content) */}
         {drawerOpen && (
@@ -151,7 +162,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 // Mobile bottom navigation bar — ChatGPT/DeepSeek-style 3-tab bar
 // ---------------------------------------------------------------------------
 
-import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid } from "lucide-react";
+import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid, Play, FileCode, FlaskConical } from "lucide-react";
 import { resolveIcon } from "@/lib/icons";
 
 function MobileBottomNavInner({
@@ -165,6 +176,10 @@ function MobileBottomNavInner({
   const { data: session } = useSession();
   const activeRunIds = useActiveSessions();
   const activeCount = activeRunIds.size;
+  // Same access filter as the desktop Sidebar — the two navs must agree, or a
+  // pane hidden on desktop reappears in the phone drawer.
+  const { access, loading: accessLoading } = useAccess();
+  const navSections = visibleSections(accessLoading ? null : access.features);
 
   const menuContent = (
     <>
@@ -188,7 +203,7 @@ function MobileBottomNavInner({
         </button>
       </div>
       <nav className="flex flex-col overflow-y-auto">
-        {NAV_SECTIONS.map((section) => (
+        {navSections.map((section) => (
           <div key={section.id} className="px-2 pt-1 pb-1.5">
             <div
               className={
@@ -264,6 +279,11 @@ function MobileBottomNavInner({
   // "Triage" (the stream filter) is inbox-only. Both open bottom drawers.
   const isWhatsAppPage = pathname?.startsWith("/whatsapp") ?? false;
   const isWhatsAppInbox = pathname === "/whatsapp";
+  // App Workshop editor: chat and the preview/code/tests pane are full-screen
+  // alternatives on mobile (desktop shows both side by side) — the page owns
+  // the "workshop-*" cc-mobile-nav detail values.
+  const isAppWorkshopEditPage =
+    (pathname?.startsWith("/build/apps/") && pathname?.endsWith("/edit")) ?? false;
 
   // Tasks: the bottom bar reflects which GTD section you're in. The page emits
   // `cc-tasks-section` whenever the active view changes.
@@ -280,37 +300,37 @@ function MobileBottomNavInner({
   };
 
   return (
-    <nav className="flex items-stretch justify-around gap-0.5 py-1.5 px-1">
+    <nav className="flex items-stretch justify-around gap-0.5 py-1 px-1">
         <button
           onClick={() => { open(menuContent); }}
-          className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors ${
+          className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors ${
             isOpen ? "text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          <MenuIcon size={21} />
+          <MenuIcon size={20} />
           <span className="text-[10px] font-medium leading-none">Menu</span>
         </button>
         {isEmailPage && (
           <>
             <button
               onClick={() => dispatchNav("email-accounts")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <Mail size={21} />
+              <Mail size={20} />
               <span className="text-[10px] font-medium leading-none">Inbox</span>
             </button>
             <button
               onClick={() => dispatchNav("email-automation")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <Zap size={21} />
+              <Zap size={20} />
               <span className="text-[10px] font-medium leading-none">Automation</span>
             </button>
             <button
               onClick={() => dispatchNav("email-ai")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <MessageCircle size={21} />
+              <MessageCircle size={20} />
               <span className="text-[10px] font-medium leading-none">AI Chat</span>
             </button>
           </>
@@ -319,9 +339,9 @@ function MobileBottomNavInner({
           <>
             <button
               onClick={() => dispatchNav("chats")}
-              className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <MessageCircle size={22} />
+              <MessageCircle size={20} />
               {activeCount > 0 && (
                 <span className="absolute -top-0.5 right-2 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-success text-success-foreground text-[9px] font-bold animate-pulse">
                   {activeCount}
@@ -331,9 +351,9 @@ function MobileBottomNavInner({
             </button>
             <button
               onClick={() => dispatchNav("files")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <FolderOpen size={22} />
+              <FolderOpen size={20} />
               <span className="text-[10px] font-medium leading-none">Files</span>
             </button>
           </>
@@ -374,6 +394,11 @@ function MobileBottomNavInner({
               accent
             />
             <TaskTab
+              onClick={() => dispatchNav("notes-join")}
+              icon={Video}
+              label="Join call"
+            />
+            <TaskTab
               onClick={() => dispatchNav("notes-upload")}
               icon={Upload}
               label="Upload"
@@ -399,6 +424,31 @@ function MobileBottomNavInner({
             label="Sections"
           />
         )}
+        {isAppWorkshopEditPage && (
+          <>
+            <TaskTab
+              onClick={() => dispatchNav("workshop-chat")}
+              icon={Sparkles}
+              label="Chat"
+              accent
+            />
+            <TaskTab
+              onClick={() => dispatchNav("workshop-preview")}
+              icon={Play}
+              label="Preview"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("workshop-code")}
+              icon={FileCode}
+              label="Code"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("workshop-tests")}
+              icon={FlaskConical}
+              label="Tests"
+            />
+          </>
+        )}
     </nav>
   );
 }
@@ -419,7 +469,7 @@ function TaskTab({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 transition-colors ${
+      className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1 transition-colors ${
         accent
           ? "text-primary"
           : active
@@ -427,7 +477,7 @@ function TaskTab({
             : "text-muted-foreground hover:text-foreground"
       }`}
     >
-      <Icon size={accent ? 22 : 20} strokeWidth={active || accent ? 2.4 : 2} />
+      <Icon size={20} strokeWidth={active || accent ? 2.4 : 2} />
       <span className="text-[10px] font-medium leading-none">{label}</span>
     </button>
   );

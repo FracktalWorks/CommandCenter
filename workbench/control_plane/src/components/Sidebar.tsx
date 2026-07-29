@@ -5,9 +5,13 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
-import { NAV_SECTIONS, type NavPane, type NavSection } from "@/lib/nav";
+import { visibleSections, type NavPane, type NavSection } from "@/lib/nav";
+import { useAccess } from "@/components/AccessProvider";
 import { resolveIcon } from "@/lib/icons";
 import ThemeToggle from "@/components/ThemeToggle";
+
+/** Mirrors gateway/routes/apps/pins.py's PinnedApp — GET /api/apps/pins. */
+type PinnedApp = { slug: string; name: string; icon?: string };
 
 // ---------------------------------------------------------------------------
 // Sidebar — sectioned navigation (Apps / Configure / Build)
@@ -19,6 +23,12 @@ export default function Sidebar() {
   const [collapsed, setCollapsed] = useState(false);
   const { data: session } = useSession();
   const [agentUpdateCount, setAgentUpdateCount] = useState(0);
+  const [pinnedApps, setPinnedApps] = useState<PinnedApp[]>([]);
+  // Org access control (spec §5, seam 5): the sidebar shows only what this
+  // member can reach. `null` while unresolved keeps the full list, so the
+  // nav does not visibly shrink on first paint.
+  const { access, loading: accessLoading } = useAccess();
+  const sections = visibleSections(accessLoading ? null : access.features);
 
   // Poll agent list for behind_by counts — shows "N updates" badge on Agents
   useEffect(() => {
@@ -43,6 +53,29 @@ export default function Sidebar() {
     };
     check();
     const interval = setInterval(check, 60_000); // refresh every minute
+    return () => {
+      alive = false;
+      clearInterval(interval);
+    };
+  }, []);
+
+  // Pinned Custom Apps — same polling shape as the agent-updates badge above.
+  useEffect(() => {
+    let alive = true;
+    const check = async () => {
+      try {
+        const res = await fetch("/api/apps/pins", {
+          signal: AbortSignal.timeout(5000),
+        });
+        if (!res.ok || !alive) return;
+        const pins = await res.json();
+        if (alive && Array.isArray(pins)) setPinnedApps(pins);
+      } catch {
+        // Gateway down — keep last known list
+      }
+    };
+    check();
+    const interval = setInterval(check, 60_000);
     return () => {
       alive = false;
       clearInterval(interval);
@@ -81,13 +114,14 @@ export default function Sidebar() {
 
       {/* Nav sections */}
       <nav className="flex flex-col flex-1 overflow-y-auto">
-        {NAV_SECTIONS.map((section) => (
+        {sections.map((section) => (
           <NavSectionBlock
             key={section.id}
             section={section}
             pathname={pathname}
             collapsed={collapsed}
             agentUpdateCount={agentUpdateCount}
+            pinnedApps={pinnedApps}
           />
         ))}
       </nav>
@@ -134,11 +168,13 @@ function NavSectionBlock({
   pathname,
   collapsed,
   agentUpdateCount = 0,
+  pinnedApps = [],
 }: {
   section: NavSection;
   pathname: string | null;
   collapsed: boolean;
   agentUpdateCount?: number;
+  pinnedApps?: PinnedApp[];
 }) {
   if (collapsed) {
     return (
@@ -180,6 +216,7 @@ function NavSectionBlock({
             pane={p}
             pathname={pathname}
             badge={p.href === "/agents" && agentUpdateCount > 0 ? agentUpdateCount : undefined}
+            pinnedApps={p.href === "/build/apps" ? pinnedApps : undefined}
           />
         ))}
       </div>
@@ -196,11 +233,13 @@ function NavLink({
   pathname,
   collapsed = false,
   badge,
+  pinnedApps,
 }: {
   pane: NavPane;
   pathname: string | null;
   collapsed?: boolean;
   badge?: number;
+  pinnedApps?: PinnedApp[];
 }) {
   const active = pathname?.startsWith(pane.href);
   const Icon = resolveIcon(pane.icon);
@@ -228,25 +267,49 @@ function NavLink({
   }
 
   return (
-    <Link
-      key={pane.href}
-      href={pane.href}
-      className={`rounded-lg tech-transition px-3 py-2 text-sm ${
-        active
-          ? "bg-primary/15 text-primary"
-          : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
-      }`}
-    >
-      <div className="flex items-center gap-2.5">
-        <Icon size={16} strokeWidth={active ? 2.5 : 2} />
-        <span className="font-medium text-[13px]">{pane.label}</span>
-        {badge !== undefined && badge > 0 && (
-          <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
-            {badge}
-          </span>
-        )}
-      </div>
-      <div className="ml-[26px] text-[11px] text-muted-foreground/60 leading-tight mt-0.5">{pane.note}</div>
-    </Link>
+    <>
+      <Link
+        key={pane.href}
+        href={pane.href}
+        className={`rounded-lg tech-transition px-3 py-2 text-sm ${
+          active
+            ? "bg-primary/15 text-primary"
+            : "text-muted-foreground hover:bg-sidebar-accent hover:text-sidebar-foreground"
+        }`}
+      >
+        <div className="flex items-center gap-2.5">
+          <Icon size={16} strokeWidth={active ? 2.5 : 2} />
+          <span className="font-medium text-[13px]">{pane.label}</span>
+          {badge !== undefined && badge > 0 && (
+            <span className="ml-auto rounded-full bg-amber-500 px-1.5 py-0.5 text-[10px] font-bold text-white">
+              {badge}
+            </span>
+          )}
+        </div>
+        <div className="ml-[26px] text-[11px] text-muted-foreground/60 leading-tight mt-0.5">{pane.note}</div>
+      </Link>
+      {pinnedApps && pinnedApps.length > 0 && (
+        <div className="flex flex-col gap-0.5 ml-[26px] mt-0.5 mb-1">
+          {pinnedApps.map((a) => {
+            const href = `/build/apps/${a.slug}`;
+            const appActive = pathname?.startsWith(href);
+            return (
+              <Link
+                key={a.slug}
+                href={href}
+                className={`flex items-center gap-1.5 rounded-md px-2 py-1 text-[11.5px] tech-transition truncate ${
+                  appActive
+                    ? "text-primary"
+                    : "text-muted-foreground/80 hover:text-sidebar-foreground hover:bg-sidebar-accent"
+                }`}
+              >
+                <span className="shrink-0">{a.icon || "▦"}</span>
+                <span className="truncate">{a.name}</span>
+              </Link>
+            );
+          })}
+        </div>
+      )}
+    </>
   );
 }

@@ -1,16 +1,19 @@
 """Outbound HTML-signature assembly.
 
 The account signature is stored as HTML (authored in the workbench's hybrid
-rich-text / HTML editor). At SEND time it is appended to the message as a
-rendered HTML block, with a plain-text fallback derived by stripping tags — so
-mail goes out ``multipart/alternative`` and the signature renders in every
-client. Kept in ONE place so every send path (the full ``/send`` endpoint and
-the native draft-send) produces the signature identically.
+rich-text / HTML editor). The signature lives IN the draft body: every
+draft-write path appends the plain-text rendering to the body via
+:func:`append_signature_text`, so a draft synced upstream (Gmail / Outlook)
+already shows the signature — it used to be added only at send time, so
+upstream drafts looked unsigned. Send remains the safety net: it appends the
+signature if a (legacy / hand-made) draft still lacks it, and upgrades an
+in-body plain signature to the rendered HTML block with a plain-text fallback,
+so mail goes out ``multipart/alternative`` and renders in every client. Kept in
+ONE place so every path produces the signature identically.
 
-Signature injection lives here, at send time, rather than in the drafter: the
-AI drafter returns the reply body only, and the signature is appended once here.
-That avoids a doubled signature and keeps raw HTML tags out of the plain-text
-compose box.
+The AI drafter itself still returns the reply body only — the signature is
+appended once, deterministically, by the draft/send paths here, never by the
+model (which would double or mangle it).
 
 The signature goes directly under the NEW text, ABOVE any quoted trailing
 thread. The composer sends one ``body_text`` containing both (new text + "\\n\\n"
@@ -68,6 +71,35 @@ def signature_text(signature: str) -> str:
     return html_to_text(sig) if _looks_html(sig) else sig
 
 
+def append_signature_text(signature: str, body_text: str) -> str:
+    """The plain-text half of :func:`build_signed_bodies`: the body with the
+    signature's text inserted under the new text, above any quoted thread.
+
+    Idempotent — a body already carrying the signature text is returned
+    unchanged — so every draft-write path can call it unconditionally and a
+    reopened/re-saved draft never accumulates copies."""
+    return build_signed_bodies(signature, body_text, None)[0]
+
+
+def strip_signature_text(signature: str, body_text: str) -> str:
+    """Remove the signature's plain-text block from a body (first occurrence),
+    collapsing the blank run it leaves behind. Returns the body unchanged when
+    there's no signature or it isn't present.
+
+    Used where the signature must NOT take part: the compose-assist AI sees the
+    owner's words only (a signature-only body is an EMPTY draft, not text to
+    improve), and edit-learning diffs what the user wrote, not the boilerplate
+    both sides carry."""
+    sig_text = signature_text(signature)
+    body = body_text or ""
+    if not sig_text or sig_text not in body:
+        return body
+    idx = body.find(sig_text)
+    out = body[:idx] + body[idx + len(sig_text):]
+    out = re.sub(r"\n{3,}", "\n\n", out)
+    return out.strip()
+
+
 def build_signed_bodies(
     signature: str, body_text: str, body_html: str | None = None,
 ) -> tuple[str, str | None]:
@@ -96,13 +128,21 @@ def build_signed_bodies(
     sig_html = signature_html(sig)
     body_text = body_text or ""
 
-    # Already signed (a re-signed draft): leave the text alone AND skip the HTML
-    # block, so re-sending a stored draft can't end up with two signatures.
+    # Already signed (drafts now carry the signature in-body): leave the text
+    # alone AND never add a second block. When the HTML part must be derived,
+    # swap the in-body PLAIN signature for the rendered HTML block in place, so
+    # a signed draft still goes out with the rich signature (links, formatting)
+    # rather than its escaped plain-text rendering.
     if sig_text and sig_text in body_text:
-        return body_text, (
-            body_html if (body_html and body_html.strip())
-            else _text_to_html(body_text)
-        )
+        if body_html and body_html.strip():
+            return body_text, body_html
+        idx = body_text.find(sig_text)
+        pre = body_text[:idx].rstrip("\n")
+        post = body_text[idx + len(sig_text):].strip("\n")
+        out_html = f"{_text_to_html(pre)}<br><br>{sig_html}" if pre else sig_html
+        if post:
+            out_html += f"<br><br>{_text_to_html(post)}"
+        return body_text, out_html
 
     main_text, quoted_text = split_quoted_text(body_text)
     out_text = (

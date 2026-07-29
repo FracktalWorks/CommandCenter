@@ -82,6 +82,7 @@ export const PROVIDER_COLOURS: Record<string, string> = {
   mistral:    "bg-indigo-500/10 text-indigo-600 border-indigo-500/30",
   together:   "bg-teal-500/10 text-teal-600 border-teal-500/30",
   deepgram:   "bg-emerald-500/10 text-emerald-600 border-emerald-500/30",
+  assemblyai: "bg-violet-500/10 text-violet-600 border-violet-500/30",
   ollama:     "bg-violet-500/10 text-violet-600 border-violet-500/30",
   vllm:       "bg-violet-500/10 text-violet-600 border-violet-500/30",
   unknown:    "bg-secondary text-muted-foreground border-border",
@@ -98,6 +99,7 @@ export const PROVIDER_ICONS: Record<string, string> = {
   mistral:    "🌪",
   together:   "🤝",
   deepgram:   "🎧",
+  assemblyai: "🎙️",
   ollama:     "🦙",
   vllm:       "⚡",
 };
@@ -209,8 +211,19 @@ export const PROVIDER_GUIDES: Record<string, ProviderGuide> = {
       "Copy your key.",
     ],
   },
+  assemblyai: {
+    description: "AssemblyAI — the default speech-to-text for the Note Taker. Names speakers (diarization) on both recorded and live transcription, handles Hindi/English code-switching, and is the cheapest per hour of the STT options.",
+    setup_url: "https://www.assemblyai.com/dashboard/signup",
+    docs_url: "https://www.assemblyai.com/docs",
+    instructions: [
+      "Create an account at assemblyai.com (free credit included).",
+      "Copy your API key from the dashboard home.",
+      "Paste it here, then assign an AssemblyAI model to the STT tier in the Tiers tab.",
+      "Live captions use this key too — no extra setup.",
+    ],
+  },
   deepgram: {
-    description: "Deepgram — speech-to-text for the Note Taker. The only provider here that names speakers (diarization) in multi-speaker meetings.",
+    description: "Deepgram — speech-to-text for the Note Taker. Names speakers (diarization) in multi-speaker meetings. A working alternative to AssemblyAI.",
     setup_url: "https://console.deepgram.com/signup",
     docs_url: "https://developers.deepgram.com/docs",
     instructions: [

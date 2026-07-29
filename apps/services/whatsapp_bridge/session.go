@@ -83,14 +83,23 @@ type SessionManager struct {
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
+
+	// Bounded background queue for profile-picture fetches (W17) — see avatars.go.
+	avatarQueue chan avatarJob
 }
 
-// NewSessionManager wires the manager to its stores + gateway client.
+// NewSessionManager wires the manager to its stores + gateway client, and starts
+// the fixed-size worker pool that drains avatarQueue for the process lifetime.
 func NewSessionManager(c *sqlstore.Container, meta *MetaStore, gw *GatewayClient, log waLog.Logger) *SessionManager {
-	return &SessionManager{
+	m := &SessionManager{
 		container: c, meta: meta, gw: gw, log: log,
-		sessions: map[string]*Session{},
+		sessions:    map[string]*Session{},
+		avatarQueue: make(chan avatarJob, avatarQueueSize),
 	}
+	for range avatarWorkerCount {
+		go m.avatarWorker()
+	}
+	return m
 }
 
 func (m *SessionManager) get(accountID string) (*Session, bool) {
@@ -136,6 +145,10 @@ func (m *SessionManager) remove(accountID string) {
 // per-account event handler.
 func (m *SessionManager) newClient(accountID string, device *store.Device) *Session {
 	client := whatsmeow.NewClient(device, m.log.Sub("wa:"+accountID))
+	// Emit label/list (and other app-state) events during a FULL sync too, so a
+	// forced regular-collection resync backfills the number's existing labels —
+	// without this, whatsmeow only emits app-state events for incremental patches.
+	client.EmitAppStateEventsOnFullSync = true
 	s := &Session{accountID: accountID, client: client, status: statusPairing}
 	client.AddEventHandler(m.handler(s))
 	return s

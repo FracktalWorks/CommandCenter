@@ -79,6 +79,12 @@ async def run_copilot_code_session(
 
     Raises on timeout or session failure — the skill layer turns that into a
     structured tool error for the calling agent.
+
+    BO-7 phase 2: when ``"code_task"`` is in ``settings.copilot_sandbox_scope``,
+    runs the session's CLI inside a hardened container (copilot_sandbox.py)
+    instead of the host process. Falls back to the existing in-process session
+    unchanged whenever the sandbox fails to spawn or come up in time — the
+    scope flag never turns a spawn failure into a hard error.
     """
     from orchestrator.copilot_agent import CommandCenterCopilotAgent
     from orchestrator.executor import _copilot_permission_handler
@@ -87,11 +93,8 @@ async def run_copilot_code_session(
     gw_base = (
         getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:8080"
     ).rstrip("/")
-    gw_key = (
-        getattr(settings, "gateway_internal_token", "")
-        or getattr(settings, "litellm_master_key", "")
-        or "sk-local"
-    ).strip()
+    # /v1 only — LLM API key, not the identity token (BO-2 residual #4).
+    gw_key = (getattr(settings, "llm_api_key", "") or "sk-local").strip()
 
     default_options: dict[str, Any] = {
         "model": model,
@@ -102,11 +105,29 @@ async def run_copilot_code_session(
         },
         "working_directory": workspace,
     }
+
+    scope = str(getattr(settings, "copilot_sandbox_scope", "") or "")
+    sandbox_handle = None
+    permission_check_root_prev: str | None = None
+    if "code_task" in {s.strip() for s in scope.split(",") if s.strip()}:
+        from orchestrator.copilot_sandbox import (
+            CONTAINER_WORKSPACE,
+            spawn_copilot_sandbox,
+            stop_copilot_sandbox,
+        )
+        sandbox_handle = await spawn_copilot_sandbox(
+            workspace=workspace, label="code_task", settings=settings,
+        )
+        if sandbox_handle is not None:
+            default_options["working_directory"] = CONTAINER_WORKSPACE
+
     agent = CommandCenterCopilotAgent(
         name="code-task",
         instructions=_HARNESS_INSTRUCTIONS,
         default_options=default_options,
     )
+    if sandbox_handle is not None:
+        agent._sandbox_cli_url = sandbox_handle.cli_url
     try:
         if getattr(agent, "_permission_handler", None) is None:
             agent._permission_handler = _copilot_permission_handler()
@@ -115,10 +136,23 @@ async def run_copilot_code_session(
 
     _log.info(
         "code_session.start", workspace=workspace, model=model,
-        task_preview=task[:120],
+        task_preview=task[:120], sandboxed=sandbox_handle is not None,
     )
-    async with agent:
-        result = await asyncio.wait_for(agent.run(task), timeout=timeout)
+    try:
+        if sandbox_handle is not None:
+            from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT
+            permission_check_root_prev = _WRITE_ARTIFACT_CONTEXT.get("permission_check_root")
+            _WRITE_ARTIFACT_CONTEXT["permission_check_root"] = CONTAINER_WORKSPACE
+        async with agent:
+            result = await asyncio.wait_for(agent.run(task), timeout=timeout)
+    finally:
+        if sandbox_handle is not None:
+            from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT
+            if permission_check_root_prev is None:
+                _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
+            else:
+                _WRITE_ARTIFACT_CONTEXT["permission_check_root"] = permission_check_root_prev
+            await stop_copilot_sandbox(sandbox_handle)
     text = getattr(result, "text", None) or str(result)
     _log.info("code_session.done", chars=len(text))
     return text

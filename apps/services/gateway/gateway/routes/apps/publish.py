@@ -42,6 +42,7 @@ from gateway.routes.apps._common import (
     publish_app_activity,
     read_workspace_manifest,
     record_app_audit,
+    require_app_author,
     require_app_user,
     resolve_app_file,
     router,
@@ -117,7 +118,7 @@ def _read_entry_bundle(row: Any) -> tuple[bytes, dict[str, Any]]:
 async def publish_app(
     slug: str,
     body: PublishRequest,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Snapshot the draft as the next immutable version and go live."""
     if body.visibility is not None and body.visibility not in VISIBILITIES:
@@ -174,7 +175,7 @@ async def publish_app(
                 """INSERT INTO app_versions
                    (app_id, version, manifest, bundle_html, bundle_sha256,
                     release_notes, scope_set_hash, published_by, review_status)
-                   VALUES (:app_id, :version, :manifest::jsonb, :bundle,
+                   VALUES (:app_id, :version, :manifest ::jsonb, :bundle,
                            :sha256, :notes, :scope_hash, :published_by,
                            :review_status)"""
             ),
@@ -241,7 +242,7 @@ async def publish_app(
 async def rollback_app(
     slug: str,
     body: RollbackRequest,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Repoint the live version at an existing snapshot."""
     db = await _get_db()

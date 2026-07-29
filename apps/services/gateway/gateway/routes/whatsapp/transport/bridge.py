@@ -8,6 +8,10 @@ holds the session, and streams NORMALIZED messages here. This module:
   messages (shared-secret auth); we parse → ``persist_sync_result`` → the SAME
   post-sync hooks the webhook fires. So every message a personal number receives
   flows through the identical triage + AI brain as a Cloud API number.
+* ``POST /whatsapp/bridge/labels`` — native WhatsApp labels + chat associations
+  from app-state sync, mirrored read-only into the triage inbox (W16).
+* ``POST /whatsapp/bridge/avatars`` — freshly-fetched profile-picture URLs per
+  chat, so the inbox can render the real DP instead of colored initials (W17).
 * ``POST /whatsapp/bridge/paired`` — the bridge tells us a device finished
   pairing; we fill in the number/name and flip the account to 'live'.
 * ``POST /whatsapp/bridge/connect`` — the app asks to pair: create a 'pairing'
@@ -106,6 +110,151 @@ def parse_bridge_payload(payload: dict[str, Any]) -> SyncResult:
             raw=m,
         ))
     return result
+
+
+def parse_labels_payload(
+    payload: dict[str, Any],
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Map the bridge's ``/bridge/labels`` body to normalized (labels, assocs).
+
+    Pure. Labels missing a ``wa_label_id`` are skipped (nothing to key on);
+    associations missing an id or chat JID are skipped. Both arrays are optional
+    — a single LabelEdit sends one label, a LabelAssociationChat one assoc."""
+    labels: list[dict[str, Any]] = []
+    for lbl in payload.get("labels") or []:
+        if not isinstance(lbl, dict):
+            continue
+        wid = str(lbl.get("wa_label_id") or "").strip()
+        if not wid:
+            continue
+        labels.append({
+            "wa_label_id": wid,
+            "name": str(lbl.get("name") or "").strip() or wid,
+            "color": (str(lbl.get("color")).strip() or None) if lbl.get("color") else None,
+            "color_index": _as_int(lbl.get("color_index")),
+            "list_type": (str(lbl.get("list_type")).strip() or None) if lbl.get("list_type") else None,
+            "predefined_id": _as_int(lbl.get("predefined_id")),
+            "sort_order": _as_int(lbl.get("sort_order")) or 100,
+            "active": bool(lbl.get("active", True)),
+            "deleted": bool(lbl.get("deleted", False)),
+        })
+    assocs: list[dict[str, Any]] = []
+    for a in payload.get("associations") or []:
+        if not isinstance(a, dict):
+            continue
+        wid = str(a.get("wa_label_id") or "").strip()
+        chat = str(a.get("wa_chat_id") or "").strip()
+        if not wid or not chat:
+            continue
+        assocs.append({
+            "wa_label_id": wid,
+            "wa_chat_id": chat,
+            "labeled": bool(a.get("labeled", True)),
+        })
+    return labels, assocs
+
+
+def _as_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+async def persist_labels(
+    db: Any,
+    account_id: str,
+    labels: list[dict[str, Any]],
+    assocs: list[dict[str, Any]],
+) -> dict[str, int]:
+    """Upsert synced labels + chat associations for an account. A deleted label
+    also drops its associations; an un-labeling removes the association row."""
+    for lbl in labels:
+        await db.execute(
+            text("""
+                INSERT INTO wa_labels (account_id, wa_label_id, name, color,
+                    color_index, list_type, predefined_id, sort_order,
+                    active, deleted, sync_state, updated_at)
+                VALUES (:aid, :wid, :name, :color, :cidx, :ltype, :pid, :sort,
+                        :active, :deleted, 'synced', now())
+                ON CONFLICT (account_id, wa_label_id) WHERE wa_label_id IS NOT NULL
+                DO UPDATE SET name = excluded.name, color = excluded.color,
+                    color_index = excluded.color_index, list_type = excluded.list_type,
+                    predefined_id = excluded.predefined_id, sort_order = excluded.sort_order,
+                    active = excluded.active, deleted = excluded.deleted,
+                    sync_state = 'synced', updated_at = now()
+            """),
+            {"aid": account_id, "wid": lbl["wa_label_id"], "name": lbl["name"],
+             "color": lbl["color"], "cidx": lbl["color_index"],
+             "ltype": lbl["list_type"], "pid": lbl["predefined_id"],
+             "sort": lbl["sort_order"], "active": lbl["active"],
+             "deleted": lbl["deleted"]},
+        )
+        if lbl["deleted"]:
+            await db.execute(
+                text("""DELETE FROM wa_chat_labels
+                        WHERE account_id = :aid AND wa_label_id = :wid"""),
+                {"aid": account_id, "wid": lbl["wa_label_id"]},
+            )
+    for a in assocs:
+        if a["labeled"]:
+            await db.execute(
+                text("""
+                    INSERT INTO wa_chat_labels (account_id, wa_chat_id, wa_label_id)
+                    VALUES (:aid, :chat, :wid)
+                    ON CONFLICT (account_id, wa_chat_id, wa_label_id) DO NOTHING
+                """),
+                {"aid": account_id, "chat": a["wa_chat_id"], "wid": a["wa_label_id"]},
+            )
+        else:
+            await db.execute(
+                text("""DELETE FROM wa_chat_labels
+                        WHERE account_id = :aid AND wa_chat_id = :chat
+                          AND wa_label_id = :wid"""),
+                {"aid": account_id, "chat": a["wa_chat_id"], "wid": a["wa_label_id"]},
+            )
+    return {"labels": len(labels), "associations": len(assocs)}
+
+
+def parse_avatars_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Map the bridge's ``/bridge/avatars`` body to normalized avatar rows. Pure.
+
+    Rows missing a chat id or URL are skipped (never a partial/blank pointer)."""
+    out: list[dict[str, Any]] = []
+    for a in payload.get("avatars") or []:
+        if not isinstance(a, dict):
+            continue
+        chat = str(a.get("wa_chat_id") or "").strip()
+        url = str(a.get("avatar_url") or "").strip()
+        if not chat or not url:
+            continue
+        out.append({
+            "wa_chat_id": chat,
+            "avatar_url": url,
+            "avatar_hash": (str(a.get("avatar_hash")).strip() or None) if a.get("avatar_hash") else None,
+        })
+    return out
+
+
+async def persist_avatars(
+    db: Any, account_id: str, avatars: list[dict[str, Any]]
+) -> dict[str, int]:
+    """Upsert freshly-fetched profile-picture URLs for an account's chats. Keyed
+    by JID (wa_chat_avatars), not the wa_chats UUID — an avatar can arrive before
+    the chat's first message has synced."""
+    for a in avatars:
+        await db.execute(
+            text("""
+                INSERT INTO wa_chat_avatars (account_id, wa_chat_id, avatar_url, avatar_hash, updated_at)
+                VALUES (:aid, :chat, :url, :hash, now())
+                ON CONFLICT (account_id, wa_chat_id)
+                DO UPDATE SET avatar_url = excluded.avatar_url,
+                    avatar_hash = excluded.avatar_hash, updated_at = now()
+            """),
+            {"aid": account_id, "chat": a["wa_chat_id"], "url": a["avatar_url"],
+             "hash": a["avatar_hash"]},
+        )
+    return {"avatars": len(avatars)}
 
 
 # ── shared-secret auth (bridge ↔ gateway is server-to-server) ──────────────────
@@ -212,6 +361,74 @@ async def bridge_reclassify(request: Request):
         _log.warning("whatsapp.bridge.reclassify_failed",
                      account_id=account_id, error=str(exc)[:200])
     return {"ok": True}
+
+
+@router.post("/bridge/labels")
+async def bridge_labels(request: Request):
+    """The whatsmeow bridge posts native WhatsApp labels + chat associations for a
+    paired number (from app-state sync). Verify → parse → upsert into wa_labels +
+    wa_chat_labels, so the founder's own WhatsApp labels mirror into the inbox."""
+    if not bridge_secret_ok(request.headers.get("X-Bridge-Secret")):
+        return Response(status_code=403, content="bad secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=400, content="invalid json")
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id:
+        return Response(status_code=200, content="ok")
+
+    db = await _get_db()
+    try:
+        owned = (await db.execute(
+            text("""SELECT 1 FROM wa_accounts
+                    WHERE id = :aid AND provider = 'whatsmeow'"""),
+            {"aid": account_id},
+        )).fetchone()
+        if not owned:
+            _log.warning("whatsapp.bridge.labels_unknown_account", account_id=account_id)
+            return Response(status_code=200, content="ok")
+
+        labels, assocs = parse_labels_payload(payload)
+        counts = await persist_labels(db, account_id, labels, assocs)
+        await db.commit()
+        return {"ok": True, **counts}
+    finally:
+        await db.close()
+
+
+@router.post("/bridge/avatars")
+async def bridge_avatars(request: Request):
+    """The whatsmeow bridge posts freshly-fetched profile-picture URLs for one or
+    more chats. Verify → parse → upsert into wa_chat_avatars, so the inbox can
+    render the real DP instead of colored initials."""
+    if not bridge_secret_ok(request.headers.get("X-Bridge-Secret")):
+        return Response(status_code=403, content="bad secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=400, content="invalid json")
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id:
+        return Response(status_code=200, content="ok")
+
+    db = await _get_db()
+    try:
+        owned = (await db.execute(
+            text("""SELECT 1 FROM wa_accounts
+                    WHERE id = :aid AND provider = 'whatsmeow'"""),
+            {"aid": account_id},
+        )).fetchone()
+        if not owned:
+            _log.warning("whatsapp.bridge.avatars_unknown_account", account_id=account_id)
+            return Response(status_code=200, content="ok")
+
+        avatars = parse_avatars_payload(payload)
+        counts = await persist_avatars(db, account_id, avatars)
+        await db.commit()
+        return {"ok": True, **counts}
+    finally:
+        await db.close()
 
 
 @router.post("/bridge/paired")

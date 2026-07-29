@@ -27,6 +27,16 @@ export interface AppMeta {
   updated_at: string;
   /** Viewer's role on this app. */
   role: AppRole;
+  /** This viewer's own app_pins bookmark — list route only (the detail route
+   * always returns false; the pin button lives on the gallery card). */
+  pinned?: boolean;
+  /** Flagged by an editor as a starting point in the templates gallery. */
+  is_template?: boolean;
+  /** This-month AI usage (app_audit, kind='ai') — list route only, batched
+   * across every app in one query. See AppUsage for the fuller per-app
+   * breakdown (incl. budget) the detail page's usage popover fetches. */
+  month_cost_usd?: number;
+  month_calls?: number;
   /** Detail route only. The app.json manifest (LLM-drafted). */
   manifest?: Record<string, unknown>;
   /** Detail route only, editors only — the builder session's working dir. */
@@ -51,6 +61,13 @@ export interface GrantEntry {
   consented_scope_hash?: string | null;
   granted_by: string;
   created_at: string;
+}
+
+/** One pinned app from GET /api/apps/pins — the sidebar's lightweight query. */
+export interface PinnedApp {
+  slug: string;
+  name: string;
+  icon?: string;
 }
 
 /** One workspace file from GET /api/apps/{slug}/files. */

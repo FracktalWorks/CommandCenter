@@ -80,38 +80,45 @@ jobs:
           # Build the commit list (cap at 50 lines to keep the issue readable).
           COMMITS="$(git log ${RANGE} --oneline | head -50)"
           COMMIT_COUNT="$(git log ${RANGE} --oneline | wc -l | tr -d ' ')"
+          # NOTE: keep this assignment on ONE line. A continuation line at
+          # column 0 terminates the YAML block scalar early, which truncates
+          # this script mid-string and fails the step with
+          # "unexpected EOF while looking for matching quote".
           if [ "$COMMIT_COUNT" -gt 50 ]; then
-            COMMITS="${COMMITS}
-... (${COMMIT_COUNT} total — showing first 50)"
+            COMMITS="${COMMITS}"$'\n'"... (${COMMIT_COUNT} total — showing first 50)"
           fi
 
           # Write the issue body to a temp file to avoid shell quoting issues.
+          # NOTE: every heredoc line below MUST keep this same indent. YAML
+          # strips the block-scalar indent, so bash still sees the heredoc at
+          # column 0 — but a line written at column 0 *here* would end the
+          # block scalar and silently truncate this script.
           BODY_FILE="$(mktemp)"
           cat > "$BODY_FILE" <<BODY
-## Commit review due
+          ## Commit review due
 
-**${COUNT} commits** have landed on \`main\` since the last review (${SINCE}).
+          **${COUNT} commits** have landed on \`main\` since the last review (${SINCE}).
 
-Per the CommandCenter commit review cadence, do a pass over this batch before continuing:
+          Per the CommandCenter commit review cadence, do a pass over this batch before continuing:
 
-- [ ] List changed files: \`git diff --name-only ${RANGE}\`
-- [ ] Check comments for accuracy and staleness
-- [ ] Verify cross-references in AGENTS.md and docs
-- [ ] Spot-check logic, type hints, and any inline \`TODO\`/\`FIXME\` markers
-- [ ] Run tests: \`uv run python -m pytest tests/unit/ -x -q\`
+          - [ ] List changed files: \`git diff --name-only ${RANGE}\`
+          - [ ] Check comments for accuracy and staleness
+          - [ ] Verify cross-references in AGENTS.md and docs
+          - [ ] Spot-check logic, type hints, and any inline \`TODO\`/\`FIXME\` markers
+          - [ ] Run tests: \`uv run python -m pytest tests/unit/ -x -q\`
 
-### Commits in this batch
-\`\`\`
-${COMMITS}
-\`\`\`
+          ### Commits in this batch
+          \`\`\`
+          ${COMMITS}
+          \`\`\`
 
-### Mark the review done
-\`\`\`bash
-git tag review/\$(date +%Y-%m-%d)
-git push --tags
-\`\`\`
-Then close this issue.
-BODY
+          ### Mark the review done
+          \`\`\`bash
+          git tag review/\$(date +%Y-%m-%d)
+          git push --tags
+          \`\`\`
+          Then close this issue.
+          BODY
 
           gh issue create \
             --title "Review due — ${COUNT} commits since ${SINCE}" \

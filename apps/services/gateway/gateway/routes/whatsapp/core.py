@@ -15,10 +15,31 @@ from typing import Any
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from acb_auth import require_feature_router
 
 _log = get_logger("gateway.whatsapp")
 
-router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
+router = APIRouter(
+    prefix="/whatsapp", tags=["whatsapp"],
+    # Org access control: the whole surface needs `feature:whatsapp`, so a new
+    # endpoint added here is gated by default. The provider webhook is exempt —
+    # it arrives from Meta with no session and no internal token, and it
+    # authenticates itself via the verify token / signature, so gating it would
+    # break inbound message ingestion rather than restrict it.
+    # Exempt: machine entrypoints that arrive with no session and no internal
+    # token, each already authenticated by its own scheme. Gating them would
+    # break inbound ingestion, not restrict it.
+    #   /whatsapp/webhook    — Meta verify-token (GET) + signature (POST)
+    #   /whatsapp/bridge/*   — the Go bridge's X-Bridge-Secret (constant-time
+    #                          compare in transport/bridge.bridge_secret_ok)
+    dependencies=[require_feature_router("whatsapp", exempt=[
+        "/whatsapp/webhook",
+        "/whatsapp/bridge/ingest",
+        "/whatsapp/bridge/reclassify",
+        "/whatsapp/bridge/labels",
+        "/whatsapp/bridge/paired",
+    ])],
+)
 
 
 # ── Pydantic models (the wire shape the Next.js app consumes) ─────────────────
@@ -52,6 +73,10 @@ class WhatsAppChatModel(BaseModel):
     window_open: bool = False
     window_expires_at: str | None = None
     snoozed_until: str | None = None    # set while the chat is snoozed (W6)
+    # Native WhatsApp labels the chat carries, mirrored read-only (W16).
+    labels: list[dict[str, Any]] = []
+    # Native WhatsApp profile-picture URL, synced from the number (W17).
+    avatar_url: str | None = None
 
 
 class WhatsAppMessageModel(BaseModel):

@@ -1,0 +1,8 @@
+# Files that are executed on the Linux VPS must keep LF endings regardless of
+# the contributor's platform or core.autocrlf setting. A CRLF shebang fails at
+# runtime with the famously unhelpful "bad interpreter: /usr/bin/env bash^M",
+# and a CRLF systemd unit is parsed but silently misbehaves.
+*.sh            text eol=lf
+*.service       text eol=lf
+*.timer         text eol=lf
+deploy/hostinger/caddy/Caddyfile text eol=lf

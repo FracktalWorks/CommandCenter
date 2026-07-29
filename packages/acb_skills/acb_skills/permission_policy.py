@@ -93,7 +93,17 @@ def _workspace_root() -> str | None:
         from acb_skills.write_artifact import (
             _WRITE_ARTIFACT_CONTEXT,
         )
-        return _WRITE_ARTIFACT_CONTEXT.get("workspace_root") or None
+        # BO-7 phase 2: a sandboxed Copilot session (copilot_sandbox.py) reports
+        # PermissionRequest paths relative to the CONTAINER's fixed mount point
+        # (/workspace/repo), not the host workspace_root — the call site sets
+        # permission_check_root for the duration of that call so this containment
+        # check compares against the right root. Unset everywhere else, so this
+        # is a no-op for every non-sandboxed call.
+        return (
+            _WRITE_ARTIFACT_CONTEXT.get("permission_check_root")
+            or _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
+            or None
+        )
     except Exception:
         return None
 
@@ -120,6 +130,18 @@ def decide(request: Any) -> tuple[bool, str, str]:
     Pure over the request fields — no SDK result objects, no I/O beyond reading
     env policy + the workspace-root context. The executor's handler wraps this
     and maps ``approved`` to the SDK's result type.
+
+    Ordering (BO-7 cheap win 1/3): the dangerous-shell and out-of-workspace
+    hard vetoes run BEFORE the named-tool annotation lookup, not after. They
+    used to run only when a request carried no recognised ``tool_name`` — so
+    a call that was BOTH a named platform tool AND, per its real arguments,
+    a denylisted shell command or an out-of-workspace write, was waved
+    through purely on the tool's "reversible"/"destructive-defer"
+    classification without ever being checked against what it actually asked
+    to do. The annotation lookup itself is unchanged; only its position moved,
+    and it still runs — and still short-circuits to approve — once neither
+    veto applies. Every existing single-field test call (no request combines
+    ``tool_name`` with shell/write fields) is unaffected by the reorder.
     """
     read_only = bool(_field(request, "read_only"))
     tool_name = str(_field(request, "tool_name") or "")
@@ -134,7 +156,29 @@ def decide(request: Any) -> tuple[bool, str, str]:
     if read_only:
         return True, "read_only", "observation only"
 
-    # 2. Named platform tool → consult risk annotations.
+    # 2. Dangerous shell command → hard veto (fail-closed), regardless of
+    #    what tool is asking for it.
+    cmd_text = full_cmd
+    if not cmd_text and commands:
+        cmd_text = " ".join(
+            commands if isinstance(commands, list) else [str(commands)]
+        )
+    if cmd_text:
+        for pat in _deny_patterns():
+            if pat.search(cmd_text):
+                return False, "shell_denied", cmd_text[:200]
+
+    # 3. File write outside the agent workspace → hard veto (fail-closed),
+    #    same reasoning: a tool's own annotation cannot waive this.
+    if has_write_redir or new_file is not None or path:
+        root = _workspace_root()
+        if root and path and not _is_within(path, root):
+            return False, "write_out_of_workspace", path[:200]
+
+    # 4. Named platform tool → consult risk annotations. Reached once the
+    #    hard vetoes above have cleared (or didn't apply), so the common case
+    #    — an annotated tool with no separately-supplied command/path context
+    #    — still gets its fast, no-extra-context approval.
     if tool_name:
         try:
             from acb_skills.tool_annotations import (
@@ -154,31 +198,72 @@ def decide(request: Any) -> tuple[bool, str, str]:
             return True, "tool_reversible", tool_name
         # Unknown named tool → fall through to fail-open-loud below.
 
-    # 3. Shell command → dangerous-command denylist (fail-closed).
-    cmd_text = full_cmd
-    if not cmd_text and commands:
-        cmd_text = " ".join(
-            commands if isinstance(commands, list) else [str(commands)]
-        )
+    # 5. Shell command that cleared the denylist → approve.
     if cmd_text:
-        for pat in _deny_patterns():
-            if pat.search(cmd_text):
-                return False, "shell_denied", cmd_text[:200]
         return True, "shell_ok", cmd_text[:200]
 
-    # 4. File write → must stay inside the agent workspace (fail-closed).
+    # 6. File write that cleared containment (or no workspace configured) →
+    #    approve.
     if has_write_redir or new_file is not None or path:
-        root = _workspace_root()
-        if root and path and not _is_within(path, root):
-            return False, "write_out_of_workspace", path[:200]
         return True, "write_in_workspace", path[:200] or "(workspace)"
 
-    # 5. Network → open_world is expected; approve but surface for audit.
+    # 7. Network → open_world is expected; approve but surface for audit.
     if url:
         return True, "network", str(url)[:200]
 
-    # 6. Unknown / unclassifiable → fail OPEN but LOUD (near-term slice).
+    # 8. Unknown / unclassifiable → fail OPEN but LOUD (near-term slice).
     return True, "unknown_allowed", tool_name or "(unclassified request)"
+
+
+# ── Per-tool call-context builders (BO-7 cheap win 1/3) ──────────────────────
+# The Copilot SDK's own built-in shell/file/fetch hook already gives decide()
+# full context (PermissionRequest carries full_command_text/path/etc. — see
+# copilot.generated.session_events.PermissionRequest). Every gate wrapper for
+# OUR OWN platform tools, though, called decide({"tool_name": tool_name}) —
+# name only, no args — so run_script (which builds and executes a literal
+# shell command from its own arguments) was gated purely on its "reversible"
+# annotation, never on what it was actually about to run.
+#
+# Deliberately narrow: only run_script is mapped. code_task's `task` is a
+# free-text prompt describing INTENT, not the shell command that will run —
+# mapping it into full_command_text would false-positive the denylist on
+# ordinary prose ("clean up with rm -rf tmp/ if needed" is a reasonable task
+# description), and its real shell commands are already separately gated
+# inside its own bounded Copilot session (code_session.py sets its own
+# _permission_handler). install_dependency's `packages` string is pre-
+# validated against a name[==version]-only regex before it ever reaches a
+# subprocess, so it isn't exposed to the same class of shell-injection risk.
+def _run_script_context(kwargs: dict) -> dict:
+    path = str(kwargs.get("path") or "")
+    script_args = str(kwargs.get("args") or "")
+    return {
+        "path": path,
+        "full_command_text": f"{path} {script_args}".strip(),
+    }
+
+
+_TOOL_CONTEXT_BUILDERS: dict[str, Any] = {
+    "run_script": _run_script_context,
+}
+
+
+def build_tool_call_context(tool_name: str, kwargs: dict) -> dict:
+    """Build the request :func:`decide` sees for a gated platform-tool call.
+
+    Always includes ``tool_name``; additionally maps a tool's real call
+    keyword-arguments onto :func:`decide`'s recognised fields for the tools in
+    :data:`_TOOL_CONTEXT_BUILDERS`. A builder failure (unexpected arg shape)
+    falls back to name-only context rather than raising — never brick a tool
+    call over a permission-context mapping bug.
+    """
+    ctx: dict[str, Any] = {"tool_name": tool_name}
+    builder = _TOOL_CONTEXT_BUILDERS.get(tool_name)
+    if builder is not None:
+        try:
+            ctx.update(builder(kwargs or {}))
+        except Exception:
+            pass
+    return ctx
 
 
 def _approved_result() -> Any:

@@ -116,6 +116,59 @@ async def require_app_user(
     return user
 
 
+def _is_service_principal(user: UserContext) -> bool:
+    """The internal-token caller, which holds `*` and bypasses org gates.
+
+    The app-builder agent reaches these routes with the internal token on the
+    member's behalf; the member's own access was already checked when they
+    invoked it.
+    """
+    return user.role is UserRole.AGENT and user.has_permission("*")
+
+
+async def require_app_viewer(
+    user: UserContext = Depends(require_app_user),
+) -> UserContext:
+    """Org-level gate for USING apps (`apps:use:*`).
+
+    Distinct from the per-app grant/visibility checks, which decide *which*
+    apps a viewer may open. This is the org-level off switch: a member denied
+    `apps:use:*` gets no custom apps at all, regardless of how any individual
+    app is shared. Without this the permission would appear in the admin UI
+    and do nothing, which is worse than not offering it.
+    """
+    if _is_service_principal(user):
+        return user
+    if not user.has_permission("apps:use:*"):
+        raise HTTPException(
+            status_code=403, detail="Forbidden: missing permission 'apps:use:*'."
+        )
+    return user
+
+
+async def require_app_author(
+    user: UserContext = Depends(require_app_user),
+) -> UserContext:
+    """Gate for AUTHORING apps (`feature:build.apps`) — the "app creator".
+
+    A separate dependency rather than a router-level gate because `/apps`
+    serves two audiences on one prefix: running a shared app is not the same
+    permission as building one. This is the check behind "don't give them the
+    app creator, but they can still use the apps the team shares".
+
+    Authoring implies use, so this does not additionally require
+    `apps:use:*` — an author locked out of their own app would be nonsense.
+    """
+    if _is_service_principal(user):
+        return user
+    if not user.has_permission("feature:build.apps"):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: missing permission 'feature:build.apps'.",
+        )
+    return user
+
+
 def _uid(user: UserContext | None) -> str:
     return getattr(user, "email", None) or "system:internal"
 
@@ -134,6 +187,20 @@ def apps_root() -> Path:
     )
     root.mkdir(parents=True, exist_ok=True)
     return root
+
+
+def t2_vendor_dir() -> Path:
+    """The shared, deploy-provisioned T2 (React) build dependency cache —
+    ``react``/``react-dom``/``esbuild``, installed once outside any app
+    workspace (never per-app ``npm install``). ``CUSTOM_APPS_T2_VENDOR_DIR``
+    overrides; empty falls back to ``{agents_clone_dir}/vendor/t2-react``.
+    Does not create the directory — deploy provisioning owns that."""
+    settings = get_settings()
+    configured = (getattr(settings, "custom_apps_t2_vendor_dir", "") or "").strip()
+    return (
+        Path(configured) if configured
+        else Path(settings.agents_clone_dir) / "vendor" / "t2-react"
+    )
 
 
 # ── Slugs ────────────────────────────────────────────────────────────────────
@@ -269,7 +336,12 @@ def role_for(
 def default_manifest(
     slug: str, name: str, icon: str = "", description: str = "",
 ) -> dict[str, Any]:
-    """A fresh scaffold's ``app.json`` (RFC §4.1, runtime T1: static)."""
+    """A fresh scaffold's ``app.json`` (RFC §4.1, runtime T1: static).
+
+    ``tier`` is display/prompt metadata only (T1 vanilla vs T2 React) — every
+    backend read path (publish, draft preview, durability) already resolves
+    the real entry point dynamically from ``entry``, not from ``tier``.
+    """
     return {
         "slug": slug,
         "name": name,
@@ -277,6 +349,7 @@ def default_manifest(
         "description": description,
         "runtime": "static",
         "entry": "index.html",
+        "tier": "T1",
         "run_as": "viewer",
         "scopes": list(DEFAULT_SCOPES),
         "storage": {"tables": []},
@@ -303,6 +376,15 @@ def parse_db_manifest(val: Any) -> dict[str, Any]:
         except ValueError:
             return {}
     return {}
+
+
+def manifest_entry_rel(manifest: dict[str, Any] | None) -> str:
+    """Normalized rel path of the manifest's declared entry (default
+    ``index.html``) — the one path durability must mirror even when it falls
+    under a ``WORKSPACE_SKIP_DIRS`` directory (e.g. a T2 app's
+    ``dist/bundle.html``)."""
+    raw = str((manifest or {}).get("entry") or "index.html")
+    return raw.replace("\\", "/").strip("/")
 
 
 def manifest_scopes(manifest: dict[str, Any] | None) -> list[str]:
@@ -446,7 +528,7 @@ async def record_app_audit(
                        (app_id, app_version, user_email, kind, detail,
                         tokens_in, tokens_out, cost_usd, model)
                        VALUES (:app_id, :app_version, :user_email, :kind,
-                               :detail::jsonb, :tokens_in, :tokens_out,
+                               :detail ::jsonb, :tokens_in, :tokens_out,
                                :cost_usd, :model)"""
                 ),
                 {

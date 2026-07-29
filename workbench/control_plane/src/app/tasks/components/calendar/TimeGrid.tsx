@@ -260,15 +260,18 @@ export function TimeGrid({
       )}
 
       <div className="flex">
-        {/* Hour gutter */}
+        {/* Hour gutter — each row is EXACTLY HOUR_PX so the labels stay in
+            lockstep with the day-column hour lines and the now-line (a per-row
+            negative margin here used to compound, drifting the labels ~3h up by
+            late evening). The label is centred on the hour line at the row top. */}
         <div className="w-14 shrink-0">
           {hours.map((h) => (
             <div
               key={h}
               style={{ height: HOUR_PX }}
-              className="relative -mt-2 pr-2 text-right text-[10px] text-muted-foreground"
+              className="relative pr-2 text-right text-[10px] text-muted-foreground"
             >
-              <span className="absolute right-2 top-2">
+              <span className="absolute right-2 top-0 -translate-y-1/2">
                 {h % 12 === 0 ? 12 : h % 12}
                 {h < 12 ? "am" : "pm"}
               </span>

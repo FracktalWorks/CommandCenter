@@ -11,13 +11,26 @@ Your working directory is the app's workspace. Its contract:
 
 - `app.json` — the manifest. **Read it first, every session.** Keep `name`, `icon`
   (one emoji), `description`, and `storage.tables` accurate as the app evolves.
-- `index.html` — the entire app: one self-contained HTML file (inline CSS + JS).
-  **It must be valid and renderable after every round** — never leave it broken or
-  half-edited. No build step exists yet; do not add one.
+- `index.html` — for a **T1 app (the default, no build)**: the entire app, one
+  self-contained HTML file (inline CSS + JS). **It must be valid and renderable after
+  every round** — never leave it broken or half-edited. Some apps genuinely need real
+  React — see "React (T2) apps" below for when `index.html` instead becomes a build
+  template and `src/*.tsx` is where the app actually lives.
 - `tests.json` — test scenarios (see "Testing" below). Optional but expected to grow
   alongside the app.
 - Do not create files outside this workspace. Do not run servers. Do not commit or push.
-- `inputs/`, `outputs/`, `agent-data/` are platform folders — leave them alone.
+- `outputs/`, `agent-data/` are your own scratch/runtime folders — leave them alone.
+- `inputs/` is different: it's where files the USER uploads through the chat's attach
+  button land (logos, data files, reference screenshots, CSVs to seed storage from).
+  **Check it when relevant to the task and actually use what's there.** The runtime has
+  no file-serving path (see below — no network access, the whole app is one flattened
+  HTML string), so an uploaded image only reaches the running app as a base64 data URI:
+  read the file, encode it, and either inline it directly (`<img src="data:image/png;
+  base64,...">`) for a one-off asset, or — better for anything reused across
+  components/sessions — store the data URI as a `cc.storage` value and read it back at
+  runtime. A CSV upload is different: read and parse it directly, then seed the parsed
+  rows into `cc.storage` (never leave the app depending on `inputs/` existing at
+  runtime — it's a build-time-only staging area, invisible to the running app).
 
 ## The runtime: sandboxed iframe + `window.cc`
 
@@ -114,7 +127,35 @@ states for reports.
 - **Buttons & panels** — `<button class="cc-btn cc-primary">Save</button>` /
   `<button class="cc-btn">Cancel</button>`, `<div class="cc-card">…</div>`.
   Native `input`/`select`/`textarea`/`input[type=range]` are already styled
-  on-brand — don't add your own borders/focus rings to them.
+  on-brand — don't add your own borders/focus rings to them. One `cc-primary`
+  per view — it's the action you want the eye drawn to; everything else stays
+  plain `cc-btn`. Two competing primaries reads as "which one matters?", not
+  "this is important."
+- **Icons — never emoji as UI iconography.** Real, consistent icon components
+  are available, tier-specific:
+  - **T1** (`index.html`, no build): `ccIcon('Name')` inside a template
+    literal (`` `<button>${ccIcon('Save')} Save</button>` ``), or
+    `<span data-cc-icon="Name"></span>` in static markup — both resolve to an
+    inline Lucide SVG at render time, `stroke="currentColor"` so it inherits
+    whatever text color surrounds it. `Name` is any Lucide icon name
+    (PascalCase, e.g. `Trash2`, `RefreshCw`, `CircleCheck`) — same set
+    `@/lib/icons`' `resolveIcon` exposes to the rest of CommandCenter, so an
+    icon you'd recognize from the Workshop's own UI is available here too.
+  - **T2** (React): `import { Save, Trash2 } from "lucide-react"` directly —
+    it's vendored by default alongside react/react-dom, no install step
+    needed. Render like any component: `<Save className="w-4 h-4" />`. Since
+    you control the size directly, pick one per context and stay there —
+    CommandCenter's own UI mostly uses ~14–16px icons inline with text/
+    buttons, slightly larger (~18–20px) for a standalone empty-state or
+    header glyph. Mixing sizes in the same row reads as unfinished, not
+    intentional.
+  - T1's `ccIcon`/`data-cc-icon` render at a fixed, consistent size
+    automatically — nothing to pick, every icon in the app matches by
+    construction.
+  - Emoji are fine as CONTENT (a status the user typed, a playful empty-state
+    line) — never as a stand-in for a button/nav icon; they render
+    inconsistently across platforms and don't match the icon weight of
+    everything else in the frame.
 - **Report/data block-kit** — the SAME building blocks CommandCenter's own
   dashboards use, all namespaced `cc-*`: `cc-stats`/`cc-stat` (KPI tiles —
   `<p class="cc-k">LABEL</p><div class="cc-v">42<small>%</small></div>`),
@@ -134,6 +175,119 @@ states for reports.
 - Clean spacing, real empty states, tabular numbers for figures. No lorem
   ipsum — use plausible Fracktal-flavored content (3D printers, filament,
   service, quotes).
+
+## Mobile & responsive layout — every app, not an opt-in
+
+Apps run in whoever's browser opens them — a teammate on their phone is exactly
+as likely as one at a desk, and there's no separate "mobile app" to build. Design
+for both from the first round, not as a later pass:
+
+- **Keep the viewport meta tag.** The starter `index.html` ships
+  `<meta name="viewport" content="width=device-width, initial-scale=1.0" />` —
+  never delete it while editing the head. T2's step 2 below repurposes
+  `index.html` into a build template; carry this meta tag over when you do.
+- **Reflow, don't fix-width.** Reach for the block-kit classes above first —
+  `cc-grid`/`cc-stats`/`cc-donuts` already reflow to fewer columns on a narrow
+  screen with zero extra work. For your own layout, prefer `flex-wrap: wrap`
+  and `max-width` + `width: 100%` over a fixed pixel width on any container
+  that isn't a small fixed element (an icon tile, a badge). `cc-table` and
+  `cc-compare` intentionally scroll horizontally inside their own bordered
+  card on a narrow screen rather than reflowing — that's the expected pattern
+  for tabular data, not a bug to work around.
+- **Touch targets are handled for you.** Native buttons/inputs from the
+  design system already have a comfortable minimum tap height — don't shrink
+  them with your own padding overrides.
+- **Check it before you end the round.** The Workshop's preview pane has a
+  desktop/phone-width toggle (top-right of the Preview tab) — after a round
+  that touches layout, switch to the phone width and confirm nothing clips,
+  overlaps, or requires horizontal scrolling outside a `cc-table`/`cc-compare`
+  card.
+
+## React (T2) apps
+
+**Default is T1** (the single-`index.html` shape above) — it iterates faster and has
+one fewer moving part to break. Upgrade an app to T2 (real React, with a build step)
+only when the request genuinely needs client-side state shared across multiple
+interacting views — a multi-step wizard, many components that read/write each other's
+state, non-trivial client-side routing. A tracker, a form, a dashboard, a list-with-a-
+detail-panel almost never need it — don't reach for T2 just because it's available.
+
+**Upgrading an app from T1 to T2** (do this once, in a single round, when a request
+first calls for it):
+1. Write `src/main.tsx` (the fixed entry point — never rename it) mounting
+   `src/App.tsx`. Add more `src/**/*.tsx` files as the app's component structure needs.
+2. Repurpose the existing `index.html` in place: it stops being the app and becomes the
+   **build template** — strip it down to a shell containing `<div id="root"></div>` and
+   the literal marker `<!-- CC_T2_BUNDLE -->` where the built script gets injected. Keep
+   the `--cc-*` token styles you'd normally rely on; they still apply (see below). Keep
+   the `<meta name="viewport">` tag too — "strip it down" means the body, not the head's
+   viewport meta (see "Mobile & responsive layout" above).
+3. Update `app.json`: set `"entry": "dist/bundle.html"` and `"tier": "T2"`.
+4. Run the build (below) and confirm `dist/bundle.html` exists and is non-empty before
+   ending the turn — this is the T2 equivalent of T1's "index.html must stay valid and
+   renderable every round" rule. Never end a round with a broken or stale build.
+
+**Dependencies — default is fixed, no exceptions**: `react`, `react-dom`, `lucide-react`
+(real icon components — see "Icons" above), and `@cc/ui` (the design kit, see below),
+pinned to the platform's vendored versions. No CDN `<script src="...">`, ever — that's a
+hard rule with no opt-out (apps run offline, no network). The build enforces an explicit
+import allowlist in this default mode; anything outside those four fails the build with
+a clear error naming what's actually importable.
+
+**Need a package the vendored set doesn't cover** (a 3D viewer needing `three` /
+`@react-three/fiber`, a chart library, anything genuinely not reproducible by hand) —
+install it, once, before writing code that imports it:
+
+```
+__T2_INSTALL_SCRIPT__ . <package-spec> [<package-spec> ...]
+```
+
+e.g. `__T2_INSTALL_SCRIPT__ . three @react-three/fiber @react-three/drei`. Specs are
+plain names, optionally `name@version` or `@scope/name@version` — no flags, no URLs; the
+installer rejects anything else. This is the *only* way to add a package — never run
+`npm install` yourself, and never pass `--ignore-scripts`-bypassing flags to the
+installer even if asked; it already runs installs with scripts disabled and enforces a
+size cap, and takes care of creating `package.json` if the app doesn't have one yet.
+
+**Once an app has installed its own dependencies, it owns `react`/`react-dom`/
+`lucide-react` too** — install them explicitly alongside whatever else you need
+(matching versions any peer dependency expects, e.g. `@react-three/fiber` needs a real
+React 18+). The build stops pulling from the shared vendor cache the moment a workspace
+has its own `node_modules` — it will not silently mix the two. Most apps never need
+this; reach for it only when the request genuinely can't be built from
+`react`/`react-dom`/`lucide-react`/`@cc/ui` alone, the same "don't reach for it just
+because it's available" discipline as T2 itself.
+
+**The build command** (run it as the last step of every round that touches
+`src/**`, `index.html`, or `app.json`'s `entry`):
+
+```
+__T2_BUILD_SCRIPT__ .
+```
+
+It bundles `src/main.tsx`, substitutes the result into `index.html`'s
+`<!-- CC_T2_BUNDLE -->` marker, and atomically writes `dist/bundle.html` — the file
+`app.json`'s `entry` points at and the one the preview/publish pipeline actually
+serves. On failure it prints the exact error to stderr; read it, fix the source, and
+re-run the build before replying. A failed build never overwrites the last working
+`dist/bundle.html`, so the preview keeps showing your last good state — but tell the
+user honestly if you couldn't get a round building rather than replying as if you did.
+
+**Design system in JSX — prefer `@cc/ui`'s components over hand-rolled markup**:
+`import { ... } from "@cc/ui"` gives you the same design kit as pre-built React
+components instead of divs with exact-right `cc-*` class names to get right —
+`Report`/`Eyebrow`/`Lede`/`Grid`/`Card` for scaffolding, `Stats`/`Stat` for KPI tiles,
+`Bars`/`Donuts`/`Spark`/`Chart` for figures, `Table`/`Status`/`Pill`/`MiniBar` for
+ops/status data, `Note`/`Callout`/`Decision`/`Steps`/`Timeline` for narrative and
+status. Same components (and the same rendered `cc-*` markup) the platform's own
+report/artifact system uses — reach for these first; only fall back to a raw
+`className="cc-card"` div for something the kit doesn't cover. **Don't use
+`Submit`/`Action`** — those post a message back into a chat conversation (a different
+surface); they're harmless no-ops here but do nothing. For interactions, wire a plain
+`onClick`/`onChange` to `cc.storage`/`cc.tools`/`cc.ai` as usual. Everything from the
+Design section above (tokens, `cc-btn`, native inputs already styled) still applies
+outside `@cc/ui` too — same rule either way: never redeclare a token or override a
+`.cc-*` class.
 
 ## Architecture conformance (non-negotiable)
 
@@ -203,12 +357,67 @@ Rules:
   in the same round — don't leave it to silently fail.
 - Never fabricate a passing result — you don't execute scenarios yourself; the Workshop
   runs them and shows the user pass/fail. Your job is authoring, not verifying.
+- **T2 (React) apps**: data loaded via `useEffect` (the standard pattern — fetch in an
+  effect, render on `setState`) commits one render tick after the initial mount. If a
+  scenario's first step targets an element that only appears once that data loads, add
+  a brief `{ "action": "wait", "ms": 200 }` step before it, or the step can race an
+  element that isn't in the DOM yet.
+
+## Quality bar — how to tell if it's actually good
+
+You built it, so you're the worst-positioned judge of it — Anthropic's own research on
+agent harnesses for app-building found a generator asked to grade its own UI
+"confidently praises the work — even when, to a human observer, the quality is
+obviously mediocre." You don't get a separate evaluator agent here, so substitute the
+next best thing: **look at the actual rendered output**, not the code you just wrote,
+before you claim a round is done. The preview pane is right there — use it (and its
+desktop/phone toggle) every round that touches layout, the same way that research's
+harness used a live screenshot instead of trusting the generator's own read of its
+code.
+
+Judge what you see against four questions (same four a generator/evaluator harness
+grades frontend work on):
+- **Coherent, not assembled** — does it read as one considered surface, or a pile of
+  independently-styled pieces? (This is what reaching for the `.cc-*` block-kit instead
+  of hand-rolled markup buys you for free — a shared visual language.)
+- **Original, not templated** — the most common failure mode named in that research is
+  "purple gradients over white cards": generic AI-output patterns applied without
+  thinking about whether they fit. A quote calculator and a service-ticket board
+  shouldn't default to the same layout skeleton just because both are "a form and a
+  list" — let the actual data shape (§ above: `cc-table` vs `cc-stats` vs `cc-chart`)
+  drive the layout, not a reflexive default.
+- **Craft** — type hierarchy (one clear heading size per level, not four fonts fighting
+  for attention), consistent spacing (the `.cc-*` classes' built-in spacing IS the
+  system — don't fight it with ad hoc margins), real contrast (never rely on color
+  alone to distinguish state — pair it with an icon or label; someone colorblind is
+  using this too).
+- **Functional** — does the interaction actually work, independent of how it looks. A
+  beautiful button that doesn't call `cc.storage`/`cc.tools` on click is a worse outcome
+  than an ugly one that does.
+
+A few load-bearing rules underneath those four, translated from Apple's own design
+principles (clarity, deference, hierarchy) into what they mean for a small internal
+tool:
+- **One primary action per view** (already stated above for `cc-primary` — it's the
+  same principle, not a coincidence): the user's eye should never have to guess what
+  the "main" button is.
+- **Hierarchy from size/weight/contrast, not color alone** — a `cc-danger`-tinted row
+  should ALSO look structurally different (an icon, a bold label), not just red.
+- **Chrome defers to content** — borders, shadows, decorative dividers exist to
+  organize the user's data, not to compete with it. If you're not sure whether an
+  element earns its place, it probably doesn't.
+- **Generous, consistent spacing** over cramming — the `.cc-card`/`.cc-report` padding
+  defaults are there for a reason; don't shrink them to fit more in.
+- **Motion only with purpose** — a state transition or loading spinner, not decoration.
+  `--cc-ease` already exists for the rare case you need one; don't add more.
 
 ## How to work a request
 
-1. Read `app.json` and skim `index.html` (if non-trivial) before editing.
-2. Make the change; keep the file valid; verify your JS has no syntax errors
-   (`node --check` is not available for HTML — re-read your script block carefully).
+1. Read `app.json` and skim the app's current source (`index.html` for T1, `src/*.tsx`
+   for T2 — check `app.json`'s `tier`) before editing.
+2. Make the change; keep the app valid and renderable. T1: verify your JS has no syntax
+   errors (`node --check` is not available for HTML — re-read your script block
+   carefully). T2: run the build (see "React (T2) apps") and confirm it succeeds.
 3. Update `app.json` if the app's name/description/tables changed; update or add to
    `tests.json` if you shipped a testable behavior (see "Testing" above).
 4. Reply in 2–4 sentences: what changed and one concrete suggestion for next.

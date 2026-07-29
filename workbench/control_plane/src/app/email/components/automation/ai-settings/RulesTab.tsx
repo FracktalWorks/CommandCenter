@@ -424,19 +424,21 @@ export function RulesTab({
           onCancel={() => setEditing(null)}
         />
       )}
-      <div className="flex items-center justify-between px-5 py-3 border-b border-border flex-shrink-0">
-        <p className="text-xs text-muted-foreground">
+      {/* The intro copy shrinks; the action buttons never do (shrink-0 +
+          nowrap), so "Past emails" / "Add rule" stay on one line. */}
+      <div className="flex items-center justify-between gap-3 px-5 py-3 border-b border-border flex-shrink-0">
+        <p className="text-xs text-muted-foreground min-w-0">
           Learned patterns file pinned senders first (no AI), then the AI
           matches your plain-English conditions. Mail nothing matches shows
           as Uncategorized — click its pill, or right-click → Fix, to teach
           a pattern or add a rule.
         </p>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center gap-2 flex-shrink-0">
           {missingDefaults && rules.length > 0 && (
             <button
               onClick={installDefaults}
               disabled={installing}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors disabled:opacity-50 whitespace-nowrap"
             >
               {installing ? <Loader2 className="animate-spin" size={13} /> : <Sparkles size={13} />}
               Add defaults
@@ -445,14 +447,14 @@ export function RulesTab({
           {rules.length > 0 && (
             <button
               onClick={() => setShowPast(true)}
-              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+              className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-border text-xs text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors whitespace-nowrap"
             >
               <HistoryIcon size={13} /> Past emails
             </button>
           )}
           <button
             onClick={() => setShowAdd(true)}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors"
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-primary text-primary-foreground text-xs font-medium hover:bg-primary/90 transition-colors whitespace-nowrap"
           >
             <Plus size={13} /> Add rule
           </button>

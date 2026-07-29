@@ -68,6 +68,57 @@ export interface EmailAccount {
   isDefault?: boolean;
 }
 
+// ── Contact card (the people card behind a sender's name/avatar) ────────────
+
+/** One of the contact's recent messages, as a small card in the popover. */
+export interface ContactRecentMessage {
+  id: string;
+  threadId?: string | null;
+  accountId: string;
+  subject: string;
+  /** Truncated body preview, already shortened server-side. */
+  preview: string;
+  receivedAt?: string | null;
+  isRead: boolean;
+  hasAttachments: boolean;
+  folder: string;
+}
+
+/** What the person's own email signature says about them. Every field is
+ *  optional — a personal address usually yields nothing but the domain. */
+export interface ContactDetails {
+  phones: string[];
+  title?: string | null;
+  organization?: string | null;
+  links: string[];
+  /** The message the signature was read from, so the card can cite it. */
+  sourceMessageId?: string | null;
+}
+
+export interface ContactStats {
+  /** Messages received FROM this person. */
+  received: number;
+  /** Messages the user sent TO this person (To or Cc). */
+  sent: number;
+  unread: number;
+  threads: number;
+  firstSeen?: string | null;
+  lastSeen?: string | null;
+}
+
+export interface ContactCard {
+  email: string;
+  name?: string | null;
+  domain?: string | null;
+  /** Sender rollup category (Newsletter / Conversation / …), when assigned. */
+  category?: string | null;
+  /** Cleaner disposition for this sender. */
+  status: SenderStatus;
+  stats: ContactStats;
+  details: ContactDetails;
+  recent: ContactRecentMessage[];
+}
+
 export interface ChatMessage {
   id: string;
   role: "user" | "assistant";
@@ -129,6 +180,9 @@ export interface DigestData {
     overdue: boolean;
     task_id?: string;
     thread_id?: string | null;
+    /** Latest message of the linked thread — lets the row open the email the
+     *  commitment came from. Null when the thread has no mirrored mail. */
+    message_id?: string | null;
   }[];
   /** Opt-in LLM one-liner orienting the day ("2 urgent: X's quote, Y's
    *  contract"). Empty unless morning_brief_enabled is on. */
@@ -511,6 +565,11 @@ export interface AssistantSettings {
   account_id: string;
   about: string;
   signature: string;
+  /** The SERVER's plain-text rendering of the signature — the composers seed
+   *  this exact text into the body so the backend's idempotent re-signing
+   *  recognises it (a client-side re-derivation could drift by whitespace and
+   *  get double-signed). */
+  signature_text?: string;
   auto_run: boolean;
   cold_email_blocker: ColdBlockerMode;
   /** Model for rule evaluation / classification / labeling (default tier-fast). */

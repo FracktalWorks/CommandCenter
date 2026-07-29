@@ -19,6 +19,14 @@ clone cache.
 3. agent_tools.py -- call_agent, call_agents_parallel, call_agent_background for cross-agent delegation.
 4. web_tools.py -- web_search (DuckDuckGo) and fetch_page (Jina Reader). Zero credential.
 5. write_artifact.py -- write_artifact tool for surfacing created files in the UI.
+6. artifact_lint.py -- lints agent-generated HTML before it reaches the sandbox.
+   The sandbox (SandboxedHtml.tsx) fails SILENTLY: a CDN fetch is CSP-blocked, a
+   typo'd `cc-` class renders unstyled, a `cc-bar` without `--v` draws empty. The
+   linter turns those into `warnings` on the write_artifact / emit_generative_ui
+   result. Advisory only -- it never blocks a write and never raises.
+   `CC_CLASSES` mirrors the stylesheet in SandboxedHtml.tsx; the drift test in
+   tests/unit/test_artifact_lint.py fails if the two diverge, so a new `cc-`
+   block must be registered in BOTH places.
 
 ## Work Guidance
 

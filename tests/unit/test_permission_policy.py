@@ -16,8 +16,10 @@ def _clean_env(monkeypatch):
     monkeypatch.delenv("AGENT_PERMISSION_MODE", raising=False)
     monkeypatch.delenv("AGENT_PERMISSION_DENY_PATTERNS", raising=False)
     _WRITE_ARTIFACT_CONTEXT.pop("workspace_root", None)
+    _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
     yield
     _WRITE_ARTIFACT_CONTEXT.pop("workspace_root", None)
+    _WRITE_ARTIFACT_CONTEXT.pop("permission_check_root", None)
 
 
 # ── decide(): the decision table ─────────────────────────────────────────────
@@ -110,6 +112,34 @@ def test_write_inside_workspace_approved():
     assert ok is True and code == "write_in_workspace"
 
 
+def test_permission_check_root_overrides_workspace_root_when_sandboxed():
+    # BO-7 phase 2: a sandboxed Copilot session reports CONTAINER paths
+    # (/workspace/repo/...), not the host workspace_root — permission_check_root
+    # is what the containment check must compare against when both are set.
+    _WRITE_ARTIFACT_CONTEXT["workspace_root"] = "/opt/acb/repos/agent-x"
+    _WRITE_ARTIFACT_CONTEXT["permission_check_root"] = "/workspace/repo"
+    ok, code, _ = pp.decide(
+        {"has_write_file_redirection": True, "path": "/workspace/repo/outputs/r.md"},
+    )
+    assert ok is True and code == "write_in_workspace"
+
+    # A path that's inside the HOST workspace_root but not the container
+    # permission_check_root is denied — proving the override actually changes
+    # which root is authoritative, not just widening what's allowed.
+    ok2, code2, _ = pp.decide(
+        {"has_write_file_redirection": True, "path": "/opt/acb/repos/agent-x/outputs/r.md"},
+    )
+    assert ok2 is False and code2 == "write_out_of_workspace"
+
+
+def test_permission_check_root_falls_back_to_workspace_root_when_unset():
+    _WRITE_ARTIFACT_CONTEXT["workspace_root"] = "/opt/acb/repos/agent-x"
+    ok, code, _ = pp.decide(
+        {"has_write_file_redirection": True, "path": "/etc/passwd"},
+    )
+    assert ok is False and code == "write_out_of_workspace"
+
+
 def test_write_with_no_workspace_context_approves():
     # No workspace root configured → can't prove out-of-bounds → approve.
     ok, code, _ = pp.decide({"has_write_file_redirection": True, "path": "/x"})
@@ -124,6 +154,72 @@ def test_network_approved_and_logged():
 def test_unknown_request_fails_open_loud():
     ok, code, _ = pp.decide({})
     assert ok is True and code == "unknown_allowed"
+
+
+def test_named_tool_with_dangerous_command_context_still_denied():
+    # BO-7 cheap win 1/3: a reversible-annotated tool (run_script) whose real
+    # arguments amount to a denylisted shell command must not be waved through
+    # on its tool-level annotation alone — the veto now runs BEFORE the
+    # annotation short-circuit, not only for requests with no tool_name.
+    ok, code, _ = pp.decide({
+        "tool_name": "run_script",
+        "full_command_text": "agent-data/scripts/x.py rm -rf /home",
+    })
+    assert ok is False and code == "shell_denied"
+
+
+def test_named_tool_with_out_of_workspace_path_still_denied():
+    _WRITE_ARTIFACT_CONTEXT["workspace_root"] = "/opt/acb/repos/agent-x"
+    ok, code, _ = pp.decide({
+        "tool_name": "run_script",
+        "has_write_file_redirection": True,
+        "path": "/etc/cron.d/evil",
+    })
+    assert ok is False and code == "write_out_of_workspace"
+
+
+def test_named_tool_with_benign_command_context_approves_via_annotation():
+    # No veto applies → falls through to the tool's own annotation, same
+    # result as before the reorder.
+    ok, code, _ = pp.decide({
+        "tool_name": "run_script",
+        "full_command_text": "agent-data/scripts/report.py --month 2026-07",
+    })
+    assert ok is True and code == "tool_reversible"
+
+
+def test_build_tool_call_context_maps_run_script_args():
+    ctx = pp.build_tool_call_context(
+        "run_script", {"path": "agent-data/scripts/x.py", "args": "--force"},
+    )
+    assert ctx["tool_name"] == "run_script"
+    assert ctx["path"] == "agent-data/scripts/x.py"
+    assert ctx["full_command_text"] == "agent-data/scripts/x.py --force"
+
+
+def test_build_tool_call_context_denies_run_script_dangerous_args():
+    # End-to-end: the mapped context alone (as the gate wrapper builds it)
+    # is enough for decide() to catch a dangerous run_script call.
+    ctx = pp.build_tool_call_context(
+        "run_script",
+        {"path": "agent-data/scripts/cleanup.sh", "args": "; rm -rf /home"},
+    )
+    ok, code, _ = pp.decide(ctx)
+    assert ok is False and code == "shell_denied"
+
+
+def test_build_tool_call_context_unmapped_tool_is_name_only():
+    # web_search has no context builder — context stays name-only, unaffected
+    # by whatever kwargs the caller passes.
+    ctx = pp.build_tool_call_context("web_search", {"query": "rm -rf /"})
+    assert ctx == {"tool_name": "web_search"}
+
+
+def test_build_tool_call_context_bad_kwargs_falls_back_gracefully():
+    # A builder given an unexpected shape must not raise — falls back to
+    # name-only context rather than bricking the tool call.
+    ctx = pp.build_tool_call_context("run_script", None)
+    assert ctx["tool_name"] == "run_script"
 
 
 def test_custom_deny_patterns_env(monkeypatch):
@@ -180,6 +276,39 @@ def test_gate_wrapper_preserves_name_and_allows_readonly_tool():
     gated = _gate_injected_tool(web_search)
     assert gated.__name__ == "web_search"  # SDK/MAF registration unaffected
     assert asyncio.run(gated("openai ceo")) == "results for openai ceo"
+
+
+def test_gate_wrapper_blocks_run_script_on_dangerous_args(monkeypatch):
+    # BO-7 cheap win 1/3, end-to-end through the real gate wrapper (not just
+    # decide()/build_tool_call_context in isolation): a call named run_script
+    # whose actual keyword args amount to a denylisted shell command is
+    # blocked, even though run_script is annotated non-destructive/reversible.
+    import asyncio
+
+    from orchestrator.executor import _gate_injected_tool
+
+    async def run_script(path, args=""):
+        return "SHOULD NOT RUN"
+
+    gated = _gate_injected_tool(run_script)
+    out = asyncio.run(gated(path="agent-data/scripts/x.py", args="; rm -rf /home"))
+    assert "blocked by permission policy" in out
+    assert "SHOULD NOT RUN" not in out
+
+
+def test_gate_wrapper_allows_run_script_on_benign_args(monkeypatch):
+    import asyncio
+
+    from orchestrator.executor import _gate_injected_tool
+
+    async def run_script(path, args=""):
+        return f"ran {path} {args}"
+
+    gated = _gate_injected_tool(run_script)
+    out = asyncio.run(
+        gated(path="agent-data/scripts/report.py", args="--month 2026-07")
+    )
+    assert out == "ran agent-data/scripts/report.py --month 2026-07"
 
 
 def test_gate_wrapper_blocks_a_denied_tool_in_enforce(monkeypatch):

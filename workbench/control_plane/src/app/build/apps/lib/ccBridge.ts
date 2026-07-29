@@ -295,6 +295,25 @@ export function buildAppSrcDoc(
   return sdk + bundleHtml;
 }
 
+// SandboxedHtml's `icons` prop pre-resolves Lucide icons into inline SVG
+// (the sandboxed frame has no network access to fetch them itself) — but it
+// needs to be TOLD which names an app's HTML actually references. This scans
+// for both call shapes instructions.md documents for T1 apps: `ccIcon('Name')`
+// and `<span data-cc-icon="Name">`. T2 apps import lucide-react directly and
+// never need this — icons compile into the bundle like any other component.
+const CC_ICON_CALL_RE = /ccIcon\(\s*["']([A-Za-z][A-Za-z0-9]*)["']\s*\)/g;
+const CC_ICON_ATTR_RE = /data-cc-icon=["']([A-Za-z][A-Za-z0-9]*)["']/g;
+
+/** Every distinct icon name an app's HTML asks for via `ccIcon(...)` or
+ * `data-cc-icon="..."` — feed the result to `buildIconMap` (lib/iconSvg)
+ * and pass it as `<SandboxedHtml icons={...}>`. */
+export function extractCcIconNames(html: string): string[] {
+  const names = new Set<string>();
+  for (const m of html.matchAll(CC_ICON_CALL_RE)) names.add(m[1]);
+  for (const m of html.matchAll(CC_ICON_ATTR_RE)) names.add(m[1]);
+  return [...names];
+}
+
 // ─── Parent-side broker ───────────────────────────────────────────────────
 
 interface CcSdkRequest {

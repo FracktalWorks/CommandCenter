@@ -67,6 +67,23 @@ def test_walk_skips_build_and_dependency_dirs(tmp_path: Path) -> None:
     assert _rel_paths(tmp_path) == {"index.html"}
 
 
+def test_walk_mirrors_a_t2_entry_file_living_under_a_skip_dir(tmp_path: Path) -> None:
+    """A T2 app's ``entry: dist/bundle.html`` must survive the mirror — it's
+    what a lost workspace rehydrates from — while a sibling build artifact
+    under the same skip-dir (a source map) still does not."""
+    (tmp_path / "app.json").write_text('{"entry": "dist/bundle.html"}')
+    (tmp_path / "src").mkdir()
+    (tmp_path / "src" / "App.tsx").write_text("export default function App() {}")
+    (tmp_path / "dist").mkdir()
+    (tmp_path / "dist" / "bundle.html").write_text("<html></html>")
+    (tmp_path / "dist" / "bundle.js.map").write_text("{}")
+    (tmp_path / "node_modules" / "react").mkdir(parents=True)
+    (tmp_path / "node_modules" / "react" / "index.js").write_text("x")
+    assert _rel_paths(tmp_path) == {
+        "app.json", "src/App.tsx", "dist/bundle.html",
+    }
+
+
 def test_walk_skips_oversize_and_non_utf8_files(tmp_path: Path) -> None:
     (tmp_path / "index.html").write_text("ok")
     (tmp_path / "big.txt").write_bytes(b"x" * (2 * 1024 * 1024 + 1))

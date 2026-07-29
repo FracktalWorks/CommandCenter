@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import {
   X,
   Loader2,
@@ -56,13 +56,58 @@ export function PlanDayPanel({
   const [plan, setPlan] = useState<DayPlanResult | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  const run = async (n: string) => {
+  // Plan-through horizon — where the day STOPS. "work" = your standing working
+  // hours (the office default); "1".."6" = that many hours from NOW, which
+  // crosses midnight so a late-night burst plans 24/7. When you open the panel
+  // OUTSIDE working hours (early morning / late night), we default to a few
+  // hours-from-now so the plan isn't an empty window. Only "today" gets the
+  // from-now options; a future day always plans its working hours.
+  const planningToday = new Date().toDateString() === target.toDateString();
+  const [horizon, setHorizon] = useState<string>(() => {
+    if (planningToday) {
+      const h = new Date().getHours();
+      if (h >= dayEnd || h < dayStart) return "3";
+    }
+    return "work";
+  });
+  // "Custom time…" — an exact clock time to work through (HH:MM, 24h). Defaults
+  // to the working-hours end; a time already past today rolls to the next day so
+  // a late-night pick (e.g. 1:00 at 11pm) plans into the small hours.
+  const [customTime, setCustomTime] = useState<string>(
+    `${String(dayEnd % 24).padStart(2, "0")}:00`,
+  );
+  // A single "now" captured when the panel opens — used for the horizon LABELS
+  // (kept out of render so it stays pure; the labels are a preview, and the
+  // panel is short-lived). `run` recomputes from a fresh Date.now() at tap time.
+  const [openedAtMs] = useState(() => Date.now());
+  const workEndAt = () => {
+    const d = new Date(target);
+    d.setHours(dayEnd, 0, 0, 0);
+    return d;
+  };
+  const customEndAt = (baseMs: number) => {
+    const [hh, mm] = customTime.split(":").map(Number);
+    const d = new Date(target);
+    d.setHours(hh || 0, mm || 0, 0, 0);
+    // Wrap a past clock time to tomorrow (only makes sense for "today").
+    if (planningToday && d.getTime() <= baseMs) d.setDate(d.getDate() + 1);
+    return d;
+  };
+  const endForHorizon = (hz: string, baseMs: number) =>
+    hz === "work"
+      ? workEndAt()
+      : hz === "custom"
+        ? customEndAt(baseMs)
+        : new Date(baseMs + Number(hz) * 3600_000);
+
+  const run = async (n: string, hz: string = horizon) => {
     setLoading(true);
     setError(null);
     const dayStartAt = new Date(target);
     dayStartAt.setHours(dayStart, 0, 0, 0);
-    const dayEndAt = new Date(target);
-    dayEndAt.setHours(dayEnd, 0, 0, 0);
+    // Fresh "now" at tap time — a "N more hours" / past-time-wrap horizon is
+    // measured from when you actually plan, not when the panel opened.
+    const dayEndAt = endForHorizon(hz, Date.now());
     try {
       setPlan(
         await (isReplan ? apiReplan : apiPlanDay)({
@@ -81,12 +126,9 @@ export function PlanDayPanel({
       setLoading(false);
     }
   };
-  useEffect(() => {
-    // Plan once when the panel opens (data fetch on mount).
-    // eslint-disable-next-line react-hooks/set-state-in-effect
-    void run("");
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
+  // NB: we deliberately do NOT plan on open — the user first adds an optional
+  // note / picks a horizon, then taps the button. Planning is an explicit act so
+  // a per-run prompt is never skipped by an auto-run.
 
   const apply = () => {
     if (!plan) return;
@@ -207,62 +249,136 @@ export function PlanDayPanel({
           </button>
         </div>
 
-        {/* Today's note — steers the AI's selection/order for THIS run, on top of
-            your standing planning prompt (Settings). Plan mode only; replan and
-            rollover are deterministic repacks that ignore free text. */}
-        {!isReplan && (
-          <div className="shrink-0 border-b border-border px-4 py-2.5">
-            <div className="mb-1 flex items-center justify-between gap-2">
+        {/* Plan-through horizon — how far into the day (or night) to schedule.
+            Defaults to your working hours; a preset works "N hours from now", or
+            pick "Custom time…" for an exact end time (any time up to — and past —
+            midnight, so late-night sessions plan 24/7). Re-plans on change. */}
+        <div className="flex shrink-0 flex-col gap-2 border-b border-border px-4 py-2">
+          <div className="flex items-center gap-2">
+            <CalendarClock className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+            <label
+              htmlFor="plan-horizon"
+              className="shrink-0 text-[11px] font-medium text-foreground"
+            >
+              Plan through
+            </label>
+            <select
+              id="plan-horizon"
+              value={horizon}
+              onChange={(e) => {
+                const v = e.target.value;
+                setHorizon(v);
+                // Only LIVE re-plan once a plan is on screen — before the first
+                // run, changing the horizon just updates the pending setting so
+                // planning stays an explicit tap (with your note).
+                if (plan) void run(note, v);
+              }}
+              disabled={loading}
+              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
+            >
+              <option value="work">
+                Working hours · till {fmt(workEndAt().toISOString())}
+              </option>
+              {planningToday &&
+                [1, 2, 3, 4, 6].map((h) => (
+                  <option key={h} value={String(h)}>
+                    {h} more hour{h === 1 ? "" : "s"} · till{" "}
+                    {fmt(endForHorizon(String(h), openedAtMs).toISOString())}
+                  </option>
+                ))}
+              <option value="custom">Custom time…</option>
+            </select>
+          </div>
+          {horizon === "custom" && (
+            <div className="flex items-center gap-2 pl-[22px]">
               <label
-                htmlFor="plan-note"
-                className="text-[11px] font-medium text-foreground"
+                htmlFor="plan-horizon-time"
+                className="shrink-0 text-[11px] text-muted-foreground"
               >
-                Anything special about today?
+                Work until
               </label>
-              {onOpenSettings && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    onClose();
-                    onOpenSettings();
-                  }}
-                  className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground"
-                >
-                  <Settings2 className="h-3 w-3" />
-                  Standing prompt
-                </button>
-              )}
-            </div>
-            <div className="flex items-center gap-2">
               <input
-                id="plan-note"
-                value={note}
-                onChange={(e) => setNote(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter") void run(note);
+                id="plan-horizon-time"
+                type="time"
+                value={customTime}
+                onChange={(e) => {
+                  setCustomTime(e.target.value);
+                  if (plan) void run(note, "custom");
                 }}
-                placeholder="e.g. “low energy”, “calls only”, “deep work”, “free after 3pm”"
-                className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+                disabled={loading}
+                className="rounded-md border border-border bg-background/60 px-2 py-1.5 text-[12px] text-foreground focus:border-primary/50 focus:outline-none disabled:opacity-50"
               />
+              <span className="truncate text-[11px] text-muted-foreground">
+                {planningToday &&
+                customEndAt(openedAtMs).getDate() !== target.getDate()
+                  ? "tomorrow"
+                  : "today"}
+              </span>
+            </div>
+          )}
+        </div>
+
+        {/* Today's note — an optional per-run prompt that steers the AI's
+            selection/order (Plan) or ordering (Fit) for THIS run, ON TOP of your
+            standing planning prompt (Settings) and OVERRIDING it where the two
+            conflict. Shown in both modes; the server threads it to the ranker and
+            also reads a horizon from it ("until 2am", "work for 2 more hours"). */}
+        <div className="shrink-0 border-b border-border px-4 py-2.5">
+          <div className="mb-1 flex items-center justify-between gap-2">
+            <label
+              htmlFor="plan-note"
+              className="text-[11px] font-medium text-foreground"
+            >
+              Anything special about today?{" "}
+              <span className="font-normal text-muted-foreground">
+                (optional)
+              </span>
+            </label>
+            {onOpenSettings && (
               <button
                 type="button"
-                onClick={() => void run(note)}
-                disabled={loading}
-                className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+                onClick={() => {
+                  onClose();
+                  onOpenSettings();
+                }}
+                className="inline-flex items-center gap-1 text-[10px] font-medium text-muted-foreground hover:text-foreground"
               >
-                {loading ? (
-                  <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                ) : (
-                  <Wand2 className="h-3.5 w-3.5" />
-                )}
-                {plan ? "Re-plan" : "Plan"}
+                <Settings2 className="h-3 w-3" />
+                Standing prompt
               </button>
-            </div>
-            <p className="mt-1 text-[10px] text-muted-foreground">
-              Applied on top of your standing plan. Press Re-plan after typing.
-            </p>
+            )}
           </div>
-        )}
+          <div className="flex items-center gap-2">
+            <input
+              id="plan-note"
+              value={note}
+              onChange={(e) => setNote(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter") void run(note);
+              }}
+              placeholder="e.g. “low energy”, “calls only”, “deep work”, “work for 2 more hours”, “until 2am”"
+              className="min-w-0 flex-1 rounded-md border border-border bg-background/60 px-3 py-2 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-sm"
+            />
+            <button
+              type="button"
+              onClick={() => void run(note)}
+              disabled={loading}
+              className="tech-transition inline-flex shrink-0 items-center gap-1.5 rounded-md bg-primary px-3 py-2 text-[12px] font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
+            >
+              {loading ? (
+                <Loader2 className="h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wand2 className="h-3.5 w-3.5" />
+              )}
+              {plan ? "Redo" : isReplan ? "Fit" : "Plan"}
+            </button>
+          </div>
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            {isReplan
+              ? "Reshuffles today's blocks into the time left. Your note orders them and can override the standing prompt for this run."
+              : "Applied on top of your standing plan, overriding it where they conflict."}
+          </p>
+        </div>
 
         <div className="min-h-0 flex-1 overflow-y-auto px-4 py-3">
           {error ? (
@@ -276,9 +392,9 @@ export function PlanDayPanel({
           ) : plan ? (
             <>
               {/* How the day was ordered — reassure when AI ran, warn (not fail)
-                  when it fell back so the user knows their prompt wasn't used. */}
-              {!isReplan &&
-                plan.blocks.length > 0 &&
+                  when it fell back so the user knows their prompt wasn't used.
+                  Both modes rank via the LLM when candidates exist. */}
+              {plan.blocks.length > 0 &&
                 (fellBack ? (
                   <p className="mb-2 flex items-start gap-1.5 rounded-md border border-warning/40 bg-warning/10 px-2.5 py-2 text-[11px] text-warning">
                     <AlertTriangle className="mt-px h-3.5 w-3.5 shrink-0" />
@@ -374,7 +490,30 @@ export function PlanDayPanel({
                   </p>
                 )}
             </>
-          ) : null}
+          ) : (
+            // Pre-run state — nothing plans until you tap the button, so a
+            // per-run note is never skipped by an auto-run.
+            <div className="flex flex-col items-center gap-2 py-8 text-center">
+              {isReplan ? (
+                <CalendarClock className="h-6 w-6 text-muted-foreground/60" />
+              ) : (
+                <Wand2 className="h-6 w-6 text-muted-foreground/60" />
+              )}
+              <p className="text-[12.5px] font-medium text-foreground">
+                {isReplan
+                  ? "Fit today's tasks into the time left"
+                  : "Rebuild your day"}
+              </p>
+              <p className="max-w-[16rem] text-[11px] text-muted-foreground">
+                Add an optional note above and pick how far to plan through, then
+                tap{" "}
+                <span className="font-medium text-foreground">
+                  {isReplan ? "Fit" : "Plan"}
+                </span>{" "}
+                to see a proposal before anything changes.
+              </p>
+            </div>
+          )}
         </div>
 
         <div

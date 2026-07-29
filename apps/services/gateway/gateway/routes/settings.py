@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 import yaml
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_permission
 from acb_common import get_logger, get_settings
 from acb_llm.model_limits import FALLBACK_CONTEXT_WINDOWS, MODEL_CAPABILITIES
 from fastapi import APIRouter, Depends, HTTPException
@@ -249,6 +249,7 @@ _PROVIDER_ENV_MAP: dict[str, str] = {
     "mistral":     "MISTRAL_API_KEY",
     "together":    "TOGETHER_API_KEY",
     "deepgram":    "DEEPGRAM_API_KEY",  # speech-to-text w/ named speakers (Note Taker STT tier)
+    "assemblyai":  "ASSEMBLYAI_API_KEY",  # STT + live streaming, both with named speakers
     "ollama":      "",        # local — always "configured" if URL reachable
     "vllm":        "VLLM_BASE_URL",
 }
@@ -264,6 +265,7 @@ _PROVIDER_LABELS: dict[str, str] = {
     "mistral":     "Mistral AI",
     "together":    "Together AI",
     "deepgram":    "Deepgram (speech-to-text)",
+    "assemblyai":  "AssemblyAI (speech-to-text)",
     "ollama":      "Ollama (local)",
     "vllm":        "vLLM (local)",
 }
@@ -388,6 +390,12 @@ _PROVIDER_MODELS: dict[str, list[str]] = {
         "deepgram/nova-3",
         "deepgram/nova-2",
     ],
+    # AssemblyAI is speech-to-text only too, and — unlike Deepgram — reaches us
+    # through a native provider rather than litellm (its API is submit-then-poll).
+    "assemblyai": [
+        "assemblyai/universal-3-pro",
+        "assemblyai/universal-2",
+    ],
     "vllm": [
         "openai/Qwen/Qwen3-8B-Instruct",
         "openai/meta-llama/Llama-3.1-8B-Instruct",
@@ -432,6 +440,8 @@ def _provider_from_model(model: str) -> str:
         return "together"
     if model.startswith("deepgram/"):
         return "deepgram"
+    if model.startswith("assemblyai/"):
+        return "assemblyai"
     if model.startswith("ollama/"):
         return "ollama"
     if model.startswith("openai/"):
@@ -579,7 +589,7 @@ async def get_llm_config(_user: UserContext = Depends(get_current_user)) -> LLMC
 # POST /settings/llm/tier  — patch one tier in config.yaml
 # ---------------------------------------------------------------------------
 
-@router.post("/llm/tier", response_model=TierInfo)
+@router.post("/llm/tier", response_model=TierInfo, dependencies=[require_permission("feature:models")])
 async def update_tier(
     req: TierUpdateRequest,
     _user: UserContext = Depends(get_current_user),
@@ -706,7 +716,7 @@ class TestResult(BaseModel):
     latency_ms: int
 
 
-@router.post("/llm/test", response_model=TestResult)
+@router.post("/llm/test", response_model=TestResult, dependencies=[require_permission("feature:models")])
 async def test_tier(
     req: TestRequest,
     _user: UserContext = Depends(get_current_user),
@@ -743,7 +753,7 @@ class ProviderKeyRequest(BaseModel):
     api_key: str
 
 
-@router.post("/llm/key")
+@router.post("/llm/key", dependencies=[require_permission("feature:models")])
 async def set_provider_key(
     req: ProviderKeyRequest,
     _user: UserContext = Depends(get_current_user),
@@ -781,7 +791,7 @@ class CopilotModelRequest(BaseModel):
     model: str   # e.g. "claude-sonnet-4-5", "gpt-4o", "o3-mini"
 
 
-@router.post("/llm/copilot-model")
+@router.post("/llm/copilot-model", dependencies=[require_permission("feature:models")])
 async def set_copilot_model(
     req: CopilotModelRequest,
     _user: UserContext = Depends(get_current_user),
@@ -934,8 +944,8 @@ async def list_enabled_models(
     }
 
 
-@router.post("/llm/enabled-models", status_code=201)
-@router.post("/llm/custom-models", status_code=201)
+@router.post("/llm/enabled-models", status_code=201, dependencies=[require_permission("feature:models")])
+@router.post("/llm/custom-models", status_code=201, dependencies=[require_permission("feature:models")])
 async def add_custom_model(
     req: CustomModelAddRequest,
     _user: UserContext = Depends(get_current_user),
@@ -984,7 +994,7 @@ async def add_custom_model(
     return EnabledModelEntry(**entry)
 
 
-@router.delete("/llm/enabled-models/{model_id:path}", status_code=200)
+@router.delete("/llm/enabled-models/{model_id:path}", status_code=200, dependencies=[require_permission("feature:models")])
 async def remove_enabled_model(
     model_id: str,
     _user: UserContext = Depends(get_current_user),
@@ -1013,7 +1023,7 @@ async def list_hidden_models(
     return raw if isinstance(raw, list) else []  # type: ignore[return-value]
 
 
-@router.post("/llm/hidden-models", status_code=201)
+@router.post("/llm/hidden-models", status_code=201, dependencies=[require_permission("feature:models")])
 async def hide_model(
     body: dict[str, str],
     _user: UserContext = Depends(get_current_user),
@@ -1034,7 +1044,7 @@ async def hide_model(
     return {"hidden": model_id}
 
 
-@router.delete("/llm/hidden-models/{model_id:path}", status_code=200)
+@router.delete("/llm/hidden-models/{model_id:path}", status_code=200, dependencies=[require_permission("feature:models")])
 async def unhide_model(
     model_id: str,
     _user: UserContext = Depends(get_current_user),
@@ -1121,6 +1131,7 @@ def _is_transcription_model(model_id: str) -> bool:
     return (
         "whisper" in mid
         or mid.startswith("deepgram/")
+        or mid.startswith("assemblyai/")
         or "transcribe" in mid
         or "/nova-" in mid
     )
@@ -1359,12 +1370,48 @@ async def _fetch_live_models(
             "together_ai/",
         )
 
+    if provider == "assemblyai" and api_key:
+        return await _fetch_assemblyai(api_key)
+
     if provider == "ollama":
         base = api_base or "http://localhost:11434"
         return await _fetch_ollama(base)
 
-    # github / vllm / unknown — fall back to static list
+    # github / vllm / deepgram / unknown — fall back to static list.
+    # (Deepgram publishes no model-list endpoint either; its models are curated.)
     return []
+
+
+async def _fetch_assemblyai(api_key: str) -> list[ModelInfo]:
+    """AssemblyAI models, verified against the account.
+
+    Unlike OpenAI-compatible providers, AssemblyAI publishes **no model-list
+    endpoint** — the valid `speech_models` values are documented, not
+    discoverable. So "refresh" can't enumerate them; what it CAN do is prove the
+    key works, which is the actual question a user is asking when they hit it.
+    We call a cheap authenticated endpoint and, on success, return the curated
+    list; on an auth failure we return nothing so the UI doesn't imply the key
+    is good. Any id the user types still works — the provider passes whatever
+    follows "assemblyai/" straight through as the model."""
+    try:
+        async with httpx.AsyncClient(timeout=10.0) as client:
+            # Cheapest authenticated call available: list one transcript.
+            r = await client.get(
+                "https://api.assemblyai.com/v2/transcript",
+                params={"limit": 1},
+                headers={"authorization": api_key},
+            )
+        if r.status_code in (401, 403):
+            _log.warning("provider_models.assemblyai_key_rejected", status=r.status_code)
+            return []
+        if r.status_code >= 400:
+            # Reachable but unhappy (rate limit, transient) — fall back to the
+            # curated list rather than blanking the picker.
+            _log.info("provider_models.assemblyai_probe_soft_fail", status=r.status_code)
+    except Exception as exc:
+        _log.warning("provider_models.assemblyai_probe_failed", error=str(exc)[:200])
+        return []
+    return _static_models_for_provider("assemblyai")
 
 
 def _static_models_for_provider(provider: str) -> list[ModelInfo]:

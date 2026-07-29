@@ -1,37 +1,58 @@
 /**
- * DeepgramLive — browser-direct live captions during a recording.
+ * LiveTranscription — browser-direct live captions during a recording.
  *
- * The gateway mints a short-lived, usage-scoped Deepgram key
- * (POST /notes/stt/live-token); the browser opens a WebSocket straight to
- * Deepgram with it and streams 16 kHz linear16 PCM, rendering interim + final
- * captions as people talk. This keeps the gateway out of the audio path
- * (spec §7 D7). Everything is best-effort: if the token or socket is
- * unavailable, onUnavailable() fires and the recorder just keeps doing its
- * chunked upload → authoritative batch transcript on stop (two-pass).
+ * The gateway mints a short-lived token (POST /notes/stt/live-token) and tells
+ * us which provider it is for; the browser then opens a WebSocket straight to
+ * that provider and streams 16 kHz linear16 PCM, rendering captions as people
+ * talk. This keeps the gateway out of the audio path (spec §7 D7).
+ *
+ * Two protocols, one interface:
+ *  - **AssemblyAI** (preferred) — v3 streaming: token in the query string,
+ *    `Turn` messages whose `end_of_turn` marks a final. Diarizes live.
+ *  - **Deepgram** (fallback) — ephemeral key as a WS subprotocol,
+ *    `channel.alternatives[0]` messages with `is_final`.
+ *
+ * Everything is best-effort: if the token or socket is unavailable,
+ * onUnavailable() fires and the recorder just keeps doing its chunked upload →
+ * authoritative batch transcript on stop (two-pass).
  */
 
 export interface LiveCaption {
   text: string;
   isFinal: boolean;
+  /** Diarized speaker index, 0-based, or null when the provider didn't say. */
   speaker: number | null;
+  /** Seconds from the start of the stream. Used when relaying finals to the
+   *  live bus, where spans drive speaker reconciliation. */
+  startS: number;
+  endS: number;
 }
 
-export interface DeepgramLiveCallbacks {
+export interface LiveCallbacks {
   onCaption?: (c: LiveCaption) => void;
-  /** Live isn't available (no Deepgram key/scope, or the socket failed). */
+  /** Live isn't available (no key/scope, or the socket failed). */
   onUnavailable?: (reason: string) => void;
 }
 
+interface LiveToken {
+  provider: "assemblyai" | "deepgram";
+  token: string;
+  model: string;
+  expires_in: number;
+}
+
 const DG_WS = "wss://api.deepgram.com/v1/listen";
+const AAI_WS = "wss://streaming.assemblyai.com/v3/ws";
 const TARGET_RATE = 16000;
 
-export class DeepgramLive {
+export class LiveTranscription {
   private ws: WebSocket | null = null;
-  private cb: DeepgramLiveCallbacks;
+  private cb: LiveCallbacks;
   private open = false;
   private closed = false;
+  private provider: LiveToken["provider"] = "assemblyai";
 
-  constructor(cb: DeepgramLiveCallbacks = {}) {
+  constructor(cb: LiveCallbacks = {}) {
     this.cb = cb;
   }
 
@@ -44,22 +65,12 @@ export class DeepgramLive {
         this.cb.onUnavailable?.(String(body?.detail ?? `token ${res.status}`));
         return false;
       }
-      const { token, model } = (await res.json()) as {
-        token: string;
-        model: string;
-      };
-      const params = new URLSearchParams({
-        model,
-        encoding: "linear16",
-        sample_rate: String(TARGET_RATE),
-        channels: "1",
-        interim_results: "true",
-        punctuate: "true",
-        smart_format: "true",
-        diarize: "true",
-      });
-      // Deepgram accepts the key as the second WS subprotocol ("token", <key>).
-      this.ws = new WebSocket(`${DG_WS}?${params}`, ["token", token]);
+      const tok = (await res.json()) as LiveToken;
+      this.provider = tok.provider === "deepgram" ? "deepgram" : "assemblyai";
+      this.ws =
+        this.provider === "deepgram"
+          ? this.openDeepgram(tok)
+          : this.openAssemblyAI(tok);
       this.ws.binaryType = "arraybuffer";
       this.ws.onopen = () => {
         this.open = true;
@@ -78,6 +89,39 @@ export class DeepgramLive {
     }
   }
 
+  private openAssemblyAI(tok: LiveToken): WebSocket {
+    const params = new URLSearchParams({
+      sample_rate: String(TARGET_RATE),
+      encoding: "pcm_s16le",
+      format_turns: "true",
+      // Ask for speakers. Streaming diarization has to be requested explicitly
+      // — exactly like Deepgram's `diarize` below — and omitting it was why
+      // live captions arrived with no speaker separation at all. Note it needs
+      // a streaming model that supports it (Universal-3 Pro Streaming or a
+      // multilingual streaming model); Universal-2 does not.
+      speaker_labels: "true",
+      token: tok.token,
+    });
+    // Empty model → AssemblyAI's default streaming model.
+    if (tok.model) params.set("speech_model", tok.model);
+    return new WebSocket(`${AAI_WS}?${params}`);
+  }
+
+  private openDeepgram(tok: LiveToken): WebSocket {
+    const params = new URLSearchParams({
+      model: tok.model || "nova-3",
+      encoding: "linear16",
+      sample_rate: String(TARGET_RATE),
+      channels: "1",
+      interim_results: "true",
+      punctuate: "true",
+      smart_format: "true",
+      diarize: "true",
+    });
+    // Deepgram accepts the key as the second WS subprotocol ("token", <key>).
+    return new WebSocket(`${DG_WS}?${params}`, ["token", tok.token]);
+  }
+
   /** Feed one buffer of mono Float32 samples at `inRate` Hz. */
   send(samples: Float32Array, inRate: number): void {
     if (!this.open || !this.ws || this.ws.readyState !== WebSocket.OPEN) return;
@@ -90,8 +134,14 @@ export class DeepgramLive {
     this.open = false;
     try {
       if (this.ws && this.ws.readyState === WebSocket.OPEN) {
-        // Tell Deepgram to flush and close cleanly.
-        this.ws.send(JSON.stringify({ type: "CloseStream" }));
+        // Ask the provider to flush and close cleanly.
+        this.ws.send(
+          JSON.stringify(
+            this.provider === "deepgram"
+              ? { type: "CloseStream" }
+              : { type: "Terminate" }
+          )
+        );
       }
       this.ws?.close();
     } catch {
@@ -104,22 +154,80 @@ export class DeepgramLive {
     if (typeof ev.data !== "string") return;
     try {
       const msg = JSON.parse(ev.data);
-      const alt = msg?.channel?.alternatives?.[0];
-      const text: string = (alt?.transcript ?? "").trim();
-      if (!text) return;
-      const speaker =
-        typeof alt?.words?.[0]?.speaker === "number"
-          ? alt.words[0].speaker
-          : null;
-      this.cb.onCaption?.({
-        text,
-        isFinal: Boolean(msg.is_final),
-        speaker,
-      });
+      const caption =
+        this.provider === "deepgram"
+          ? parseDeepgram(msg)
+          : parseAssemblyAI(msg);
+      if (caption) this.cb.onCaption?.(caption);
     } catch {
       /* non-JSON keepalive/metadata frame */
     }
   }
+}
+
+/** AssemblyAI v3: `Turn` messages; `end_of_turn` marks a final. */
+export function parseAssemblyAI(msg: {
+  type?: string;
+  transcript?: string;
+  end_of_turn?: boolean;
+  speaker?: unknown;
+  words?: { start?: number; end?: number; speaker?: unknown }[];
+}): LiveCaption | null {
+  if (msg?.type !== "Turn") return null;
+  const text = (msg.transcript ?? "").trim();
+  if (!text) return null;
+  const words = Array.isArray(msg.words) ? msg.words : [];
+  // AssemblyAI reports word offsets in milliseconds.
+  const startS = words.length ? (words[0].start ?? 0) / 1000 : 0;
+  const endS = words.length ? (words[words.length - 1].end ?? 0) / 1000 : 0;
+  // A diarized turn belongs to one speaker by definition, but the label can
+  // arrive on the turn or on its words depending on the streaming model. Read
+  // whichever is present rather than betting on one — a miss here shows up as
+  // "diarization is broken" when it's really just the wrong field.
+  const speaker =
+    msg.speaker != null ? msg.speaker : words.find((w) => w.speaker != null)?.speaker;
+  return {
+    text,
+    isFinal: Boolean(msg.end_of_turn),
+    speaker: speakerIndex(speaker),
+    startS,
+    endS,
+  };
+}
+
+/** Deepgram: `channel.alternatives[0]`; `is_final` marks a final. */
+export function parseDeepgram(msg: {
+  is_final?: boolean;
+  start?: number;
+  duration?: number;
+  channel?: { alternatives?: { transcript?: string; words?: { speaker?: unknown }[] }[] };
+}): LiveCaption | null {
+  const alt = msg?.channel?.alternatives?.[0];
+  const text = (alt?.transcript ?? "").trim();
+  if (!text) return null;
+  const startS = typeof msg.start === "number" ? msg.start : 0;
+  const duration = typeof msg.duration === "number" ? msg.duration : 0;
+  return {
+    text,
+    isFinal: Boolean(msg.is_final),
+    speaker: speakerIndex(alt?.words?.[0]?.speaker),
+    startS,
+    endS: startS + duration,
+  };
+}
+
+/**
+ * Normalise a provider's speaker marker to a 0-based index.
+ * Deepgram emits ints (0,1,…); AssemblyAI emits letters ("A","B",…). The caller
+ * maps this onto the app-wide S1/S2 label space.
+ */
+export function speakerIndex(raw: unknown): number | null {
+  if (typeof raw === "number") return raw;
+  if (typeof raw === "string" && raw.length) {
+    if (/^\d+$/.test(raw)) return Number(raw);
+    if (/^[A-Za-z]$/.test(raw)) return raw.toUpperCase().charCodeAt(0) - 65;
+  }
+  return null;
 }
 
 /** Linear-interpolate/decimate Float32 @ inRate → Int16 PCM @ outRate. */

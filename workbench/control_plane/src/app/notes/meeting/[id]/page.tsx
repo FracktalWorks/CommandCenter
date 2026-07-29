@@ -29,6 +29,10 @@ import Link from "next/link";
 import MarkdownMessage from "@/components/MarkdownMessage";
 import AskPanel from "../../components/AskPanel";
 import FollowupEmailModal from "../../components/FollowupEmailModal";
+import JoinCallModal from "../../components/JoinCallModal";
+import MeetingOutcomes from "../../components/MeetingOutcomes";
+import MeetingPrep from "../../components/MeetingPrep";
+import { speakerAvatar, speakerText } from "../../lib/speakers";
 import {
   approveAction,
   approveAllActions,
@@ -56,33 +60,10 @@ import type {
   MeetingEvent,
 } from "../../lib/types";
 
-const SPEAKER_COLORS = [
-  "text-primary",
-  "text-accent",
-  "text-success",
-  "text-warning",
-  "text-destructive",
-];
-
-function speakerColor(label: string | null): string {
-  if (!label) return "text-muted-foreground";
-  const n = parseInt(label.replace(/\D/g, ""), 10);
-  return SPEAKER_COLORS[(isNaN(n) ? 0 : n - 1) % SPEAKER_COLORS.length];
-}
-
-const SPEAKER_AV = [
-  "bg-primary/15 text-primary",
-  "bg-accent/15 text-accent",
-  "bg-success/15 text-success",
-  "bg-warning/15 text-warning",
-  "bg-destructive/15 text-destructive",
-];
-
-function speakerAv(label: string | null): string {
-  if (!label) return "bg-muted text-muted-foreground";
-  const n = parseInt(label.replace(/\D/g, ""), 10);
-  return SPEAKER_AV[(isNaN(n) ? 0 : n - 1) % SPEAKER_AV.length];
-}
+// Speaker colour is shared with the live console and roster (lib/speakers.ts),
+// so the same person reads as the same person on every surface.
+const speakerColor = speakerText;
+const speakerAv = speakerAvatar;
 
 export default function MeetingPage({
   params,
@@ -100,6 +81,7 @@ export default function MeetingPage({
   const [actioning, setActioning] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [showEmail, setShowEmail] = useState(false);
+  const [showJoin, setShowJoin] = useState(false);
   const [addName, setAddName] = useState("");
   const [addEmail, setAddEmail] = useState("");
   const [scratch, setScratch] = useState("");
@@ -364,11 +346,16 @@ export default function MeetingPage({
     meeting?.status === "processing" ||
     progress?.runs.some((r) => r.status === "queued" || r.status === "running");
 
-  // Diarization is only real when the STT model is Deepgram; Whisper returns no
-  // speakers. Surface that so "no named speakers" isn't a silent mystery.
+  // Diarization is only real on a provider that returns speakers (AssemblyAI,
+  // Deepgram, or a local sherpa pass); Whisper alone returns none. Surface that
+  // so "no named speakers" isn't a silent mystery.
   const diarized = speakerLabels.length > 0;
   const sttModel = meeting?.transcript_source ?? "";
-  const canDiarize = sttModel.startsWith("deepgram/");
+  const canDiarize =
+    sttModel.startsWith("assemblyai/") ||
+    sttModel.startsWith("deepgram/") ||
+    // The local diarization pass appends this to the model id when it ran.
+    sttModel.includes("sherpa-diar");
   const showDiarizeHint =
     !!meeting && meeting.segments.length > 0 && !diarized && !canDiarize && !busy;
 
@@ -380,6 +367,18 @@ export default function MeetingPage({
   const citedDecisions = (meeting?.summary_json?.decisions ?? []).filter(
     (d) => d && d.text && (d.refs?.length ?? 0) > 0
   );
+
+  // A meeting exists before it happens. With no audio and nothing captured,
+  // the workspace below (audio scrubber, transcript, actions) has nothing to
+  // show — what you actually want is to get ready. Keyed on "has any
+  // recording" rather than on status, because status advances the moment
+  // capture starts while a draft can also be an upload mid-flight.
+  const isPrep =
+    !!meeting &&
+    meeting.recordings.length === 0 &&
+    meeting.segments.length === 0 &&
+    !busy &&
+    meeting.status !== "recording";
 
   return (
     <div className="flex flex-col h-full">
@@ -472,7 +471,18 @@ export default function MeetingPage({
             </div>
           )}
 
-          {meeting?.recordings.length ? (
+          {/* Before the meeting: prepare it. The workspace below has nothing to
+              show yet, and this is the only moment you can actually brief the
+              copilot. */}
+          {isPrep && meeting && (
+            <MeetingPrep
+              meeting={meeting}
+              onChanged={() => void refresh()}
+              onSendBot={() => setShowJoin(true)}
+            />
+          )}
+
+          {!isPrep && meeting?.recordings.length ? (
             <audio
               ref={audioRef}
               controls
@@ -483,7 +493,7 @@ export default function MeetingPage({
           ) : null}
 
           {/* At-a-glance meta strip */}
-          {meeting && (meeting.duration_s != null || meeting.transcript_source) && (
+          {!isPrep && meeting && (meeting.duration_s != null || meeting.transcript_source) && (
             <div className="flex flex-wrap items-center gap-2">
               {meeting.created_at && (
                 <span className={chipCls}>
@@ -517,7 +527,7 @@ export default function MeetingPage({
             </div>
           )}
 
-          {meeting && (
+          {!isPrep && meeting && (
             <div className="flex flex-wrap items-center gap-2">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground">
                 Attendees
@@ -605,7 +615,22 @@ export default function MeetingPage({
             </div>
           )}
 
+          {/* What came out of it, before the tabs — the yield of a meeting is
+              its notes, actions and follow-up, and actions used to be tab
+              three. */}
+          {!isPrep && meeting && meeting.segments.length > 0 && (
+            <MeetingOutcomes
+              meeting={meeting}
+              actions={actions}
+              hasNotes={!!notesMd}
+              onOpenActions={() => setTab("actions")}
+              onDraftFollowup={() => setShowEmail(true)}
+            />
+          )}
+
           {/* Tabbed workspace — the summary is the hero */}
+          {!isPrep && (
+          <>
           <div className="flex items-center gap-1 border-b border-border overflow-x-auto">
             {(
               [
@@ -653,7 +678,7 @@ export default function MeetingPage({
                           Speakers aren&apos;t separated.
                         </span>{" "}
                         Your current transcription model doesn&apos;t identify who
-                        said what. Switch to a Deepgram model in{" "}
+                        said what. Switch to an AssemblyAI (or Deepgram) model in{" "}
                         <Link
                           href="/settings/models"
                           className="text-primary underline underline-offset-2"
@@ -1000,8 +1025,22 @@ export default function MeetingPage({
                 </p>
               ))}
           </div>
+          </>
+          )}
         </div>
       </div>
+
+      {showJoin && meeting && (
+        <JoinCallModal
+          meetingId={id}
+          defaultTitle={meeting.title ?? ""}
+          onClose={() => setShowJoin(false)}
+          onJoined={() => {
+            setShowJoin(false);
+            void refresh();
+          }}
+        />
+      )}
 
       {showEmail && (
         <FollowupEmailModal

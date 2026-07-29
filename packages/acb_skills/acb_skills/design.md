@@ -150,6 +150,47 @@ light-theme overrides are applied automatically by the app.
 - Don't cram — when in doubt, add spacing and remove borders.
 - Don't invent a new visual style; match what's described here.
 
+### 8.1 Avoid the generic-AI look
+
+There is a recognisable house style that LLM-generated pages fall into, and it
+reads as unconsidered. Actively avoid it:
+
+- **No purple/violet gradients.** This is the single strongest tell. Command
+  Center is blue (`--cc-primary`) with one warm-orange accent (`--cc-accent`).
+- **No `font-family` declaration at all** — the sandbox already sets the
+  on-brand stack. Naming Inter explicitly is a tell.
+- **Don't centre everything.** Reports are left-aligned documents. Centre stat
+  tiles and gauges; leave prose, headings, and tables ranged left.
+- **Vary the corner radius.** Uniform pill-rounding on every element flattens
+  hierarchy — `--cc-radius` on cards, tighter on buttons and inputs.
+- **No emoji as iconography.** Use the `cc-dot`, `cc-ico`, and `cc-mark` blocks,
+  or a Lucide icon via `ccIcon('Name')`.
+
+The test is not "does this look nice in isolation" but **"does it look like it
+was designed for this product?"**
+
+---
+
+## 8.5 Your output is linted — read the warnings
+
+Generated HTML runs in a sandbox that fails **silently**: a CDN `<script src>`
+is blocked with no error, a misspelled `cc-` class renders unstyled, and a
+`cc-bar` without its `--v` custom property draws an empty track. You cannot see
+any of this from the tool result alone.
+
+So `write_artifact` (for `.html` files) and `emit_generative_ui` (for `html`
+nodes) both **lint the markup and return a `warnings` list** when something is
+wrong. Treat it as part of the result, not noise:
+
+- **`ERROR:`** — the artifact is genuinely broken (almost always a remote URL
+  the CSP blocks). Fix it and write again with `overwrite=True`.
+- **`warning:`** — it renders, but off-brand or degraded (unknown class,
+  missing `--v`, hard-coded hex, no `cc-report` wrapper).
+
+A clean write returns no `warnings` key at all. If you get warnings, fix them
+in the same turn — the user should never be the one to discover the artifact is
+broken.
+
 ---
 
 ## 9. Generating documents & HTML (how this applies to your output)
@@ -175,10 +216,79 @@ presenting:
   Use it for something substantial and multi-section: an analysis, a plan, a
   briefing, an audit — anything the user will keep or scroll through.
 
+### Which surface? Let the volume decide
+
+Pick the surface from the shape and size of the answer, before writing any UI:
+
+| The answer is… | Surface | How |
+|---|---|---|
+| A one-line fact, or a narrative explanation | Prose | Just say it |
+| ≤8 rows · ≤4 metrics · one chart · a status · a comparison | **Inline card** in the chat | `emit_generative_ui` (`template` → `tree` → `react` → `html`) |
+| >12 rows · several sections or charts · anything they'll scroll, sort, filter, or return to | **Side panel** | `"surface": "panel"` for a live view |
+| A deliverable they'll keep, re-open, or download | **Saved artifact** | `write_artifact("outputs/<name>.jsx"` or `.html")` |
+| Something they must *act* on — filter, sort, pick, set a value | **React + `@cc/ui`** | `load_artifact_kit()`, then compose |
+
+Two tests that resolve most cases:
+
+- **Would this need its own scrollbar inside a chat bubble?** Then it belongs in
+  the panel, not inline.
+- **Am I about to type a markdown table?** If it is more than a few rows, render
+  it instead — a `Table` from `@cc/ui` (or the `cc-table` block) is more readable
+  and no more work.
+
+Between 8 and 12 rows either is defensible; prefer inline unless the table is
+part of a larger answer. And when a big result could genuinely be *either* a
+saved document or a live dashboard, **ask** rather than guessing — an
+`optionPicker` template with `"hitl": true` gets an answer in the same turn.
+
 Rule of thumb: **a few blocks the user just needs to see → inline `html` node;
 a full document the user will keep or read at length → a saved `outputs/*.html`
 report.** The markup is identical either way — the same `cc-report` container and
 `cc-*` blocks work in both, so you never rewrite to move between them.
+
+**React artifacts.** When the thing you're building is genuinely *interactive*
+rather than a document — a filterable table, a multi-step form, a calculator, a
+live dashboard — write a real React component instead of hand-rolling DOM
+scripting. Same two surfaces, same design kit:
+
+- **Inline in the chat** — an `emit_generative_ui` **`react` node**
+  (`{"type":"react","props":{"code":"…"}}`).
+- **Full-page in the side panel** — `write_artifact("outputs/<name>.jsx", …)`.
+
+Default-export the component. **Don't hand-write the markup** — import the same
+blocks documented below as ready-made components from `@cc/ui`:
+
+```jsx
+import { useState } from "react";
+import { Report, Eyebrow, Stats, Stat, Bars, Submit } from "@cc/ui";
+
+export default function Dashboard() {
+  const [region, setRegion] = useState("all");
+  return (
+    <Report>
+      <Eyebrow>Pipeline</Eyebrow>
+      <h1>Deals by region</h1>
+      <Stats><Stat label="Revenue" value={18} unit="%" delta={12} /></Stats>
+      <Bars data={[{ label: "North", value: 72 }, { label: "South", value: 41 }]} />
+      <Submit label="Region" value={region}>Send to agent</Submit>
+    </Report>
+  );
+}
+```
+
+**Call `load_artifact_kit()` for the component list** (a few hundred tokens), then
+`load_artifact_kit("Stat,Bars")` for the exact props of the ones you picked. That
+is much cheaper and more reliable than writing the divs yourself, and the output
+is on-brand by construction. Anything the kit doesn't cover: drop to the `cc-*`
+classes below — they work identically inside a React artifact.
+
+Hooks all work and JSX/TypeScript are compiled for you. The one hard limit is
+that the sandbox has **no network**: you may import only from `@cc/ui`, `react`,
+and `react-dom/client` — no npm packages, no CDNs, no icon libraries — so inline
+your helpers and seed the data in the file. Reach the agent with `<Submit>` /
+`<Action>` (or `window.ccSubmit("Label", value)` / `window.ccAction("message")`),
+available from first mount. A build failure comes back in the tool result with
+compiler errors — fix and emit again.
 
 Both render in a locked sandbox with these CSS variables **pre-injected** — use
 them, don't redefine colors:

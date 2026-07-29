@@ -43,6 +43,7 @@ _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
     "write_artifact", "share_artifact",  # file writing / delivery
     "emit_generative_ui",                # rich/interactive HITL UI (genui_2)
     "load_design_system",                # on-demand design language (genui_2 §7)
+    "load_artifact_kit",                 # on-demand @cc/ui component reference
     "manage_todo_list",                  # task tracking panel
     "ask_questions",                     # HITL clarification
     "run_diagnostics", "get_errors",     # code / file error checking
@@ -195,17 +196,27 @@ def _gate_injected_tool(fn: Any) -> Any:
 
     tool_name = getattr(fn, "__name__", "tool")
 
-    def _gate() -> tuple[bool, str]:
+    def _gate(call_kwargs: dict[str, Any] | None = None) -> tuple[bool, str]:
         """Return (allowed, reason). Never raises. Logs EVERY decision.
 
         Logging approvals too (not just denials) is what makes audit mode
         actually observable — an operator running in audit needs the full
         decision stream to judge the policy before flipping to enforce, and it
         is how we confirm the gate is even on this tool's execution path.
+
+        ``call_kwargs`` (BO-7 cheap win 1/3) is the tool's actual call
+        arguments — LLM tool-calling always produces keyword args (a JSON
+        object mapped onto the function signature), so this is effectively
+        the full call. Passed to build_tool_call_context so tools with a real
+        command/path shape (run_script) are checked against what they're
+        actually about to do, not just their name.
         """
         try:
-            from acb_skills.permission_policy import decide  # noqa: PLC0415
-            ok, code, _ = decide({"tool_name": tool_name})
+            from acb_skills.permission_policy import (  # noqa: PLC0415
+                build_tool_call_context, decide,
+            )
+            request = build_tool_call_context(tool_name, call_kwargs or {})
+            ok, code, _ = decide(request)
             mode = os.environ.get(
                 "AGENT_PERMISSION_MODE", "enforce"
             ).strip().lower()
@@ -222,7 +233,7 @@ def _gate_injected_tool(fn: Any) -> Any:
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def _agated(*args: Any, **kwargs: Any) -> Any:
-            allowed, reason = _gate()
+            allowed, reason = _gate(kwargs)
             if not allowed:
                 return f"[blocked by permission policy: {reason}]"
             return await fn(*args, **kwargs)
@@ -230,7 +241,7 @@ def _gate_injected_tool(fn: Any) -> Any:
 
     @functools.wraps(fn)
     def _sgated(*args: Any, **kwargs: Any) -> Any:
-        allowed, reason = _gate()
+        allowed, reason = _gate(kwargs)
         if not allowed:
             return f"[blocked by permission policy: {reason}]"
         return fn(*args, **kwargs)
@@ -315,7 +326,7 @@ def _build_injected_tools_addendum(
             )
         if _want("emit_generative_ui"):
             parts.append(
-                "emit_generative_ui(ui) — render rich UI inline; reach for it EAGERLY when the answer is data/status/comparison/a checklist/a value to pick or set (not for trivial one-liners). On-brand automatically. Optional top-level fields: surface:'panel' opens the UI as an immersive side-panel view (use for big dashboards/itineraries/long recipes/multi-section forms); hitl:true BLOCKS this call until the user interacts and returns their values as the tool result (use for forms/pickers you need answered). 3 modes: (1) component tree card/table/keyValue/badge/callout/button(label+action) + an icon node (type:icon, name=any Lucide icon e.g. 'cloud-sun'); (2) a template node (type:template, name= weatherCard/statDashboard/barChart/sparkTrend/comparison/progressTracker/recipeCard/flightStatus/trainStatus/formCard/optionPicker) pre-designed animated cards, supply data only (formCard+optionPicker collect user input — pair with hitl:true); (3) an html node (type:html, props code + optional icons list of Lucide names) custom animated HTML/CSS/JS in a sandbox — style with the pre-set CSS vars --cc-primary/--cc-accent/--cc-fg/--cc-card/--cc-border/--cc-radius/--cc-ease (native inputs+sliders pre-styled), use icons via ccIcon('Name') or a span with data-cc-icon='Name', wire interactivity via data-cc-action='msg' (fixed follow-up) or data-cc-submit='label'/ccSubmit('label',value) to send user-set slider/input/select VALUES back. Prefer template over tree over html."
+                "emit_generative_ui(ui) — render rich UI inline; reach for it EAGERLY when the answer is data/status/comparison/a checklist/a value to pick or set (not for trivial one-liners). On-brand automatically. Optional top-level fields: surface:'panel' opens the UI as an immersive side-panel view (use for big dashboards/itineraries/long recipes/multi-section forms); hitl:true BLOCKS this call until the user interacts and returns their values as the tool result (use for forms/pickers you need answered). 3 modes: (1) component tree card/table/keyValue/badge/callout/button(label+action) + an icon node (type:icon, name=any Lucide icon e.g. 'cloud-sun'); (2) a template node (type:template, name= weatherCard/statDashboard/barChart/sparkTrend/comparison/progressTracker/recipeCard/flightStatus/trainStatus/formCard/optionPicker) pre-designed animated cards, supply data only (formCard+optionPicker collect user input — pair with hitl:true); (3) an html node (type:html, props code + optional icons list of Lucide names) custom animated HTML/CSS/JS in a sandbox — style with the pre-set CSS vars --cc-primary/--cc-accent/--cc-fg/--cc-card/--cc-border/--cc-radius/--cc-ease (native inputs+sliders pre-styled), use icons via ccIcon('Name') or a span with data-cc-icon='Name', wire interactivity via data-cc-action='msg' (fixed follow-up) or data-cc-submit='label'/ccSubmit('label',value) to send user-set slider/input/select VALUES back. (4) a react node (type:react, props code) — a REAL React component (hooks, state) for interactive/stateful artifacts; default-export it; import prebuilt components from @cc/ui (run load_artifact_kit() to see them) plus react/react-dom/client — nothing else (no network, no npm); call ccSubmit/ccAction to reach the agent. Prefer template over tree over react over html."
             )
         if _want("remember", "save_memory", "recall_agent", "save_agent_memory",
                  "recall_org", "save_org_memory", "recall_timeline",
@@ -403,12 +414,20 @@ def _build_injected_tools_addendum(
 {_build_output_discipline_block()}
 
 Workspace folders visible in the Files Viewer: **outputs/** (default for generated files), **inputs/** (user uploads, read-only), **agent-data/** (reusable reference data).
-- **write_artifact(path, content, encoding?, overwrite?)** — Write a file to outputs/ (if path has no prefix). The chat shows a Download/preview card **automatically** — you do NOT need to build or paste any URL; just say what the file is. It never clobbers an existing file by default (it auto-versions to ``name (1).ext`` and returns the real ``path``); pass ``overwrite=true`` only when you deliberately want to replace a file in place.
+- **write_artifact(path, content, encoding?, overwrite?)** — Write a file to outputs/ (if path has no prefix). The chat shows a Download/preview card **automatically** — you do NOT need to build or paste any URL; just say what the file is. It never clobbers an existing file by default (it auto-versions to ``name (1).ext`` and returns the real ``path``); pass ``overwrite=true`` only when you deliberately want to replace a file in place. For **.html** files the result may include a ``warnings`` list — the sandbox fails silently, so these are real defects (a CDN URL the CSP blocks, an unknown ``cc-`` class, a chart block missing its ``--v``). Fix them and re-write with ``overwrite=true`` in the same turn; never leave a warned artifact for the user to find. Writing **`outputs/<name>.jsx`** (or `.tsx`) creates a FULL-PAGE, immersive **React** artifact that opens in the side panel — same rules as the `emit_generative_ui` react node (default-export a component, import only from react/react-dom/client, style with the cc-* kit). Use it for a substantial interactive tool or dashboard the user will keep; use the inline react node for something compact in the chat itself.
 - **share_artifact(path)** — If you created a file with your OWN tools (shell, editor, a script you ran) instead of write_artifact, call this with that file's path (or a folder) to surface it as a Download/preview card. The card appears automatically; do NOT hand-construct links.
 - **emit_generative_ui(ui)** — Render a rich, interactive, animated UI element inline in the chat, on the fly. REACH FOR THIS EAGERLY: when the answer is data, a metric, a status, a comparison, a checklist, or a value the user should pick or set, render UI instead of a paragraph — it is clearer and often interactive. Do not be trivial about it (a one-line factual reply or a long narrative stays as text), but whenever there is a genuine chance to let the user adjust a value, pick an option, or confirm a choice, prefer an interactive UI over asking in prose. All three modes follow the Command Center design language automatically (blue primary, warm-orange accent, rounded cards, subtle motion). `ui` is a JSON object discriminated by its top-level `type`. Three modes, prefer them in this order:
     1. **Named template** (best-looking, use first when one fits) — a node with type "template" and props holding `name` plus a `data` object. Pre-designed animated cards; supply data only. Available names: weatherCard, statDashboard, barChart, sparkTrend, comparison, progressTracker, recipeCard, flightStatus, trainStatus, formCard, optionPicker (see the emit_generative_ui tool doc for each one's data shape). statDashboard stats accept an optional `icon` (a Lucide name). formCard and optionPicker COLLECT user input — pair them with top-level `"hitl": true` so the submitted values return as this tool call's result, and use top-level `"surface": "panel"` to open any big UI as an immersive side-panel view instead of an inline card.
     2. **Component tree** (structured, safe) — a whitelist tree of card / table / keyValue / badge / callout / list / button / icon nodes; data, not code. The icon node takes a `name` = any Lucide icon (e.g. cloud-sun, check-circle, trending-up). A button node has a `label` plus an `action` string sent back when clicked. Good for summaries, tables, labelled rows, and action buttons.
-    3. **Custom HTML** (escape hatch, only when no template/tree fits, and the place for genuinely interactive controls) — a node with type "html" and props holding `code` (a full HTML/CSS/JS snippet) plus an optional `icons` array of Lucide names. Runs in an isolated sandbox for bespoke animation/layout. No external network/CDNs — inline everything; use declared icons via ccIcon('Name') or a span with data-cc-icon='Name'. DESIGN: use the pre-defined CSS variables so it matches the app — --cc-primary, --cc-accent, --cc-fg, --cc-muted, --cc-card, --cc-secondary, --cc-border, --cc-success, --cc-warning, --cc-danger, --cc-radius, --cc-ease — instead of hard-coded colors; native button/input/select/textarea and range sliders are already styled on-brand (add class cc-primary for a filled blue button, cc-card for a panel). INTERACTIVITY: put data-cc-action='<follow-up message>' on a clickable element (or call ccAction('...') in script) to fire a fixed follow-up like a button; put data-cc-submit='<label>' on a button to harvest every named input/select/textarea in its enclosing form (or a data-cc-form container) and submit their VALUES back — or call ccSubmit('Temperature', 22) directly — so when the user sets a slider/number/option the agent actually receives what they chose.
+    3. **React component** (for anything genuinely INTERACTIVE or stateful — filterable/sortable tables, multi-step forms, calculators, live dashboards, small tools) — a node with type "react" and props holding `code`: ordinary modern React that DEFAULT-EXPORTS a component (`export default function App(){...}`). Hooks all work; JSX/TypeScript are compiled for you. You may import from "@cc/ui" (the prebuilt design kit — call load_artifact_kit() first) and from "react" / "react-dom/client". Nothing else: the sandbox has NO network, so no npm packages, no CDNs, no icon libraries; inline your helpers and seed the data in the file. Style it with the SAME cc-* classes and --cc-* tokens as custom HTML (start with <div className="cc-report">). Send data back with window.ccSubmit('Label', value) or window.ccAction('message') — both work from first mount. If the build fails, the tool result carries the compiler errors: fix them and emit again.
+    4. **Custom HTML** (escape hatch, only when no template/tree fits, and the place for genuinely interactive controls) — a node with type "html" and props holding `code` (a full HTML/CSS/JS snippet) plus an optional `icons` array of Lucide names. Runs in an isolated sandbox for bespoke animation/layout. No external network/CDNs — inline everything; use declared icons via ccIcon('Name') or a span with data-cc-icon='Name'. DESIGN: use the pre-defined CSS variables so it matches the app — --cc-primary, --cc-accent, --cc-fg, --cc-muted, --cc-card, --cc-secondary, --cc-border, --cc-success, --cc-warning, --cc-danger, --cc-radius, --cc-ease — instead of hard-coded colors; native button/input/select/textarea and range sliders are already styled on-brand (add class cc-primary for a filled blue button, cc-card for a panel). INTERACTIVITY: put data-cc-action='<follow-up message>' on a clickable element (or call ccAction('...') in script) to fire a fixed follow-up like a button; put data-cc-submit='<label>' on a button to harvest every named input/select/textarea in its enclosing form (or a data-cc-form container) and submit their VALUES back — or call ccSubmit('Temperature', 22) directly — so when the user sets a slider/number/option the agent actually receives what they chose.
+
+**Choosing the surface — decide this BEFORE you start writing the UI.** Let the shape and VOLUME of the answer pick, not whichever tool came to mind first:
+- **Prose** — a one-line fact, or a genuinely narrative explanation.
+- **Inline card** (`emit_generative_ui`) — anything the user just needs to SEE at a glance: roughly ≤8 table rows, ≤4 metrics, one chart, a status, a comparison. If you are about to type a markdown table of data, render it instead.
+- **Side panel** — anything SUBSTANTIAL: more than ~12 rows, several sections or charts, or something the user will scroll, sort, filter, return to, or keep. Use `"surface": "panel"` for a live view, or `write_artifact("outputs/<name>.jsx")` when it should persist. Rule of thumb: an inline card that would need its own scrollbar belongs in the panel.
+- **React + `@cc/ui`** — whenever the user should DO something with the data (filter, sort, pick, set a value), or there is simply too much of it for a static table to stay readable. At that point call **`load_artifact_kit()`** and compose the prebuilt components; do not hand-roll the markup.
+- **When genuinely in doubt** — a big result that could reasonably be a saved document OR a live dashboard — ask which they'd prefer rather than guessing (an `optionPicker` template with `"hitl": true` settles it in one turn).
 
 **Delivering files to the user:** to give the user a downloadable/previewable file, call ``write_artifact`` (for content you generate) or ``share_artifact`` (for a file you already wrote). That is ALL you need — the card renders itself. Never try to guess or assemble a download URL yourself.
 """)
@@ -493,8 +512,10 @@ Maintain **`agent-data/NOTES.md`** as your cross-session working memory.
 """)
     sections.append(f"""{risk_block}
 Tools marked DESTRUCTIVE are irreversible or outward-facing: never call one
-without an explicit user instruction, and let its built-in confirmation card
-do the confirming (do not also double-confirm in prose).
+without an explicit user instruction. If it renders its own confirmation
+card, let that do the confirming (do not also double-confirm in prose) —
+not every destructive tool has one yet, so treat the instruction above as
+the real requirement, not the card's presence.
 
 ### Self-improvement & committing
 To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..."`, then print `COMMIT_SHA: <git rev-parse HEAD>`. Never amend; one commit per task.
@@ -502,7 +523,7 @@ To persist changes to your own repo: `git add -A`, then `git commit -m "feat: ..
 - **If the user explicitly tells you to push (e.g. "commit and push") in this conversation**, then after committing run `git push --no-verify origin HEAD`. The `--no-verify` flag is required to bypass the approval hook. That commit is then recorded as already-approved — the user does not need to approve it again on the Agents page.
 
 ### Design language — load on demand
-Named `emit_generative_ui` templates are already on-brand (supply data only), and the `--cc-*` CSS tokens above cover simple custom HTML. For anything HEAVIER — a full-page HTML or Markdown **report**, or a bespoke custom-HTML `emit_generative_ui` card — call **`load_design_system()`** FIRST to load the Command Center design system (palette tokens, typography, spacing, motion, dark/light, and the `cc-report` block kit), then follow it. Don't guess the styling for a report; load it.
+Named `emit_generative_ui` templates are already on-brand (supply data only), and the `--cc-*` CSS tokens above cover simple custom HTML. For anything HEAVIER — a full-page HTML or Markdown **report**, or a bespoke custom-HTML `emit_generative_ui` card — call **`load_design_system()`** FIRST — it returns the core guide (palette, type, spacing, motion, surface choice); ask for a section (`"blocks"`, `"charts"`) rather than `"all"` when you need a block reference. Don't guess the styling for a report. For a **React** artifact call **`load_artifact_kit()`** instead — it lists the prebuilt `@cc/ui` components (stat tiles, bar/donut/trend charts, data tables, timelines, decision boxes, buttons that submit back to you) in a few hundred tokens; then `load_artifact_kit("Stat,Table")` for the exact props of just the ones you use. Importing them is far cheaper and more reliable than hand-writing the markup.
 ---""")
     return "\n".join(sections)
 
@@ -721,6 +742,15 @@ def _inject_agent_tools(
     try:
         from acb_skills.design_tools import load_design_system  # noqa: PLC0415
         _all_tools = _all_tools + [load_design_system]
+    except ImportError:
+        pass
+
+    # Same progressive-disclosure trick for the @cc/ui React component kit: the
+    # index is a few hundred tokens and per-component signatures load only for
+    # the components an artifact actually uses.
+    try:
+        from acb_skills.artifact_kit import load_artifact_kit  # noqa: PLC0415
+        _all_tools = _all_tools + [load_artifact_kit]
     except ImportError:
         pass
 

@@ -56,7 +56,7 @@ _MAX_ANNEAL_ATTEMPTS = 2
 # orchestrator/watchdog.py (core_module_map A1/A2 "unified watchdog policy") —
 # instead of being read via os.environ.get() at three call sites. Env knob
 # names are unchanged (COPILOT_TOOL_TIMEOUT_SECONDS etc.).
-from orchestrator.watchdog import (  # noqa: E402
+from orchestrator.watchdog import (
     LoopDetector as _LoopDetector,
     default_watchdog,
 )
@@ -68,7 +68,7 @@ _WATCHDOG = default_watchdog()
 # extracted to orchestrator/_copilot_session.py (maintainability refactor).
 # Re-exported so existing bare-name call sites + the copilot-infinite-sessions
 # tests (which reach them as ``executor.<name>``) keep resolving unchanged.
-from orchestrator._copilot_session import (  # noqa: E402
+from orchestrator._copilot_session import (
     _apply_copilot_infinite_sessions,
     _copilot_infinite_session_config,
     _copilot_permission_handler,
@@ -78,7 +78,7 @@ from orchestrator._copilot_session import (  # noqa: E402
 # Platform tool injection extracted to orchestrator/_tool_injection.py
 # (maintainability refactor). Re-exported so bare-name call sites in the run
 # paths + external importers (tests, tool-addendum eval) keep resolving.
-from orchestrator._tool_injection import (  # noqa: E402
+from orchestrator._tool_injection import (
     _apply_own_tool_scope,
     _build_injected_tools_addendum,
     _build_registry_block,
@@ -96,7 +96,7 @@ def _missing_module_name(exc: BaseException) -> str | None:
     """
     name = getattr(exc, "name", None)
     if not name:
-        import re as _re  # noqa: PLC0415
+        import re as _re
         m = _re.search(r"No module named ['\"]([^'\"]+)['\"]", str(exc))
         name = m.group(1) if m else None
     # Install the TOP-LEVEL distribution name (submodule installs never work).
@@ -139,12 +139,12 @@ def _disable_agent_telemetry_once() -> None:
     ):
         return  # operator explicitly wants tracing — leave it on
     try:
-        from agent_framework.observability import (  # noqa: PLC0415
+        from agent_framework.observability import (
             disable_instrumentation,
         )
         disable_instrumentation()
         _log.info("executor.agent_telemetry_disabled")
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # Best-effort — the executor's ValueError guard still catches the symptom.
         _log.warning(
             "executor.agent_telemetry_disable_failed", error=str(exc)[:160])
@@ -238,13 +238,13 @@ def resolve_relay_thread_id() -> str | None:
     if tid:
         return tid
     try:
-        from acb_skills.write_artifact import (  # noqa: PLC0415
+        from acb_skills.write_artifact import (
             _WRITE_ARTIFACT_CONTEXT,
         )
         sid = _WRITE_ARTIFACT_CONTEXT.get("session_id")
         if sid:
             return str(sid)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     if len(_RUN_QUEUES) == 1:
         return next(iter(_RUN_QUEUES.keys()))
@@ -283,9 +283,9 @@ async def _push_sse_to_stream(thread_id: str, sse_line: str) -> None:
     interrupted by Redis issues.
     """
     try:
-        from orchestrator.stream_relay import push_sse_event  # noqa: PLC0415
+        from orchestrator.stream_relay import push_sse_event
         await push_sse_event(thread_id, sse_line)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -311,7 +311,7 @@ def _tee_sse_line(line: str) -> None:
         if prev is not None:
             try:
                 await prev
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         await _push_sse_to_stream(tid, line)
 
@@ -355,7 +355,7 @@ def resolve_user_input(
     payload = {"answer": answer, "wasFreeform": was_freeform}
     try:
         loop = fut.get_loop()
-    except Exception:  # noqa: BLE001
+    except Exception:
         if not fut.done():
             fut.set_result(payload)
         return True
@@ -400,9 +400,9 @@ async def wait_user_future(
                 return fut.result()
             if tid:
                 try:
-                    from orchestrator.stream_relay import touch_active  # noqa: PLC0415
+                    from orchestrator.stream_relay import touch_active
                     await touch_active(tid)
-                except Exception:  # noqa: BLE001 — heartbeat is best-effort
+                except Exception:
                     pass
 
 
@@ -416,8 +416,8 @@ def _make_user_input_handler(thread_id: str) -> Any:
 
     async def _handler(request: Any, _ctx: Any) -> dict[str, Any]:
         global _sse_seq
-        import time as _time  # noqa: PLC0415
-        import uuid as _uuid  # noqa: PLC0415
+        import time as _time
+        import uuid as _uuid
 
         if isinstance(request, dict):
             question = request.get("question", "") or ""
@@ -471,7 +471,7 @@ def _make_user_input_handler(thread_id: str) -> Any:
 # Extracted to orchestrator/_todo_tracker.py (maintainability refactor).
 # Re-exported here so existing references (``_TodoTracker`` / ``_unwrap_json_param``
 # inside run_agent_stream) and any external importers keep resolving unchanged.
-from orchestrator._todo_tracker import (  # noqa: E402
+from orchestrator._todo_tracker import (
     _TodoTracker,
     _unwrap_json_param,
 )
@@ -526,7 +526,7 @@ async def _run_sub_agent_streaming(
     _local_path: str | None = None
     _runtime: str = "maf"
     try:
-        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _AGENT_REGISTRY
         from gateway.routes.agent import _load_dynamic_agents
         _all = _load_dynamic_agents() + _AGENT_REGISTRY
         entry = next((e for e in _all if e["name"] == agent_name), None)
@@ -536,7 +536,7 @@ async def _run_sub_agent_streaming(
             _repo_name = raw if raw else None
             _local_path = entry.get("local_path")
             _runtime = entry.get("agent_runtime", "maf")
-    except (ImportError, Exception):  # noqa: BLE001
+    except (ImportError, Exception):
         pass
 
     # Initialised before try so the finally block always has access
@@ -557,7 +557,7 @@ async def _run_sub_agent_streaming(
         if event_queue is not None:
             await event_queue.put(evt)
         if _push_to_relay:
-            import json as _json_sub  # noqa: PLC0415
+            import json as _json_sub
             _payload = _json_sub.dumps(evt, default=str)
             _line = f"data: {_payload}\n\n"
             await _push_sse_to_stream(_relay_tid, _line)  # type: ignore[arg-type]
@@ -608,7 +608,7 @@ async def _run_sub_agent_streaming(
                 for _a in agents:
                     if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
                         _a._permission_handler = _ph
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # ── Set working directory for Copilot SDK sub-agents ──────────
@@ -643,7 +643,7 @@ async def _run_sub_agent_streaming(
             # sidebar).  Restored after sub-agent completes.
             try:
                 from acb_skills.write_artifact import \
-                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                    _WRITE_ARTIFACT_CONTEXT
                 for _k in ("workspace_root", "session_id", "integrations"):
                     _saved_artifact_ctx[_k] = _WRITE_ARTIFACT_CONTEXT.get(
                         _k, ""
@@ -654,7 +654,7 @@ async def _run_sub_agent_streaming(
                 _WRITE_ARTIFACT_CONTEXT["integrations"] = sorted(integrations)
                 # session_id stays as orchestrator's so download URLs
                 # resolve correctly in the parent chat window.
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             text_parts: list[str] = []
@@ -723,7 +723,7 @@ async def _run_sub_agent_streaming(
                                 )
                             else:
                                 agent._default_options["model"] = _model
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                 async with agent:
@@ -787,7 +787,7 @@ async def _run_sub_agent_streaming(
                 )
             return raw_result
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         await _emit_sub_event({
             "type": "SUB_AGENT_ERROR",
             "agentName": agent_name,
@@ -804,11 +804,11 @@ async def _run_sub_agent_streaming(
         if _saved_artifact_ctx:
             try:
                 from acb_skills.write_artifact import \
-                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                    _WRITE_ARTIFACT_CONTEXT
                 for _key, _val in _saved_artifact_ctx.items():
                     if _val:
                         _WRITE_ARTIFACT_CONTEXT[_key] = _val
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
 
@@ -844,8 +844,8 @@ def _session_workspace_override(
         return None
     workspace_path = ""
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
         with _db_session() as s:
             row = s.execute(
                 text("SELECT workspace_path FROM chat_session WHERE id = :id"),
@@ -853,7 +853,7 @@ def _session_workspace_override(
             ).fetchone()
         if row and row.workspace_path:
             workspace_path = str(row.workspace_path)
-    except Exception:  # noqa: BLE001
+    except Exception:
         return None
     if not workspace_path:
         return None
@@ -1023,13 +1023,13 @@ def _apply_agent_md_overrides(
     no usable file exists. Fully defensive — never raises.
     """
     try:
-        from acb_skills.agent_md import (  # noqa: PLC0415
+        from acb_skills.agent_md import (
             load_agent_md,
             load_repo_mcp_servers,
             runtime_note_for,
         )
         spec = load_agent_md(agent_dir, agent_name)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.debug("executor.agent_md_load_failed", agent=agent_name, error=str(exc))
         return None
 
@@ -1069,7 +1069,7 @@ def _apply_agent_md_overrides(
                         _ag.instructions = _body
                     except (AttributeError, TypeError):
                         pass
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
     _log.info(
@@ -1114,7 +1114,7 @@ def _merged_tool_scope(
 # BYOK model resolution extracted to orchestrator/_model_resolution.py
 # (maintainability refactor). Re-exported so run-path call sites +
 # gateway.main / test_byok_default keep resolving as executor.<name>.
-from orchestrator._model_resolution import (  # noqa: E402
+from orchestrator._model_resolution import (
     _apply_byok_provider_for_copilot_sdk,
     _apply_model_for_maf_agent,
     _apply_thinking_mode_for_agent,
@@ -1132,7 +1132,7 @@ async def _get_current_head(agent_dir: str) -> str:
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         return out.decode(errors="replace").strip() if proc.returncode == 0 else ""
-    except Exception:  # noqa: BLE001
+    except Exception:
         return ""
 
 
@@ -1153,7 +1153,7 @@ async def _commit_on_remote(agent_dir: str, commit_sha: str) -> bool:
         )
         out, _ = await asyncio.wait_for(proc.communicate(), timeout=5)
         return proc.returncode == 0 and bool(out.decode(errors="replace").strip())
-    except Exception:  # noqa: BLE001
+    except Exception:
         return False
 
 
@@ -1201,7 +1201,7 @@ async def _install_push_guard(agent_dir: str) -> None:
                 encoding="utf-8",
             )
             post_commit.chmod(0o755)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("executor.push_guard_install_failed", agent=agent_dir, error=str(exc))
 
 
@@ -1247,8 +1247,8 @@ async def _detect_agent_commits(
         # ── Load existing commit SHAs for dedup ─────────────────────────
         _existing_shas: set[str] = set()
         try:
-            from acb_graph import get_session as _gs  # noqa: PLC0415
-            from sqlalchemy import text as _txt  # noqa: PLC0415
+            from acb_graph import get_session as _gs
+            from sqlalchemy import text as _txt
             with _gs() as _s:
                 _rows = _s.execute(
                     _txt(
@@ -1258,7 +1258,7 @@ async def _detect_agent_commits(
                     {"a": agent_name},
                 ).fetchall()
                 _existing_shas = {r[0] for r in _rows}
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         all_lines: list[str] = []
@@ -1300,12 +1300,12 @@ async def _detect_agent_commits(
                                 )
                                 out, _ = await asyncio.wait_for(p.communicate(), timeout=5)
                                 msg = out.decode(errors="replace").strip()
-                            except Exception:  # noqa: BLE001
+                            except Exception:
                                 msg = sha[:12]
                             all_lines.append(f"{sha}|{msg}")
                 # Truncate so SHAs are not re-registered on next scan.
                 queue_file.write_text("", encoding="utf-8")
-            except Exception as exc:  # noqa: BLE001
+            except Exception as exc:
                 _log.warning(
                     "executor.commit_scan_queue_failed",
                     agent=agent_name, error=str(exc),
@@ -1397,7 +1397,7 @@ async def _detect_agent_commits(
             count=len(all_lines),
         )
 
-        from orchestrator.mutation import _git_diff  # noqa: PLC0415
+        from orchestrator.mutation import _git_diff
         from orchestrator.mutation import _register_pending_commit
 
         # ── System-generated commit messages to skip ──────────────────
@@ -1464,7 +1464,7 @@ async def _detect_agent_commits(
             )
         )
 
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning(
             "executor.detect_commits_failed",
             agent=agent_name,
@@ -1505,7 +1505,7 @@ async def _integration_authorizer(event_payload: Any):
         return None
 
     try:
-        from acb_auth import (  # noqa: PLC0415
+        from acb_auth import (
             integration_use_permission,
             resolve_access,
         )
@@ -1518,16 +1518,16 @@ async def _integration_authorizer(event_payload: Any):
         # org-memory writes are checked against the same member. Done here so
         # there is exactly one access lookup per run.
         try:
-            from acb_skills.memory_tools import (  # noqa: PLC0415
+            from acb_skills.memory_tools import (
                 _set_memory_permission,
             )
 
             _set_memory_permission(access.has)
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         return lambda service: access.has(integration_use_permission(service))
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         # resolve_access is documented never to raise, so reaching here is a
         # bug rather than a misconfiguration. Preserve the prior behaviour
         # rather than failing every integration on a transient fault.
@@ -1564,7 +1564,7 @@ async def run_agent(
     # Set the memory/user ContextVar from the payload so user-scoped tools and
     # memory resolve the acting user (mirrors run_agent_stream).
     try:
-        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        from acb_skills.memory_tools import _set_memory_user_id
         _mu = str(
             event_payload.get("user_email")
             or event_payload.get("user_id") or ""
@@ -1572,7 +1572,7 @@ async def run_agent(
         if _mu:
             _set_memory_user_id(_mu)
             os.environ["ACB_AGENT_USER_EMAIL"] = _mu
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     record(
@@ -1594,7 +1594,7 @@ async def run_agent(
         _registry_repo_name: str | None = None
         _registry_local_path: str | None = None
         try:
-            from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+            from gateway.routes.agent import _AGENT_REGISTRY
             from gateway.routes.agent import _load_dynamic_agents
             _all_entries = _load_dynamic_agents() + _AGENT_REGISTRY
             _registry_entry = next(
@@ -1636,7 +1636,7 @@ async def run_agent(
             try:
                 from gateway.routes.agent import _AGENT_REGISTRY
                 from gateway.routes.agent import \
-                    _load_dynamic_agents as _lda  # noqa: PLC0415
+                    _load_dynamic_agents as _lda
                 _ea = next(
                     (e for e in _lda() + _AGENT_REGISTRY if e["name"] == agent_name),
                     None,
@@ -1648,7 +1648,7 @@ async def run_agent(
                 # a run, and the guard protects against unapproved pushes.
                 await _install_push_guard(_effective_agent_dir)
                 _head_before = await _get_current_head(_effective_agent_dir)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # Resolve credentials for both mandatory and optional integrations.
@@ -1684,7 +1684,7 @@ async def run_agent(
             # Set write_artifact context + ensure visible workspace dirs exist.
             try:
                 from acb_skills.write_artifact import \
-                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                    _WRITE_ARTIFACT_CONTEXT
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
@@ -1707,16 +1707,16 @@ async def run_agent(
                 _ws_root = Path(_effective_agent_dir)
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # Rehydrate the agent's durable folders from the authoritative blob
             # store BEFORE it runs, so a wiped/migrated volume comes back (store
             # is source of truth, disk is a cache). Best-effort; never blocks.
             try:
-                from acb_memory import rehydrate_workspace  # noqa: PLC0415
+                from acb_memory import rehydrate_workspace
                 await rehydrate_workspace(agent_name, _effective_agent_dir)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # ── Set working directory for Copilot SDK agents ────────────
@@ -1734,7 +1734,7 @@ async def run_agent(
                             _ag._default_options["working_directory"] = (
                                 _effective_agent_dir
                             )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
             # Resolve + apply the run model to the agent (batch path).
@@ -1758,7 +1758,7 @@ async def run_agent(
                         _agent0, model or "", settings,
                         agent_model_tier=_cfg_tier,
                     )
-                except Exception as _be:  # noqa: BLE001
+                except Exception as _be:
                     _log.warning("executor.byok_apply_failed",
                                  agent=agent_name, error=str(_be)[:160])
 
@@ -1788,7 +1788,7 @@ async def run_agent(
         # Post-run: detect commits the agent made during this run (ALL agents)
         _registry_runtime = "maf"
         try:
-            from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+            from gateway.routes.agent import _AGENT_REGISTRY
             from gateway.routes.agent import _load_dynamic_agents
             _e = next(
                 (e for e in _load_dynamic_agents() + _AGENT_REGISTRY if e["name"] == agent_name),
@@ -1796,7 +1796,7 @@ async def run_agent(
             )
             if _e:
                 _registry_runtime = _e.get("agent_runtime", "maf")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         await _detect_agent_commits(
             agent_name, _effective_agent_dir, run_id,
@@ -1819,7 +1819,7 @@ async def run_agent(
         # The sandbox receives the full error + the agent_repo_compatibility.md guide
         # so the SDK agent knows exactly what the repo needs to look like.
         from orchestrator.mutation import \
-            attempt_self_mutation  # noqa: PLC0415
+            attempt_self_mutation
         mutation_result = await attempt_self_mutation(
             agent_name=agent_name,
             run_id=run_id,
@@ -1845,7 +1845,7 @@ async def run_agent(
             "executor.run_error", agent=agent_name, run_id=run_id,
             error=str(exc), exc_info=True,
         )
-        import traceback as _tb  # noqa: PLC0415
+        import traceback as _tb
         _run_tb = "".join(
             _tb.format_exception(type(exc), exc, exc.__traceback__)
         )[:8000]
@@ -1864,7 +1864,7 @@ async def run_agent(
 
         # All anneal attempts exhausted — attempt self-mutation (ADR-021)
         from orchestrator.mutation import \
-            attempt_self_mutation  # noqa: PLC0415
+            attempt_self_mutation
 
         mutation_result = await attempt_self_mutation(
             agent_name=agent_name,
@@ -1951,7 +1951,7 @@ def _sse(payload: dict[str, Any]) -> str:
 # and is shared by all four streaming paths (native MAF, Copilot, Tier 2
 # batch, sub-agent).  These aliases preserve the executor's historical API
 # (tests and older call sites import them from here).
-from orchestrator.event_translator import (  # noqa: E402
+from orchestrator.event_translator import (
     ToolCallStreamState as _FcStreamState,
     TranslationState as _TranslationState,
     TranslatorHooks as _TranslatorHooks,
@@ -2004,7 +2004,7 @@ async def run_agent_stream(
     # acting user. Setting it in the calling route doesn't survive into the
     # streaming/agent execution context.
     try:
-        from acb_skills.memory_tools import _set_memory_user_id  # noqa: PLC0415
+        from acb_skills.memory_tools import _set_memory_user_id
         _mu = ""
         if isinstance(event_payload, dict):
             _mu = str(
@@ -2016,7 +2016,7 @@ async def run_agent_stream(
             # Fallback for tool callbacks the Copilot SDK runs outside this
             # ContextVar's reach (single-user deployments).
             os.environ["ACB_AGENT_USER_EMAIL"] = _mu
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── Run correlation (E2 observability) ─────────────────────────────────
@@ -2027,7 +2027,7 @@ async def run_agent_stream(
     _corr_source = "chat"
     _corr_user = ""
     try:
-        from acb_common import bind_run_context  # noqa: PLC0415
+        from acb_common import bind_run_context
         if isinstance(event_payload, dict):
             _corr_user = str(
                 event_payload.get("user_email")
@@ -2040,24 +2040,24 @@ async def run_agent_stream(
             run_id=run_id, thread_id=thread_id,
             agent=agent_name, user=_corr_user or None, source=_corr_source,
         )
-    except Exception:  # noqa: BLE001 — logging correlation must never block a run
+    except Exception:
         pass
 
     # ── Live activity feed (E2): agent activation START ───────────────────────
     # Publish to the global bus so /observability shows this run the instant it
     # begins — across chat and every app. Best-effort; the matching END event is
     # emitted in the finally below. Duration is measured from here.
-    import time as _time  # noqa: PLC0415
+    import time as _time
     _activity_started = _time.monotonic()
     try:
-        from acb_common import publish_activity  # noqa: PLC0415
+        from acb_common import publish_activity
         publish_activity(
             kind="agent", phase="start",
             agent=agent_name, run_id=run_id, thread_id=thread_id,
             user=(_corr_user or None), model=(model or None),
             source=_corr_source,
         )
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # Tool-call activations (E2 granular observability): publish a kind:"tool"
@@ -2065,12 +2065,12 @@ async def run_agent_stream(
     # EXACT tool on the agent's avatar. Best-effort; inherits agent/run context.
     def _emit_tool(_name: str, _phase: str) -> None:
         try:
-            from acb_common import publish_activity  # noqa: PLC0415
+            from acb_common import publish_activity
             publish_activity(
                 kind="tool", phase=_phase, tool=_name,
                 agent=agent_name, run_id=run_id, source=_corr_source,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
     # ── Stream relay: tee all SSE events to Redis for reconnection support ─
@@ -2080,12 +2080,12 @@ async def run_agent_stream(
     _model_token = _active_run_model.set((model or "").strip() or None)
     _relay_mark_inactive = None  # type: ignore[assignment]
     try:
-        from orchestrator.stream_relay import (  # noqa: PLC0415
+        from orchestrator.stream_relay import (
             mark_active as _relay_mark_active,
             mark_inactive as _relay_mark_inactive,
         )
         await _relay_mark_active(thread_id)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # Fresh per-thread emit ordinal for this run (P1-5): the stream was just
@@ -2098,7 +2098,7 @@ async def run_agent_stream(
     # is keyed by request_id, so the applier just forwards.  Unregistered in the
     # finally alongside the relay tokens.
     try:
-        from orchestrator.stream_relay import (  # noqa: PLC0415
+        from orchestrator.stream_relay import (
             register_control_command as _register_ctl,
         )
 
@@ -2110,7 +2110,7 @@ async def run_agent_stream(
             )
 
         _register_ctl(thread_id, "respond_input", _respond_input_apply)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── Resolve agent metadata ──────────────────────────────────────────────
@@ -2118,7 +2118,7 @@ async def run_agent_stream(
     _registry_local_path: str | None = None
     _agent_runtime: str = "maf"
     try:
-        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _AGENT_REGISTRY
         from gateway.routes.agent import _load_dynamic_agents
         _all = _load_dynamic_agents() + _AGENT_REGISTRY
         entry = next((e for e in _all if e["name"] == agent_name), None)
@@ -2189,7 +2189,7 @@ async def run_agent_stream(
             # report files to and where the workspace root lives.
             try:
                 from acb_skills.write_artifact import \
-                    _WRITE_ARTIFACT_CONTEXT  # noqa: PLC0415
+                    _WRITE_ARTIFACT_CONTEXT
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
@@ -2218,15 +2218,15 @@ async def run_agent_stream(
                 _ws_root = Path(_session_ws) if _session_ws else loaded.agent_dir
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # Rehydrate durable folders from the authoritative blob store before
             # the agent runs (store is source of truth). Best-effort.
             try:
-                from acb_memory import rehydrate_workspace  # noqa: PLC0415
+                from acb_memory import rehydrate_workspace
                 await rehydrate_workspace(agent_name, str(loaded.agent_dir))
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             if not agents:
@@ -2270,7 +2270,7 @@ async def run_agent_stream(
                 for _a in agents:
                     if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
                         _a._permission_handler = _ph
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
             # ── BYOK early detection (must happen BEFORE tier selection) ────
@@ -2361,7 +2361,7 @@ async def run_agent_stream(
                         runtime=_agent_runtime,
                         model=_final_model_early,
                     )
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
             # ── Reasoning depth (chat UI "thinking" toggle) ─────────────
@@ -2409,7 +2409,7 @@ async def run_agent_stream(
                             _ag._default_options[
                                 "on_user_input_request"
                             ] = _make_user_input_handler(thread_id)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
             # If the user switches models mid-thread, the Copilot SDK
             # session is bound to the old model.  Invalidate the stored
@@ -2452,7 +2452,7 @@ async def run_agent_stream(
                 # a long conversation just degraded as oldest turns dropped.
                 # Surface one unobtrusive progress line so the user knows.
                 try:
-                    from acb_llm.context import last_fit_stats  # noqa: PLC0415
+                    from acb_llm.context import last_fit_stats
                     _fit = last_fit_stats.get() or {}
                     if _fit.get("dropped_turns"):
                         yield _sse({
@@ -2463,7 +2463,7 @@ async def run_agent_stream(
                                 "fit the model's context and were left out."
                             ),
                         })
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
                 _nq: asyncio.Queue[dict[str, Any] | None] = asyncio.Queue()
                 _nq_token = _active_run_queue.set(_nq)
@@ -2568,7 +2568,7 @@ async def run_agent_stream(
                             if _q_task in _done:
                                 try:
                                     _qev = _q_task.result()
-                                except Exception:  # noqa: BLE001
+                                except Exception:
                                     _qev = None
                                 while _qev is not None:
                                     _n_emitted = True
@@ -2753,7 +2753,7 @@ async def run_agent_stream(
             # registered as "maf" (e.g. email-assistant) so they get BYOK
             # provider forwarding instead of a native Copilot session.
             if _is_copilot_sdk:
-                from orchestrator.copilot_agent import CommandCenterCopilotAgent  # noqa: PLC0415
+                from orchestrator.copilot_agent import CommandCenterCopilotAgent
 
                 # Patch the loaded agent with enhanced BYOK + streaming methods.
                 agent.start = CommandCenterCopilotAgent.start.__get__(
@@ -2798,7 +2798,7 @@ async def run_agent_stream(
                 try:
                     if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
                         agent._permission_handler = _copilot_permission_handler()
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
                 _msg_text = event_payload.get("message") or event_payload.get("user_query") or ""
@@ -2855,7 +2855,7 @@ async def run_agent_stream(
                         # breakpoint at exactly this point for Anthropic tiers.
                         # It is consumed (Anthropic) or stripped (others) before
                         # the request leaves the gateway — never seen by the LLM.
-                        from acb_llm.prompt_cache import (  # noqa: PLC0415
+                        from acb_llm.prompt_cache import (
                             CACHE_BREAK as _CACHE_BREAK,
                         )
                         _opts = agent.default_options
@@ -2910,7 +2910,7 @@ async def run_agent_stream(
                                     _copilot_opts["system_message"] = (
                                         _merged
                                     )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                 # ── Thinking mode (Auto / Thinking / Max) ──
@@ -2929,7 +2929,7 @@ async def run_agent_stream(
                             _think_mode, "low"
                         )
                         _opts["reasoning_effort"] = _effort
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
                 # Canonical translation state — same mapping as every other
@@ -3048,7 +3048,7 @@ async def run_agent_stream(
                                         "request_id": _req_id,
                                     },
                                 })
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
                     if not _emitted_todo and _todo_tracker.feed(
                         _tc_name, _tc_args,
@@ -3159,7 +3159,7 @@ async def run_agent_stream(
                                     _copilot_model_store[thread_id] = (
                                         _final_model_early
                                     )
-                            except Exception:  # noqa: BLE001
+                            except Exception:
                                 _log.exception("executor.store_session_failed")
 
                 # ── Artifact / CUSTOM event relay ────────────────────────
@@ -3191,7 +3191,7 @@ async def run_agent_stream(
                     if _copilot_session_id and not _session_retry_attempted:
                         try:
                             _ag_sess = agent.get_session(_copilot_session_id)
-                        except Exception:  # noqa: BLE001
+                        except Exception:
                             pass
                     try:
                         async for _line in _run_copilot_attempt(_effective_msg, _ag_sess):
@@ -3209,7 +3209,7 @@ async def run_agent_stream(
                             if _aev:
                                 yield _sse(_aev)
                         break  # success — exit retry loop
-                    except Exception as _exc:  # noqa: BLE001
+                    except Exception as _exc:
                         # ── Gap-1 fix: stale Copilot session ─────────────
                         # After a gateway restart the Copilot CLI process is
                         # dead, so resume_session() raises
@@ -3382,8 +3382,8 @@ async def run_agent_stream(
 
             def _make_tool_shim(original_fn: Any, tool_name: str) -> Any:
                 """Return an async wrapper that emits TOOL_CALL_* events."""
-                import functools  # noqa: PLC0415
-                import inspect  # noqa: PLC0415
+                import functools
+                import inspect
 
                 @functools.wraps(original_fn)
                 async def _shim(*args: Any, **kwargs: Any) -> Any:
@@ -3402,7 +3402,7 @@ async def run_agent_stream(
                                 call_args[k] = v
                             except (TypeError, ValueError):
                                 call_args[k] = str(v)
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         call_args = {}
 
                     await queue.put({
@@ -3431,7 +3431,7 @@ async def run_agent_stream(
                     # path/args now reach decide()'s shell-denylist check here
                     # too, not just on the injected-tool gate's path.
                     try:
-                        from acb_skills.permission_policy import (  # noqa: PLC0415
+                        from acb_skills.permission_policy import (
                             build_tool_call_context as _perm_context,
                             decide as _perm_decide,
                         )
@@ -3454,7 +3454,7 @@ async def run_agent_stream(
                             return (
                                 f"[blocked by permission policy: {_code}]"
                             )
-                    except Exception:  # noqa: BLE001 — never brick a tool call
+                    except Exception:
                         pass
 
                     try:
@@ -3501,12 +3501,12 @@ async def run_agent_stream(
                                 agent=agent_name, tool=tool_name, module=_mod,
                             )
                             try:
-                                from acb_skills.dep_tools import (  # noqa: PLC0415
+                                from acb_skills.dep_tools import (
                                     install_dependency,
                                 )
                                 _msg = await install_dependency(_mod)
                                 _healed = _msg.startswith("Installed")
-                            except Exception:  # noqa: BLE001
+                            except Exception:
                                 _healed = False
                         if _healed:
                             try:
@@ -3514,7 +3514,7 @@ async def run_agent_stream(
                                     original_fn(*args, **kwargs),
                                     timeout=_TOOL_EXECUTION_TIMEOUT,
                                 )
-                            except Exception as _retry_exc:  # noqa: BLE001
+                            except Exception as _retry_exc:
                                 await queue.put({
                                     "type": "TOOL_CALL_RESULT",
                                     "toolCallId": tool_call_id,
@@ -3582,7 +3582,7 @@ async def run_agent_stream(
             # Discover and patch tools on the agent.
             # MAF agents expose tools as `agent.tools` (list) or as annotated
             # methods decorated with @tool.  Try both patterns.
-            import inspect  # noqa: PLC0415
+            import inspect
             patched: list[tuple[str, str, Any]] = []  # (attr, name, original)
 
             _tool_attrs: list[str] = []
@@ -3645,7 +3645,7 @@ async def run_agent_stream(
                     # without it, and we don't want the LLM to fall back to shell execution.
                     try:
                         from copilot import \
-                            CopilotClient as _CopilotClient  # noqa: PLC0415
+                            CopilotClient as _CopilotClient
                         if hasattr(agent, "_client") and agent._client is None:
                             _agent_settings = getattr(agent, "_settings", {}) or {}
                             _cli_opts: dict[str, Any] = {}
@@ -3678,7 +3678,7 @@ async def run_agent_stream(
                                 _cli_opts["github_token"] = _cop_tok
                             agent._client = _CopilotClient(_cli_opts if _cli_opts else None)
                             agent._owns_client = True
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
                     if hasattr(type(agent), "__aenter__"):
@@ -3687,7 +3687,7 @@ async def run_agent_stream(
                     try:
                         if hasattr(agent, "_permission_handler") and agent._permission_handler is None:
                             agent._permission_handler = _copilot_permission_handler()
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
                     # Pass history as proper MAF Message objects so the model sees
                     # full user/assistant turn structure, not a flat string.
@@ -3734,7 +3734,7 @@ async def run_agent_stream(
             for attr, _, original in patched:
                 try:
                     object.__setattr__(agent, attr, original)
-                except Exception:  # noqa: BLE001
+                except Exception:
                     pass
 
             # Restore shimmed list entries
@@ -3742,7 +3742,7 @@ async def run_agent_stream(
                 for _idx, _orig in _shimmed_list_indices:
                     try:
                         agent.tools[_idx] = _orig
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
             # Get the final text result
@@ -3765,14 +3765,14 @@ async def run_agent_stream(
                     _GATEWAY_URL = settings.gateway_base_url if hasattr(settings, "gateway_base_url") else "http://127.0.0.1:8000"
                     _token = getattr(settings, "gateway_internal_token", "") or getattr(settings, "litellm_master_key", "")
                     try:
-                        import httpx  # noqa: PLC0415
+                        import httpx
                         async with httpx.AsyncClient(timeout=5) as c:
                             await c.post(
                                 f"{_GATEWAY_URL}/integrations/configure",
                                 json={"vars": vars_to_save},
                                 headers={"Authorization": f"Bearer {_token}"},
                             )
-                    except Exception:  # noqa: BLE001
+                    except Exception:
                         pass
 
             # Emit the final text as TOKEN-STREAMED TEXT_MESSAGE_CONTENT deltas
@@ -3802,9 +3802,9 @@ async def run_agent_stream(
         # Clears this run from the "running now" panel and stamps duration +
         # status. sys.exc_info() is set here iff we're unwinding an exception.
         try:
-            import sys as _sys  # noqa: PLC0415
-            import time as _time  # noqa: PLC0415
-            from acb_common import publish_activity  # noqa: PLC0415
+            import sys as _sys
+            import time as _time
+            from acb_common import publish_activity
             _status = "error" if _sys.exc_info()[0] is not None else "completed"
             _dur_ms = int((_time.monotonic() - _activity_started) * 1000)
             publish_activity(
@@ -3812,7 +3812,7 @@ async def run_agent_stream(
                 agent=agent_name, run_id=run_id, thread_id=thread_id,
                 status=_status, duration_ms=_dur_ms, source=_corr_source,
             )
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
 
         # Deactivate stream relay so the reconnect endpoint knows the run
@@ -3823,7 +3823,7 @@ async def run_agent_stream(
         if _pending_push is not None:
             try:
                 await _pending_push
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
         _stream_relay_thread_id.reset(_relay_token)
         _active_run_model.reset(_model_token)
@@ -3831,25 +3831,25 @@ async def run_agent_stream(
         # they don't linger in the shared process env for the next agent.
         _restore_integration_env(_integration_env_token)
         try:
-            from acb_common import clear_run_context  # noqa: PLC0415
+            from acb_common import clear_run_context
             clear_run_context()
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         _thread_emit_seq.pop(thread_id, None)  # P1-5 counter cleanup
         # Drop the cross-worker HITL applier for this run (P1-2).  run_detached's
         # finally also clears ALL handlers for the thread, but this generator can
         # outlive/precede that path (batch tiers), so unregister defensively.
         try:
-            from orchestrator.stream_relay import (  # noqa: PLC0415
+            from orchestrator.stream_relay import (
                 unregister_control_command as _unreg_ctl,
             )
             _unreg_ctl(thread_id, "respond_input")
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
         if _relay_mark_inactive is not None:
             try:
                 await _relay_mark_inactive(thread_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
 
@@ -3945,9 +3945,9 @@ async def _self_anneal(
                 await asyncio.sleep(0.5 * (attempt + 1))
                 try:
                     from acb_skills.integrations import \
-                        build_integrations as _bi  # noqa: PLC0415
+                        build_integrations as _bi
                     from acb_skills.loader import \
-                        load_agent as _load  # noqa: PLC0415
+                        load_agent as _load
                     settings = get_settings()
                     with _load(agent_name, run_id=run_id) as loaded:
                         integrations, integration_warnings = _bi(
@@ -3974,7 +3974,7 @@ async def _self_anneal(
                     _log.info("self_anneal.retry_success",
                               agent=agent_name, attempt=attempt + 1)
                     return result
-                except Exception as retry_exc:  # noqa: BLE001
+                except Exception as retry_exc:
                     _log.warning("self_anneal.retry_failed",
                                  agent=agent_name, attempt=attempt + 1,
                                  error=str(retry_exc)[:200])
@@ -3989,9 +3989,9 @@ async def _self_anneal(
             try:
                 settings = get_settings()
                 from acb_skills.integrations import \
-                    build_integrations as _bi  # noqa: PLC0415
+                    build_integrations as _bi
                 from acb_skills.loader import \
-                    load_agent as _load  # noqa: PLC0415
+                    load_agent as _load
                 with _load(agent_name, run_id=run_id) as loaded:
                     integrations, integration_warnings = _bi(
                         loaded.config.get("integrations", []),
@@ -4017,7 +4017,7 @@ async def _self_anneal(
                 _log.info("self_anneal.retry_success",
                           agent=agent_name, attempt=attempt + 1)
                 return result
-            except Exception as retry_exc:  # noqa: BLE001
+            except Exception as retry_exc:
                 _log.warning("self_anneal.retry_failed",
                              agent=agent_name, attempt=attempt + 1,
                              error=str(retry_exc)[:200])
@@ -4058,7 +4058,7 @@ async def _llm_recovery(
     hint = _HINTS.get(error_class, "")
 
     try:
-        from acb_llm import LLMTier, complete  # noqa: PLC0415
+        from acb_llm import LLMTier, complete
 
         messages: list[dict[str, str]] = list(event_payload.get("messages", []))
         latest: str = event_payload.get("message", "")
@@ -4096,7 +4096,7 @@ async def _llm_recovery(
         )
         _log.info("self_anneal.llm_recovery_success", agent=agent_name)
         return {"result": {"role": "assistant", "content": content}}
-    except Exception as llm_exc:  # noqa: BLE001
+    except Exception as llm_exc:
         _log.warning("self_anneal.llm_recovery_failed",
                      agent=agent_name, error=str(llm_exc))
         return None
@@ -4146,12 +4146,12 @@ def _inject_integrations_to_env(
     is Tier 2 (container/subprocess).  Tier 0 removes the *permanent
     accumulation* and scopes to the run's own declared integrations.
     """
-    import os  # noqa: PLC0415
+    import os
 
     # Canonical mapping now lives in acb_skills.integrations.FIELD_TO_ENV —
     # shared with code_tools._script_env so a declared integration's scripts
     # see exactly the vars this function exports (agent_coding_skill.md §9).
-    from acb_skills.integrations import FIELD_TO_ENV  # noqa: PLC0415
+    from acb_skills.integrations import FIELD_TO_ENV
 
     token: IntegrationEnvToken = {}
     for service, creds in integrations.items():
@@ -4180,7 +4180,7 @@ def _restore_integration_env(token: IntegrationEnvToken | None) -> None:
     """
     if not token:
         return
-    import os  # noqa: PLC0415
+    import os
 
     for env_var, prior in token.items():
         try:
@@ -4188,7 +4188,7 @@ def _restore_integration_env(token: IntegrationEnvToken | None) -> None:
                 os.environ.pop(env_var, None)
             else:
                 os.environ[env_var] = prior
-        except Exception:  # noqa: BLE001 — teardown must not raise
+        except Exception:
             pass
 
 
@@ -4206,7 +4206,7 @@ async def _run_with_maf_agent(
     Accepts any MAF ``BaseAgent`` subclass including ``GitHubCopilotAgent``.
     Automatically calls ``start()`` / ``stop()`` if the agent supports it.
     """
-    import contextlib  # noqa: PLC0415
+    import contextlib
 
     if not agents:
         raise ValueError(f"Agent {agent_name!r}: build_agents() returned an empty list.")
@@ -4222,7 +4222,7 @@ async def _run_with_maf_agent(
         for _a in agents:
             if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
                 _a._permission_handler = _ph
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # Build the input for agent.run().
@@ -4242,9 +4242,9 @@ async def _run_with_maf_agent(
         # dedup + DB-rebuild-when-empty) — identical to the streaming path's
         # _compose_maf_run_input, replacing the old blind last-50 count cap.
         try:
-            from acb_llm import assemble_run_context  # noqa: PLC0415
+            from acb_llm import assemble_run_context
             from agent_framework._types import \
-                Message as _Message  # noqa: PLC0415
+                Message as _Message
 
             # Fold the integrations preamble into the leading system context so
             # the assembler carries it as one system message (it emits a single
@@ -4279,7 +4279,7 @@ async def _run_with_maf_agent(
             run_input = [
                 _Message(m["role"], [m["content"]]) for m in assembled
             ]
-        except Exception:  # noqa: BLE001
+        except Exception:
             # Fallback: MAF version mismatch — use plain string
             run_input = _build_event_message(agent_name, run_id, event_payload, integrations)
     else:
@@ -4350,7 +4350,7 @@ def _compose_maf_run_input(
     _loader = event_payload.get("_history_loader")
     if history_msgs or _loader:
         try:
-            from acb_llm import assemble_run_context  # noqa: PLC0415
+            from acb_llm import assemble_run_context
             from agent_framework import Message as _MAFMsg
             _model = _active_run_model.get() or ""
             assembled = assemble_run_context(
@@ -4365,7 +4365,7 @@ def _compose_maf_run_input(
                 _MAFMsg(role=m["role"], content=m["content"]) for m in assembled
             ]
             return maf_messages if maf_messages else message
-        except Exception:  # noqa: BLE001 — fall back to the string prompt
+        except Exception:
             return message
     return message
 
@@ -4558,7 +4558,7 @@ def _build_event_message(
         parts.append(current_msg)
     else:
         # Webhook / event-driven path: serialise key payload fields as context
-        import json  # noqa: PLC0415
+        import json
         skip = {"integration_warnings", "messages"}
         keys = [k for k in event_payload if k not in skip]
         if keys:
@@ -4683,8 +4683,8 @@ def _get_stored_session_id(thread_id: str) -> str | None:
     # Also try Postgres for cross-restart durability
     if not sid:
         try:
-            from acb_graph import get_session as _db_session  # noqa: PLC0415
-            from sqlalchemy import text  # noqa: PLC0415
+            from acb_graph import get_session as _db_session
+            from sqlalchemy import text
             with _db_session() as s:
                 row = s.execute(
                     text("SELECT service_session_id FROM chat_session WHERE id = :id"),
@@ -4693,7 +4693,7 @@ def _get_stored_session_id(thread_id: str) -> str | None:
             if row and row.service_session_id:
                 sid = row.service_session_id
                 _copilot_session_store[thread_id] = sid
-        except Exception:  # noqa: BLE001
+        except Exception:
             pass
     return sid
 
@@ -4705,8 +4705,8 @@ def _store_session_id(thread_id: str, service_session_id: str) -> None:
     # doesn't exist yet (the chat_session may be created by the frontend
     # AFTER the agent finishes, or never at all for named-agent chats).
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
 
         # Attribute the row to the ACTING user (the memory ContextVar is set
         # from the request's user_email at run start).  The old hardcoded
@@ -4715,9 +4715,9 @@ def _store_session_id(thread_id: str, service_session_id: str) -> None:
         # cancel their own run (403).
         try:
             from acb_skills.memory_tools import \
-                _get_memory_user_id  # noqa: PLC0415
+                _get_memory_user_id
             _uid = _get_memory_user_id() or "system"
-        except Exception:  # noqa: BLE001
+        except Exception:
             _uid = "system"
 
         def _write():
@@ -4752,7 +4752,7 @@ def _store_session_id(thread_id: str, service_session_id: str) -> None:
                              thread_id=thread_id[:12], error=str(exc)[:200])
         _fut = _aio.get_running_loop().run_in_executor(None, _write)
         _fut.add_done_callback(_log_write_failure)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
 
@@ -4767,8 +4767,8 @@ def _clear_stored_session_id(thread_id: str | None) -> None:
         return
     _copilot_session_store.pop(thread_id, None)
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
 
         def _write() -> None:
             with _db_session() as s:
@@ -4784,6 +4784,6 @@ def _clear_stored_session_id(thread_id: str | None) -> None:
 
         import asyncio as _aio
         _aio.get_event_loop().run_in_executor(None, _write)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 

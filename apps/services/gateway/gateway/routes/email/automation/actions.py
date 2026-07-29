@@ -128,7 +128,7 @@ async def correct_applied_labels(
             db, message_id, owner)
         if provider is not None and not await provider.authenticate():
             provider = None  # local-mirror only; can't reach the provider
-    except Exception:  # noqa: BLE001
+    except Exception:
         provider, pmid = None, ""
 
     add_labels = (await _rule_label_values(db, add_rule_id)
@@ -189,9 +189,9 @@ def _load_action_attachments(a: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     out: list[dict[str, Any]] = []
     try:
-        import mimetypes  # noqa: PLC0415
+        import mimetypes
 
-        from gateway.routes.workspace import (  # noqa: PLC0415
+        from gateway.routes.workspace import (
             _agent_workspace_dir,
         )
         ws = _agent_workspace_dir("email-assistant")
@@ -213,7 +213,7 @@ def _load_action_attachments(a: dict[str, Any]) -> list[dict[str, Any]]:
                 "content": full.read_bytes(),
                 "mime_type": mime or "application/octet-stream",
             })
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("email.attachment_load_failed", error=str(exc)[:120])
     return out
 
@@ -229,7 +229,7 @@ async def _render_template(template: str, email: dict[str, str]) -> str:
     if not template or "{{" not in template:
         return template
     try:
-        from acb_llm.context import acompletion_with_fallback  # noqa: PLC0415
+        from acb_llm.context import acompletion_with_fallback
         ctx = (
             f"From: {email.get('from', '')}\n"
             f"Subject: {email.get('subject', '')}\n\n"
@@ -254,7 +254,7 @@ async def _render_template(template: str, email: dict[str, str]) -> str:
         )
         out = (resp.choices[0].message.content or "").strip()
         return out or template
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("email.template_render_failed", error=str(exc)[:200])
         return template
 
@@ -327,7 +327,7 @@ async def _apply_rule_actions(
                 # Store the canonical (lowercased) key locally, but hand the
                 # ORIGINAL-CASE name to the provider so a created folder reads
                 # "Cold Email", not "cold email".
-                from email_ingestion.providers.base import canonical_folder  # noqa: PLC0415
+                from email_ingestion.providers.base import canonical_folder
                 dest = a["label"].strip()
                 canon = canonical_folder(dest)
                 # Provider first: if the move raises, the local folder is NOT
@@ -392,7 +392,7 @@ async def _apply_rule_actions(
                     draft_email = await _build_reply_context(
                         db, account_id, str(message_id), user_email)
                     if draft_email is None:
-                        from gateway.routes.email.core import (  # noqa: PLC0415
+                        from gateway.routes.email.core import (
                             hydrate_message_body,
                         )
                         _hb = await hydrate_message_body(
@@ -423,7 +423,7 @@ async def _apply_rule_actions(
                     continue
                 # Signature-in-body: the rule-created draft shows the signature
                 # upstream too (idempotent; send re-signing dedups).
-                from gateway.routes.email.signature import (  # noqa: PLC0415
+                from gateway.routes.email.signature import (
                     append_signature_text,
                 )
                 body = append_signature_text(signature, body)
@@ -465,7 +465,7 @@ async def _apply_rule_actions(
                 fwd_subject = a.get("subject") or f"Fwd: {email.get('subject', '')}"
                 # Sign the forward note too — the splitter keeps the signature
                 # ABOVE the "---------- Forwarded message" block.
-                from gateway.routes.email.signature import (  # noqa: PLC0415
+                from gateway.routes.email.signature import (
                     append_signature_text,
                 )
                 fwd = append_signature_text(signature, fwd)
@@ -487,7 +487,7 @@ async def _apply_rule_actions(
             else:
                 continue
             done.append(t)
-        except Exception as exc:  # noqa: BLE001
+        except Exception as exc:
             _log.warning("email.rule_action_failed", action=t, error=str(exc)[:120])
             if errors_out is not None:
                 errors_out.append({"type": t or "?", "error": str(exc)[:160]})

@@ -111,13 +111,13 @@ async def _mirror_gateway_write(
     outside agent-data/inputs/outputs or when the store is unavailable.
     """
     try:
-        from acb_memory import is_stored_path, put_file  # noqa: PLC0415
+        from acb_memory import is_stored_path, put_file
     except ImportError:
         return
     rel = rel_path.replace("\\", "/")
     if not is_stored_path(rel):
         return
-    import mimetypes as _mt  # noqa: PLC0415
+    import mimetypes as _mt
 
     mime = _mt.guess_type(rel)[0] or "application/octet-stream"
     try:
@@ -125,7 +125,7 @@ async def _mirror_gateway_write(
             _agent_name_for_workspace(workspace), rel, data,
             mime_type=mime, action=action, session_id=session_id, actor="user",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("workspace.blob_mirror_failed", path=rel, error=str(exc)[:200])
 
 
@@ -137,7 +137,7 @@ async def _faultin_from_store(workspace: Path, rel_path: str) -> bool:
     """
     rel = rel_path.replace("\\", "/").lstrip("/")
     try:
-        from acb_memory import get_file, is_stored_path  # noqa: PLC0415
+        from acb_memory import get_file, is_stored_path
     except ImportError:
         return False
     if not is_stored_path(rel):
@@ -157,7 +157,7 @@ async def _mirror_gateway_delete(
 ) -> None:
     """Write-through a gateway file delete into the blob store."""
     try:
-        from acb_memory import delete_file, is_stored_path  # noqa: PLC0415
+        from acb_memory import delete_file, is_stored_path
     except ImportError:
         return
     rel = rel_path.replace("\\", "/")
@@ -168,7 +168,7 @@ async def _mirror_gateway_delete(
             _agent_name_for_workspace(workspace), rel,
             session_id=session_id, actor="user",
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("workspace.blob_delete_mirror_failed", path=rel, error=str(exc)[:200])
 
 
@@ -182,8 +182,8 @@ def _get_workspace_path(session_id: str) -> Path | None:
        - GitHub-registered agent → ``{agents_clone_dir}/repos/{agent_name}``.
     """
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
 
         with _db_session() as s:
             row = s.execute(
@@ -231,7 +231,7 @@ def _agent_workspace_dir(agent_name: str) -> Path | None:
     and we must still surface their files.  Returns ``None`` when no clone
     exists yet (the agent has never run, so it has no artefacts).
     """
-    from acb_common import get_settings  # noqa: PLC0415
+    from acb_common import get_settings
 
     settings = get_settings()
     configured = getattr(
@@ -267,7 +267,7 @@ def _canonical_workspace_dir(agent_name: str) -> Path:
     still appears in the artifacts viewer with empty folders, instead of
     vanishing entirely just because it has no clone yet.
     """
-    from acb_common import get_settings  # noqa: PLC0415
+    from acb_common import get_settings
 
     settings = get_settings()
     configured = getattr(
@@ -286,7 +286,7 @@ def _resolve_agent_workspace(agent_name: str) -> Path | None:
     """
     try:
         return _agent_workspace_dir(agent_name)
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning(
             "workspace.agent_resolve_failed",
             agent=agent_name,
@@ -453,7 +453,7 @@ async def get_workspace_tree(
     If the session has no explicit workspace_path set, the agent's clone
     directory is used automatically (derived from the session's agent_name).
     """
-    import asyncio  # noqa: PLC0415
+    import asyncio
     loop = asyncio.get_event_loop()
     workspace = await loop.run_in_executor(None, _get_workspace_path, session_id)
     if workspace is None or not workspace.exists():
@@ -470,7 +470,7 @@ async def get_workspace_file(
     _user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a single file from the session workspace."""
-    import asyncio  # noqa: PLC0415
+    import asyncio
     workspace = await asyncio.get_event_loop().run_in_executor(
         None, _get_workspace_path, session_id
     )
@@ -521,8 +521,8 @@ async def set_workspace_path(
 ) -> None:
     """Record the workspace_path for a session (called by write_artifact tool)."""
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
 
         def _write():
             with _db_session() as s:
@@ -620,7 +620,7 @@ async def stream_artifact_events(
 # POST /workspace/{session_id}/upload  — user file upload
 # ---------------------------------------------------------------------------
 
-from fastapi import UploadFile  # noqa: E402
+from fastapi import UploadFile
 
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _ALLOWED_EXTENSIONS = {
@@ -930,7 +930,7 @@ async def get_workspace_history(
     if workspace is None:
         return {"history": []}
     try:
-        from acb_memory import file_history  # noqa: PLC0415
+        from acb_memory import file_history
     except ImportError:
         return {"history": []}
     rows = await file_history(_agent_name_for_workspace(workspace), path, limit)
@@ -962,7 +962,7 @@ async def write_workspace_file(
     Accepts text (encoding='utf-8') and binary (encoding='base64') content.
     Returns the updated FileEntry with fresh stat metadata.
     """
-    import base64  # noqa: PLC0415
+    import base64
 
     loop = asyncio.get_event_loop()
     workspace = await loop.run_in_executor(None, _get_workspace_path, session_id)
@@ -1065,28 +1065,28 @@ def _discover_agent_workspaces() -> dict[str, Path]:
 
     # ── 1. Static registry (in-code _AGENT_REGISTRY) ──────────────────────
     try:
-        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _AGENT_REGISTRY
         for entry in _AGENT_REGISTRY:
             name = entry.get("name")
             if name:
                 names.add(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── 2. Dynamic registry (Postgres-backed) — live agents only ──────────
     try:
         from gateway.routes.agent import \
-            _load_dynamic_agents  # noqa: PLC0415
+            _load_dynamic_agents
         for entry in _load_dynamic_agents():
             name = entry.get("name")
             if name and entry.get("status", "live") == "live":
                 names.add(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── 3. Agents.json file (legacy fallback) ─────────────────────────────
     try:
-        import json as _json  # noqa: PLC0415
+        import json as _json
         agents_file = Path(__file__).resolve()
         for _ in range(8):
             agents_file = agents_file.parent
@@ -1099,7 +1099,7 @@ def _discover_agent_workspaces() -> dict[str, Path]:
                 name = entry.get("name")
                 if name:
                     names.add(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── Resolve each name to its workspace.  Prefer an existing clone; fall
@@ -1111,7 +1111,7 @@ def _discover_agent_workspaces() -> dict[str, Path]:
     for name in names:
         try:
             ws = _agent_workspace_dir(name) or _canonical_workspace_dir(name)
-        except Exception:  # noqa: BLE001
+        except Exception:
             continue
         workspaces[name] = ws
 
@@ -1140,7 +1140,7 @@ def _walk_agent_artifacts(
     noise and secrets; the listing is capped at ``_MAX_TREE_FILES``.  When
     *category_filter* names a special dir, only that subtree is walked.
     """
-    import datetime as _dt  # noqa: PLC0415
+    import datetime as _dt
 
     entries: list[ArtifactEntry] = []
     emitted_dirs: set[str] = set()
@@ -1267,7 +1267,7 @@ async def get_artifacts(
     for every known agent.  Supports optional filtering by agent name and
     category.
     """
-    import asyncio as _asyncio  # noqa: PLC0415
+    import asyncio as _asyncio
     loop = _asyncio.get_event_loop()
 
     # Validate category filter early
@@ -1308,7 +1308,7 @@ async def get_artifact_file(
     _user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a single file from any agent's workspace (global artifact view)."""
-    import asyncio as _asyncio  # noqa: PLC0415
+    import asyncio as _asyncio
     loop = _asyncio.get_event_loop()
     workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
     workspace = workspaces.get(agent)
@@ -1367,8 +1367,8 @@ async def write_artifact_file(
     Accepts text (encoding='utf-8') and binary (encoding='base64') content.
     Returns the updated ArtifactEntry with fresh stat metadata.
     """
-    import asyncio as _asyncio  # noqa: PLC0415
-    import base64  # noqa: PLC0415
+    import asyncio as _asyncio
+    import base64
     loop = _asyncio.get_event_loop()
 
     workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)

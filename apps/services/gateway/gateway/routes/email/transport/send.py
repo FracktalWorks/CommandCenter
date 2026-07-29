@@ -56,10 +56,10 @@ def load_artifact_attachments(
         return []
     out: list[dict] = []
     try:
-        import mimetypes  # noqa: PLC0415
+        import mimetypes
 
         from gateway.routes.workspace import \
-            _agent_workspace_dir  # noqa: PLC0415
+            _agent_workspace_dir
 
         ws_cache: dict[str, object] = {}
         for ref in refs:
@@ -83,7 +83,7 @@ def load_artifact_attachments(
                 "content": full.read_bytes(),
                 "mime_type": mime or "application/octet-stream",
             })
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
     return out
 
@@ -114,7 +114,7 @@ async def send_email(
                         }
                         for a in req.attachments
                     ]
-                except Exception as exc:  # noqa: BLE001
+                except Exception as exc:
                     raise HTTPException(
                         status_code=400,
                         detail=f"Invalid attachment encoding: {exc}",
@@ -129,7 +129,7 @@ async def send_email(
             # Append the account's HTML signature once, here at the single send
             # choke point (with a plain-text fallback), so every reply / new
             # message carries it. The drafter no longer bakes it into the body.
-            from gateway.routes.email.signature import build_signed_bodies  # noqa: PLC0415
+            from gateway.routes.email.signature import build_signed_bodies
             sig_row = (await db.execute(text(
                 "SELECT signature FROM email_assistant_settings "
                 "WHERE account_id = :aid"
@@ -171,7 +171,7 @@ async def send_email(
         # If this was a reply, learn from how the user edited the AI's draft.
         if req.reply_to_message_id and req.body_text and reply_thread_id:
             try:
-                from gateway.routes.email.automation import (  # noqa: PLC0415
+                from gateway.routes.email.automation import (
                     _cleanup_thread_drafts,
                     _learn_from_sent,
                     _mark_thread_replied,
@@ -188,7 +188,7 @@ async def send_email(
                 # Trash leftover drafts in the thread (AI draft / auto-save).
                 background.add_task(
                     _cleanup_thread_drafts, req.account_id, reply_thread_id)
-            except Exception:  # noqa: BLE001
+            except Exception:
                 pass
 
         return {"id": msg_id, "ok": True}
@@ -211,11 +211,11 @@ async def import_artifact(
     workspace (``agent-data/``) so it can be attached to emails and browsed /
     downloaded in the email artifact picker. Returns the new
     email-assistant-relative path. Path-traversal-safe."""
-    import shutil  # noqa: PLC0415
-    from pathlib import Path  # noqa: PLC0415
+    import shutil
+    from pathlib import Path
 
     from gateway.routes.workspace import \
-        _agent_workspace_dir  # noqa: PLC0415
+        _agent_workspace_dir
 
     src_ws = _agent_workspace_dir(req.source_agent)
     dst_ws = _agent_workspace_dir("email-assistant")

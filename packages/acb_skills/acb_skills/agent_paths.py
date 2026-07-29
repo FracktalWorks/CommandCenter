@@ -74,7 +74,7 @@ _SLUG_READABLE_MAX = 48
 
 def _configured_clone_dir() -> Path:
     """The configured clone root, matching every other consumer's fallback."""
-    from acb_common import get_settings  # noqa: PLC0415
+    from acb_common import get_settings
 
     settings = get_settings()
     return Path(

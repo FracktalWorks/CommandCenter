@@ -1019,8 +1019,15 @@ history, forker owns the new private draft); templates gallery — **shipped**
 (`apps.is_template`, toggled via the existing generic `PATCH /{slug}`; the
 gallery's "Templates" filter pill client-side-filters the already-fetched
 `GET /apps` list — no new listing endpoint; "Use" on a template card calls the
-same `POST /{slug}/fork` and lands in the new copy's editor); suggest-a-change —
-remaining.
+same `POST /{slug}/fork` and lands in the new copy's editor); mobile design
+philosophy — **shipped** (a "Mobile & responsive layout" section in
+`agent-app-builder/instructions.md` — keep the viewport meta, reflow over
+fixed widths, the block-kit classes already do this; a desktop/phone-width
+preview toggle in the Workshop's Preview tab, so it can be checked before a
+round ends; a touch-target `min-height` bump on the injected design-token CSS
+that every app already gets for free); the Workshop editor's OWN UI is
+mobile-responsive too (§4.2, separate from apps-being-built — see the App
+Workshop mobile-layout work above); suggest-a-change — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers

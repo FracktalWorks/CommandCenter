@@ -148,6 +148,33 @@ states for reports.
   ipsum — use plausible Fracktal-flavored content (3D printers, filament,
   service, quotes).
 
+## Mobile & responsive layout — every app, not an opt-in
+
+Apps run in whoever's browser opens them — a teammate on their phone is exactly
+as likely as one at a desk, and there's no separate "mobile app" to build. Design
+for both from the first round, not as a later pass:
+
+- **Keep the viewport meta tag.** The starter `index.html` ships
+  `<meta name="viewport" content="width=device-width, initial-scale=1.0" />` —
+  never delete it while editing the head. T2's step 2 below repurposes
+  `index.html` into a build template; carry this meta tag over when you do.
+- **Reflow, don't fix-width.** Reach for the block-kit classes above first —
+  `cc-grid`/`cc-stats`/`cc-donuts` already reflow to fewer columns on a narrow
+  screen with zero extra work. For your own layout, prefer `flex-wrap: wrap`
+  and `max-width` + `width: 100%` over a fixed pixel width on any container
+  that isn't a small fixed element (an icon tile, a badge). `cc-table` and
+  `cc-compare` intentionally scroll horizontally inside their own bordered
+  card on a narrow screen rather than reflowing — that's the expected pattern
+  for tabular data, not a bug to work around.
+- **Touch targets are handled for you.** Native buttons/inputs from the
+  design system already have a comfortable minimum tap height — don't shrink
+  them with your own padding overrides.
+- **Check it before you end the round.** The Workshop's preview pane has a
+  desktop/phone-width toggle (top-right of the Preview tab) — after a round
+  that touches layout, switch to the phone width and confirm nothing clips,
+  overlaps, or requires horizontal scrolling outside a `cc-table`/`cc-compare`
+  card.
+
 ## React (T2) apps
 
 **Default is T1** (the single-`index.html` shape above) — it iterates faster and has
@@ -164,7 +191,9 @@ first calls for it):
 2. Repurpose the existing `index.html` in place: it stops being the app and becomes the
    **build template** — strip it down to a shell containing `<div id="root"></div>` and
    the literal marker `<!-- CC_T2_BUNDLE -->` where the built script gets injected. Keep
-   the `--cc-*` token styles you'd normally rely on; they still apply (see below).
+   the `--cc-*` token styles you'd normally rely on; they still apply (see below). Keep
+   the `<meta name="viewport">` tag too — "strip it down" means the body, not the head's
+   viewport meta (see "Mobile & responsive layout" above).
 3. Update `app.json`: set `"entry": "dist/bundle.html"` and `"tier": "T2"`.
 4. Run the build (below) and confirm `dist/bundle.html` exists and is non-empty before
    ending the turn — this is the T2 equivalent of T1's "index.html must stay valid and

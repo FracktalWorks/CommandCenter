@@ -227,11 +227,15 @@ function buildSrcDoc(
   h1, h2, h3 { font-weight: 600; letter-spacing: -0.01em; }
   [data-cc-icon] svg { display: inline-block; vertical-align: middle; }
 
-  /* On-brand native controls so generated interactive UI matches the app. */
+  /* On-brand native controls so generated interactive UI matches the app.
+     min-height keeps every control's TAP target comfortable on a touch
+     screen (published apps run in whoever's browser opens them, phone
+     included) without changing the compact visual size — padding still
+     controls how the control LOOKS, min-height only pads the hit area. */
   button, .cc-btn {
     font: inherit; cursor: pointer; border-radius: calc(var(--cc-radius) - 0.25rem);
     border: 1px solid var(--cc-border); background: var(--cc-secondary);
-    color: var(--cc-fg); padding: 0.4rem 0.8rem;
+    color: var(--cc-fg); padding: 0.4rem 0.8rem; min-height: 2.25rem;
     transition: background 0.2s var(--cc-ease), border-color 0.2s var(--cc-ease);
   }
   button:hover, .cc-btn:hover { border-color: var(--cc-primary); }
@@ -241,14 +245,17 @@ function buildSrcDoc(
   input, select, textarea {
     font: inherit; color: var(--cc-fg); background: var(--cc-card);
     border: 1px solid var(--cc-border); border-radius: calc(var(--cc-radius) - 0.25rem);
-    padding: 0.35rem 0.55rem; outline: none;
+    padding: 0.35rem 0.55rem; outline: none; min-height: 2.25rem;
   }
   input:focus, select:focus, textarea:focus {
     border-color: var(--cc-primary);
     box-shadow: 0 0 0 3px ${dark ? "hsl(198 89% 50% / 0.2)" : "hsl(198 89% 45% / 0.2)"};
   }
+  /* Native checkbox/radio sizing is a well-established browser default —
+     don't stretch it to the min-height above. */
+  input[type="checkbox"], input[type="radio"] { min-height: 0; }
   input[type="range"] {
-    -webkit-appearance: none; appearance: none; height: 6px; padding: 0;
+    -webkit-appearance: none; appearance: none; height: 6px; min-height: 0; padding: 0;
     border: none; border-radius: 999px; background: var(--cc-secondary);
   }
   input[type="range"]::-webkit-slider-thumb {

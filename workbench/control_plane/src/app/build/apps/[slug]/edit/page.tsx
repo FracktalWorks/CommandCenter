@@ -37,12 +37,14 @@ import {
   History,
   Loader2,
   Lock,
+  Monitor,
   Play,
   Plug,
   Plus,
   RefreshCw,
   Rocket,
   Save,
+  Smartphone,
   Sparkles,
   Trash2,
   Wrench,
@@ -775,6 +777,11 @@ function Workshop({ slug }: { slug: string }) {
   const [loadError, setLoadError] = useState<string | null>(null);
   const [files, setFiles] = useState<AppFile[]>([]);
   const [view, setView] = useState<"preview" | "code" | "tests">("preview");
+  // Preview device — desktop (fills the pane) or a phone-width frame, so an
+  // app can be checked at both sizes without leaving the Workshop.
+  const [previewDevice, setPreviewDevice] = useState<"desktop" | "mobile">(
+    "desktop",
+  );
   const [showPublish, setShowPublish] = useState(false);
 
   // Simple (chat + preview only) vs Advanced (adds Code/Tests + the file
@@ -1780,13 +1787,50 @@ function Workshop({ slug }: { slug: string }) {
                   </span>
                 ) : null}
                 <div className="flex-1" />
+                {/* Desktop/mobile preview — same srcDoc, just a narrower
+                    frame; lets the app be checked at both sizes without
+                    leaving the Workshop. */}
+                <div className="flex items-center rounded-lg border border-border p-0.5 shrink-0">
+                  <button
+                    onClick={() => setPreviewDevice("desktop")}
+                    title="Preview at desktop width"
+                    className={`p-1 rounded-md tech-transition ${
+                      previewDevice === "desktop"
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Monitor className="w-3.5 h-3.5" />
+                  </button>
+                  <button
+                    onClick={() => setPreviewDevice("mobile")}
+                    title="Preview at phone width (390px)"
+                    className={`p-1 rounded-md tech-transition ${
+                      previewDevice === "mobile"
+                        ? "text-primary bg-primary/10"
+                        : "text-muted-foreground hover:text-foreground"
+                    }`}
+                  >
+                    <Smartphone className="w-3.5 h-3.5" />
+                  </button>
+                </div>
                 <span className="font-mono text-[10px] text-muted-foreground hidden sm:block">
                   sandboxed · opaque origin
                 </span>
               </div>
-              <div className="flex-1 min-h-0 flex flex-col">
+              <div
+                className={`flex-1 min-h-0 flex flex-col ${
+                  previewDevice === "mobile" ? "items-center bg-secondary/30 overflow-y-auto py-3" : ""
+                }`}
+              >
                 {srcDoc ? (
-                  <SandboxedHtml chromeless html={srcDoc} theme={theme} />
+                  previewDevice === "mobile" ? (
+                    <div className="w-[390px] max-w-full shrink-0 h-[780px] max-h-full rounded-[2rem] border-4 border-border overflow-hidden shadow-lg bg-background">
+                      <SandboxedHtml chromeless html={srcDoc} theme={theme} />
+                    </div>
+                  ) : (
+                    <SandboxedHtml chromeless html={srcDoc} theme={theme} />
+                  )
                 ) : (
                   <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
                     <Sparkles className="w-6 h-6 text-muted-foreground/50" />

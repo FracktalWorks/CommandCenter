@@ -91,6 +91,62 @@ def _resolve_think_mode(req: AgentRunRequest) -> str:
     return "auto"
 
 
+async def _refuse_if_another_run_is_active(thread_id: str, actor: str) -> None:
+    """409 when starting a run would destroy somebody ELSE's in-flight run.
+
+    Starting a run on an already-active thread cancels the previous one *and*
+    deletes its event log (``run_detached`` → ``mark_active(reset=True)``). That
+    is correct when you supersede your OWN run — steer, retry, Quick action —
+    and destructive the moment two people share a thread: the first person's
+    work vanishes with no error, because the cancel path deliberately suppresses
+    ``RUN_ERROR`` (it treats cancellation as a supersede, not a failure).
+    See ``docs/multiplayer/README.md`` §3.3.
+
+    So the guard keys on WHO owns the live run, not merely on one existing.
+    Every same-user path is untouched; only a different person is refused.
+
+    Fails OPEN — unknown owner (a run predating actor tracking, a Redis hiccup)
+    or an anonymous caller (cron, service-to-service) proceeds. That matches
+    ``_thread_owner_ok``'s contract and the asymmetry behind it: a false refusal
+    blocks legitimate work, while a false allow merely restores today's
+    behaviour.
+
+    When floor control lands (§5.1) the condition becomes "does not hold the
+    floor" and this same 409 grows the steer/queue/request-floor options.
+    """
+    if not actor:
+        return
+    try:
+        from orchestrator.stream_relay import get_run_actor, is_active
+
+        if not await is_active(thread_id):
+            return
+        owner = await get_run_actor(thread_id)
+    except Exception:  # never block a run because the check itself failed
+        _log.warning("agent.active_run_check_failed", thread_id=thread_id[:12])
+        return
+
+    if not owner or owner == actor:
+        return
+
+    _log.info(
+        "agent.run_refused_active_run",
+        thread_id=thread_id[:12], owner=owner[:20], actor=actor[:20],
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "run_in_progress",
+            "message": (
+                f"{owner} has a run in progress on this conversation. "
+                "Starting another would cancel it and discard its transcript."
+            ),
+            "threadId": thread_id,
+            "holder": owner,
+        },
+    )
+
+
 class AgentRunResponse(BaseModel):
     run_id: str
     agent: str
@@ -1510,6 +1566,9 @@ async def run_agent_stream_endpoint(
             _log.warning("agent.run_end_memory_extraction_failed",
                          thread_id=thread_id[:12])
 
+    _actor = (getattr(user, "email", "") or "").strip()
+    await _refuse_if_another_run_is_active(thread_id, _actor)
+
     _think_mode = _resolve_think_mode(req)
 
     agent_gen = run_agent_stream(
@@ -1526,6 +1585,7 @@ async def run_agent_stream_endpoint(
             async for evt in run_detached(
                 thread_id, agent_gen, tee=False,
                 on_complete=_persist_on_complete,
+                actor=_actor or None,
             ):
                 yield f"data: {json.dumps(evt)}\n\n"
         except Exception:  # noqa: BLE001

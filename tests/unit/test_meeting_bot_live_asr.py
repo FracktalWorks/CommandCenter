@@ -219,3 +219,35 @@ def test_undiarized_turn_carries_no_speaker_rather_than_a_wrong_one() -> None:
         "type": "Turn", "transcript": "hello", "end_of_turn": True, "words": [],
     })
     assert "speaker_label" not in out[0]
+
+
+def test_worker_sends_the_model_the_gateway_chose() -> None:
+    """The gateway picks the streaming model (diarization only works on some of
+    them). The worker used to drop it and let AssemblyAI default, so a
+    deployment could configure u3-rt-pro and still get no speakers."""
+    import asyncio
+
+    import pytest
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(live, "LIVE_ASR_URL", "")
+    monkey.setattr(live, "LIVE_TOKEN_URL", "http://gw/token")
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self):
+            return {"provider": "assemblyai", "token": "tok", "model": "u3-rt-pro"}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None): return _Resp()
+
+    import httpx
+    monkey.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+    try:
+        url, _ = asyncio.run(live._resolve_asr())
+    finally:
+        monkey.undo()
+    assert "speech_model=u3-rt-pro" in url
+    assert "speaker_labels=true" in url

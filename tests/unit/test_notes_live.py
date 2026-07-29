@@ -64,13 +64,14 @@ def test_deepgram_live_model_uses_configured_model(monkeypatch) -> None:
     assert live._live_model("deepgram") == "nova-2"
 
 
-def test_assemblyai_live_model_defaults_to_provider_default(monkeypatch) -> None:
-    """Empty → AssemblyAI picks its own default streaming model; overridable per
-    deployment without a code change."""
+def test_assemblyai_live_model_is_pinned_not_left_to_the_provider(monkeypatch) -> None:
+    """This used to send nothing and let AssemblyAI pick. That silently cost us
+    live speaker diarization, which only some streaming models support — so the
+    model is now pinned, and still overridable per deployment."""
     monkeypatch.delenv("ASSEMBLYAI_LIVE_MODEL", raising=False)
-    assert live._live_model("assemblyai") == ""
-    monkeypatch.setenv("ASSEMBLYAI_LIVE_MODEL", "universal-3.5-pro")
-    assert live._live_model("assemblyai") == "universal-3.5-pro"
+    assert live._live_model("assemblyai") == "u3-rt-pro"
+    monkeypatch.setenv("ASSEMBLYAI_LIVE_MODEL", "universal-streaming-english")
+    assert live._live_model("assemblyai") == "universal-streaming-english"
 
 
 # ── guard ────────────────────────────────────────────────────────────────────
@@ -126,3 +127,28 @@ async def test_bot_live_token_open_when_no_shared_secret_is_set(monkeypatch) -> 
     with pytest.raises(HTTPException) as ei:
         await live.bot_live_token(authorization=None)
     assert ei.value.status_code == 503  # reached the provider check, not 401
+
+
+# ── streaming model family ───────────────────────────────────────────────────
+
+def test_streaming_defaults_to_the_model_that_diarizes(monkeypatch) -> None:
+    """Live diarization needs Universal-3 Pro Streaming. On any other streaming
+    model you get a working transcript with every voice merged into one speaker
+    — a silent wrong answer, not an error — so the default has to be the one
+    that works."""
+    monkeypatch.delenv("ASSEMBLYAI_LIVE_MODEL", raising=False)
+    assert live._live_model("assemblyai") == "u3-rt-pro"
+
+
+def test_streaming_model_is_overridable(monkeypatch) -> None:
+    monkeypatch.setenv("ASSEMBLYAI_LIVE_MODEL", "universal-streaming-multilingual")
+    assert live._live_model("assemblyai") == "universal-streaming-multilingual"
+
+
+def test_batch_tier_choice_never_leaks_into_streaming(monkeypatch) -> None:
+    """AssemblyAI's streaming models are a separate family — a batch id like
+    "universal-2" is not a valid streaming model, which is why picking it in
+    Settings -> Models never affected live transcription."""
+    monkeypatch.delenv("ASSEMBLYAI_LIVE_MODEL", raising=False)
+    monkeypatch.setattr(live, "_configured_stt_model", lambda: "assemblyai/universal-2")
+    assert live._live_model("assemblyai") == "u3-rt-pro"

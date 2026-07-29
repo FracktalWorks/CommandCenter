@@ -21,7 +21,7 @@ import { ComposerQuote, AiButton } from "./ComposerAI";
 import { DraftAssistant } from "./DraftAssistant";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
-import { SignaturePreview } from "./SignaturePreview";
+import { getSignatureText, seededBody, stripSignature } from "../lib/signature";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { ContactTrigger, RecipientList } from "./ContactCard";
 import { LabelMenu } from "./LabelMenu";
@@ -68,6 +68,19 @@ export function EmailDetail({ email }: EmailDetailProps) {
   // AI draft/improve bar (sparkles button in the composer footer).
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
+  // The account signature's plain text — it lives IN the reply body (seeded on
+  // open, no separate card); kept here to judge whether the user has typed
+  // anything beyond it (the AI bar's Draft-vs-Improve).
+  const [sigText, setSigText] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void getSignatureText(selectedAccountId).then((s) => {
+      if (alive) setSigText(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [selectedAccountId]);
   const [replyAttachments, setReplyAttachments] = useState<SendAttachment[]>([]);
   const [replyArtifacts, setReplyArtifacts] = useState<ArtifactAttachmentRef[]>([]);
   const [sendErr, setSendErr] = useState<string | null>(null);
@@ -421,10 +434,16 @@ export function EmailDetail({ email }: EmailDetailProps) {
     setAiInstruction("");
     // HTML-only mail (e.g. Outlook) has no bodyText — fall back to the snippet.
     const quoteSrc = src.bodyText || src.snippet || "";
-    // The editable box starts EMPTY (just your new text). The quoted trailing
+    // The editable box starts with just the SIGNATURE (Gmail-style — it's part
+    // of the draft body now, visible upstream too, not a separate card); the
+    // caret stays at the top so typing lands above it. The quoted trailing
     // chain is kept separate in `replyQuote`, shown collapsed below the box and
     // reattached on send — so it can never be edited or AI-rewritten by mistake.
     setReplyBody("");
+    void getSignatureText(selectedAccountId).then((sig) => {
+      // Seed only while the box is still untouched — never clobber typing.
+      if (sig) setReplyBody((prev) => (prev.trim() ? prev : seededBody(sig)));
+    });
     // Reveal Cc/Bcc for Reply All / Forward; hide them for a sender-only Reply.
     setShowReplyCc(mode !== "reply");
     if (mode === "forward") {
@@ -1173,10 +1192,8 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 ))}
               </div>
             )}
-            {/* Signature as it will be appended on send (Outlook/Gmail style). */}
-            {replyMode !== "forward" && (
-              <SignaturePreview accountId={selectedAccountId} />
-            )}
+            {/* The signature is IN the editable body (seeded on open) — no
+                separate preview card; what you see is what the draft stores. */}
             {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
             <ComposerQuote quote={replyQuote} />
             {/* AI draft/improve bar */}
@@ -1185,7 +1202,7 @@ export function EmailDetail({ email }: EmailDetailProps) {
                 instruction={aiInstruction}
                 onInstruction={setAiInstruction}
                 busy={ai.busy}
-                hasText={replyBody.trim().length > 0}
+                hasText={stripSignature(replyBody, sigText).trim().length > 0}
                 hasDraft={ai.hasDraft}
                 steps={ai.steps}
                 thinking={ai.thinking}

@@ -220,6 +220,12 @@ async def _maybe_send_follow_up_reminders(account_id: str) -> dict[str, int | bo
                         # Confidence gate (defense-in-depth): don't persist a
                         # declined / empty draft as a real provider draft.
                         if not _is_no_draft(body):
+                            # Signature-in-body: the nudge draft shows the
+                            # signature upstream too (idempotent).
+                            from gateway.routes.email.signature import (  # noqa: PLC0415
+                                append_signature_text,
+                            )
+                            body = append_signature_text(signature, body)
                             await provider.create_draft(
                                 to=[to],
                                 subject=f"Re: {r.subject or ''}",

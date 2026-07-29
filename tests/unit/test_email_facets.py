@@ -116,6 +116,40 @@ async def test_a_label_with_no_mail_in_this_folder_is_simply_absent() -> None:
     assert "cold email" not in res["labels"]
 
 
+async def test_facets_tally_custom_rule_labels_too() -> None:
+    """Every label the rules write gets a chip — the tally must not be
+    restricted to the built-in vocabulary. A rule with a custom label produced
+    mail that was filterable, but its chip never appeared in the inbox row."""
+    from gateway.routes.email.transport.messages import message_facets
+
+    captured: list[str] = []
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            sql = str(clause)
+            captured.append(sql)
+            if "GROUP BY 1" in sql:
+                return MagicMock(fetchall=MagicMock(return_value=[
+                    MagicMock(label="supplier updates", n=12)]))
+            return MagicMock(fetchone=MagicMock(return_value=MagicMock(
+                total=12, unread=0, uncategorized=0)))
+
+        async def close(self): ...
+
+    with patch("gateway.routes.email.transport.messages._get_db",
+               AsyncMock(return_value=_DB())):
+        res = await message_facets(
+            account_id="acc-1", folder="inbox",
+            user=MagicMock(email="u@x.io"))
+
+    label_sql = next(s for s in captured if "GROUP BY 1" in s)
+    assert "ANY(:known_labels)" not in label_sql  # no allowlist on the tally
+    # Busiest-first and capped, so a runaway AI-resolved label can't flood the
+    # chip row.
+    assert "ORDER BY n DESC" in label_sql and "LIMIT 40" in label_sql
+    assert res["labels"] == {"supplier updates": 12}
+
+
 async def test_facets_bind_the_shared_label_vocabulary() -> None:
     """The uncategorized count must be computed from the same list the filter
     uses, or the chip would advertise a number the filter can't reproduce."""

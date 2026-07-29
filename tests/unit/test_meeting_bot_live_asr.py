@@ -156,3 +156,66 @@ def test_no_source_resolves_to_none(monkeypatch) -> None:
     monkeypatch.setattr(live, "LIVE_ASR_URL", "")
     monkeypatch.setattr(live, "LIVE_TOKEN_URL", "")
     assert asyncio.run(_resolve(live)) is None
+
+
+# ── streaming diarization ────────────────────────────────────────────────────
+
+def test_speaker_labels_are_requested_on_the_socket() -> None:
+    """Streaming does not diarize by default. Omitting this is exactly why live
+    captions arrived with no speaker separation — Deepgram's path asked for
+    `diarize`, AssemblyAI's asked for nothing."""
+    import asyncio
+
+    import pytest
+
+    monkey = pytest.MonkeyPatch()
+    monkey.setattr(live, "LIVE_ASR_URL", "")
+    monkey.setattr(live, "LIVE_TOKEN_URL", "http://gw/token")
+
+    captured = {}
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"provider": "assemblyai", "token": "tok", "model": ""}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def post(self, url, headers=None):
+            captured["url"] = url
+            return _Resp()
+
+    import httpx
+    monkey.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+    try:
+        url, protocol = asyncio.run(live._resolve_asr())
+    finally:
+        monkey.undo()
+    assert protocol == "assemblyai"
+    assert "speaker_labels=true" in url
+
+
+def test_turn_level_speaker_is_mapped_to_our_label_space() -> None:
+    """AssemblyAI says "A"/"B"; the rest of the app speaks S1/S2. A mismatch
+    here would silently break the rename UI and batch reconciliation."""
+    out = live._parse_assemblyai_message({
+        "type": "Turn", "transcript": "hello", "end_of_turn": True, "speaker": "B",
+    })
+    assert out[0]["speaker_label"] == "S2"
+
+
+def test_word_level_speaker_is_read_when_the_turn_has_none() -> None:
+    """The label's position varies by streaming model — reading only one field
+    would present as "diarization is broken"."""
+    out = live._parse_assemblyai_message({
+        "type": "Turn", "transcript": "hello", "end_of_turn": True,
+        "words": [{"start": 0, "end": 10, "speaker": "A"}],
+    })
+    assert out[0]["speaker_label"] == "S1"
+
+
+def test_undiarized_turn_carries_no_speaker_rather_than_a_wrong_one() -> None:
+    out = live._parse_assemblyai_message({
+        "type": "Turn", "transcript": "hello", "end_of_turn": True, "words": [],
+    })
+    assert "speaker_label" not in out[0]

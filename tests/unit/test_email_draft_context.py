@@ -258,8 +258,10 @@ async def test_compose_assist_reply_empty_body_uses_shared_reply_drafter() -> No
         res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
 
     # Draft-from-scratch reply → the shared reply drafter, NOT the lighter compose
-    # path — and the replied-to body (the template) reaches it.
-    assert res["draft"] == "drafted from the template"
+    # path — and the replied-to body (the template) reaches it. The signature
+    # ("sig" from the patched settings) rides IN the returned body now, so the
+    # composer/autosave carry it upstream.
+    assert res["draft"] == "drafted from the template\n\nsig"
     assert "compose" not in calls
     assert calls["agent_email"]["body"] == "TEMPLATE_BODY"
     # Manual "Draft with AI" is interactive → it runs on the account's COMPOSE
@@ -295,8 +297,9 @@ async def test_compose_assist_improve_passes_reply_to_body() -> None:
             account_id="a", body="my rough draft", mode="reply", message_id="m1")
         res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
 
-    # Improve-in-place keeps the compose path, now WITH the replied-to body.
-    assert res["draft"] == "improved draft"
+    # Improve-in-place keeps the compose path, now WITH the replied-to body —
+    # and the returned draft carries the signature in-body.
+    assert res["draft"] == "improved draft\n\nsig"
     assert calls["reply_to_body"] == "TEMPLATE_BODY"
     assert calls["current_body"] == "my rough draft"
     # Interactive improve runs on the compose model too.
@@ -330,7 +333,7 @@ async def test_compose_assist_reply_empty_body_passes_user_instruction() -> None
             instruction="ask what happened to the one we already had")
         res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
 
-    assert res["draft"] == "steered draft"
+    assert res["draft"] == "steered draft\n\nsig"
     assert calls["kwargs"]["extra_instructions"] == \
         "ask what happened to the one we already had"
 
@@ -355,3 +358,64 @@ async def test_agent_draft_reply_weaves_extra_instructions_into_drafter() -> Non
     assert "mention the discount" in calls["instructions"]
     # The confidence gate note still rides along.
     assert _drafting.DRAFT_NO_DRAFT_SENTINEL in calls["instructions"]
+
+
+async def test_compose_assist_signature_only_body_is_a_fresh_draft() -> None:
+    """The composer seeds the signature into the editable body, so a body that
+    is ONLY the signature is an EMPTY draft: it must route to the full reply
+    drafter, never improve-in-place on the boilerplate."""
+    ctx = {"from": "a@x.com", "from_name": "A", "subject": "Re: hi",
+           "body": "TEMPLATE_BODY", "thread": ""}
+    calls: dict = {}
+
+    async def fake_agent_draft(email, *a, **k):
+        calls["used"] = "reply_drafter"
+        return "fresh reply"
+
+    async def fake_compose(**k):
+        calls["used"] = "compose"
+        return "unused"
+
+    with patch.object(_drafting, "_get_db", AsyncMock(return_value=AsyncMock())), \
+            patch.object(_drafting, "_assert_account_owner", AsyncMock()), \
+            patch.object(_drafting, "_load_assistant_about",
+                         AsyncMock(return_value=("about", "Best,\nVijay"))), \
+            patch.object(_drafting, "_account_models",
+                         AsyncMock(return_value={"draft": "tier-powerful",
+                                                 "compose": "tier-fast"})), \
+            patch.object(_drafting, "_build_reply_context",
+                         AsyncMock(return_value=ctx)), \
+            patch.object(_drafting, "_agent_draft_reply", fake_agent_draft), \
+            patch.object(_drafting, "_llm_compose_assist", fake_compose):
+        req = _drafting.ComposeAssistRequest(
+            account_id="a", body="Best,\nVijay", mode="reply", message_id="m1")
+        res = await _drafting.compose_assist(req, SimpleNamespace(email="me@x.com"))
+
+    assert calls["used"] == "reply_drafter"
+    # …and the returned draft carries the signature back in-body.
+    assert res["draft"] == "fresh reply\n\nBest,\nVijay"
+
+
+async def test_learn_from_sent_is_signature_insensitive() -> None:
+    """The sent body carries the in-body signature; the stored AI draft might
+    not (or vice versa). That difference alone is NOT an edit — no extraction
+    may fire on it."""
+    called = {"extract": False}
+
+    async def fake_extract(*a, **k):
+        called["extract"] = True
+        return []
+
+    db = AsyncMock()
+    db.execute.side_effect = [
+        _one(SimpleNamespace(draft_text="Hi A,\n\nThanks!")),  # stored, unsigned
+        MagicMock(),  # DELETE of the consumed draft row
+    ]
+    with patch.object(_drafting, "_get_db", AsyncMock(return_value=db)), \
+            patch.object(_drafting, "_account_signature",
+                         AsyncMock(return_value="Best,\nVijay")), \
+            patch.object(_drafting, "_llm_extract_reply_memories", fake_extract):
+        await _drafting._learn_from_sent(
+            "acc", "t1", "Hi A,\n\nThanks!\n\nBest,\nVijay")
+
+    assert called["extract"] is False  # signature-only diff → unchanged

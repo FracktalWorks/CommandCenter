@@ -110,9 +110,15 @@ async def _digest_top_senders(
 # A thread whose LAST message sits in trash/junk is not an open loop — the user
 # disposed of it. Counting it as "awaiting your reply" was a live lie (a trashed
 # sick-leave thread sat in the backlog). NULL folder (unmirrored) stays counted.
+# A currently-SNOOZED conversation is excluded the same way: the inbox hides it
+# until it wakes, and the dashboard's own Snooze action dropped the row only for
+# the quiet re-sync to bring it straight back (and the needs-reply count never
+# moved). It reappears — here and in the inbox — the moment snoozed_until
+# passes, with no scheduler involved.
 _LIVE_THREAD = ("NOT EXISTS (SELECT 1 FROM email_messages tem "
                 "WHERE tem.id = ts.last_message_id "
-                "AND LOWER(COALESCE(tem.folder, '')) IN ('trash', 'junk'))")
+                "AND (LOWER(COALESCE(tem.folder, '')) IN ('trash', 'junk') "
+                "OR tem.snoozed_until > now()))")
 
 
 async def _digest_status_count(db: Any, account_id: str, status: str) -> int:
@@ -234,7 +240,11 @@ async def _digest_commitments(
     (see tasks/email_link.py). ``include_undated`` (dashboard) adds the open
     promises with NO due date — 3 of the 4 live commitments had none and were
     invisible to the horizon filter. Best-effort: the tasks feature may be
-    absent, and a digest must never fail because of it."""
+    absent, and a digest must never fail because of it.
+
+    Each row carries ``message_id`` — the latest message of the linked thread —
+    so the dashboard can open the email the commitment came from (context on
+    what was promised, not just the captured title)."""
     try:
         # ``:aid`` binds ONCE, against the uuid column. The json text on the
         # other side compares to ``ea.id::text`` — binding the same parameter in
@@ -243,10 +253,18 @@ async def _digest_commitments(
         rows = (await db.execute(text(
             """SELECT gi.id AS task_id, gi.title,
                       gi.origin->>'thread_id' AS thread_id,
+                      lm.id AS message_id,
                       to_char(gi.due_at, 'Mon DD') AS due_label,
                       (gi.due_at < now()) AS overdue
                FROM gtd_items gi
                JOIN email_accounts ea ON ea.id = :aid
+               LEFT JOIN LATERAL (
+                   SELECT em.id FROM email_messages em
+                   WHERE em.account_id = ea.id
+                     AND em.thread_id = gi.origin->>'thread_id'
+                   ORDER BY em.received_at DESC NULLS LAST
+                   LIMIT 1
+               ) lm ON true
                WHERE gi.user_id = ea.user_id
                  AND gi.origin->>'account_id' = ea.id::text
                  AND gi.disposition NOT IN ('DONE', 'TRASH')
@@ -271,7 +289,9 @@ async def _digest_commitments(
         return []
     return [{"title": (r.title or "(untitled)"), "due": r.due_label,
              "overdue": bool(r.overdue), "task_id": str(r.task_id),
-             "thread_id": r.thread_id} for r in rows]
+             "thread_id": r.thread_id,
+             "message_id": (str(r.message_id) if r.message_id else None)}
+            for r in rows]
 
 
 def _digest_is_empty(digest: dict) -> bool:
@@ -523,7 +543,10 @@ async def _generate_digest(
     # going stale (aging Reply-Zero backlog), who owes US the next move
     # (awaiting), and what I promised to do (commitments). Independent of the
     # digest's category window.
-    list_cap = 50 if full else 5
+    # Dashboard cap: high enough that the list matches the stat-tile count for
+    # any realistic mailbox — at 50 the badge said "104 waiting" while the list
+    # silently held 50, and there was no way to see (or close) the rest.
+    list_cap = 500 if full else 5
     # Dashboard ranks the reply queue by urgency (act first); the emailed brief
     # keeps it oldest-first (what's going stale).
     backlog = await _digest_backlog_aging(

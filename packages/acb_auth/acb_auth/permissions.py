@@ -60,7 +60,7 @@ from typing import Iterable
 # ── Vocabulary ──────────────────────────────────────────────────────────────
 
 #: Nav panes / product surfaces. Kept in sync with the `feature_catalog` table
-#: (infra/postgres/128_org_access_control.sql) and the frontend's nav.ts.
+#: (infra/postgres/130_org_access_control.sql) and the frontend's nav.ts.
 FEATURES: tuple[str, ...] = (
     "chat",
     "email",

@@ -106,7 +106,7 @@ async def get_org_id(db: Any) -> str:
             status_code=503,
             detail=(
                 "Organization not provisioned. Apply "
-                "infra/postgres/128_org_access_control.sql."
+                "infra/postgres/130_org_access_control.sql."
             ),
         )
     return row["id"]

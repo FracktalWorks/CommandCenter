@@ -418,6 +418,7 @@ PUBLIC_ROUTES: frozenset[str] = frozenset({
     "/whatsapp/bridge/ingest",
     "/whatsapp/bridge/reclassify",
     "/whatsapp/bridge/labels",
+    "/whatsapp/bridge/avatars",
     "/whatsapp/bridge/paired",
 
     # Meeting-bot worker callbacks — machine-authed by MEETING_BOT_TOKEN.

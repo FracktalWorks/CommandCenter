@@ -385,6 +385,53 @@ def require_feature(slug: str) -> Depends:
     return require_permission(f"feature:{slug}")
 
 
+def _route_template(request: Request) -> str:
+    """The matched route's path template, e.g. ``/email/oauth/{provider}/callback``.
+
+    Always the template, never the concrete URL: matching on the URL would let
+    a path parameter be crafted to spell an exempt path.
+    """
+    route = request.scope.get("route")
+    return getattr(route, "path", None) or request.url.path
+
+
+def require_authenticated(public: Collection[str] = ()) -> Depends:
+    """App-wide default-deny: 401 unless the caller proved who they are.
+
+    BO-2 residual #1. ``get_current_user`` never rejects — it *labels*, which
+    means every route was open unless it remembered to opt in to a guard. The
+    failure mode of opt-in security is the route nobody opted in, and that is
+    exactly what happened: ``/agent/workspace/{id}/history`` and
+    ``/promote`` were reading and writing agent workspaces anonymously.
+
+    Attach once at ``FastAPI(dependencies=[...])`` so a route added tomorrow is
+    covered without anyone remembering anything.
+
+    "Authenticated" means either a valid internal bearer token or a
+    domain-verified ``X-User-Email`` that arrived with one — i.e. anything
+    ``get_current_user`` resolved to a non-empty email. It says nothing about
+    *authorization*; ``require_permission`` and friends still do that.
+
+    ``public`` holds route templates that must stay reachable anonymously.
+    Each one authenticates itself by another means (provider signature, HMAC
+    state, shared secret) or is a liveness probe. Gating them would not
+    restrict access, it would break ingestion and sign-in.
+    """
+    public_paths = frozenset(public)
+
+    async def _check(
+        request: Request,
+        user: Annotated[UserContext, Depends(get_current_user)],
+    ) -> UserContext:
+        if _route_template(request) in public_paths:
+            return user
+        if not user.email:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        return user
+
+    return Depends(_check)
+
+
 def require_feature_router(
     slug: str, *, exempt: Collection[str] = ()
 ) -> Depends:
@@ -421,9 +468,7 @@ def require_feature_router(
         request: Request,
         user: Annotated[UserContext, Depends(get_current_user)],
     ) -> UserContext:
-        route = request.scope.get("route")
-        template = getattr(route, "path", None) or request.url.path
-        if template in exempt_paths:
+        if _route_template(request) in exempt_paths:
             return user
         if not user.email:
             raise HTTPException(status_code=401, detail="Authentication required")

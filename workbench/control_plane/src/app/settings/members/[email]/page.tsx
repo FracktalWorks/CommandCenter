@@ -11,7 +11,11 @@
  *
  *     Inherit   use whatever the role says (no override row)
  *     Allow     grant it to this person regardless of role
- *     Deny      take it away from this person regardless of role  ← deny wins
+ *     Deny      take it away from this person regardless of role
+ *
+ * Allow and Deny both beat the role. Against each other the more specific one
+ * wins, which is what makes "deny all agents, allow these two" work — see the
+ * resolution rule in acb_auth/permissions.py.
  *
  * "Inherit" is the default and stays visually neutral, because a screen where
  * every row looks deliberately configured hides the two rows that actually are.

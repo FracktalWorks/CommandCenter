@@ -52,6 +52,8 @@ import {
 import AgentChat from "@/components/AgentChat";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import Tabs from "@/components/Tabs";
+import { useMobileDrawer } from "@/components/AppShell";
+import { useViewMode } from "@/components/ViewModeProvider";
 import {
   createSession,
   getSessions,
@@ -794,6 +796,38 @@ function Workshop({ slug }: { slug: string }) {
       if (!next) setView("preview");
       return next;
     });
+  }, []);
+
+  // Mobile: chat and the preview/code/tests pane are full-screen alternatives
+  // (desktop shows both side by side), switched via AppShell's bottom nav —
+  // same "one active pane at a time, driven by a shared window event" pattern
+  // as the email/tasks/whatsapp mobile layouts (AppShell.tsx's
+  // MobileBottomNavInner dispatches "cc-mobile-nav"; this page owns the
+  // "workshop-*" detail values). Defaults to chat: that's where a session
+  // starts (there's nothing to preview yet on a fresh app).
+  const { isMobile } = useViewMode();
+  const { open: openMobileDrawer, close: closeMobileDrawer } = useMobileDrawer();
+  const [mobilePane, setMobilePane] = useState<"chat" | "main">("chat");
+  useEffect(() => {
+    const onNav = (e: Event) => {
+      const detail = (e as CustomEvent<string>).detail;
+      if (detail === "workshop-chat") {
+        setMobilePane("chat");
+      } else if (detail === "workshop-preview") {
+        setMobilePane("main");
+        setView("preview");
+      } else if (detail === "workshop-code") {
+        setMobilePane("main");
+        setAdvanced(true);
+        setView("code");
+      } else if (detail === "workshop-tests") {
+        setMobilePane("main");
+        setAdvanced(true);
+        setView("tests");
+      }
+    };
+    window.addEventListener("cc-mobile-nav", onNav);
+    return () => window.removeEventListener("cc-mobile-nav", onNav);
   }, []);
 
   // Builder chat session (one per app).
@@ -1556,7 +1590,11 @@ function Workshop({ slug }: { slug: string }) {
           </span>
         </div>
 
-        <div className="flex-1 flex justify-center">
+        {/* The bottom nav's Chat/Preview/Code/Tests tabs cover this switch on
+            mobile — a second, redundant control here would just eat space
+            that phones don't have. */}
+        <div className={isMobile ? "flex-1" : "flex-1 flex justify-center"}>
+          {!isMobile && (
           <Tabs
             tabs={
               advanced
@@ -1572,6 +1610,7 @@ function Workshop({ slug }: { slug: string }) {
             variant="segmented"
             className="border-b-0! px-0! sm:px-0! pt-0! pb-0!"
           />
+          )}
         </div>
 
         <button
@@ -1608,7 +1647,7 @@ function Workshop({ slug }: { slug: string }) {
 
           {/* Checkpoints popover */}
           {showHistory && (
-            <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-border bg-card shadow-lg z-40 p-3 flex flex-col gap-1 text-xs">
+            <div className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-card shadow-lg z-40 p-3 flex flex-col gap-1 text-xs">
               <span className="text-[10px] uppercase tracking-wide text-muted-foreground px-2 py-1">
                 Checkpoints
               </span>
@@ -1708,9 +1747,17 @@ function Workshop({ slug }: { slug: string }) {
       </div>
 
       {/* ── Split main ──────────────────────────────────────────────── */}
+      {/* Desktop: both panes side by side. Mobile: one full-screen pane at a
+          time (mobilePane), switched via the bottom nav — `hidden` rather
+          than unmounting so the chat session/editor/preview iframe stay
+          alive underneath instead of resetting on every tab switch. */}
       <div className="flex-1 flex min-h-0">
         {/* Left: preview / code */}
-        <div className="flex-1 min-w-0 flex flex-col min-h-0">
+        <div
+          className={`flex-1 min-w-0 flex-col min-h-0 ${
+            isMobile ? (mobilePane === "main" ? "flex" : "hidden") : "flex"
+          }`}
+        >
           {view === "preview" ? (
             <>
               {/* Preview toolbar */}
@@ -1811,8 +1858,17 @@ function Workshop({ slug }: { slug: string }) {
             </>
           ) : view === "code" ? (
             <div className="relative flex-1 min-h-0 flex">
-              {/* File tree */}
-              <div className="w-56 shrink-0 border-r border-border overflow-y-auto p-2 flex flex-col">
+              {/* File tree — inline column on desktop; on mobile it's reached
+                  via the "Files" button below (a drawer, same secondary-panel
+                  pattern every other mobile page uses), not shown inline —
+                  there isn't room for a fixed column next to the editor. */}
+              <div
+                className={
+                  isMobile
+                    ? "hidden"
+                    : "w-56 shrink-0 border-r border-border overflow-y-auto p-2 flex flex-col"
+                }
+              >
                 <div className="flex items-center justify-between px-2 py-1.5">
                   <span className="text-[10px] uppercase tracking-wide text-muted-foreground truncate">
                     {app.slug}
@@ -1865,6 +1921,42 @@ function Workshop({ slug }: { slug: string }) {
               {/* Editor */}
               <div className="flex-1 min-w-0 flex flex-col min-h-0">
                 <div className="flex items-center gap-2 px-3 py-1.5 border-b border-border shrink-0">
+                  {isMobile && (
+                    <button
+                      onClick={() =>
+                        openMobileDrawer(
+                          <div className="flex flex-col p-2">
+                            <div className="px-2 py-1.5 text-[10px] uppercase tracking-wide text-muted-foreground truncate">
+                              {app.slug} — files
+                            </div>
+                            {files.length === 0 ? (
+                              <p className="text-[11px] text-muted-foreground px-2 py-1">
+                                No files yet.
+                              </p>
+                            ) : (
+                              <FileTreeView
+                                dir={fileTree}
+                                pathPrefix=""
+                                selectedPath={selectedPath}
+                                onSelect={(p) => {
+                                  selectFile(p);
+                                  closeMobileDrawer();
+                                }}
+                                onDelete={setDeletePath}
+                                collapsedDirs={collapsedDirs}
+                                onToggleDir={toggleDir}
+                              />
+                            )}
+                          </div>
+                        )
+                      }
+                      title="Files"
+                      className="flex items-center gap-1.5 text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition shrink-0"
+                    >
+                      <Folder className="w-3 h-3" />
+                      Files
+                    </button>
+                  )}
                   {selectedPath ? (
                     <>
                       <FileCode className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
@@ -2139,7 +2231,11 @@ function Workshop({ slug }: { slug: string }) {
         </div>
 
         {/* Right: build chat */}
-        <div className="w-[400px] shrink-0 border-l border-border flex flex-col min-h-0 bg-card">
+        <div
+          className={`${isMobile ? "flex-1" : "w-[400px] shrink-0"} border-l border-border flex-col min-h-0 bg-card ${
+            isMobile ? (mobilePane === "chat" ? "flex" : "hidden") : "flex"
+          }`}
+        >
           <div className="flex items-center gap-2 px-4 h-10 border-b border-border shrink-0">
             <Sparkles className="w-4 h-4 text-accent" />
             <div className="min-w-0">

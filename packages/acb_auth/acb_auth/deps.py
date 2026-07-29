@@ -34,9 +34,10 @@ Service-to-service (internal):
 from __future__ import annotations
 
 import os
+from collections.abc import Collection
 from typing import Annotated
 
-from fastapi import Depends, Header, HTTPException
+from fastapi import Depends, Header, HTTPException, Request
 
 from acb_auth.access import SERVICE_ACCESS, resolve_access, resolve_identity
 from acb_auth.permissions import NO_ACCESS
@@ -298,6 +299,58 @@ def require_permission(*permissions: str) -> Depends:
 def require_feature(slug: str) -> Depends:
     """Sugar for ``require_permission(f"feature:{slug}")``."""
     return require_permission(f"feature:{slug}")
+
+
+def require_feature_router(
+    slug: str, *, exempt: Collection[str] = ()
+) -> Depends:
+    """Gate a whole feature surface at the router, with declared exemptions.
+
+    Attach to an ``APIRouter(dependencies=[...])`` so every route under a
+    prefix is covered by construction. A new endpoint added to that router is
+    then gated by default, which is the property that matters: the failure
+    mode of per-route gating is the route someone forgets.
+
+    ``exempt`` holds **route path templates** (e.g.
+    ``"/email/oauth/{provider}/callback"``) that must stay reachable without a
+    member. These are not oversights — a provider webhook and an OAuth
+    redirect arrive with no session and no internal token, so gating them
+    would break message ingestion and account linking rather than merely
+    restrict them. Listing them explicitly keeps the set greppable and small;
+    matching on the *template* rather than the concrete URL means a path
+    parameter can never be used to slip past the gate.
+
+        router = APIRouter(
+            prefix="/whatsapp",
+            dependencies=[require_feature_router("whatsapp",
+                                                 exempt=["/whatsapp/webhook"])],
+        )
+
+    Exempting a path here removes the *feature* check only; whatever
+    authentication that endpoint already does for itself (signature
+    verification, HMAC-signed OAuth state) is untouched.
+    """
+    permission = f"feature:{slug}"
+    exempt_paths = frozenset(exempt)
+
+    async def _check(
+        request: Request,
+        user: Annotated[UserContext, Depends(get_current_user)],
+    ) -> UserContext:
+        route = request.scope.get("route")
+        template = getattr(route, "path", None) or request.url.path
+        if template in exempt_paths:
+            return user
+        if not user.email:
+            raise HTTPException(status_code=401, detail="Authentication required")
+        if not user.has_permission(permission):
+            raise HTTPException(
+                status_code=403,
+                detail=f"Forbidden: missing permission '{permission}'.",
+            )
+        return user
+
+    return Depends(_check)
 
 
 def require_any_permission(*permissions: str) -> Depends:

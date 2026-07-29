@@ -29,6 +29,7 @@ from acb_auth import (
     assert_can_run_agent,
     get_current_user,
     require_internal_auth,
+    require_permission,
 )
 from acb_common import get_logger, get_settings
 from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
@@ -789,7 +790,7 @@ async def list_agents(
     return merged
 
 
-@router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone")
+@router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone", dependencies=[require_permission("agents:manage")])
 async def pull_agent(
     name: str,
     user: UserContext = Depends(get_current_user),
@@ -902,7 +903,7 @@ async def pull_agent(
     }
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, summary="Register an agent from a GitHub repo")
+@router.post("", status_code=status.HTTP_201_CREATED, summary="Register an agent from a GitHub repo", dependencies=[require_permission("agents:manage")])
 async def register_agent(
     req: RegisterAgentRequest,
     background_tasks: BackgroundTasks,
@@ -1097,7 +1098,7 @@ def _cleanup_agent_workspace(agent_name: str) -> bool:
         return False
 
 
-@router.delete("/{name}", summary="Remove a user-registered agent")
+@router.delete("/{name}", summary="Remove a user-registered agent", dependencies=[require_permission("agents:manage")])
 async def remove_agent(
     name: str,
     user: UserContext = Depends(get_current_user),
@@ -1158,7 +1159,7 @@ class PatchAgentRequest(BaseModel):
     status: str | None = None
 
 
-@router.patch("/{name}", summary="Update metadata for a user-registered agent")
+@router.patch("/{name}", summary="Update metadata for a user-registered agent", dependencies=[require_permission("agents:manage")])
 async def patch_agent(
     name: str,
     req: PatchAgentRequest,
@@ -1781,6 +1782,7 @@ async def run_agent_async(
     from orchestrator.executor import run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
+    assert_can_run_agent(user, agent)
     run_id = req.run_id or str(uuid.uuid4())
 
     async def _run() -> None:

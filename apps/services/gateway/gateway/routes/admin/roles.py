@@ -32,6 +32,7 @@ from gateway.routes.admin._common import (
     get_org_id,
     get_role,
     invalidate_for,
+    record_admin_change,
     require_admin_user,
     router,
 )
@@ -210,6 +211,8 @@ async def create_role(
         await db.commit()
 
     _log.info("role_created", slug=slug, by=admin.email, permissions=permissions)
+    record_admin_change(admin.email, "org.role_created", f"role:{slug}",
+                        permissions=permissions)
     return RoleEntry(
         slug=slug,
         display_name=req.display_name or slug,
@@ -274,6 +277,8 @@ async def update_role(
     # cache cannot be targeted, so clear it wholesale.
     invalidate_for(None)
     _log.info("role_updated", slug=slug, by=admin.email)
+    record_admin_change(admin.email, "org.role_updated", f"role:{slug}",
+                        permissions=permissions)
     return RoleEntry(
         slug=role["slug"],
         display_name=role["display_name"],
@@ -319,6 +324,7 @@ async def delete_role(
 
     invalidate_for(None)
     _log.info("role_deleted", slug=slug, by=admin.email)
+    record_admin_change(admin.email, "org.role_deleted", f"role:{slug}")
     return {"status": "deleted", "slug": slug}
 
 

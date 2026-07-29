@@ -33,6 +33,7 @@ from gateway.routes.apps._common import (
     parse_db_manifest,
     publish_app_activity,
     read_workspace_manifest,
+    require_app_author,
     require_app_user,
     role_for,
     router,
@@ -339,7 +340,7 @@ async def list_apps(
 @router.post("", response_model=AppDetail)
 async def create_app(
     body: AppCreate,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> AppDetail:
     """Create the row + scaffold the workspace (manifest, starter, git)."""
     name = body.name.strip()
@@ -394,7 +395,7 @@ async def create_app(
 @router.post("/{slug}/fork", response_model=AppDetail)
 async def fork_app(
     slug: str,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> AppDetail:
     """Duplicate *slug*'s current SOURCE FILES into a brand-new app, owned
     by the caller — view access is enough (no edit grant required), the same
@@ -516,7 +517,7 @@ async def get_app(
 async def patch_app(
     slug: str,
     body: AppPatch,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> AppDetail:
     fields = {k: v for k, v in body.model_dump().items() if v is not None}
     if "visibility" in fields and fields["visibility"] not in VISIBILITIES:
@@ -555,7 +556,7 @@ async def patch_app(
 @router.delete("/{slug}")
 async def delete_app(
     slug: str,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Soft-archive (edit-gated); a second delete by the OWNER of an already
     archived app removes the row (cascades) and its workspace folder."""

@@ -20,10 +20,14 @@ from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
+from acb_auth import require_feature_router
 
 _log = get_logger("gateway.tasks")
 
-router = APIRouter(prefix="/tasks", tags=["tasks"])
+router = APIRouter(
+    prefix="/tasks", tags=["tasks"],
+    dependencies=[require_feature_router("tasks")],
+)
 
 
 # ── Models (snake_case — the frontend maps to camelCase) ─────────────────────

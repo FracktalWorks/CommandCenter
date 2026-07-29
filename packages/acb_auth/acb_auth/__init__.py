@@ -14,6 +14,7 @@ from acb_auth.deps import (
     get_current_user,
     require_any_permission,
     require_feature,
+    require_feature_router,
     require_internal_auth,
     require_permission,
     require_role,
@@ -44,6 +45,7 @@ __all__ = [
     "require_permission",
     "require_any_permission",
     "require_feature",
+    "require_feature_router",
     "require_internal_auth",
     "assert_can_run_agent",
     # permission model

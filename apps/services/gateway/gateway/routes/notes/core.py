@@ -19,10 +19,21 @@ from typing import Any
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter
 from pydantic import BaseModel
+from acb_auth import require_feature_router
 
 _log = get_logger("gateway.notes")
 
-router = APIRouter(prefix="/notes", tags=["notes"])
+router = APIRouter(
+    prefix="/notes", tags=["notes"],
+    # Exempt: the meeting-bot worker's callbacks, machine-authed by
+    # MEETING_BOT_TOKEN (live_transcript._check_bot_auth). The browser
+    # recorder's twin route (/live/browser-segment) is user-authed and stays
+    # gated — that split is the point.
+    dependencies=[require_feature_router("notes", exempt=[
+        "/notes/meetings/{meeting_id}/live/segment",
+        "/notes/stt/bot-live-token",
+    ])],
+)
 
 
 # ── Models (snake_case — same convention as tasks) ───────────────────────────

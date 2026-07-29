@@ -185,10 +185,19 @@ From CommandCenter itself the same detail is at
 `GET /notes/meetings/{meeting_id}/bot/diagnostics`, and the failure text now
 shows on the Notes screen for 30 minutes after it happens.
 
-The three failures that look identical from outside, and their fixes:
+The failures that look identical from outside, and their fixes:
 
 | Symptom | What it means | Fix |
 |---|---|---|
 | `Nobody admitted the notetaker within 150s` | It knocked; no one answered. | Click **Admit** when it knocks, or raise `MEET_JOIN_TIMEOUT`. |
 | `Google Meet refused the join` | Signed-out guests can't enter this call. | Host starts the call first, or loosen the meeting's access setting. |
+| `Meet showed its landing page` | Meet decided the visitor was a bot (or the link invalid) and client-side-rendered its *marketing* page — no green room, no join button. The 2026-07-29 production failure. | The worker now launches Chrome with automation hidden (`--disable-blink-features=AutomationControlled`, no `--enable-automation`) and canonicalises invite links to the bare `meet.google.com/xxx-yyyy-zzz?hl=en` form, which prevents the known triggers. If it recurs, Meet has tightened detection — check the screenshot and update `looks_like_landing` / the launch flags. |
 | `No join button on the meeting page` | A selector missed, or a dialog covered it. | Read the `controls` list in the error — it names the buttons that *were* there. |
+
+Every status change is also mirrored to `/data/{job}.state.json`, so a worker
+restart (deploys recreate the container) no longer 404s its bots or destroys
+the evidence: after a restart, `GET /bots/{id}` serves the persisted terminal
+state, and an interrupted in-flight job comes back as a clean `failed` with an
+explanation. The deploy itself also refuses to recreate the container while
+`/health` reports an active bot. From the Notes UI, a failed join now shows on
+the meeting page with the error, the button list, and the screenshot.

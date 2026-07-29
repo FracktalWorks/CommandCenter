@@ -18,9 +18,11 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import signal
 import subprocess
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 _log = logging.getLogger("meeting_bot.meet")
 
@@ -234,6 +236,50 @@ def classify_body(body: str) -> str | None:
     return None
 
 
+_MEET_CODE = re.compile(r"^/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:[/?#]|$)", re.I)
+
+
+def canonical_meet_url(url: str) -> str:
+    """Reduce a meet.google.com link to its canonical bare form, in English.
+
+    Invite links arrive dressed up — ``?authuser=0&hs=122``, calendar tracking
+    params — and some of those decorations make Meet route a signed-out browser
+    to its marketing page instead of the green room. The bare
+    ``https://meet.google.com/xxx-yyyy-zzz`` form is the one guests handle most
+    reliably; ``hl=en`` pins the UI language so the phrase lists above match on
+    any box. Non-Meet URLs and unusual shapes (``/lookup/…``) pass through
+    untouched.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if (parts.hostname or "").lower() != "meet.google.com":
+        return url
+    m = _MEET_CODE.match(parts.path or "")
+    if not m:
+        return url
+    return f"https://meet.google.com/{m.group(1).lower()}?hl=en"
+
+
+def looks_like_landing(url: str, body: str) -> bool:
+    """Whether the page is Meet's *marketing* page rather than a green room.
+
+    Meet renders this client-side (the URL often doesn't change) when it
+    decides the visitor isn't a real participant — the signature of a
+    signed-out browser that leaked ``navigator.webdriver`` or hit a decorated
+    invite link. It has no join button at all, so without this check it
+    surfaces as the misleading "No join button on the meeting page".
+    """
+    low_url = (url or "").lower()
+    if "workspace.google.com" in low_url or "meet.google.com/landing" in low_url:
+        return True
+    low = (body or "").lower()
+    if "try meet for work" in low or "video calls, enhanced with ai" in low:
+        return True
+    return "join a meeting now" in low and "enter code" in low
+
+
 async def _in_call(page) -> bool:
     """Whether we are actually inside the call (the leave control exists)."""
     for sel in (
@@ -394,6 +440,14 @@ async def _green_room(page, job_id: str, bot_name: str) -> None:
     if await _click_join(page) is not None:
         return
     diag = await _snapshot(page, job_id, "no-join-button")
+    if looks_like_landing(diag.get("url") or "", diag.get("body") or ""):
+        raise MeetingBotError(
+            "Google Meet showed its landing page instead of the meeting — it "
+            "treated the notetaker as a bot or the link as invalid. Use a "
+            "direct https://meet.google.com/xxx-yyyy-zzz link and check the "
+            "meeting allows guests to knock.",
+            diagnostics=diag,
+        )
     controls = ", ".join(diag.get("controls", [])[:10]) or "none visible"
     raise MeetingBotError(
         f"No join button on the meeting page. Buttons Meet actually showed: "
@@ -424,24 +478,38 @@ async def join_and_record(
         browser = await p.chromium.launch(
             headless=False,  # headful under Xvfb so the audio pipeline works
             executable_path=chrome_path,
+            # Meet sniffs for automation. Playwright's default launch both adds
+            # --enable-automation (the "controlled by automated software" mode)
+            # and leaves navigator.webdriver=true — either is enough for Meet
+            # to route a signed-out visitor to its MARKETING page, which has no
+            # join button at all (seen in production, screenshot-proven).
+            ignore_default_args=["--enable-automation"],
             args=[
                 "--no-sandbox",
                 "--disable-dev-shm-usage",
+                "--disable-blink-features=AutomationControlled",
                 "--use-fake-ui-for-media-stream",  # auto-accept the mic/cam prompt
                 "--autoplay-policy=no-user-gesture-required",
                 "--disable-notifications",
                 "--window-size=1280,720",
+                "--lang=en-US",
             ],
         )
         context = await browser.new_context(
             permissions=["microphone", "camera"],
             viewport={"width": 1280, "height": 720},
+            # English pinned so classify_body/looks_like_landing phrase match
+            # regardless of the host's geo-derived language.
+            locale="en-US",
         )
         page = await context.new_page()
         rec: subprocess.Popen | None = None
         try:
-            _log.info("meet.goto url=%s name=%r", meeting_url, bot_name)
-            await page.goto(meeting_url, wait_until="load", timeout=60000)
+            url = canonical_meet_url(meeting_url)
+            if url != meeting_url:
+                _log.info("meet.url_canonicalised %s -> %s", meeting_url, url)
+            _log.info("meet.goto url=%s name=%r", url, bot_name)
+            await page.goto(url, wait_until="load", timeout=60000)
             # Meet hydrates its green room well after `load` fires, and slower
             # still on a 2-vCPU box. Wait for a real control rather than a fixed
             # sleep, falling through after 20 s so the snapshot shows the page.
@@ -450,6 +518,36 @@ async def join_and_record(
                     'button, [role="button"], input', timeout=20000
                 )
             await asyncio.sleep(2)
+
+            # Marketing page instead of a green room → Meet bounced us. Reload
+            # once (the first navigation sometimes races Meet's own routing);
+            # if it still refuses, fail with the real story, not "no button".
+            body = ""
+            with contextlib.suppress(Exception):
+                body = await page.inner_text("body")
+            if looks_like_landing(page.url, body):
+                _log.warning("meet.landing_page_detected — retrying once")
+                await page.goto(url, wait_until="load", timeout=60000)
+                with contextlib.suppress(Exception):
+                    await page.wait_for_selector(
+                        'button, [role="button"], input', timeout=20000
+                    )
+                await asyncio.sleep(2)
+                body = ""
+                with contextlib.suppress(Exception):
+                    body = await page.inner_text("body")
+                if looks_like_landing(page.url, body):
+                    diag = await _snapshot(page, job_id, "landing-page")
+                    raise MeetingBotError(
+                        "Google Meet showed its landing page instead of the "
+                        "meeting — it treated the notetaker as a bot or the "
+                        "link as invalid. Double-check the meeting link is a "
+                        "direct https://meet.google.com/xxx-yyyy-zzz code and "
+                        "that the meeting allows guests to knock; if this "
+                        "keeps happening Meet has likely tightened its "
+                        "automated-browser detection.",
+                        diagnostics=diag,
+                    )
 
             await _green_room(page, job_id, bot_name)
 

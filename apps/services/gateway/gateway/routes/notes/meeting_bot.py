@@ -40,7 +40,7 @@ from urllib.parse import urlparse
 
 import httpx
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import Depends, HTTPException, Response
 from gateway.routes.notes.core import _get_db, _log, media_dir, router
 from gateway.routes.notes.pipeline import run_transcription
 from pydantic import BaseModel
@@ -240,10 +240,15 @@ class RecallProvider:
             resp.raise_for_status()
             return resp.json()
 
-    async def status(self, bot_id: str) -> tuple[str | None, str | None]:
-        """Provider-agnostic (lifecycle_status, download_url|None) for the poller."""
+    async def status(self, bot_id: str) -> tuple[str | None, str | None, str | None]:
+        """Provider-agnostic (lifecycle_status, download_url|None, error|None)
+        for the poller. Recall doesn't surface a failure explanation here."""
         bot = await self.fetch(bot_id)
-        return normalize_status(latest_status_code(bot)), extract_download_url(bot)
+        return (
+            normalize_status(latest_status_code(bot)),
+            extract_download_url(bot),
+            None,
+        )
 
     async def leave(self, bot_id: str) -> None:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -303,7 +308,7 @@ class SelfHostedProvider:
             raise RuntimeError("meeting-bot worker did not return a bot id")
         return str(bot_id)
 
-    async def status(self, bot_id: str) -> tuple[str | None, str | None]:
+    async def status(self, bot_id: str) -> tuple[str | None, str | None, str | None]:
         async with httpx.AsyncClient(timeout=30) as client:
             resp = await client.get(
                 f"{self._base}/bots/{bot_id}", headers=self._headers
@@ -316,7 +321,11 @@ class SelfHostedProvider:
         # Worker may serve the file at a stable path instead of returning a URL.
         if status == "done" and not download:
             download = f"{self._base}/bots/{bot_id}/recording"
-        return status, download
+        # The worker's own explanation of a failed join ("nobody admitted…",
+        # "Meet showed its landing page…") — the only text that tells a human
+        # what to do differently, so it must reach the DB row the UI renders.
+        error = data.get("error") or None
+        return status, download, str(error)[:800] if error else None
 
     async def leave(self, bot_id: str) -> None:
         async with httpx.AsyncClient(timeout=30) as client:
@@ -348,6 +357,16 @@ class SelfHostedProvider:
             )
             resp.raise_for_status()
             return resp.json()
+
+    async def screenshot(self, bot_id: str) -> bytes:
+        """The page as the bot saw it (PNG) — the fastest way to tell a waiting
+        room from a sign-in wall from Meet's marketing page."""
+        async with httpx.AsyncClient(timeout=30) as client:
+            resp = await client.get(
+                f"{self._base}/bots/{bot_id}/screenshot", headers=self._headers
+            )
+            resp.raise_for_status()
+            return resp.content
 
     async def download(self, url: str) -> tuple[bytes, str]:
         async with httpx.AsyncClient(timeout=600, follow_redirects=True) as client:
@@ -435,7 +454,34 @@ async def _refresh_bot(bot_row_id: str) -> None:
         if row is None or row.status not in ACTIVE_STATUSES or not row.provider_bot_id:
             return
 
-        new_status, download_url = await provider.status(row.provider_bot_id)
+        try:
+            new_status, download_url, worker_error = await provider.status(
+                row.provider_bot_id
+            )
+        except httpx.HTTPStatusError as exc:
+            if exc.response.status_code != 404:
+                raise
+            # The provider no longer knows this bot. The self-hosted worker
+            # persists terminal state across restarts, so a 404 means even
+            # that is gone (volume wiped / very old id) — fail the row
+            # honestly instead of polling "joining" for four hours.
+            async with await _get_db() as db:
+                await _set_bot(
+                    db, bot_row_id, status="failed",
+                    error="The meeting-bot worker no longer knows this bot — "
+                          "it was probably restarted (a deploy does this) "
+                          "while the bot was in flight. Send the notetaker "
+                          "again.",
+                )
+                await db.execute(
+                    text("UPDATE meeting SET status='failed' WHERE id=:id"),
+                    {"id": str(row.meeting_id)},
+                )
+                await db.commit()
+            from gateway.routes.notes import live_session
+
+            await live_session.end(str(row.meeting_id))
+            return
 
         # Terminal success: call finished AND media is downloadable → claim the
         # ingest atomically (only one caller flips out of an active status).
@@ -470,7 +516,13 @@ async def _refresh_bot(bot_row_id: str) -> None:
         # Non-terminal (or terminal-without-media-yet): record status changes.
         if new_status and new_status != row.status and new_status != "done":
             async with await _get_db() as db:
-                await _set_bot(db, bot_row_id, status=new_status)
+                if new_status in ("failed", "not_admitted") and worker_error:
+                    # Carry the worker's own explanation to the row the UI
+                    # renders — "Failed" alone tells a human nothing.
+                    await _set_bot(db, bot_row_id, status=new_status,
+                                   error=worker_error)
+                else:
+                    await _set_bot(db, bot_row_id, status=new_status)
                 if new_status in ("failed", "not_admitted"):
                     await db.execute(
                         text("UPDATE meeting SET status='failed' WHERE id=:id"),
@@ -765,6 +817,32 @@ async def meeting_bot_diagnostics(
         except Exception as exc:
             out["diagnostics_error"] = str(exc)[:200]
     return out
+
+
+@router.get("/meetings/{meeting_id}/bot/screenshot")
+async def meeting_bot_screenshot(
+    meeting_id: str,
+    _user: UserContext = Depends(get_current_user),
+) -> Response:
+    """The green room exactly as the bot saw it (PNG). 404 when no screenshot
+    was captured (only failure paths snapshot the page)."""
+    async with await _get_db() as db:
+        r = (
+            await db.execute(
+                text("SELECT provider_bot_id FROM meeting_bot "
+                     "WHERE meeting_id=:id ORDER BY created_at DESC LIMIT 1"),
+                {"id": meeting_id},
+            )
+        ).fetchone()
+    provider = resolve_bot_provider()
+    if (r is None or not r.provider_bot_id
+            or not isinstance(provider, SelfHostedProvider)):
+        raise HTTPException(status_code=404, detail="no screenshot")
+    try:
+        png = await provider.screenshot(str(r.provider_bot_id))
+    except Exception as exc:
+        raise HTTPException(status_code=404, detail="no screenshot") from exc
+    return Response(content=png, media_type="image/png")
 
 
 @router.post("/meetings/{meeting_id}/bot/stop", status_code=202)

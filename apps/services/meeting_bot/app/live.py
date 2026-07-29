@@ -176,9 +176,14 @@ async def _resolve_asr() -> tuple[str, str] | None:
         return None
     # Ephemeral tokens go in the query string (the browser can't set headers on
     # a WebSocket, and AssemblyAI kept one scheme for both callers).
+    # speaker_labels must be asked for explicitly — streaming does not diarize
+    # by default, and omitting it is why live captions had no speakers. Needs a
+    # streaming model that supports it (Universal-3 Pro Streaming or a
+    # multilingual streaming model); Universal-2 does not.
     url = (
         f"{_AAI_WS}?sample_rate={_SAMPLE_RATE}"
-        f"&encoding=pcm_s16le&format_turns=true&token={token}"
+        f"&encoding=pcm_s16le&format_turns=true&speaker_labels=true"
+        f"&token={token}"
     )
     return url, "assemblyai"
 
@@ -228,12 +233,40 @@ def _parse_assemblyai_message(data: dict) -> list[dict]:
     words = data.get("words") or []
     start_ms = words[0].get("start", 0) if words else 0
     end_ms = words[-1].get("end", 0) if words else 0
-    return [{
+    seg = {
         "text": text,
         "start_s": float(start_ms or 0) / 1000.0,
         "end_s": float(end_ms or 0) / 1000.0,
         "is_final": True,
-    }]
+    }
+    # A diarized turn belongs to one speaker, but the label can arrive on the
+    # turn or on its words depending on the streaming model. Read whichever is
+    # there. Mapped to our S1/S2 space so the gateway's registry, the rename UI
+    # and batch reconciliation all see one label space.
+    speaker = data.get("speaker")
+    if speaker is None:
+        speaker = next((w.get("speaker") for w in words if w.get("speaker")), None)
+    label = _speaker_label(speaker)
+    if label:
+        seg["speaker_label"] = label
+    return [seg]
+
+
+def _speaker_label(speaker: object) -> str | None:
+    """AssemblyAI labels speakers "A", "B", … — map onto our S1/S2 space.
+
+    Mirrors ``acb_stt.assemblyai_provider._speaker_label`` so the live and batch
+    paths agree; the worker is a standalone service and can't import it."""
+    if speaker is None:
+        return None
+    s = str(speaker).strip()
+    if not s:
+        return None
+    if len(s) == 1 and s.isalpha():
+        return f"S{ord(s.upper()) - 64}"
+    if s.isdigit():
+        return f"S{int(s) + 1}"
+    return s
 
 
 def _parse_asr_message(raw: str, protocol: str = "whisperlive") -> list[dict]:

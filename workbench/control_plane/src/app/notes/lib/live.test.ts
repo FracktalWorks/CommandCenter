@@ -85,3 +85,48 @@ describe("speakerIndex", () => {
     expect(speakerIndex("speaker one")).toBeNull();
   });
 });
+
+describe("AssemblyAI streaming diarization", () => {
+  it("reads a turn-level speaker", () => {
+    const c = parseAssemblyAI({
+      type: "Turn",
+      transcript: "so the pricing works",
+      end_of_turn: true,
+      speaker: "B",
+      words: [{ start: 0, end: 500 }],
+    });
+    expect(c?.speaker).toBe(1); // "B" → index 1
+  });
+
+  it("falls back to a word-level speaker when the turn has none", () => {
+    // Which field carries the label varies by streaming model; reading only
+    // one would present as "diarization is broken".
+    const c = parseAssemblyAI({
+      type: "Turn",
+      transcript: "hello",
+      end_of_turn: true,
+      words: [{ start: 0, end: 500, speaker: "A" }],
+    });
+    expect(c?.speaker).toBe(0);
+  });
+
+  it("skips leading words that carry no speaker", () => {
+    const c = parseAssemblyAI({
+      type: "Turn",
+      transcript: "hello",
+      end_of_turn: true,
+      words: [{ start: 0, end: 100 }, { start: 100, end: 200, speaker: "C" }],
+    });
+    expect(c?.speaker).toBe(2);
+  });
+
+  it("reports null rather than a wrong speaker when undiarized", () => {
+    const c = parseAssemblyAI({
+      type: "Turn",
+      transcript: "hello",
+      end_of_turn: true,
+      words: [{ start: 0, end: 500 }],
+    });
+    expect(c?.speaker).toBeNull();
+  });
+});

@@ -7,11 +7,27 @@ pass-through. So this speaks the v2 REST API directly, and slots in behind the
 same :class:`SttProvider` interface as ``LiteLLMSTT``, keeping the notes pipeline
 provider-agnostic.
 
-Why it's the default STT: it diarizes (``speaker_labels``) on both batch and
-streaming, handles Hindi/English code-switching, and is materially cheaper than
-the alternatives per hour of audio. Because it returns real speaker labels, the
-local sherpa-onnx diarization pass (``local_diarization.py``) automatically
-becomes a *fallback* — ``maybe_diarize`` no-ops on an already-diarized result.
+Why it's the default STT: it diarizes (``speaker_labels``), handles
+Hindi/English code-switching, and is materially cheaper than the alternatives
+per hour of audio. Because it returns real speaker labels, the local sherpa-onnx
+diarization pass (``local_diarization.py``) automatically becomes a *fallback* —
+``maybe_diarize`` no-ops on an already-diarized result.
+
+Diarization, precisely (an earlier version of this note over-promised and cost a
+debugging session):
+
+- **Batch** — set ``speaker_labels`` on the job. Works on the Universal models
+  including universal-2. This is what the notes pipeline uses.
+- **Streaming** — also supported, but it is **opt-in per connection**
+  (``speaker_labels=true`` on the WebSocket URL, exactly like Deepgram's
+  ``diarize``) and needs a streaming model that offers it: Universal-3 Pro
+  Streaming or a multilingual streaming model. **Universal-2 does not.** Asking
+  a model that can't for speaker labels yields captions with no speakers, which
+  looks identical to broken plumbing.
+
+Note the streaming model is chosen independently of the ``tier-stt`` batch model
+(see ``routes/notes/live.py::_live_model`` / ``ASSEMBLYAI_LIVE_MODEL``) — picking
+universal-2 in Settings -> Models does not make streaming use universal-2.
 
 Spec: ai-company-brain/specs/note_taker_app.md §3.4.
 """

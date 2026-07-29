@@ -94,6 +94,12 @@ export class LiveTranscription {
       sample_rate: String(TARGET_RATE),
       encoding: "pcm_s16le",
       format_turns: "true",
+      // Ask for speakers. Streaming diarization has to be requested explicitly
+      // — exactly like Deepgram's `diarize` below — and omitting it was why
+      // live captions arrived with no speaker separation at all. Note it needs
+      // a streaming model that supports it (Universal-3 Pro Streaming or a
+      // multilingual streaming model); Universal-2 does not.
+      speaker_labels: "true",
       token: tok.token,
     });
     // Empty model → AssemblyAI's default streaming model.
@@ -164,6 +170,7 @@ export function parseAssemblyAI(msg: {
   type?: string;
   transcript?: string;
   end_of_turn?: boolean;
+  speaker?: unknown;
   words?: { start?: number; end?: number; speaker?: unknown }[];
 }): LiveCaption | null {
   if (msg?.type !== "Turn") return null;
@@ -173,10 +180,16 @@ export function parseAssemblyAI(msg: {
   // AssemblyAI reports word offsets in milliseconds.
   const startS = words.length ? (words[0].start ?? 0) / 1000 : 0;
   const endS = words.length ? (words[words.length - 1].end ?? 0) / 1000 : 0;
+  // A diarized turn belongs to one speaker by definition, but the label can
+  // arrive on the turn or on its words depending on the streaming model. Read
+  // whichever is present rather than betting on one — a miss here shows up as
+  // "diarization is broken" when it's really just the wrong field.
+  const speaker =
+    msg.speaker != null ? msg.speaker : words.find((w) => w.speaker != null)?.speaker;
   return {
     text,
     isFinal: Boolean(msg.end_of_turn),
-    speaker: speakerIndex(words[0]?.speaker),
+    speaker: speakerIndex(speaker),
     startS,
     endS,
   };

@@ -459,21 +459,23 @@ export default function AppRunPage({
           onClick={forkApp}
           disabled={forking}
           title="Duplicate this app as your own editable copy"
-          className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
+          className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0 disabled:opacity-50"
         >
           {forking ? (
             <Loader2 className="w-3.5 h-3.5 animate-spin" />
           ) : (
             <GitFork className="w-3.5 h-3.5" />
           )}
-          Fork
+          <span className="hidden sm:inline">Fork</span>
         </button>
         {canEdit && (
           <button
             onClick={() => router.push(`/build/apps/${slug}/edit`)}
-            className="rounded-lg border border-border px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
+            title="Open in Workshop"
+            className="rounded-lg border border-border px-2 sm:px-3 py-1.5 text-xs text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition flex items-center gap-1.5 shrink-0"
           >
-            <Wrench className="w-3.5 h-3.5" /> Open in Workshop
+            <Wrench className="w-3.5 h-3.5" />
+            <span className="hidden sm:inline">Open in Workshop</span>
           </button>
         )}
         <div className="relative shrink-0" ref={infoRef}>
@@ -491,7 +493,7 @@ export default function AppRunPage({
 
           {/* Info popover */}
           {showInfo && (
-            <div className="absolute right-0 top-full mt-2 w-80 rounded-xl border border-border bg-card shadow-lg z-40 p-4 flex flex-col gap-3 text-xs">
+            <div className="absolute right-0 top-full mt-2 w-80 max-w-[calc(100vw-1.5rem)] rounded-xl border border-border bg-card shadow-lg z-40 p-4 flex flex-col gap-3 text-xs">
               <div className="flex justify-between gap-3">
                 <span className="text-muted-foreground">Owner</span>
                 <span className="text-foreground truncate">

@@ -155,7 +155,7 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
 // Mobile bottom navigation bar — ChatGPT/DeepSeek-style 3-tab bar
 // ---------------------------------------------------------------------------
 
-import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid } from "lucide-react";
+import { MessageCircle, FolderOpen, Menu as MenuIcon, Filter, LayoutGrid, Play, FileCode, FlaskConical } from "lucide-react";
 import { resolveIcon } from "@/lib/icons";
 
 function MobileBottomNavInner({
@@ -268,6 +268,11 @@ function MobileBottomNavInner({
   // "Triage" (the stream filter) is inbox-only. Both open bottom drawers.
   const isWhatsAppPage = pathname?.startsWith("/whatsapp") ?? false;
   const isWhatsAppInbox = pathname === "/whatsapp";
+  // App Workshop editor: chat and the preview/code/tests pane are full-screen
+  // alternatives on mobile (desktop shows both side by side) — the page owns
+  // the "workshop-*" cc-mobile-nav detail values.
+  const isAppWorkshopEditPage =
+    (pathname?.startsWith("/build/apps/") && pathname?.endsWith("/edit")) ?? false;
 
   // Tasks: the bottom bar reflects which GTD section you're in. The page emits
   // `cc-tasks-section` whenever the active view changes.
@@ -407,6 +412,31 @@ function MobileBottomNavInner({
             icon={LayoutGrid}
             label="Sections"
           />
+        )}
+        {isAppWorkshopEditPage && (
+          <>
+            <TaskTab
+              onClick={() => dispatchNav("workshop-chat")}
+              icon={Sparkles}
+              label="Chat"
+              accent
+            />
+            <TaskTab
+              onClick={() => dispatchNav("workshop-preview")}
+              icon={Play}
+              label="Preview"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("workshop-code")}
+              icon={FileCode}
+              label="Code"
+            />
+            <TaskTab
+              onClick={() => dispatchNav("workshop-tests")}
+              icon={FlaskConical}
+              label="Tests"
+            />
+          </>
         )}
     </nav>
   );

@@ -867,6 +867,19 @@ try:
 except Exception:  # pragma: no cover
     pass
 
+try:
+    # Org access control (ai-company-brain/specs/org_access_control.md) —
+    # member roster + lifecycle, roles, per-user overrides (prefix /admin),
+    # plus /auth/me, which every signed-in member calls to resolve their own
+    # feature and agent access.
+    from gateway.routes.admin import me_router as _me_router
+    from gateway.routes.admin import router as _admin_router
+
+    app.include_router(_admin_router)
+    app.include_router(_me_router)
+except Exception:  # pragma: no cover
+    pass
+
 # ---------- Health ----------
 
 class Health(BaseModel):

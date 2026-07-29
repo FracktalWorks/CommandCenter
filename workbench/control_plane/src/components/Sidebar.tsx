@@ -5,7 +5,8 @@ import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
 import { ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
-import { NAV_SECTIONS, type NavPane, type NavSection } from "@/lib/nav";
+import { visibleSections, type NavPane, type NavSection } from "@/lib/nav";
+import { useAccess } from "@/components/AccessProvider";
 import { resolveIcon } from "@/lib/icons";
 import ThemeToggle from "@/components/ThemeToggle";
 
@@ -23,6 +24,11 @@ export default function Sidebar() {
   const { data: session } = useSession();
   const [agentUpdateCount, setAgentUpdateCount] = useState(0);
   const [pinnedApps, setPinnedApps] = useState<PinnedApp[]>([]);
+  // Org access control (spec §5, seam 5): the sidebar shows only what this
+  // member can reach. `null` while unresolved keeps the full list, so the
+  // nav does not visibly shrink on first paint.
+  const { access, loading: accessLoading } = useAccess();
+  const sections = visibleSections(accessLoading ? null : access.features);
 
   // Poll agent list for behind_by counts — shows "N updates" badge on Agents
   useEffect(() => {
@@ -108,7 +114,7 @@ export default function Sidebar() {
 
       {/* Nav sections */}
       <nav className="flex flex-col flex-1 overflow-y-auto">
-        {NAV_SECTIONS.map((section) => (
+        {sections.map((section) => (
           <NavSectionBlock
             key={section.id}
             section={section}

@@ -31,6 +31,23 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 
 ## Work Guidance
 
+### Authentication posture (BO-2)
+
+Authentication is **default-deny, applied app-wide**: `main.py` attaches
+`require_authenticated(public=PUBLIC_ROUTES)` at `FastAPI(dependencies=[...])`,
+so every route — including one added tomorrow — requires a valid internal
+bearer token or a domain-verified `X-User-Email`. You do NOT add an auth
+dependency for that; you add an *authorization* one.
+
+A genuinely public endpoint (provider webhook, OAuth callback, liveness probe)
+goes in `main.PUBLIC_ROUTES` **by route template**, and must authenticate
+itself some other way. `tests/unit/test_default_deny_auth.py` fails if any
+route escapes the guard, or if a PUBLIC_ROUTES entry matches no live route.
+
+Swagger/ReDoc/openapi.json are dev-only (`docs_enabled`): FastAPI mounts them
+without a dependency chain, so they cannot be guarded, and they publish the
+whole API surface.
+
 ### Adding a new endpoint
 1. Create or extend a route file in routes/
 2. Register the router in main.py

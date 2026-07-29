@@ -106,12 +106,35 @@ def _cache_put(email: str, access: EffectiveAccess) -> None:
 
 # ── Legacy fallback ─────────────────────────────────────────────────────────
 
+def legacy_fallback_enabled() -> bool:
+    """Whether a missing access table degrades to the legacy role mapping.
+
+    **Off by default** since BO-2 residual #1 landed. Before authentication was
+    enforced app-wide, refusing everyone when the tables were absent would have
+    been an outage with no way back in, so the fallback was automatic. Now that
+    an unauthenticated caller is rejected outright, the remaining case is an
+    authenticated member on a deployment whose migration has not run — and
+    quietly granting them an *approximation* of access is worse than refusing:
+    it is the access model silently not being the access model.
+
+    Deploy order makes this safe: ``.github/workflows/deploy.yml`` runs
+    ``apply_migrations.sh`` before restarting the gateway, so by the time this
+    code serves traffic the tables exist.
+
+    ``ACCESS_LEGACY_FALLBACK=1`` re-enables it. That is the recovery hatch for
+    a failed migration — turn it on, fix the migration, turn it off.
+    """
+    return os.getenv("ACCESS_LEGACY_FALLBACK", "").strip().lower() in {
+        "1", "true", "yes", "on",
+    }
+
+
 def legacy_access(role: str | None) -> EffectiveAccess:
     """Approximate the pre-128 world from the legacy ``executive``/``employee``.
 
-    Used only when the access tables are absent (migration not yet applied) —
-    see spec §7. A member whose row *does* exist never lands here; an unknown
-    user resolves to nothing.
+    Reached only when the access tables are absent AND
+    :func:`legacy_fallback_enabled` is on — see spec §7. A member whose row
+    *does* exist never lands here; an unknown user resolves to nothing.
     """
     slug = LEGACY_ROLE_MAP.get((role or "employee").lower(), "member")
     if slug in ("admin", "agent_service"):
@@ -130,6 +153,17 @@ def legacy_access(role: str | None) -> EffectiveAccess:
          "agents:run:*", "apps:use:*"],
         roles=[slug],
     )
+
+
+def _degraded(legacy_role: str | None) -> EffectiveAccess:
+    """What a failed/absent access lookup resolves to.
+
+    Fail CLOSED unless the operator opted into the legacy mapping. See
+    :func:`legacy_fallback_enabled` for why the default flipped.
+    """
+    if legacy_fallback_enabled():
+        return legacy_access(legacy_role)
+    return EffectiveAccess(is_active=False)
 
 
 # ── Resolution ──────────────────────────────────────────────────────────────
@@ -190,7 +224,7 @@ async def resolve_access(
             return cached
 
     if _tables_missing:
-        return legacy_access(legacy_role)
+        return _degraded(legacy_role)
 
     try:
         from sqlalchemy import text  # noqa: PLC0415
@@ -206,14 +240,18 @@ async def resolve_access(
         message = str(exc).lower()
         if "does not exist" in message or "undefinedtable" in message:
             _tables_missing = True
-            _log.warning(
+            _log.error(
                 "access_tables_missing",
-                detail="falling back to legacy executive/employee mapping; "
-                       "apply infra/postgres/128_org_access_control.sql",
+                detail=(
+                    "apply infra/postgres/128_org_access_control.sql. Members "
+                    "resolve to NO ACCESS until it runs; set "
+                    "ACCESS_LEGACY_FALLBACK=1 to degrade to the legacy "
+                    "executive/employee mapping instead."
+                ),
             )
         else:
             _log.warning("access_resolve_failed", error=str(exc))
-        return legacy_access(legacy_role)
+        return _degraded(legacy_role)
 
     if row is None:
         # Authenticated by the IdP but not provisioned here. No access, and

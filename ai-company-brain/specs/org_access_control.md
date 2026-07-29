@@ -288,9 +288,11 @@ The change is additive and reversible:
 1. `app_user.role` is retained and dual-written. Rollback is redeploying the previous build.
 2. `require_role()` semantics are preserved exactly.
 3. `EXECUTIVE_EMAILS` continues to work as the bootstrap path but stops being the source of truth once roles are assigned.
-4. If the access tables are missing or unreachable, the resolver falls back to the legacy `executive`/`employee` mapping and logs a warning — a migration that has not run yet must not brick sign-in.
+4. If the access tables are missing or unreachable, the resolver resolves to **no access** and logs an error naming the migration to run.
 
-**Fail-open is a deliberate, bounded choice here** and worth stating plainly: it applies only to the *resolver's* fallback when the tables are absent, i.e. before the migration lands. It does not apply to a member whose row exists — an unknown user resolves to the empty set and gets nothing. This matches the fail-open contract `deps.py` already documents for an unprovisioned gateway, and it is the same trade-off flagged in `FOUNDATION_BUILDOUT_CHECKLIST.md` BO-2 (enforce auth: never-reject → require). When BO-2 lands, this fallback should be removed with it.
+**That fallback used to fail open** — degrading to the legacy `executive`/`employee` mapping — because before authentication was enforced, refusing everyone would have been an outage with no way back in. BO-2 residual #1 (§8c) removed that reason, so the default flipped: quietly granting an *approximation* of access is the access model silently not being the access model. `ACCESS_LEGACY_FALLBACK=1` re-enables the old behaviour as a recovery hatch for a failed migration.
+
+Deploy order makes fail-closed safe: `apply_migrations.sh` runs before the gateway restarts, so the tables exist by the time the new code serves traffic.
 
 ---
 
@@ -368,6 +370,25 @@ When `GATEWAY_INTERNAL_TOKEN` is unset the identity token still falls back to th
 It now requires an HMAC-SHA256 signature over the raw body in `X-CC-Signature`, with per-source secrets (`AGENT_WEBHOOK_SECRET_<SOURCE>`) overriding a global one. A valid signature *is* the authorization: it proves the platform's own secret produced the request, which is the same trust level as the internal token. There is no member to resolve, which is precisely why the signature is mandatory.
 
 **It fails closed when unconfigured** — 503, naming the variable to set — unlike the bridge and bot-token checks elsewhere, which allow when unset. Those receive data; this one starts an agent run. Safe to make strict because nothing calls this path today: the provider receivers live in `ingestion/sources/*/webhook.py` and dispatch no agents (`FOUNDATION_AUDIT_REPORT.md`), so there is no working sender to break.
+
+---
+
+## 8c. Default-deny authentication (BO-2 residual #1)
+
+`get_current_user` never rejects — it *labels*. Every route was therefore open unless it remembered to add a guard, and the failure mode of opt-in security is the route nobody opted in. Two were found exactly that way:
+
+- `GET /agent/workspace/{session_id}/history` — anonymous read of an agent's full file version history.
+- `POST /agent/workspace/{session_id}/promote` — anonymous **write** to the workspace.
+
+Both took no caller identity at all. Same IDOR family as the memory API that BO-2's first pass closed.
+
+`require_authenticated(public=...)` is now attached once at `FastAPI(dependencies=[...])`, so **a route added tomorrow is covered without anyone remembering anything**. It asks only "who are you" — `require_permission` and the feature gates still answer "may you", and a member with an empty permission set passes authentication and then fails authorization, which is the correct sequence.
+
+`gateway.main.PUBLIC_ROUTES` is the complete list of anonymous-reachable templates: `/health`, the three provider webhook receivers, the signed agent webhook, the two OAuth callbacks, the Graph notification, the Meta webhook, the four WhatsApp bridge endpoints, and the two meeting-bot callbacks. Every one authenticates itself by another means or is a liveness probe.
+
+Two things keep the list honest, both tested: a `PUBLIC_ROUTES` entry matching no live route fails (a typo is dead text; a stale entry is a hole held open), and a coverage test asserts **every** route in the assembled app carries the guard — if a router is ever included in a way that bypasses the app-level dependency, that test fails rather than the endpoint quietly opening.
+
+**Swagger/ReDoc are the one exception**, and structurally so: FastAPI mounts them as plain Starlette routes with no dependency chain, so they cannot carry the guard. They publish the entire API surface, so they are dev-only — outside `ACB_ENV=dev` the endpoints do not exist.
 
 ---
 

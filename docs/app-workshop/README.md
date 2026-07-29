@@ -339,7 +339,7 @@ same vocabulary. The effective permission at runtime is always the **intersectio
 | Tier | What | When |
 |---|---|---|
 | T1 | Single-file HTML/JS (no build) | Phase 0 — **built** |
-| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html`. Default: vendored deps via a shared, deploy-provisioned cache, no per-app install, no CDN. Opt-in: per-app `npm install` for anything the vendored set doesn't cover (e.g. `three`/`@react-three/fiber` for 3D) — see below | Phase 1 — **built** (`agent-app-builder/build/build_t2.mjs`; `entry`/`tier` in `app.json`; the builder upgrades an app from T1→T2 mid-conversation when a request calls for it, no separate creation-time picker). Reuses `@cc/ui` — the same 25-component design kit the chat "artifacts" system (`lib/compileArtifact.ts`) bundles into React artifacts — aliased in via an explicit import allowlist, so a T2 app writes `<Stat/>`/`<Table/>` instead of hand-rolled `cc-*` divs. Per-app custom dependencies — **built** (`agent-app-builder/build/install_t2_deps.mjs`: `--ignore-scripts` + a package-spec allowlist + a `node_modules` size cap; `build_t2.mjs` auto-detects an app-local `node_modules` and switches from the vendor cache + import allowlist to standard npm resolution, no per-app container) |
+| T2 | Multi-file React → esbuild → one self-contained `dist/bundle.html`. Default: vendored deps (react/react-dom/**lucide-react**) via a shared, deploy-provisioned cache, no per-app install, no CDN. Opt-in: per-app `npm install` for anything the vendored set doesn't cover (e.g. `three`/`@react-three/fiber` for 3D) — see below | Phase 1 — **built** (`agent-app-builder/build/build_t2.mjs`; `entry`/`tier` in `app.json`; the builder upgrades an app from T1→T2 mid-conversation when a request calls for it, no separate creation-time picker). Reuses `@cc/ui` — the same 25-component design kit the chat "artifacts" system (`lib/compileArtifact.ts`) bundles into React artifacts — aliased in via an explicit import allowlist, so a T2 app writes `<Stat/>`/`<Table/>` instead of hand-rolled `cc-*` divs. Per-app custom dependencies — **built** (`agent-app-builder/build/install_t2_deps.mjs`: `--ignore-scripts` + a package-spec allowlist + a `node_modules` size cap; `build_t2.mjs` auto-detects an app-local `node_modules` and switches from the vendor cache + import allowlist to standard npm resolution, no per-app container). Real icons for every app, T1 and T2 — **built**: `lucide-react` is now a default-vendored T2 dependency (same version workbench/control_plane itself uses), and T1's `ccIcon('Name')`/`data-cc-icon` bridge — documented in `design.md` since the chat-artifacts system, but never actually wired up for Custom Apps — now gets its `icons` prop pre-resolved (`extractCcIconNames` + `buildIconMap`, in both the Workshop's preview and the published run page), so it isn't silently a no-op |
 | T3 | Server-side apps (backend compute), JS/TS runtime | **Scoped, not built.** Deferred until **BO-7** lands (platform-wide sandbox hardening — today's code execution is a bare env-scrubbed subprocess, no container/cgroup/seccomp). Decided-but-unbuilt substrate: **not** Docker-per-app — warm Deno subprocesses with explicit `--allow-*` flags, supervised by the gateway (Val Town's `deno-http-worker` pattern) — chosen for the 4GB VPS. Cron/webhook-triggered functions additionally need BO-20 (durable job queue), currently absent. BO-7 progress so far (2026-07-27, `competitive_hardening_2026-07.md`'s status log): dep-install RCE fix, permission-context/destructive-tool cheap wins, and Copilot-SDK session containerization for both `code_task` and the App Workshop builder's own interactive chat session — but the loader-level agent-import path T3's own gate references is separate and still untouched, so this row's status doesn't move yet |
 
 ### 4.2 The builder (Workshop session)
@@ -1027,7 +1027,22 @@ preview toggle in the Workshop's Preview tab, so it can be checked before a
 round ends; a touch-target `min-height` bump on the injected design-token CSS
 that every app already gets for free); the Workshop editor's OWN UI is
 mobile-responsive too (§4.2, separate from apps-being-built — see the App
-Workshop mobile-layout work above); suggest-a-change — remaining.
+Workshop mobile-layout work above); proper icons + a UI/UX quality bar —
+**shipped**: `lucide-react` joins the T2 default vendor set (real icon
+components, not hand-rolled SVGs), and the `ccIcon`/`data-cc-icon` bridge T1
+apps already had documented access to is now actually wired up end to end
+(`extractCcIconNames` + `buildIconMap`, both the Workshop preview and the
+published run page) — it silently resolved to nothing before this.
+`instructions.md` gained a "Quality bar" section translating Apple's HIG
+principles (one primary action, hierarchy from size/weight not color alone,
+chrome defers to content, generous spacing, purposeful motion) and a finding
+from Anthropic's own research on agent harnesses for app-building — a
+generator grading its own UI "confidently praises the work even when...
+obviously mediocre," so the instruction is to actually LOOK at the preview
+(the new desktop/phone toggle) rather than trust the code read, and to judge
+against four concrete criteria (coherent, original — avoid "purple gradients
+over white cards" — craft, functional) instead of a vague "does it look
+good"; suggest-a-change — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers

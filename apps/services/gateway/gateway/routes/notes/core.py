@@ -78,6 +78,15 @@ class MeetingListItem(BaseModel):
     scheduled_at: str | None = None
     #: Per-meeting copilot decision. None = follow the account default.
     copilot_enabled: bool | None = None
+    # ── What the library bands on ──────────────────────────────────────────
+    #: Action items still awaiting approval — the "needs you" signal.
+    pending_actions: int = 0
+    action_count: int = 0
+    agenda_count: int = 0
+    has_brief: bool = False
+    attendee_count: int = 0
+    #: A session is running right now (the bot is in a call, or a mic is open).
+    is_live: bool = False
 
 
 class Attendee(BaseModel):
@@ -201,4 +210,10 @@ def row_to_list_item(r: Any) -> MeetingListItem:
         created_at=_iso(r.created_at),
         scheduled_at=_iso(getattr(r, "scheduled_at", None)),
         copilot_enabled=getattr(r, "copilot_enabled", None),
+        pending_actions=getattr(r, "pending_actions", 0) or 0,
+        action_count=getattr(r, "action_count", 0) or 0,
+        agenda_count=getattr(r, "agenda_count", 0) or 0,
+        has_brief=bool(getattr(r, "has_brief", False)),
+        attendee_count=getattr(r, "attendee_count", 0) or 0,
+        is_live=bool(getattr(r, "is_live", False)),
     )

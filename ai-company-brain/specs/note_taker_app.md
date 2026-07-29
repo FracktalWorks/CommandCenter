@@ -395,6 +395,31 @@ Sequencing rationale: value lands at slice 1 (usable notes), the suite thesis la
 | D9 | Audio retention | Default 90d audio / forever transcripts, org-configurable | Storage reality on the VPS; transcripts are the durable asset |
 | D10 | Meeting-bot backend (§3.13) | **Fully self-hosted by default** — own worker `apps/services/meeting_bot` (Playwright headless Chrome) behind a pluggable `bot_provider`; `recall` kept as an optional managed fallback; Phase 2 calendar auto-join deferred | Owner wants no third-party API dependency. Gateway can't join a call itself, and a headless-Chrome bot (~1–3 GB/meeting) won't fit the 4 GB VPS → the worker runs on the upsized VPS / a dedicated box. `recallai/meeting-bot` is a Recall wrapper, so not an escape from Recall. |
 
+### 7.1 Deferred: calendar integration (blocked on the calendar app)
+
+The library's **"Coming up"** band and the meeting-bot's Phase-2 auto-join both
+want the same thing — meetings that appear *before* you create them by hand.
+Today `meeting.scheduled_at` is set manually in prep, so the band only ever
+holds meetings someone typed in.
+
+Deliberately **not built yet**: a Google/Outlook calendar connector belongs to
+the comprehensive calendar app (owner's call, 2026-07-28), not to the Note
+Taker. Building a second, narrower calendar sync here would be a duplicate
+source of truth for the same events, and would have to be unpicked when the
+real one lands.
+
+When the calendar app exists, this is what the Note Taker needs from it:
+
+| Need | Why |
+|---|---|
+| Upcoming events with attendees + join links | Populates "Coming up" without manual entry; the attendee list is what the context pack keys on for "your past meetings with these people" |
+| A stable event id → `meeting` link | So a prepared meeting attaches to the real event rather than forking a duplicate when the bot joins |
+| Change/cancel notifications | A meeting that moved shouldn't sit in the band at its old time |
+| "Has a video link" signal | The trigger for offering (never performing) auto-join — D10 keeps auto-join deferred and consent-gated |
+
+Until then the manual path is complete and works: create a meeting, set a time,
+prepare it, and start it by recording / sending the notetaker / uploading.
+
 **Open questions (need an owner call, none block slice 0–1):**
 1. **Q1 — Groq vs OpenAI vs Deepgram as the *recommended* Tier-A default?** Deepgram buys diarization before slice 3 lands but is the least BYOK-common key in the org today. (Lean: Groq for speed/cost, revisit at slice 3.)
 2. **Q2 — Do meeting embeddings live in `transcript_segment.embedding` (proposed) or route through `acb_memory`'s existing stores only?** Duplication vs query ergonomics.

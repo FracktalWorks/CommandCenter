@@ -25,6 +25,13 @@ export interface MeetingListItem {
   scheduled_at?: string | null;
   /** Per-meeting copilot decision. null = follow the account default. */
   copilot_enabled?: boolean | null;
+  /** Signals the library bands on — see lib/bands.ts. */
+  pending_actions?: number;
+  action_count?: number;
+  agenda_count?: number;
+  has_brief?: boolean;
+  attendee_count?: number;
+  is_live?: boolean;
 }
 
 /** A meeting-notes template (shapes the generated summary). */
@@ -240,6 +247,14 @@ export interface MeetingContext {
 export interface AgendaItem {
   title: string;
   notes: string;
+}
+
+/** Live agenda coverage — what's been discussed, and how long you've had. */
+export interface AgendaProgress {
+  items: { title: string; notes: string; covered: boolean }[];
+  covered_count: number;
+  total: number;
+  elapsed_s: number;
 }
 
 /** Note Taker settings — one row per user, read/written whole. */

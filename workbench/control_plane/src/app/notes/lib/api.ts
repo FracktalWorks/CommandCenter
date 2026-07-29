@@ -3,6 +3,7 @@
 import type {
   ActionItem,
   AgendaItem,
+  AgendaProgress,
   Attendee,
   EmailAccount,
   EmailDraft,
@@ -85,6 +86,19 @@ export async function getAgenda(meetingId: string): Promise<AgendaItem[]> {
     await fetch(`/api/notes/meetings/${meetingId}/agenda`, { cache: "no-store" })
   );
   return body.agenda ?? [];
+}
+
+/** Per-item agenda coverage. Free server-side (token overlap, no model call),
+ *  and independent of the copilot — "you haven't reached pricing yet" is worth
+ *  knowing whether or not an agent is listening. */
+export async function getAgendaProgress(
+  meetingId: string
+): Promise<AgendaProgress> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda/progress`, {
+      cache: "no-store",
+    })
+  );
 }
 
 /** Talk to the copilot to build the agenda; it replies and returns the full

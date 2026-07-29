@@ -29,7 +29,22 @@ SELECT m.id, m.title, m.platform, m.status, m.language, m.duration_s,
        (SELECT count(*) FROM transcript_segment ts WHERE ts.meeting_id = m.id)
            AS segment_count,
        EXISTS (SELECT 1 FROM meeting_note mn WHERE mn.meeting_id = m.id)
-           AS has_notes
+           AS has_notes,
+       -- What the library bands on. Computed here rather than by fetching each
+       -- meeting's detail, because the alternative is N+1 round-trips just to
+       -- decide which heading a row belongs under.
+       (SELECT count(*) FROM action_item ai
+         WHERE ai.meeting_id = m.id AND ai.status = 'draft')
+           AS pending_actions,
+       (SELECT count(*) FROM action_item ai WHERE ai.meeting_id = m.id)
+           AS action_count,
+       jsonb_array_length(COALESCE(m.agenda, '[]'::JSONB)) AS agenda_count,
+       (m.copilot_brief IS NOT NULL
+        AND length(trim(m.copilot_brief)) > 0) AS has_brief,
+       jsonb_array_length(COALESCE(m.attendees, '[]'::JSONB)) AS attendee_count,
+       EXISTS (SELECT 1 FROM live_session ls
+                WHERE ls.meeting_id = m.id AND ls.status = 'live')
+           AS is_live
 FROM meeting m
 WHERE (CAST(:q AS TEXT) IS NULL
        OR m.title ILIKE '%' || :q || '%'

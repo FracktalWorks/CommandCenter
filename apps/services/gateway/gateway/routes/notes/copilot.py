@@ -267,7 +267,7 @@ _RUNNING: dict[str, asyncio.Task] = {}
 
 async def _deep_context(meeting_id: str) -> bool:
     """Whether this session may fan out to the business agents at session
-    start. ON for new sessions (migration 127) — the whole point of a briefed
+    start. ON for new sessions (migration 129) — the whole point of a briefed
     copilot — and still a per-session toggle for anyone who wants it quiet."""
     try:
         async with await _get_db() as db:

@@ -1,4 +1,4 @@
--- 127: Action-item dispatch — meeting follow-ups become real work automatically.
+-- 129: Action-item dispatch — meeting follow-ups become real work automatically.
 --
 -- The summariser now classifies each extracted action item by WHAT KIND of
 -- follow-up it is (a task to do, an email someone promised to send, a document

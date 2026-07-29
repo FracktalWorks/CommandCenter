@@ -177,14 +177,21 @@ async def _resolve_asr() -> tuple[str, str] | None:
     # Ephemeral tokens go in the query string (the browser can't set headers on
     # a WebSocket, and AssemblyAI kept one scheme for both callers).
     # speaker_labels must be asked for explicitly — streaming does not diarize
-    # by default, and omitting it is why live captions had no speakers. Needs a
-    # streaming model that supports it (Universal-3 Pro Streaming or a
-    # multilingual streaming model); Universal-2 does not.
+    # by default, and omitting it is why live captions had no speakers.
+    #
+    # The model matters as much as the flag: diarization needs Universal-3 Pro
+    # Streaming (`u3-rt-pro`) or a multilingual streaming model. The gateway
+    # decides which and passes it here; dropping it on the floor (as this did)
+    # meant the worker silently used AssemblyAI's default whatever the
+    # deployment had configured.
+    model = (data.get("model") or "").strip()
     url = (
         f"{_AAI_WS}?sample_rate={_SAMPLE_RATE}"
         f"&encoding=pcm_s16le&format_turns=true&speaker_labels=true"
         f"&token={token}"
     )
+    if model:
+        url += f"&speech_model={model}"
     return url, "assemblyai"
 
 

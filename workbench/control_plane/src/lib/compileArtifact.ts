@@ -125,13 +125,14 @@ function allowlistPlugin(): Plugin {
         // internals) — esbuild handles it.
         if (args.namespace !== "artifact") return null;
         if (ALLOWED_IMPORTS.has(args.path)) return null;
+        // Kept to one line on purpose. A file with many bad imports repeats
+        // this per import, so the long "why" belongs in the docs, not stapled
+        // to every diagnostic.
         return {
           errors: [{
             text:
-              `Cannot import ${JSON.stringify(args.path)}. Artifacts run offline in a ` +
-              `sandbox with no network and no file access, so only the React runtime ` +
-              `is importable (${AGENT_FACING_IMPORTS.join(", ")}). Inline any helper ` +
-              `code into this file instead.`,
+              `Cannot import ${JSON.stringify(args.path)} — artifacts run offline, so ` +
+              `only ${AGENT_FACING_IMPORTS.join(", ")} are available. Inline it instead.`,
           }],
         };
       });
@@ -139,19 +140,43 @@ function allowlistPlugin(): Plugin {
   };
 }
 
-/** Format esbuild diagnostics into something an agent can act on. */
+/**
+ * How many diagnostics to hand back. One real mistake often cascades into
+ * dozens; the agent only needs enough to find it, and every extra line is
+ * tokens spent twice — once reading the error, once re-emitting the artifact.
+ */
+const MAX_REPORTED_ERRORS = 8;
+
+/** Format esbuild diagnostics into something an agent can act on, and no more. */
 function formatErrors(err: unknown): string {
   const messages = (err as { errors?: { text?: string; location?: { line?: number } | null }[] })
     ?.errors;
-  if (Array.isArray(messages) && messages.length) {
-    return messages
-      .map((m) => {
-        const line = m.location?.line;
-        return line ? `line ${line}: ${m.text ?? ""}` : (m.text ?? "");
-      })
-      .join("\n");
+  if (!Array.isArray(messages) || !messages.length) {
+    return err instanceof Error ? err.message : String(err);
   }
-  return err instanceof Error ? err.message : String(err);
+
+  // Collapse repeats before truncating: 60 bad imports produce 60 copies of the
+  // same sentence, which is noise, not information.
+  const seen = new Map<string, { line?: number; count: number }>();
+  for (const m of messages) {
+    const text = m.text ?? "";
+    const prior = seen.get(text);
+    if (prior) prior.count += 1;
+    else seen.set(text, { line: m.location?.line, count: 1 });
+  }
+
+  const lines = [...seen.entries()]
+    .slice(0, MAX_REPORTED_ERRORS)
+    .map(([text, { line, count }]) => {
+      const where = line ? `line ${line}: ` : "";
+      const repeats = count > 1 ? ` (×${count})` : "";
+      return `${where}${text}${repeats}`;
+    });
+
+  if (seen.size > MAX_REPORTED_ERRORS) {
+    lines.push(`… and ${seen.size - MAX_REPORTED_ERRORS} more distinct errors`);
+  }
+  return lines.join("\n");
 }
 
 /**

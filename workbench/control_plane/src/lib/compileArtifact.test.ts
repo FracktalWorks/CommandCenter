@@ -154,6 +154,38 @@ describe("compileArtifact", () => {
     expect(res.error).toMatch(/larger than/);
   });
 
+  // ── Diagnostics must stay affordable ─────────────────────────────────────
+  // Error text is paid for twice: once when the agent reads it, once when it
+  // re-emits the whole artifact to fix it. One mistake cascading into dozens of
+  // repeated messages used to cost ~3.4k tokens.
+
+  it("caps and de-duplicates diagnostics instead of returning one per bad line", async () => {
+    const source =
+      Array.from({ length: 60 }, (_, i) => `import x${i} from "pkg-${i}";`).join("\n") +
+      "\nexport default function A(){ return <p>{" +
+      Array.from({ length: 60 }, (_, i) => `String(x${i})`).join("+") +
+      "}</p>; }";
+    const res = await compileArtifact(source);
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    expect(res.error.length).toBeLessThan(2_000);
+    expect(res.error.split("\n").length).toBeLessThanOrEqual(9);
+    expect(res.error).toMatch(/and \d+ more distinct errors/);
+    // Still actionable: the first offender is named.
+    expect(res.error).toContain("pkg-0");
+  });
+
+  it("shows a repeat count rather than repeating an identical message", async () => {
+    const res = await compileArtifact(
+      'import a from "lodash";\nimport b from "lodash";\n' +
+        "export default function A(){ return <p>{String(a)+String(b)}</p>; }",
+    );
+    expect(res.ok).toBe(false);
+    if (res.ok) return;
+    // Two imports of the same missing module collapse into one line.
+    expect(res.error.split("\n").length).toBe(1);
+  });
+
   it("reports syntax errors with a line number the agent can act on", async () => {
     const res = await compileArtifact("export default function A(){ return <div>unclosed; }");
     expect(res.ok).toBe(false);

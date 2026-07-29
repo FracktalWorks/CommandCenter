@@ -14,6 +14,8 @@
  */
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useViewMode } from "@/components/ViewModeProvider";
+import { classifyArtifact, isRenderable } from "@/lib/artifactKind";
 import {
   File,
   FileCode,
@@ -50,7 +52,16 @@ interface ArtifactCardProps {
 }
 
 /** Documents get a first-class "Open in side panel" action (editable + live). */
-const DOC_EXTS = new Set(["md", "mdx", "html", "htm"]);
+/**
+ * Which artifacts have a rendered view worth opening. Derived from the shared
+ * classifier rather than its own extension list, so a React artifact
+ * (outputs/*.jsx) gets the same treatment as HTML — it previously got no Open
+ * button at all, because the hard-coded list here only knew about md/html.
+ */
+function hasRenderedView(name: string, path: string): boolean {
+  const kind = classifyArtifact(name, path);
+  return kind === "markdown" || isRenderable(kind);
+}
 
 // ─── Helpers ───────────────────────────────────────────────────────────────────
 
@@ -107,7 +118,8 @@ export default function ArtifactCard({
 }: ArtifactCardProps) {
   const fileUrl = `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(artifact.path)}`;
   const image = isImage(artifact);
-  const isDoc = DOC_EXTS.has(getExt(artifact.name));
+  const { isMobile } = useViewMode();
+  const isDoc = hasRenderedView(artifact.name, artifact.path);
   const [imgError, setImgError] = useState(false);
 
   // Build a FileEntry-compatible object for the ArtifactViewerModal
@@ -203,23 +215,25 @@ export default function ArtifactCard({
 
       {/* Actions */}
       <div className="flex items-center gap-1 shrink-0">
-        {isDoc && onOpenInSidePanel && (
+        {isDoc && (isMobile || onOpenInSidePanel) && (
           <button
-            onClick={handleOpenPanel}
+            onClick={isMobile ? handleOpen : handleOpenPanel}
             className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
-            title="Open in side panel — edit + live preview"
+            title={isMobile ? "Open the rendered artifact" : "Open in side panel — edit + live preview"}
           >
-            <PanelLeft size={13} />
+            {isMobile ? <Maximize2 size={13} /> : <PanelLeft size={13} />}
             Open
           </button>
         )}
-        <button
-          onClick={handleOpen}
-          className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
-          title={isDoc ? "Open in modal viewer" : "Open in viewer"}
-        >
-          <Maximize2 size={14} />
-        </button>
+        {!isMobile && (
+          <button
+            onClick={handleOpen}
+            className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
+            title={isDoc ? "Open in modal viewer" : "Open in viewer"}
+          >
+            <Maximize2 size={14} />
+          </button>
+        )}
         <a
           href={fileUrl}
           download={artifact.name}

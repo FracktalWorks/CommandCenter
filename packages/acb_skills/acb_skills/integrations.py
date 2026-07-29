@@ -33,6 +33,7 @@ directly — see §5 of ``ai-company-brain/agent_repo_compatibility.md``.
 from __future__ import annotations
 
 import os
+from collections.abc import Callable
 from typing import Any
 
 from acb_common import get_logger
@@ -281,6 +282,8 @@ def build_integrations(
     mandatory: list[str],
     optional: list[str],
     settings: Any,
+    *,
+    is_authorized: Callable[[str], bool] | None = None,
 ) -> tuple[dict[str, dict[str, Any]], dict[str, str]]:
     """Resolve integration service names to their credential dicts.
 
@@ -296,14 +299,32 @@ def build_integrations(
                     Resolution failures are logged as warnings and silently
                     skipped.
         settings:   Loaded ``acb_common.Settings`` instance.
+        is_authorized:
+                    Optional predicate ``(service) -> bool`` deciding whether
+                    the ACTING USER may have this service's credentials
+                    resolved on their behalf (org access control,
+                    ``integrations:use:<service>``). ``None`` means no
+                    filtering — the pre-org-access-control behaviour, and what
+                    every non-user-initiated caller (cron, reconciler) gets.
+
+                    An agent's ``config.json`` declares which integrations it
+                    *wants*; this decides which the caller is allowed to give
+                    it. The agent never widens its own access by declaring
+                    more.
 
     Returns:
         A 2-tuple of:
         - ``resolved``: ``{service: credentials_dict}`` for every service that
           resolved successfully.
         - ``unavailable``: ``{service: reason}`` for every service that failed
-          (not in registry, or missing env vars).  Agents can read this from
-          ``state["integration_warnings"]`` to surface helpful messages.
+          (not in registry, missing env vars, or not authorised for the acting
+          user).  Agents can read this from ``state["integration_warnings"]``
+          to surface helpful messages.
+
+    An unauthorised service is reported through ``unavailable`` rather than
+    raising, deliberately: agents already handle that map gracefully, so a
+    member who lacks one integration still gets a working agent that explains
+    what it cannot do, instead of a failed run.
     """
     resolved: dict[str, dict[str, Any]] = {}
     unavailable: dict[str, str] = {}
@@ -311,6 +332,20 @@ def build_integrations(
     for service_name, is_mandatory in (
         [(s, True) for s in mandatory] + [(s, False) for s in optional]
     ):
+        if is_authorized is not None and not is_authorized(service_name):
+            reason = (
+                f"You do not have access to the {service_name!r} integration "
+                f"(missing permission 'integrations:use:{service_name}'). "
+                f"An organization admin can grant it."
+            )
+            unavailable[service_name] = reason
+            _log.info(
+                "integrations.not_authorized",
+                service=service_name,
+                mandatory=is_mandatory,
+            )
+            continue
+
         resolver = _REGISTRY.get(service_name)
         if resolver is None:
             reason = (

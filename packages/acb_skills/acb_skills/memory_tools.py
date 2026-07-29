@@ -85,6 +85,35 @@ def _get_memory_agent_name() -> str:
     return _memory_agent_name.get()
 
 
+# ContextVar holding a predicate `(permission) -> bool` for the acting member,
+# set by the executor per run alongside the two above. A plain callable rather
+# than a UserContext so this low-level tool package keeps no dependency on
+# acb_auth. Default allows everything: a run with no member attached (cron,
+# reconciler, webhook) is the platform acting on its own behalf and keeps the
+# behaviour it had before org access control existed.
+_memory_permission: contextvars.ContextVar = contextvars.ContextVar(
+    "_memory_permission", default=None
+)
+
+
+def _set_memory_permission(predicate) -> None:
+    """Install the acting member's permission predicate for this run."""
+    _memory_permission.set(predicate)
+
+
+def _may(permission: str) -> bool:
+    """True when the acting member holds *permission* (or none is attached)."""
+    predicate = _memory_permission.get()
+    if predicate is None:
+        return True
+    try:
+        return bool(predicate(permission))
+    except Exception:  # noqa: BLE001
+        # A broken predicate must not silently open the gate.
+        _log.warning("memory_tools.permission_check_failed", permission=permission)
+        return False
+
+
 async def remember(query: str) -> str:
     """Search episodic memory for facts about the current user related to *query*.
 
@@ -394,6 +423,16 @@ async def save_org_memory(fact: str) -> str:
         await save_org_memory("Fracktal's fiscal year runs April-March")
         await save_org_memory("All customer refunds above 1L need finance approval")
     """
+    if not _may("memory:write_org"):
+        # Org memory is read by every agent for every user, so an unauthorised
+        # write is not a private mistake — it becomes shared context. Refuse
+        # with a message the agent can relay rather than failing the run.
+        _log.info("memory_tools.save_org_memory_denied")
+        return (
+            "You do not have permission to write organisation-wide memory "
+            "(missing 'memory:write_org'). An organization admin can grant it. "
+            "Saving this as a personal memory instead may be what you want."
+        )
     try:
         from acb_memory import add_scoped_memories, scope_key  # noqa: PLC0415
 

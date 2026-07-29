@@ -28,6 +28,7 @@ import {
   ArrowLeft,
   Bot,
   Check,
+  Plug,
   Info,
   LayoutGrid,
   Loader2,
@@ -349,6 +350,49 @@ export default function MemberAccessPage() {
               />
               <DecisionTable
                 decisions={data.agents}
+                labelOf={(d) => d.name ?? d.permission}
+                overrides={overrides}
+                reasons={reasons}
+                onEffect={setEffect}
+                onReason={(p, v) => setReasons((r) => ({ ...r, [p]: v }))}
+              />
+            </>
+          )}
+        </Section>
+
+        {/* Integrations */}
+        <Section
+          icon={<Plug size={14} />}
+          title="Integrations"
+          subtitle="Which third-party services an agent may use on this person's behalf. Separate from managing the credentials themselves, which is a capability below."
+        >
+          {(data.integrations ?? []).length === 0 ? (
+            <p className="text-xs text-muted-foreground">
+              No integrations registered yet.
+            </p>
+          ) : (
+            <>
+              <DecisionRow
+                permission="integrations:use:*"
+                label="All integrations"
+                decision={{
+                  permission: "integrations:use:*",
+                  allowed: data.granted.includes("integrations:use:*"),
+                  source: data.denied.includes("integrations:use:*")
+                    ? "deny-override"
+                    : data.granted.includes("integrations:use:*")
+                      ? "role"
+                      : "default-deny",
+                  pattern: "integrations:use:*",
+                  via_role: data.roles[0] ?? "",
+                }}
+                overrides={overrides}
+                reasons={reasons}
+                onEffect={setEffect}
+                onReason={(p, v) => setReasons((r) => ({ ...r, [p]: v }))}
+              />
+              <DecisionTable
+                decisions={data.integrations}
                 labelOf={(d) => d.name ?? d.permission}
                 overrides={overrides}
                 reasons={reasons}

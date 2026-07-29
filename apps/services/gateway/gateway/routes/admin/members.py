@@ -23,6 +23,7 @@ from acb_auth import (
     agent_run_permission,
     build_access,
     feature_permission,
+    integration_use_permission,
     require_permission,
     validate_permission,
 )
@@ -471,6 +472,21 @@ def _agent_names() -> list[str]:
         return []
 
 
+def _integration_names() -> list[str]:
+    """Registered integration service names. Best-effort.
+
+    Lazily imported for the same reason as the agent registry: an access
+    screen that 500s because one registry is unavailable is worse than one
+    showing fewer rows.
+    """
+    try:
+        from acb_skills.integrations import list_registered  # noqa: PLC0415
+
+        return sorted(list_registered())
+    except Exception:  # noqa: BLE001
+        return []
+
+
 def _explain(
     access: EffectiveAccess, permission: str, role_perms: dict[str, list[str]]
 ) -> dict[str, Any]:
@@ -531,6 +547,13 @@ async def get_member_access(
         "agents": [
             _explain(access, agent_run_permission(n), role_perms) | {"name": n}
             for n in _agent_names()
+        ],
+        # Which third-party services an agent may use ON THIS MEMBER'S BEHALF.
+        # Separate from `integrations:manage` (adding/rotating the credentials),
+        # which appears under capabilities.
+        "integrations": [
+            _explain(access, integration_use_permission(s), role_perms) | {"name": s}
+            for s in _integration_names()
         ],
         "overrides": [
             {

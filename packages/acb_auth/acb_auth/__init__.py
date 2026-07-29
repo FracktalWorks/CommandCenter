@@ -30,6 +30,7 @@ from acb_auth.permissions import (
     agent_run_permission,
     build_access,
     feature_permission,
+    integration_use_permission,
     permission_matches,
     validate_permission,
 )
@@ -59,6 +60,7 @@ __all__ = [
     "build_access",
     "feature_permission",
     "agent_run_permission",
+    "integration_use_permission",
     "permission_matches",
     "validate_permission",
     # resolution

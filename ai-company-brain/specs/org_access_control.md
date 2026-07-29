@@ -300,9 +300,43 @@ The change is additive and reversible:
 |---|---|---|
 | **1** | Schema, permission engine, admin API, member/role/access UI, nav + route gating, agent-run gate | 🔄 this spec |
 | **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; `email_account_member` | 🔲 |
-| **3** | Memory + credential scoping (research §7–§8) — the real seam-3 work | 🔲 |
+| **3** | Memory + credential scoping (research §7–§8) — the real seam-3 work | 🔄 authorization done (below); isolation deferred to BO-7 |
 | **4** | Entity-graph visibility + RLS safety net (research §9, §16.5) | 🔲 |
 | **5** | Consent records, access reviews, audit completeness (research §11.3) | 🔲 |
+
+---
+
+## 8a. Integration credentials and org memory (seam 3, authorization half)
+
+### What is enforced
+
+An agent's `config.json` declares which integrations it *wants*. Which of those the platform actually resolves is now decided by the **acting member**, via `integrations:use:<service>`:
+
+```
+role:     integrations:use:*                     baseline
+override: integrations:use:zoho-crm      deny    Priya is not on the sales team
+```
+
+`build_integrations(..., is_authorized=...)` filters before resolution, and the executor supplies the predicate from the member's resolved access. Two properties matter:
+
+- **An agent cannot widen its own access.** Declaring more integrations gets more entries in `unavailable`, not more credentials.
+- **Filtering happens before the env injection.** At the streaming call site the credentials are injected into the run's environment (B6 Tier 0, restored afterwards by token); filtering first means an unauthorized credential never enters that environment at all, rather than merely being absent from `state["integrations"]`.
+
+Unauthorized services are reported through the existing `unavailable` map rather than raising, so a member missing one integration still gets a working agent that can explain what it cannot do.
+
+Org memory writes are gated the same way, on `memory:write_org`. Personal and agent-scoped memory stay ungated — they are already keyed to the acting user and the running agent, so there is nothing to authorize. Org memory is the shared one, which is why writing to it is the act that needs a permission. Reads stay open to `member`; a recall that silently returns nothing is worse than one that works.
+
+### What is *not* enforced — say this out loud
+
+This is **authorization, not isolation.** During a run, resolved credentials still live in the process environment. An agent that reads `os.environ` directly, rather than `state["integrations"]`, can still see whatever else is there. Per-run scoping (B6 Tier 0) narrows the window and the restore token cleans up after, but the boundary is cooperative, not enforced.
+
+Real isolation needs the sandbox work — **BO-7** in `FOUNDATION_BUILDOUT_CHECKLIST.md`, and research doc §17.12. Until that lands, the honest claim is: *the platform will not hand a member credentials they are not authorized for*, not *a hostile agent cannot obtain them*. Those are different sentences and only the first one is true today.
+
+### Background runs are deliberately unfiltered
+
+The filter engages only when a run is attributable to an **active member**. Cron, the reconciler, webhook-triggered runs, and any address that does not resolve to a provisioned member all run unfiltered, exactly as before.
+
+This asymmetry is on purpose. The feature exists to restrict a known member's reach. If it also starved background runs whose payload happened to carry an unfamiliar address, the failure would be silent — no 403, no error, just work that quietly stops happening. Who may start a run at all is already enforced upstream by `assert_can_run_agent`.
 
 ---
 

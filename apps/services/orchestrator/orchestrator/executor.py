@@ -1478,6 +1478,68 @@ async def _detect_agent_commits(
         )
 
 
+async def _integration_authorizer(event_payload: Any):
+    """Build the per-run integration filter for the acting member, or None.
+
+    Org access control (spec §5, seam 3). An agent's ``config.json`` declares
+    which integrations it *wants*; this decides which the caller may actually
+    hand it, so a member denied `integrations:use:zoho-crm` cannot reach Zoho
+    by picking an agent that declares it.
+
+    Returns ``None`` — meaning no filtering, the pre-org-access-control
+    behaviour — whenever the run is **not** attributable to an active member:
+
+    * no ``user_email`` in the payload (cron, reconciler, webhook-triggered
+      runs: the platform acting on its own behalf, not a person's);
+    * a synthetic principal such as ``system:internal``;
+    * an address that does not resolve to an ACTIVE member.
+
+    That last case is the important one. This feature exists to restrict a
+    known member's reach — it must never become a new way for a background
+    run to silently lose its credentials because the address in the payload
+    happened not to be a provisioned member. Who may start a run at all is
+    already enforced upstream by ``assert_can_run_agent``, so an
+    unidentifiable address here means "platform-initiated", not "attacker".
+    """
+    email = ""
+    if isinstance(event_payload, dict):
+        email = str(
+            event_payload.get("user_email") or event_payload.get("user_id") or ""
+        ).strip()
+    if not email or ":" in email:
+        return None
+
+    try:
+        from acb_auth import (  # noqa: PLC0415
+            integration_use_permission,
+            resolve_access,
+        )
+
+        access = await resolve_access(email)
+        if not access.is_active:
+            return None
+
+        # Same resolution also arms the memory tools' permission gate, so
+        # org-memory writes are checked against the same member. Done here so
+        # there is exactly one access lookup per run.
+        try:
+            from acb_skills.memory_tools import (  # noqa: PLC0415
+                _set_memory_permission,
+            )
+
+            _set_memory_permission(access.has)
+        except Exception:  # noqa: BLE001
+            pass
+
+        return lambda service: access.has(integration_use_permission(service))
+    except Exception as exc:  # noqa: BLE001
+        # resolve_access is documented never to raise, so reaching here is a
+        # bug rather than a misconfiguration. Preserve the prior behaviour
+        # rather than failing every integration on a transient fault.
+        _log.warning("executor.integration_authorizer_failed", error=str(exc))
+        return None
+
+
 async def run_agent(
     agent_name: str,
     event_payload: dict[str, Any],
@@ -1601,7 +1663,8 @@ async def run_agent(
             mandatory_integrations: list[str] = loaded.config.get("integrations", [])
             optional_integrations: list[str] = loaded.config.get("optional_integrations", [])
             integrations, integration_warnings = build_integrations(
-                mandatory_integrations, optional_integrations, settings
+                mandatory_integrations, optional_integrations, settings,
+                is_authorized=await _integration_authorizer(event_payload),
             )
             if integration_warnings:
                 _log.warning(
@@ -2088,8 +2151,12 @@ async def run_agent_stream(
         ) as loaded:
             mandatory = loaded.config.get("integrations", [])
             optional = loaded.config.get("optional_integrations", [])
+            # Filter BEFORE the env injection below, so a credential the
+            # acting member may not use never enters the run's environment at
+            # all — not merely absent from state["integrations"].
             integrations, integration_warnings = build_integrations(
-                mandatory, optional, settings
+                mandatory, optional, settings,
+                is_authorized=await _integration_authorizer(event_payload),
             )
             # B6 Phase-5 Tier 0: scope creds to this run; token restored in the
             # finally below so they don't linger in the shared process env.

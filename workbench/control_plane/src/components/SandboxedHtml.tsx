@@ -231,11 +231,14 @@ function buildSrcDoc(
      min-height keeps every control's TAP target comfortable on a touch
      screen (published apps run in whoever's browser opens them, phone
      included) without changing the compact visual size — padding still
-     controls how the control LOOKS, min-height only pads the hit area. */
+     controls how the control LOOKS, min-height only pads the hit area.
+     44px matches Apple HIG / Material Design's minimum touch target size —
+     the same number CommandCenter's own mobile bottom-nav bar already uses
+     (see globals.css), not a separate convention for built apps. */
   button, .cc-btn {
     font: inherit; cursor: pointer; border-radius: calc(var(--cc-radius) - 0.25rem);
     border: 1px solid var(--cc-border); background: var(--cc-secondary);
-    color: var(--cc-fg); padding: 0.4rem 0.8rem; min-height: 2.25rem;
+    color: var(--cc-fg); padding: 0.4rem 0.8rem; min-height: 2.75rem;
     transition: background 0.2s var(--cc-ease), border-color 0.2s var(--cc-ease);
   }
   button:hover, .cc-btn:hover { border-color: var(--cc-primary); }
@@ -245,7 +248,7 @@ function buildSrcDoc(
   input, select, textarea {
     font: inherit; color: var(--cc-fg); background: var(--cc-card);
     border: 1px solid var(--cc-border); border-radius: calc(var(--cc-radius) - 0.25rem);
-    padding: 0.35rem 0.55rem; outline: none; min-height: 2.25rem;
+    padding: 0.35rem 0.55rem; outline: none; min-height: 2.75rem;
   }
   input:focus, select:focus, textarea:focus {
     border-color: var(--cc-primary);

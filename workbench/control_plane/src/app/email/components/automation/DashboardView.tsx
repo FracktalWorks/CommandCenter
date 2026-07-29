@@ -96,14 +96,17 @@ export function DashboardView({
     action.then(() => load(true)).catch(() => load(true));
   };
 
-  const markDone = (t: DigestThread) => {
+  // Closing actions work on BOTH sides of the ledger: a needs-reply loop can
+  // be done/dismissed, and so can a waiting-on-them loop the user no longer
+  // cares about (it otherwise sits in the list — and the count — forever).
+  const markDone = (key: "backlog" | "awaiting", t: DigestThread) => {
     if (!accountId) return;
-    dropThread("backlog", t.thread_id, resolveThread(accountId, t.thread_id));
+    dropThread(key, t.thread_id, resolveThread(accountId, t.thread_id));
   };
 
-  const dismiss = (t: DigestThread) => {
+  const dismiss = (key: "backlog" | "awaiting", t: DigestThread) => {
     if (!accountId) return;
-    dropThread("backlog", t.thread_id,
+    dropThread(key, t.thread_id,
       resolveThread(accountId, t.thread_id, { dismiss: true }));
   };
 
@@ -195,13 +198,22 @@ export function DashboardView({
               </div>
             )}
 
-            {/* Stat row */}
+            {/* Stat row. Two different clocks live here: the traffic tiles are
+                WINDOWED by the day/week toggle, while the two open-loop tiles
+                are ALL open threads regardless of period — each tile says which,
+                so "Waiting on them 104" under a "Last day" toggle stops reading
+                as one day's mail. */}
             <div className="grid grid-cols-2 md:grid-cols-5 gap-3">
-              <Stat icon={Mail} label="In inbox" value={t!.inbox} />
-              <Stat icon={MailOpen} label="Unread" value={t!.unread} />
-              <Stat icon={Reply} label="Needs reply" value={t!.needs_reply} accent />
-              <Stat icon={Hourglass} label="Waiting on them" value={t!.awaiting ?? 0} />
-              <Stat icon={Paperclip} label="Attachments" value={t!.attachments} />
+              <Stat icon={Mail} label="In inbox" value={t!.inbox}
+                sub={period === "day" ? "last day" : "last week"} />
+              <Stat icon={MailOpen} label="Unread" value={t!.unread}
+                sub={period === "day" ? "last day" : "last week"} />
+              <Stat icon={Reply} label="Needs reply" value={t!.needs_reply}
+                sub="all open" accent />
+              <Stat icon={Hourglass} label="Waiting on them"
+                value={t!.awaiting ?? 0} sub="all open" />
+              <Stat icon={Paperclip} label="Attachments" value={t!.attachments}
+                sub={period === "day" ? "last day" : "last week"} />
             </div>
 
             {/* The two sides of the ledger: what YOU owe, and what's owed to
@@ -224,6 +236,11 @@ export function DashboardView({
                   </p>
                 ) : (
                   <div className="max-h-72 overflow-y-auto pr-1 space-y-0.5">
+                    {t!.needs_reply > data.backlog.length && (
+                      <p className="text-[10px] text-muted-foreground pb-1">
+                        Showing the top {data.backlog.length} of {t!.needs_reply}.
+                      </p>
+                    )}
                     {data.backlog.map((b) => (
                       <ThreadRow
                         key={b.thread_id}
@@ -241,7 +258,7 @@ export function DashboardView({
                             )}
                             <RowBtn
                               title="Mark done — this loop is closed"
-                              onClick={() => markDone(b)}
+                              onClick={() => markDone("backlog", b)}
                             >
                               <CheckCheck size={12} />
                             </RowBtn>
@@ -255,7 +272,7 @@ export function DashboardView({
                             )}
                             <RowBtn
                               title="Dismiss — never mind this thread (files it as FYI without claiming it's done)"
-                              onClick={() => dismiss(b)}
+                              onClick={() => dismiss("backlog", b)}
                             >
                               <XCircle size={12} />
                             </RowBtn>
@@ -278,20 +295,40 @@ export function DashboardView({
                   </p>
                 ) : (
                   <div className="max-h-72 overflow-y-auto pr-1 space-y-0.5">
+                    {(t!.awaiting ?? 0) > data.awaiting.length && (
+                      <p className="text-[10px] text-muted-foreground pb-1">
+                        Showing the longest-waiting {data.awaiting.length} of{" "}
+                        {t!.awaiting}.
+                      </p>
+                    )}
                     {data.awaiting.map((b) => (
                       <ThreadRow
                         key={b.thread_id}
                         row={b}
                         onOpen={onOpenEmail}
                         actions={
-                          b.message_id && onNudge ? (
+                          <>
+                            {b.message_id && onNudge && (
+                              <RowBtn
+                                title="Nudge — open the thread with an AI follow-up draft ready"
+                                onClick={() => onNudge(b.message_id!)}
+                              >
+                                <BellRing size={12} />
+                              </RowBtn>
+                            )}
                             <RowBtn
-                              title="Nudge — open the thread with an AI follow-up draft ready"
-                              onClick={() => onNudge(b.message_id!)}
+                              title="Mark done — no longer waiting on this; closes the loop"
+                              onClick={() => markDone("awaiting", b)}
                             >
-                              <BellRing size={12} />
+                              <CheckCheck size={12} />
                             </RowBtn>
-                          ) : undefined
+                            <RowBtn
+                              title="Dismiss — stop tracking this thread (files it as FYI)"
+                              onClick={() => dismiss("awaiting", b)}
+                            >
+                              <XCircle size={12} />
+                            </RowBtn>
+                          </>
                         }
                       />
                     ))}
@@ -308,22 +345,49 @@ export function DashboardView({
                   <CountBadge n={data.commitments.length} />
                 </h3>
                 <div className="space-y-1.5">
-                  {data.commitments.map((c, i) => (
-                    <div key={i} className="flex items-center justify-between text-xs gap-2">
-                      <span className="text-foreground truncate">{c.title}</span>
-                      <span
-                        className={`tabular-nums flex-shrink-0 ${
-                          c.overdue && c.due
-                            ? "text-destructive"
-                            : "text-muted-foreground"
+                  {data.commitments.map((c, i) => {
+                    // Click-through to the email the promise was made in — the
+                    // captured title alone rarely carries enough context.
+                    const openable = Boolean(onOpenEmail && c.message_id);
+                    return (
+                      <button
+                        key={c.task_id ?? i}
+                        onClick={() => openable && onOpenEmail!(c.message_id!)}
+                        disabled={!openable}
+                        title={
+                          openable
+                            ? "Open the email this commitment came from"
+                            : undefined
+                        }
+                        className={`group flex items-center justify-between text-xs gap-2 w-full rounded px-1.5 py-0.5 -mx-1.5 ${
+                          openable
+                            ? "hover:bg-secondary cursor-pointer"
+                            : "cursor-default"
                         }`}
                       >
-                        {!c.due
-                          ? "no due date"
-                          : `${c.overdue ? "overdue" : "due"} ${c.due}`}
-                      </span>
-                    </div>
-                  ))}
+                        <span className="text-foreground truncate flex items-center gap-1 min-w-0">
+                          <span className="truncate">{c.title}</span>
+                          {openable && (
+                            <ChevronRight
+                              size={11}
+                              className="text-muted-foreground opacity-0 group-hover:opacity-100 transition-opacity flex-shrink-0"
+                            />
+                          )}
+                        </span>
+                        <span
+                          className={`tabular-nums flex-shrink-0 ${
+                            c.overdue && c.due
+                              ? "text-destructive"
+                              : "text-muted-foreground"
+                          }`}
+                        >
+                          {!c.due
+                            ? "no due date"
+                            : `${c.overdue ? "overdue" : "due"} ${c.due}`}
+                        </span>
+                      </button>
+                    );
+                  })}
                 </div>
               </div>
             )}
@@ -476,8 +540,10 @@ function ThreadRow({
       >
         {_agePhrase(row.age_days)}
       </span>
+      {/* Always visible on touch screens (no hover to reveal them); hover-only
+          on sm+ where a pointer exists. */}
       <span
-        className="flex items-center gap-0.5 flex-shrink-0 opacity-0 group-hover:opacity-100 transition-opacity"
+        className="flex items-center gap-0.5 flex-shrink-0 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity"
         onClick={(e) => e.stopPropagation()}
       >
         {actions}
@@ -523,11 +589,15 @@ function Stat({
   icon: Icon,
   label,
   value,
+  sub,
   accent,
 }: {
   icon: React.ElementType;
   label: string;
   value: number;
+  /** Which clock the number is on: the period window ("last day") or the
+   *  all-time open-loop ledger ("all open"). */
+  sub?: string;
   accent?: boolean;
 }) {
   return (
@@ -535,6 +605,11 @@ function Stat({
       <div className="flex items-center gap-1.5 text-muted-foreground mb-1">
         <Icon size={12} />
         <span className="text-[10px] uppercase tracking-wide">{label}</span>
+        {sub && (
+          <span className="ml-auto text-[9px] text-muted-foreground/60 whitespace-nowrap">
+            {sub}
+          </span>
+        )}
       </div>
       <div
         className={`text-xl font-semibold tabular-nums ${

@@ -273,10 +273,16 @@ async def get_assistant_settings(
         # Fall back to the legacy single field if the new column is still 0.
         if not awaiting and row:
             awaiting = getattr(row, "follow_up_days", 0) or 0
+        from gateway.routes.email.signature import signature_text  # noqa: PLC0415
         return {
             "account_id": account_id,
             "about": row.about if row else "",
             "signature": row.signature if row else "",
+            # The SERVER's plain-text rendering of the signature — the composer
+            # seeds this exact text into the body so the draft-write paths'
+            # idempotent re-signing recognises it (a client-side re-derivation
+            # could differ by whitespace and get double-signed).
+            "signature_text": signature_text((row.signature if row else "") or ""),
             "auto_run": bool(row.auto_run) if row else True,
             "cold_email_blocker": (row.cold_email_blocker if row else "OFF") or "OFF",
             "rule_model": (getattr(row, "rule_model", None) if row else None)

@@ -31,6 +31,10 @@ from gateway.routes.email.core import (
     router,
 )
 from gateway.routes.email.quoting import split_quoted_text
+from gateway.routes.email.signature import (
+    append_signature_text,
+    strip_signature_text,
+)
 from gateway.routes.email.transport.send import (
     ArtifactAttachment,
     SendAttachment,
@@ -38,6 +42,19 @@ from gateway.routes.email.transport.send import (
 )
 from pydantic import BaseModel
 from sqlalchemy import text
+
+
+async def _account_signature(db: Any, account_id: str) -> str:
+    """The account's configured signature (HTML/plain, '' when unset) — for the
+    draft-write paths that don't already hold it via _load_assistant_about."""
+    try:
+        row = (await db.execute(text(
+            "SELECT signature FROM email_assistant_settings "
+            "WHERE account_id = :aid"
+        ), {"aid": account_id})).fetchone()
+        return (row.signature if row else "") or ""
+    except Exception:  # noqa: BLE001 — a draft save must not fail on settings
+        return ""
 
 
 def _resolve_draft_attachments(
@@ -495,13 +512,19 @@ async def _learn_from_sent(account_id: str, thread_id: str, sent_text: str) -> N
     sent_text = split_quoted_text(sent_text)[0]
     db = await _get_db()
     try:
+        # The signature now rides IN draft bodies, but the /send path's body may
+        # or may not carry it depending on where the send started. Strip it from
+        # BOTH sides so the unchanged-check diffs what the user wrote — never
+        # the boilerplate — and the signature never leaks into learned prefs.
+        sig = await _account_signature(db, account_id)
+        sent_text = strip_signature_text(sig, sent_text)
         row = (await db.execute(text(
             "SELECT draft_text FROM email_ai_drafts "
             "WHERE account_id = :aid AND thread_id = :tid"
         ), {"aid": account_id, "tid": thread_id})).fetchone()
         if not row:
             return
-        original = row.draft_text or ""
+        original = strip_signature_text(sig, row.draft_text or "")
         await db.execute(text(
             "DELETE FROM email_ai_drafts "
             "WHERE account_id = :aid AND thread_id = :tid"
@@ -870,9 +893,9 @@ async def _llm_draft_reply(
     # Salutation guarantee: the prompt asks for a greeting, but a model that
     # skips it ships an abrupt, informal-reading draft — so enforce it here.
     body = _ensure_salutation(body, email.get("from_name") or "")
-    # The signature is NOT appended here — it is added at send time
-    # (signature.build_signed_bodies) as an HTML block with a plain-text
-    # fallback, so it renders as HTML and never doubles up in the compose box.
+    # The signature is NOT appended here — each draft-write/send path appends
+    # it once, deterministically (signature.append_signature_text /
+    # build_signed_bodies), so the model can never double or mangle it.
     return body
 
 
@@ -1664,6 +1687,12 @@ async def draft_reply_smart(
         if _is_no_draft(draft):
             return {"draft": "", "created": False, "skipped": "low_confidence"}
 
+        # The signature lives IN the draft body, so the provider draft shows it
+        # upstream (Gmail/Outlook) too — it used to be added only at send time,
+        # leaving synced drafts looking unsigned. Idempotent; send re-signing
+        # dedups against this same text.
+        draft = append_signature_text(signature, draft)
+
         # Remember this draft so we can learn from the user's edits on send.
         if not req.follow_up:
             await _store_ai_draft(db, req.account_id, email["thread_id"], draft)
@@ -1737,6 +1766,12 @@ async def _compose_assist_run(
             db, req.account_id,
             query=f"{req.subject or ''} {req.body or ''}")
         models = await _account_models(db, req.account_id)
+        # The composer body CARRIES the signature now (it's part of the draft,
+        # visible upstream). The AI must never see it: a signature-only body is
+        # an EMPTY draft — it routes to the full reply drafter, not improve —
+        # and improve mode works on the owner's words alone. Strip it here; the
+        # result is re-signed before returning.
+        req_body = strip_signature_text(signature, req.body or "")
         recipient = ""
         subject = req.subject or ""
         thread = ""
@@ -1755,7 +1790,7 @@ async def _compose_assist_run(
             # /draft-reply, so full context + identical rules apply (one method,
             # not a separate lighter one). Improve-in-place and forward keep the
             # compose path, now WITH the replied-to body in view.
-            if req.mode == "reply" and not (req.body or "").strip():
+            if req.mode == "reply" and not req_body.strip():
                 # The user's AI-bar prompt must steer this draft. This path used
                 # to drop req.instruction entirely, so typing an instruction and
                 # hitting Draft on an empty reply changed nothing.
@@ -1770,6 +1805,9 @@ async def _compose_assist_run(
                 )
                 if _is_no_draft(draft):
                     return {"draft": "", "skipped": "low_confidence"}
+                # The signature rides in the returned body (the composer shows
+                # it as part of the draft; autosave syncs it upstream).
+                draft = append_signature_text(signature, draft)
                 # Remember this draft (same as /draft-reply) so when the user
                 # edits it in the composer and sends, _learn_from_sent can diff
                 # the sent body against what the AI wrote. Without this the
@@ -1795,10 +1833,10 @@ async def _compose_assist_run(
             detail="thread and recipient loaded")
         await _emit_activity(
             on_activity, kind="stage", id="draft", status="start",
-            detail=("refining your draft" if (req.body or "").strip()
+            detail=("refining your draft" if req_body.strip()
                     else "writing a new draft"))
         draft = await _llm_compose_assist(
-            about=about, signature=signature, current_body=req.body,
+            about=about, signature=signature, current_body=req_body,
             instruction=req.instruction, mode=req.mode, recipient=recipient,
             subject=subject, thread=thread, reply_to_body=reply_to_body,
             user_email=user.email or "", model=models["compose"],
@@ -1806,7 +1844,7 @@ async def _compose_assist_run(
         )
         if _is_no_draft(draft):
             return {"draft": "", "skipped": "low_confidence"}
-        return {"draft": draft}
+        return {"draft": append_signature_text(signature, draft)}
     finally:
         await db.close()
 
@@ -1992,6 +2030,11 @@ async def upsert_draft(
     db = await _get_db()
     try:
         await _assert_account_owner(db, req.account_id, user.email or "anonymous")
+        # The signature lives IN the draft body so the upstream (provider)
+        # draft shows it too. The composer normally seeds it already — this is
+        # the idempotent backstop for bodies that arrived without it.
+        body = append_signature_text(
+            await _account_signature(db, req.account_id), req.body)
         async with provider_session(
             db, user.email or "anonymous", account_id=req.account_id,
         ) as sess:
@@ -2018,14 +2061,14 @@ async def upsert_draft(
                 try:
                     provider_id = await provider.update_draft(
                         drow.provider_message_id, to=to or None,
-                        subject=subject or None, body_text=req.body,
+                        subject=subject or None, body_text=body,
                         thread_id=thread_id or None,
                         cc=cc, bcc=bcc, attachments=atts or None,
                     )
                 except NotImplementedError:
                     # No in-place update primitive → fresh draft, drop the old.
                     provider_id = await provider.create_draft(
-                        to=to, subject=subject, body_text=req.body,
+                        to=to, subject=subject, body_text=body,
                         thread_id=thread_id or None, cc=cc, bcc=bcc,
                         attachments=atts or None,
                     )
@@ -2058,21 +2101,21 @@ async def upsert_draft(
                     if frm.get("email"):
                         to = [frm["email"]]
                 provider_id = await provider.create_draft(
-                    to=to, subject=subject, body_text=req.body,
+                    to=to, subject=subject, body_text=body,
                     reply_to_message_id=rrow.provider_message_id,
                     thread_id=thread_id or None, cc=cc, bcc=bcc,
                     attachments=atts or None,
                 )
             else:
                 provider_id = await provider.create_draft(
-                    to=to, subject=subject, body_text=req.body, cc=cc, bcc=bcc,
+                    to=to, subject=subject, body_text=body, cc=cc, bcc=bcc,
                     attachments=atts or None,
                 )
 
             local_id = await _upsert_local_draft(
                 db, req.account_id, provider_id, thread_id=thread_id,
                 owner_email=sess.owner_email, to_email=(to[0] if to else ""),
-                subject=subject, body=req.body, cc=cc, bcc=bcc,
+                subject=subject, body=body, cc=cc, bcc=bcc,
                 has_attachments=bool(atts),
             )
         await db.commit()
@@ -2216,6 +2259,9 @@ async def save_draft(
             raise HTTPException(status_code=404, detail="Message not found")
         frm = row.from_address if isinstance(row.from_address, dict) \
             else json.loads(row.from_address or "{}")
+        # Signature-in-body (idempotent): the saved draft shows it upstream too.
+        body = append_signature_text(
+            await _account_signature(db, req.account_id), req.body)
         async with provider_session(
             db, user.email or "anonymous",
             message_id=req.message_id, require_auth=False,
@@ -2230,14 +2276,14 @@ async def save_draft(
             provider_id = await sess.provider.create_draft(
                 to=[to_email],
                 subject=re_subject,
-                body_text=req.body,
+                body_text=body,
                 reply_to_message_id=sess.provider_message_id,
                 thread_id=row.thread_id or None,
             )
             local_id = await _upsert_local_draft(
                 db, req.account_id, provider_id, thread_id=row.thread_id,
                 owner_email="", to_email=to_email,
-                subject=re_subject, body=req.body,
+                subject=re_subject, body=body,
             )
         await db.commit()
         return {"created": True, "id": local_id}

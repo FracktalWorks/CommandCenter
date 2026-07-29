@@ -15,7 +15,7 @@ import { ComposerQuote, AiButton } from "./ComposerAI";
 import { DraftAssistant } from "./DraftAssistant";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
-import { SignaturePreview } from "./SignaturePreview";
+import { getSignatureText, stripSignature } from "../lib/signature";
 import { TaskCaptureModal, type CommitmentContext } from "./TaskCaptureModal";
 import { ContactTrigger, RecipientList } from "./ContactCard";
 
@@ -414,6 +414,19 @@ export function DraftCard({
   // AI draft/refine panel — the session owns live backend steps + revisions.
   const [aiOpen, setAiOpen] = useState(false);
   const [aiInstruction, setAiInstruction] = useState("");
+  // The signature's plain text — it rides IN the stored draft body now (the
+  // draft-write paths sign it), so the editor shows it as ordinary body text;
+  // kept here to judge whether the user wrote anything beyond it.
+  const [sigText, setSigText] = useState("");
+  useEffect(() => {
+    let alive = true;
+    void getSignatureText(draft.accountId || selectedAccountId).then((s) => {
+      if (alive) setSigText(s);
+    });
+    return () => {
+      alive = false;
+    };
+  }, [draft.accountId, selectedAccountId]);
   const ai = useDraftSession({
     onBody: (next) => {
       dirty.current = true;
@@ -650,8 +663,8 @@ export function DraftCard({
           placeholder="Write your reply…"
           className={`${INPUT} resize-y leading-relaxed`}
         />
-        {/* Signature as it will be appended on send (Outlook/Gmail style). */}
-        <SignaturePreview accountId={draft.accountId || selectedAccountId} />
+        {/* The signature is IN the stored draft body (signed at draft-write
+            time) — no separate preview card. */}
         {/* Quoted trailing email — collapsed, read-only (reattached on send) */}
         <ComposerQuote quote={quote} className="" />
       </div>
@@ -661,7 +674,7 @@ export function DraftCard({
             instruction={aiInstruction}
             onInstruction={setAiInstruction}
             busy={ai.busy}
-            hasText={body.trim().length > 0}
+            hasText={stripSignature(body, sigText).trim().length > 0}
             hasDraft={ai.hasDraft}
             steps={ai.steps}
             thinking={ai.thinking}

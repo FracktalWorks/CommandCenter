@@ -98,22 +98,36 @@ export default function LiveConsolePage({
   }, [id]);
 
   // Poll session + roster + coverage: all change on human timescales, so
-  // polling is cheaper and simpler than more streams.
+  // polling is cheaper and simpler than more streams. Once the session has
+  // ended nothing changes any more — stop entirely (an abandoned tab used to
+  // issue ~2,880 requests/hour forever).
+  const ended = session?.status === "ended";
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
+    if (ended) return;
     const t = setInterval(() => void refresh(), 5000);
     return () => clearInterval(t);
-  }, [refresh]);
+  }, [refresh, ended]);
 
-  // The transcript IS worth a stream — words arrive continuously.
+  // The transcript IS worth a stream — words arrive continuously. The server
+  // replays its ring buffer on every (re)connect, so lines are deduped by
+  // identity (start time + speaker + text), not blindly appended —
+  // EventSource auto-reconnects and every reconnect used to duplicate the
+  // whole visible transcript.
   useEffect(() => {
     const es = new EventSource(`/api/notes/meetings/${id}/live`);
+    const segKey = (s: LiveSegment) =>
+      `${s.start_s}|${s.speaker_id ?? ""}|${s.text}`;
     es.onmessage = (ev) => {
       try {
         const seg = JSON.parse(ev.data) as LiveSegment;
         if (!seg?.text) return;
-        setLines((prev) => [...prev.slice(-(MAX_LINES - 1)), seg]);
+        setLines((prev) => {
+          const seen = new Set(prev.map(segKey));
+          if (seen.has(segKey(seg))) return prev;
+          return [...prev.slice(-(MAX_LINES - 1)), seg];
+        });
       } catch {
         /* keepalive / non-JSON frame */
       }
@@ -123,14 +137,23 @@ export default function LiveConsolePage({
   }, [id]);
 
   // The copilot's output is its own channel, so its chatter never mixes into
-  // the transcript. Only subscribed while it's actually on.
+  // the transcript. Only subscribed while it's actually on; toggling it off
+  // and on starts a fresh feed (stale pre-toggle tips used to reappear), and
+  // ring-buffer replays on reconnect are deduped like the transcript.
   useEffect(() => {
     if (!session?.copilot_enabled) return;
+    setSuggestions([]);
     const es = new EventSource(`/api/notes/meetings/${id}/copilot/stream`);
+    const evKey = (e: CopilotEvent) => `${e.ts ?? ""}|${e.kind}|${e.text}`;
     es.onmessage = (ev) => {
       try {
         const e = JSON.parse(ev.data) as CopilotEvent;
-        if (e?.text) setSuggestions((prev) => [...prev.slice(-49), e]);
+        if (!e?.text) return;
+        setSuggestions((prev) => {
+          const seen = new Set(prev.map(evKey));
+          if (seen.has(evKey(e))) return prev;
+          return [...prev.slice(-49), e];
+        });
       } catch {
         /* keepalive */
       }

@@ -8,6 +8,10 @@ holds the session, and streams NORMALIZED messages here. This module:
   messages (shared-secret auth); we parse → ``persist_sync_result`` → the SAME
   post-sync hooks the webhook fires. So every message a personal number receives
   flows through the identical triage + AI brain as a Cloud API number.
+* ``POST /whatsapp/bridge/labels`` — native WhatsApp labels + chat associations
+  from app-state sync, mirrored read-only into the triage inbox (W16).
+* ``POST /whatsapp/bridge/avatars`` — freshly-fetched profile-picture URLs per
+  chat, so the inbox can render the real DP instead of colored initials (W17).
 * ``POST /whatsapp/bridge/paired`` — the bridge tells us a device finished
   pairing; we fill in the number/name and flip the account to 'live'.
 * ``POST /whatsapp/bridge/connect`` — the app asks to pair: create a 'pairing'
@@ -212,6 +216,47 @@ async def persist_labels(
     return {"labels": len(labels), "associations": len(assocs)}
 
 
+def parse_avatars_payload(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Map the bridge's ``/bridge/avatars`` body to normalized avatar rows. Pure.
+
+    Rows missing a chat id or URL are skipped (never a partial/blank pointer)."""
+    out: list[dict[str, Any]] = []
+    for a in payload.get("avatars") or []:
+        if not isinstance(a, dict):
+            continue
+        chat = str(a.get("wa_chat_id") or "").strip()
+        url = str(a.get("avatar_url") or "").strip()
+        if not chat or not url:
+            continue
+        out.append({
+            "wa_chat_id": chat,
+            "avatar_url": url,
+            "avatar_hash": (str(a.get("avatar_hash")).strip() or None) if a.get("avatar_hash") else None,
+        })
+    return out
+
+
+async def persist_avatars(
+    db: Any, account_id: str, avatars: list[dict[str, Any]]
+) -> dict[str, int]:
+    """Upsert freshly-fetched profile-picture URLs for an account's chats. Keyed
+    by JID (wa_chat_avatars), not the wa_chats UUID — an avatar can arrive before
+    the chat's first message has synced."""
+    for a in avatars:
+        await db.execute(
+            text("""
+                INSERT INTO wa_chat_avatars (account_id, wa_chat_id, avatar_url, avatar_hash, updated_at)
+                VALUES (:aid, :chat, :url, :hash, now())
+                ON CONFLICT (account_id, wa_chat_id)
+                DO UPDATE SET avatar_url = excluded.avatar_url,
+                    avatar_hash = excluded.avatar_hash, updated_at = now()
+            """),
+            {"aid": account_id, "chat": a["wa_chat_id"], "url": a["avatar_url"],
+             "hash": a["avatar_hash"]},
+        )
+    return {"avatars": len(avatars)}
+
+
 # ── shared-secret auth (bridge ↔ gateway is server-to-server) ──────────────────
 
 def bridge_secret_ok(header: str | None) -> bool:
@@ -346,6 +391,40 @@ async def bridge_labels(request: Request):
 
         labels, assocs = parse_labels_payload(payload)
         counts = await persist_labels(db, account_id, labels, assocs)
+        await db.commit()
+        return {"ok": True, **counts}
+    finally:
+        await db.close()
+
+
+@router.post("/bridge/avatars")
+async def bridge_avatars(request: Request):
+    """The whatsmeow bridge posts freshly-fetched profile-picture URLs for one or
+    more chats. Verify → parse → upsert into wa_chat_avatars, so the inbox can
+    render the real DP instead of colored initials."""
+    if not bridge_secret_ok(request.headers.get("X-Bridge-Secret")):
+        return Response(status_code=403, content="bad secret")
+    try:
+        payload = await request.json()
+    except Exception:
+        return Response(status_code=400, content="invalid json")
+    account_id = str(payload.get("account_id") or "").strip()
+    if not account_id:
+        return Response(status_code=200, content="ok")
+
+    db = await _get_db()
+    try:
+        owned = (await db.execute(
+            text("""SELECT 1 FROM wa_accounts
+                    WHERE id = :aid AND provider = 'whatsmeow'"""),
+            {"aid": account_id},
+        )).fetchone()
+        if not owned:
+            _log.warning("whatsapp.bridge.avatars_unknown_account", account_id=account_id)
+            return Response(status_code=200, content="ok")
+
+        avatars = parse_avatars_payload(payload)
+        counts = await persist_avatars(db, account_id, avatars)
         await db.commit()
         return {"ok": True, **counts}
     finally:

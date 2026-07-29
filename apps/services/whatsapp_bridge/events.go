@@ -85,6 +85,9 @@ func (m *SessionManager) onMessage(s *Session, e *events.Message) {
 	}); err != nil {
 		m.log.Errorf("ingest %s msg %s: %v", s.accountID, e.Info.ID, err)
 	}
+
+	// Best-effort, TTL-cached — see avatars.go. Non-blocking.
+	m.enqueueAvatarCheck(s, e.Info.Chat)
 }
 
 func directionOf(fromMe bool) string {

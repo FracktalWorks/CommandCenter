@@ -162,3 +162,23 @@ func (g *GatewayClient) Reclassify(ctx context.Context, accountID string) error 
 func (g *GatewayClient) IngestLabels(ctx context.Context, p labelsPayload) error {
 	return g.post(ctx, "/whatsapp/bridge/labels", p)
 }
+
+// bridgeAvatar mirrors one chat's fetched profile-picture URL, as the gateway's
+// /bridge/avatars handler expects. avatar_url is WhatsApp's own CDN URL — the
+// gateway stores the pointer, not the bytes (same posture as labels).
+type bridgeAvatar struct {
+	WAChatID   string `json:"wa_chat_id"`
+	AvatarURL  string `json:"avatar_url"`
+	AvatarHash string `json:"avatar_hash,omitempty"`
+}
+
+// avatarsPayload is the body POSTed to /whatsapp/bridge/avatars.
+type avatarsPayload struct {
+	AccountID string         `json:"account_id"`
+	Avatars   []bridgeAvatar `json:"avatars"`
+}
+
+// IngestAvatars reports one or more freshly-fetched profile-picture URLs.
+func (g *GatewayClient) IngestAvatars(ctx context.Context, p avatarsPayload) error {
+	return g.post(ctx, "/whatsapp/bridge/avatars", p)
+}

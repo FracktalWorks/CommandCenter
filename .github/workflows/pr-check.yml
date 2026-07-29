@@ -7,7 +7,10 @@ name: pr-check
 
 on:
   pull_request:
-    branches: [main]
+    # Deliberately NOT restricted to `branches: [main]`. With that filter a
+    # stacked PR (one targeting another feature branch) ran no checks at all,
+    # and GitHub renders "no checks" the same as "nothing failing" — so broken
+    # code could look green all the way up the stack. Run on every PR instead.
     paths-ignore:
       - "**.md"
       - "ai-company-brain/**"

@@ -192,6 +192,9 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
 
             copilot.stop(meeting_id)
             reset_live_speakers(meeting_id)
+            from gateway.routes.notes import agenda_progress
+
+            agenda_progress.reset(meeting_id)
             await live_session.end(meeting_id)
         except Exception as exc:
             _log.warning("notes.live_teardown_failed", error=str(exc)[:200])
@@ -212,6 +215,9 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
             from gateway.routes.notes.live_speakers import reset as reset_live_speakers
 
             reset_live_speakers(meeting_id)
+            from gateway.routes.notes import agenda_progress
+
+            agenda_progress.reset(meeting_id)
             await live_session.end(meeting_id)
         except Exception as exc2:
             _log.warning("notes.live_teardown_failed", error=str(exc2)[:200])

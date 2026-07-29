@@ -3,6 +3,7 @@
 import type {
   ActionItem,
   AgendaItem,
+  AgendaProgress,
   Attendee,
   EmailAccount,
   EmailDraft,
@@ -85,6 +86,19 @@ export async function getAgenda(meetingId: string): Promise<AgendaItem[]> {
     await fetch(`/api/notes/meetings/${meetingId}/agenda`, { cache: "no-store" })
   );
   return body.agenda ?? [];
+}
+
+/** Per-item agenda coverage. Free server-side (token overlap, no model call),
+ *  and independent of the copilot — "you haven't reached pricing yet" is worth
+ *  knowing whether or not an agent is listening. */
+export async function getAgendaProgress(
+  meetingId: string
+): Promise<AgendaProgress> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}/agenda/progress`, {
+      cache: "no-store",
+    })
+  );
 }
 
 /** Talk to the copilot to build the agenda; it replies and returns the full
@@ -221,7 +235,8 @@ export async function listMeetings(query?: string): Promise<MeetingListItem[]> {
 export async function createMeeting(
   title?: string,
   platform: string = "upload",
-  templateKey?: string
+  templateKey?: string,
+  scheduledAt?: string
 ): Promise<MeetingListItem> {
   return json(
     await fetch("/api/notes/meetings", {
@@ -231,6 +246,7 @@ export async function createMeeting(
         title: title || null,
         platform,
         template_key: templateKey || null,
+        scheduled_at: scheduledAt || null,
       }),
     })
   );
@@ -405,6 +421,25 @@ export async function setMeetingTemplate(
   if (!res.ok) throw new Error(`${res.status}`);
 }
 
+/** Update a meeting's prep fields. Omitted keys are left alone server-side. */
+export async function patchMeeting(
+  meetingId: string,
+  patch: {
+    title?: string;
+    template_key?: string;
+    scheduled_at?: string;
+    copilot_enabled?: boolean;
+  }
+): Promise<MeetingListItem> {
+  return json(
+    await fetch(`/api/notes/meetings/${meetingId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(patch),
+    })
+  );
+}
+
 export async function saveScratchNotes(
   meetingId: string,
   scratchNotes: string
@@ -560,13 +595,20 @@ export async function getBotConfig(): Promise<{
  *  out to several meetings at once. */
 export async function botJoin(
   meetingUrl: string,
-  title?: string
+  title?: string,
+  /** Send the bot to a meeting you already prepared, instead of a fresh one —
+   *  otherwise the agenda and briefing you just wrote are stranded. */
+  meetingId?: string
 ): Promise<MeetingBot> {
   return json(
     await fetch(`/api/notes/meetings/bot-join`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ meeting_url: meetingUrl, title: title || null }),
+      body: JSON.stringify({
+        meeting_url: meetingUrl,
+        title: title || null,
+        meeting_id: meetingId || null,
+      }),
     })
   );
 }

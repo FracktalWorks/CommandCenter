@@ -88,8 +88,15 @@ jobs:
   deploy:
     name: "Deploy to Hostinger"
     runs-on: ubuntu-latest
-    needs: test
-    if: success()
+    needs: [lint, test]
+    # NOT `if: success()`. With skip_tests=true the `test` job is SKIPPED, and a
+    # dependent guarded by success() is skipped along with it — so the emergency
+    # hotfix path silently deployed nothing, exactly when it was needed most.
+    # Treat a skipped test job as acceptable; a FAILED one still blocks.
+    if: >-
+      ${{ always()
+      && needs.lint.result == 'success'
+      && (needs.test.result == 'success' || needs.test.result == 'skipped') }}
     env:
       # Runner-reachable public URLs used to VERIFY the deploy by outcome
       # (see the deploy step's rationale).
@@ -460,6 +467,26 @@ jobs:
               exit 1
             }
             echo "Caddy is active"
+
+            echo "==> Installing health watchdog (systemd timer)"
+            # Self-heals services between deploys and captures network forensics
+            # every 10 min. Deliberately installed here so it can never drift
+            # from the repo. See deploy/hostinger/health-watchdog.sh.
+            # The script is already in place via git reset; just make sure it is
+            # executable. (Do NOT `install` it onto itself — src == dest is an
+            # error, which is how it ended up non-executable the first time.)
+            sudo chmod 0755 "$APP_DIR/deploy/hostinger/health-watchdog.sh" || true
+            sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.service" /etc/systemd/system/
+            sudo cp "$APP_DIR/deploy/hostinger/acb-health-watchdog.timer"   /etc/systemd/system/
+            sudo systemctl daemon-reload
+            sudo systemctl enable --now acb-health-watchdog.timer || true
+            if systemctl is-active --quiet acb-health-watchdog.timer; then
+              echo "    watchdog timer active — next: $(systemctl show acb-health-watchdog.timer -p NextElapseUSecRealtime --value 2>/dev/null || echo '?')"
+            else
+              # Non-fatal: a missing watchdog must never block shipping the app.
+              echo "    ! watchdog timer NOT active (non-fatal)"
+              sudo systemctl status acb-health-watchdog.timer --no-pager 2>&1 | head -15 || true
+            fi
 
             echo "==> Running infra health probe"
             cd "$APP_DIR"

@@ -84,16 +84,19 @@ def choose_provider(model: str, has_aai: bool, has_dg: bool) -> str | None:
 def _live_model(provider: str) -> str:
     """The streaming model id the browser should request."""
     if provider == "assemblyai":
-        # Empty → let AssemblyAI use its default streaming model. Overridable
-        # per-deployment without a code change.
+        # AssemblyAI's streaming models are a SEPARATE family from the batch
+        # ones — the valid ids are `universal-streaming-english`,
+        # `universal-streaming-multilingual` and `u3-rt-pro`. A batch id like
+        # "universal-2" is not a streaming model at all, so picking it in
+        # Settings -> Models never affected live transcription.
         #
-        # Deliberately NOT the tier-stt batch model: AssemblyAI's streaming
-        # models are a separate family, so a batch id like "universal-2" is not
-        # a valid streaming model. It also matters for speakers — live
-        # diarization needs Universal-3 Pro Streaming (or a multilingual
-        # streaming model); universal-2 has no streaming diarization, and the
-        # symptom is captions with no speaker separation rather than an error.
-        return os.environ.get("ASSEMBLYAI_LIVE_MODEL", "").strip()
+        # Default to u3-rt-pro (Universal-3 Pro Streaming) because it is the
+        # model that supports live speaker diarization; the plain
+        # english-streaming model does not, and the symptom is a working
+        # transcript with every voice merged into one speaker rather than an
+        # error. Override per-deployment if the cost tradeoff isn't worth it —
+        # live captions still work on the others, just without speakers.
+        return os.environ.get("ASSEMBLYAI_LIVE_MODEL", "u3-rt-pro").strip()
     resolved = _configured_stt_model()
     if resolved.startswith("deepgram/"):
         return resolved.split("/", 1)[1]

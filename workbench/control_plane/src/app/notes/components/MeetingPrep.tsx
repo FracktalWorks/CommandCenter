@@ -51,6 +51,25 @@ import type {
   TemplateInfo,
 } from "../lib/types";
 
+/**
+ * ISO timestamp → the value a `datetime-local` input expects, in the viewer's
+ * own timezone.
+ *
+ * Slicing the ISO string looks equivalent and isn't: it hands the input a UTC
+ * wall-clock time, so a meeting set for 10:00 in IST reopens showing 04:30 —
+ * and blurring the field then saves that wrong time back. The offset makes it
+ * obvious anywhere but UTC, and invisible in a UTC-based test.
+ */
+function toLocalInput(iso: string | null | undefined): string {
+  if (!iso) return "";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "";
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
+    d.getHours()
+  )}:${p(d.getMinutes())}`;
+}
+
 interface Props {
   meeting: MeetingDetail;
   onChanged: () => void;
@@ -64,9 +83,7 @@ export default function MeetingPrep({ meeting, onChanged, onSendBot }: Props) {
   const id = meeting.id;
 
   const [title, setTitle] = useState(meeting.title ?? "");
-  const [scheduled, setScheduled] = useState(
-    meeting.scheduled_at ? meeting.scheduled_at.slice(0, 16) : ""
-  );
+  const [scheduled, setScheduled] = useState(toLocalInput(meeting.scheduled_at));
   const [agenda, setAgenda] = useState<AgendaItem[]>([]);
   const [agendaMsg, setAgendaMsg] = useState("");
   const [agendaReply, setAgendaReply] = useState("");

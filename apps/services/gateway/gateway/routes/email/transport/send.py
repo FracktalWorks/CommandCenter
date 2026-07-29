@@ -47,11 +47,14 @@ class SendEmailRequest(BaseModel):
 
 def load_artifact_attachments(
     refs: "list[ArtifactAttachment] | None",
+    user_email: str | None = None,
 ) -> list[dict]:
     """Resolve workspace-artifact references to ``[{filename, content,
     mime_type}]`` for a provider. Reads each ref from its source agent's
-    workspace (default ``email-assistant``). Best-effort + path-traversal-safe;
-    silently skips refs that don't resolve to a real file inside the workspace."""
+    workspace (default ``email-assistant``), resolved for the sending member —
+    the same tenant directory their runs and uploads write to when the agent
+    is instanced. Best-effort + path-traversal-safe; silently skips refs that
+    don't resolve to a real file inside the workspace."""
     if not refs:
         return []
     out: list[dict] = []
@@ -69,7 +72,7 @@ def load_artifact_attachments(
                 continue
             ws = ws_cache.get(agent)
             if ws is None:
-                ws = _agent_workspace_dir(agent)
+                ws = _agent_workspace_dir(agent, user_email)
                 ws_cache[agent] = ws
             if not ws:
                 continue
@@ -122,7 +125,7 @@ async def send_email(
 
             # Resolve any workspace-artifact attachments (agent-created files)
             # to bytes and merge them in alongside base64 attachments.
-            artifact_atts = load_artifact_attachments(req.artifacts)
+            artifact_atts = load_artifact_attachments(req.artifacts, user.email)
             if artifact_atts:
                 attachments = (attachments or []) + artifact_atts
 
@@ -217,8 +220,8 @@ async def import_artifact(
     from gateway.routes.workspace import \
         _agent_workspace_dir
 
-    src_ws = _agent_workspace_dir(req.source_agent)
-    dst_ws = _agent_workspace_dir("email-assistant")
+    src_ws = _agent_workspace_dir(req.source_agent, user.email)
+    dst_ws = _agent_workspace_dir("email-assistant", user.email)
     if not src_ws or not dst_ws:
         raise HTTPException(status_code=404, detail="Workspace not found")
 

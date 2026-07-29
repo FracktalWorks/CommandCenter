@@ -49,13 +49,21 @@ def _current_agent_name() -> str:
     """Best-effort agent name for the current run (blob-store key).
 
     Prefers the explicit context value the executor sets; falls back to the
-    workspace_root basename ({agents_clone_dir}/repos/<agent_name>).
+    workspace_root basename ({agents_clone_dir}/repos/<agent_name>). A tenant
+    state dir ({agents_clone_dir}/state/<agent_name>/<slug>) puts the SLUG in
+    the basename — keying blobs by slug would silently shard one agent's
+    store — so the agent name is its parent there.
     """
     name = _WRITE_ARTIFACT_CONTEXT.get("agent_name")
     if name:
         return str(name)
     root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
-    return Path(root).name if root else ""
+    if not root:
+        return ""
+    p = Path(root)
+    if p.parent.parent.name == "state":
+        return p.parent.name
+    return p.name
 
 
 async def mirror_to_blob_store(
@@ -91,6 +99,10 @@ async def mirror_to_blob_store(
         run_id=_WRITE_ARTIFACT_CONTEXT.get("run_id"),
         session_id=_WRITE_ARTIFACT_CONTEXT.get("session_id"),
         actor=actor,
+        # The run's tenant partition, set by the executor alongside
+        # workspace_root — disk and store must carry the SAME key, or a
+        # personal agent's files rehydrate into the wrong person's run.
+        instance=_WRITE_ARTIFACT_CONTEXT.get("instance", ""),
     )
 
 

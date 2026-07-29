@@ -58,9 +58,18 @@ __all__ = [
     "agent_code_dir",
     "agent_state_dir",
     "clone_root",
+    "ensure_state_dir",
     "instance_slug",
     "state_root",
+    "workspace_blob_key",
 ]
+
+# A state directory records its own partition key. The slug in the path is
+# one-way (hash-suffixed), so without this marker nothing could map a
+# directory back to the instance its blobs are stored under — and deriving it
+# from "whoever is asking" breaks the moment a shared session lets a second
+# person open the first person's workspace.
+_INSTANCE_MARKER = ".cc-instance"
 
 # Anything outside this set is replaced in a slug. ':' (in ``u:``/``t:``) is
 # illegal in Windows filenames and awkward in shell paths everywhere.
@@ -131,7 +140,52 @@ def agent_state_dir(agent_name: str, instance: str = "") -> Path:
     docstring. Any other key returns a private directory that holds only the
     three durable folders (``agent-data``/``inputs``/``outputs``, i.e.
     ``blob_store.STORE_FOLDERS``) and never any source.
+
+    Pure path arithmetic — use :func:`ensure_state_dir` when the directory
+    should exist (it also stamps the instance marker).
     """
     if not instance:
         return agent_code_dir(agent_name)
     return state_root() / agent_name / instance_slug(instance)
+
+
+def ensure_state_dir(agent_name: str, instance: str = "") -> Path:
+    """:func:`agent_state_dir`, created and stamped with its instance marker.
+
+    The marker is what lets :func:`workspace_blob_key` map the directory back
+    to its partition later. For the shared key this is a no-op resolver call:
+    the clone dir is the loader's concern and gets no marker.
+    """
+    d = agent_state_dir(agent_name, instance)
+    if instance:
+        d.mkdir(parents=True, exist_ok=True)
+        marker = d / _INSTANCE_MARKER
+        try:
+            if not marker.exists():
+                marker.write_text(instance, encoding="utf-8")
+        except OSError:
+            # The directory itself exists; blob writes fall back to the
+            # slug-less key only if the marker also can't be read later.
+            pass
+    return d
+
+
+def workspace_blob_key(workspace: Path | str) -> tuple[str, str]:
+    """``(agent_name, instance)`` for any workspace directory.
+
+    A clone dir's basename IS the agent name (the loader clones with
+    ``clone_as=agent_name``); a state dir carries the agent name one level up
+    and its instance in the marker. This is the single mapping the gateway's
+    write-through mirrors use, so a file edited in the file manager lands in
+    the SAME partition the run that created it used — regardless of who is
+    looking at the directory.
+    """
+    p = Path(workspace)
+    if p.parent.parent == state_root():
+        agent = p.parent.name
+        try:
+            instance = (p / _INSTANCE_MARKER).read_text(encoding="utf-8").strip()
+        except OSError:
+            instance = ""
+        return agent, instance
+    return p.name, ""

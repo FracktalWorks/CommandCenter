@@ -179,11 +179,14 @@ def _email_looks_sensitive(email: dict[str, str] | None) -> bool:
     return bool(_LONG_NUMBER_RE.search(blob))
 
 
-def _load_action_attachments(a: dict[str, Any]) -> list[dict[str, Any]]:
+def _load_action_attachments(
+    a: dict[str, Any], user_email: str = "",
+) -> list[dict[str, Any]]:
     """Read the files a draft/forward action attaches (stored as
-    ``attachments: [{path, name}]`` referencing the email-assistant workspace),
-    returning ``[{filename, content, mime_type}]`` for the provider. Best-effort
-    and path-traversal-safe."""
+    ``attachments: [{path, name}]`` referencing the email-assistant workspace
+    of the rule's acting member — the same tenant directory the rule editor's
+    upload landed the file in), returning ``[{filename, content, mime_type}]``
+    for the provider. Best-effort and path-traversal-safe."""
     atts = a.get("attachments") or []
     if not atts:
         return []
@@ -194,7 +197,7 @@ def _load_action_attachments(a: dict[str, Any]) -> list[dict[str, Any]]:
         from gateway.routes.workspace import (
             _agent_workspace_dir,
         )
-        ws = _agent_workspace_dir("email-assistant")
+        ws = _agent_workspace_dir("email-assistant", user_email or None)
         if not ws:
             return []
         ws_root = ws.resolve()
@@ -436,7 +439,7 @@ async def _apply_rule_actions(
                     to=[to], subject=subj, body_text=body,
                     reply_to_message_id=provider_msg_id,
                     thread_id=email.get("thread_id") or None,
-                    attachments=_load_action_attachments(a) or None,
+                    attachments=_load_action_attachments(a, user_email) or None,
                 )
                 # Mirror the draft locally so it shows in the Drafts folder and
                 # in-thread immediately (matches the manual draft write-path).
@@ -473,7 +476,7 @@ async def _apply_rule_actions(
                     to=[a["to_address"]],
                     subject=fwd_subject,
                     body_text=fwd,
-                    attachments=_load_action_attachments(a) or None,
+                    attachments=_load_action_attachments(a, user_email) or None,
                 )
                 if fwd_pid and account_id:
                     await _upsert_local_draft(

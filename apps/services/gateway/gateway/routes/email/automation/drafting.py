@@ -60,6 +60,7 @@ async def _account_signature(db: Any, account_id: str) -> str:
 def _resolve_draft_attachments(
     attachments: list[SendAttachment] | None,
     artifacts: list[ArtifactAttachment] | None,
+    user_email: str | None = None,
 ) -> list[dict[str, Any]]:
     """Resolve base64 uploads + workspace artifact refs to the provider's
     ``[{filename, content, mime_type}]`` shape — the same resolution the /send
@@ -77,7 +78,7 @@ def _resolve_draft_attachments(
             raise HTTPException(
                 status_code=400,
                 detail=f"Invalid attachment encoding: {exc}") from exc
-    out.extend(load_artifact_attachments(artifacts))
+    out.extend(load_artifact_attachments(artifacts, user_email))
     return out
 
 
@@ -2044,7 +2045,7 @@ async def upsert_draft(
             cc = [c for c in (req.cc or []) if c]
             bcc = [b for b in (req.bcc or []) if b]
             subject = req.subject or ""
-            atts = _resolve_draft_attachments(req.attachments, req.artifacts)
+            atts = _resolve_draft_attachments(req.attachments, req.artifacts, user.email)
             thread_id: str | None = None
 
             if req.draft_id:

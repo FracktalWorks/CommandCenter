@@ -872,10 +872,34 @@ def _session_workspace_override(
     return None
 
 
+def _resolve_agent_instance(
+    agent_config: dict[str, Any], agent_name: str, actor: str,
+) -> str:
+    """The state-partition key for this run: ``''`` / ``u:<email>`` / ``t:<team>``.
+
+    Resolved from the agent's declared ``sharing`` block
+    (:class:`acb_skills.manifest.AgentManifest`), keyed by the acting member.
+    Only a real email counts as an actor: background runs (cron, webhooks,
+    the reconciler) and legacy ``user_id='default'`` payloads resolve to the
+    shared partition rather than minting a ``u:default`` bucket nobody can
+    reach again — the same asymmetry `_integration_authorizer` documents.
+    Never raises; an unparseable config means shared, today's behaviour.
+    """
+    if "@" not in (actor or ""):
+        return ""
+    try:
+        from acb_skills.manifest import AgentManifest
+        manifest = AgentManifest.from_config(agent_config, name=agent_name)
+        return manifest.instance_key(actor)
+    except Exception:
+        return ""
+
+
 def _resolve_effective_agent_dir(
     agent_dir: Path,
     agent_config: dict[str, Any],
     session_override: str | None = None,
+    instance: str = "",
 ) -> str:
     """Resolve the effective working directory for an agent.
 
@@ -887,6 +911,15 @@ def _resolve_effective_agent_dir(
     ``session_override`` (an already-validated per-session workspace from
     :func:`_session_workspace_override`) takes precedence over both.
 
+    ``instance`` (a non-empty key from :func:`_resolve_agent_instance`) wins
+    over ``workspace_root`` but not over the session override: a personal
+    agent's run must land in the tenant's private state directory
+    (:func:`acb_skills.agent_paths.agent_state_dir`) — pointing it at a
+    shared external repo would reintroduce exactly the commingling the
+    partition exists to prevent. The directory is created here because the
+    run is about to write into it, and because callers treat the returned
+    path as existing (push guard, mkdir of the visible folders, rehydrate).
+
     This lets an agent opt in to working on an external repo while its
     agent definition stays in its own clone, exactly like every other
     Copilot SDK agent.  When unset (the default), the agent operates in
@@ -894,6 +927,11 @@ def _resolve_effective_agent_dir(
     """
     if session_override:
         return session_override
+    if instance:
+        from acb_skills.agent_paths import ensure_state_dir
+        # The clone dir's basename IS the agent name (loader clones with
+        # clone_as=agent_name), so no separate parameter to drift from it.
+        return str(ensure_state_dir(agent_dir.name, instance))
     raw = agent_config.get("workspace_root") or ""
     if not raw:
         return str(agent_dir)
@@ -1621,11 +1659,21 @@ async def run_agent(
             # guard, HEAD capture, working directory, commit detection — use
             # this resolved path so they stay consistent.  When unset, the
             # agent operates in its own clone directory.
+            # A personal/team agent instead lands in its tenant state dir —
+            # the same key its blob-store rows carry (migration 130).
+            _agent_instance = _resolve_agent_instance(
+                loaded.config, agent_name,
+                str(
+                    event_payload.get("user_email")
+                    or event_payload.get("user_id") or ""
+                ) if isinstance(event_payload, dict) else "",
+            )
             _effective_agent_dir = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
                 session_override=_session_workspace_override(
                     thread_id, loaded.config,
                 ),
+                instance=_agent_instance,
             )
 
             # For GitHub Copilot SDK agents: install the push guard (prevents
@@ -1689,6 +1737,9 @@ async def run_agent(
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_agent_dir
+                # The blob-store partition every write-through must carry —
+                # keeping disk and store on the SAME tenant key (migration 130).
+                _WRITE_ARTIFACT_CONTEXT["instance"] = _agent_instance
                 # Declared+resolved integrations for this run — read by
                 # list_integrations (discoverability) and code_tools
                 # (_script_env grants a script exactly these creds).
@@ -1713,9 +1764,13 @@ async def run_agent(
             # Rehydrate the agent's durable folders from the authoritative blob
             # store BEFORE it runs, so a wiped/migrated volume comes back (store
             # is source of truth, disk is a cache). Best-effort; never blocks.
+            # The instance selects WHICH partition — restoring the shared one
+            # into a tenant dir would put other people's notes in this run.
             try:
                 from acb_memory import rehydrate_workspace
-                await rehydrate_workspace(agent_name, _effective_agent_dir)
+                await rehydrate_workspace(
+                    agent_name, _effective_agent_dir, instance=_agent_instance,
+                )
             except Exception:
                 pass
 
@@ -2185,6 +2240,19 @@ async def run_agent_stream(
             # Copilot working directory below so both stay consistent.
             _session_ws = _session_workspace_override(thread_id, loaded.config)
 
+            # Tenant partition for a personal/team agent ('' = shared). Must
+            # resolve BEFORE the artifact context, the visible-folder mkdir
+            # and the rehydrate below — all three must agree on the same
+            # directory, or one person's files surface in another's run.
+            _agent_instance = _resolve_agent_instance(
+                loaded.config, agent_name, _corr_user,
+            )
+            _effective_ws = _resolve_effective_agent_dir(
+                loaded.agent_dir, loaded.config,
+                session_override=_session_ws,
+                instance=_agent_instance,
+            )
+
             # Set write_artifact context so the tool knows which session to
             # report files to and where the workspace root lives.
             try:
@@ -2193,9 +2261,10 @@ async def run_agent_stream(
                 _WRITE_ARTIFACT_CONTEXT["session_id"] = thread_id or run_id
                 _WRITE_ARTIFACT_CONTEXT["agent_name"] = agent_name
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
-                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = str(
-                    _session_ws or loaded.agent_dir
-                )
+                _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_ws
+                # The blob-store partition every write-through must carry —
+                # keeping disk and store on the SAME tenant key (migration 130).
+                _WRITE_ARTIFACT_CONTEXT["instance"] = _agent_instance
                 # Declared+resolved integrations for this run — read by
                 # list_integrations (discoverability) and code_tools
                 # (_script_env grants a script exactly these creds).
@@ -2215,17 +2284,27 @@ async def run_agent_stream(
                 # Ensure the three visible workspace directories exist so the
                 # Files Viewer sidebar shows them even before the agent writes
                 # its first artefact.
-                _ws_root = Path(_session_ws) if _session_ws else loaded.agent_dir
+                _ws_root = Path(_effective_ws)
                 for _d in ("inputs", "outputs", "agent-data"):
                     (_ws_root / _d).mkdir(parents=True, exist_ok=True)
             except Exception:
                 pass
 
             # Rehydrate durable folders from the authoritative blob store before
-            # the agent runs (store is source of truth). Best-effort.
+            # the agent runs (store is source of truth). Best-effort. The
+            # instance selects WHICH partition — restoring the shared one into
+            # a tenant dir would put other people's notes in this run. A
+            # session-override run keeps restoring into the agent's own dir
+            # (never the app workspace), exactly as before.
             try:
                 from acb_memory import rehydrate_workspace
-                await rehydrate_workspace(agent_name, str(loaded.agent_dir))
+                from acb_skills.agent_paths import ensure_state_dir
+                await rehydrate_workspace(
+                    agent_name,
+                    str(ensure_state_dir(loaded.agent_dir.name, _agent_instance))
+                    if _agent_instance else str(loaded.agent_dir),
+                    instance=_agent_instance,
+                )
             except Exception:
                 pass
 
@@ -2386,13 +2465,11 @@ async def run_agent_stream(
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless
             # working_directory is explicitly set.  Point it at the agent's
-            # effective workspace (clone dir, workspace_root from config, or
-            # the session-bound Custom Apps workspace) so shell commands,
-            # file I/O, AGENTS.md, and skill resolution all work correctly.
-            _effective_agent_dir = _resolve_effective_agent_dir(
-                loaded.agent_dir, loaded.config,
-                session_override=_session_ws,
-            )
+            # effective workspace (clone dir, workspace_root from config,
+            # tenant state dir, or the session-bound Custom Apps workspace) —
+            # the SAME path resolved above for the artifact context, so shell
+            # commands, file I/O and the write-through all agree on one root.
+            _effective_agent_dir = _effective_ws
             if _is_copilot_sdk:
                 for _ag in agents:
                     try:

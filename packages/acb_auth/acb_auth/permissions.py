@@ -94,7 +94,16 @@ CAPABILITIES: tuple[str, ...] = (
     "admin:access:manage",
     "admin:settings:manage",
     "admin:audit:read",
+    # Which third-party services an agent run may receive credentials for, on
+    # this member's behalf. `integrations:manage` is the separate right to
+    # add/rotate those credentials.
+    "integrations:use:*",
     "integrations:manage",
+    # Organisation-wide memory. Personal and agent-scoped memory need no
+    # permission: they are already keyed to the acting user / running agent.
+    # Org memory is the shared one, so writing to it is the gated act.
+    "memory:read_org",
+    "memory:write_org",
     "data:org:read",
 )
 
@@ -133,6 +142,15 @@ def feature_permission(slug: str) -> str:
 def agent_run_permission(agent_name: str) -> str:
     """``"agent-sales"`` → ``"agents:run:agent-sales"``."""
     return f"agents:run:{agent_name}"
+
+
+def integration_use_permission(service: str) -> str:
+    """``"zoho-crm"`` → ``"integrations:use:zoho-crm"``.
+
+    Service names carry dots and dashes (``zoho-crm``, ``gmail-send``), which
+    the segment grammar already allows.
+    """
+    return f"integrations:use:{service}"
 
 
 # ── Validation ──────────────────────────────────────────────────────────────

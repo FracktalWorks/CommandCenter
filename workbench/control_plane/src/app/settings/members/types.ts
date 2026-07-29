@@ -63,6 +63,7 @@ export type MemberAccess = {
   features: Decision[];
   capabilities: Decision[];
   agents: Decision[];
+  integrations: Decision[];
   overrides: {
     permission: string;
     effect: "allow" | "deny";

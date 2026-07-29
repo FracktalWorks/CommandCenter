@@ -1,5 +1,5 @@
 -- ============================================================================
--- 117_agent_blob_instance.sql — partition the agent file store by instance
+-- 130_agent_blob_instance.sql — partition the agent file store by instance
 -- ============================================================================
 -- Spec: ai-company-brain/specs/memory_architecture.md §5.3, §6.1
 --       ai-company-brain/specs/agent_architecture.md §2
@@ -26,7 +26,7 @@
 --   instance = 'u:<email>'   -> one partition per person   (personal agents)
 --   instance = 't:<team>'    -> one partition per team     (team agents)
 --   instance = 'quarantine'  -> commingled pre-migration content, readable by
---                               nobody, deleted by nobody (see 118).
+--                               nobody, deleted by nobody (see 131).
 --
 -- The '' = shared convention is not invented here: app_data (114_custom_apps)
 -- already keys rows by (table, key, user_scope) where "user_scope '' = shared

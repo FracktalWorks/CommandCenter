@@ -1,5 +1,5 @@
 -- ============================================================================
--- 118_quarantine_commingled_agent_data.sql — retire pre-instance file content
+-- 131_quarantine_commingled_agent_data.sql — retire pre-instance file content
 -- ============================================================================
 -- Spec: ai-company-brain/specs/memory_architecture.md §5.3
 --       ai-company-brain/specs/agent_platform_hardening_2026-07.md H4
@@ -7,7 +7,7 @@
 --
 -- WHY
 -- ---
--- Before 117 the file store was keyed by agent_name alone, so every user of an
+-- Before 130 the file store was keyed by agent_name alone, so every user of an
 -- agent wrote into ONE agent-data/ workspace. For agents that are now declared
 -- `personal`, those rows are commingled: they hold several people's notes with
 -- no record of whose is whose. `agent_file_history.actor` says "agent" or
@@ -44,7 +44,7 @@
 -- traffic and therefore the most visible if recall regresses.
 --
 -- Idempotent: re-running moves nothing, because the rows are already out of ''.
--- Depends on: 117_agent_blob_instance.sql.
+-- Depends on: 130_agent_blob_instance.sql.
 -- ============================================================================
 
 DO $$

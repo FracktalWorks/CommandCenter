@@ -228,6 +228,30 @@ export default function NotesPage() {
           }}
         />
 
+        {/* Mobile: the bottom nav owns Record / Join / Upload / Glossary
+            (thumb-reachable), but it has no room for the two considered
+            actions — preparing a meeting, and settings. Those get a compact
+            header row rather than being unreachable on a phone. */}
+        {isMobile && (
+          <div className="flex items-center gap-2">
+            <button
+              onClick={onPrepare}
+              className="tech-transition flex-1 rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground"
+            >
+              <span className="flex items-center justify-center gap-1.5">
+                <CalendarPlus className="h-4 w-4" /> New meeting
+              </span>
+            </button>
+            <button
+              onClick={() => setShowSettings(true)}
+              className="tech-transition shrink-0 rounded-lg border border-border p-2 text-muted-foreground"
+              aria-label="Note Taker settings"
+            >
+              <Settings2 className="h-4 w-4" />
+            </button>
+          </div>
+        )}
+
         {!isMobile && (
           <div className="flex flex-wrap items-center justify-end gap-2">
             <button

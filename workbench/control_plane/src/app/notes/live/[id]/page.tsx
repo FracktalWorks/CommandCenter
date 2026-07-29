@@ -132,7 +132,11 @@ export default function LiveConsolePage({
     return () => es.close();
   }, [id, session?.copilot_enabled]);
 
+  // Follow the transcript only where it has its own scroll container. On a
+  // phone the whole page scrolls, so auto-scrolling would yank the user past
+  // the copilot every time anyone spoke.
   useEffect(() => {
+    if (!window.matchMedia("(min-width: 1024px)").matches) return;
     endRef.current?.scrollIntoView({ behavior: "smooth", block: "end" });
   }, [lines]);
 
@@ -244,10 +248,15 @@ export default function LiveConsolePage({
         </div>
       </div>
 
-      {/* Two columns: transcript reads, rail informs. */}
-      <div className="grid min-h-0 flex-1 grid-cols-1 lg:grid-cols-[1.6fr_1fr]">
+      {/* Two columns on a desktop: transcript reads, rail informs.
+          On a phone they stack, and the ORDER flips — the copilot and agenda
+          are the glanceable things, and burying them under a transcript that
+          grows all meeting would put them permanently off-screen. The page
+          scrolls as one there too; two nested scroll areas on a phone is a
+          way to trap a thumb. */}
+      <div className="grid min-h-0 flex-1 grid-cols-1 overflow-y-auto lg:grid-cols-[1.6fr_1fr] lg:overflow-hidden">
         {/* ── Transcript ───────────────────────────────────────────────── */}
-        <div className="min-h-0 overflow-y-auto border-border px-4 py-4 sm:px-6 lg:border-r">
+        <div className="order-2 min-h-0 border-border px-4 py-4 sm:px-6 lg:order-1 lg:overflow-y-auto lg:border-r">
           <p className="mb-3 flex items-center gap-2 text-[11px] font-semibold uppercase tracking-wide text-muted-foreground">
             Live transcript
             <span className="font-mono text-[10px] normal-case tracking-normal opacity-70">
@@ -295,7 +304,7 @@ export default function LiveConsolePage({
         </div>
 
         {/* ── Rail: copilot, agenda coverage, room ─────────────────────── */}
-        <div className="min-h-0 space-y-5 overflow-y-auto px-4 py-4 sm:px-6">
+        <div className="order-1 min-h-0 space-y-5 border-b border-border px-4 py-4 sm:px-6 lg:order-2 lg:border-b-0 lg:overflow-y-auto">
           {/* Copilot output arrives here. */}
           <section>
             <p className="mb-2 flex items-center gap-1.5 text-[11px] font-semibold uppercase tracking-wide text-primary">

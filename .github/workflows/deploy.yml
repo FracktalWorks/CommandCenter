@@ -388,12 +388,17 @@ jobs:
             echo "Gateway is active"
 
             # ── App Workshop T2 (React) build vendor cache ────────────────────
-            # Shared, pinned react/react-dom/esbuild the app-builder agent's
-            # build script (apps/agents/agent-app-builder/build/build_t2.mjs)
-            # resolves against via esbuild's nodePaths — installed ONCE here,
-            # never per-app. Same default-resolution as CUSTOM_APPS_ROOT
-            # (already proven in production for the App Workshop): read an
-            # override from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+            # Shared, pinned react/react-dom/esbuild/lucide-react the
+            # app-builder agent's build script
+            # (apps/agents/agent-app-builder/build/build_t2.mjs) resolves
+            # against via esbuild's nodePaths — installed ONCE here, never
+            # per-app. Same default-resolution as CUSTOM_APPS_ROOT (already
+            # proven in production for the App Workshop): read an override
+            # from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+            # lucide-react: zero runtime deps of its own (only a react peer
+            # dep, already here) — pinned to the exact version
+            # workbench/control_plane itself uses, so every T2 app gets real
+            # icon components for free instead of hand-rolled SVGs.
             echo "==> Provisioning T2 (React) vendor cache for the App Workshop builder"
             T2_VENDOR_DIR="$(grep -E '^CUSTOM_APPS_T2_VENDOR_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
             if [ -z "$T2_VENDOR_DIR" ]; then
@@ -403,9 +408,9 @@ jobs:
             mkdir -p "$T2_VENDOR_DIR"
             printf '%s\n' \
               '{ "name": "cc-app-workshop-t2-vendor", "private": true,' \
-              '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0" } }' \
+              '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0", "lucide-react": "1.17.0" } }' \
               > "$T2_VENDOR_DIR/package.json"
-            if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ]; then
+            if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/lucide-react" ]; then
               (cd "$T2_VENDOR_DIR" && npm install --no-audit --no-fund --omit=dev) \
                 && echo "    + T2 vendor cache installed ($T2_VENDOR_DIR)" \
                 || echo "    ! T2 vendor install failed — T2 (React) apps will fail to build; T1 apps unaffected"

@@ -127,7 +127,35 @@ states for reports.
 - **Buttons & panels** — `<button class="cc-btn cc-primary">Save</button>` /
   `<button class="cc-btn">Cancel</button>`, `<div class="cc-card">…</div>`.
   Native `input`/`select`/`textarea`/`input[type=range]` are already styled
-  on-brand — don't add your own borders/focus rings to them.
+  on-brand — don't add your own borders/focus rings to them. One `cc-primary`
+  per view — it's the action you want the eye drawn to; everything else stays
+  plain `cc-btn`. Two competing primaries reads as "which one matters?", not
+  "this is important."
+- **Icons — never emoji as UI iconography.** Real, consistent icon components
+  are available, tier-specific:
+  - **T1** (`index.html`, no build): `ccIcon('Name')` inside a template
+    literal (`` `<button>${ccIcon('Save')} Save</button>` ``), or
+    `<span data-cc-icon="Name"></span>` in static markup — both resolve to an
+    inline Lucide SVG at render time, `stroke="currentColor"` so it inherits
+    whatever text color surrounds it. `Name` is any Lucide icon name
+    (PascalCase, e.g. `Trash2`, `RefreshCw`, `CircleCheck`) — same set
+    `@/lib/icons`' `resolveIcon` exposes to the rest of CommandCenter, so an
+    icon you'd recognize from the Workshop's own UI is available here too.
+  - **T2** (React): `import { Save, Trash2 } from "lucide-react"` directly —
+    it's vendored by default alongside react/react-dom, no install step
+    needed. Render like any component: `<Save className="w-4 h-4" />`. Since
+    you control the size directly, pick one per context and stay there —
+    CommandCenter's own UI mostly uses ~14–16px icons inline with text/
+    buttons, slightly larger (~18–20px) for a standalone empty-state or
+    header glyph. Mixing sizes in the same row reads as unfinished, not
+    intentional.
+  - T1's `ccIcon`/`data-cc-icon` render at a fixed, consistent size
+    automatically — nothing to pick, every icon in the app matches by
+    construction.
+  - Emoji are fine as CONTENT (a status the user typed, a playful empty-state
+    line) — never as a stand-in for a button/nav icon; they render
+    inconsistently across platforms and don't match the icon weight of
+    everything else in the frame.
 - **Report/data block-kit** — the SAME building blocks CommandCenter's own
   dashboards use, all namespaced `cc-*`: `cc-stats`/`cc-stat` (KPI tiles —
   `<p class="cc-k">LABEL</p><div class="cc-v">42<small>%</small></div>`),
@@ -199,12 +227,12 @@ first calls for it):
    ending the turn — this is the T2 equivalent of T1's "index.html must stay valid and
    renderable every round" rule. Never end a round with a broken or stale build.
 
-**Dependencies — default is fixed, no exceptions**: `react`, `react-dom`, and `@cc/ui`
-(the design kit, see below), pinned to the platform's vendored versions. No CDN
-`<script src="...">`, ever — that's a hard rule with no opt-out (apps run offline, no
-network). The build enforces an explicit import allowlist in this default mode; anything
-outside `react`/`react-dom`/`@cc/ui` fails the build with a clear error naming what's
-actually importable.
+**Dependencies — default is fixed, no exceptions**: `react`, `react-dom`, `lucide-react`
+(real icon components — see "Icons" above), and `@cc/ui` (the design kit, see below),
+pinned to the platform's vendored versions. No CDN `<script src="...">`, ever — that's a
+hard rule with no opt-out (apps run offline, no network). The build enforces an explicit
+import allowlist in this default mode; anything outside those four fails the build with
+a clear error naming what's actually importable.
 
 **Need a package the vendored set doesn't cover** (a 3D viewer needing `three` /
 `@react-three/fiber`, a chart library, anything genuinely not reproducible by hand) —
@@ -221,13 +249,14 @@ installer rejects anything else. This is the *only* way to add a package — nev
 installer even if asked; it already runs installs with scripts disabled and enforces a
 size cap, and takes care of creating `package.json` if the app doesn't have one yet.
 
-**Once an app has installed its own dependencies, it owns `react`/`react-dom` too** —
-install them explicitly alongside whatever else you need (matching versions any peer
-dependency expects, e.g. `@react-three/fiber` needs a real React 18+). The build stops
-pulling from the shared vendor cache the moment a workspace has its own
-`node_modules` — it will not silently mix the two. Most apps never need this; reach for
-it only when the request genuinely can't be built from `react`/`react-dom`/`@cc/ui`
-alone, the same "don't reach for it just because it's available" discipline as T2 itself.
+**Once an app has installed its own dependencies, it owns `react`/`react-dom`/
+`lucide-react` too** — install them explicitly alongside whatever else you need
+(matching versions any peer dependency expects, e.g. `@react-three/fiber` needs a real
+React 18+). The build stops pulling from the shared vendor cache the moment a workspace
+has its own `node_modules` — it will not silently mix the two. Most apps never need
+this; reach for it only when the request genuinely can't be built from
+`react`/`react-dom`/`lucide-react`/`@cc/ui` alone, the same "don't reach for it just
+because it's available" discipline as T2 itself.
 
 **The build command** (run it as the last step of every round that touches
 `src/**`, `index.html`, or `app.json`'s `entry`):
@@ -333,6 +362,54 @@ Rules:
   scenario's first step targets an element that only appears once that data loads, add
   a brief `{ "action": "wait", "ms": 200 }` step before it, or the step can race an
   element that isn't in the DOM yet.
+
+## Quality bar — how to tell if it's actually good
+
+You built it, so you're the worst-positioned judge of it — Anthropic's own research on
+agent harnesses for app-building found a generator asked to grade its own UI
+"confidently praises the work — even when, to a human observer, the quality is
+obviously mediocre." You don't get a separate evaluator agent here, so substitute the
+next best thing: **look at the actual rendered output**, not the code you just wrote,
+before you claim a round is done. The preview pane is right there — use it (and its
+desktop/phone toggle) every round that touches layout, the same way that research's
+harness used a live screenshot instead of trusting the generator's own read of its
+code.
+
+Judge what you see against four questions (same four a generator/evaluator harness
+grades frontend work on):
+- **Coherent, not assembled** — does it read as one considered surface, or a pile of
+  independently-styled pieces? (This is what reaching for the `.cc-*` block-kit instead
+  of hand-rolled markup buys you for free — a shared visual language.)
+- **Original, not templated** — the most common failure mode named in that research is
+  "purple gradients over white cards": generic AI-output patterns applied without
+  thinking about whether they fit. A quote calculator and a service-ticket board
+  shouldn't default to the same layout skeleton just because both are "a form and a
+  list" — let the actual data shape (§ above: `cc-table` vs `cc-stats` vs `cc-chart`)
+  drive the layout, not a reflexive default.
+- **Craft** — type hierarchy (one clear heading size per level, not four fonts fighting
+  for attention), consistent spacing (the `.cc-*` classes' built-in spacing IS the
+  system — don't fight it with ad hoc margins), real contrast (never rely on color
+  alone to distinguish state — pair it with an icon or label; someone colorblind is
+  using this too).
+- **Functional** — does the interaction actually work, independent of how it looks. A
+  beautiful button that doesn't call `cc.storage`/`cc.tools` on click is a worse outcome
+  than an ugly one that does.
+
+A few load-bearing rules underneath those four, translated from Apple's own design
+principles (clarity, deference, hierarchy) into what they mean for a small internal
+tool:
+- **One primary action per view** (already stated above for `cc-primary` — it's the
+  same principle, not a coincidence): the user's eye should never have to guess what
+  the "main" button is.
+- **Hierarchy from size/weight/contrast, not color alone** — a `cc-danger`-tinted row
+  should ALSO look structurally different (an icon, a bold label), not just red.
+- **Chrome defers to content** — borders, shadows, decorative dividers exist to
+  organize the user's data, not to compete with it. If you're not sure whether an
+  element earns its place, it probably doesn't.
+- **Generous, consistent spacing** over cramming — the `.cc-card`/`.cc-report` padding
+  defaults are there for a reason; don't shrink them to fit more in.
+- **Motion only with purpose** — a state transition or loading spinner, not decoration.
+  `--cc-ease` already exists for the rare case you need one; don't add more.
 
 ## How to work a request
 

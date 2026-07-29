@@ -289,37 +289,37 @@ function MobileBottomNavInner({
   };
 
   return (
-    <nav className="flex items-stretch justify-around gap-0.5 py-1.5 px-1">
+    <nav className="flex items-stretch justify-around gap-0.5 py-1 px-1">
         <button
           onClick={() => { open(menuContent); }}
-          className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors ${
+          className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors ${
             isOpen ? "text-primary" : "text-muted-foreground hover:text-foreground"
           }`}
         >
-          <MenuIcon size={21} />
+          <MenuIcon size={20} />
           <span className="text-[10px] font-medium leading-none">Menu</span>
         </button>
         {isEmailPage && (
           <>
             <button
               onClick={() => dispatchNav("email-accounts")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <Mail size={21} />
+              <Mail size={20} />
               <span className="text-[10px] font-medium leading-none">Inbox</span>
             </button>
             <button
               onClick={() => dispatchNav("email-automation")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <Zap size={21} />
+              <Zap size={20} />
               <span className="text-[10px] font-medium leading-none">Automation</span>
             </button>
             <button
               onClick={() => dispatchNav("email-ai")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <MessageCircle size={21} />
+              <MessageCircle size={20} />
               <span className="text-[10px] font-medium leading-none">AI Chat</span>
             </button>
           </>
@@ -328,9 +328,9 @@ function MobileBottomNavInner({
           <>
             <button
               onClick={() => dispatchNav("chats")}
-              className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="relative flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <MessageCircle size={22} />
+              <MessageCircle size={20} />
               {activeCount > 0 && (
                 <span className="absolute -top-0.5 right-2 flex items-center justify-center min-w-[16px] h-4 px-1 rounded-full bg-success text-success-foreground text-[9px] font-bold animate-pulse">
                   {activeCount}
@@ -340,9 +340,9 @@ function MobileBottomNavInner({
             </button>
             <button
               onClick={() => dispatchNav("files")}
-              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1.5 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
+              className="flex flex-1 min-w-0 flex-col items-center gap-0.5 px-1 py-1 rounded-lg transition-colors text-muted-foreground hover:text-foreground"
             >
-              <FolderOpen size={22} />
+              <FolderOpen size={20} />
               <span className="text-[10px] font-medium leading-none">Files</span>
             </button>
           </>
@@ -458,7 +458,7 @@ function TaskTab({
   return (
     <button
       onClick={onClick}
-      className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1.5 transition-colors ${
+      className={`flex flex-1 min-w-0 flex-col items-center gap-0.5 rounded-lg px-1 py-1 transition-colors ${
         accent
           ? "text-primary"
           : active
@@ -466,7 +466,7 @@ function TaskTab({
             : "text-muted-foreground hover:text-foreground"
       }`}
     >
-      <Icon size={accent ? 22 : 20} strokeWidth={active || accent ? 2.4 : 2} />
+      <Icon size={20} strokeWidth={active || accent ? 2.4 : 2} />
       <span className="text-[10px] font-medium leading-none">{label}</span>
     </button>
   );

@@ -33,6 +33,7 @@ import {
   Mic,
   Settings2,
   Sparkles,
+  Square,
   Users,
 } from "lucide-react";
 import { speakerEdge, speakerText } from "../../lib/speakers";
@@ -41,7 +42,9 @@ import {
   getLiveRoster,
   getLiveSession,
   setCopilot,
+  stopBot,
 } from "../../lib/api";
+import { useRecordingStore } from "../../lib/recordingStore";
 import type {
   AgendaProgress,
   CopilotEvent,
@@ -76,7 +79,11 @@ export default function LiveConsolePage({
   const [progress, setProgress] = useState<AgendaProgress | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+  const [ending, setEnding] = useState(false);
   const endRef = useRef<HTMLDivElement | null>(null);
+  // A browser recording is owned by the tab that started it.
+  const localMeetingId = useRecordingStore((s) => s.meetingId);
+  const stopLocal = useRecordingStore((s) => s.stop);
 
   const refresh = useCallback(async () => {
     const [s, r, p] = await Promise.all([
@@ -149,6 +156,43 @@ export default function LiveConsolePage({
       /* surfaced by the unchanged toggle state */
     } finally {
       setBusy(false);
+    }
+  }
+
+  // Ending the meeting early. Confirmed because it is not undoable — the bot
+  // leaves the call and cannot be sent back into the same session.
+  async function onEnd() {
+    if (!session) return;
+    const bot = session.source === "bot";
+    if (
+      !window.confirm(
+        bot
+          ? "Remove the notetaker from this call? Audio captured so far is still transcribed."
+          : "Stop recording? Audio captured so far is still transcribed."
+      )
+    )
+      return;
+    setEnding(true);
+    try {
+      if (bot) {
+        await stopBot(id);
+      } else {
+        // A browser recording lives in the tab that started it. Same tab: stop
+        // it directly. Another device: say so rather than pretending to.
+        if (localMeetingId === id) stopLocal();
+        else {
+          window.alert(
+            "This recording was started in another tab or on another device — " +
+              "stop it there, or from the recording dock."
+          );
+          return;
+        }
+      }
+      await refresh();
+    } catch {
+      /* the still-live badge is the error signal */
+    } finally {
+      setEnding(false);
     }
   }
 
@@ -245,6 +289,24 @@ export default function LiveConsolePage({
             <Sparkles className="h-4 w-4" />
             {busy ? "…" : session.copilot_enabled ? "Copilot on" : "Copilot off"}
           </button>
+          {/* Ending the meeting belongs HERE — this is the screen you're on
+              while it runs. It used to live only as an icon in a strip on the
+              library page, which is not somewhere you look mid-call. */}
+          {live && (
+            <button
+              onClick={onEnd}
+              disabled={ending}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-1.5 text-sm font-medium text-destructive hover:bg-destructive/20 disabled:opacity-50"
+              title={
+                session.source === "bot"
+                  ? "Remove the notetaker from this call"
+                  : "Stop recording"
+              }
+            >
+              <Square className="h-3.5 w-3.5 fill-current" />
+              {ending ? "Ending…" : session.source === "bot" ? "End" : "Stop"}
+            </button>
+          )}
         </div>
       </div>
 

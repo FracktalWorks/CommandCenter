@@ -86,6 +86,13 @@ def _live_model(provider: str) -> str:
     if provider == "assemblyai":
         # Empty → let AssemblyAI use its default streaming model. Overridable
         # per-deployment without a code change.
+        #
+        # Deliberately NOT the tier-stt batch model: AssemblyAI's streaming
+        # models are a separate family, so a batch id like "universal-2" is not
+        # a valid streaming model. It also matters for speakers — live
+        # diarization needs Universal-3 Pro Streaming (or a multilingual
+        # streaming model); universal-2 has no streaming diarization, and the
+        # symptom is captions with no speaker separation rather than an error.
         return os.environ.get("ASSEMBLYAI_LIVE_MODEL", "").strip()
     resolved = _configured_stt_model()
     if resolved.startswith("deepgram/"):

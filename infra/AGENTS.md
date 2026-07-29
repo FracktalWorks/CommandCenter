@@ -5,10 +5,11 @@ Docker Compose, Postgres schema, LiteLLM tier config. LLM routing is via the gat
 
 ## Key Files
 - docker-compose.yml -- core services (Postgres 16 + pgvector, Redis 7)
-- postgres/ -- schema files (00-10) + 09_app_user.sql (NextAuth users) + 11_integration_credentials.sql (unified credential store)
+- postgres/ -- schema files (00-10) + 09_app_user.sql (NextAuth users) + 11_integration_credentials.sql (unified credential store) + 128_org_access_control.sql (organization, membership lifecycle on app_user, org_role/org_role_permission/user_role, user_permission_override, feature_catalog — spec: ai-company-brain/specs/org_access_control.md)
 
 ## Conventions
 - Postgres migrations are numbered SQL files
+- Access control: `app_user.role` (executive/employee) is RETAINED and dual-written alongside the org role model, so `require_role()` and any not-yet-migrated route keep working. Do not drop it without migrating every `require_role` call site first
 - **Provider keys table (08) stores ALL credentials encrypted at rest: LLM provider keys (credential_type='llm') AND business integration keys (credential_type='integration')** — migrated in 11_integration_credentials.sql
 - LiteLLM model names follow tier1/tier2/tier3/copilot/ patterns
 - **LiteLLM uses Prisma internally → `DATABASE_URL` MUST be `postgresql://` (plain, no `+psycopg` suffix)**

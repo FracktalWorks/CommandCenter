@@ -62,12 +62,14 @@ source = { editable = "packages/acb_auth" }
 dependencies = [
     { name = "acb-common" },
     { name = "fastapi" },
+    { name = "sqlalchemy" },
 ]
 
 [package.metadata]
 requires-dist = [
     { name = "acb-common", editable = "packages/acb_common" },
     { name = "fastapi", specifier = ">=0.115" },
+    { name = "sqlalchemy", specifier = ">=2.0" },
 ]
 
 [[package]]

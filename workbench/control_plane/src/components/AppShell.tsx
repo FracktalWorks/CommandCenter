@@ -28,7 +28,10 @@ import { X, Monitor, Smartphone, LogOut, Command, Mail, Zap, Inbox, ListChecks, 
 import Sidebar from "@/components/Sidebar";
 import { useViewMode } from "@/components/ViewModeProvider";
 import { useActiveSessions } from "@/hooks/useActiveSessions";
-import { NAV_SECTIONS } from "@/lib/nav";import { ThemeToggleMenuItem } from "@/components/ThemeToggle";
+import { visibleSections } from "@/lib/nav";
+import AccessGate from "@/components/AccessGate";
+import { useAccess } from "@/components/AccessProvider";
+import { ThemeToggleMenuItem } from "@/components/ThemeToggle";
 // The task manager's Focus Mode session (room + minimizable timer dock). Lives
 // in the SHELL so the running timer stays visible across every app in the
 // control plane; renders nothing when no focus session is active.
@@ -82,7 +85,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
     return (
       <div className="flex h-screen overflow-hidden">
         <Sidebar />
-        <main className="flex-1 min-w-0 overflow-auto">{children}</main>
+        <main className="flex-1 min-w-0 overflow-auto">
+          <AccessGate>{children}</AccessGate>
+        </main>
         <FocusSession />
         <RecordingDock />
         <LiveDock />
@@ -112,7 +117,9 @@ export default function AppShell({ children }: { children: React.ReactNode }) {
       <div className="flex flex-col overflow-hidden bg-background pt-safe" style={{ height: "100dvh" }}>
         {/* Page content — pb-nav reserves the fixed bottom bar's FULL height
             (content + safe-area inset), so nothing hides under it */}
-        <main className="flex-1 min-h-0 overflow-y-auto pb-nav">{children}</main>
+        <main className="flex-1 min-h-0 overflow-y-auto pb-nav">
+          <AccessGate>{children}</AccessGate>
+        </main>
 
         {/* Bottom navigation bar — fixed at viewport bottom, never scrolls. pb-safe lifts it above the iOS home indicator */}
         <div className="fixed bottom-0 inset-x-0 z-50 border-t border-border bg-card/90 backdrop-blur pb-safe">
@@ -169,6 +176,10 @@ function MobileBottomNavInner({
   const { data: session } = useSession();
   const activeRunIds = useActiveSessions();
   const activeCount = activeRunIds.size;
+  // Same access filter as the desktop Sidebar — the two navs must agree, or a
+  // pane hidden on desktop reappears in the phone drawer.
+  const { access, loading: accessLoading } = useAccess();
+  const navSections = visibleSections(accessLoading ? null : access.features);
 
   const menuContent = (
     <>
@@ -192,7 +203,7 @@ function MobileBottomNavInner({
         </button>
       </div>
       <nav className="flex flex-col overflow-y-auto">
-        {NAV_SECTIONS.map((section) => (
+        {navSections.map((section) => (
           <div key={section.id} className="px-2 pt-1 pb-1.5">
             <div
               className={

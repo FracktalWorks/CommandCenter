@@ -10,7 +10,7 @@ Reusable Python packages shared across all CommandCenter services.
 - acb_graph/ -- Postgres entity graph (SQLAlchemy sessions)
 - acb_common/ -- Shared settings, logging, activity/cost feed, utilities
 - acb_audit/ -- Audit event recording
-- acb_auth/ -- Authentication, roles, and org access control. Two guard styles coexist: the original coarse `require_role(UserRole.EXECUTIVE)` (unchanged) and `require_permission("feature:whatsapp")`, backed by DB roles + per-user allow/deny overrides (`permissions.py` is pure and testable; `access.py` does the I/O with a 60s cache). Spec: ai-company-brain/specs/org_access_control.md
+- acb_auth/ -- Authentication, roles, and org access control. Two guard styles coexist: the original coarse `require_role(UserRole.EXECUTIVE)` (unchanged) and `require_permission("feature:whatsapp")`, backed by DB roles + per-user allow/deny overrides (`permissions.py` is pure and testable; `access.py` does the I/O with a 60s cache). Two DISTINCT secrets: `GATEWAY_INTERNAL_TOKEN` is service identity (grants everything, never handed to agents) and `LITELLM_MASTER_KEY` is the /v1 API key agents hold, checked only by `require_llm_api_auth`. Spec: ai-company-brain/specs/org_access_control.md
 
 ## Conventions
 - Each package has its own pyproject.toml

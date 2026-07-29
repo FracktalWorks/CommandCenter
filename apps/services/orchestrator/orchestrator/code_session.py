@@ -93,11 +93,8 @@ async def run_copilot_code_session(
     gw_base = (
         getattr(settings, "litellm_base_url", "") or "http://127.0.0.1:8080"
     ).rstrip("/")
-    gw_key = (
-        getattr(settings, "gateway_internal_token", "")
-        or getattr(settings, "litellm_master_key", "")
-        or "sk-local"
-    ).strip()
+    # /v1 only — LLM API key, not the identity token (BO-2 residual #4).
+    gw_key = (getattr(settings, "llm_api_key", "") or "sk-local").strip()
 
     default_options: dict[str, Any] = {
         "model": model,

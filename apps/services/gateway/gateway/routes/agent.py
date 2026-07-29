@@ -18,7 +18,10 @@ POST /agent/webhook/{source}
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import re
 import uuid
 from pathlib import Path
@@ -32,8 +35,8 @@ from acb_auth import (
     require_permission,
 )
 from acb_common import get_logger, get_settings
-from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
-                     Request, status)
+from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
+                     HTTPException, Request, status)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -2784,18 +2787,76 @@ async def _git_push_with_rebase(
     return success, new_sha if success else None
 
 
+_SIGNATURE_HEADER = "X-CC-Signature"
+
+
+def _webhook_secret(source: str) -> str:
+    """Shared secret for signing ``/agent/webhook/{source}``.
+
+    Per-source (``AGENT_WEBHOOK_SECRET_<SOURCE>``) wins over the global
+    ``AGENT_WEBHOOK_SECRET``, so one leaked integration does not authorise
+    every agent on the platform.
+    """
+    slug = "".join(c if c.isalnum() else "_" for c in source).upper()
+    return (
+        os.environ.get(f"AGENT_WEBHOOK_SECRET_{slug}", "").strip()
+        or os.environ.get("AGENT_WEBHOOK_SECRET", "").strip()
+    )
+
+
+def verify_webhook_signature(source: str, body: bytes, presented: str | None) -> None:
+    """HMAC-SHA256 over the raw body, or raise.
+
+    Unlike the bridge/bot-token checks elsewhere in the gateway, this one
+    **fails closed when unconfigured**. Those endpoints receive data; this one
+    *starts an agent run* — arbitrary tool use against real systems — and it is
+    reachable from the internet through Caddy. An unconfigured deployment
+    should not have that endpoint open, so a missing secret is a 503 naming
+    the fix rather than an implicit allow.
+
+    Safe to make strict: the audit found nothing calls this path today
+    (`FOUNDATION_AUDIT_REPORT.md` — the provider receivers live in
+    `ingestion/sources/*/webhook.py` and dispatch no agents), so there is no
+    working sender to break.
+    """
+    secret = _webhook_secret(source)
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Agent webhooks are not configured. Set AGENT_WEBHOOK_SECRET "
+                f"(or AGENT_WEBHOOK_SECRET_{source.upper()}) and sign the "
+                f"request body with HMAC-SHA256 in {_SIGNATURE_HEADER}."
+            ),
+        )
+
+    supplied = (presented or "").strip()
+    if supplied.startswith("sha256="):
+        supplied = supplied[len("sha256="):]
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not supplied or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
+
 @router.post("/webhook/{source}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(
     source: str,
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
+    request: Request,
+    x_cc_signature: str | None = Header(default=None, alias=_SIGNATURE_HEADER),
 ) -> dict[str, Any]:
-    """Receive a webhook from an external source and route to the correct agent.
+    """Receive a signed webhook from an external source and route it to an agent.
 
-    No authentication required on this endpoint (called by external services).
-    Webhook signature verification is handled by the source-specific ingestion
-    routers (``ingestion/sources/*/webhook.py``); this endpoint is the v2
-    agent-dispatch layer on top.
+    **Authenticated by HMAC signature** (BO-2 residual #3). This endpoint
+    dispatches an agent run, so leaving it open made it a fourth run path that
+    bypassed ``assert_can_run_agent`` entirely — anyone who could reach the
+    gateway could trigger any agent with any payload.
+
+    A valid signature IS the authorization here: it proves the platform's own
+    secret produced the request, which is the same trust level as the internal
+    service token. There is no member to resolve, so no per-agent check
+    applies — which is exactly why the signature has to be mandatory.
 
     Routing logic:
     1. Look up (source, event_type) in ``_WEBHOOK_ROUTES`` for static MAF agents.
@@ -2804,6 +2865,8 @@ async def receive_webhook(
     3. Dispatch to the MAF executor (the sole agent execution runtime; the
        Copilot SDK is used only for self-mutation containers).
     """
+    verify_webhook_signature(source, await request.body(), x_cc_signature)
+
     agent_name: str | None = _WEBHOOK_ROUTES.get((source, event.event_type))
     agent_runtime = "maf"  # default for static routes — MAF executor (WBS 0.7)
 

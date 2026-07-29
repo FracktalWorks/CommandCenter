@@ -24,47 +24,104 @@ Headers (set by Next.js SSO proxy):
     X-User-Role    -- one of: executive | employee | agent
                      Falls back to "employee" if missing/unrecognised.
 
-Service-to-service (internal):
-    Authorization: Bearer <GATEWAY_INTERNAL_TOKEN>
-    Sets role = "agent" so internal callers can access all non-executive routes.
-    The token must match the GATEWAY_INTERNAL_TOKEN env var (falls back to
-    LITELLM_MASTER_KEY in dev).  Empty string disables Bearer auth (never
-    accept all callers — use SSO headers instead).
+Two secrets, deliberately distinct (BO-2 residual #4):
+
+    GATEWAY_INTERNAL_TOKEN  -- SERVICE IDENTITY. Proves the caller *is* the
+        platform (Next.js proxy, cron, CI) and grants SERVICE_ACCESS, i.e.
+        everything. Never handed to agent code. Checked by
+        require_internal_auth() and get_current_user()'s Bearer branch.
+
+    LITELLM_MASTER_KEY      -- the /v1 API key. Handed to every agent's BYOK
+        client so completions route through the gateway. Checked ONLY by
+        require_llm_api_auth(). Treat as semi-public within the deployment.
+
+They used to be one value: the identity token fell back to the LLM key, and
+the orchestrator handed agents whichever it resolved to. Every agent therefore
+held the identity token and could call /admin/* to grant itself anything.
+
+Empty string disables Bearer auth (never accept all callers — use SSO headers
+instead).
 """
 from __future__ import annotations
 
 import os
+import secrets
 from collections.abc import Collection
 from typing import Annotated
 
 from fastapi import Depends, Header, HTTPException, Request
 
+from acb_common import get_logger
+
 from acb_auth.access import SERVICE_ACCESS, resolve_access, resolve_identity
 from acb_auth.permissions import NO_ACCESS
 from acb_auth.roles import UserContext, UserRole, _coerce_role
+
+_log = get_logger("acb_auth.deps")
 
 # ---------------------------------------------------------------------------
 # Internal service token (server → gateway calls, e.g. Next.js proxy route)
 # ---------------------------------------------------------------------------
 
-def _get_internal_token() -> str:
-    """Resolve the expected Bearer token for server-to-server calls.
+def _get_llm_api_token() -> str:
+    """The API key for the gateway's OpenAI-compatible ``/v1`` endpoint.
 
-    Precedence: GATEWAY_INTERNAL_TOKEN → LITELLM_MASTER_KEY (via Settings) → "".
-    An empty string means Bearer auth is disabled.
+    This one is handed OUT — every agent's BYOK client presents it to route
+    completions through the gateway. Treat it as semi-public within the
+    deployment: anything it authenticates, an agent can do.
     """
-    tok = os.getenv("GATEWAY_INTERNAL_TOKEN", "").strip()
+    tok = os.getenv("LITELLM_MASTER_KEY", "").strip()
     if not tok:
-        # Try Settings (pydantic-settings loads .env; os.getenv may miss it)
         try:
             from acb_common import get_settings  # noqa: PLC0415
             tok = (get_settings().litellm_master_key or "").strip()
         except Exception:  # noqa: BLE001
             pass
-    if not tok:
-        # Hard fallback to raw env (Docker / CI where vars are injected directly)
-        tok = os.getenv("LITELLM_MASTER_KEY", "").strip()
     return tok
+
+
+def _get_internal_token() -> str:
+    """The SERVICE IDENTITY token: proof that a caller *is* the platform.
+
+    Grants ``SERVICE_ACCESS`` (everything), so it must never be given to code
+    that runs untrusted input — which is exactly why it is now separate from
+    the ``/v1`` API key. Previously this fell back to ``LITELLM_MASTER_KEY``,
+    and the orchestrator handed agents whichever value this resolved to, so
+    every agent held the identity token and could call ``/admin/*`` to grant
+    itself anything. That is BO-2 residual #4.
+
+    Precedence: ``GATEWAY_INTERNAL_TOKEN`` → (unprovisioned only)
+    ``LITELLM_MASTER_KEY`` with a warning → ``""``, which disables Bearer
+    auth entirely.
+
+    The fallback is retained ONLY so a deployment that has not set
+    ``GATEWAY_INTERNAL_TOKEN`` keeps working rather than 401ing every internal
+    call on upgrade. While it is in effect the two secrets are the same value
+    and the separation does not exist, so it warns on every resolution — a
+    silent fallback here would be the vulnerability wearing a fix's clothes.
+    """
+    tok = os.getenv("GATEWAY_INTERNAL_TOKEN", "").strip()
+    if not tok:
+        try:
+            from acb_common import get_settings  # noqa: PLC0415
+            tok = (get_settings().gateway_internal_token or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+    if tok:
+        return tok
+
+    llm_key = _get_llm_api_token()
+    if llm_key:
+        _log.warning(
+            "gateway_internal_token_unset",
+            detail=(
+                "Falling back to LITELLM_MASTER_KEY for service identity. That "
+                "key is handed to every agent, so any agent can currently "
+                "authenticate as the platform. Set GATEWAY_INTERNAL_TOKEN to a "
+                "distinct secret."
+            ),
+        )
+    return llm_key
 
 
 def _trust_unverified_sso_headers() -> bool:
@@ -146,7 +203,7 @@ async def get_current_user(
         submitted = authorization.removeprefix("Bearer ").strip()
         expected = _get_internal_token()
         # Only accept if expected is non-empty AND tokens match.
-        if expected and submitted == expected:
+        if expected and secrets.compare_digest(submitted, expected):
             bearer_ok = True
 
     # 1a. Bearer-matched call WITH user identity headers → real user context.
@@ -238,8 +295,35 @@ async def require_internal_auth(
         return  # Bearer auth disabled (unconfigured) — preserve prior behaviour.
     if authorization and authorization.startswith("Bearer "):
         submitted = authorization.removeprefix("Bearer ").strip()
-        if submitted and submitted == expected:
+        if submitted and secrets.compare_digest(submitted, expected):
             return
+    raise HTTPException(status_code=401, detail="Unauthorized")
+
+
+async def require_llm_api_auth(
+    authorization: Annotated[str | None, Header(alias="Authorization")] = None,
+) -> None:
+    """Guard the OpenAI-compatible ``/v1`` endpoint.
+
+    Accepts **either** the ``/v1`` API key (``LITELLM_MASTER_KEY``, which every
+    agent's BYOK client holds) **or** the service identity token (the Next.js
+    server and internal jobs route completions too).
+
+    This is deliberately weaker than :func:`require_internal_auth` and must
+    stay that way. ``/v1`` bills the server's stored provider keys, so it needs
+    authentication — but it is the one endpoint agents are *supposed* to reach,
+    so gating it on the identity token is what forced agents to hold that token
+    in the first place. Separating the two is the fix.
+    """
+    submitted = ""
+    if authorization and authorization.startswith("Bearer "):
+        submitted = authorization.removeprefix("Bearer ").strip()
+
+    accepted = [t for t in (_get_llm_api_token(), _get_internal_token()) if t]
+    if not accepted:
+        return  # Unconfigured deployment — same fail-open contract as below.
+    if submitted and any(secrets.compare_digest(submitted, t) for t in accepted):
+        return
     raise HTTPException(status_code=401, detail="Unauthorized")
 
 

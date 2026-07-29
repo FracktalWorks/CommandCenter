@@ -702,17 +702,11 @@ async def _run_sub_agent_streaming(
                                     )
                                     or "http://127.0.0.1:8080"
                                 ).rstrip("/")
-                                # Present the gateway's internal token with the
-                                # SAME precedence as require_internal_auth
-                                # (gateway_internal_token → litellm_master_key),
-                                # else a token divergence 401s the BYOK call.
+                                # /v1 only — LLM API key, not the identity
+                                # token: this provider config is attached to
+                                # agent code (BO-2 residual #4).
                                 _gw_key = (
-                                    getattr(
-                                        settings, "gateway_internal_token", ""
-                                    )
-                                    or getattr(
-                                        settings, "litellm_master_key", ""
-                                    )
+                                    getattr(settings, "llm_api_key", "")
                                     or "sk-local"
                                 ).strip()
                                 agent._default_options["provider"] = {

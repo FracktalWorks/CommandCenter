@@ -340,6 +340,37 @@ This asymmetry is on purpose. The feature exists to restrict a known member's re
 
 ---
 
+## 8b. Two credentials that were one (BO-2 residuals #3 and #4)
+
+Everything above assumes a caller's identity means something. Two holes made that assumption false, and both were adjacent enough to this work that closing them belongs here.
+
+### The LLM key was the identity token
+
+`_get_internal_token()` fell back to `LITELLM_MASTER_KEY`, and the orchestrator handed agents whichever value it resolved to — preferring `gateway_internal_token` when set. So **every agent held a credential granting `SERVICE_ACCESS`**: it could call `/admin/members/{me}/overrides` and grant itself anything, defeating the whole model.
+
+Now two secrets with different jobs:
+
+| Secret | Role | Checked by | Handed to agents |
+|---|---|---|---|
+| `GATEWAY_INTERNAL_TOKEN` | service identity → `SERVICE_ACCESS` | `require_internal_auth`, `get_current_user`'s Bearer branch | **never** |
+| `LITELLM_MASTER_KEY` | the `/v1` API key | `require_llm_api_auth` only | yes — that is its purpose |
+
+`/v1` accepts either, because the Next.js server and internal jobs route completions too. Everything else accepts identity only. Every `/v1` client now reads `settings.llm_api_key`; a test asserts none of them resolves `gateway_internal_token`, so the escalation cannot be reintroduced by a future edit.
+
+When `GATEWAY_INTERNAL_TOKEN` is unset the identity token still falls back to the LLM key, so an un-migrated deployment does not 401 every internal call on upgrade — but it warns on every resolution, because a silent fallback here is the vulnerability wearing a fix's clothes.
+
+**What this does not fix.** Agents run in-process (BO-7), so an agent that reads `get_settings()` directly can still obtain `gateway_internal_token`. What is closed is the *shared-secret* exposure: the value most likely to leak outside the process — an API key, by design present in BYOK configs, provider settings and logs — is no longer an identity credential. The in-process path needs the sandbox.
+
+### The agent webhook was unauthenticated
+
+`POST /agent/webhook/{source}` dispatches an agent run and had no authentication and no `assert_can_run_agent` — a fourth run path, internet-reachable through Caddy, that bypassed every gate in §5.
+
+It now requires an HMAC-SHA256 signature over the raw body in `X-CC-Signature`, with per-source secrets (`AGENT_WEBHOOK_SECRET_<SOURCE>`) overriding a global one. A valid signature *is* the authorization: it proves the platform's own secret produced the request, which is the same trust level as the internal token. There is no member to resolve, which is precisely why the signature is mandatory.
+
+**It fails closed when unconfigured** — 503, naming the variable to set — unlike the bridge and bot-token checks elsewhere, which allow when unset. Those receive data; this one starts an agent run. Safe to make strict because nothing calls this path today: the provider receivers live in `ingestion/sources/*/webhook.py` and dispatch no agents (`FOUNDATION_AUDIT_REPORT.md`), so there is no working sender to break.
+
+---
+
 ## 9. Open questions
 
 1. **Agent visibility vs. runnability.** Phase 1 gates *running* an agent. Should a member also be unable to *see* that an agent exists? Listing is currently a weaker signal than running, but agent names leak org structure.

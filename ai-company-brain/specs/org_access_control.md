@@ -211,6 +211,42 @@ Five seams. The first three are security, the last two are UX — a hidden nav i
 
 Phase 1 ships 1, 2, 4, 5 and the plumbing for 3. Seam 3's full form (per-user credential and memory scoping) is research-doc §7–§8 and stays queued.
 
+### Where seam 1 is applied
+
+Gating happens **at the router** wherever a prefix has one audience, so a new endpoint added later is covered by default — the failure mode of per-route gating is the route someone forgets.
+
+| Surface | Gate |
+|---|---|
+| `/whatsapp` `/email` `/tasks` `/notes` `/chat` | `feature:<slug>`, router-level |
+| `/actions` | `feature:approvals`, router-level |
+| `/integrations` | `feature:integrations`, router-level |
+| `/memory` | already `require_internal_auth` — internal callers only, left as is |
+| `/settings` **writes** | `feature:models` per route; reads stay open (they feed the chat model picker, which every member needs) |
+| `/integrations/oauth` | `authorize` + `refresh` gated; `callback` is not (see below) |
+| `/agent` | run endpoints per-agent via `assert_can_run_agent`; registry writes on `agents:manage`; `/webhook/{source}` deliberately unauthenticated for external callers |
+| `/apps` | `require_app_author` (`feature:build.apps`) for authoring, `require_app_viewer` (`apps:use:*`) for runtime — one prefix, two audiences |
+| `/observability` `/debug` | left on their existing `EXECUTIVE` gate. Switching them to `feature:observability` would *widen* access to `manager`; a PR that tightens access should not quietly loosen one |
+
+### Exemptions are load-bearing, not oversights
+
+`require_feature_router(slug, exempt=[...])` takes a list of **route templates** that must stay reachable without a member:
+
+| Exempt | Why | Its own auth |
+|---|---|---|
+| `/whatsapp/webhook` | Meta calls it | verify-token (GET), signature (POST) |
+| `/whatsapp/bridge/*` | the Go bridge posts inbound messages | `X-Bridge-Secret`, constant-time compare |
+| `/email/oauth/{provider}/callback` | browser redirect from the provider | HMAC-signed `state` |
+| `/email/webhook/microsoft` | Graph change notification | `validationToken` echo + `clientState` |
+| `/notes/meetings/{id}/live/segment` | meeting-bot worker's ASR callback | `MEETING_BOT_TOKEN` |
+| `/notes/stt/bot-live-token` | bot token minting | `MEETING_BOT_TOKEN` |
+
+Each arrives with no session and no internal token. Gating one does not restrict access — it **stops ingestion**, invisibly, until someone notices missing data. Exempting removes the *feature* check only; the endpoint's own scheme still runs.
+
+Two properties keep the list honest, both enforced by `tests/unit/test_org_access_enforcement.py`:
+
+- Matching is on the **route template**, never the concrete URL, so a path parameter cannot be crafted to spell an exempt path.
+- Any route in a gated router that takes no `UserContext` must be either exempt or an explicitly-listed UI read. A new machine entrypoint added without an exemption fails the test rather than breaking ingestion in production.
+
 `require_role()` is **kept and reimplemented** on top of the permission engine — `UserRole.EXECUTIVE` resolves as `admin:*`-equivalent — so no existing route changes behaviour on deploy. New routes use `require_permission()`.
 
 ### Resolution and caching

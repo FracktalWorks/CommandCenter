@@ -40,6 +40,7 @@ from gateway.routes.admin._common import (
     get_member,
     get_org_id,
     invalidate_for,
+    record_admin_change,
     require_admin_user,
     roles_for_user,
     router,
@@ -186,6 +187,8 @@ async def invite_member(
 
     invalidate_for(email)
     _log.info("member_invited", email=email, by=admin.email, roles=roles)
+    record_admin_change(admin.email, "org.member_invited", f"user:{email}",
+                        roles=roles)
     return MemberEntry(
         email=email,
         display_name=req.display_name or "",
@@ -242,6 +245,8 @@ async def update_member(
     invalidate_for(member["email"])
     _log.info("member_updated", email=member["email"], by=admin.email,
               status=member["status"])
+    record_admin_change(admin.email, "org.member_updated",
+                        f"user:{member['email']}", status=member["status"])
     return MemberEntry(
         email=member["email"],
         display_name=member["display_name"] or "",
@@ -293,6 +298,8 @@ async def remove_member(
 
     invalidate_for(member["email"])
     _log.info("member_removed", email=member["email"], by=admin.email)
+    record_admin_change(admin.email, "org.member_removed",
+                        f"user:{member['email']}")
     return {"status": "removed", "email": member["email"]}
 
 
@@ -395,6 +402,8 @@ async def set_member_roles(
 
     invalidate_for(member["email"])
     _log.info("member_roles_set", email=member["email"], by=admin.email, roles=roles)
+    record_admin_change(admin.email, "org.member_roles_set",
+                        f"user:{member['email']}", roles=roles)
     return MemberEntry(
         email=member["email"],
         display_name=member["display_name"] or "",
@@ -611,4 +620,10 @@ async def set_member_overrides(
     invalidate_for(member["email"])
     _log.info("member_overrides_set", email=member["email"], by=admin.email,
               count=len(cleaned))
+    # The overrides themselves, not just the count: "who lost WhatsApp and
+    # when" is the question this record exists to answer.
+    record_admin_change(admin.email, "org.member_overrides_set",
+                        f"user:{member['email']}",
+                        overrides=[{"permission": p, "effect": e, "reason": r}
+                                   for p, e, r in cleaned])
     return await get_member_access(member["email"], admin)  # type: ignore[arg-type]

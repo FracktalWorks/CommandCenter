@@ -37,7 +37,16 @@ webhook receivers, OAuth callbacks, and the Control Plane API.
 3. Use acb_auth.get_current_user for authentication; gate access with
    `require_permission("feature:<slug>")` (preferred for new routes) or the
    legacy `require_role(...)`. `get_current_user` already resolves the caller's
-   org roles + overrides onto `UserContext.access`, so no second lookup is needed
+   org roles + overrides onto `UserContext.access`, so no second lookup is needed.
+   A whole feature surface is gated at the router with
+   `require_feature_router("<slug>", exempt=[...])`, so a new endpoint under
+   that prefix is covered by default.
+   ⚠️ **Adding a machine entrypoint** (provider webhook, OAuth callback, worker
+   callback) under a gated prefix: add its route TEMPLATE to that router's
+   `exempt` list, or the feature gate will 401 it and silently stop ingestion.
+   `tests/unit/test_org_access_enforcement.py` fails on any route that takes no
+   `UserContext` and is not exempt — do not silence it without checking which
+   kind of route you added
 4. Follow FastAPI patterns: Pydantic models, dependency injection
 5. Audit all write operations via acb_audit.record()
 

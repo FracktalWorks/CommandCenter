@@ -220,3 +220,30 @@ def invalidate_for(*emails: str | None) -> None:
     for email in emails:
         if email:
             invalidate_access(email)
+
+
+def record_admin_change(
+    actor: str | None, action: str, target: str, **payload: Any
+) -> None:
+    """Append an access change to the audit log.
+
+    Every write in this package goes through here. "Who could see what, and
+    who changed it" is the first question asked after an incident and the
+    first thing an access review needs; structlog alone does not survive as a
+    queryable record.
+
+    Best-effort by contract (``acb_audit.record`` logs always, DB-writes if it
+    can) — an audit backend that is down must not block an admin from
+    revoking someone's access.
+    """
+    try:
+        from acb_audit import AuditEvent, record  # noqa: PLC0415
+
+        record(AuditEvent(
+            actor=f"user:{actor}" if actor else "system:internal",
+            action=action,
+            target=target,
+            payload=payload,
+        ))
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("admin_audit_failed", action=action, error=str(exc))

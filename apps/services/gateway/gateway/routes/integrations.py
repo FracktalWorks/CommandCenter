@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Any
 
 import httpx
-from acb_auth import UserContext, UserRole, get_current_user, require_role
+from acb_auth import UserContext, UserRole, get_current_user, require_feature_router, require_role
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
@@ -32,7 +32,10 @@ from sqlalchemy import text
 
 _log = get_logger("gateway.integrations")
 
-router = APIRouter(prefix="/integrations", tags=["integrations"])
+router = APIRouter(
+    prefix="/integrations", tags=["integrations"],
+    dependencies=[require_feature_router("integrations")],
+)
 
 # ---------------------------------------------------------------------------
 # Static setup guides — one entry per registered integration.

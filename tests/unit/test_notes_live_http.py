@@ -17,6 +17,7 @@ import json
 
 from acb_auth import get_current_user
 from fastapi import APIRouter, FastAPI
+from acb_auth import UserContext, UserRole, build_access
 from fastapi.testclient import TestClient
 from gateway.routes.notes import live_speakers as ls
 from gateway.routes.notes import live_transcript as lt
@@ -30,9 +31,14 @@ def _client() -> TestClient:
         if "/live" in getattr(route, "path", ""):
             sub.routes.append(route)
     app.include_router(sub)
-    app.dependency_overrides[get_current_user] = lambda: type(
-        "U", (), {"email": "tester@example.com", "role": "employee"}
-    )()
+    # A real UserContext, not a duck-typed stand-in: the /notes routes are
+    # gated on `feature:notes` (org access control), so the override has to
+    # carry a resolvable permission set the way the real dependency does.
+    app.dependency_overrides[get_current_user] = lambda: UserContext(
+        email="tester@example.com",
+        role=UserRole.EMPLOYEE,
+        access=build_access(["feature:notes"], roles=["member"]),
+    )
     return TestClient(app)
 
 

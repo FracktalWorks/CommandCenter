@@ -33,7 +33,7 @@ from typing import Any
 from urllib.parse import urlencode
 
 import httpx
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_permission
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import HTMLResponse
@@ -133,7 +133,7 @@ def _verify_state(state: str, service: str, settings: Any) -> bool:
 # Endpoints
 # ---------------------------------------------------------------------------
 
-@router.get("/{service}/authorize")
+@router.get("/{service}/authorize", dependencies=[require_permission("feature:integrations")])
 async def oauth_authorize(
     service: str,
     user: UserContext = Depends(get_current_user),
@@ -216,7 +216,7 @@ async def oauth_callback(
     return _html_result(service, ok=True, detail="Connected successfully. You can close this tab.")
 
 
-@router.post("/{service}/refresh")
+@router.post("/{service}/refresh", dependencies=[require_permission("feature:integrations")])
 async def oauth_refresh(
     service: str,
     user: UserContext = Depends(get_current_user),

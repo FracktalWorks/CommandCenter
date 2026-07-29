@@ -16,6 +16,7 @@ from acb_auth.deps import (
     require_feature,
     require_feature_router,
     require_internal_auth,
+    require_llm_api_auth,
     require_permission,
     require_role,
 )
@@ -48,6 +49,7 @@ __all__ = [
     "require_feature",
     "require_feature_router",
     "require_internal_auth",
+    "require_llm_api_auth",
     "assert_can_run_agent",
     # permission model
     "EffectiveAccess",

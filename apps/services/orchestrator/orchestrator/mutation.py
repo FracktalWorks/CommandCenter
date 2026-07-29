@@ -639,11 +639,12 @@ async def _run_mutation_sandbox(
     import asyncio
 
     github_token: str | None = getattr(settings, "github_token", None) or None
-    # Same internal-token precedence as acb_auth.require_internal_auth
-    # (gateway_internal_token → litellm_master_key) so the sandbox's /v1 calls
-    # aren't 401'd when the two values diverge.
+    # The LLM API key, NEVER the identity token. This value crosses a process
+    # boundary into a container running model-authored code, delivered as an
+    # env var — the single worst place to put a credential that grants full
+    # platform authority. /v1 accepts it via acb_auth.require_llm_api_auth.
     gateway_key: str | None = (
-        getattr(settings, "gateway_internal_token", None)
+        getattr(settings, "llm_api_key", None)
         or getattr(settings, "litellm_master_key", None)
         or None
     )

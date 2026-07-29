@@ -13,7 +13,7 @@ import os
 import re
 from typing import Any
 
-from acb_auth import require_internal_auth
+from acb_auth import require_llm_api_auth
 from acb_common import get_logger
 from acb_llm.client import _ensure_keys_loaded
 from fastapi import APIRouter, Depends, Request
@@ -652,7 +652,7 @@ async def _handle_chat_completions(request: Request) -> StreamingResponse | dict
 # require_internal_auth 401s any caller without the internal Bearer token —
 # this endpoint bills the server's stored provider keys, so it must not be
 # world-reachable. Every internal caller already forwards the token.
-_auth = [Depends(require_internal_auth)]
+_auth = [Depends(require_llm_api_auth)]
 router_v1.post(
     "/chat/completions", response_model=None, dependencies=_auth,
 )(_handle_chat_completions)

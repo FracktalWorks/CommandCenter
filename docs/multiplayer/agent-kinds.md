@@ -295,9 +295,11 @@ layer, not by reading the answers.
    at month 3" is real value, and it is exactly the thing that must not be built by pooling raw
    memory. Probably a separate, explicitly-derived aggregate compartment with no verbatim
    facts — worth designing before someone asks for it and reaches for the shared bucket.
-2. **Team membership source.** `team_ref` needs a real team object; the org research doc's
-   `module` is the natural home, but it isn't built yet. Interim: an explicit member list on
-   the agent registration.
+2. **Team membership source.** ~~`team_ref` needs a real team object; the org research doc's
+   `module` is the natural home, but it isn't built yet.~~ **Answered** —
+   [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §1:
+   `sharing.team` names an `org_group.slug` (migration 133), the single group primitive shared
+   with access control Phase 2 and session sharing. `t:<team>` keys are `t:<org_group.slug>`.
 3. **Per-user agent config.** If everyone has their own email agent, does everyone get their
    own `instructions.md` tweaks and model choice, or only their own memory? Memory-only is
    the smaller first step; per-user prompt overrides are a real want soon after.

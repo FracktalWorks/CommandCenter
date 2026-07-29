@@ -32,6 +32,13 @@ Interactive mockups live alongside this doc:
   produced them** so replay can be filtered by label, not only by join cursor — otherwise the
   model launders restricted content into a transcript that later joiners can read.
 
+- [`../../ai-company-brain/specs/groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md)
+  — **the binding decisions (2026-07-29).** Org access control Phase 1 shipped (resolved
+  principals, `EffectiveAccess`, default-deny, agent-run gating) and handed the rest to this
+  workstream. That spec fixes the three shared primitives: `org_group` (one group model for
+  teams, agent instancing, and sharing), `chat_session_participant`, and the authority rule —
+  a shared run acts at the **intersection** of all participants' access. Where this document
+  disagrees with it, that spec wins (§4.3 notes the specifics).
 - [`agent-kinds.md`](agent-kinds.md) — **personal vs shared agents.** Which agents are
   one-per-person (coach, email) and which are one-brain-for-a-team (sales assistant).
   Read this first: instancing decides what a memory compartment even is, and whether an
@@ -215,47 +222,33 @@ Why this and not a new abstraction:
 - It degrades gracefully: a session with one member behaves exactly as today, so nothing
   regresses for solo use.
 
-### 4.3 Schema — migration `117_multiplayer_rooms.sql`
+### 4.3 Schema
+
+> **Superseded in part (2026-07-29):** the participant table, visibility values, and
+> authority model below were drafted before org access control Phase 1 shipped and handed
+> off ([`org_access_control.md` §10](../../ai-company-brain/specs/org_access_control.md)).
+> The binding decisions now live in
+> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md):
+> the table is `chat_session_participant(subject, role ∈ owner|member|viewer)` with the
+> `app_grants` subject vocabulary (email / `group:<slug>` / `org`), visibility is
+> `private|people|org` mirroring `apps.visibility`, and — most importantly — there is **no
+> `acting_identity` column**: a shared run acts with the **intersection** of every
+> participant's `EffectiveAccess`, never one member's identity. The room-layer columns
+> below (floor control, history waterline, budgets) remain this doc's scope and land with
+> the room feature.
 
 ```sql
--- ── The room ────────────────────────────────────────────────────────────────
+-- ── The room layer (this doc's scope; participants live in migration 133) ───
 ALTER TABLE chat_session
     -- user_id keeps its meaning: the creator/owner. Membership is additive.
-    ADD COLUMN IF NOT EXISTS visibility TEXT NOT NULL DEFAULT 'private'
-        CHECK (visibility IN ('private', 'invite', 'team', 'organization')),
     ADD COLUMN IF NOT EXISTS floor_mode TEXT NOT NULL DEFAULT 'driver'
         CHECK (floor_mode IN ('solo', 'driver', 'queue', 'open', 'moderated')),
     ADD COLUMN IF NOT EXISTS history_visibility TEXT NOT NULL DEFAULT 'full'
         CHECK (history_visibility IN ('full', 'since_join')),
     ADD COLUMN IF NOT EXISTS context_policy TEXT NOT NULL DEFAULT 'room'
         CHECK (context_policy IN ('room', 'driver', 'none')),
-    ADD COLUMN IF NOT EXISTS acting_identity TEXT,          -- email whose integrations the agent uses
     ADD COLUMN IF NOT EXISTS max_contributors INT NOT NULL DEFAULT 5,
     ADD COLUMN IF NOT EXISTS token_budget BIGINT;           -- NULL = unlimited
-
--- ── Membership ──────────────────────────────────────────────────────────────
-CREATE TABLE IF NOT EXISTS chat_session_member (
-    session_id      TEXT NOT NULL REFERENCES chat_session(id) ON DELETE CASCADE,
-    user_email      TEXT NOT NULL,
-    room_role       TEXT NOT NULL DEFAULT 'observer'
-                      CHECK (room_role IN ('owner','contributor','observer')),
-    invited_by      TEXT,
-    joined_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
-    -- History redaction for late joiners: fed straight into the EXISTING
-    -- /reconnect?since= cursor and the chat_message timestamp filter.
-    join_stream_id  TEXT,
-    join_message_ts BIGINT,
-    last_seen_at    TIMESTAMPTZ,
-    PRIMARY KEY (session_id, user_email)
-);
-CREATE INDEX IF NOT EXISTS chat_session_member_user_idx
-    ON chat_session_member (user_email, joined_at DESC);
-
--- Backfill: every existing session gets its owner as a member. Solo sessions
--- keep behaving identically.
-INSERT INTO chat_session_member (session_id, user_email, room_role)
-SELECT id, user_id, 'owner' FROM chat_session
-ON CONFLICT DO NOTHING;
 
 -- ── Attribution + private lanes ─────────────────────────────────────────────
 ALTER TABLE chat_message

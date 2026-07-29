@@ -190,6 +190,15 @@ Intersection, never union. Everything else follows from it:
 The last point is the reason this is worth building rather than prompting for. "Don't mention
 Falcon" in a system prompt is a request. Not passing the scope key is a boundary.
 
+> **Now grounded in shipped machinery (2026-07-29):** this same rule was independently
+> chosen for *permissions* — a shared run's authority is
+> `EffectiveAccess.intersect()` folded over all participants
+> ([`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §3,
+> primitive in `packages/acb_auth/acb_auth/permissions.py`). Memory clearance and run
+> authority are the same shape applied to two resources: what may be *read into* the run,
+> and what the run may *do*. One rule, two enforcement points — credentials via
+> `executor._integration_authorizer`, compartments via the scope keys passed to `search()`.
+
 ### 3.4 The write rule
 
 > **A fact may be written only to a compartment whose audience is no wider than the session

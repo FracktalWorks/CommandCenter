@@ -1,7 +1,7 @@
 # Organization Access Control — implementation spec
 
-> **Status:** 🔄 Phase 1 shipping.
-> **Created:** 2026-07-29
+> **Status:** 🟢 Phase 1 shipped. **Multi-tenant user management now hands off to the multiplayer agent collaboration workstream — see [§10](#10-handoff-multiplayer-agent-collaboration).**
+> **Created:** 2026-07-29 · **Handed off:** 2026-07-29
 > **Scope:** Turning the single-tenant deployment into a real multi-user organization: named members, roles, per-user feature/agent access, and one enforcement path the whole platform shares.
 > **Parent research:** [`multi_user_organization_research.md`](multi_user_organization_research.md) — the *why* and the long-horizon (SaaS, memory scoping, entity-graph RLS) design. This document is the *what we are building now*, and it deliberately implements a subset.
 > **Companion:** [`permissions_sandbox_b6.md`](permissions_sandbox_b6.md) (tool-level risk gating — orthogonal: that answers "may this *tool call* proceed", this answers "may this *person* reach this feature at all").
@@ -399,3 +399,77 @@ Two things keep the list honest, both tested: a `PUBLIC_ROUTES` entry matching n
 3. **Departure.** A removed member's private apps, chat sessions, and agent workspaces currently persist unowned. Transfer-on-removal is unbuilt (research §13 Q4).
 4. **Guest scope.** Does `guest` ever need email or tasks, or is chat-plus-shared-apps the whole product surface for externals?
 5. **Custom role ceiling.** Clerk caps at 10. Unbounded custom roles tend to produce one role per person, which is what overrides are for.
+
+---
+
+## 10. Handoff: multiplayer agent collaboration
+
+**Multi-tenant user management is complete as Phase 1 and is not being extended on its own track.** Everything remaining — modules/teams, session sharing, memory and transcript scoping — is now owned by the multiplayer agent collaboration workstream, because those are the same primitives seen from two directions. Building them twice would produce two group models to reconcile later.
+
+This section is the integration contract. Read it before designing multiplayer; it says what you can rely on, what will collide, and what is deliberately absent.
+
+### 10.1 What is built and can be relied on
+
+| Capability | Where | Notes for multiplayer |
+|---|---|---|
+| Permission model + resolution rule | `packages/acb_auth/acb_auth/permissions.py` | Pure, no I/O, fully unit-tested. Two layers: role grants, then per-user allow/deny overrides that compete **by specificity** (§3.4). |
+| DB-backed resolution | `acb_auth/access.py` → `resolve_access(email)` | 60s cache, invalidated on every admin write. Never raises; unknown/suspended → no access. |
+| Request identity | `acb_auth/deps.py` → `get_current_user` | Returns `UserContext` carrying `email`, `user_id`, `organization_id` and a resolved `EffectiveAccess`. |
+| Authentication | `require_authenticated(public=...)`, app-wide (§8c) | Default-deny. A new route is covered without opting in. |
+| Feature gating | `require_feature_router(slug, exempt=[...])` | Router-level, with a declared exemption list for self-authenticating machine entrypoints. |
+| Agent-run gating | `assert_can_run_agent(user, name)` | On all three run endpoints; `/agent/webhook/{source}` is HMAC-signed instead. |
+| Credential scoping | `build_integrations(..., is_authorized=)` + `executor._integration_authorizer` | Filters per acting member **before** creds enter the run env. |
+| Org-memory gate | `acb_skills/memory_tools._may("memory:write_org")` | Run-scoped predicate contextvar, set by the executor. |
+| Admin API + UI | gateway `routes/admin/`, workbench `/settings/members`, `/settings/roles` | Members, roles, per-user overrides, with provenance on every decision. |
+| Schema | `infra/postgres/128_*.sql`, `129_*.sql` | `organization`, membership on `app_user`, `org_role`, `org_role_permission`, `user_role`, `user_permission_override`, `feature_catalog`. |
+
+### 10.2 The four collisions
+
+**1. Groups — build once, not twice.** `module` / team is the deferred Phase 2 (research §5) and is *unbuilt*. Multiplayer needs "who is in this space"; access control needs "who is in this team". Same primitive. Whoever builds it should satisfy both requirement sets in one table. The visibility vocabulary to reuse is already established by `apps.visibility ∈ (private, people, org)` and generalised in §5 — do not invent a third.
+
+**2. Session ownership is single-owner today.**
+
+```sql
+chat_session.user_id TEXT NOT NULL DEFAULT 'default'   -- comment still says "future multi-tenant"
+```
+
+No participants table, no sharing, no visibility column. Multiplayer needs `chat_session_participant`; access control needs session visibility. One change, not two.
+
+**3. Whose authority runs the agent — decide before transcripts exist.**
+
+Phase 1 resolved this implicitly for one user: `assert_can_run_agent` checks the caller, and `_integration_authorizer` keys off `event_payload["user_email"]`. With two people in a session the default answer becomes "whoever typed", and that leaks — a member denied Zoho sits in a session where another member triggers a Zoho-using agent, and the output lands in the shared transcript.
+
+**`EffectiveAccess.intersect()` already exists and is tested** (`permissions.py`). It was written so a sub-agent cannot exceed its invoking member, but the semantics are exactly "a shared session grants the intersection of its participants' access". If intersection is the rule, the primitive is there. If the rule is actor-only, that needs to be a stated decision with attribution visible in the UI — not a default nobody chose.
+
+**4. The transcript is a second exposure boundary.** Phase 1 gates *reaching* a feature. A shared transcript re-exposes whatever any participant's agent produced to everyone in the room. Two concrete cases:
+
+- **Personal memory.** Keyed to the acting user via `_memory_user_id`. Injecting it into a shared session surfaces one person's private context in another's view.
+- **Tool output.** A member without `integrations:use:zoho-crm` reads Zoho records in the shared transcript because a permitted member asked for them.
+
+Nothing in Phase 1 addresses this; every enforcement seam assumes one viewer per run. It is new surface that multiplayer introduces, and it is the item most likely to be discovered late.
+
+### 10.3 Deliberately not built
+
+Not oversights — scoped out with reasons in the sections referenced.
+
+- Modules/teams (§8 phases, research §5).
+- Entity-graph row visibility + Postgres RLS (research §9, §16.5).
+- Transfer-on-removal: a removed member's private apps, sessions and workspaces persist unowned (§9 Q3).
+- Personal (BYO) integration credentials (research §8.3).
+- Everything SaaS — subdomains, billing, per-tenant isolation (research §17).
+- **True agent isolation.** Agents run in-process, so §8b's credential scoping is *authorization, not isolation*. That ceiling is **BO-7**, and it bounds what any access claim in this document can mean.
+- ~50 Next.js proxy routes still carry their own `EXECUTIVE_EMAILS` copy. Cosmetic — permissions resolve server-side from the email regardless — but `workbench/control_plane/src/lib/gateway.ts` is the single replacement when someone sweeps them.
+
+### 10.4 Suggested first move
+
+One spec covering the group primitive, `chat_session_participant`, and the authority rule — then implementation can split cleanly. Sequencing matters: the authority and transcript-exposure decisions are cheap now and expensive once shared transcripts exist and have to be migrated.
+
+### 10.5 Where the reasoning lives
+
+Design rationale sits in the code, not only here. If a decision looks arbitrary, the docstring explains it:
+
+- `permissions.py` module docstring — why specificity rather than flat deny-wins.
+- `access.py::legacy_fallback_enabled` — why the resolver flipped to fail-closed.
+- `deps.py::require_feature_router` — why exemptions match route *templates*.
+- `deps.py::_get_internal_token` — why the identity token and the LLM key are separate.
+- `executor.py::_integration_authorizer` — why background runs are deliberately unfiltered.

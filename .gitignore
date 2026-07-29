@@ -84,3 +84,6 @@ skill-observations/
 *_dump.bak
 *token_cache*.json
 .zoho_token_cache.json
+
+# Redis snapshot from a locally-run redis-server (dev/verification only)
+dump.rdb

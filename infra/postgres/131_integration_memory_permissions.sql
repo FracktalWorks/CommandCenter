@@ -1,8 +1,8 @@
 -- ============================================================================
--- 129_integration_memory_permissions.sql — per-user integration + org memory
+-- 131_integration_memory_permissions.sql — per-user integration + org memory
 -- ============================================================================
 -- Phase 3 (partial) of ai-company-brain/specs/org_access_control.md: extends
--- the seeded roles with two permission families that migration 128 did not
+-- the seeded roles with two permission families that migration 130 did not
 -- have vocabulary for.
 --
 --   integrations:use:*        which third-party services an agent run may
@@ -25,7 +25,7 @@
 -- behaviour that was already in effect. The restriction only takes hold once
 -- an admin sets a per-user deny.
 --
--- Idempotent. Depends on: 128_org_access_control.sql.
+-- Idempotent. Depends on: 130_org_access_control.sql.
 -- ============================================================================
 
 DO $$
@@ -35,7 +35,7 @@ DECLARE
 BEGIN
     SELECT id INTO org_id FROM organization WHERE slug = 'default';
     IF org_id IS NULL THEN
-        RAISE NOTICE '129: no default organization — run migration 128 first';
+        RAISE NOTICE '131: no default organization — run migration 130 first';
         RETURN;
     END IF;
 

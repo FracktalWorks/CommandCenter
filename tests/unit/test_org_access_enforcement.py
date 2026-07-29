@@ -116,6 +116,7 @@ GATED_ROUTERS: dict[str, set[str]] = {
         "/whatsapp/bridge/ingest",
         "/whatsapp/bridge/reclassify",
         "/whatsapp/bridge/labels",
+        "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
     },
     "gateway.routes.email": {

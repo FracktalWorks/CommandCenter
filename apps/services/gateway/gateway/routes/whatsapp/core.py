@@ -37,6 +37,7 @@ router = APIRouter(
         "/whatsapp/bridge/ingest",
         "/whatsapp/bridge/reclassify",
         "/whatsapp/bridge/labels",
+        "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
     ])],
 )

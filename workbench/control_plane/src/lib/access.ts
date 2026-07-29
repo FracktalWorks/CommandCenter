@@ -48,7 +48,7 @@ export const NO_ACCESS: Access = {
 //
 // Longest-prefix match, so "/settings/models" resolves to `models` rather
 // than being swallowed by a shorter "/settings" entry. Kept in sync with the
-// feature_catalog table (infra/postgres/128_org_access_control.sql).
+// feature_catalog table (infra/postgres/130_org_access_control.sql).
 
 const HREF_FEATURES: ReadonlyArray<[string, string]> = [
   ["/chat", "chat"],

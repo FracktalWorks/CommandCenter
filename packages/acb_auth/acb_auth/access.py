@@ -1,6 +1,6 @@
 """DB-backed resolution of a member's effective access.
 
-Reads the org/role/override tables from ``infra/postgres/128_org_access_control.sql``
+Reads the org/role/override tables from ``infra/postgres/130_org_access_control.sql``
 and turns an email into an :class:`~acb_auth.permissions.EffectiveAccess`.
 Pure matching logic lives in :mod:`acb_auth.permissions`; this module is the
 I/O half.
@@ -243,7 +243,7 @@ async def resolve_access(
             _log.error(
                 "access_tables_missing",
                 detail=(
-                    "apply infra/postgres/128_org_access_control.sql. Members "
+                    "apply infra/postgres/130_org_access_control.sql. Members "
                     "resolve to NO ACCESS until it runs; set "
                     "ACCESS_LEGACY_FALLBACK=1 to degrade to the legacy "
                     "executive/employee mapping instead."

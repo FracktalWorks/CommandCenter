@@ -1,5 +1,5 @@
 -- ============================================================================
--- 128_org_access_control.sql — Organization membership, roles, permissions
+-- 130_org_access_control.sql — Organization membership, roles, permissions
 -- ============================================================================
 -- Phase 1 of ai-company-brain/specs/org_access_control.md. Turns the
 -- single-tenant deployment into a real multi-user organization:
@@ -265,7 +265,7 @@ END $$;
 -- redeploy of this idempotent migration.
 
 INSERT INTO user_role (user_id, role_id, assigned_by)
-SELECT u.id, r.id, 'migration:128'
+SELECT u.id, r.id, 'migration:130'
   FROM app_user u
   JOIN org_role r
     ON r.organization_id = u.organization_id
@@ -300,7 +300,7 @@ BEGIN
 
         IF candidate IS NOT NULL THEN
             INSERT INTO user_role (user_id, role_id, assigned_by)
-            VALUES (candidate, owner_rid, 'migration:128')
+            VALUES (candidate, owner_rid, 'migration:130')
             ON CONFLICT DO NOTHING;
         END IF;
     END IF;

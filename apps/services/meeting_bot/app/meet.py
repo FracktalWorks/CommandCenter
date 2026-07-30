@@ -398,11 +398,78 @@ async def _await_admission(page, on_status: Callable[[str], None]) -> str:
     return "timeout"
 
 
-def _participant_count(page) -> int:
-    """Best-effort current participant count (Meet shows it on a people pill).
-    Returns -1 when it can't be read (treated as 'not alone')."""
-    # Not reliably available headless; kept simple and optional.
-    return -1
+#: Meet says one of these once the call is over for us. Split from the kicked
+#: markers below because "the meeting ended" and "the host removed you" are
+#: different events: one is routine, the other is someone declining to be
+#: recorded, and that belongs in the notes rather than in a shrug.
+_ENDED_MARKERS = (
+    "you've left the meeting",
+    "you left the meeting",
+    "call ended",
+    "the meeting has ended",
+    "return to home screen",
+)
+_KICKED_MARKERS = (
+    "removed from the meeting",
+    "you were removed",
+    "someone removed you",
+)
+
+
+def classify_call_end(body: str) -> str | None:
+    """``ended`` / ``kicked`` / None from the page text.
+
+    Checks kicked FIRST: Meet's removal screen also offers "Return to home
+    screen", so testing the generic markers first would report every ejection
+    as an ordinary end.
+    """
+    low = (body or "").lower()
+    if any(m in low for m in _KICKED_MARKERS):
+        return "kicked"
+    if any(m in low for m in _ENDED_MARKERS):
+        return "ended"
+    return None
+
+
+#: How long to stay when nobody else ever showed up. Deliberately shorter than
+#: ALONE_TIMEOUT_S: a meeting that never started is a mistake to abandon
+#: quickly, whereas a call everyone has just left may still be coming back.
+NOONE_JOINED_TIMEOUT_S = int(os.environ.get("MEET_NOONE_JOINED_TIMEOUT", "300"))
+
+_COUNT_SCRIPT = """() => {
+  // 1. The people pill / participants button carries the count in its label.
+  for (const el of document.querySelectorAll('[aria-label]')) {
+    const m = (el.getAttribute('aria-label') || '')
+      .match(/(\\d+)\\s+(participants?|people|others?)/i);
+    if (m) return parseInt(m[1], 10);
+  }
+  // 2. Explicit participant tiles, when Meet renders them.
+  const tiles = document.querySelectorAll('[data-participant-id]');
+  if (tiles.length) return tiles.length;
+  // 3. The number Meet draws inside the show-everyone button.
+  const btn = document.querySelector('button[aria-label*="everyone" i]');
+  if (btn) {
+    const m = (btn.innerText || '').match(/\\d+/);
+    if (m) return parseInt(m[0], 10);
+  }
+  return -1;
+}"""
+
+
+async def _participant_count(page) -> int:
+    """Best-effort headcount for the call, or ``-1`` when it can't be read.
+
+    This reads the least stable thing in the whole worker — Meet's DOM is not a
+    public API and these selectors are the first that will rot. So it tries
+    three independent signals, and every caller treats ``-1`` as "not alone":
+    leaving a real meeting early loses the recording, while lingering in an
+    empty one only costs a few minutes of a worker. Fail towards staying.
+    """
+    try:
+        n = await page.evaluate(_COUNT_SCRIPT)
+        return int(n)
+    except Exception:
+        return -1
 
 
 def _start_ffmpeg(out_path: str) -> subprocess.Popen:
@@ -429,30 +496,58 @@ def _stop_ffmpeg(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
-async def _wait_until_end(page, leave_event: asyncio.Event) -> None:
-    """Stay in the call until asked to leave, the call ends, or the cap is hit."""
+async def _wait_until_end(page, leave_event: asyncio.Event) -> str:
+    """Stay in the call until it's over. Returns WHY we stopped.
+
+    Four distinct exits, because they mean different things to whoever reads the
+    meeting afterwards: ``asked`` (someone hit Stop), ``ended`` (the call
+    finished), ``kicked`` (the host removed us — a recording someone declined),
+    ``noone_joined`` (we sat alone and nobody ever came), ``everyone_left``, and
+    ``max_duration``.
+
+    Two separate alone-timers, which is the part that matters: a bot that joins
+    an empty room must give up **soon** (the meeting was cancelled or the link
+    was wrong), while a bot whose call has emptied out waits longer in case
+    people are reconnecting. Collapsing them either abandons live meetings or
+    holds a worker for four hours on a meeting that never happened — and since
+    only one bot runs at a time, the latter takes the whole feature down with it.
+    """
     waited = 0
     alone_for = 0
+    seen_others = False
     while waited < MAX_DURATION_S:
         if leave_event.is_set():
-            return
+            return "asked"
         try:
-            body = (await page.inner_text("body")).lower()
+            body = await page.inner_text("body")
         except Exception:
             body = ""
-        if any(s in body for s in ("you've left the meeting", "you left the meeting",
-                                   "return to home screen", "call ended",
-                                   "removed from the meeting")):
-            return
-        n = _participant_count(page)
-        if n == 1:
+        end = classify_call_end(body)
+        if end == "kicked":
+            _log.warning("meet.removed_by_host")
+            return "kicked"
+        if end == "ended":
+            return "ended"
+
+        n = await _participant_count(page)
+        if n > 1:
+            # Someone else is here; from now on "alone" means they left.
+            seen_others = True
+            alone_for = 0
+        elif n == 1:
             alone_for += 5
-            if alone_for >= ALONE_TIMEOUT_S:
-                return
+            limit = ALONE_TIMEOUT_S if seen_others else NOONE_JOINED_TIMEOUT_S
+            if alone_for >= limit:
+                _log.info(
+                    "meet.leaving_alone seen_others=%s after=%ss", seen_others, alone_for
+                )
+                return "everyone_left" if seen_others else "noone_joined"
         else:
+            # -1: couldn't read the count. Never treat unknown as alone.
             alone_for = 0
         await asyncio.sleep(5)
         waited += 5
+    return "max_duration"
 
 
 async def _leave(page) -> None:
@@ -537,6 +632,7 @@ async def join_and_record(
     live_callback: str | None = None,
     say_queue=None,
     job_id: str = "bot",
+    on_end_reason: Callable[[str], None] | None = None,
 ) -> None:
     from playwright.async_api import async_playwright
 
@@ -682,7 +778,14 @@ async def join_and_record(
             live_stop = asyncio.Event()
             aux = _start_live_tasks(live_callback, say_queue, live_stop)
             try:
-                await _wait_until_end(page, leave_event)
+                reason = await _wait_until_end(page, leave_event)
+                _log.info("meet.call_over reason=%s", reason)
+                # Surfaced so the meeting can say WHY it stopped. "The host
+                # removed the notetaker" and "nobody ever joined" both produce a
+                # short or empty recording, and without this they look
+                # identical to a bot that simply broke.
+                if on_end_reason is not None:
+                    on_end_reason(reason)
             finally:
                 live_stop.set()
                 for t in aux:

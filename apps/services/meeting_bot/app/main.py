@@ -67,6 +67,9 @@ class _Job:
         #: What the page looked like when a join failed (see meet._snapshot).
         self.diagnostics: dict = {}
         self.recording: str | None = None
+        #: Why the call stopped — see meet._wait_until_end. Distinguishes a
+        #: normal end from being removed by the host, from nobody ever joining.
+        self.end_reason: str | None = None
         self.leave = asyncio.Event()
         self.say_queue: asyncio.Queue[str] = asyncio.Queue()
         self.task: asyncio.Task | None = None
@@ -97,6 +100,7 @@ def _persist(job: _Job) -> None:
         "error": job.error,
         "diagnostics": job.diagnostics,
         "recording": job.recording,
+        "end_reason": job.end_reason,
     }
     try:
         os.makedirs(DATA_DIR, exist_ok=True)
@@ -127,6 +131,7 @@ def _load_persisted(job_id: str) -> _Job | None:
     job.status = str(state.get("status") or "failed")
     job.error = state.get("error")
     job.diagnostics = state.get("diagnostics") or {}
+    job.end_reason = state.get("end_reason")
     rec = state.get("recording")
     job.recording = rec if rec and os.path.isfile(rec) else None
     if job.status not in _TERMINAL:
@@ -166,6 +171,35 @@ class SayRequest(BaseModel):
     text: str
 
 
+#: Why an empty recording is empty. Without these, "captured no audio" always
+#: reads as a broken audio stack and sends someone into the container to check
+#: PulseAudio — when usually nobody ever joined the call.
+_NO_AUDIO_REASONS = {
+    "noone_joined": (
+        "Nobody else ever joined, so there was nothing to record. The notetaker "
+        "waited alone and left. Check the meeting actually went ahead."
+    ),
+    "kicked": (
+        "The host removed the notetaker from the call before anything was "
+        "recorded. If that wasn't deliberate, admit it and send it again."
+    ),
+    "ended": (
+        "The call ended before any audio was captured — it was probably already "
+        "over when the notetaker arrived."
+    ),
+}
+
+#: Same information, for a recording that DID capture audio but ended oddly.
+_NOTE_REASONS = {
+    "kicked": (
+        "The host removed the notetaker mid-call, so this recording stops early."
+    ),
+    "noone_joined": (
+        "The notetaker was alone for the whole call and left by itself."
+    ),
+}
+
+
 async def _run(job: _Job) -> None:
     """Background driver: join + record, then mark the job terminal."""
     os.makedirs(DATA_DIR, exist_ok=True)
@@ -175,20 +209,32 @@ async def _run(job: _Job) -> None:
         job.status = s
         _persist(job)
 
+    def on_end_reason(reason: str) -> None:
+        job.end_reason = reason
+        _persist(job)
+
     try:
         await join_and_record(
             job.meeting_url, job.bot_name, out_path, job.leave, on_status,
             live_callback=job.live_callback, say_queue=job.say_queue,
-            job_id=job.id,
+            job_id=job.id, on_end_reason=on_end_reason,
         )
         ok = os.path.isfile(out_path) and os.path.getsize(out_path) > 0
         job.recording = out_path if ok else None
         job.status = "done" if ok else "failed"
         if not ok and not job.error:
-            job.error = (
+            # A bot that joined and captured nothing is usually not a broken
+            # audio stack — it's a call that never had anyone in it. Say which,
+            # because the two send you to completely different places.
+            job.error = _NO_AUDIO_REASONS.get(
+                job.end_reason or "",
                 "Joined the call but captured no audio — check that PulseAudio "
-                "and ffmpeg are running inside the container."
+                "and ffmpeg are running inside the container.",
             )
+        elif ok and job.end_reason in ("kicked", "noone_joined"):
+            # Recording is fine but short, and the reason belongs on the meeting
+            # rather than only in a log line nobody will read.
+            job.error = _NOTE_REASONS.get(job.end_reason)
     except MeetingBotError as exc:
         job.status = exc.status
         job.error = str(exc)
@@ -390,7 +436,15 @@ async def get_bot(
     if job is None:
         raise HTTPException(status_code=404, detail="unknown bot")
     # download_url null → the gateway falls back to GET /bots/{id}/recording.
-    return {"id": bot_id, "status": job.status, "download_url": None, "error": job.error}
+    # end_reason rides along so the gateway can tell a call that finished
+    # normally from one the host ejected the bot from, without parsing prose.
+    return {
+        "id": bot_id,
+        "status": job.status,
+        "download_url": None,
+        "error": job.error,
+        "end_reason": job.end_reason,
+    }
 
 
 @app.get("/bots/{bot_id}/diagnostics")

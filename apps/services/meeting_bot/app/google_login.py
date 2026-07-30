@@ -96,8 +96,10 @@ _BROWSER_BLOCKED = (
 # "finish it by hand" case, not a failure to retry.
 _NEEDS_HUMAN = (
     "2-step verification",
+    # Both apostrophes on purpose: Google renders the typographic one, and
+    # matching only the ASCII form silently misses the real page.
     "verify it's you",
-    "verify it’s you",
+    "verify it’s you",  # noqa: RUF001 - deliberate, matches Google's own text
     "enter the code",
     "check your phone",
     "passkey",

@@ -48,6 +48,8 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
+import { useAccess } from "@/components/AccessProvider";
+import { hasCapability } from "@/lib/access";
 import CopilotPanel from "../components/CopilotPanel";
 import NodeInspector from "../components/NodeInspector";
 import NodePalette, { type PaletteDrop } from "../components/NodePalette";
@@ -153,6 +155,10 @@ function EditorInner({ id }: { id: string }) {
   const router = useRouter();
   const { resolvedTheme } = useTheme();
   const { screenToFlowPosition } = useReactFlow();
+  // Publishing arms live triggers, so it needs its own authority (spec Q3).
+  // Drafting, validating, and Test runs stay open to the workflows feature.
+  const { access } = useAccess();
+  const canPublish = hasCapability(access, "workflows:publish");
 
   const [detail, setDetail] = useState<WorkflowDetail | null>(null);
   const [catalog, setCatalog] = useState<Catalog | null>(null);
@@ -701,8 +707,13 @@ function EditorInner({ id }: { id: string }) {
                       ) : (
                         <button
                           onClick={() => onRollback(v.version)}
-                          disabled={busy !== null}
-                          className="text-[10px] px-1.5 py-0.5 rounded-md border border-border text-foreground hover:bg-secondary tech-transition disabled:opacity-50 shrink-0"
+                          disabled={busy !== null || !canPublish}
+                          title={
+                            canPublish
+                              ? undefined
+                              : "Rolling back changes the live version — needs workflows:publish."
+                          }
+                          className="text-[10px] px-1.5 py-0.5 rounded-md border border-border text-foreground hover:bg-secondary tech-transition disabled:opacity-50 disabled:cursor-not-allowed shrink-0"
                         >
                           {busy === "rollback" ? (
                             <Loader2 className="w-3 h-3 animate-spin" />
@@ -779,8 +790,13 @@ function EditorInner({ id }: { id: string }) {
           </div>
           <button
             onClick={onPublish}
-            disabled={busy !== null}
-            className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1 disabled:opacity-50"
+            disabled={busy !== null || !canPublish}
+            title={
+              canPublish
+                ? undefined
+                : "Publishing needs the workflows:publish permission — ask an admin. You can still edit and Test this draft."
+            }
+            className="rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {busy === "publish" ? (
               <Loader2 className="w-3.5 h-3.5 animate-spin" />

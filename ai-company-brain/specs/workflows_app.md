@@ -168,7 +168,7 @@ Modules are the "programmatic modules generated via a conversational interface" 
 - `POST /workflows/{id}/copilot` — chat-to-build: returns `{reply, graph, created_modules, issues, problems}`; generated modules persist, the graph is client-applied
 - Triggers ride the workflow document (`PUT /workflows/{id}` persists trigger bindings; publish activates them)
 
-All under `require_authenticated` + the `workflows` feature check; the hook route is the one deliberate exemption (token *is* the credential), rate-limited and audited.
+All under `require_authenticated` + the `workflows` feature check; the hook route is the one deliberate exemption (token *is* the credential), rate-limited and audited. **Publish, rollback, and disable additionally require the `workflows:publish` capability** (Q3, migration 133) — everything else in the list is open to any member holding the feature.
 
 ---
 
@@ -204,7 +204,7 @@ Aligned to RFC §9, resequenced so each slice ships value:
 
 - **Q1** — MAF Workflows API stability at the pinned version: spike passed (build/run/conditional edges/fan-out), but checkpoint-storage backends for pause/resume (F11) need their own spike before Slice 2.
 - **Q2** — Engine placement: gateway package now; move into orchestrator process if agent-node fan-out or isolation demands it. Transport-free module boundary keeps the move cheap.
-- **Q3** — Who can publish? v1: any `workflows`-granted member may draft; publish requires `workflows.publish` (default: executives) — validate this against real usage.
+- **Q3 — RESOLVED (implemented).** Any `workflows`-granted member may draft, validate, Test-run, and duplicate; **publish, rollback, and disable require `workflows:publish`** (`acb_auth` capability; migration 133 seeds it to owner/admin/manager — `member`/`guest` drop to draft-and-test, and an admin can hand it back per-user with an override). The line is drawn at *arming*: a draft fires no triggers and its writes are still broker-held, while publishing starts webhooks/cron/events running it unattended. `/auth/me` now returns resolved `capabilities` so the editor greys out Publish with an explanation instead of surfacing a bare 403. Still worth validating against real usage: whether `manager` is the right default tier.
 - **Q4** — Event-trigger volume before BO‑20: in-process runs are honest-but-lossy on restart; cap per-workflow concurrency and surface "missed while down" in run history, or hold F10 GA until BO‑20?
 - **Q5** — Module review policy: is generator + validator + test-before-save enough, or should `ready` status require a second human (approver) before a module is usable in published workflows? **Sharpened by F14:** copilot-created modules save as `ready` immediately (provenance `auto_created: true` makes them auditable and filterable); if review-before-ready is adopted, the copilot path should queue them as `draft` and say so in its reply.
 - **R1** — *Scope creep toward n8n*: the catalog makes it tempting to add generic SaaS nodes. Rule: a node exists only if the Integration Registry has the integration — the registry is the roadmap.

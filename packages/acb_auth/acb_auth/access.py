@@ -140,7 +140,8 @@ def legacy_access(role: str | None) -> EffectiveAccess:
     if slug in ("admin", "agent_service"):
         return build_access(
             ["feature:*", "agents:run:*", "agents:manage", "apps:use:*",
-             "apps:create", "apps:publish", "admin:members:read",
+             "apps:create", "apps:publish", "workflows:publish",
+             "admin:members:read",
              "admin:members:invite", "admin:members:manage",
              "admin:roles:manage", "admin:access:manage",
              "admin:settings:manage", "admin:audit:read",

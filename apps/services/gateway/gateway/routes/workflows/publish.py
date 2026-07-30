@@ -5,6 +5,14 @@ validate against the live capability catalog (agents, ready modules), carry
 no credential-shaped strings, and compile cleanly — or nothing is published.
 Runs execute versions, never the draft, so editing never breaks in-flight
 automations.
+
+AUTHORITY (spec Q3): drafting and test-running need only ``feature:workflows``
+— a draft fires no triggers and its writes are still broker-held. Publishing
+ARMS the thing: webhooks, cron ticks, and event bindings start running it
+unattended against production systems. So every endpoint here — publish,
+rollback, disable — requires ``workflows:publish`` (seeded to owner/admin/
+manager by migration 133). Rollback and disable share it because they change
+the live version just as surely as publish does.
 """
 
 from __future__ import annotations
@@ -12,7 +20,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_permission
 from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
     _get_db,
@@ -28,8 +36,12 @@ from gateway.routes.workflows.engine.graph import (
 )
 from sqlalchemy import text
 
+#: The authority to make a workflow live (spec Q3). Named once so the route
+#: gate and the catalog's capability probe can never drift apart.
+PUBLISH_PERMISSION = "workflows:publish"
 
-@router.post("/{workflow_id}/publish")
+
+@router.post("/{workflow_id}/publish", dependencies=[require_permission(PUBLISH_PERMISSION)])
 async def publish_workflow(
     workflow_id: str,
     user: UserContext = Depends(get_current_user),
@@ -100,7 +112,10 @@ async def publish_workflow(
     }
 
 
-@router.post("/{workflow_id}/versions/{version}/rollback")
+@router.post(
+    "/{workflow_id}/versions/{version}/rollback",
+    dependencies=[require_permission(PUBLISH_PERMISSION)],
+)
 async def rollback_workflow(
     workflow_id: str,
     version: int,
@@ -193,7 +208,7 @@ async def rollback_workflow(
     }
 
 
-@router.post("/{workflow_id}/disable")
+@router.post("/{workflow_id}/disable", dependencies=[require_permission(PUBLISH_PERMISSION)])
 async def disable_workflow(
     workflow_id: str,
     user: UserContext = Depends(get_current_user),

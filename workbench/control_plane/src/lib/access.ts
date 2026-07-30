@@ -23,7 +23,14 @@ export type Access = {
   features: string[];
   /** Agent names this member may run. */
   agents: string[];
+  /** Raw granted patterns (admin screens display these verbatim). */
   permissions: string[];
+  /**
+   * Concrete capabilities the server RESOLVED to yes for this member, e.g.
+   * ["apps:publish", "workflows:publish"]. Use this — not `permissions` —
+   * for "may they do X": an owner holds "*", never the literal string.
+   */
+  capabilities: string[];
   denied: string[];
   is_admin: boolean;
 };
@@ -40,6 +47,7 @@ export const NO_ACCESS: Access = {
   features: [],
   agents: [],
   permissions: [],
+  capabilities: [],
   denied: [],
   is_admin: false,
 };
@@ -109,6 +117,15 @@ export function canRunAgent(access: Access, name: string): boolean {
   return access.agents.includes(name);
 }
 
+/**
+ * Whether the member holds a concrete capability, e.g. "workflows:publish".
+ * A lookup against the server's resolved answer — hiding the control is a
+ * courtesy, require_permission() on the route is the actual boundary.
+ */
+export function hasCapability(access: Access, name: string): boolean {
+  return access.capabilities.includes(name);
+}
+
 export function canSeePath(access: Access, pathname: string): boolean {
   if (isAlwaysAllowed(pathname)) return true;
   // Admin surfaces are gated on the resolved admin flag, not a feature slug —
@@ -126,7 +143,18 @@ export async function fetchAccess(signal?: AbortSignal): Promise<Access> {
   try {
     const res = await fetch("/api/auth/me", { signal, cache: "no-store" });
     if (!res.ok) return NO_ACCESS;
-    return (await res.json()) as Access;
+    const raw = (await res.json()) as Partial<Access>;
+    // Normalize the list fields: a payload from a gateway that predates one of
+    // them must read as "nothing granted", never as undefined.
+    return {
+      ...NO_ACCESS,
+      ...raw,
+      features: raw.features ?? [],
+      agents: raw.agents ?? [],
+      permissions: raw.permissions ?? [],
+      capabilities: raw.capabilities ?? [],
+      denied: raw.denied ?? [],
+    };
   } catch {
     return NO_ACCESS;
   }

@@ -668,10 +668,13 @@ confidential-deal case safe, and it is detailed in
 - `mark_active(reset=True)` is only reachable from a legitimate supersede.
 - `chat_message.author_email` / `author_kind` added and populated on every write path
   (`chat_fold`, `save_messages`, the Next translator's checkpoints).
-- **Authorize `routes/memory.py`** — `GET/POST/DELETE /memory/{user_id}` resolves
-  `UserContext` and never compares it to the path parameter, so any signed-in user can list,
-  semantically search, and delete any other user's memory scope today
-  ([`memory-clearance.md`](memory-clearance.md) §2.1). Independent of everything else here.
+- ✅ **Authorize `routes/memory.py`** (done 2026-07-30) — the path parameter is a *scope key*
+  and was never compared to the caller, so any member could read, search or delete a
+  colleague's memory scope by email in a URL. Worse than first written up: the
+  `/api/chat/memories?userId=` path needed no session at all, and `lib/memory.ts` forwarded
+  no identity, so the gateway saw a service principal. Fixed at all three layers, plus
+  `delete` now checks the memory is in the scope
+  ([`memory-clearance.md`](memory-clearance.md) §2.1).
 - **Scope Graphiti reads** — knowledge-graph episodes are written with a per-user `group_id`
   but `GraphitiClient.search()` passes no group filter, so retrieval spans every user's
   episodes ([`agent-kinds.md`](agent-kinds.md) §2.2). Both Mem0/Graphiti findings are latent

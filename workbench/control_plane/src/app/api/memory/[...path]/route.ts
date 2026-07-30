@@ -8,9 +8,30 @@
  * All routes proxy to the FastAPI gateway /memory/* path.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { auth, isAuthEnabled } from "@/auth";
 
 export const dynamic = "force-dynamic";
+
+/**
+ * A request with no session forwards the internal token and NO identity, and
+ * the gateway reads a bearer-without-headers call as the platform acting as
+ * itself — full service access, scope check bypassed (acb_auth/deps.py §1b).
+ * `/api/memory/` is in the proxy's public list, so without this the route was
+ * an unauthenticated read of any scope named in the URL.
+ */
+async function requireSession(): Promise<string | null> {
+  if (!isAuthEnabled) return "dev@fracktal.in";
+  try {
+    return (await auth())?.user?.email ?? null;
+  } catch {
+    return null;
+  }
+}
+
+const UNAUTHORIZED = NextResponse.json(
+  { error: "Sign in to use memory" },
+  { status: 401 }
+);
 
 const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
 const INTERNAL_TOKEN =
@@ -49,6 +70,7 @@ export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  if (!(await requireSession())) return UNAUTHORIZED;
   const { path } = await params;
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {
@@ -67,6 +89,7 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  if (!(await requireSession())) return UNAUTHORIZED;
   const { path } = await params;
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {
@@ -91,6 +114,7 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  if (!(await requireSession())) return UNAUTHORIZED;
   const { path } = await params;
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {

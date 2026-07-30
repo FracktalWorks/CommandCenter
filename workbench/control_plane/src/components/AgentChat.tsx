@@ -978,7 +978,9 @@ export default function AgentChat({
       fetch("/api/chat/memories", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ userId: memoryUserId, messages: payload }),
+        // No userId: the scope is the signed-in member, resolved server-side.
+        // Sending one here would be a claim the route no longer accepts.
+        body: JSON.stringify({ messages: payload }),
         keepalive: true,
       }).catch(() => {});
     };

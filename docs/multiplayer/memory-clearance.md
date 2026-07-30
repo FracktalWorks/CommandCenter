@@ -59,7 +59,7 @@ is in the right place.
 | Graphiti episodes are grouped | `add_episode(..., group_id=…)` — `graphiti_client.py:187` | Subject compartments map onto `group_id`, so the knowledge graph partitions the same way. |
 | The assembled block is cached per thread | `get_session_memory` / `invalidate_session_memory` | Multi-compartment reads cost N searches; the existing cache absorbs that across turns (and it is why the block must stay byte-stable for prompt caching). |
 
-### 2.1 Prerequisite: the memory API is currently open by path parameter
+### 2.1 Prerequisite: the memory API was open by path parameter — ✅ fixed 2026-07-30
 
 `apps/services/gateway/gateway/routes/memory.py` resolves `UserContext` on every route and
 then **never compares it to the `{user_id}` in the path**:
@@ -70,14 +70,36 @@ async def list_memories(user_id: str, user: UserContext = Depends(get_current_us
     return await client.get_all(user_id)      # user is resolved, then ignored
 ```
 
-Any authenticated user can list (`:59`), semantically search (`:71`), delete (`:84`), and
-write (`:97`) **any** other user's memory scope by putting their email in the URL. It needs
-a signed-in session, so it is internal-user-to-internal-user rather than anonymous — but
-that is exactly the threat model in the Falcon case.
+Any authenticated user could list (`:59`), semantically search (`:71`), delete (`:84`), and
+write (`:97`) **any** other user's memory scope by putting their email in the URL.
 
-This must be fixed **before** compartments mean anything: a compartment model whose read API
-is addressable by guessing a scope key is decorative. The fix is small and belongs in Phase 0
-of the room plan:
+**It was worse than "needs a signed-in session".** Two of the three paths in did not need
+one at all:
+
+- `/api/chat/memories?userId=<colleague>` (Next BFF) took the scope from a query parameter,
+  never called `auth()`, and `/api/chat/` sits in the proxy's public list.
+- `lib/memory.ts` forwarded only the internal Bearer token and no identity headers, and the
+  gateway reads a bearer-without-identity call as **the platform acting as itself** — full
+  service access (`acb_auth/deps.py` §1b). So the scope check had nobody to compare against
+  even once it existed.
+
+The fix therefore lands in three places, and the middle one is the reason the first alone
+would not have been enough:
+
+1. `_authorize_scope` in `routes/memory.py` — one rule per scope shape (own email / agent /
+   org), unknown shapes refused, and `delete` additionally confirms the memory is *in* the
+   scope (naming your own scope and a colleague's memory id was the same IDOR one level
+   down).
+2. `lib/memory.ts` forwards the acting member, and the two Next routes require a session and
+   derive the scope from it rather than from caller input.
+3. A service principal may reach shared scopes but must **assert an identity** to touch a
+   person's. `deps.py` §1b argues a narrower service grant is theatre since the token holder
+   could assert any email anyway — true, and beside the point: the distinction that matters
+   is between asserting an identity and *omitting* one, and omission is exactly how this bug
+   happened.
+
+This had to be fixed **before** compartments mean anything: a compartment model whose read
+API is addressable by guessing a scope key is decorative. The shape of the fix, as built:
 
 ```python
 compartment = resolve_compartment(scope_key)          # 404 if unknown
@@ -439,7 +461,7 @@ Slots into the room plan in [`README.md`](README.md) §8.
 
 | Phase | Work |
 |---|---|
-| **0** *(with the room Phase 0)* | **Authorize `routes/memory.py`** (§2.1). Independent of everything else and worth doing on its own. |
+| **0** *(with the room Phase 0)* | ✅ **Authorize `routes/memory.py`** (§2.1) — done 2026-07-30. |
 | **3a** | Compartment registry (migration 118) · `scope_key()` kinds · `prefs`/`user` split with a backfill classifier · clearance resolution at run start · read/write rules at the two `routes/agent.py` call sites · `_set_memory_write_scope` |
 | **3b** | Subject binding (bound rooms, inline declaration) · entity linking for inference · the private hint on the personal lane · extraction classification (§5.2) |
 | **3c** | Share sheet with the memory disclosure · waterline · memory inspector · "what would they see?" |

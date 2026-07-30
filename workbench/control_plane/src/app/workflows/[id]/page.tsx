@@ -66,6 +66,7 @@ import {
 import type {
   Catalog,
   GraphIssue,
+  NodeResult,
   NodeType,
   RunEvent,
   TriggerSpec,
@@ -460,6 +461,25 @@ function EditorInner({ id }: { id: string }) {
     [],
   );
 
+  // History drill-in (spec F9): paint a recorded run's node_results onto the
+  // canvas (null clears). Nodes added since that run simply stay unpainted.
+  const paintRunResults = useCallback(
+    (results: Record<string, NodeResult> | null) => {
+      setNodes((ns) =>
+        ns.map((n) => ({
+          ...n,
+          data: {
+            ...n.data,
+            runStatus: results
+              ? (results[n.id]?.status as CCNodeData["runStatus"])
+              : undefined,
+          },
+        })),
+      );
+    },
+    [],
+  );
+
   const onTest = useCallback(async () => {
     setBusy("test");
     setNotice(null);
@@ -782,6 +802,7 @@ function EditorInner({ id }: { id: string }) {
         running={running}
         collapsed={consoleCollapsed}
         onToggle={() => setConsoleCollapsed((c) => !c)}
+        onPaintRun={paintRunResults}
       />
     </div>
   );

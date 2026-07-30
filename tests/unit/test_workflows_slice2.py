@@ -211,3 +211,57 @@ def test_resume_handler_without_run_id_fails_closed() -> None:
 
     result = asyncio.run(broker_handlers._resume_run_handler(_Proposal()))
     assert result["ok"] is False
+
+
+# ── Startup reconciliation ──────────────────────────────────────────────────
+
+
+class _FakeReconcileDb:
+    """Captures the UPDATE the startup sweep issues (no Postgres)."""
+
+    def __init__(self, rowcount: int) -> None:
+        self.rowcount = rowcount
+        self.statements: list[str] = []
+        self.committed = False
+
+    async def execute(self, clause: Any, params: Any = None) -> Any:
+        self.statements.append(str(clause))
+        db = self
+
+        class _Result:
+            rowcount = db.rowcount
+
+        return _Result()
+
+    async def commit(self) -> None:
+        self.committed = True
+
+    async def close(self) -> None:
+        return None
+
+
+def test_reconcile_orphaned_runs_fails_running_only(monkeypatch) -> None:
+    """The sweep flips 'running' rows to failed — and ONLY 'running' rows:
+    paused runs must survive restarts (resume rebuilds from the snapshot)."""
+    fake = _FakeReconcileDb(rowcount=3)
+
+    async def fake_get_db() -> Any:
+        return fake
+
+    monkeypatch.setattr(service, "_get_db", fake_get_db)
+    assert asyncio.run(service.reconcile_orphaned_runs()) == 3
+    assert fake.committed
+    sql = " ".join(fake.statements)
+    assert "status = 'running'" in sql and "'failed'" in sql
+    assert "interrupted by a platform restart" in sql
+    assert "'paused'" not in sql
+
+
+def test_reconcile_orphaned_runs_survives_db_outage(monkeypatch) -> None:
+    """Best-effort at boot: a dead DB must not crash the gateway lifespan."""
+
+    async def fake_get_db() -> Any:
+        raise RuntimeError("postgres not up yet")
+
+    monkeypatch.setattr(service, "_get_db", fake_get_db)
+    assert asyncio.run(service.reconcile_orphaned_runs()) == 0

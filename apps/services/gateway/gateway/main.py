@@ -263,6 +263,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.tasks_rollover_skipped", error=str(exc))
 
+    # Workflow runs are in-process asyncio tasks (BO-20 pending): rows still
+    # 'running' from a previous process can never finish — mark them failed
+    # BEFORE the scheduler can start new runs. Paused runs survive restarts
+    # (resume rebuilds from the pause snapshot) and are left alone.
+    try:
+        from gateway.routes.workflows import reconcile_orphaned_runs
+        await reconcile_orphaned_runs()
+    except Exception as exc:
+        _log.warning("gateway.workflow_reconcile_skipped", error=str(exc))
+
     # Start the workflow schedule scanner — cron triggers for published
     # workflows (routes/workflows/scheduler.py; spec workflows_app.md F8).
     try:

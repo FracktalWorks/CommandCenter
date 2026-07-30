@@ -24,5 +24,11 @@ from gateway.routes.workflows.scheduler import (
     start_workflow_scheduler,
     stop_workflow_scheduler,
 )
+from gateway.routes.workflows.service import reconcile_orphaned_runs
 
-__all__ = ["router", "start_workflow_scheduler", "stop_workflow_scheduler"]
+__all__ = [
+    "reconcile_orphaned_runs",
+    "router",
+    "start_workflow_scheduler",
+    "stop_workflow_scheduler",
+]

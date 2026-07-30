@@ -11,8 +11,10 @@ Bridges the transport-free engine to the gateway's real seams:
 Live run events fan out through an in-process hub (per-run replay + tail) that
 ``runs.py`` serves over SSE. v1 honesty note (spec §3.3): runs execute as
 supervised asyncio tasks inside the gateway process — durable queueing across
-restarts is BO-20's scope; a run interrupted by a restart is marked failed on
-the next status read rather than silently lost.
+restarts is BO-20's scope; a run interrupted by a restart is marked failed by
+the startup sweep (``reconcile_orphaned_runs``) and, for reads that race it,
+lazily on the next status read — never silently lost. Paused runs are exempt:
+resume rebuilds from the pause snapshot, so they survive restarts.
 """
 
 from __future__ import annotations
@@ -373,6 +375,41 @@ async def _finish_run(
             await db.close()
     except Exception as exc:  # pragma: no cover - best effort persistence
         _log.warning("workflows.finish_persist_failed", run_id=run_id, error=str(exc)[:160])
+
+
+async def reconcile_orphaned_runs() -> int:
+    """Startup sweep (spec §3.3 honesty): mark previous-process runs failed.
+
+    Runs execute as supervised asyncio tasks inside the gateway process, so a
+    row still ``running`` when this process boots belonged to a process that
+    died — it can never finish. ``runs.py`` already patches such rows lazily
+    per read; this sweep persists the truth once at startup so lists, the
+    F13 agent tools, and anything else reading the table agree immediately.
+    ``paused`` rows are deliberately untouched: resume rebuilds everything
+    from the pause snapshot, so they legitimately survive restarts.
+    """
+    try:
+        db = await _get_db()
+        try:
+            result = await db.execute(
+                text(
+                    """UPDATE workflow_runs SET
+                         status = 'failed',
+                         error = COALESCE(error, 'interrupted by a platform restart'),
+                         finished_at = now()
+                       WHERE status = 'running'"""
+                ),
+            )
+            await db.commit()
+            count = int(result.rowcount or 0)
+        finally:
+            await db.close()
+    except Exception as exc:  # best effort — reads still self-heal lazily
+        _log.warning("workflows.reconcile_failed", error=str(exc)[:160])
+        return 0
+    if count:
+        _log.info("workflows.orphaned_runs_reconciled", count=count)
+    return count
 
 
 # ── Approval pause / resume (spec F11 — rides the Action Broker inbox) ───────

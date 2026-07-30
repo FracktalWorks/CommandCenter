@@ -58,7 +58,7 @@ Respond with ONLY a JSON object (no prose outside it, no markdown fence):
 
 Graph rules (a validator enforces them — violations bounce back to you):
 - Node: {"id", "type", "position": {"x","y"}, "data": {"label", "config"}}.
-  Types: trigger | agent | tool | module | condition | set | output.
+  Types: trigger | agent | tool | module | condition | set | approval | output.
 - Exactly one trigger node; no cycles; a node has at most ONE incoming edge.
 - Edges: {"id", "source", "target"}; edges out of a condition MUST carry
   "sourceHandle": "true" or "false".
@@ -67,10 +67,14 @@ Graph rules (a validator enforces them — violations bounce back to you):
   module: {"module_id": <existing id>} or {"module_name": <name>} for a module
   you define in new_modules; condition: {"left","op","right"} with ops
   equals|not_equals|contains|not_contains|gt|gte|lt|lte|is_empty|not_empty|truthy;
-  set: {"assignments": {...}}; output: {"value": ...}.
+  set: {"assignments": {...}}; approval: {"message": "what the human is
+  approving"} — the run pauses there until an operator approves in the
+  approvals inbox; output: {"value": ...}.
 - Reference upstream data with {{trigger.field}}, {{vars.name}}, {{node_id.field}}.
   An agent node's output is {{<id>.result}}; a condition's is {{<id>.branch}}.
 - Only use agent names and tool actions from the provided lists — never invent.
+- Any tool action marked "write": true MUST have an approval node somewhere
+  upstream of it (the validator rejects the graph otherwise).
 - Never put credentials or secrets in any config.
 - Lay out top-to-bottom: x around 360 for the spine, y += ~120 per node;
   condition branches diverge left/right (x -220 / +220). Keep existing node
@@ -397,11 +401,13 @@ async def _apply_round(
                 for n in unresolved
             )
             from gateway.routes.workflows.catalog import known_agent_names
+            from gateway.routes.workflows.tools import destructive_action_names
 
             issues = validate_graph(
                 graph,
                 known_modules=set(name_to_id.values()),
                 known_agents=known_agent_names() or None,
+                destructive_actions=destructive_action_names(),
             )
             problems.extend(
                 f"{i.code}: {i.message}" + (f" (node {i.node_id})" if i.node_id else "")

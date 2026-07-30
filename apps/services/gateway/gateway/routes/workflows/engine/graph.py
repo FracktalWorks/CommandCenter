@@ -168,12 +168,15 @@ def validate_graph(
     *,
     known_modules: set[str] | None = None,
     known_agents: set[str] | None = None,
+    destructive_actions: set[str] | None = None,
 ) -> list[GraphIssue]:
     """Design-time validation. Returns ALL issues (empty list = publishable).
 
     ``known_modules`` / ``known_agents``, when provided, let publish verify
-    referenced capabilities actually exist; the pure structural checks never
-    need them (the editor calls this without context for live badges).
+    referenced capabilities actually exist; ``destructive_actions`` names the
+    write-class tool actions that REQUIRE a Human-approval node upstream
+    (spec success criterion #5). The pure structural checks never need any
+    of them (the editor calls this without context for live badges).
     """
     parsed, issues = _parse(graph)
     if issues:
@@ -198,6 +201,24 @@ def validate_graph(
             known_modules=known_modules,
             known_agents=known_agents,
         )
+        # Write-class actions need a human gate upstream (platform contract
+        # rung 3 — the runtime broker gates them too; this makes the intent
+        # explicit in the graph before anything publishes).
+        if destructive_actions and _node_type(node) == "tool":
+            action = str(_node_config(node).get("action") or "").strip()
+            if action in destructive_actions and not any(
+                _node_type(parsed.nodes[u]) == "approval"
+                for u in upstream.get(nid, set())
+                if u in parsed.nodes
+            ):
+                issues.append(
+                    GraphIssue(
+                        "write_without_approval",
+                        f"'{action}' writes to an external system — add a "
+                        "Human approval node upstream of it",
+                        nid,
+                    )
+                )
     return issues
 
 
@@ -389,6 +410,7 @@ def compile_graph(
     *,
     known_modules: set[str] | None = None,
     known_agents: set[str] | None = None,
+    destructive_actions: set[str] | None = None,
 ) -> dict[str, Any]:
     """Compile the edit-model to the serialized run-model, or raise.
 
@@ -399,6 +421,7 @@ def compile_graph(
         graph,
         known_modules=known_modules,
         known_agents=known_agents,
+        destructive_actions=destructive_actions,
     )
     if issues:
         raise GraphValidationError(issues)

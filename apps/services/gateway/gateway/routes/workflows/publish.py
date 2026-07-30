@@ -46,10 +46,13 @@ async def publish_workflow(
         from gateway.routes.workflows.catalog import known_agent_names
 
         try:
+            from gateway.routes.workflows.tools import destructive_action_names
+
             serialized = compile_graph(
                 graph,
                 known_modules={str(m.id) for m in ready_modules},
                 known_agents=known_agent_names(),
+                destructive_actions=destructive_action_names(),
             )
         except GraphValidationError as exc:
             raise HTTPException(

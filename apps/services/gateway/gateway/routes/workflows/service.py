@@ -533,3 +533,115 @@ async def resume_run(run_id: str, *, resumed_by: str = "approver") -> dict[str, 
         name=f"workflow-resume:{run_id}",
     )
     return {"ok": True, "resumed": True, "run_id": run_id, "node_id": str(pause.node_id)}
+
+# ── Programmatic entry points (F13: workflows as agent tools) ────────────────
+
+
+async def list_published_workflows() -> list[dict[str, Any]]:
+    """Published workflows an agent (or API caller) may trigger."""
+    db = await _get_db()
+    try:
+        rows = (
+            await db.execute(
+                text(
+                    "SELECT id, name, description, latest_version FROM workflows "
+                    "WHERE status = 'published' AND latest_version IS NOT NULL "
+                    "ORDER BY name"
+                ),
+            )
+        ).fetchall()
+    finally:
+        await db.close()
+    return [
+        {
+            "id": str(r.id),
+            "name": r.name,
+            "description": r.description or "",
+            "version": int(r.latest_version),
+        }
+        for r in rows
+    ]
+
+
+async def run_published_workflow(
+    ref: str, payload: dict[str, Any], *, started_by: str
+) -> dict[str, Any]:
+    """Start a published workflow by name (case-insensitive) or id.
+
+    The programmatic twin of the manual Run button — same entrypoint, same
+    concurrency caps, trigger kind ``api``. Returns ``{run_id, …}`` or
+    ``{error}`` (ambiguous/unknown refs are reported, never guessed).
+    """
+    db = await _get_db()
+    try:
+        rows = (
+            await db.execute(
+                text(
+                    """SELECT id, name, latest_version, variables FROM workflows
+                       WHERE status = 'published' AND latest_version IS NOT NULL
+                         AND (lower(name) = lower(:ref) OR id::text = :ref)"""
+                ),
+                {"ref": ref.strip()},
+            )
+        ).fetchall()
+        if not rows:
+            return {"error": f"no published workflow named or with id '{ref}'"}
+        if len(rows) > 1:
+            return {
+                "error": f"'{ref}' is ambiguous — matching workflows: "
+                + ", ".join(f"{r.name} ({r.id})" for r in rows)
+            }
+        row = rows[0]
+        serialized = await load_version_serialized(db, str(row.id), int(row.latest_version))
+    finally:
+        await db.close()
+    if serialized is None:
+        return {"error": f"published version missing for workflow '{row.name}'"}
+    try:
+        run_id = await start_run(
+            workflow_id=str(row.id),
+            workflow_name=row.name,
+            version=int(row.latest_version),
+            serialized=serialized,
+            trigger_kind="api",
+            trigger_payload=payload,
+            variables=parse_jsonb(row.variables, {}),
+            started_by=started_by,
+        )
+    except RunRejected as exc:
+        return {"error": str(exc)}
+    return {
+        "run_id": run_id,
+        "workflow_id": str(row.id),
+        "workflow_name": row.name,
+        "version": int(row.latest_version),
+    }
+
+
+async def run_summary(run_id: str) -> dict[str, Any]:
+    """Status + outputs for one run (the polling half of workflow-as-tool)."""
+    db = await _get_db()
+    try:
+        row = (
+            await db.execute(
+                text(
+                    "SELECT status, error, output, workflow_name "
+                    "FROM workflow_runs WHERE id = :id"
+                ),
+                {"id": run_id},
+            )
+        ).fetchone()
+    finally:
+        await db.close()
+    if row is None:
+        return {"error": f"no run {run_id}"}
+    status = row.status
+    if status == "running" and hub_for(run_id) is None:
+        status = "failed"
+    return {
+        "run_id": run_id,
+        "workflow_name": row.workflow_name,
+        "status": status,
+        "error": row.error,
+        "output": parse_jsonb(row.output, None),
+    }

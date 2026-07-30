@@ -49,6 +49,12 @@ def register_tool(spec: WorkflowToolSpec) -> None:
     _TOOL_REGISTRY[spec.action] = spec
 
 
+def destructive_action_names() -> set[str]:
+    """Write-class actions — publish requires an approval node upstream of
+    any node using one (spec success criterion #5)."""
+    return {spec.action for spec in _TOOL_REGISTRY.values() if spec.destructive}
+
+
 def list_tools() -> list[WorkflowToolSpec]:
     return list(_TOOL_REGISTRY.values())
 

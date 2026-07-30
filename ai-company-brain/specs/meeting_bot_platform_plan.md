@@ -256,10 +256,32 @@ unblock everything; 3–4 are the real capability jumps; 5–6 are optional reac
 
 The decisive unverified path. Nothing else matters until a bot actually gets in.
 
-1. Create a dedicated Google account, **no 2-step verification**. A plain Gmail
-   works; `notetaker@fracktal.in` also works if registered as a Google Account
-   (note: `fracktal.in` MX is Microsoft 365, so this is a Google *identity* on
-   that address, not Workspace).
+**The identity does NOT have to be a Gmail address.** Three options, and the
+middle one is recommended:
+
+| Option | Cost | Gets us | Cost of choosing it |
+|---|---|---|---|
+| Plain Gmail (`ccnotetaker@gmail.com`) | Free | A working signed-in bot | Looks like a stranger on client calls; invites land in a mailbox nobody reads |
+| **★ Google Account on our own domain** (`notetaker@fracktal.in`) | Free | Same capability, our own branding, and invites arrive in a mailbox we already control in Microsoft 365 | None material — Google's signup accepts an existing address ("Use your existing email"), verification goes to that mailbox |
+| Google **Workspace** on the domain, MX left with Microsoft | ~$7–14/user/mo | Makes us a *Workspace host*: link-guests can ask to join, native transcripts + Gemini notes retrievable via the Meet REST API, and no anonymous-guest wall on meetings we host. This is the tier Recall.ai runs its own bot accounts on. | Recurring cost, DNS TXT verification, and Workspace admin to maintain. Revisit if Meet becomes core. |
+
+Workspace's "**Skip Google MX setup**" is the load-bearing detail for option 3:
+the domain activates for Meet/Calendar/Drive while mail keeps flowing to
+Microsoft 365, so adopting it would not touch email at all.
+
+Option 2 is recommended because it is free, looks right, and the bot's mailbox
+becomes the foundation of the invite-driven opt-in in Phase 4 *and* the future
+"bot finds a slot and schedules it" feature — a Gmail would strand those invites
+somewhere nobody watches. A catch-all on the domain means no new mailbox is
+even needed.
+
+1. Register the chosen address as a Google Account.
+   **2-step verification is not a blocker** — it only rules out the *scripted*
+   `POST /google-login`. If Google demands a phone, 2SV, or "verify it's you",
+   use `POST /google-login/interactive` and complete it by hand over VNC once;
+   the persistent profile keeps the session afterwards. (Interactive needs
+   `MEET_VNC=1`, which defaults to `0` — set it in `/opt/acb/app/.env` and
+   restart the container, then tunnel to 6080.)
 2. `POST /google-login` → verify `signed_in: true` persists across a container
    restart (the volume is `acb-meeting-bot-profile`).
 3. **Verify a real join end to end**, then set the display name to something
@@ -436,5 +458,7 @@ our business systems.* No vendor sells that, which is the actual reason to build
    the *highest*-quality capture we'd have anywhere.
 4. Google Workspace for the org? It would make Meet dramatically easier
    (host-side "anyone with the link can ask to join", native transcripts via the
-   Meet REST API, Gemini smart-notes retrievable by API) — currently blocked by
-   `fracktal.in` being on Microsoft 365.
+   Meet REST API, Gemini smart-notes retrievable by API). **Not blocked by
+   Microsoft 365** as first assumed — Workspace's "Skip Google MX setup" lets the
+   domain activate for Meet/Calendar while mail keeps flowing to Outlook. So it
+   is purely a cost decision (~$7–14/user/mo), not a migration.

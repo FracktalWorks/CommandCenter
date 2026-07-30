@@ -45,8 +45,10 @@ import {
   Rocket,
   Save,
   ShieldCheck,
+  Sparkles,
   Zap,
 } from "lucide-react";
+import CopilotPanel from "../components/CopilotPanel";
 import NodeInspector from "../components/NodeInspector";
 import NodePalette, { type PaletteDrop } from "../components/NodePalette";
 import RunConsole from "../components/RunConsole";
@@ -79,6 +81,35 @@ const TRIGGER_KIND_HINTS = [
   { kind: "webhook" as const, hint: "per-workflow tokened URL (+ optional HMAC)" },
   { kind: "schedule" as const, hint: "cron expression, UTC" },
 ];
+
+/** Edit-model graph → React Flow state (used on load and on copilot apply). */
+function flowFromGraph(
+  graph: WorkflowGraph,
+  catalog: Catalog | null,
+): { nodes: Node[]; edges: Edge[] } {
+  const graphNodes = Array.isArray(graph?.nodes) ? graph.nodes : [];
+  const graphEdges = Array.isArray(graph?.edges) ? graph.edges : [];
+  return {
+    nodes: graphNodes.map((n) => ({
+      id: n.id,
+      type: "ccNode",
+      position: n.position ?? { x: 0, y: 0 },
+      data: {
+        label: n.data?.label ?? n.id,
+        nodeType: n.type,
+        config: n.data?.config ?? {},
+        summary: summarize(n.type, n.data?.config ?? {}, catalog),
+      },
+    })),
+    edges: graphEdges.map((e) => ({
+      id: e.id ?? `e_${e.source}_${e.sourceHandle ?? "out"}_${e.target}`,
+      source: e.source,
+      target: e.target,
+      sourceHandle: e.sourceHandle ?? undefined,
+      label: e.sourceHandle ?? undefined,
+    })),
+  };
+}
 
 function summarize(type: NodeType, config: Record<string, unknown>, catalog: Catalog | null): string {
   if (type === "agent") return String(config.agent ?? "");
@@ -119,6 +150,8 @@ function EditorInner({ id }: { id: string }) {
   const [running, setRunning] = useState(false);
   const [consoleCollapsed, setConsoleCollapsed] = useState(false);
   const [notice, setNotice] = useState<string | null>(null);
+  const [leftTab, setLeftTab] = useState<"palette" | "copilot">("palette");
+  const [undoGraph, setUndoGraph] = useState<WorkflowGraph | null>(null);
   const counter = useRef(1);
   const esRef = useRef<EventSource | null>(null);
 
@@ -153,28 +186,9 @@ function EditorInner({ id }: { id: string }) {
           ]);
           setDirty(true);
         } else {
-          setNodes(
-            graphNodes.map((n) => ({
-              id: n.id,
-              type: "ccNode",
-              position: n.position ?? { x: 0, y: 0 },
-              data: {
-                label: n.data?.label ?? n.id,
-                nodeType: n.type,
-                config: n.data?.config ?? {},
-                summary: summarize(n.type, n.data?.config ?? {}, cat),
-              },
-            })),
-          );
-          setEdges(
-            (Array.isArray(g.edges) ? g.edges : []).map((e) => ({
-              id: e.id,
-              source: e.source,
-              target: e.target,
-              sourceHandle: e.sourceHandle ?? undefined,
-              label: e.sourceHandle ?? undefined,
-            })),
-          );
+          const flow = flowFromGraph(g, cat);
+          setNodes(flow.nodes);
+          setEdges(flow.edges);
         }
       } catch (e) {
         if (!cancelled)
@@ -373,6 +387,36 @@ function EditorInner({ id }: { id: string }) {
     setSelectedId(null);
     setDirty(true);
   }, [selectedId]);
+
+  // ── Copilot: apply / undo / catalog refresh ─────────────────────────────
+  const applyCopilotGraph = useCallback(
+    (graph: WorkflowGraph) => {
+      setUndoGraph(toGraph()); // snapshot for one-click undo
+      const flow = flowFromGraph(graph, catalog);
+      setNodes(flow.nodes);
+      setEdges(flow.edges);
+      setSelectedId(null);
+      setDirty(true);
+    },
+    [toGraph, catalog],
+  );
+
+  const undoCopilot = useCallback(() => {
+    if (!undoGraph) return;
+    const flow = flowFromGraph(undoGraph, catalog);
+    setNodes(flow.nodes);
+    setEdges(flow.edges);
+    setUndoGraph(null);
+    setDirty(true);
+  }, [undoGraph, catalog]);
+
+  const refreshCatalog = useCallback(async () => {
+    try {
+      setCatalog(await getCatalog());
+    } catch {
+      /* palette keeps the last good catalog */
+    }
+  }, []);
 
   // ── Actions ─────────────────────────────────────────────────────────────
   const applyIssues = useCallback((next: GraphIssue[]) => {
@@ -654,7 +698,43 @@ function EditorInner({ id }: { id: string }) {
 
       {/* Panes */}
       <div className="flex-1 min-h-0 flex">
-        <NodePalette catalog={catalog} onAdd={(drop) => addNode(drop)} />
+        <div className="flex flex-col shrink-0 border-r border-border">
+          <div className="flex border-b border-border">
+            <button
+              onClick={() => setLeftTab("palette")}
+              className={`flex-1 text-[11px] px-3 py-2 tech-transition ${
+                leftTab === "palette"
+                  ? "text-primary font-semibold border-b-2 border-primary -mb-px"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              Palette
+            </button>
+            <button
+              onClick={() => setLeftTab("copilot")}
+              className={`flex-1 text-[11px] px-3 py-2 tech-transition inline-flex items-center justify-center gap-1 ${
+                leftTab === "copilot"
+                  ? "text-primary font-semibold border-b-2 border-primary -mb-px"
+                  : "text-muted-foreground hover:text-foreground"
+              }`}
+            >
+              <Sparkles className="w-3 h-3" /> Copilot
+            </button>
+          </div>
+          <div className="flex-1 min-h-0 flex">
+            {leftTab === "palette" ? (
+              <NodePalette catalog={catalog} onAdd={(drop) => addNode(drop)} />
+            ) : (
+              <CopilotPanel
+                workflowId={id}
+                onApplyGraph={applyCopilotGraph}
+                onUndo={undoCopilot}
+                canUndo={undoGraph !== null}
+                onModulesCreated={refreshCatalog}
+              />
+            )}
+          </div>
+        </div>
         <div
           className="flex-1 min-w-0 relative"
           onDragOver={(e) => {

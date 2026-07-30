@@ -3,12 +3,14 @@
 
 import type {
   Catalog,
+  CopilotResponse,
   GeneratedModule,
   GraphIssue,
   ModuleDetail,
   ModuleSummary,
   RunDetail,
   RunSummary,
+  SearchResponse,
   TriggerSpec,
   WorkflowDetail,
   WorkflowGraph,
@@ -191,5 +193,27 @@ export async function generateModule(body: {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(body),
+  }));
+}
+
+// ── Semantic catalog search + Workflow Copilot ──────────────────────────────
+
+export async function searchCatalog(
+  q: string, kinds?: string[],
+): Promise<SearchResponse> {
+  const params = new URLSearchParams({ q });
+  if (kinds?.length) params.set("kinds", kinds.join(","));
+  return json(await fetch(`${BASE}/catalog/search?${params}`, OPTS));
+}
+
+export async function askCopilot(
+  workflowId: string,
+  message: string,
+  history: { role: string; content: string }[],
+): Promise<CopilotResponse> {
+  return json(await fetch(`${BASE}/${workflowId}/copilot`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ message, history }),
   }));
 }

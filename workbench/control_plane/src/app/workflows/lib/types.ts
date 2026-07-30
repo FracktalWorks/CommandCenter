@@ -211,3 +211,30 @@ export function categoryForType(type: NodeType): string {
   if (type === "condition" || type === "set") return "logic";
   return type;
 }
+
+// ── Semantic catalog search + Workflow Copilot ──────────────────────────────
+
+export type SearchResult = {
+  kind: "agent" | "tool" | "integration" | "module" | "node";
+  key: string;
+  label: string;
+  description: string;
+  category: string;
+  score: number;
+};
+
+export type SearchResponse = {
+  query: string;
+  /** false = keyword-only (no embedding provider configured) */
+  semantic: boolean;
+  results: SearchResult[];
+};
+
+export type CopilotResponse = {
+  reply: string;
+  graph: WorkflowGraph | null;
+  created_modules: { id: string; name: string }[];
+  issues: GraphIssue[];
+  problems: string[];
+  shortlist: SearchResult[];
+};

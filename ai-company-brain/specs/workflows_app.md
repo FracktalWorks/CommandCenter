@@ -1,7 +1,7 @@
 # Workflows App — Project Plan (deterministic automation over the agent fleet)
 
 > **Product:** CommandCenter · **Feature:** Workflows app (`/workflows`) · **Updated:** 2026-07-30 · **Version:** 0.2
-> **Status:** 🔄 v1 slice in progress — data model + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio (conversational code modules). Trigger kinds: manual + webhook + schedule live; event triggers wired through the existing ingestion normalizers.
+> **Status:** 🔄 v1 slice built — data model (migrations 132+133) + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio + **Workflow Copilot (F14)** + **semantic capability search (F15)**. Trigger kinds: manual + webhook + schedule live; event triggers are Slice 2.
 > **Parent RFC:** [`docs/workflow-editor/README.md`](../../docs/workflow-editor/README.md) — stack selection (React Flow), the compile-to-MAF-Workflows decision, data model, editor UX, trigger taxonomy. Read it for *how*; this doc is *what, why, and why now*. Interactive mockup: `docs/workflow-editor/mockup.html`.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape) · [`docs/app-workshop/README.md`](../../docs/app-workshop/README.md) §4.0 (the platform contract this app also enforces).
 > **Policy amendment:** ADR-028 (see `system_architecture.md`) amends ADR-014 and `project_plan.md` C-09 / §2 non-goals — see §10.
@@ -73,8 +73,10 @@ Feature IDs `F1..F13`; Must/Should/Could is for v1 (phases in §8).
 | F9 | **Run history** — list of runs per workflow with status, duration, trigger kind; drill into per-node inputs/outputs | Must | G6 |
 | F10 | **Event triggers** — bind a workflow to normalized ingestion events (ClickUp task change, Zoho CRM change, inbound email) the way `webhook_routes` binds agents today | Should | Ships behind the same entrypoint; full durability rides BO‑20 |
 | F11 | **Approval node** — pause the run, surface in the approvals inbox, resume on approve/reject | Should | MAF checkpointing + `workflow_run_pause`; write-class integration nodes require it upstream until BO‑1 |
-| F12 | **Describe → generate → refine** — prompt bar on an empty canvas emits a full graph JSON conforming to the node schema | Should | Same LLM path as Module Studio; node schema is LLM-emittable by design |
+| F12 | **Describe → generate → refine** — prompt bar on an empty canvas emits a full graph JSON conforming to the node schema | Should | Superseded by F14, which delivers this conversationally inside the editor |
 | F13 | **Workflows as tools / MCP** — published workflows exposed to the orchestrator as callable tools; later, as MCP servers | Could | Mirrors `orchestrator/app_tools.py` for Custom Apps |
+| F14 | **Workflow Copilot** — a chat panel in the editor (Palette \| Copilot tabs): the maker describes a change, the copilot emits the full updated graph; **modules the graph needs that don't exist are generated, AST-validated, and saved automatically** (provenance `auto_created`, `generated_by: workflow-copilot`); graph applies to the canvas with one-click undo, and is never saved server-side without the maker | Must (shipped) | One named-issue repair round against the same validators as publish; the copilot never invents capabilities — it only wires what the catalog serves |
+| F15 | **Semantic capability search** — one index (`workflow_catalog_index`, migration 133) over agents/tools/integrations/modules/node types; hash-keyed lazy embed sync (litellm `aembedding`, keyword-only degrade flagged as `semantic: false`); hybrid keyword+cosine ranking; powers BOTH the palette's search box and the copilot's shortlist, and the palette rolls tools up under their integration with counts | Must (shipped) | The palette and the copilot see the same ranking — no divergence between what a human and the copilot can find |
 
 ---
 
@@ -162,6 +164,8 @@ Modules are the "programmatic modules generated via a conversational interface" 
 - `GET /workflows/{id}/runs` · `GET /workflows/runs/{run_id}` — history + per-node detail; `GET /workflows/runs/{run_id}/stream` — SSE live events
 - `GET /workflows/catalog` — the node palette: agents (live registry), integration actions, modules, logic/trigger/output node types
 - `GET/POST /workflows/modules` · `GET/PUT/DELETE /workflows/modules/{id}` · `POST /workflows/modules/generate` (conversational generate/refine) · `POST /workflows/modules/{id}/test`
+- `GET /workflows/catalog/search?q=&kinds=` — hybrid semantic/keyword search over the capability index (palette + copilot shortlist)
+- `POST /workflows/{id}/copilot` — chat-to-build: returns `{reply, graph, created_modules, issues, problems}`; generated modules persist, the graph is client-applied
 - Triggers ride the workflow document (`PUT /workflows/{id}` persists trigger bindings; publish activates them)
 
 All under `require_authenticated` + the `workflows` feature check; the hook route is the one deliberate exemption (token *is* the credential), rate-limited and audited.
@@ -202,7 +206,7 @@ Aligned to RFC §9, resequenced so each slice ships value:
 - **Q2** — Engine placement: gateway package now; move into orchestrator process if agent-node fan-out or isolation demands it. Transport-free module boundary keeps the move cheap.
 - **Q3** — Who can publish? v1: any `workflows`-granted member may draft; publish requires `workflows.publish` (default: executives) — validate this against real usage.
 - **Q4** — Event-trigger volume before BO‑20: in-process runs are honest-but-lossy on restart; cap per-workflow concurrency and surface "missed while down" in run history, or hold F10 GA until BO‑20?
-- **Q5** — Module review policy: is generator + validator + test-before-save enough, or should `ready` status require a second human (approver) before a module is usable in published workflows?
+- **Q5** — Module review policy: is generator + validator + test-before-save enough, or should `ready` status require a second human (approver) before a module is usable in published workflows? **Sharpened by F14:** copilot-created modules save as `ready` immediately (provenance `auto_created: true` makes them auditable and filterable); if review-before-ready is adopted, the copilot path should queue them as `draft` and say so in its reply.
 - **R1** — *Scope creep toward n8n*: the catalog makes it tempting to add generic SaaS nodes. Rule: a node exists only if the Integration Registry has the integration — the registry is the roadmap.
 - **R2** — *Silent automation drift*: published workflows keep running while the business changes. Mitigation: run-history visibility, per-workflow owner, disabled-on-repeated-failure policy with notification.
 

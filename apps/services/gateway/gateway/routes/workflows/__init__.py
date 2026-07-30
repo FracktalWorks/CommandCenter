@@ -12,10 +12,12 @@ register before ``crud``'s ``/{workflow_id}`` routes, or FastAPI matches
 # ruff: noqa: I001  -- import order is route-registration order (see above)
 
 from gateway.routes.workflows import catalog as _catalog  # noqa: F401
+from gateway.routes.workflows import search as _search  # noqa: F401
 from gateway.routes.workflows import modules as _modules  # noqa: F401
 from gateway.routes.workflows import hooks as _hooks  # noqa: F401
 from gateway.routes.workflows import runs as _runs  # noqa: F401
 from gateway.routes.workflows import publish as _publish  # noqa: F401
+from gateway.routes.workflows import copilot as _copilot  # noqa: F401
 from gateway.routes.workflows import crud as _crud  # noqa: F401
 from gateway.routes.workflows.core import router
 from gateway.routes.workflows.scheduler import (

@@ -389,6 +389,31 @@ export function Timeline({
   );
 }
 
+// ── Icons ──────────────────────────────────────────────────────────────────
+
+/**
+ * A Lucide icon, by name (e.g. "trending-up", "check-circle", "building-2").
+ *
+ * The sandbox has NO network, so an icon cannot be fetched — the parent resolves
+ * the ones your source mentions into inline SVG and injects them. That means the
+ * name must be a literal string here, not built at runtime: `<Icon name="rocket" />`
+ * works, `<Icon name={someVar} />` cannot be seen by the scanner and renders
+ * nothing. Colour is inherited (`currentColor`), so set it on a parent.
+ *
+ * This is the ONLY way to show imagery in an artifact besides a data: URI —
+ * remote logos and images are blocked by the sandbox and will not appear.
+ */
+export function Icon({ name, size = 18 }: { name: string; size?: number }) {
+  return (
+    <span
+      data-cc-icon={name}
+      aria-hidden="true"
+      style={{ display: "inline-flex", width: size, height: size,
+               verticalAlign: "middle" }}
+    />
+  );
+}
+
 // ── Talking back to the agent ──────────────────────────────────────────────
 // The reason to build a React artifact rather than an HTML one: the user does
 // something, and the agent hears about it.

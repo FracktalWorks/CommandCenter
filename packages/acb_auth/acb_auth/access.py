@@ -255,8 +255,24 @@ async def resolve_access(
 
     if row is None:
         # Authenticated by the IdP but not provisioned here. No access, and
-        # deliberately not auto-provisioned: an admin invites people.
-        return EffectiveAccess(is_active=False)
+        # deliberately not auto-provisioned: an admin invites people. Logged
+        # loudly because the 2026-07-30 lockout was exactly this branch firing
+        # silently — the operator saw a dead-end screen with no server-side
+        # trace of WHO was being refused or WHY. Cached like every other
+        # resolution, so the warning fires once per TTL, not per request.
+        _log.warning(
+            "access_unprovisioned_signin",
+            email=key,
+            detail=(
+                "authenticated by the IdP but has no app_user row — an owner "
+                "must invite them via /settings/members (or see "
+                "ensure_owner_bootstrap if NOBODY holds owner)"
+            ),
+        )
+        refused = EffectiveAccess(is_active=False)
+        if use_cache:
+            _cache_put(key, refused)
+        return refused
 
     overrides: list[tuple[str, str]] = []
     for entry in row["overrides"] or []:
@@ -415,3 +431,89 @@ async def resolve_session_access(
     for email in sorted(emails - {actor}):
         folded = folded.intersect(await resolve_access(email))
     return folded, sorted(emails)
+
+
+# ── Ownership bootstrap (the way back in) ───────────────────────────────────
+
+_BOOTSTRAP_OWNER_SQL = """
+WITH org AS (
+    SELECT id FROM organization WHERE slug = 'default'
+),
+member AS (
+    INSERT INTO app_user (email, display_name, role, status,
+                          organization_id, joined_at)
+    SELECT :email, :email, 'executive', 'active', org.id, now() FROM org
+    ON CONFLICT (email) DO UPDATE
+        SET status = 'active',
+            organization_id = COALESCE(app_user.organization_id,
+                                       EXCLUDED.organization_id)
+    RETURNING id
+)
+INSERT INTO user_role (user_id, role_id, assigned_by)
+SELECT member.id, r.id, 'bootstrap:executive_emails'
+FROM member, org_role r, org
+WHERE r.organization_id = org.id AND r.slug = 'owner'
+ON CONFLICT DO NOTHING
+"""
+
+_HAS_OWNER_SQL = """
+SELECT 1 FROM user_role ur
+JOIN org_role r ON r.id = ur.role_id AND r.slug = 'owner'
+LIMIT 1
+"""
+
+
+async def ensure_owner_bootstrap() -> str | None:
+    """If NOBODY holds ``owner``, provision the first ``EXECUTIVE_EMAILS``
+    address as an active owner — creating the ``app_user`` row if needed.
+
+    Exists because of the 2026-07-30 production lockout: the model is
+    invite-only ("an admin invites people"), and migration 128's SQL
+    bootstrap can only *promote an existing row* — SQL cannot read env vars,
+    so the spec's promised EXECUTIVE_EMAILS fallback was never implementable
+    there. On a deployment where ``app_user`` was empty, that left zero
+    members, zero owners, and **no inviter**: everyone authenticated, nobody
+    provisioned, and the only fix was hand-run SQL. This closes the loop at
+    gateway startup, the first place both the database AND the environment
+    are readable.
+
+    Deliberately narrow: it runs only when NO member holds ``owner`` — one
+    real owner anywhere (however provisioned) makes this a no-op forever, so
+    a stale or placeholder EXECUTIVE_EMAILS can never overwrite real
+    membership. Returns the provisioned email, or ``None`` when it did
+    nothing. Never raises: an ownerless deployment with a broken bootstrap
+    should still boot and serve /health, not crash-loop.
+    """
+    raw = os.environ.get("EXECUTIVE_EMAILS", "")
+    candidate = next(
+        (e.strip().lower() for e in raw.split(",") if "@" in e), None,
+    )
+    try:
+        from sqlalchemy import text  # noqa: PLC0415
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            if (await session.execute(text(_HAS_OWNER_SQL))).first() is not None:
+                return None
+            if candidate is None:
+                _log.warning(
+                    "ownership_bootstrap_no_candidate",
+                    detail=(
+                        "no member holds 'owner' and EXECUTIVE_EMAILS names "
+                        "no address — nobody can grant access; set "
+                        "EXECUTIVE_EMAILS or provision an owner by SQL"
+                    ),
+                )
+                return None
+            await session.execute(text(_BOOTSTRAP_OWNER_SQL), {"email": candidate})
+            await session.commit()
+        invalidate(candidate)
+        _log.warning(
+            "ownership_bootstrapped",
+            email=candidate,
+            detail="no member held 'owner'; provisioned from EXECUTIVE_EMAILS",
+        )
+        return candidate
+    except Exception as exc:
+        _log.warning("ownership_bootstrap_failed", error=str(exc)[:200])
+        return None

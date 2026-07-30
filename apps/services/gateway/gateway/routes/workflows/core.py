@@ -107,6 +107,30 @@ def new_hook_token() -> str:
     return secrets.token_urlsafe(24)
 
 
+#: Path of the inbound webhook trigger, relative to the gateway's own origin.
+HOOK_PATH = "/workflows/hooks/{token}"
+
+
+def hook_url(token: str | None) -> str:
+    """The URL an EXTERNAL system should POST to fire this workflow.
+
+    Deliberately absolute and gateway-origin (``public_api_base_url``), not
+    the control-plane origin the browser happens to be on. The control plane's
+    ``/api`` proxy parses and re-serializes JSON bodies, which changes the
+    bytes — so an HMAC computed by the sender cannot verify — and it drops
+    non-JSON payloads entirely. Providers that post form-encoded or signed
+    bodies need the raw request, and only the gateway route gets it.
+
+    Empty when the origin is unconfigured: the UI then shows the path and says
+    so, which is honest. Inventing an origin would hand out a URL that 404s in
+    production and nobody would know why until a webhook silently stopped.
+    """
+    if not token:
+        return ""
+    base = (get_settings().public_api_base_url or "").rstrip("/")
+    return f"{base}{HOOK_PATH.format(token=token)}" if base else ""
+
+
 async def load_workflow_or_404(db: Any, workflow_id: str) -> Any:
     row = (
         await db.execute(

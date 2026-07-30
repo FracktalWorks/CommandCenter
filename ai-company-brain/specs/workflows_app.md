@@ -110,6 +110,32 @@ Mirroring App Workshop §4.0 — a workflow is CommandCenter-native **by constru
 
 Enforcement ladder (each rung independent): (1) the editor and Module Studio **refuse and redirect** — deviations are named and the platform equivalent is built instead; (2) **validation physics** — the module validator and graph validator reject forbidden constructs before anything persists; (3) **publish gate** — compile-time checks (unresolved refs, secret-shaped strings in config, write-class nodes without an approval ancestor) block publish; (4) **runtime gate** — handlers resolve capabilities server-side per call; an unknown agent/integration/module fails the node, is audited, and never falls back to raw access.
 
+### 3.3a Trigger durability (what survives a restart, and what does not)
+
+There is **no OS cron and no scheduler process**. A schedule is a `workflow_trigger` row (`config.cron`, `config.timezone`, `last_fired_at`); the *scanner* is one supervised asyncio loop in the gateway (30s). APScheduler's `CronTrigger` is used purely as an expression **parser** — importing a scheduler daemon would be the "second runtime" this design exists to avoid. Durability therefore comes from the row, not the loop: **the schedule is a database fact, the scanner is a stateless reader of it.**
+
+| Situation | Behaviour |
+|---|---|
+| Gateway restarts while idle | Next scan re-reads triggers from the DB — nothing to recover |
+| Gateway down across one or more ticks | `compute_due_fire` anchors on the most recent tick ≤ now → **one** catch-up fire, never a storm |
+| A schedule that has never fired | **Armed, not fired**, on first sight (`_claim_baseline`): a cron says *when*, not *how far back*. This step is load-bearing, not defensive — the maths only looks forward, so without a baseline a new schedule produced no tick, never got a `last_fired_at`, and therefore never ran at all |
+| Down > 366 days / absurdly stale | Re-armed from now; no attempt to replay a year |
+| Several gateway workers or replicas | CAS on `last_fired_at` — exactly one worker wins each tick, clock skew included |
+| The workflow is saved | `last_fired_at` is carried across the trigger rewrite for **unchanged** schedules; editing the cron or timezone deliberately re-arms |
+| Tick due but the workflow is at its concurrency cap | Claimed ticks always leave a trace: a `cancelled` run row with the reason (`record_skipped_run`), never silence |
+| Tick due but the published version is missing | Same — a `cancelled` run row saying to republish |
+| Run in flight | Killed; the startup sweep marks it `failed` ("interrupted by a platform restart") |
+| Run in an inline wait (≤60s) | Same as any in-flight run — failed and visible. This is the honest cost of the 60s inline cut-off |
+| Run in a long wait (>60s) | **Survives** — durable pause with `resume_at`; the scanner resumes it |
+| Run paused at an approval | **Survives** — the snapshot carries everything resume needs |
+| Bad cron or unknown timezone | Rejected at save with a 422, never discovered at fire time |
+
+Timezones are IANA wall clocks (`Asia/Kolkata`), not offsets, so a 9am schedule stays 9am across daylight-saving changes.
+
+### 3.3b The inbound webhook URL
+
+An external caller must be given the **gateway's own** origin (`public_api_base_url` + `/workflows/hooks/{token}`), which is what the editor now shows — the gateway names the URL rather than the browser assembling one from its own origin. The control-plane `/api` proxy parses and re-serialises JSON, which changes the bytes and makes any HMAC the sender computed unverifiable, and it drops non-JSON bodies entirely. `/api/workflows/hooks/[token]` exists as a raw-passthrough safety net for a URL someone copied off the control plane: it forwards the body byte-for-byte with the caller's own headers and attaches **no** platform credentials — the token in the path is the whole credential.
+
 ### 3.3 Trigger model
 
 RFC §7 verbatim, plus one product rule: **all trigger kinds converge on one entrypoint** (`start_run`) that seeds `variables.trigger` with a typed payload and creates a `workflow_run`. Kinds: `manual`, `api`, `webhook` (per-workflow secret token URL), `schedule` (cron expression, croniter-driven asyncio loop), `event` (bindings against normalized ingestion events — the successor to `agent_registry.json.webhook_routes`). Durable queueing/backoff for high-volume event triggers is BO‑20's scope; v1 executes runs as supervised asyncio tasks in-process and says so honestly in run status.

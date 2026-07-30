@@ -243,6 +243,79 @@ class RunRejected(Exception):
     """The run was refused before starting (concurrency limits)."""
 
 
+async def record_skipped_run(
+    *,
+    workflow_id: str,
+    workflow_name: str,
+    version: int,
+    trigger_kind: str,
+    trigger_payload: dict[str, Any],
+    reason: str,
+) -> str | None:
+    """Write a terminal run row for a trigger that fired but could not run.
+
+    The schedule scanner CAS-claims ``last_fired_at`` *before* it starts the
+    run, because the claim is what stops two workers double-firing one tick.
+    That ordering means a tick refused afterwards — the workflow is already at
+    its concurrency cap, or its published version has gone missing — is
+    consumed and never re-offered. Without this row the maker sees a gap in run
+    history with no explanation, which is the single most corrosive thing an
+    automation tool can do.
+
+    Recorded as ``cancelled``, not ``failed``: the workflow did not break, the
+    platform declined to start it. That distinction is load-bearing — the R2
+    auto-disable policy counts consecutive *failures*, and being busy must
+    never take a healthy automation offline.
+    """
+    run_id = str(uuid.uuid4())
+    try:
+        db = await _get_db()
+        try:
+            await db.execute(
+                text(
+                    """INSERT INTO workflow_runs
+                       (id, workflow_id, workflow_name, version, trigger_kind,
+                        trigger_payload, status, error, started_by, finished_at)
+                       VALUES (:id, :wid, :name, :v, :tk, :tp ::jsonb,
+                               'cancelled', :err, 'scheduler', now())"""
+                ),
+                {
+                    "id": run_id,
+                    "wid": workflow_id,
+                    "name": workflow_name,
+                    "v": version,
+                    "tk": trigger_kind,
+                    "tp": json.dumps(trigger_payload, default=str),
+                    "err": reason[:500],
+                },
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as exc:  # pragma: no cover - best effort bookkeeping
+        _log.warning(
+            "workflows.skipped_run_persist_failed",
+            workflow_id=workflow_id,
+            error=str(exc)[:160],
+        )
+        return None
+    _log.warning(
+        "workflows.tick_skipped",
+        workflow_id=workflow_id,
+        workflow_name=workflow_name,
+        reason=reason[:160],
+    )
+    publish_workflow_activity(
+        workflow_id,
+        workflow_name,
+        phase="end",
+        run_id=run_id,
+        status="cancelled",
+        reason=reason[:160],
+    )
+    return run_id
+
+
 async def _execute_run(
     *,
     run_id: str,

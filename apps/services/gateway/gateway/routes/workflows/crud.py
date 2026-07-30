@@ -13,9 +13,11 @@ from typing import Any
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
+    HOOK_PATH,
     MAX_GRAPH_BYTES,
     _get_db,
     _uid,
+    hook_url,
     iso,
     load_triggers,
     load_workflow_or_404,
@@ -226,6 +228,11 @@ async def get_workflow(
         "graph": parse_jsonb(row.graph, {"nodes": [], "edges": []}),
         "variables": parse_jsonb(row.variables, {}),
         "hook_token": row.hook_token,
+        # The gateway names the URL rather than letting the browser assemble
+        # one from its own origin — external callers must hit the gateway
+        # directly, not the control-plane proxy (see core.hook_url).
+        "hook_url": hook_url(row.hook_token),
+        "hook_path": HOOK_PATH.format(token=row.hook_token or ""),
         "triggers": triggers,
         "versions": [
             {
@@ -273,6 +280,26 @@ async def update_workflow(
                 params,
             )
         if body.triggers is not None:
+            # Triggers are replaced wholesale, but `last_fired_at` is not part
+            # of the maker's document — it is the scheduler's dedup state. Drop
+            # it on every save and a cron would be re-armed each time anyone
+            # touched the canvas, which both loses the "already fired this
+            # tick" guarantee and (before the baseline fix) parked the schedule
+            # in a state that never fires again. Carry it across for triggers
+            # that did not actually change; a schedule whose cron or timezone
+            # was edited is deliberately re-armed from now.
+            previous = {
+                _trigger_identity(r.kind, parse_jsonb(r.config, {}) or {}): r.last_fired_at
+                for r in (
+                    await db.execute(
+                        text(
+                            "SELECT kind, config, last_fired_at "
+                            "FROM workflow_triggers WHERE workflow_id = :id"
+                        ),
+                        {"id": workflow_id},
+                    )
+                ).fetchall()
+            }
             await db.execute(
                 text("DELETE FROM workflow_triggers WHERE workflow_id = :id"),
                 {"id": workflow_id},
@@ -281,14 +308,17 @@ async def update_workflow(
                 await db.execute(
                     text(
                         """INSERT INTO workflow_triggers
-                           (workflow_id, kind, config, enabled)
-                           VALUES (:wid, :kind, :config ::jsonb, :enabled)"""
+                           (workflow_id, kind, config, enabled, last_fired_at)
+                           VALUES (:wid, :kind, :config ::jsonb, :enabled, :last_fired)"""
                     ),
                     {
                         "wid": workflow_id,
                         "kind": trig.kind,
                         "config": json.dumps(trig.config, default=str),
                         "enabled": trig.enabled,
+                        "last_fired": previous.get(
+                            _trigger_identity(trig.kind, trig.config)
+                        ),
                     },
                 )
         await db.commit()
@@ -349,6 +379,21 @@ async def validate_workflow(
     return {"ok": not issues, "issues": [i.as_dict() for i in issues]}
 
 
+def _trigger_identity(kind: str, config: dict[str, Any]) -> tuple[str, str]:
+    """What makes two saves "the same trigger" for fire-state purposes.
+
+    For a schedule that is the cron expression and its timezone: change either
+    and the maker meant a different schedule, so it re-arms from now rather
+    than inheriting a baseline that could fire an unexpected catch-up tick.
+    Other kinds carry no scheduler state, so the kind alone is enough.
+    """
+    if kind == "schedule":
+        cron = str(config.get("cron") or "").strip()
+        timezone = str(config.get("timezone") or "UTC").strip() or "UTC"
+        return (kind, f"{cron}@{timezone}")
+    return (kind, "")
+
+
 def _validate_trigger_specs(triggers: list[TriggerSpec]) -> None:
     """422 on malformed trigger bindings (kind vocabulary + per-kind config)."""
     for trig in triggers:
@@ -356,7 +401,13 @@ def _validate_trigger_specs(triggers: list[TriggerSpec]) -> None:
             raise HTTPException(status_code=422, detail=f"Unknown trigger kind '{trig.kind}'")
         if trig.kind == "schedule":
             cron = str(trig.config.get("cron") or "").strip()
-            if not cron or not _cron_is_valid(cron):
+            timezone = str(trig.config.get("timezone") or "UTC").strip() or "UTC"
+            if not _timezone_is_valid(timezone):
+                raise HTTPException(
+                    status_code=422,
+                    detail=f"Unknown timezone '{timezone}' — use an IANA name like Asia/Kolkata",
+                )
+            if not cron or not _cron_is_valid(cron, timezone):
                 raise HTTPException(
                     status_code=422,
                     detail="Schedule triggers need a valid cron expression",
@@ -368,11 +419,27 @@ def _validate_trigger_specs(triggers: list[TriggerSpec]) -> None:
             )
 
 
-def _cron_is_valid(expr: str) -> bool:
+def _cron_is_valid(expr: str, timezone: str = "UTC") -> bool:
     try:
         from apscheduler.triggers.cron import CronTrigger
 
-        CronTrigger.from_crontab(expr, timezone="UTC")
+        CronTrigger.from_crontab(expr, timezone=timezone)
         return True
     except (ValueError, TypeError):
+        return False
+
+
+def _timezone_is_valid(name: str) -> bool:
+    """IANA zone names only — the same vocabulary APScheduler resolves.
+
+    Validated here rather than at fire time because a bad zone discovered by
+    the scanner is a schedule that silently never runs; discovered at save
+    time it is a 422 the maker can act on.
+    """
+    from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
+
+    try:
+        ZoneInfo(name)
+        return True
+    except (ZoneInfoNotFoundError, ValueError, KeyError):
         return False

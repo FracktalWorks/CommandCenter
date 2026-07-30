@@ -38,6 +38,7 @@ from acb_common import get_logger, get_settings
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request, status)
 from fastapi.responses import StreamingResponse
+from gateway.room_stream import publish_room_event
 from pydantic import BaseModel
 
 _log = get_logger("gateway.agent")
@@ -620,6 +621,117 @@ def _validate_agent_name(name: str) -> str:
 # chat_session row yet). It must NEVER reach a run dispatch as a literal agent
 # name — see _resolve_agent_for_run below.
 _UNRESOLVED_AGENT_SENTINELS = {"unknown", "", "undefined", "null", "none"}
+
+
+#: A leading ``@name`` addresses one agent in a room. Only leading, and only
+#: one: "@sales what about @finance's number" asks sales about finance, it does
+#: not start two runs. Multi-agent rooms work by ADDRESSING, not by broadcast —
+#: a message that reaches every agent produces N answers to one question and
+#: N times the cost, which is not what anyone means by "ask the room".
+_MENTION_RE = re.compile(r"^\s*@([A-Za-z0-9][A-Za-z0-9._-]*)\s*")
+
+
+def _resolve_room(thread_id: str, email: str):
+    """This person's place in the room, or ``None`` when rooms are unavailable.
+
+    ``None`` — not a refusal — is the answer when the room layer cannot be
+    consulted, because the run path predates rooms and must keep working
+    without them.
+    """
+    if not thread_id or not email:
+        return None
+    try:
+        from gateway.rooms import resolve_room_access
+        return resolve_room_access(thread_id, email)
+    except Exception:
+        _log.warning("agent.room_resolve_failed", thread_id=thread_id[:12], exc_info=True)
+        return None
+
+
+def _room_agents(thread_id: str) -> list[tuple[str, str]]:
+    """[(agent_name, role)] for a room, primary first. Empty on any failure."""
+    if not thread_id:
+        return []
+    try:
+        from acb_graph import get_session
+        from sqlalchemy import text
+        with get_session() as s:
+            rows = s.execute(
+                text(
+                    "SELECT agent_name, role FROM chat_session_agent "
+                    "WHERE session_id = :sid ORDER BY role DESC, added_at"
+                ),
+                {"sid": thread_id},
+            ).fetchall()
+        return [(r.agent_name, r.role) for r in rows]
+    except Exception:
+        return []
+
+
+def _match_mention(mention: str, candidates: list[str]) -> str | None:
+    """Match a typed ``@name`` against the agents present, forgivingly.
+
+    People type ``@sales`` for ``agent-sales-assistant``. Exact match wins,
+    then the ``agent-`` prefix is optional, then a unique prefix match — but
+    only if it is unique: an ambiguous mention falls through to the primary
+    agent rather than guessing which colleague's agent to spend money on.
+    """
+    want = mention.strip().lower()
+    if not want:
+        return None
+    lowered = {c.lower(): c for c in candidates}
+    if want in lowered:
+        return lowered[want]
+    if f"agent-{want}" in lowered:
+        return lowered[f"agent-{want}"]
+    starts = [
+        original for low, original in lowered.items()
+        if low.startswith(want) or low.removeprefix("agent-").startswith(want)
+    ]
+    return starts[0] if len(starts) == 1 else None
+
+
+def _address_agent(req: AgentRunRequest, room) -> str:
+    """Which agent answers this turn.
+
+    A room can hold several agents (migration 135). An unaddressed turn goes to
+    the primary; ``@name`` addresses one of the others. Outside a room — and
+    for any mention that names nobody present — this is exactly
+    ``_resolve_agent_for_run``, so nothing about single-agent chat changes.
+    """
+    requested = _resolve_agent_for_run(req.agent, req.thread_id)
+    if room is None or not req.thread_id:
+        return requested
+
+    message = str(req.payload.get("message") or "")
+    match = _MENTION_RE.match(message)
+    if not match:
+        return requested
+
+    present = [name for name, _role in _room_agents(req.thread_id)]
+    if not present:
+        return requested
+    addressed = _match_mention(match.group(1), present)
+    if not addressed or addressed == requested:
+        return requested
+    try:
+        return _validate_agent_name(addressed)
+    except Exception:
+        return requested
+
+
+#: How much of a turn the room sees before it is persisted. The transcript is
+#: the durable record; this is the "Vijay asked…" line in the live rail, and a
+#: whole message there would duplicate content the history endpoint serves with
+#: the room's redaction rules applied.
+_ROOM_PREVIEW_CHARS = 280
+
+
+def _room_preview(req: AgentRunRequest) -> str:
+    text_ = str(req.payload.get("message") or "").strip()
+    if len(text_) <= _ROOM_PREVIEW_CHARS:
+        return text_
+    return text_[:_ROOM_PREVIEW_CHARS] + "…"
 
 
 def _resolve_agent_for_run(agent: str | None, thread_id: str | None) -> str:
@@ -1376,13 +1488,36 @@ async def run_agent_stream_endpoint(
     Use this instead of ``POST /agent/run`` whenever the caller wants live
     tool-call visibility (e.g. the control-plane chat UI).
     """
+    import asyncio
+
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
-    agent_name = _resolve_agent_for_run(req.agent, req.thread_id)
+    # Room guard: sending is a contributor's act. A viewer invited to WATCH a
+    # conversation must not be able to drive its agents — otherwise "add them
+    # as a viewer" is a one-click way around the room's roles entirely.
+    actor_email = getattr(user, "email", "") or ""
+    room = await asyncio.to_thread(
+        _resolve_room, req.thread_id or "", actor_email,
+    )
+    if room is not None and not room.can_send:
+        raise HTTPException(status_code=403, detail=room.denied("send messages"))
+
+    agent_name = _address_agent(req, room)
     # Org access control, enforcement seam 2: the picker is filtered, but the
     # endpoint is the boundary of record — a hand-crafted request naming an
     # agent the member cannot run is refused here, not in the UI.
     await assert_can_run_agent_in_session(user, agent_name, req.thread_id)
+
+    # The other people in the room find out what was asked, and by whom, the
+    # moment it is asked — the run stream carries only the agent's side.
+    if room is not None and room.is_shared:
+        await publish_room_event(req.thread_id or "", {
+            "type": "USER_MESSAGE",
+            "author": actor_email,
+            "agentName": agent_name,
+            "content": _room_preview(req),
+        })
+
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
@@ -1714,10 +1849,11 @@ async def reconnect_agent_stream(
     from orchestrator.stream_relay import (replay_events, stream_exists,
                                            subscribe_events)
 
-    # Ownership guard (same policy as cancel): the replayed stream contains the
-    # whole conversation — text, tool args, reasoning — so it must never be
-    # readable across users. Block only when the session exists AND belongs to
-    # a different user; ephemeral/legacy threads (no row) stay reachable.
+    # Membership guard: the replayed stream contains the whole conversation —
+    # text, tool args, reasoning — so it must never be readable by someone
+    # outside the room. Participants and viewers may hold it open, which is how
+    # a second person watches a run work; ephemeral threads (no session row)
+    # stay reachable for the person who started them.
     actor = getattr(user, "email", None) or "default"
     if not await _asyncio.to_thread(_thread_owner_ok, thread_id, actor):
         raise HTTPException(status_code=403, detail="Not your conversation")
@@ -1791,24 +1927,34 @@ async def reconnect_agent_stream(
 
 
 def _thread_owner_ok(thread_id: str, user_id: str) -> bool:
-    """True if *thread_id* is owned by *user_id* OR not a persisted session.
+    """True if *user_id* may WATCH *thread_id*, or it is not a persisted session.
 
-    Permissive by design: returns True when the session row is absent
-    (ephemeral / legacy thread) or on any DB error, so legitimate cancels are
-    never blocked.  Returns False only when the session exists for a DIFFERENT
-    user.
+    Ownership became membership when sessions became rooms (migration 134): a
+    viewer invited to watch a run must be able to hold the replay stream open,
+    which is the whole of read-only multiplayer. The permissive cases are
+    unchanged and still deliberate — an absent session row (ephemeral / legacy
+    thread) and any DB error resolve to True, so legitimate solo operations are
+    never blocked by an infra hiccup.
+
+    The name is kept because it is the guard two endpoints already name; what
+    it means is now "may read this room".
     """
     try:
-        from acb_graph import get_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
-        with get_session() as s:
-            row = s.execute(
-                text("SELECT user_id FROM chat_session WHERE id = :id"),
-                {"id": thread_id},
-            ).first()
-        if row is None:
-            return True
-        return row.user_id == user_id
+        from gateway.rooms import resolve_room_access
+        return resolve_room_access(thread_id, user_id).can_read
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _thread_control_ok(thread_id: str, user_id: str) -> bool:
+    """True if *user_id* may STOP a run in *thread_id*.
+
+    Watching and stopping are different rights: a viewer sees the transcript
+    but cannot end somebody else's work. Same permissive fallbacks.
+    """
+    try:
+        from gateway.rooms import resolve_room_access
+        return resolve_room_access(thread_id, user_id).can_cancel
     except Exception:  # noqa: BLE001
         return True
 
@@ -1835,13 +1981,16 @@ async def cancel_agent_run(
 
     from orchestrator.stream_relay import cancel_run  # noqa: PLC0415
 
-    # Ownership guard: a thread_id maps to a chat_session.  Block only when the
-    # session exists AND belongs to a different user (prevents one user
-    # cancelling another's run).  Allow when not found (ephemeral/legacy thread)
-    # or on DB hiccup, so legitimate cancels never get stuck.
+    # Control guard: stopping a run is a contributor's act, not a viewer's.
+    # A viewer who could cancel would be able to end work they were only
+    # invited to watch. Allow when the session is not found (ephemeral/legacy
+    # thread) or on a DB hiccup, so legitimate cancels never get stuck.
     actor = getattr(user, "email", None) or "default"
-    if not await asyncio.to_thread(_thread_owner_ok, thread_id, actor):
-        raise HTTPException(status_code=403, detail="Not your conversation")
+    if not await asyncio.to_thread(_thread_control_ok, thread_id, actor):
+        raise HTTPException(
+            status_code=403,
+            detail="You are watching this conversation and cannot stop its run.",
+        )
 
     _log.info(
         "agent.cancel_request",

@@ -897,6 +897,16 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # Rooms share /chat's prefix — a room IS a chat session — but live in their
+    # own module because membership, presence, and the live room stream are a
+    # different concern from history CRUD.
+    from gateway.routes.rooms import router as _rooms_router
+
+    app.include_router(_rooms_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     from gateway.routes.workspace import router as _workspace_router
 
     app.include_router(_workspace_router)

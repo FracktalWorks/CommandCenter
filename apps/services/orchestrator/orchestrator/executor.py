@@ -565,6 +565,30 @@ async def _run_sub_agent_streaming(
     # B6 Phase-5 Tier 0: init before the try so the finally can always restore.
     _integration_env_token: IntegrationEnvToken = {}
 
+    # Delegation is a run too, and until now it was invisible to everyone
+    # outside the tab that started it: SUB_AGENT_* events reach the parent's
+    # SSE stream and nothing else. So a delegated agent looked idle in the
+    # office view while it was doing the work, and a second person watching a
+    # shared room saw the parent stall with no explanation. `delegated_by` is
+    # what makes it readable as one agent asking another rather than as two
+    # unrelated runs that happen to overlap.
+    import time as _time_sub
+    _sub_started = _time_sub.monotonic()
+    try:
+        from acb_common import get_run_context
+        _parent_agent = (get_run_context() or {}).get("agent")
+    except Exception:
+        _parent_agent = None
+    try:
+        from acb_common import publish_activity
+        publish_activity(
+            kind="agent", phase="start", agent=agent_name,
+            run_id=run_id, source="delegation",
+            delegated_by=_parent_agent, model=(model or None),
+        )
+    except Exception:
+        pass
+
     try:
         with load_agent(agent_name, run_id=run_id, repo_name=_repo_name, local_path=_local_path) as loaded:
             mandatory = loaded.config.get("integrations", [])
@@ -796,6 +820,16 @@ async def _run_sub_agent_streaming(
         })
         return f"Sub-task to {agent_name!r} failed: {exc}"
     finally:
+        try:
+            from acb_common import publish_activity
+            publish_activity(
+                kind="agent", phase="end", agent=agent_name,
+                run_id=run_id, source="delegation",
+                delegated_by=_parent_agent,
+                duration_ms=int((_time_sub.monotonic() - _sub_started) * 1000),
+            )
+        except Exception:
+            pass
         # B6 Phase-5 Tier 0: tear down this sub-agent's scoped integration creds
         # so a delegated agent's secrets don't linger for the parent/next run.
         _restore_integration_env(_integration_env_token)

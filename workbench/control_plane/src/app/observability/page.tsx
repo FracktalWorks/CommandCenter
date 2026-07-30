@@ -53,6 +53,9 @@ interface ActivityEvent {
   duration_ms?: number;
   tokens?: number;
   cost_usd?: number | null;
+  /** Set when this run is one agent delegating to another (call_agent). The
+   *  feed reads as "asked by X" rather than as two unrelated overlapping runs. */
+  delegated_by?: string;
 }
 
 interface AgentRow {
@@ -183,6 +186,8 @@ function sourceClass(source?: string | null): string {
       return "bg-blue-500/10 text-blue-500 border-blue-500/20";
     case "tasks":
       return "bg-emerald-500/10 text-emerald-500 border-emerald-500/20";
+    case "delegation":
+      return "bg-accent/10 text-accent border-accent/20";
     case "":
     case "unattributed":
       return "bg-secondary/40 text-muted-foreground border-border";
@@ -352,10 +357,14 @@ function ActivityRow({ e, onOpen, aliases }: { e: ActivityEvent; onOpen: (name: 
             <span className="text-[11px] text-muted-foreground/70 shrink-0">· tier {e.tier}</span>
           )}
         </div>
-        {(e.user || e.thread_id) && (
+        {(e.user || e.thread_id || e.delegated_by) && (
           <div className="text-[11px] text-muted-foreground/60 truncate">
-            {e.user ? e.user : ""}
-            {e.user && e.thread_id ? " · " : ""}
+            {/* Who asked. A person's email when a human started it, the
+                calling agent when one agent delegated to another — the two
+                answers to "why is this running" and the reason a busy feed is
+                readable at all. */}
+            {e.delegated_by ? `asked by ${e.delegated_by}` : (e.user ?? "")}
+            {(e.delegated_by || e.user) && e.thread_id ? " · " : ""}
             {e.thread_id ? `thread ${e.thread_id.slice(0, 8)}` : ""}
           </div>
         )}

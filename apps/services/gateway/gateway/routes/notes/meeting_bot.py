@@ -108,6 +108,31 @@ def is_supported_url(url: str) -> bool:
     return p.scheme in ("http", "https") and bool(p.hostname)
 
 
+#: Platforms the SELF-HOSTED worker can actually drive. Its join flow is written
+#: against Google Meet's DOM; Zoom and Teams need their own automation (or their
+#: SDKs) and are not built. Recall, being a managed provider, handles all three.
+SELFHOSTED_PLATFORMS = ("meet",)
+
+#: What to tell someone whose link we can't join, per platform. The alternative
+#: matters: both Zoom and Teams can record locally, and an upload runs the exact
+#: same transcribe → notes → action-item pipeline as a bot recording.
+_UNSUPPORTED_HELP = {
+    "zoom": "Zoom",
+    "teams": "Microsoft Teams",
+    "other": "That link's platform",
+}
+
+
+def unsupported_platform_message(platform: str) -> str:
+    what = _UNSUPPORTED_HELP.get(platform, _UNSUPPORTED_HELP["other"])
+    return (
+        f"{what} isn't supported by the self-hosted notetaker yet — it can only "
+        "join Google Meet. Record the call with the platform's own recorder and "
+        "upload the file here (you still get the transcript, notes and action "
+        "items), or use Record for an in-person meeting."
+    )
+
+
 def normalize_status(recall_code: str | None) -> str | None:
     """Recall status code → our lifecycle status (None = unknown, leave as-is)."""
     if not recall_code:
@@ -627,6 +652,16 @@ async def bot_join(
                    "or configure a provider key.",
         )
     platform = detect_platform(url)
+    # Refuse a platform the worker can't drive, HERE, rather than dispatching a
+    # bot that opens Zoom in a Meet-shaped automation and reports "no join
+    # button". The self-hosted worker is Meet-only; Recall handles the rest.
+    if (
+        isinstance(provider, SelfHostedProvider)
+        and platform not in SELFHOSTED_PLATFORMS
+    ):
+        raise HTTPException(
+            status_code=400, detail=unsupported_platform_message(platform)
+        )
     bot_name = (body.bot_name or "").strip() or default_bot_name()
     title = (body.title or "").strip() or None
 

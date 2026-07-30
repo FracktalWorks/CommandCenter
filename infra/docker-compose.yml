@@ -192,6 +192,15 @@ services:
       EMBED_CMD: ${MEETING_BOT_EMBED_CMD:-}
       TTS_CMD: ${MEETING_BOT_TTS_CMD:-}
       MEET_MAX_DURATION: ${MEET_MAX_DURATION:-14400}
+      # Persistent Chrome profile: sign a Google account in once
+      # (POST /google-login) and Meet stops auto-declining the bot as an
+      # anonymous guest. Lives on its own volume so it survives redeploys.
+      MEET_PROFILE_DIR: ${MEET_PROFILE_DIR:-/profile}
+      MEET_GOOGLE_EMAIL: ${MEET_GOOGLE_EMAIL:-}
+      MEET_GOOGLE_PASSWORD: ${MEET_GOOGLE_PASSWORD:-}
+      # 1 → live VNC view of the bot's browser on 6080/5900 (debugging + a
+      # by-hand sign-in when Google demands a second factor).
+      MEET_VNC: ${MEET_VNC:-0}
     # Chrome needs more than Docker's default 64 MB of shared memory or it
     # crashes on real pages.
     shm_size: "1gb"
@@ -199,8 +208,20 @@ services:
       # Host 8095 — the gateway itself owns 8080 on the VPS. Bound to localhost
       # only: nothing outside the box should be able to dispatch a bot.
       - "127.0.0.1:8095:8080"
+      # noVNC live view — loopback only; reach it over an SSH tunnel. It is an
+      # unauthenticated view of a browser holding a Google session, so it must
+      # never be exposed off-box.
+      - "127.0.0.1:6080:6080"
     volumes:
       - acb-meeting-bot-data:/data
+      # The signed-in Chrome profile. Separate volume from /data so clearing
+      # recordings never signs the bot out.
+      - acb-meeting-bot-profile:/profile
+      # Live-edit the worker on the box: the code is also baked into the image,
+      # but this mount wins, so `docker restart acb-meeting-bot` picks up an
+      # edit made on the VPS with no rebuild. Read-only — the source of truth
+      # is still git.
+      - ../apps/services/meeting_bot/app:/app/app:ro
     extra_hosts:
       - "host.docker.internal:host-gateway"
 
@@ -208,5 +229,6 @@ volumes:
   acb-postgres-data:
   acb-redis-data:
   acb-meeting-bot-data:
+  acb-meeting-bot-profile:
   acb-neo4j-data:
   acb-neo4j-logs:

@@ -147,6 +147,19 @@ export default function JoinCallModal({
               </div>
             )}
 
+            {/* The single most common failure isn't a bug: Google refuses
+                guests outright when nobody is in the call yet. Saying so here
+                prevents the failure instead of explaining it afterwards. */}
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-warning/10 px-2.5 py-1.5 text-[10px] leading-relaxed text-warning">
+              <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                Join the call yourself first, then admit the notetaker when it
+                knocks — Google turns guests away when no one is in the meeting
+                yet. To skip that, sign the notetaker into a Google account and
+                invite it like a person.
+              </span>
+            </p>
+
             <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
               The bot joins named so everyone can see it. Recording others may
               require their consent depending on where you are — get it first.

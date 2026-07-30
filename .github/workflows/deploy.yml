@@ -342,6 +342,16 @@ jobs:
             # mode is silent, so it is wired by default rather than left opt-in.
             upsert_env NOTES_LIVE_TOKEN_URL \
               "http://host.docker.internal:8080/notes/stt/bot-live-token"
+            # Persistent Chrome profile for the bot. Meet AUTO-DECLINES
+            # anonymous participants (they never get to knock) whenever the
+            # host isn't in the call yet or link-guests can't ask in — a
+            # signed-in profile is the only unattended fix. The dir is inside
+            # the container (its own volume); sign in once via
+            # POST /google-login. Defaults preserved on re-deploy.
+            grep -qE '^MEET_PROFILE_DIR=' "$ENV_FILE" || \
+              echo "MEET_PROFILE_DIR=/profile" >> "$ENV_FILE"
+            # Live VNC view of the bot's browser (loopback only). Default off.
+            grep -qE '^MEET_VNC=' "$ENV_FILE" || echo "MEET_VNC=0" >> "$ENV_FILE"
             # One shared secret, both directions (gateway -> worker, and the
             # worker's live-segment callback). Generated once, then reused.
             if ! grep -qE '^MEETING_BOT_TOKEN=.+' "$ENV_FILE"; then

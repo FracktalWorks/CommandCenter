@@ -196,10 +196,110 @@ async def _run(job: _Job) -> None:
         _persist(job)
 
 
+def _active_count() -> int:
+    return sum(
+        1
+        for j in _JOBS.values()
+        if j.status in ("joining", "waiting_room", "in_call", "processing")
+    )
+
+
 @app.get("/health")
 async def health() -> dict:
-    return {"ok": True, "active": sum(1 for j in _JOBS.values() if j.status in
-            ("joining", "waiting_room", "in_call", "processing"))}
+    from .meet import PROFILE_DIR
+
+    return {
+        "ok": True,
+        "active": _active_count(),
+        # Whether this worker can present a signed-in identity at all — the
+        # single most useful fact when joins are being auto-declined.
+        "profile": bool(PROFILE_DIR),
+    }
+
+
+# ── Google sign-in (so Meet stops auto-declining the bot) ───────────────────
+# Anonymous participants are refused outright by Meet whenever the host isn't
+# in the call yet or link-guests can't ask in. A signed-in profile is the fix;
+# these endpoints put an account into it once.
+
+@app.get("/google-login")
+async def google_login_status(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    _auth(authorization)
+    from . import google_login
+
+    if _active_count() > 0:
+        # Chrome locks the profile dir; checking mid-call would either fail or
+        # disturb a live recording.
+        raise HTTPException(
+            status_code=409,
+            detail="a bot is in a call — the browser profile is in use",
+        )
+    try:
+        return {
+            **await google_login.current_account(),
+            "interactive": google_login.interactive_status(),
+            "credentials_configured": all(google_login.configured_credentials()),
+        }
+    except google_login.LoginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
+
+
+class GoogleLoginRequest(BaseModel):
+    email: str | None = None
+    password: str | None = None
+
+
+@app.post("/google-login")
+async def google_login(
+    req: GoogleLoginRequest | None = None,
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Sign the bot into a Google account (scripted). Credentials may come from
+    the body or from MEET_GOOGLE_EMAIL / MEET_GOOGLE_PASSWORD."""
+    _auth(authorization)
+    from . import google_login as gl
+
+    if _active_count() > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="a bot is in a call — try again once it has finished",
+        )
+    if gl.interactive_status()["running"]:
+        raise HTTPException(
+            status_code=409, detail="an interactive login session is open"
+        )
+    try:
+        return await gl.sign_in(
+            (req.email if req else "") or "", (req.password if req else "") or ""
+        )
+    except gl.LoginError as exc:
+        # 400 + the diagnostics: which wall Google put up is the whole answer.
+        raise HTTPException(
+            status_code=400,
+            detail={"error": str(exc), "diagnostics": exc.diagnostics},
+        ) from None
+
+
+@app.post("/google-login/interactive", status_code=202)
+async def google_login_interactive(
+    authorization: str | None = Header(default=None),
+) -> dict:
+    """Open Google's sign-in page in the container's browser and hold it open so
+    a human can finish it over VNC (2FA, passkeys, 'verify it's you')."""
+    _auth(authorization)
+    from . import google_login as gl
+
+    if _active_count() > 0:
+        raise HTTPException(
+            status_code=409,
+            detail="a bot is in a call — try again once it has finished",
+        )
+    try:
+        return gl.start_interactive()
+    except gl.LoginError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from None
 
 
 @app.post("/bots", status_code=201)

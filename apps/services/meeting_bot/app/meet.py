@@ -28,6 +28,11 @@ _log = logging.getLogger("meeting_bot.meet")
 
 PULSE_MONITOR = os.environ.get("PULSE_MONITOR", "meet.monitor")
 DIAG_DIR = os.environ.get("MEETING_BOT_DATA", "/data")
+#: Chrome profile directory. When set, the browser launches with a PERSISTENT
+#: profile, so a Google account signed in once (see /google-login) stays signed
+#: in — the difference between a bot Meet auto-denies as anonymous and one it
+#: lets knock (or admits straight away when it's on the invite).
+PROFILE_DIR = os.environ.get("MEET_PROFILE_DIR", "").strip()
 JOIN_TIMEOUT_S = int(os.environ.get("MEET_JOIN_TIMEOUT", "150"))
 MAX_DURATION_S = int(os.environ.get("MEET_MAX_DURATION", str(4 * 3600)))
 # End the call if the bot has been the only participant for this long (everyone
@@ -262,6 +267,49 @@ def canonical_meet_url(url: str) -> str:
     return f"https://meet.google.com/{m.group(1).lower()}?hl=en"
 
 
+def chrome_launch_args() -> list[str]:
+    """Chrome flags shared by the join path and the Google-login path.
+
+    Meet sniffs for automation: Playwright's default launch adds
+    ``--enable-automation`` and leaves ``navigator.webdriver`` true, and either
+    is enough for Meet to route a signed-out visitor to its marketing page.
+    The login flow needs exactly the same disguise — Google's sign-in screen
+    blocks "this browser or app may not be secure" otherwise.
+    """
+    return [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled",
+        "--use-fake-ui-for-media-stream",  # auto-accept the mic/cam prompt
+        "--autoplay-policy=no-user-gesture-required",
+        "--disable-notifications",
+        "--window-size=1280,720",
+        "--lang=en-US",
+    ]
+
+
+#: Meet's wording when it auto-declines an ANONYMOUS participant — the
+#: signed-out bot case. Distinct from a host who simply never clicked Admit:
+#: this arrives seconds after "Ask to join", not after a wait.
+_ANON_DENIED = (
+    "no one can join a meeting unless invited or admitted by the host",
+    "you can't join this video call",
+    "you cannot join this video call",
+)
+
+
+def is_anonymous_denial(body: str) -> bool:
+    """Whether a refusal is Google blocking a signed-out guest outright.
+
+    Worth its own branch because the remedy is specific and non-obvious: be in
+    the call when the bot knocks, allow link-guests to ask to join, or sign the
+    bot into a Google account (``/google-login``). Telling someone to "check
+    the link" here sends them looking for a problem that isn't there.
+    """
+    low = " ".join((body or "").lower().split())
+    return any(s in low for s in _ANON_DENIED)
+
+
 def looks_like_landing(url: str, body: str) -> bool:
     """Whether the page is Meet's *marketing* page rather than a green room.
 
@@ -475,34 +523,34 @@ async def join_and_record(
         # on the box wasn't installed by THIS playwright version (otherwise the
         # launch dies with "Executable doesn't exist at .../chromium-<rev>").
         chrome_path = os.environ.get("CHROME_EXECUTABLE", "").strip() or None
-        browser = await p.chromium.launch(
-            headless=False,  # headful under Xvfb so the audio pipeline works
-            executable_path=chrome_path,
-            # Meet sniffs for automation. Playwright's default launch both adds
-            # --enable-automation (the "controlled by automated software" mode)
-            # and leaves navigator.webdriver=true — either is enough for Meet
-            # to route a signed-out visitor to its MARKETING page, which has no
-            # join button at all (seen in production, screenshot-proven).
-            ignore_default_args=["--enable-automation"],
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-                "--use-fake-ui-for-media-stream",  # auto-accept the mic/cam prompt
-                "--autoplay-policy=no-user-gesture-required",
-                "--disable-notifications",
-                "--window-size=1280,720",
-                "--lang=en-US",
-            ],
-        )
-        context = await browser.new_context(
-            permissions=["microphone", "camera"],
-            viewport={"width": 1280, "height": 720},
+        common = {
+            "headless": False,  # headful under Xvfb so the audio pipeline works
+            "executable_path": chrome_path,
+            "ignore_default_args": ["--enable-automation"],
+            "args": chrome_launch_args(),
+        }
+        ctx_opts = {
+            "permissions": ["microphone", "camera"],
+            "viewport": {"width": 1280, "height": 720},
             # English pinned so classify_body/looks_like_landing phrase match
             # regardless of the host's geo-derived language.
-            locale="en-US",
-        )
-        page = await context.new_page()
+            "locale": "en-US",
+        }
+        browser = None
+        if PROFILE_DIR:
+            # Persistent profile → whatever account was signed in via
+            # /google-login is still signed in, so Meet sees a real user
+            # instead of an anonymous guest it can auto-decline.
+            os.makedirs(PROFILE_DIR, exist_ok=True)
+            _log.info("meet.using_profile dir=%s", PROFILE_DIR)
+            context = await p.chromium.launch_persistent_context(
+                PROFILE_DIR, **common, **ctx_opts
+            )
+            page = context.pages[0] if context.pages else await context.new_page()
+        else:
+            browser = await p.chromium.launch(**common)
+            context = await browser.new_context(**ctx_opts)
+            page = await context.new_page()
         rec: subprocess.Popen | None = None
         try:
             url = canonical_meet_url(meeting_url)
@@ -554,6 +602,24 @@ async def join_and_record(
             admission = await _await_admission(page, on_status)
             if admission == "refused":
                 diag = await _snapshot(page, job_id, "refused")
+                if is_anonymous_denial(diag.get("body") or ""):
+                    signed_in = " (the bot IS using a signed-in profile)" \
+                        if PROFILE_DIR else ""
+                    raise MeetingBotError(
+                        "Google Meet declined the notetaker outright — it "
+                        f"never got to knock{signed_in}. Meet does this to "
+                        "guests when nobody is in the call yet, or when the "
+                        "meeting doesn't allow link-guests to ask to join. "
+                        "Fixes, easiest first: (1) join the meeting yourself "
+                        "first, then send the notetaker and click Admit; "
+                        "(2) in the call, Host controls → Meeting access → "
+                        "allow 'Anyone with the link can ask to join'; "
+                        "(3) sign the notetaker into a Google account and put "
+                        "that address on the calendar invite so it is admitted "
+                        "automatically.",
+                        status="not_admitted",
+                        diagnostics=diag,
+                    )
                 raise MeetingBotError(
                     "Google Meet refused the join. This link needs a signed-in "
                     "Google account, or the host has locked the call to invited "
@@ -590,5 +656,10 @@ async def join_and_record(
                 _stop_ffmpeg(rec)
             with contextlib.suppress(Exception):
                 await _leave(page)
-            await context.close()
-            await browser.close()
+            # A persistent context owns its browser — closing it is enough, and
+            # there is no separate handle to close.
+            with contextlib.suppress(Exception):
+                await context.close()
+            if browser is not None:
+                with contextlib.suppress(Exception):
+                    await browser.close()

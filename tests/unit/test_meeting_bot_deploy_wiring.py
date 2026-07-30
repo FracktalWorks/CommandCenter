@@ -31,15 +31,18 @@ def test_meeting_bot_is_not_in_the_core_profile() -> None:
     assert "core" not in profiles
 
 
-def test_host_port_does_not_collide_with_the_gateway() -> None:
+def test_published_ports_stay_on_loopback_and_clear_of_the_gateway() -> None:
     """The gateway owns 8080 on the VPS; publishing the bot there would break
-    the whole app rather than just the bot."""
+    the whole app rather than just the bot. And EVERY published port must be
+    loopback-only — one of them is an unauthenticated VNC view of a browser
+    holding a Google session."""
     ports = _service()["ports"]
-    assert len(ports) == 1
-    host_side = str(ports[0]).split(":")
-    # "127.0.0.1:8095:8080" → bound to loopback, host 8095, container 8080
-    assert host_side[0] == "127.0.0.1", "must not be reachable off-box"
-    assert host_side[1] != _GATEWAY_PORT, "collides with the gateway"
+    assert ports, "the worker must publish its API"
+    for mapping in ports:
+        # "127.0.0.1:8095:8080" → bound to loopback, host 8095, container 8080
+        host_side = str(mapping).split(":")
+        assert host_side[0] == "127.0.0.1", f"{mapping} is reachable off-box"
+        assert host_side[1] != _GATEWAY_PORT, f"{mapping} collides with the gateway"
 
 
 def test_chrome_gets_enough_shared_memory() -> None:

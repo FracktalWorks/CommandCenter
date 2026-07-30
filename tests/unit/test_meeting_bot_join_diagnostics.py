@@ -158,3 +158,52 @@ def test_green_room_is_not_mistaken_for_landing() -> None:
         assert not meet.looks_like_landing(
             "https://meet.google.com/abc-defg-hij", body
         ), body
+
+
+# ── anonymous denial vs "nobody clicked Admit" ───────────────────────────────
+# The 2026-07-30 production failure: the join flow worked perfectly (name
+# filled, muted, "Ask to join" clicked) and Google declined the signed-out bot
+# within 3 seconds. It needs its own message because the remedies (be in the
+# call, allow link-guests, sign the bot in) are nothing like "check the link".
+
+def test_anonymous_denial_is_recognised_from_meets_own_words() -> None:
+    assert meet.is_anonymous_denial(
+        "You can't join this video call Return to home screen Submit feedback "
+        "Your meeting is safe No one can join a meeting unless invited or "
+        "admitted by the host Learn more"
+    )
+    assert meet.is_anonymous_denial(
+        "No one can join a meeting unless invited or admitted by the host"
+    )
+
+
+def test_waiting_and_ordinary_states_are_not_anonymous_denials() -> None:
+    for body in (
+        "Asking to be let in...",
+        "Waiting for the host to let you in",
+        "Ready to join?",
+        "",
+    ):
+        assert not meet.is_anonymous_denial(body), body
+
+
+def test_anonymous_denial_is_also_a_refusal() -> None:
+    """Both classifiers must agree it is terminal — the admission loop stops on
+    classify_body, and only then is the denial branch consulted."""
+    body = (
+        "You can't join this video call. No one can join a meeting unless "
+        "invited or admitted by the host"
+    )
+    assert meet.classify_body(body) == "refused"
+    assert meet.is_anonymous_denial(body)
+
+
+# ── the automation disguise is shared with the login path ────────────────────
+
+def test_launch_args_hide_automation_and_pin_english() -> None:
+    args = meet.chrome_launch_args()
+    assert "--disable-blink-features=AutomationControlled" in args
+    assert "--lang=en-US" in args
+    # --enable-automation is removed via ignore_default_args, so it must never
+    # be added back here.
+    assert not any("enable-automation" in a for a in args)

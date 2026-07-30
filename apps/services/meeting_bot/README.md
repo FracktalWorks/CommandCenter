@@ -125,6 +125,103 @@ MEETING_BOT_TOKEN=<same secret as above>
 | `LIVE_VAD_RMS` | `300` | Energy-VAD threshold (RMS over s16le) for the pause endpointer. Tune per room/mic. |
 | `LIVE_SEGMENT_MAX_WAIT` | `2.5` | Max seconds a recognised segment waits for its utterance to close (and so for its embedding) before being forwarded untagged. Bounds live latency. |
 | `CHROME_EXECUTABLE` | _(none)_ | Path to a Chrome/Chromium binary. Needed when the browser on the box wasn't installed by *this* Playwright version — otherwise the launch fails with "Executable doesn't exist at …/chromium-&lt;rev&gt;". |
+| `MEET_PROFILE_DIR` | `/profile` (by deploy) | Persistent Chrome profile. Set → the bot keeps whatever Google account was signed in via `/google-login`, so Meet stops auto-declining it as anonymous. Unset → anonymous, and joins need a human to admit it. |
+| `MEET_GOOGLE_EMAIL` / `MEET_GOOGLE_PASSWORD` | _(none)_ | Optional credentials for `POST /google-login`. Use a dedicated bot account **without 2FA**. |
+| `MEET_VNC` | `0` | `1` → live VNC view of the bot's browser on 6080 (noVNC) / 5900. Loopback only; use an SSH tunnel. |
+| `MEET_LOGIN_WINDOW` | `600` | Seconds an interactive (VNC) sign-in session stays open. |
+
+## The anonymous-guest wall (read this before debugging a join)
+
+**Google auto-declines anonymous participants.** A signed-out bot that clicks
+"Ask to join" is refused within seconds — it never gets to knock — whenever
+*nobody is in the call yet*, or the meeting doesn't let link-guests ask in. The
+page says "You can't join this video call / No one can join a meeting unless
+invited or admitted by the host". This is **policy, not a selector bug**;
+verified in production on 2026-07-30 with a perfect run up to that point (name
+filled, mic/cam off, "Ask to join" clicked, denied 3 s later).
+
+Three ways through it, cheapest first:
+
+1. **Be in the call.** Join yourself, then send the notetaker and click
+   **Admit**. Works with no configuration.
+2. **Let link-guests knock.** In the call: Host controls → Meeting access →
+   allow "Anyone with the link can ask to join" (Workspace hosts only).
+3. **Sign the bot in** (the only unattended option, and what every commercial
+   meeting bot does). Then put its address on the calendar invite and Meet
+   admits it with nobody clicking anything.
+
+### Signing the bot into a Google account
+
+Use a **dedicated account with no 2-step verification** — a personal account
+with 2FA cannot be automated, and repeated automated logins on your own account
+invite a security flag. `MEET_PROFILE_DIR` (default `/profile`, its own volume)
+holds the profile, so this is a one-time act that survives redeploys.
+
+```bash
+# Scripted (a plain password account, no 2FA)
+curl -s -X POST -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
+  -H 'Content-Type: application/json' \
+  -d '{"email":"notetaker@yourdomain.com","password":"…"}' \
+  localhost:8095/google-login | jq
+
+# Who is signed in right now?
+curl -s -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
+  localhost:8095/google-login | jq
+```
+
+Credentials can also live in `MEET_GOOGLE_EMAIL` / `MEET_GOOGLE_PASSWORD` and
+the body omitted. Every step screenshots to `/data/google-login-*.png`, so a
+failure names the wall it hit: `blocked` ("this browser or app may not be
+secure" — scripted login can never pass, use the interactive path) versus
+`needs_human` (2FA / "verify it's you" — the password worked, finish it by
+hand).
+
+For anything needing a human (2FA, passkey, consent), open the browser and do
+it yourself over VNC:
+
+```bash
+curl -s -X POST -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
+  localhost:8095/google-login/interactive | jq   # holds the browser open 10 min
+```
+
+## Debugging on the VPS
+
+Three affordances, in increasing order of directness:
+
+**1. Watch the browser live (VNC).** The container runs Chrome headful under
+Xvfb; with `MEET_VNC=1` it also runs x11vnc + noVNC, so you can watch a join as
+it happens and click things yourself. Loopback-only — it is an unauthenticated
+view of a browser holding a Google session, so reach it through a tunnel:
+
+```bash
+# on the VPS: set MEET_VNC=1 in /opt/acb/app/.env, then
+docker restart acb-meeting-bot
+
+# from your machine:
+ssh -L 6080:127.0.0.1:6080 acb@<vps>
+# then open http://localhost:6080/vnc.html
+```
+
+**2. Edit the worker in place, no rebuild.** `infra/docker-compose.yml`
+bind-mounts `apps/services/meeting_bot/app` over the image's copy, so an edit
+on the box takes effect on restart:
+
+```bash
+sudo -e /opt/acb/app/apps/services/meeting_bot/app/meet.py
+docker restart acb-meeting-bot && docker logs -f acb-meeting-bot
+```
+Git is still the source of truth — the next deploy overwrites it (`git reset
+--hard`), so port anything that works back into a commit.
+
+**3. Post-mortem evidence** (always on, no setup): every failure path snapshots
+the page and persists the job.
+
+```bash
+docker exec acb-meeting-bot ls -lat /data   # screenshots + {job}.state.json
+docker logs --tail 100 acb-meeting-bot      # step-by-step: goto, name, join
+curl -s -H "Authorization: Bearer $MEETING_BOT_TOKEN" \
+  localhost:8095/bots/<id>/diagnostics | jq
+```
 
 ## Status & honest caveats
 

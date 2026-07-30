@@ -6,9 +6,10 @@
  * integration actions, ready modules — never a hard-coded capability.
  *
  * With many agents/tools the tree alone doesn't scale, so the palette leads
- * with semantic search (`/workflows/catalog/search`, the same index the
- * Workflow Copilot shortlists from) and rolls tools up under their
- * integration. Typing searches; clearing returns to the category view.
+ * with search (`/workflows/catalog/search` — keyword-ranked for now, the same
+ * index the Workflow Copilot shortlists from; platform semantic search is
+ * BO‑22) and rolls tools up under their integration. Typing searches;
+ * clearing returns to the category view.
  */
 
 import { useEffect, useRef, useState } from "react";
@@ -72,7 +73,6 @@ export default function NodePalette({
   });
   const [query, setQuery] = useState("");
   const [results, setResults] = useState<SearchResult[] | null>(null);
-  const [semantic, setSemantic] = useState(true);
   const [searching, setSearching] = useState(false);
   const debounceRef = useRef<number | null>(null);
 
@@ -92,7 +92,6 @@ export default function NodePalette({
       try {
         const res = await searchCatalog(q);
         setResults(res.results);
-        setSemantic(res.semantic);
       } catch {
         setResults([]);
       } finally {
@@ -192,8 +191,7 @@ export default function NodePalette({
           <div className="px-1 pb-1 text-[9px] text-muted-foreground">
             {searching
               ? "Searching…"
-              : `${results.length} match${results.length === 1 ? "" : "es"}` +
-                (semantic ? "" : " · keyword only (no embedding key)")}
+              : `${results.length} match${results.length === 1 ? "" : "es"}`}
           </div>
           {results.map((r) => {
             const drop = dropForResult(r, catalog);

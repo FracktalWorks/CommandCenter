@@ -212,7 +212,9 @@ export function categoryForType(type: NodeType): string {
   return type;
 }
 
-// ── Semantic catalog search + Workflow Copilot ──────────────────────────────
+// ── Catalog search + Workflow Copilot ───────────────────────────────────────
+// Search is keyword-ranked for now; platform-wide semantic search is BO‑22
+// (FOUNDATION_BUILDOUT_CHECKLIST.md) and will swap in behind this same shape.
 
 export type SearchResult = {
   kind: "agent" | "tool" | "integration" | "module" | "node";
@@ -225,8 +227,6 @@ export type SearchResult = {
 
 export type SearchResponse = {
   query: string;
-  /** false = keyword-only (no embedding provider configured) */
-  semantic: boolean;
   results: SearchResult[];
 };
 

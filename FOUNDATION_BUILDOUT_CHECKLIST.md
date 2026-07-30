@@ -96,6 +96,15 @@ This is the list of foundational capabilities that are **missing, partially impl
 - **Approach:** (1) Provide a **local‑embeddings fallback** wired into `/v1/embeddings` so the zero‑vector landmine is gone. (2) Flip mem0 on by default once (1) lands (graphiti stays opt‑in — it needs Neo4j). (3) Add a **human‑readable memory layer** (a curated `MEMORY.md`‑style artefact per subject) so stored memory is auditable, not just an opaque vector table.
 - **Competitive ref (CH‑6):** **Hermes** memory works day one — SQLite + FTS5 full‑text over past sessions + a human‑readable `MEMORY.md` the agent curates + Honcho user‑modeling — one memory across all channels. The lesson: a *simple always‑on auditable* memory beats a *sophisticated disabled* one. See `specs/competitive_hardening_2026-07.md`.
 
+
+### BO‑22 — Platform semantic‑search service *(P2)* ☐ *(new — requested 2026‑07‑30, Workflows app)*
+- **Missing:** every surface that needs "find by meaning" either rolls its own or goes without. Memory has mem0's private embedding path (BO‑21); the Workflows capability catalog ships **keyword‑only search by explicit decision** (`gateway/routes/workflows/search.py` — an embedding‑backed variant was built and then deliberately removed in favour of this item); email/notes/tasks search is lexical. There is no shared embed‑and‑retrieve seam.
+- **Why needed:** Semantic search is a platform capability, not a per‑app feature — N apps each bolting on their own embeddings means N index tables, N sync loops, N provider‑key fallbacks, and rankings that disagree. One service (index + query API in a shared package, pgvector‑backed, content‑hash keyed sync) lets the workflow palette/copilot, email, notes, tasks, and App Workshop all rank by meaning consistently — and BO‑21's local‑embeddings fallback makes it work without a cloud key.
+- **Dependencies:** BO‑21 (a real `/v1/embeddings` path with local fallback — kills the zero‑vector landmine first); pgvector (present); a home in `packages/` (e.g. `acb_search`) per Place‑Before‑Building.
+- **Approach:** (1) Land BO‑21's embeddings path. (2) `acb_search`: `index(namespace, key, text, metadata)` + `query(namespace, text, k, filter)` over one pgvector table, hash‑keyed lazy re‑embed, hybrid keyword+cosine ranking with an honest keyword‑only degrade. (3) First consumer: the Workflows catalog search swaps its ranking backend behind the same API shape (`search.py` is written for exactly this swap). (4) Migrate email/notes/tasks search opportunistically.
+- **Note:** until this lands, new apps needing search should copy the Workflows stance — deterministic keyword ranking, no private embedding stacks.
+
+
 ---
 
 ## D. Orchestration & runtime

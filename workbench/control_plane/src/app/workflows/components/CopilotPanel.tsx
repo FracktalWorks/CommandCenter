@@ -95,7 +95,7 @@ export default function CopilotPanel({
               contact rows, and create a ClickUp follow-up task.”
             </p>
             <p>
-              The copilot finds agents, tools and modules by meaning — and if a
+              The copilot searches your agents, tools and modules — and if a
               step needs a module that doesn&apos;t exist, it writes, validates
               and saves one for you.
             </p>

@@ -1,7 +1,7 @@
 # Workflows App — Project Plan (deterministic automation over the agent fleet)
 
 > **Product:** CommandCenter · **Feature:** Workflows app (`/workflows`) · **Updated:** 2026-07-30 · **Version:** 0.2
-> **Status:** 🔄 v1 slice built — data model (migrations 132+133) + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio + **Workflow Copilot (F14)** + **semantic capability search (F15)**. Trigger kinds: manual + webhook + schedule live; event triggers are Slice 2.
+> **Status:** 🔄 v1 slice built — data model (migration 132) + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio + **Workflow Copilot (F14)** + **keyword capability search (F15; semantic → BO‑22)**. Trigger kinds: manual + webhook + schedule live; event triggers are Slice 2.
 > **Parent RFC:** [`docs/workflow-editor/README.md`](../../docs/workflow-editor/README.md) — stack selection (React Flow), the compile-to-MAF-Workflows decision, data model, editor UX, trigger taxonomy. Read it for *how*; this doc is *what, why, and why now*. Interactive mockup: `docs/workflow-editor/mockup.html`.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape) · [`docs/app-workshop/README.md`](../../docs/app-workshop/README.md) §4.0 (the platform contract this app also enforces).
 > **Policy amendment:** ADR-028 (see `system_architecture.md`) amends ADR-014 and `project_plan.md` C-09 / §2 non-goals — see §10.
@@ -76,7 +76,7 @@ Feature IDs `F1..F13`; Must/Should/Could is for v1 (phases in §8).
 | F12 | **Describe → generate → refine** — prompt bar on an empty canvas emits a full graph JSON conforming to the node schema | Should | Superseded by F14, which delivers this conversationally inside the editor |
 | F13 | **Workflows as tools / MCP** — published workflows exposed to the orchestrator as callable tools; later, as MCP servers | Could | Mirrors `orchestrator/app_tools.py` for Custom Apps |
 | F14 | **Workflow Copilot** — a chat panel in the editor (Palette \| Copilot tabs): the maker describes a change, the copilot emits the full updated graph; **modules the graph needs that don't exist are generated, AST-validated, and saved automatically** (provenance `auto_created`, `generated_by: workflow-copilot`); graph applies to the canvas with one-click undo, and is never saved server-side without the maker | Must (shipped) | One named-issue repair round against the same validators as publish; the copilot never invents capabilities — it only wires what the catalog serves |
-| F15 | **Semantic capability search** — one index (`workflow_catalog_index`, migration 133) over agents/tools/integrations/modules/node types; hash-keyed lazy embed sync (litellm `aembedding`, keyword-only degrade flagged as `semantic: false`); hybrid keyword+cosine ranking; powers BOTH the palette's search box and the copilot's shortlist, and the palette rolls tools up under their integration with counts | Must (shipped) | The palette and the copilot see the same ranking — no divergence between what a human and the copilot can find |
+| F15 | **Capability search** — keyword-ranked search over the live catalog (agents/tools/integrations/modules/node types); powers BOTH the palette's search box and the copilot's shortlist, and the palette rolls tools up under their integration with counts | Must (shipped) | **Deliberately keyword-only** (owner decision 2026-07-30): semantic ranking belongs to the platform, not this app — see **BO‑22** (platform semantic-search service, `FOUNDATION_BUILDOUT_CHECKLIST.md`); `search.py` keeps the API shape so BO‑22 swaps in as a ranking backend. The palette and the copilot see the same ranking either way |
 
 ---
 
@@ -164,7 +164,7 @@ Modules are the "programmatic modules generated via a conversational interface" 
 - `GET /workflows/{id}/runs` · `GET /workflows/runs/{run_id}` — history + per-node detail; `GET /workflows/runs/{run_id}/stream` — SSE live events
 - `GET /workflows/catalog` — the node palette: agents (live registry), integration actions, modules, logic/trigger/output node types
 - `GET/POST /workflows/modules` · `GET/PUT/DELETE /workflows/modules/{id}` · `POST /workflows/modules/generate` (conversational generate/refine) · `POST /workflows/modules/{id}/test`
-- `GET /workflows/catalog/search?q=&kinds=` — hybrid semantic/keyword search over the capability index (palette + copilot shortlist)
+- `GET /workflows/catalog/search?q=&kinds=` — keyword-ranked search over the live capability catalog (palette + copilot shortlist; semantic backend arrives with BO‑22)
 - `POST /workflows/{id}/copilot` — chat-to-build: returns `{reply, graph, created_modules, issues, problems}`; generated modules persist, the graph is client-applied
 - Triggers ride the workflow document (`PUT /workflows/{id}` persists trigger bindings; publish activates them)
 
@@ -174,7 +174,7 @@ All under `require_authenticated` + the `workflows` feature check; the hook rout
 
 ## 7. Foundation dependencies
 
-Deferred to `FOUNDATION_BUILDOUT_CHECKLIST.md` per planning rules — not re-described here: **BO‑20** (durable event-bus consumer/job queue — event triggers at volume, retries, dead-letter), **BO‑1** (Action Broker write path — until then write-class nodes are approval-gated or draft-only), **BO‑7** (real sandbox — module runtime graduates into it), **BO‑14** (permission/risk enforcement — node risk annotations), **BO‑6** (migration framework), **BO‑5** (tracing/cost — per-node cost attribution beyond the activity feed).
+Deferred to `FOUNDATION_BUILDOUT_CHECKLIST.md` per planning rules — not re-described here: **BO‑20** (durable event-bus consumer/job queue — event triggers at volume, retries, dead-letter), **BO‑1** (Action Broker write path — until then write-class nodes are approval-gated or draft-only), **BO‑7** (real sandbox — module runtime graduates into it), **BO‑14** (permission/risk enforcement — node risk annotations), **BO‑6** (migration framework), **BO‑5** (tracing/cost — per-node cost attribution beyond the activity feed), **BO‑22** (platform semantic-search service — the catalog search's future ranking backend; this app deliberately ships keyword-only until it lands).
 
 ## 8. Implementation phases
 

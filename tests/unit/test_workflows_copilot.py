@@ -1,9 +1,12 @@
-"""Workflow Copilot + semantic catalog search unit tests.
+"""Workflow Copilot + catalog search unit tests.
 
-Pure parts (scoring, module-name resolution, module validation problems) run
-directly; the copilot's persist/validate round (``_apply_round``) runs against
-a fake DB session so the create-missing-modules flow is covered without
-Postgres or an LLM.
+Pure parts (keyword scoring, module-name resolution, module validation
+problems) run directly; the copilot's persist/validate round
+(``_apply_round``) runs against a fake DB session so the
+create-missing-modules flow is covered without Postgres or an LLM.
+
+Search is deliberately keyword-only (spec F15) — platform-wide semantic
+search is BO-22 in FOUNDATION_BUILDOUT_CHECKLIST.md.
 """
 
 from __future__ import annotations
@@ -21,12 +24,7 @@ from gateway.routes.workflows.copilot import (
     _module_problems,
     resolve_module_nodes,
 )
-from gateway.routes.workflows.search import (
-    CatalogEntry,
-    cosine,
-    keyword_score,
-    merge_scores,
-)
+from gateway.routes.workflows.search import CatalogEntry, keyword_score
 
 # ── Scoring ─────────────────────────────────────────────────────────────────
 
@@ -44,31 +42,11 @@ def test_keyword_score_exact_label_beats_substring() -> None:
     assert exact > partial > 0
 
 
-def test_merge_scores_semantic_contributes() -> None:
-    assert merge_scores(2.0, 0.8) == pytest.approx(6.0)
-    assert merge_scores(2.0, None) == pytest.approx(2.0)
-    assert merge_scores(0.0, -0.3) == pytest.approx(0.0)
+def test_search_works_without_db_and_ranks_by_keyword(monkeypatch) -> None:
+    async def _no_modules() -> list[CatalogEntry]:
+        return []
 
-
-def test_cosine_bounds() -> None:
-    assert cosine([1.0, 0.0], [1.0, 0.0]) == pytest.approx(1.0)
-    assert cosine([1.0, 0.0], [0.0, 1.0]) == pytest.approx(0.0)
-    assert cosine([], [1.0]) == 0.0
-
-
-def test_catalog_entry_hash_tracks_content() -> None:
-    a = CatalogEntry(kind="tool", key="x", label="A", description="d")
-    b = CatalogEntry(kind="tool", key="x", label="A", description="d2")
-    assert a.content_hash != b.content_hash
-
-
-def test_search_degrades_to_keyword_only_without_index(monkeypatch) -> None:
-    async def _no_db() -> Any:
-        raise RuntimeError("no database in unit tests")
-
-    monkeypatch.setattr(search_mod, "_get_db", _no_db)
-    monkeypatch.setattr(search_mod, "_embedding_model", lambda: None)
-    monkeypatch.setattr(search_mod, "_last_sync", 0.0)
+    monkeypatch.setattr(search_mod, "_module_entries", _no_modules)
     monkeypatch.setattr(
         search_mod,
         "collect_catalog_entries",
@@ -85,8 +63,24 @@ def test_search_degrades_to_keyword_only_without_index(monkeypatch) -> None:
         ],
     )
     out = asyncio.run(search_mod.search_catalog("classify email"))
-    assert out["semantic"] is False
     assert out["results"] and out["results"][0]["key"] == "triage"
+
+
+def test_search_kind_filter(monkeypatch) -> None:
+    async def _no_modules() -> list[CatalogEntry]:
+        return []
+
+    monkeypatch.setattr(search_mod, "_module_entries", _no_modules)
+    monkeypatch.setattr(
+        search_mod,
+        "collect_catalog_entries",
+        lambda: [
+            CatalogEntry(kind="tool", key="a.task", label="task tool", description=""),
+            CatalogEntry(kind="agent", key="task-manager", label="task-manager", description=""),
+        ],
+    )
+    out = asyncio.run(search_mod.search_catalog("task", kinds={"agent"}))
+    assert [r["kind"] for r in out["results"]] == ["agent"]
 
 
 # ── Module resolution + validation problems ─────────────────────────────────

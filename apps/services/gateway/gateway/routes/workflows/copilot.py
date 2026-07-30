@@ -58,7 +58,8 @@ Respond with ONLY a JSON object (no prose outside it, no markdown fence):
 
 Graph rules (a validator enforces them — violations bounce back to you):
 - Node: {"id", "type", "position": {"x","y"}, "data": {"label", "config"}}.
-  Types: trigger | agent | tool | module | condition | set | approval | output.
+  Types: trigger | agent | tool | module | condition | set | approval | wait |
+  output.
 - Exactly one trigger node; no cycles; a node has at most ONE incoming edge.
 - Edges: {"id", "source", "target"}; edges out of a condition MUST carry
   "sourceHandle": "true" or "false".
@@ -69,7 +70,9 @@ Graph rules (a validator enforces them — violations bounce back to you):
   equals|not_equals|contains|not_contains|gt|gte|lt|lte|is_empty|not_empty|truthy;
   set: {"assignments": {...}}; approval: {"message": "what the human is
   approving"} — the run pauses there until an operator approves in the
-  approvals inbox; output: {"value": ...}.
+  approvals inbox; wait: {"seconds": <positive number>} — pause before
+  continuing (use it for "wait a day then follow up"; max 30 days);
+  output: {"value": ...}.
 - Reference upstream data with {{trigger.field}}, {{vars.name}}, {{node_id.field}}.
   An agent node's output is {{<id>.result}}; a condition's is {{<id>.branch}}.
 - Only use agent names and tool actions from the provided lists — never invent.

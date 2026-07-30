@@ -55,6 +55,24 @@ NODE_TYPE_META = [
         "description": "Assign values into the run's variables.",
     },
     {
+        "type": "approval",
+        "category": "logic",
+        "label": "Human approval",
+        "description": (
+            "Pause the run until a human approves it in the approvals inbox. "
+            "Required upstream of any write action."
+        ),
+    },
+    {
+        "type": "wait",
+        "category": "logic",
+        "label": "Wait",
+        "description": (
+            "Pause for a duration before continuing — seconds to days. "
+            "Long waits survive restarts; the scheduler resumes them."
+        ),
+    },
+    {
         "type": "output",
         "category": "output",
         "label": "Output",

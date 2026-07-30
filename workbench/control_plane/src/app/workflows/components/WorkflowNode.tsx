@@ -18,6 +18,7 @@ import {
   LogOut,
   PauseCircle,
   SlidersHorizontal,
+  Timer,
   UserCheck,
   Wrench,
   XCircle,
@@ -34,6 +35,7 @@ const TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   condition: GitBranch,
   set: SlidersHorizontal,
   approval: UserCheck,
+  wait: Timer,
   output: LogOut,
 };
 

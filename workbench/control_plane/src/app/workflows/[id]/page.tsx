@@ -114,6 +114,24 @@ function flowFromGraph(
   };
 }
 
+/** "2 hours" / "30 seconds" — the wait node's card summary. */
+function humanDuration(seconds: number): string {
+  if (!Number.isFinite(seconds) || seconds <= 0) return "";
+  const units: [number, string][] = [
+    [86400, "day"],
+    [3600, "hour"],
+    [60, "minute"],
+    [1, "second"],
+  ];
+  for (const [secs, name] of units) {
+    if (seconds >= secs) {
+      const n = Math.round((seconds / secs) * 10) / 10;
+      return `${n} ${name}${n === 1 ? "" : "s"}`;
+    }
+  }
+  return `${seconds}s`;
+}
+
 function summarize(type: NodeType, config: Record<string, unknown>, catalog: Catalog | null): string {
   if (type === "agent") return String(config.agent ?? "");
   if (type === "tool") return String(config.action ?? "");
@@ -126,6 +144,7 @@ function summarize(type: NodeType, config: Record<string, unknown>, catalog: Cat
   if (type === "set")
     return Object.keys((config.assignments as object) ?? {}).join(", ");
   if (type === "approval") return String(config.message ?? "pause for approval");
+  if (type === "wait") return humanDuration(Number(config.seconds));
   if (type === "output") return String(config.value ?? "");
   return "";
 }

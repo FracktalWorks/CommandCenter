@@ -229,3 +229,77 @@ async def test_tool_failure_surfaces_the_node_and_skips_downstream(serialized: d
     assert outcome.outputs == []
     assert outcome.node_results["write"]["status"] == "error"
     assert outcome.node_results["out_hi"] == {"status": "skipped"}
+
+
+# ── The wait gate (spec F3): a second gate kind on the same rails ───────────
+
+WAIT_GRAPH = {
+    "nodes": [
+        _node("start", "trigger"),
+        _node("cool_off", "wait", {"seconds": 2 * 86400}),
+        _node("nudge", "agent", {"agent": "summarizer", "message": "Follow up on {{trigger.subject}}"}),
+        _node("out", "output", {"value": "{{nudge.result}}"}),
+    ],
+    "edges": [
+        _edge("start", "cool_off"),
+        _edge("cool_off", "nudge"),
+        _edge("nudge", "out"),
+    ],
+}
+
+
+async def test_long_wait_pauses_then_resumes_on_deadline() -> None:
+    """A "wait two days, then follow up" workflow: the wait parks the run with
+    a deadline (nothing downstream runs, no agent call), and the scheduler's
+    resume — modelled here by naming the elapsed wait — finishes it WITHOUT
+    sleeping again or re-running the replayed nodes."""
+    compiled = compile_graph(WAIT_GRAPH, known_agents=KNOWN_AGENTS)
+
+    parked = _Trace()
+    paused = await execute_workflow(
+        compiled, {"subject": "Pump order"}, parked.services(), emit=parked.emit
+    )
+
+    assert paused.status == "paused"
+    assert paused.paused_nodes == ["cool_off"]
+    assert parked.agent_calls == []  # the follow-up has NOT been sent
+    assert paused.wait_until["cool_off"] > 0
+    assert paused.node_results["nudge"]["status"] == "pending"
+    assert parked.events[-2:] == [("nudge", "pending"), ("out", "pending")]
+
+    resumed = _Trace()
+    outcome = await execute_workflow(
+        compiled,
+        {"subject": "Pump order"},
+        resumed.services(),
+        emit=resumed.emit,
+        precomputed={
+            nid: r["output"]
+            for nid, r in paused.node_results.items()
+            if r["status"] == "ok"
+        },
+        elapsed_waits={"cool_off"},
+    )
+
+    assert outcome.status == "succeeded"
+    assert outcome.node_results["cool_off"]["output"] == {"waited_seconds": 2 * 86400}
+    assert len(resumed.agent_calls) == 1  # the follow-up fires exactly once
+    assert outcome.outputs == ["  Pump order stuck at packing  "]
+
+
+async def test_short_wait_never_pauses_the_run() -> None:
+    """Under the inline threshold the run just sleeps and carries on — no
+    pause row, no scheduler involvement."""
+    graph = {**WAIT_GRAPH, "nodes": [
+        _node("start", "trigger"),
+        _node("cool_off", "wait", {"seconds": 0.01}),
+        _node("nudge", "agent", {"agent": "summarizer", "message": "go"}),
+        _node("out", "output", {"value": "{{nudge.result}}"}),
+    ]}
+    compiled = compile_graph(graph, known_agents=KNOWN_AGENTS)
+    trace = _Trace()
+    outcome = await execute_workflow(compiled, {}, trace.services(), emit=trace.emit)
+
+    assert outcome.status == "succeeded"
+    assert outcome.paused_nodes == [] and outcome.wait_until == {}
+    assert len(trace.agent_calls) == 1

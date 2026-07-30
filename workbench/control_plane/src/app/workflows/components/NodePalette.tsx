@@ -57,6 +57,8 @@ function dropForResult(r: SearchResult, catalog: Catalog | null): PaletteDrop | 
       return { nodeType: type, label: r.label, config: { assignments: {} } };
     if (type === "approval")
       return { nodeType: type, label: r.label, config: { message: "" } };
+    if (type === "wait")
+      return { nodeType: type, label: r.label, config: { seconds: 3600 } };
     if (type === "output")
       return { nodeType: type, label: r.label, config: { value: "" } };
   }
@@ -295,7 +297,7 @@ export default function NodePalette({
           )}
 
           {section(
-            "logic", "Logic", GitBranch, 2,
+            "logic", "Logic", GitBranch, 4,
             <>
               {item(
                 "logic:condition",
@@ -307,6 +309,16 @@ export default function NodePalette({
                 "logic:set",
                 { nodeType: "set", label: "Set variables", config: { assignments: {} } },
                 "Set variables", "assign into {{vars.*}}", "logic",
+              )}
+              {item(
+                "logic:approval",
+                { nodeType: "approval", label: "Human approval", config: { message: "" } },
+                "Human approval", "pause for the approvals inbox", "logic",
+              )}
+              {item(
+                "logic:wait",
+                { nodeType: "wait", label: "Wait", config: { seconds: 3600 } },
+                "Wait", "pause for a duration, then continue", "logic",
               )}
             </>,
           )}

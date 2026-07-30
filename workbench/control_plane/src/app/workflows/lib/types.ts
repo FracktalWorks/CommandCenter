@@ -8,7 +8,7 @@ export type RunStatus =
 export type TriggerKind = "manual" | "api" | "schedule" | "webhook" | "event";
 export type NodeType =
   | "trigger" | "agent" | "tool" | "module" | "condition" | "set"
-  | "approval" | "output";
+  | "approval" | "wait" | "output";
 
 export type WorkflowNodeData = {
   label: string;
@@ -209,7 +209,13 @@ export const NODE_CATEGORY_STYLE: Record<
 };
 
 export function categoryForType(type: NodeType): string {
-  if (type === "condition" || type === "set" || type === "approval") return "logic";
+  if (
+    type === "condition" ||
+    type === "set" ||
+    type === "approval" ||
+    type === "wait"
+  )
+    return "logic";
   return type;
 }
 

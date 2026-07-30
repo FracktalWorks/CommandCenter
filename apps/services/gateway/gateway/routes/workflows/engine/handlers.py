@@ -8,12 +8,21 @@ registry, the module store) in ``service.py``; tests wire stubs.
 
 from __future__ import annotations
 
+import asyncio
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
 from gateway.routes.workflows.engine.modules import run_module_code
 from gateway.routes.workflows.engine.templating import resolve_value
+
+#: Waits at or below this run INLINE (the run holds its slot and sleeps);
+#: anything longer pauses the run and resumes from a snapshot, so a long wait
+#: survives a gateway restart instead of evaporating with the process.
+WAIT_INLINE_MAX_SECONDS = 60.0
+#: Upper bound on a single wait — a typo ("wait 90000000") should fail at
+#: publish, not park a run past the heat death of the quarter.
+MAX_WAIT_SECONDS = 30 * 86400
 
 #: Per-node wall-clock budgets (seconds), by node type.
 NODE_TIMEOUTS: dict[str, float] = {
@@ -23,6 +32,8 @@ NODE_TIMEOUTS: dict[str, float] = {
     "condition": 5.0,
     "set": 5.0,
     "approval": 5.0,
+    # An inline wait sleeps inside the node; the budget must clear it.
+    "wait": WAIT_INLINE_MAX_SECONDS + 10.0,
     "output": 5.0,
     "trigger": 5.0,
 }
@@ -92,6 +103,22 @@ def evaluate_condition(left: Any, op: str, right: Any) -> bool:
     raise NodeExecutionError(f"unknown condition operator '{op}'")
 
 
+def resolve_wait_seconds(config: dict[str, Any], state: dict[str, Any]) -> float:
+    """A wait node's duration, with ``{{refs}}`` resolved against the state.
+
+    Shared by the runner (which decides inline-vs-pause BEFORE calling the
+    handler) and the handler itself, so both read one duration.
+    """
+    raw = resolve_value(config.get("seconds"), state)
+    try:
+        seconds = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        raise NodeExecutionError(f"wait duration '{raw}' is not a number") from None
+    if seconds < 0:
+        raise NodeExecutionError("wait duration must be positive")
+    return min(seconds, float(MAX_WAIT_SECONDS))
+
+
 # ── Node handlers ────────────────────────────────────────────────────────────
 
 
@@ -157,6 +184,17 @@ async def execute_node(
         # The runner pauses unresolved approvals before this handler runs;
         # reaching it means a human approved — pass through.
         return {"approved": True, "message": str(config.get("message") or "")}
+
+    if ntype == "wait":
+        # Only two ways to reach this handler, and only one of them sleeps:
+        #   short wait  → the runner chose the INLINE path; serve the time here
+        #   long wait   → it already served its time as a paused run, and the
+        #                 scheduler resumed it; returning immediately is the
+        #                 whole point (never wait twice).
+        seconds = resolve_wait_seconds(config, state)
+        if 0 < seconds <= WAIT_INLINE_MAX_SECONDS:
+            await asyncio.sleep(seconds)
+        return {"waited_seconds": seconds}
 
     if ntype == "output":
         value = resolve_value(config.get("value"), state)

@@ -22,9 +22,11 @@ from agent_framework import WorkflowBuilder, WorkflowContext, executor
 from gateway.routes.workflows.engine.handlers import (
     DEFAULT_NODE_TIMEOUT,
     NODE_TIMEOUTS,
+    WAIT_INLINE_MAX_SECONDS,
     NodeExecutionError,
     NodeServices,
     execute_node,
+    resolve_wait_seconds,
 )
 
 #: Overall wall-clock budget for one run.
@@ -42,8 +44,12 @@ class RunOutcome:
     node_results: dict[str, Any]  # node_id → {status, output|error, duration_ms}
     outputs: list[Any]  # values yielded by output nodes
     error: str | None = None
-    #: Approval nodes that halted their branch this run (status == "paused").
+    #: Gate nodes (approval or long wait) that halted their branch this run
+    #: (status == "paused").
     paused_nodes: list[str] = field(default_factory=list)
+    #: Long-wait pauses only: node_id → unix epoch seconds to resume at.
+    #: Empty when the pause is an approval (a human resumes that one).
+    wait_until: dict[str, float] = field(default_factory=dict)
 
 
 @dataclass(slots=True)
@@ -74,6 +80,7 @@ async def execute_workflow(
     run_timeout: float = RUN_TIMEOUT_SECS,
     precomputed: dict[str, Any] | None = None,
     resolved_approvals: set[str] | None = None,
+    elapsed_waits: set[str] | None = None,
 ) -> RunOutcome:
     """Execute one compiled workflow version against a trigger payload.
 
@@ -82,11 +89,15 @@ async def execute_workflow(
     re-walks the graph without re-running side effects.
     *resolved_approvals* names approval nodes a human has approved — any
     other approval node PAUSES its branch (outcome status ``paused``).
+    *elapsed_waits* is the same idea for wait nodes whose deadline has
+    passed: named waits run through, unnamed long waits pause the branch.
     """
     emit = emit or _noop_emit
     precomputed = precomputed or {}
     resolved_approvals = resolved_approvals or set()
+    elapsed_waits = elapsed_waits or set()
     paused_nodes: list[str] = []
+    wait_until: dict[str, float] = {}
     blocks: list[dict[str, Any]] = list(serialized.get("blocks") or [])
     connections: list[dict[str, Any]] = list(serialized.get("connections") or [])
     entry_id = str(serialized.get("entry") or "")
@@ -127,12 +138,17 @@ async def execute_workflow(
                 await _forward_cached(ctx, ntype, output, outputs)
                 return
 
-            # Human approval gate: unless a human resolved THIS node, the
-            # branch stops here — nothing downstream runs (spec F11).
-            if ntype == "approval" and node_id not in resolved_approvals:
+            # Gate nodes halt their branch: an approval waits for a human, a
+            # long wait waits for its deadline. Nothing downstream runs.
+            gate = _gate_pause(
+                ntype, node_id, block, state, resolved_approvals, elapsed_waits
+            )
+            if gate is not None:
                 paused_nodes.append(node_id)
-                node_results[node_id] = {"status": "waiting"}
-                emit(node_id, "waiting", {"type": ntype})
+                if gate.get("resume_at") is not None:
+                    wait_until[node_id] = gate["resume_at"]
+                node_results[node_id] = {"status": "waiting", **gate}
+                emit(node_id, "waiting", {"type": ntype, **gate})
                 return
 
             emit(node_id, "running", {"type": ntype})
@@ -170,40 +186,14 @@ async def execute_workflow(
             if ntype == "output":
                 outputs.append(output.get("value"))
                 await ctx.yield_output(output.get("value"))
-            branch = output.get("branch") if isinstance(output, dict) else None
-            await ctx.send_message(_Token(branch=branch if isinstance(branch, str) else None))
+            await ctx.send_message(_Token(branch=_branch_of(output)))
             if terminal and ntype != "output":
                 await ctx.yield_output(output)
 
         return _run
 
     executors = {str(b["id"]): _make_executor(b) for b in blocks}
-
-    # Only output-type and terminal blocks ever yield_output (see _run above);
-    # designate them explicitly (the implicit mode is deprecated).
-    yielding = [
-        executors[str(b["id"])]
-        for b in blocks
-        if str(b.get("type")) == "output" or str(b["id"]) not in has_outgoing
-    ]
-    builder = WorkflowBuilder(
-        start_executor=executors[entry_id],
-        output_from=yielding or [executors[entry_id]],
-    )
-    for conn in connections:
-        src, tgt = str(conn.get("source")), str(conn.get("target"))
-        handle = conn.get("handle")
-        if src not in executors or tgt not in executors:
-            continue
-        if handle in ("true", "false"):
-            builder.add_edge(
-                executors[src],
-                executors[tgt],
-                condition=_branch_condition(handle),
-            )
-        else:
-            builder.add_edge(executors[src], executors[tgt])
-    workflow = builder.build()
+    workflow = _build_maf_workflow(executors, blocks, connections, entry_id, has_outgoing)
 
     error = await _run_compiled(workflow, run_timeout)
     paused = bool(paused_nodes) and not error
@@ -217,7 +207,90 @@ async def execute_workflow(
         outputs=outputs,
         error=error,
         paused_nodes=paused_nodes,
+        wait_until=wait_until,
     )
+
+
+def _build_maf_workflow(
+    executors: dict[str, Any],
+    blocks: list[dict[str, Any]],
+    connections: list[dict[str, Any]],
+    entry_id: str,
+    has_outgoing: set[str],
+) -> Any:
+    """Wire the per-node executors into a MAF workflow: edges from the
+    connections, conditional edges for condition branches.
+
+    Only output-type and terminal blocks ever ``yield_output``, so they are
+    designated explicitly (MAF's implicit mode is deprecated).
+    """
+    yielding = [
+        executors[str(b["id"])]
+        for b in blocks
+        if str(b.get("type")) == "output" or str(b["id"]) not in has_outgoing
+    ]
+    builder = WorkflowBuilder(
+        start_executor=executors[entry_id],
+        output_from=yielding or [executors[entry_id]],
+    )
+    for conn in connections:
+        src, tgt = str(conn.get("source")), str(conn.get("target"))
+        if src not in executors or tgt not in executors:
+            continue
+        handle = conn.get("handle")
+        if handle in ("true", "false"):
+            builder.add_edge(
+                executors[src], executors[tgt], condition=_branch_condition(handle)
+            )
+        else:
+            builder.add_edge(executors[src], executors[tgt])
+    return builder.build()
+
+
+def _branch_of(output: Any) -> str | None:
+    """The edge handle a node's output routes to ("true"/"false"), if any.
+    Shared by the live and replay paths so both route identically."""
+    branch = output.get("branch") if isinstance(output, dict) else None
+    return branch if isinstance(branch, str) else None
+
+
+def _gate_pause(
+    ntype: str,
+    node_id: str,
+    block: dict[str, Any],
+    state: dict[str, Any],
+    resolved_approvals: set[str],
+    elapsed_waits: set[str],
+) -> dict[str, Any] | None:
+    """Extra node-result fields when this gate node must PAUSE, else ``None``.
+
+    Approval (spec F11) → ``{}``: a human resumes it from the approvals inbox.
+    Long wait (spec F3) → ``{"resume_at": epoch}``: the schedule scanner does.
+    A gate already cleared for this pass — and every non-gate node type —
+    returns ``None`` and runs normally.
+    """
+    if ntype == "approval":
+        return None if node_id in resolved_approvals else {}
+    if ntype == "wait" and node_id not in elapsed_waits:
+        deadline = _long_wait_deadline(block.get("config") or {}, state)
+        if deadline is not None:
+            return {"resume_at": deadline}
+    return None
+
+
+def _long_wait_deadline(config: dict[str, Any], state: dict[str, Any]) -> float | None:
+    """Unix deadline for a wait too long to run inline, else ``None``.
+
+    ``None`` also covers an unresolvable duration ("{{trigger.delay}}" with no
+    such field): that is a node ERROR, and letting it fall through to the
+    handler produces exactly the same clean failure every other node type
+    gets — no duplicate error plumbing here.
+    """
+    try:
+        seconds = resolve_wait_seconds(config, state)
+    except NodeExecutionError:
+        return None
+    return time.time() + seconds if seconds > WAIT_INLINE_MAX_SECONDS else None
 
 
 async def _forward_cached(
@@ -228,8 +301,7 @@ async def _forward_cached(
         value = output.get("value") if isinstance(output, dict) else output
         outputs.append(value)
         await ctx.yield_output(value)
-    branch = output.get("branch") if isinstance(output, dict) else None
-    await ctx.send_message(_Token(branch=branch if isinstance(branch, str) else None))
+    await ctx.send_message(_Token(branch=_branch_of(output)))
 
 
 async def _run_compiled(workflow: Any, run_timeout: float) -> str | None:

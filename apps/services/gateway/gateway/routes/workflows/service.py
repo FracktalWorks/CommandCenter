@@ -237,6 +237,7 @@ async def _execute_run(
     started_by: str,
     precomputed: dict[str, Any] | None = None,
     resolved_approvals: set[str] | None = None,
+    elapsed_waits: set[str] | None = None,
 ) -> None:
     global _ACTIVE_TOTAL
     actor = f"workflow:{workflow_name or workflow_id}"
@@ -271,6 +272,7 @@ async def _execute_run(
             emit=emit,
             precomputed=precomputed,
             resolved_approvals=resolved_approvals,
+            elapsed_waits=elapsed_waits,
         )
         status, error = outcome.status, outcome.error
         await _finish_run(
@@ -282,15 +284,17 @@ async def _execute_run(
             outputs=outcome.outputs,
         )
         if status == "paused" and outcome.paused_nodes:
-            await _hold_for_approval(
+            node_id = outcome.paused_nodes[0]
+            await _hold_at_gate(
                 run_id=run_id,
                 workflow_id=workflow_id,
                 workflow_name=workflow_name,
-                node_id=outcome.paused_nodes[0],
+                node_id=node_id,
                 serialized=serialized,
                 trigger_payload=trigger_payload,
                 variables=variables,
                 started_by=started_by,
+                resume_at=outcome.wait_until.get(node_id),
             )
     except Exception as exc:  # engine bugs must still close the run out
         error = f"{type(exc).__name__}: {exc}"[:500]
@@ -415,7 +419,7 @@ async def reconcile_orphaned_runs() -> int:
 # ── Approval pause / resume (spec F11 — rides the Action Broker inbox) ───────
 
 
-async def _hold_for_approval(
+async def _hold_at_gate(
     *,
     run_id: str,
     workflow_id: str,
@@ -425,14 +429,20 @@ async def _hold_for_approval(
     trigger_payload: dict[str, Any],
     variables: dict[str, Any],
     started_by: str,
+    resume_at: float | None = None,
 ) -> None:
-    """Persist the pause and put the decision in the existing approvals inbox.
+    """Persist the pause; for an APPROVAL gate, also file the inbox proposal.
 
-    The proposal (action ``workflow.resume_run``) lands in ``pending_actions``
-    exactly like any outward write — the operator sees it at /approvals and
-    approving it fires this package's registered broker handler, which resumes
-    the run. Everything a resume needs travels in the pause snapshot, so even
-    a draft test run (no published version to reload) resumes cleanly.
+    Approval (``resume_at`` is None): the proposal (action
+    ``workflow.resume_run``) lands in ``pending_actions`` exactly like any
+    outward write — the operator sees it at /approvals and approving it fires
+    this package's registered broker handler, which resumes the run.
+
+    Long wait (``resume_at`` set): nobody decides anything, so no proposal is
+    filed — the snapshot simply carries a deadline and the schedule scanner
+    resumes the run once it passes. Either way everything a resume needs
+    travels in the snapshot, so even a draft test run (no published version to
+    reload) resumes cleanly, and the pause outlives a gateway restart.
     """
     node_label = next(
         (
@@ -442,29 +452,31 @@ async def _hold_for_approval(
         ),
         node_id,
     )
+    is_wait = resume_at is not None
     action_id: str | None = None
-    try:
-        from action_broker.broker import AuthorityTier, propose, submit
+    if not is_wait:
+        try:
+            from action_broker.broker import AuthorityTier, propose, submit
 
-        proposal = propose(
-            actor=f"workflow:{workflow_name or workflow_id}",
-            action="workflow.resume_run",
-            target=f"workflow_run:{run_id}",
-            payload={
-                "run_id": run_id,
-                "workflow_id": workflow_id,
-                "workflow_name": workflow_name,
-                "node_id": node_id,
-                "node_label": node_label,
-                "requested_by": started_by,
-            },
-            authority=AuthorityTier.SUGGEST,  # always NEEDS_APPROVAL
-            destructive=False,
-        )
-        result = await submit(proposal)
-        action_id = str(result.get("action_id") or "") or None
-    except Exception as exc:
-        _log.warning("workflows.approval_propose_failed", run_id=run_id, error=str(exc)[:160])
+            proposal = propose(
+                actor=f"workflow:{workflow_name or workflow_id}",
+                action="workflow.resume_run",
+                target=f"workflow_run:{run_id}",
+                payload={
+                    "run_id": run_id,
+                    "workflow_id": workflow_id,
+                    "workflow_name": workflow_name,
+                    "node_id": node_id,
+                    "node_label": node_label,
+                    "requested_by": started_by,
+                },
+                authority=AuthorityTier.SUGGEST,  # always NEEDS_APPROVAL
+                destructive=False,
+            )
+            result = await submit(proposal)
+            action_id = str(result.get("action_id") or "") or None
+        except Exception as exc:
+            _log.warning("workflows.approval_propose_failed", run_id=run_id, error=str(exc)[:160])
     try:
         db = await _get_db()
         try:
@@ -473,11 +485,12 @@ async def _hold_for_approval(
                     """INSERT INTO workflow_run_pauses
                        (run_id, node_id, snapshot, reason, status)
                        VALUES (:run_id, :node_id, :snapshot ::jsonb,
-                               'approval', 'pending')"""
+                               :reason, 'pending')"""
                 ),
                 {
                     "run_id": run_id,
                     "node_id": node_id,
+                    "reason": "wait" if is_wait else "approval",
                     "snapshot": json.dumps(
                         {
                             "serialized": serialized,
@@ -487,6 +500,7 @@ async def _hold_for_approval(
                             "workflow_name": workflow_name,
                             "started_by": started_by,
                             "action_id": action_id,
+                            "resume_at": resume_at,
                         },
                         default=str,
                     ),
@@ -501,7 +515,12 @@ async def _hold_for_approval(
 
 async def resume_run(run_id: str, *, resumed_by: str = "approver") -> dict[str, Any]:
     """Resume a paused run: replay completed nodes from stored outputs and
-    pass the approved node. Called by the broker handler on approve."""
+    let the gate node through.
+
+    Two callers, one path: the broker handler when a human approves, and the
+    schedule scanner when a long wait's deadline passes. The pause row's
+    ``reason`` decides which gate is cleared — an elapsed wait must not also
+    clear an approval further down the graph."""
     global _ACTIVE_TOTAL
     db = await _get_db()
     try:
@@ -545,6 +564,8 @@ async def resume_run(run_id: str, *, resumed_by: str = "approver") -> dict[str, 
     finally:
         await db.close()
 
+    gate_node = str(pause.node_id)
+    is_wait = str(getattr(pause, "reason", "approval") or "approval") == "wait"
     serialized = snapshot.get("serialized") or {}
     precomputed = {
         nid: res.get("output")
@@ -565,11 +586,12 @@ async def resume_run(run_id: str, *, resumed_by: str = "approver") -> dict[str, 
             variables=snapshot.get("variables") or {},
             started_by=resumed_by,
             precomputed=precomputed,
-            resolved_approvals={str(pause.node_id)},
+            resolved_approvals=set() if is_wait else {gate_node},
+            elapsed_waits={gate_node} if is_wait else set(),
         ),
         name=f"workflow-resume:{run_id}",
     )
-    return {"ok": True, "resumed": True, "run_id": run_id, "node_id": str(pause.node_id)}
+    return {"ok": True, "resumed": True, "run_id": run_id, "node_id": gate_node}
 
 # ── Programmatic entry points (F13: workflows as agent tools) ────────────────
 

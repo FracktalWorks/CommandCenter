@@ -61,6 +61,59 @@ function JsonField({
   );
 }
 
+const WAIT_UNITS: { id: string; label: string; secs: number }[] = [
+  { id: "seconds", label: "seconds", secs: 1 },
+  { id: "minutes", label: "minutes", secs: 60 },
+  { id: "hours", label: "hours", secs: 3600 },
+  { id: "days", label: "days", secs: 86400 },
+];
+
+/** Duration editor over a single `seconds` config value: the unit is display
+ * only (the largest that divides evenly), so the graph stays one number. */
+function WaitDuration({
+  seconds,
+  onChange,
+}: {
+  seconds: unknown;
+  onChange: (v: number) => void;
+}) {
+  const total = Number(seconds);
+  const safe = Number.isFinite(total) && total > 0 ? total : 0;
+  const unit =
+    [...WAIT_UNITS].reverse().find((u) => safe >= u.secs && safe % u.secs === 0) ??
+    WAIT_UNITS[0];
+  const amount = safe ? safe / unit.secs : "";
+
+  return (
+    <div className="flex gap-1.5">
+      <input
+        type="number"
+        min={1}
+        value={amount}
+        onChange={(e) => {
+          const n = Number(e.target.value);
+          onChange(Number.isFinite(n) && n > 0 ? n * unit.secs : 0);
+        }}
+        className={`${inputCls} w-24`}
+      />
+      <select
+        value={unit.id}
+        onChange={(e) => {
+          const next = WAIT_UNITS.find((u) => u.id === e.target.value);
+          if (next && amount) onChange(Number(amount) * next.secs);
+        }}
+        className={inputCls}
+      >
+        {WAIT_UNITS.map((u) => (
+          <option key={u.id} value={u.id}>
+            {u.label}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
 export default function NodeInspector({
   node,
   catalog,
@@ -315,6 +368,19 @@ export default function NodeInspector({
             <p className="text-[10px] text-muted-foreground mt-1">
               The run pauses here and appears in the Approvals inbox. Approving
               resumes it; rejecting cancels it.
+            </p>
+          </Field>
+        )}
+
+        {type === "wait" && (
+          <Field label="Wait for">
+            <WaitDuration
+              seconds={cfg.seconds}
+              onChange={(v) => set("seconds", v)}
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              Up to a minute runs inline. Anything longer parks the run with a
+              deadline — it survives a restart and resumes on schedule.
             </p>
           </Field>
         )}

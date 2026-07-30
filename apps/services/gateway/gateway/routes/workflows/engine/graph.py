@@ -23,6 +23,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Any
 
+from gateway.routes.workflows.engine.handlers import MAX_WAIT_SECONDS
 from gateway.routes.workflows.engine.templating import (
     RESERVED_ROOTS,
     collect_refs,
@@ -39,6 +40,7 @@ NODE_TYPES = frozenset(
         "condition",
         "set",
         "approval",
+        "wait",
         "output",
     }
 )
@@ -393,6 +395,31 @@ def _validate_node_config(
             issues.append(GraphIssue("missing_config", "condition node needs an operator", nid))
     elif ntype == "set" and not isinstance(config.get("assignments"), dict):
         issues.append(GraphIssue("missing_config", "set node needs assignments", nid))
+    elif ntype == "wait":
+        _validate_wait_config(nid, config, issues)
+
+
+def _validate_wait_config(nid: str, config: dict[str, Any], issues: list[GraphIssue]) -> None:
+    """A wait needs a positive duration. ``{{refs}}`` are resolved at RUN
+    time, so a templated duration can only be checked for presence here."""
+    raw = config.get("seconds")
+    if isinstance(raw, str) and "{{" in raw:
+        return
+    try:
+        seconds = float(raw)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        issues.append(GraphIssue("missing_config", "wait node needs a duration", nid))
+        return
+    if seconds <= 0:
+        issues.append(GraphIssue("missing_config", "wait duration must be positive", nid))
+    elif seconds > MAX_WAIT_SECONDS:
+        issues.append(
+            GraphIssue(
+                "missing_config",
+                f"wait duration exceeds the {MAX_WAIT_SECONDS // 86400}-day maximum",
+                nid,
+            )
+        )
 
 
 def _flatten_strings(value: Any) -> list[str]:

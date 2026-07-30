@@ -20,7 +20,7 @@
  * This hook owns the second one only.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import {
   fetchRoom,
   isShared as roomIsShared,
@@ -74,10 +74,15 @@ export function useRoom(
   const loaded = !enabled || loadedFor === sessionId;
   const timeline = events.sid === sessionId ? events.list : [];
 
-  // Read by the stream and heartbeat effects without making them restart when
-  // the snapshot changes — a re-subscribe on every membership tick would drop
-  // events in the gap.
-  const sharedRef = useRef(false);
+  // The live channels open on this boolean, NOT on the room object: `room`
+  // gets a new identity on every 60s refresh, and re-subscribing that often
+  // would drop events in each gap. `shared` flips at most once per thread.
+  //
+  // It was a ref first, which was wrong in the one case that matters: sharing
+  // a solo thread from inside the room updates the ref but nothing re-runs the
+  // effects, so the person who just shared their conversation was the only one
+  // in it not receiving its live events until they reloaded.
+  const shared = roomIsShared(room);
 
   const refresh = useCallback(async () => {
     if (!sessionId || !enabled) return;
@@ -85,7 +90,6 @@ export function useRoom(
       const next = await fetchRoom(sessionId);
       setRoom(next);
       setPresence(next.presence ?? []);
-      sharedRef.current = roomIsShared(next);
       setError(null);
     } catch (e) {
       // A room we cannot read is not an error state for the chat — the
@@ -113,7 +117,7 @@ export function useRoom(
   // ── Live room events ─────────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled || !sessionId || !loaded) return;
-    if (!sharedRef.current) return;   // nobody to hear about
+    if (!shared) return;   // nobody to hear about
 
     const es = new EventSource(
       `/api/chat/sessions/${encodeURIComponent(sessionId)}/room-stream?since=0`
@@ -159,12 +163,12 @@ export function useRoom(
     };
 
     return () => es.close();
-  }, [sessionId, enabled, loaded, refresh]);
+  }, [sessionId, enabled, loaded, shared, refresh]);
 
   // ── Presence heartbeat ───────────────────────────────────────────────────
   useEffect(() => {
     if (!enabled || !sessionId || !loaded) return;
-    if (!sharedRef.current) return;
+    if (!shared) return;
 
     let alive = true;
     const beat = async () => {
@@ -181,12 +185,12 @@ export function useRoom(
       alive = false;
       clearInterval(t);
     };
-  }, [sessionId, enabled, loaded]);
+  }, [sessionId, enabled, loaded, shared]);
 
   return {
     room,
     loaded,
-    shared: roomIsShared(room),
+    shared,
     presence,
     timeline,
     refresh,

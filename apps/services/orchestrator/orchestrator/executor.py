@@ -1511,13 +1511,20 @@ async def _detect_agent_commits(
         )
 
 
-async def _integration_authorizer(event_payload: Any):
-    """Build the per-run integration filter for the acting member, or None.
+async def _integration_authorizer(event_payload: Any, thread_id: str | None = None):
+    """Build the per-run integration filter for the run's authority, or None.
 
     Org access control (spec §5, seam 3). An agent's ``config.json`` declares
     which integrations it *wants*; this decides which the caller may actually
     hand it, so a member denied `integrations:use:zoho-crm` cannot reach Zoho
     by picking an agent that declares it.
+
+    In a shared session the deciding authority is not the typer alone: it is
+    the **intersection of every participant's access**
+    (``groups_sessions_authority.md`` §3, via ``resolve_session_access``) —
+    otherwise the permitted member's Zoho output lands in a transcript the
+    denied member reads. A solo session resolves to exactly the actor's own
+    access, so nothing changes until a second participant exists.
 
     Returns ``None`` — meaning no filtering, the pre-org-access-control
     behaviour — whenever the run is **not** attributable to an active member:
@@ -1546,15 +1553,30 @@ async def _integration_authorizer(event_payload: Any):
         from acb_auth import (
             integration_use_permission,
             resolve_access,
+            resolve_session_access,
         )
 
         access = await resolve_access(email)
         if not access.is_active:
             return None
 
+        # Shared-session fold: the intersection REPLACES the actor's access
+        # only when a second member actually exists — a solo session keeps
+        # the object resolved above, byte-identically.
+        if thread_id:
+            folded, members = await resolve_session_access(thread_id, email)
+            if len(members) > 1:
+                access = folded
+                # The cap must be visible, never silent: name whose presence
+                # narrows the run, so "it worked yesterday" is answerable.
+                _log.info(
+                    "executor.session_authority_intersected",
+                    thread_id=thread_id, actor=email, members=members,
+                )
+
         # Same resolution also arms the memory tools' permission gate, so
-        # org-memory writes are checked against the same member. Done here so
-        # there is exactly one access lookup per run.
+        # org-memory writes are checked against the same authority. Done here
+        # so there is exactly one access lookup per run.
         try:
             from acb_skills.memory_tools import (
                 _set_memory_permission,
@@ -1707,7 +1729,7 @@ async def run_agent(
             optional_integrations: list[str] = loaded.config.get("optional_integrations", [])
             integrations, integration_warnings = build_integrations(
                 mandatory_integrations, optional_integrations, settings,
-                is_authorized=await _integration_authorizer(event_payload),
+                is_authorized=await _integration_authorizer(event_payload, thread_id),
             )
             if integration_warnings:
                 _log.warning(
@@ -2207,7 +2229,7 @@ async def run_agent_stream(
             # all — not merely absent from state["integrations"].
             integrations, integration_warnings = build_integrations(
                 mandatory, optional, settings,
-                is_authorized=await _integration_authorizer(event_payload),
+                is_authorized=await _integration_authorizer(event_payload, thread_id),
             )
             # B6 Phase-5 Tier 0: scope creds to this run; token restored in the
             # finally below so they don't linger in the shared process env.

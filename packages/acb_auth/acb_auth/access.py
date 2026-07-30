@@ -299,3 +299,119 @@ async def resolve_identity(email: str | None) -> tuple[str | None, str | None]:
     if row is None:
         return None, None
     return row["id"], row["org"]
+
+
+# ── Shared-session authority (groups_sessions_authority.md §3) ──────────────
+
+#: More per-session subjects than this is a data error, not a room.
+_MAX_PARTICIPANT_EXPANSION = 200
+
+_PARTICIPANT_SQL = """
+SELECT subject FROM chat_session_participant WHERE session_id = :sid
+"""
+
+_GROUP_MEMBER_SQL = """
+SELECT au.email
+FROM org_group g
+JOIN org_group_member m ON m.group_id = g.id
+JOIN app_user au ON au.id = m.user_id
+WHERE g.slug = :slug AND au.status = 'active'
+"""
+
+_ORG_MEMBER_SQL = """
+SELECT email FROM app_user WHERE status = 'active'
+"""
+
+
+async def resolve_session_access(
+    session_id: str | None,
+    actor_email: str | None,
+) -> tuple[EffectiveAccess, list[str]]:
+    """The authority a run in *session_id* acts with, and whose it is.
+
+    The rule (``groups_sessions_authority.md`` §3): **a shared run acts with
+    the intersection of every participant's resolved access — viewers
+    included — attributed to the typer.** Actor-authority ("whoever typed")
+    leaks by construction: the permitted member's tool output lands in a
+    transcript the denied member reads.
+
+    Mechanics:
+
+    * Participant subjects are expanded at read time — an email is itself,
+      ``group:<slug>`` becomes the group's active members, ``org`` becomes
+      every active member (an org-visible room is readable by all of them,
+      so all of them cap it).
+    * The actor is always included, so a solo session — or any session
+      recorded before migration 133 — resolves to exactly the actor's own
+      access, byte-identically to today. Everything here activates only when
+      a second distinct member exists.
+    * Each member resolves through :func:`resolve_access` (shared 60s cache);
+      a suspended member resolves inactive, which zeroes the intersection —
+      the room is capped until they are removed, which is the visible act.
+    * Fail-open to actor-only on any lookup error, matching
+      :func:`resolve_access`'s posture: the sharing feature must not become
+      a new way for a solo run to lose its authority. (Pre-133 databases land
+      here via the missing-table branch.)
+
+    Returns ``(access, members)`` where *members* is the sorted list of
+    emails the intersection covered — the provenance the room UI shows, so a
+    cap is never silent.
+    """
+    actor = (actor_email or "").lower().strip()
+    actor_access = await resolve_access(actor)
+    if not session_id:
+        return actor_access, [actor] if actor else []
+
+    emails: set[str] = {actor} if actor else set()
+    try:
+        from sqlalchemy import text
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            subjects = [
+                r[0]
+                for r in (
+                    await session.execute(
+                        text(_PARTICIPANT_SQL), {"sid": session_id},
+                    )
+                ).fetchall()
+            ]
+            for subject in subjects:
+                s = (subject or "").strip()
+                if not s:
+                    continue
+                if s == "org":
+                    rows = (await session.execute(text(_ORG_MEMBER_SQL))).fetchall()
+                    emails.update(r[0].lower() for r in rows if r[0])
+                elif s.startswith("group:"):
+                    rows = (
+                        await session.execute(
+                            text(_GROUP_MEMBER_SQL), {"slug": s[len("group:"):]},
+                        )
+                    ).fetchall()
+                    emails.update(r[0].lower() for r in rows if r[0])
+                elif "@" in s:
+                    emails.add(s.lower())
+                if len(emails) > _MAX_PARTICIPANT_EXPANSION:
+                    raise ValueError(
+                        f"session {session_id!r} expands past "
+                        f"{_MAX_PARTICIPANT_EXPANSION} members"
+                    )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "does not exist" in message or "undefinedtable" in message:
+            _log.debug("session_access_tables_missing", session=session_id)
+        else:
+            _log.warning(
+                "session_access_resolve_failed",
+                session=session_id, error=str(exc)[:200],
+            )
+        return actor_access, sorted(emails)
+
+    if len(emails) <= 1:
+        return actor_access, sorted(emails)
+
+    folded = actor_access
+    for email in sorted(emails - {actor}):
+        folded = folded.intersect(await resolve_access(email))
+    return folded, sorted(emails)

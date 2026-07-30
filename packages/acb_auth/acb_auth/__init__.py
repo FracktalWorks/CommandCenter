@@ -8,9 +8,10 @@ Two guard styles coexist:
   ``ai-company-brain/specs/org_access_control.md``.
 """
 from acb_auth.access import invalidate as invalidate_access
-from acb_auth.access import resolve_access
+from acb_auth.access import resolve_access, resolve_session_access
 from acb_auth.deps import (
     assert_can_run_agent,
+    assert_can_run_agent_in_session,
     get_current_user,
     require_any_permission,
     require_authenticated,
@@ -53,6 +54,7 @@ __all__ = [
     "require_internal_auth",
     "require_llm_api_auth",
     "assert_can_run_agent",
+    "assert_can_run_agent_in_session",
     # permission model
     "EffectiveAccess",
     "AccessDecision",
@@ -69,5 +71,6 @@ __all__ = [
     "validate_permission",
     # resolution
     "resolve_access",
+    "resolve_session_access",
     "invalidate_access",
 ]

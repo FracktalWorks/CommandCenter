@@ -29,7 +29,7 @@ from typing import Any
 
 from acb_auth import (
     UserContext,
-    assert_can_run_agent,
+    assert_can_run_agent_in_session,
     get_current_user,
     require_internal_auth,
     require_permission,
@@ -1382,7 +1382,7 @@ async def run_agent_stream_endpoint(
     # Org access control, enforcement seam 2: the picker is filtered, but the
     # endpoint is the boundary of record — a hand-crafted request naming an
     # agent the member cannot run is refused here, not in the UI.
-    assert_can_run_agent(user, agent_name)
+    await assert_can_run_agent_in_session(user, agent_name, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
@@ -1865,7 +1865,7 @@ async def run_agent_sync(
     from orchestrator.executor import AgentRunError, run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
-    assert_can_run_agent(user, agent)
+    await assert_can_run_agent_in_session(user, agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
 
     try:
@@ -1906,7 +1906,7 @@ async def run_agent_async(
     from orchestrator.executor import run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
-    assert_can_run_agent(user, agent)
+    await assert_can_run_agent_in_session(user, agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
 
     async def _run() -> None:

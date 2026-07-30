@@ -168,11 +168,26 @@ export default function BotIdentitySection() {
         <p className="mb-3 flex items-start gap-1.5 rounded-lg border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs">
           <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-500" />
           <span>
-            Not signed in. Google refuses anonymous participants, so joins will
-            fail unless you&apos;re already in the call to admit it. Sign the
-            notetaker into a <strong>dedicated</strong> Google account — never
-            your own.
+            Not signed in, so Google will decline the notetaker — it refuses
+            participants that aren&apos;t signed in, and being in the call
+            yourself doesn&apos;t help. Sign it into a{" "}
+            <strong>dedicated</strong> Google account, never your own.
           </span>
+        </p>
+      )}
+
+      {!signedIn && !id.unreachable && (
+        // The single most confusing part of setting this up: "Google account"
+        // reads as "switch our email to Gmail". It doesn't — it's a login.
+        <p className="mb-3 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+          <strong className="text-foreground">This is a login, not a mailbox.</strong>{" "}
+          Google lets you sign up with an address you already own, which creates
+          a sign-in identity and <em>no</em> Gmail inbox — mail for that address
+          keeps flowing to wherever it goes today, and nothing about your email
+          setup changes. It exists only so the notetaker&apos;s browser has
+          something to sign in with. Use the same address you&apos;ll put on
+          calendar invites: an invited, signed-in notetaker is admitted
+          automatically, with nobody clicking Admit.
         </p>
       )}
 

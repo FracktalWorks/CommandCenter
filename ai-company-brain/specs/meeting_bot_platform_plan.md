@@ -256,6 +256,25 @@ unblock everything; 3–4 are the real capability jumps; 5–6 are optional reac
 
 The decisive unverified path. Nothing else matters until a bot actually gets in.
 
+**First, clear up what "a Google Account" means here, because the phrasing
+misleads.** It is a **login, not a mailbox.** Google lets you sign up with an
+address you already own instead of creating an `@gmail.com` one, and when you do
+it provisions an *identity* — a username and password — and deliberately does
+**not** provision Gmail. No MX record moves, no mail is routed to Google, no
+second inbox appears; Outlook remains the only mailbox for that address. It is
+the same act as signing up for Zoom or Figma with a work email.
+
+Its only job is to give the bot's Chrome something to sign in *with*, because
+Meet will only treat a signed-in participant as admittable. The address (rather
+than any username) matters for exactly one reason: Meet's auto-admit matches the
+**invited** address against the **signed-in** account's address, so they have to
+be the same string.
+
+Real consequences, and they are the whole list: Google will send occasional
+security mail to the address, which lands in Outlook (file it with a rule), and
+the address must keep receiving mail indefinitely because account recovery
+depends on it — so don't retire the catch-all later.
+
 **The identity does NOT have to be a Gmail address.** Three options, and the
 middle one is recommended:
 
@@ -275,7 +294,9 @@ becomes the foundation of the invite-driven opt-in in Phase 4 *and* the future
 somewhere nobody watches. A catch-all on the domain means no new mailbox is
 even needed.
 
-1. Register the chosen address as a Google Account.
+1. Register the chosen address as a Google Account — i.e. create a Google
+   *login* on it (see the note above; this does not create a mailbox, move mail,
+   or affect Outlook).
    **2-step verification is not a blocker** — it only rules out the *scripted*
    `POST /google-login`. If Google demands a phone, 2SV, or "verify it's you",
    use `POST /google-login/interactive` and complete it by hand over VNC once;

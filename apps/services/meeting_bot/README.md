@@ -182,10 +182,20 @@ then click Admit" **does not work**, and neither does the Workspace-only
 
 ### Signing the bot into a Google account
 
-Use a **dedicated account with no 2-step verification** — a personal account
-with 2FA cannot be automated, and repeated automated logins on your own account
-invite a security flag. `MEET_PROFILE_DIR` (default `/profile`, its own volume)
-holds the profile, so this is a one-time act that survives redeploys.
+**A Google Account here is a login, not a mailbox.** Signing up with an address
+you already own (Google's "use your existing email" path) creates an identity and
+deliberately does *not* create Gmail: no MX change, no mail routed to Google, no
+second inbox. If that address is on Microsoft 365, it stays on Microsoft 365. The
+account exists purely so the bot's Chrome has something to sign in with, since
+Meet only treats signed-in participants as admittable. Use the **same** address
+you will put on calendar invites — auto-admit matches one against the other.
+
+Use a **dedicated account**, never your own: repeated automated logins on a
+personal account invite a security flag. 2-step verification is **not** a
+blocker; it only rules out the scripted endpoint, and
+`POST /google-login/interactive` exists to finish it by hand over VNC once.
+`MEET_PROFILE_DIR` (default `/profile`, its own volume) holds the profile, so
+signing in is a one-time act that survives redeploys.
 
 ```bash
 # Scripted (a plain password account, no 2FA)

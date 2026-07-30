@@ -6,6 +6,7 @@ import type {
   AgendaProgress,
   Attendee,
   BotDiagnostics,
+  BotIdentity,
   EmailAccount,
   EmailDraft,
   LiveSession,
@@ -648,6 +649,47 @@ export async function getBotDiagnostics(
 /** The green room exactly as the bot saw it (PNG); 404s when none captured. */
 export function botScreenshotUrl(meetingId: string): string {
   return `/api/notes/meetings/${meetingId}/bot/screenshot`;
+}
+
+// ── Bot identity (the notetaker's own Google account) ───────────────────────
+// Google auto-declines anonymous participants, so unattended joining depends on
+// the worker's browser being signed in. These read and set that.
+
+/** Who the notetaker is signed in as. `supported: false` → the active provider
+ *  manages its own identity, so the UI should hide the section entirely. */
+export async function getBotIdentity(): Promise<BotIdentity> {
+  return json(await fetch(`/api/notes/bot/identity`, { cache: "no-store" }));
+}
+
+/** Sign the notetaker into a Google account.
+ *
+ *  Can take longer than the proxy's 120 s ceiling, because a real browser is
+ *  driving Google's login. So a thrown error here does NOT mean the sign-in
+ *  failed — callers must re-read {@link getBotIdentity} and trust that instead. */
+export async function signInBot(
+  email: string,
+  password: string
+): Promise<{ ok: boolean; signed_in: boolean; email: string | null }> {
+  return json(
+    await fetch(`/api/notes/bot/identity/sign-in`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email, password }),
+    })
+  );
+}
+
+/** Open Google's sign-in page in the worker's browser and hold it there, so a
+ *  human can finish 2FA / "verify it's you" over VNC. */
+export async function signInBotInteractive(): Promise<{
+  ok: boolean;
+  window_s?: number;
+  vnc_enabled?: boolean;
+  note?: string;
+}> {
+  return json(
+    await fetch(`/api/notes/bot/identity/interactive`, { method: "POST" })
+  );
 }
 
 /** Dispatch one action item to its kind's system now (task / email / doc). */

@@ -298,6 +298,30 @@ _ANON_DENIED = (
 )
 
 
+#: Cookies Google sets only for an authenticated session. Presence of any one
+#: means the browser is carrying a real account, which is the difference between
+#: "Meet declined an anonymous guest" and "this account isn't invited" — two
+#: failures with opposite remedies.
+_AUTH_COOKIES = ("SID", "__Secure-1PSID", "__Secure-3PSID", "SAPISID")
+
+
+async def _is_signed_in(context) -> bool:
+    """Whether the browser holds a Google session (never raises).
+
+    Deliberately cookie-based rather than a navigation: this runs on a failure
+    path where the page is already showing a refusal, and a page load there
+    would cost seconds and could itself fail.
+    """
+    try:
+        cookies = await context.cookies()
+    except Exception:
+        return False
+    return any(
+        c.get("name") in _AUTH_COOKIES and "google" in (c.get("domain") or "")
+        for c in cookies
+    )
+
+
 def is_anonymous_denial(body: str) -> bool:
     """Whether a refusal is Google blocking a signed-out guest outright.
 
@@ -603,20 +627,33 @@ async def join_and_record(
             if admission == "refused":
                 diag = await _snapshot(page, job_id, "refused")
                 if is_anonymous_denial(diag.get("body") or ""):
-                    signed_in = " (the bot IS using a signed-in profile)" \
-                        if PROFILE_DIR else ""
+                    # A configured profile dir is NOT the same as being signed
+                    # in — reporting it as such sent a debugging session down
+                    # the wrong path on 2026-07-30. Check the real thing.
+                    signed_in = await _is_signed_in(context)
+                    who = (
+                        "The notetaker IS signed in, so this is the meeting's "
+                        "own access policy, not anonymity: it isn't invited and "
+                        "the host hasn't allowed guests to knock. Put its "
+                        "address on the calendar invite."
+                        if signed_in else
+                        "The notetaker is signed OUT, and Meet auto-declines "
+                        "anonymous participants — the green-room fine print "
+                        "says \"system info will be sent to confirm you're not "
+                        "a bot\", and an automated browser fails that check. "
+                        "Verified 2026-07-30: this happens within ~3s even when "
+                        "the host is sitting in the call, so nobody is ever "
+                        "shown an Admit prompt to click."
+                    )
                     raise MeetingBotError(
-                        "Google Meet declined the notetaker outright — it "
-                        f"never got to knock{signed_in}. Meet does this to "
-                        "guests when nobody is in the call yet, or when the "
-                        "meeting doesn't allow link-guests to ask to join. "
-                        "Fixes, easiest first: (1) join the meeting yourself "
-                        "first, then send the notetaker and click Admit; "
-                        "(2) in the call, Host controls → Meeting access → "
-                        "allow 'Anyone with the link can ask to join'; "
-                        "(3) sign the notetaker into a Google account and put "
-                        "that address on the calendar invite so it is admitted "
-                        "automatically.",
+                        "Google Meet declined the notetaker's request to join. "
+                        f"{who} What actually works, easiest first: (1) the "
+                        "host turns ON Quick access (in the call: Host controls "
+                        "→ Quick access) so guests skip admission entirely; "
+                        "(2) sign the notetaker into its own Google account and "
+                        "put that address on the calendar invite, which skips "
+                        "the knock altogether; (3) record the call with the "
+                        "platform's recorder and upload the file here.",
                         status="not_admitted",
                         diagnostics=diag,
                     )

@@ -39,7 +39,7 @@ import uuid
 from urllib.parse import urlparse
 
 import httpx
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, UserRole, get_current_user, require_role
 from fastapi import Depends, HTTPException, Response
 from gateway.routes.notes.core import _get_db, _log, media_dir, router
 from gateway.routes.notes.pipeline import run_transcription
@@ -399,6 +399,43 @@ class SelfHostedProvider:
             resp.raise_for_status()
             ctype = (resp.headers.get("content-type") or "").split(";")[0].strip()
             return resp.content, ctype
+
+    # ── Bot identity (Google sign-in) ────────────────────────────────────────
+    # Google auto-declines ANONYMOUS participants, so an unattended join needs
+    # the worker's browser signed into a real account. That sign-in lived only
+    # behind SSH + curl on the worker's loopback port; these three calls put it
+    # on an authenticated app surface instead.
+
+    async def identity(self) -> dict:
+        """Who the bot's browser is signed in as (never includes a password)."""
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.get(
+                f"{self._base}/google-login", headers=self._headers
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def identity_sign_in(self, email: str, password: str) -> dict:
+        """Scripted sign-in. Slow by nature (a real browser drives Google's
+        login), and 400s carry the diagnostics that name which wall it hit."""
+        async with httpx.AsyncClient(timeout=180) as client:
+            resp = await client.post(
+                f"{self._base}/google-login",
+                headers=self._headers,
+                json={"email": email, "password": password},
+            )
+            resp.raise_for_status()
+            return resp.json()
+
+    async def identity_interactive(self) -> dict:
+        """Hold Google's sign-in page open in the worker's browser so a human can
+        finish 2FA / 'verify it's you' over VNC."""
+        async with httpx.AsyncClient(timeout=60) as client:
+            resp = await client.post(
+                f"{self._base}/google-login/interactive", headers=self._headers
+            )
+            resp.raise_for_status()
+            return resp.json()
 
 
 def resolve_bot_provider() -> RecallProvider | SelfHostedProvider | None:
@@ -909,3 +946,151 @@ async def stop_meeting_bot(
     # Kick one refresh so ingest happens promptly once the recording finalizes.
     _spawn(_poll_bot(str(r.id)))
     return {"ok": True, "status": "processing"}
+
+
+# ── Bot identity ─────────────────────────────────────────────────────────────
+# The notetaker's Google account is the difference between a bot Meet refuses as
+# anonymous and one that walks straight in off a calendar invite. Configuring it
+# used to mean SSH-ing to the box and curling a loopback port, which is not a
+# thing anyone should have to do to set up a feature — and worse, it hid the
+# *state* (is the bot signed in? as whom?) from the only screen that cares.
+#
+# Executive-only: this writes a credential that acts on the org's behalf, so it
+# sits with the other credential-writing endpoints, not with per-user settings.
+# The password is never stored here, never logged, and never returned.
+
+class BotIdentityRequest(BaseModel):
+    email: str
+    password: str
+
+
+def _identity_unavailable() -> HTTPException:
+    return HTTPException(
+        status_code=503,
+        detail="Bot sign-in only applies to the self-hosted notetaker. The "
+               "current provider manages its own bot identity.",
+    )
+
+
+def _worker_or_503() -> SelfHostedProvider:
+    provider = resolve_bot_provider()
+    if not isinstance(provider, SelfHostedProvider):
+        raise _identity_unavailable()
+    return provider
+
+
+def _worker_error(exc: Exception) -> HTTPException:
+    """Translate a worker failure into something actionable.
+
+    The worker's 400s carry the diagnostics that name the wall Google put up
+    (``blocked`` = scripted login impossible, ``needs_human`` = 2FA), and its
+    409s mean a bot is mid-call. Both are the answer, so neither gets flattened
+    into a generic 502.
+    """
+    if isinstance(exc, httpx.HTTPStatusError):
+        code = exc.response.status_code
+        try:
+            detail = exc.response.json().get("detail")
+        except Exception:
+            detail = None
+        if code == 409:
+            return HTTPException(
+                status_code=409,
+                detail=str(detail) if detail else
+                       "The notetaker is in a call — its browser profile is in "
+                       "use. Try again once the meeting has finished.",
+            )
+        if code == 400:
+            return HTTPException(status_code=400, detail=detail or "sign-in failed")
+    return HTTPException(
+        status_code=502,
+        detail="Couldn't reach the notetaker worker. It may be restarting.",
+    )
+
+
+@router.get("/bot/identity")
+async def bot_identity(
+    _user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Whether the notetaker is signed into a Google account, and as whom.
+
+    Readable by any signed-in user: it exposes no secret, and "why did the bot
+    get refused?" is a question anyone looking at a failed join will ask.
+    """
+    provider = resolve_bot_provider()
+    if not isinstance(provider, SelfHostedProvider):
+        # Not an error — Recall manages identity itself. Say so plainly so the
+        # UI can hide the section instead of showing a broken one.
+        return {"supported": False, "signed_in": None, "provider": _provider_name()}
+    try:
+        info = await provider.identity()
+    except Exception as exc:
+        _log.warning("notes.bot_identity_failed", error=str(exc)[:200])
+        return {
+            "supported": True,
+            "signed_in": None,
+            "unreachable": True,
+            "error": "Couldn't reach the notetaker worker.",
+        }
+    interactive = info.get("interactive") or {}
+    return {
+        "supported": True,
+        "signed_in": bool(info.get("signed_in")),
+        "email": info.get("email"),
+        "profile": bool(info.get("profile")),
+        "credentials_configured": bool(info.get("credentials_configured")),
+        "interactive_running": bool(interactive.get("running")),
+        "vnc_enabled": bool(interactive.get("vnc_enabled")),
+    }
+
+
+@router.post(
+    "/bot/identity/sign-in",
+    dependencies=[require_role(UserRole.EXECUTIVE, UserRole.AGENT)],
+)
+async def bot_identity_sign_in(
+    body: BotIdentityRequest,
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Sign the notetaker into a Google account (scripted).
+
+    Takes up to ~2 minutes: a real browser drives Google's login. Fails with a
+    named wall rather than a shrug — ``blocked`` means Google refused a scripted
+    login outright (use the interactive path), ``needs_human`` means the
+    password worked and something interactive remains (2FA).
+    """
+    provider = _worker_or_503()
+    email = (body.email or "").strip()
+    password = body.password or ""
+    if not email or not password:
+        raise HTTPException(status_code=400, detail="Enter the email and password.")
+    if "@" not in email:
+        raise HTTPException(status_code=400, detail="That doesn't look like an email address.")
+    try:
+        out = await provider.identity_sign_in(email, password)
+    except Exception as exc:
+        # Never let the password reach a log line, even truncated.
+        _log.warning("notes.bot_sign_in_failed", email=email, error=type(exc).__name__)
+        raise _worker_error(exc) from None
+    _log.info("notes.bot_signed_in", email=email, by=user.email)
+    return {"ok": True, "signed_in": bool(out.get("signed_in")), "email": out.get("email")}
+
+
+@router.post(
+    "/bot/identity/interactive",
+    status_code=202,
+    dependencies=[require_role(UserRole.EXECUTIVE, UserRole.AGENT)],
+)
+async def bot_identity_interactive(
+    user: UserContext = Depends(get_current_user),
+) -> dict:
+    """Open Google's sign-in page in the worker's browser and hold it open so a
+    human can finish it over VNC — the path for 2FA, passkeys and consent
+    screens that a scripted login can never pass."""
+    provider = _worker_or_503()
+    try:
+        out = await provider.identity_interactive()
+    except Exception as exc:
+        raise _worker_error(exc) from None
+    _log.info("notes.bot_interactive_login_opened", by=user.email)
+    return {"ok": True, **out}

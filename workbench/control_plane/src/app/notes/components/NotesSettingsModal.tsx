@@ -16,6 +16,7 @@ import { useEffect, useState } from "react";
 import { Loader2, Send, Settings2, Sparkles, X } from "lucide-react";
 import { getNotesSettings, saveNotesSettings } from "../lib/api";
 import type { NotesSettings, TemplateInfo } from "../lib/types";
+import BotIdentitySection from "./BotIdentitySection";
 
 const DEFAULTS: NotesSettings = {
   copilot_instructions: "",
@@ -135,6 +136,12 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
           </div>
         ) : (
           <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4">
+            {/* ── Notetaker account ───────────────────────────────────────
+                First, because it gates whether joining works at all: Google
+                refuses anonymous participants. Acts immediately (it's an
+                action, not a form field) so it ignores Save. */}
+            <BotIdentitySection />
+
             {/* ── After-meeting dispatch ──────────────────────────────── */}
             <section>
               <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">

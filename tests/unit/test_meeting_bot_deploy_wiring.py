@@ -87,9 +87,43 @@ def test_deploy_passes_the_app_env_file_explicitly() -> None:
 
 
 def test_meeting_bot_failure_cannot_fail_the_deploy() -> None:
-    """A bot build hiccup must skip the bot, never take down a deploy."""
+    """A bot build hiccup must skip the bot, never take down a deploy — and it
+    must SAY SO loudly, because the old container keeps serving and that reads
+    as a successful deploy (exactly what happened on 2026-07-30)."""
     deploy = _DEPLOY.read_text(encoding="utf-8")
-    assert "meeting bot build/start failed" in deploy
+    assert "meeting bot build/start FAILED" in deploy
+    assert "PREVIOUS image" in deploy, "must name the stale-image state"
+
+
+def test_meeting_bot_build_cannot_hang_the_deploy() -> None:
+    """The 2026-07-30 outage: novnc pulled in tzdata, whose postinst prompted
+    for a timezone, the build hung ~15 min until the deploy's SSH session died,
+    and the deploy reported success while the OLD image stayed live.
+
+    Two independent guards, both required: no tty for a prompt to read, and a
+    hard timeout so a hang can never consume the deploy.
+    """
+    deploy = _DEPLOY.read_text(encoding="utf-8")
+    build = [
+        ln for ln in deploy.splitlines()
+        if "up -d --build meeting-bot" in ln
+    ]
+    assert build, "the deploy must build the meeting bot somewhere"
+    window = deploy[deploy.index("MB_IMAGE_BEFORE"):]
+    assert "timeout 900" in window, "the build must be time-bounded"
+    assert "</dev/null" in window, "no tty — an apt prompt must fail, not hang"
+
+
+def test_the_dockerfile_installs_packages_noninteractively() -> None:
+    """The root cause, guarded at its source: any apt install in this image
+    must be non-interactive, or a dependency's postinst can hang the build."""
+    dockerfile = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "apps/services/meeting_bot/Dockerfile"
+    ).read_text(encoding="utf-8")
+    for line in dockerfile.splitlines():
+        if "apt-get install" in line:
+            assert "DEBIAN_FRONTEND=noninteractive" in line, line
 
 
 def test_live_caption_credentials_are_wired_by_default() -> None:

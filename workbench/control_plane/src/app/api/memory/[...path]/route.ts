@@ -8,74 +8,33 @@
  * All routes proxy to the FastAPI gateway /memory/* path.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth, isAuthEnabled } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
-/**
- * A request with no session forwards the internal token and NO identity, and
- * the gateway reads a bearer-without-headers call as the platform acting as
- * itself — full service access, scope check bypassed (acb_auth/deps.py §1b).
- * `/api/memory/` is in the proxy's public list, so without this the route was
- * an unauthenticated read of any scope named in the URL.
+/*
+ * A request with no session used to forward the internal token and NO
+ * identity, and the gateway reads a bearer-without-headers call as the
+ * platform acting as itself — full service access, scope check bypassed
+ * (acb_auth/deps.py §1b). `/api/memory/` is in the proxy's public list, so
+ * this route was an unauthenticated read of any scope named in the URL.
+ *
+ * The local session check that first closed that is gone: `requireIdentity`
+ * is the same check, and `gatewayHeaders` can no longer produce the
+ * identity-free headers that made the omission dangerous in the first place.
  */
-async function requireSession(): Promise<string | null> {
-  if (!isAuthEnabled) return "dev@fracktal.in";
-  try {
-    return (await auth())?.user?.email ?? null;
-  } catch {
-    return null;
-  }
-}
-
-const UNAUTHORIZED = NextResponse.json(
-  { error: "Sign in to use memory" },
-  { status: 401 }
-);
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
-
-const EXECUTIVE_EMAILS = new Set(
-  (process.env.EXECUTIVE_EMAILS ?? "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-);
-
-async function buildGatewayHeaders(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${INTERNAL_TOKEN}`,
-  };
-  try {
-    const session = await auth();
-    if (session?.user?.email) {
-      headers["X-User-Email"] = session.user.email;
-      headers["X-User-Role"] = EXECUTIVE_EMAILS.has(
-        session.user.email.toLowerCase()
-      )
-        ? "executive"
-        : "employee";
-    }
-  } catch (_e) {
-    // auth() may throw outside request context
-  }
-  return headers;
-}
 
 export async function GET(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
-  if (!(await requireSession())) return UNAUTHORIZED;
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {
     const res = await fetch(upstream, {
-      headers: await buildGatewayHeaders(),
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(5_000),
     });
     const body = await res.json().catch(() => ({}));
@@ -89,7 +48,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
-  if (!(await requireSession())) return UNAUTHORIZED;
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {
@@ -97,7 +57,7 @@ export async function POST(
     const res = await fetch(upstream, {
       method: "POST",
       headers: {
-        ...(await buildGatewayHeaders()),
+        ...(await gatewayHeaders()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -114,13 +74,14 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
-  if (!(await requireSession())) return UNAUTHORIZED;
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = `${GATEWAY_URL}/memory/${path.join("/")}`;
   try {
     const res = await fetch(upstream, {
       method: "DELETE",
-      headers: await buildGatewayHeaders(),
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(5_000),
     });
     return new NextResponse(null, { status: res.status });

@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
-import { auth, isAuthEnabled } from "@/auth";
+import { requireIdentity } from "@/lib/gateway";
 
 /**
  * POST /api/chat/sessions/[sessionId]/compact
@@ -20,9 +20,7 @@ const LITELLM_BASE_URL =
   process.env.LITELLM_BASE_URL ??
   "http://127.0.0.1:8080/v1";
 const LITELLM_KEY =
-  process.env.LITELLM_MASTER_KEY ??
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  "sk-local-dev-change-me";
+  process.env.LITELLM_MASTER_KEY ?? "";
 const COMPACT_MODEL = process.env.SUGGESTION_MODEL ?? "deepseek/deepseek-chat";
 
 function v1Base(): string {
@@ -42,11 +40,10 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ sessionId: string }> },
 ) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   // Require auth (middleware marks /api/chat as public; no-op in dev).  Prevents
   // unauthenticated callers from running billed LiteLLM completions.
-  if (isAuthEnabled && !(await auth())?.user?.email) {
-    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
-  }
   // params is async in Next.js 15+
   await params; // ensure params are resolved (sessionId not needed server-side)
 

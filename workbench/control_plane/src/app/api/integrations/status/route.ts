@@ -6,14 +6,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 export interface IntegrationEnvVar {
   key: string;
@@ -45,12 +40,14 @@ export interface IntegrationStatus {
 }
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const agent = req.nextUrl.searchParams.get("agent") ?? "";
   const params = agent ? `?agent=${encodeURIComponent(agent)}` : "";
 
   try {
     const res = await fetch(`${GATEWAY_URL}/integrations/status${params}`, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(5_000),
     });
     if (res.ok) {

@@ -16,6 +16,7 @@ import { createHash } from "node:crypto";
 import { NextResponse } from "next/server";
 
 import { compileArtifact } from "@/lib/compileArtifact";
+import { requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 // esbuild is a native binary — it cannot run on the edge runtime.
@@ -25,6 +26,10 @@ export const runtime = "nodejs";
 const COMPILE_TIMEOUT_MS = 10_000;
 
 export async function POST(request: Request): Promise<NextResponse> {
+  // Bundling is CPU-bound and caller-driven, so it needs a member behind
+  // it even though `/api/artifacts/` is not in the proxy's public list.
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   let code: unknown;
   try {
     ({ code } = (await request.json()) as { code?: unknown });

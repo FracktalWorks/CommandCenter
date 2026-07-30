@@ -6,42 +6,9 @@
  * which forwards authenticated requests to the gateway.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
-
-const EXECUTIVE_EMAILS = new Set(
-  (process.env.EXECUTIVE_EMAILS ?? "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-);
-
-async function buildGatewayHeaders(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${INTERNAL_TOKEN}`,
-  };
-  try {
-    const session = await auth();
-    if (session?.user?.email) {
-      headers["X-User-Email"] = session.user.email;
-      headers["X-User-Role"] = EXECUTIVE_EMAILS.has(
-        session.user.email.toLowerCase()
-      )
-        ? "executive"
-        : "employee";
-    }
-  } catch (_e) {
-    // auth() may throw outside request context
-  }
-  return headers;
-}
 
 // Most email endpoints answer in well under a second, so a tight 30s abort keeps
 // a genuinely hung upstream from pinning a Next connection. But the AI drafting /
@@ -112,11 +79,13 @@ export async function GET(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
     const res = await fetch(upstream, {
-      headers: await buildGatewayHeaders(),
+      headers: await gatewayHeaders(),
       // Attachments can be large; allow more time than JSON calls.
       signal: AbortSignal.timeout(120_000),
     });
@@ -148,6 +117,8 @@ export async function POST(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
@@ -155,7 +126,7 @@ export async function POST(
     const res = await fetch(upstream, {
       method: "POST",
       headers: {
-        ...(await buildGatewayHeaders()),
+        ...(await gatewayHeaders()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -172,6 +143,8 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
@@ -179,7 +152,7 @@ export async function PATCH(
     const res = await fetch(upstream, {
       method: "PATCH",
       headers: {
-        ...(await buildGatewayHeaders()),
+        ...(await gatewayHeaders()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -196,6 +169,8 @@ export async function PUT(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
@@ -203,7 +178,7 @@ export async function PUT(
     const res = await fetch(upstream, {
       method: "PUT",
       headers: {
-        ...(await buildGatewayHeaders()),
+        ...(await gatewayHeaders()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),
@@ -220,12 +195,14 @@ export async function DELETE(
   req: NextRequest,
   { params }: { params: Promise<{ path: string[] }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { path } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {
     const res = await fetch(upstream, {
       method: "DELETE",
-      headers: await buildGatewayHeaders(),
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(30_000),
     });
     // DELETE may return 204 with no body

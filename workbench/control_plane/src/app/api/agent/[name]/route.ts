@@ -8,14 +8,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 /** Reject names that are empty or contain path separators (safety only). */
 function validateName(name: string): boolean {
@@ -29,6 +24,8 @@ export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ name: string }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { name } = await params;
 
   if (!validateName(name)) {
@@ -38,7 +35,7 @@ export async function DELETE(
   try {
     const res = await fetch(`${GATEWAY_URL}/agent/${encodeURIComponent(name)}`, {
       method: "DELETE",
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(8_000),
     });
     const data = await res.json().catch(() => ({}));
@@ -53,6 +50,8 @@ export async function PATCH(
   req: NextRequest,
   { params }: { params: Promise<{ name: string }> }
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { name } = await params;
 
   if (!validateName(name)) {
@@ -69,10 +68,7 @@ export async function PATCH(
   try {
     const res = await fetch(`${GATEWAY_URL}/agent/${encodeURIComponent(name)}`, {
       method: "PATCH",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
-      },
+      headers: await gatewayHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(8_000),
     });

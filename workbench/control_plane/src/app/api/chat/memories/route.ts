@@ -16,7 +16,7 @@
  * on it would only tell a prober that it once worked.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth, isAuthEnabled } from "@/auth";
+import { currentIdentity } from "@/lib/gateway";
 import {
   fetchMemories,
   saveConversation,
@@ -26,18 +26,15 @@ import {
 
 export const dynamic = "force-dynamic";
 
-/** The signed-in member's email, or null when there is nobody to act as. */
+/**
+ * The signed-in member's email, or null when there is nobody to act as.
+ *
+ * This was a local helper; `currentIdentity` is now the same resolution used
+ * by every route, including the dev fallback that keeps the memory panel
+ * working on a laptop with no SSO configured.
+ */
 async function actor(): Promise<string | null> {
-  try {
-    const session = await auth();
-    const email = session?.user?.email;
-    if (email) return email;
-  } catch {
-    /* not a request context */
-  }
-  // Auth disabled (local dev) keeps the previous dev identity so the memory
-  // panel still works on a laptop; with auth ON, no session means no scope.
-  return isAuthEnabled ? null : "dev@fracktal.in";
+  return (await currentIdentity())?.email ?? null;
 }
 
 const UNAUTHORIZED = NextResponse.json(

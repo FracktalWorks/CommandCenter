@@ -1,3 +1,5 @@
+import { headersActingAs } from "@/lib/gateway";
+
 /**
  * Mem0 REST client — server-side utility used by /api/chat/memories.
  *
@@ -35,14 +37,14 @@ export interface Mem0Message {
  * through as a service principal — which is exactly how an unauthenticated
  * `/api/chat/memories?userId=<colleague>` read reached a colleague's private
  * memories before this was threaded through.
+ *
+ * `headersActingAs` throws on a blank email rather than dropping the header,
+ * which is what the previous `if (actingEmail)` did — the same omission, one
+ * layer down, and it would have reopened the hole the moment a caller passed
+ * an empty string.
  */
 function gatewayHeaders(actingEmail: string): Record<string, string> {
-  const h: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me"}`,
-  };
-  if (actingEmail) h["X-User-Email"] = actingEmail;
-  return h;
+  return headersActingAs(actingEmail, { "Content-Type": "application/json" });
 }
 
 function legacyHeaders(): Record<string, string> {

@@ -10,6 +10,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
@@ -45,7 +46,13 @@ export interface ModelsStatus {
   copilot_scope_ok: boolean | null;
 }
 
-export async function GET(): Promise<NextResponse<ModelsStatus>> {
+export async function GET(): Promise<NextResponse<ModelsStatus | { error: string }>> {
+  // Which providers are configured is org configuration, and each call spends
+  // a request against the GitHub API with the server's PAT. Neither is for
+  // anonymous callers — `/api/models` is in the proxy's public list.
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+
   const gemini      = !!process.env.GEMINI_API_KEY?.trim();
   const openai      = !!process.env.OPENAI_API_KEY?.trim();
   const anthropic   = !!process.env.ANTHROPIC_API_KEY?.trim();

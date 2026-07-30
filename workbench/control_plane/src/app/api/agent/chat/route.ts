@@ -35,8 +35,9 @@
  *   {"type":"error",      "content":"…"}
  */
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth, isAuthEnabled } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 import {
   foldForToolStart,
   unfoldTrailingAnswer,
@@ -76,15 +77,10 @@ interface ChatRequest {
   reconnect?: boolean;
 }
 
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
 const LITELLM_BASE_URL =
   process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://127.0.0.1:8080/v1";
 const LITELLM_KEY =
-  process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me";
-
-// ─── Message persistence during streaming ──────────────────────────────────
+  process.env.LITELLM_MASTER_KEY ?? "";
 
 /**
  * Save the accumulated assistant message to Postgres so it survives client
@@ -136,10 +132,7 @@ async function persistAssistantMessage(
       `${GATEWAY_URL}/chat/sessions/${threadId}/messages`,
       {
         method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          Authorization: `Bearer ${INTERNAL_TOKEN}`,
-        },
+        headers: await gatewayHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload),
         signal: AbortSignal.timeout(5000),
       }
@@ -499,39 +492,17 @@ async function translateAndPersistStream(
 // which a client-side, reader-lifetime-bound extraction could never guarantee.
 // The old client-side extractMemories() was removed to avoid double extraction.
 
-/** EXECUTIVE_EMAILS: comma-separated list of executive emails for role assignment. */
-const EXECUTIVE_EMAILS = new Set(
-  (process.env.EXECUTIVE_EMAILS ?? "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-);
-
 /**
- * Build the headers object for gateway proxy calls.
- * Always includes the internal Bearer token. When an authenticated session
- * exists, also forwards X-User-Email and X-User-Role so the gateway can
- * scope chat history, memory, and audit trails to the real user.
+ * Headers for gateway proxy calls, as the signed-in member.
+ *
+ * This used to fall back to "internal-only headers (backward-compatible with
+ * cron/CI callers)" when there was no session — which the gateway reads as the
+ * platform acting as itself, i.e. every permission. A browser request with no
+ * session took that branch. `lib/gateway.ts` now throws instead; see the note
+ * there for why omitting an identity has to fail closed.
  */
 async function buildGatewayHeaders(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${INTERNAL_TOKEN}`,
-  };
-  try {
-    const session = await auth();
-    if (session?.user?.email) {
-      headers["X-User-Email"] = session.user.email;
-      const role = EXECUTIVE_EMAILS.has(session.user.email.toLowerCase())
-        ? "executive"
-        : "employee";
-      headers["X-User-Role"] = role;
-    }
-  } catch (_e) {
-    // auth() can throw if called outside a request context — fall back to
-    // internal-only headers (backward-compatible with cron/CI callers).
-  }
-  return headers;
+  return gatewayHeaders({ "Content-Type": "application/json" });
 }
 
 // ─── SSE helpers ─────────────────────────────────────────────────────────────
@@ -584,6 +555,8 @@ function withoutCurrentTurn(
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   let body: ChatRequest;
   try {
     body = (await req.json()) as ChatRequest;

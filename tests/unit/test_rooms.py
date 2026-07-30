@@ -402,3 +402,42 @@ def test_solo_and_legacy_rows_are_never_filtered(clean) -> None:
     out = _render_message(_Row(), _CAROL, frozenset())
     assert out["content"] == "plain"
     assert "redacted" not in out
+
+
+# ---------------------------------------------------------------------------
+# 9. Personal memory never enters a shared room
+# ---------------------------------------------------------------------------
+
+@_needs_db
+def test_a_shared_room_neither_reads_nor_writes_personal_memory() -> None:
+    """The rule with the quietest failure mode, pinned to the source.
+
+    ``groups_sessions_authority.md`` §3: in a shared room the acting member's
+    private compartment is not injected, and the room's turns are not extracted
+    into it. Both directions are wrong and the second is worse, because nobody
+    ever sees it happen — one person's inbox facts simply start appearing in
+    another person's recall weeks later.
+
+    Asserted against the source rather than by running a model: the branch is
+    inside a 300-line streaming endpoint whose real execution needs Redis, an
+    agent registry, and a model. What must not regress is that the two call
+    sites are gated, and that the gate is not `_mem_user` — which also names
+    the session's owner and the acting member for authorship, and blanking it
+    would silently reassign both.
+    """
+    import inspect
+
+    from gateway.routes import agent as agent_routes
+
+    src = inspect.getsource(agent_routes.run_agent_stream_endpoint)
+
+    # The read side: no personal Mem0 block in a shared room.
+    assert '_has_user = user_id != "anonymous" and not _room_is_shared' in src
+    # The tool side: remember/save_memory become no-ops rather than writing
+    # into whoever happened to type.
+    assert '_set_memory_user_id("" if _room_is_shared else user_id)' in src
+    # The write side: extraction is gated on its OWN variable.
+    assert '_extract_user = "" if _room_is_shared else _mem_user' in src
+    assert "if not (_extract_user and folded):" in src
+    # …and the session owner / authorship actor is still a real email.
+    assert '_mem_user = (user.email or "").strip()' in src

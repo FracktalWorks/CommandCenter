@@ -1525,12 +1525,23 @@ async def run_agent_stream_endpoint(
     # user_id scopes THIS user's private memory (remember/save_memory); the
     # agent name scopes the agent's cross-user memory (recall_agent/…). Org
     # memory is a fixed global scope, so it needs no per-run context.
+    #
+    # In a SHARED room this is switched off entirely. One person's private
+    # facts must not be stitched into a context whose output the whole room
+    # reads, and the room's turns must not be extracted into the typer's
+    # personal store — both directions are wrong, and the second is worse
+    # because it is silent (groups_sessions_authority.md §3, "personal memory
+    # in shared rooms"). Agent and org memory are unaffected: they were never
+    # one person's. A room of one takes neither branch.
+    _room_is_shared = room is not None and room.is_shared
     try:
         from acb_skills.memory_tools import (  # noqa: PLC0415
             _set_memory_user_id,
             _set_memory_agent_name,
         )
-        _set_memory_user_id(user_id)
+        # An empty user id makes remember/save_memory a no-op rather than a
+        # write into whoever happened to type.
+        _set_memory_user_id("" if _room_is_shared else user_id)
         _set_memory_agent_name(agent_name)
     except ImportError:
         pass
@@ -1558,7 +1569,7 @@ async def run_agent_stream_endpoint(
         # anonymous user; the per-user Mem0/Graphiti blocks stay gated on a
         # real user_id.
         if user_msg:
-            _has_user = user_id != "anonymous"
+            _has_user = user_id != "anonymous" and not _room_is_shared
 
             async def _build_memory_block() -> str:
                 parts: list[str] = []
@@ -1684,6 +1695,15 @@ async def run_agent_stream_endpoint(
         req.assistant_message_id or f"assistant-{thread_id}-{run_id}"
     )
     _mem_user = (user.email or "").strip()
+    # Who the run's turns are extracted into. Blank in a shared room, which
+    # makes the run-boundary extraction below a no-op: what several people said
+    # in a room is the room's, and writing it into one participant's private
+    # store is a disclosure nobody consented to. The room's own compartment is
+    # where this belongs and is not built yet (memory-clearance.md) — until it
+    # is, a shared room remembers nothing rather than remembering it in the
+    # wrong place. Deliberately NOT `_mem_user`, which also names the session's
+    # owner and the acting member for authorship, and must stay a real email.
+    _extract_user = "" if _room_is_shared else _mem_user
     _mem_message = str(req.payload.get("message") or "")
     _mem_history = [
         {"role": str(m.get("role") or "user"), "content": str(m.get("content") or "")}
@@ -1703,7 +1723,7 @@ async def run_agent_stream_endpoint(
         # completed after a browser-gone/reconnect contributed nothing to
         # Mem0. The gateway is now the single extraction owner for this path
         # (route.ts no longer extracts for named agents). Best-effort.
-        if not (_mem_user and folded):
+        if not (_extract_user and folded):
             return
         try:
             from acb_memory import add_memories_background  # noqa: PLC0415
@@ -1716,7 +1736,7 @@ async def run_agent_stream_endpoint(
             )
             if conv:
                 await add_memories_background(
-                    _mem_user, conv, agent_id=agent_name,
+                    _extract_user, conv, agent_id=agent_name,
                 )
         except Exception:  # noqa: BLE001 — extraction must never kill the relay
             _log.warning("agent.run_end_memory_extraction_failed",

@@ -238,7 +238,7 @@ Why this and not a new abstraction:
 > the room feature.
 
 ```sql
--- ── The room layer (this doc's scope; participants live in migration 133) ───
+-- ── The room layer (this doc's scope; participants live in migration 134) ───
 ALTER TABLE chat_session
     -- user_id keeps its meaning: the creator/owner. Membership is additive.
     ADD COLUMN IF NOT EXISTS floor_mode TEXT NOT NULL DEFAULT 'driver'

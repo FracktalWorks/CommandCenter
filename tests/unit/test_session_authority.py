@@ -47,7 +47,7 @@ def _db_ready() -> bool:
 
 _needs_db = pytest.mark.skipif(
     not _db_ready(),
-    reason="no reachable Postgres with migration 133 — live authority tests skipped",
+    reason="no reachable Postgres with migration 134 — live authority tests skipped",
 )
 
 _PREFIX = "pytest-authority"

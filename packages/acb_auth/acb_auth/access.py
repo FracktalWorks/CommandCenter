@@ -342,7 +342,7 @@ async def resolve_session_access(
       every active member (an org-visible room is readable by all of them,
       so all of them cap it).
     * The actor is always included, so a solo session — or any session
-      recorded before migration 133 — resolves to exactly the actor's own
+      recorded before migration 134 — resolves to exactly the actor's own
       access, byte-identically to today. Everything here activates only when
       a second distinct member exists.
     * Each member resolves through :func:`resolve_access` (shared 60s cache);

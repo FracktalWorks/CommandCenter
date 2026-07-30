@@ -1,4 +1,4 @@
-"""Groups and session participants (migration 133).
+"""Groups and session participants (migration 134).
 
 Spec: ai-company-brain/specs/groups_sessions_authority.md §1–§2
 
@@ -21,7 +21,7 @@ import pytest
 
 
 def _db_ready() -> bool:
-    """True when a session opens AND migration 133 has been applied."""
+    """True when a session opens AND migration 134 has been applied."""
     try:
         from acb_graph import get_session
         from sqlalchemy import text
@@ -38,7 +38,7 @@ def _db_ready() -> bool:
 
 _needs_db = pytest.mark.skipif(
     not _db_ready(),
-    reason="no reachable Postgres with migration 133 "
+    reason="no reachable Postgres with migration 134 "
     "(chat_session_participant / org_group) — live tests skipped",
 )
 
@@ -149,7 +149,7 @@ def test_rerunning_the_backfill_grants_nothing_new(clean_session) -> None:
 
     migration = (
         Path(__file__).resolve().parents[2]
-        / "infra/postgres/133_groups_and_session_participants.sql"
+        / "infra/postgres/134_groups_and_session_participants.sql"
     ).read_text(encoding="utf-8")
     from acb_graph import get_session
     from sqlalchemy import text

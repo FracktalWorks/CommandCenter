@@ -125,7 +125,7 @@ def test_first_party_manifests_are_valid(dirname: str, cfg: dict) -> None:
 #: This list is a canary, not a config: changing it must be a deliberate edit
 #: made together with the data migration, never a side effect of editing a
 #: config.json.
-# The two assistants are LIVE personal agents: migration 131 quarantined their
+# The two assistants are LIVE personal agents: migration 133 quarantined their
 # commingled pre-instance data, and the run path + gateway resolve their
 # instance since the disk/store wiring landed. task-manager, app-builder and
 # orchestrator deliberately stay `shared` for now — they are migrated

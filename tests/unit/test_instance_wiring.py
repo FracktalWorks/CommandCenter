@@ -3,7 +3,7 @@
 Spec: ai-company-brain/specs/memory_architecture.md §5.3
       ai-company-brain/specs/agent_architecture.md §2
 
-This is the flip that makes instancing real: migrations 130/131 partitioned
+This is the flip that makes instancing real: migrations 132/133 partitioned
 the store, ``agent_paths`` split the disk, and this wiring makes every seam
 agree on ONE key per run. What is asserted here:
 

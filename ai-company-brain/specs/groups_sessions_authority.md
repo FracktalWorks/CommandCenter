@@ -3,7 +3,7 @@
 > **Status:** 🔄 spec accepted, implementation starting
 > **Created:** 2026-07-29
 > **Answers:** [`org_access_control.md` §10](org_access_control.md#10-handoff-multiplayer-agent-collaboration) — the handoff asked for exactly one spec covering the group primitive, `chat_session_participant`, and the authority rule, *before* shared transcripts exist and the decisions get expensive.
-> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 130/131).
+> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 132/133).
 
 Phase 1 of org access control shipped the resolved principal (`UserContext` +
 `EffectiveAccess`), default-deny authentication, feature and agent-run gating,
@@ -166,15 +166,15 @@ not after:
 - Agent file/memory instancing — orthogonal and already specced
   (`agent-kinds.md`); the only binding is that `t:<team>` keys now name
   `org_group.slug`.
-- The quarantine and instance partition work (migrations 130/131) — already
+- The quarantine and instance partition work (migrations 132/133) — already
   landed; this spec consumes it.
 
 ## 6. Order of work
 
 | # | Step | Depends on |
 |---|---|---|
-| 1 | Migration 133: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | — |
-| 2 | Wire agent instancing through the run path (files + disk together; `agent_paths.py` is the seam) | 130/131 ✅ |
+| 1 | Migration 134: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | — |
+| 2 | Wire agent instancing through the run path (files + disk together; `agent_paths.py` is the seam) | 132/133 ✅ |
 | 3 | Participant resolution + `intersect()` fold at run start; feed the two existing enforcement points | 1 |
 | 4 | `chat_message` authorship + clearance tag; replay filter | 1 |
 | 5 | Room UX: share flow, participant list, the visible cap, groups admin UI | 1–4 |

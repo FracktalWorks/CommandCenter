@@ -200,3 +200,60 @@ def test_preview_prefers_the_snippet_and_truncates():
     assert _preview(_Row(body_text="x" * 500)).endswith("…")
     assert len(_preview(_Row(body_text="x" * 500))) == 181
     assert _preview(_Row()) == ""
+
+
+# ── /contacts/suggest — recipient autocomplete ────────────────────────────────
+
+
+async def test_suggest_unions_sent_contacts_and_senders_ranked() -> None:
+    """The people picker draws from all three sources — people you've written
+    to, the learned directory, known senders — dedup'd by address, prefix
+    matches and sent-to weight first, and never offers the user's own
+    connected addresses."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    captured: dict = {}
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            captured["sql"] = str(clause)
+            captured["params"] = params
+            row = MagicMock()
+            row.email = "ayush@fracktal.in"
+            row.name = "Ayush Sarkar"
+            return MagicMock(fetchall=MagicMock(return_value=[row]))
+
+        async def close(self): ...
+
+    with patch.object(C, "_get_db", AsyncMock(return_value=_DB())):
+        out = await C.suggest_contacts(
+            q="Ayu", account_id="acc-1", limit=8,
+            user=MagicMock(email="me@fracktal.in"))
+
+    assert [(s.email, s.name) for s in out] == [("ayush@fracktal.in", "Ayush Sarkar")]
+    sql, params = captured["sql"], captured["params"]
+    # Case-insensitive match, prefix ranked first.
+    assert params["any"] == "%ayu%" and params["pre"] == "ayu%"
+    # All three candidate sources union'd, dedup'd by address.
+    assert "folder, '')) = 'sent'" in sql
+    assert "FROM email_contacts" in sql and "FROM email_senders" in sql
+    assert "GROUP BY c.email" in sql
+    # Sent-to outranks directory outranks sender; prefix hits lead.
+    assert "ORDER BY prefix_hit DESC, weight DESC" in sql
+    # The user's own connected addresses are never suggested.
+    assert "email_address" in sql and "NOT IN" in sql
+    # Scoped to the caller's accounts (and optionally one of them).
+    assert "user_id = :uid" in sql and params["aid"] == "acc-1"
+
+
+async def test_suggest_is_best_effort_on_failure() -> None:
+    """A typeahead must never error the composer — [] on any failure (e.g. the
+    email_contacts migration not yet applied)."""
+    from unittest.mock import AsyncMock, MagicMock, patch
+
+    db = AsyncMock()
+    db.execute.side_effect = RuntimeError("relation email_contacts missing")
+    with patch.object(C, "_get_db", AsyncMock(return_value=db)):
+        out = await C.suggest_contacts(
+            q="ay", account_id=None, limit=8, user=MagicMock(email="me@x.io"))
+    assert out == []

@@ -2881,7 +2881,31 @@ async def receive_webhook(
             if agent_name:
                 break
 
+    # Workflows can bind to the same (source, event_type) events (workflow
+    # event triggers — routes/workflows/triggers.py). Dispatch is best-effort
+    # and independent of agent routing: the same event may fan out to both.
+    workflow_runs: list[dict[str, str]] = []
+    try:
+        from gateway.routes.workflows.triggers import dispatch_event  # noqa: PLC0415
+
+        workflow_runs = await dispatch_event(source, event.event_type, event.payload)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("webhook.workflow_dispatch_failed", error=str(exc)[:160])
+
     if not agent_name:
+        if workflow_runs:
+            _log.info(
+                "webhook.workflow_routed",
+                source=source,
+                event_type=event.event_type,
+                runs=len(workflow_runs),
+            )
+            return {
+                "status": "workflow_routed",
+                "source": source,
+                "event_type": event.event_type,
+                "workflow_runs": workflow_runs,
+            }
         _log.warning(
             "webhook.no_route",
             source=source,
@@ -2923,4 +2947,10 @@ async def receive_webhook(
         run_id=run_id,
     )
 
-    return {"status": "queued", "run_id": run_id, "agent": agent_name, "runtime": agent_runtime}
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "agent": agent_name,
+        "runtime": agent_runtime,
+        "workflow_runs": workflow_runs,
+    }

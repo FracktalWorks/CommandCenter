@@ -131,6 +131,9 @@ GATED_ROUTERS: dict[str, set[str]] = {
     "gateway.routes.chat": set(),
     "gateway.routes.actions": set(),
     "gateway.routes.integrations": set(),
+    "gateway.routes.workflows": {
+        "/workflows/hooks/{hook_token}",
+    },
 }
 
 

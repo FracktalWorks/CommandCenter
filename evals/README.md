@@ -4,7 +4,7 @@ Three complementary layers, from cheapest/most-deterministic to most realistic:
 
 | Layer | What it locks | Needs LLM? | CI |
 |---|---|---|---|
-| [`trajectories/`](trajectories/) | Harness invariants as golden trajectories: HITL round-trips, stream replay/reconnect semantics, delegation guards, tool-failure recovery | No | **blocking** (`skill-eval.yml`) |
+| [`trajectories/`](trajectories/) | Harness invariants as golden trajectories: HITL round-trips, stream replay/reconnect semantics, delegation guards, tool-failure recovery, the Workflows engine (compile → run → approval pause → replay-resume) | No | **blocking** (`skill-eval.yml`) |
 | [`inspect/scenarios.py`](inspect/scenarios.py) | Skill scenarios scored on the structural contract (citations, JSON shape) via Inspect AI | mockllm smoke in CI; live model locally | blocking (smoke) |
 | [`promptfoo.yaml`](promptfoo.yaml) + per-skill `skills/**/evals/cases.yaml` | Golden-case outputs of each skill against a real model | Yes (`LITELLM_BASE_URL`) | opt-in until CI secrets are wired |
 

@@ -12,6 +12,9 @@ on:
       - "skills/**"
       - "evals/**"
       - "apps/services/orchestrator/**"
+      # The Workflows engine ships with a golden trajectory eval (root
+      # AGENTS.md standing rule #3) — engine edits must re-run the gate.
+      - "apps/services/gateway/gateway/routes/workflows/**"
       - "packages/acb_skills/**"
       - "packages/acb_llm/**"
       - ".github/workflows/skill-eval.yml"

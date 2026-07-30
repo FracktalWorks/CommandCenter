@@ -90,7 +90,7 @@ Copilot SDK sandboxes.
 
 ## Global Constraints (Non-Negotiable)
 
-1. No in-app agent/skill editing -- Control Plane is for chat, HITL, observability only
+1. No in-app agent/skill *code* editing -- all code authoring is VS Code + Git. The Workflows app (`/workflows`) is the sanctioned exception-by-design: workflows are DB-persisted configuration orchestrating code-authored agents, compiled to MAF Workflows (ADR-028; spec ai-company-brain/specs/workflows_app.md) -- not generated agent code, not a second runtime
 2. No credentials in agent or skill repos -- Integration Registry holds all secrets
 3. Self-mutation max_mutation_attempts = 1 per failure event
    - ⚠️ **DEV-ONLY / must be replaced before production:** native MAF agents (local_path, no own remote) currently land approved self-mutations by opening a PR against THIS Command Center monorepo. This is fine only while all agents are first-party and Command Center is WIP. It MUST be swapped for a tenant-isolated mechanism before any multi-tenant/customer deployment — third parties must never push to the shared monorepo. See `docs/DESIGN_LIMITATION_native_maf_mutation.md`.

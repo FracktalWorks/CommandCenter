@@ -398,6 +398,85 @@ get a bot into — which, after Phases 5–6, means Zoom calls hosted by others.
 
 ---
 
+## 4a. Live findings, 2026-07-30 — and why we are NOT buying a residential proxy
+
+Tested against a real meeting with the host present in the call. Recorded here
+because it cost an afternoon and the conclusion is counter-intuitive.
+
+**What Meet does.** Its green room states: *"System info will be sent to confirm
+you're not a bot."* Our bot loads the page, fills its name, mutes, clicks "Ask to
+join" — and is declined **~3 seconds later**, without the host ever being shown
+an Admit prompt. The decline is programmatic, not a human saying no.
+
+**Ruled out by experiment, so don't re-litigate:**
+
+| Hypothesis | Test | Result |
+|---|---|---|
+| Our join automation is broken | probe reached the green room in the same container | ✗ our code is fine |
+| The persistent profile is poisoned | loaded with `/profile` | ✗ same green room |
+| Nobody was in the call to admit it | host confirmed present, retried | ✗ still declined in 3 s |
+| Missing media devices are the tell | added `--use-fake-device-for-media-stream` (7 fake devices) | ✗ declined identically |
+| Chromium's missing H.264 is the tell | installed **real Google Chrome 151** | ✗ declined *sooner* |
+
+Chromium can't play H.264 while real Chrome can, which looked like the smoking
+gun — it wasn't. A control run proved Chromium still reached the green room at
+that moment, so neither the meeting nor a blocked IP explained it; Google simply
+fingerprints real-Chrome-under-automation more precisely.
+
+**Still not isolated:** IP reputation vs automation artifacts. Both remain
+plausible and a proxy would test only the first.
+
+### Rejected: residential proxies
+
+The obvious next move is to give the bot a residential IP. We are not doing it,
+for four reasons in descending order of importance:
+
+1. **It doesn't remove the check — the invite does.** A signed-in bot whose
+   address is on the calendar invite is **auto-admitted with no knock at all**,
+   so there is no join request for Meet to evaluate. A proxy tries to *pass* the
+   bot check; an invite means the check never runs. Categorically better.
+2. **WebRTC media barely survives a proxy.** Forcing media through one needs
+   Chrome's `disable_non_proxied_udp`, which requires SOCKS5 **with UDP
+   ASSOCIATE** — rare in residential-proxy products — or it falls back to TCP,
+   reintroducing retransmission and congestion control to a real-time stream.
+   Degraded audio means degraded transcripts, which is the whole product.
+3. **Cost scales with minutes, not requests.** Residential proxies bill per GB
+   and a meeting is continuous media. This is the opposite of the traffic shape
+   they're priced for.
+4. **It's an arms race against Google, and losing it fails silently** — mid-call,
+   in front of clients.
+
+**The honest version of "residential IP", if we ever truly need one:** run a
+worker on a machine on the office connection (a mini PC), reached over a
+Tailscale/Cloudflare tunnel. A real ISP address, no proxy, no ToS games. It still
+doesn't remove the knock, so it ranks below the invite either way.
+
+### How the market actually solves this
+
+Not one serious vendor's primary strategy is "make an anonymous bot look human":
+
+- **Fireflies** — the bot has its own address (`fred@fireflies.ai`); inviting it
+  *is* the opt-in. Signed-in bots.
+- **Otter** — joins as a named participant ("<name>'s OtterPilot") off the
+  connected calendar.
+- **Recall.ai** (the infrastructure under many notetakers) — a dedicated, paid
+  Google Workspace tenant, pools of standard accounts round-robined ~30–50
+  concurrent meetings each, authenticated via **SAML SSO where Recall is the
+  IdP** so no Google password page is ever scripted. They recommend residential
+  proxies only in their *build-it-yourself* blog post, as a supporting tactic —
+  it is not how their product works.
+- **Skribby** — signed-in accounts on Meet/Teams, ZAK tokens on Zoom.
+- **Nylas** — has *no* signed-in bot mechanism, and consequently documents that
+  org-restricted meetings need a human to approve the bot. That is the price of
+  skipping the account, paid in their own docs.
+- **Granola / Circleback / tl;dv desktop** — sidestep entirely with device-local
+  capture (our Phase 7).
+
+The pattern is unanimous: **a real account identity is the mechanism.** Proxies
+are scale plumbing for people running thousands of concurrent bots.
+
+---
+
 ## 5. Non-negotiable design rules
 
 Distilled from how the market gets blocked. These are constraints, not

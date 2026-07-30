@@ -38,6 +38,12 @@ from .meet import MeetingBotError, join_and_record
 
 DATA_DIR = os.environ.get("MEETING_BOT_DATA", "/data")
 TOKEN = os.environ.get("MEETING_BOT_TOKEN", "").strip()
+#: How many meetings this worker will take at once. One by default, and that is
+#: not timidity: a bot is a real Chrome joining a live WebRTC call (~1.5-3 vCPU,
+#: 3-6 GB each — the figures the commercial providers publish for their own
+#: per-bot pods), and a signed-in profile can only be held by one Chrome anyway.
+#: Scale by running more worker instances, not by raising this.
+MAX_CONCURRENT = max(1, int(os.environ.get("MEET_MAX_CONCURRENT", "1")))
 
 logging.basicConfig(
     level=os.environ.get("MEETING_BOT_LOG_LEVEL", "INFO").upper(),
@@ -306,10 +312,44 @@ async def google_login_interactive(
 async def create_bot(
     req: JoinRequest, authorization: str | None = Header(default=None)
 ) -> dict:
+    """Dispatch a bot to one meeting.
+
+    Refuses when the worker is already at capacity, which matters more than it
+    looks: each bot is a real Chrome (~1.5-3 vCPU, 3-6 GB) and a **persistent
+    profile can only be opened by one Chrome at a time** — Chrome takes an
+    exclusive lock on the user-data dir. Accepting a second concurrent job
+    would either fail deep in the launch with a lock error or, worse, corrupt
+    the signed-in profile that makes unattended joining possible at all. A
+    clean 409 up front is the honest answer, and the one the gateway can
+    explain to a user.
+    """
     _auth(authorization)
     url = (req.meeting_url or "").strip()
     if not url.startswith("http"):
         raise HTTPException(status_code=400, detail="invalid meeting_url")
+    from .meet import PROFILE_DIR
+
+    active = _active_count()
+    if active >= MAX_CONCURRENT:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"this notetaker is already in {active} meeting(s) and can take "
+                f"{MAX_CONCURRENT}. Wait for it to finish, or run another worker "
+                "instance (each concurrent meeting needs its own Chrome)."
+            ),
+        )
+    if PROFILE_DIR and active > 0:
+        # Belt and braces: raising MEET_MAX_CONCURRENT above 1 while sharing one
+        # signed-in profile is a footgun, so refuse it here rather than let two
+        # Chromes race for the profile lock.
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                "this notetaker is already in a meeting and its signed-in "
+                "browser profile can only be used by one call at a time."
+            ),
+        )
     job_id = uuid.uuid4().hex
     job = _Job(
         job_id, url,

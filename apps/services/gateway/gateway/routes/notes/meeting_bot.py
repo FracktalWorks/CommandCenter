@@ -755,16 +755,37 @@ async def bot_join(
     try:
         provider_bot_id = await provider.join(url, bot_name, live_callback=live_callback)
     except Exception as exc:
+        # "The notetaker is already busy" is NOT a bad link, and telling someone
+        # to check the link when the worker is at capacity sends them to debug
+        # the wrong thing. Each bot is a whole Chrome, so one-at-a-time is the
+        # normal state, not an edge case.
+        busy = (
+            isinstance(exc, httpx.HTTPStatusError)
+            and exc.response.status_code == 409
+        )
+        if busy:
+            try:
+                detail = exc.response.json().get("detail") or ""
+            except Exception:
+                detail = ""
+            message = (
+                "The notetaker is already in another meeting — it can only "
+                "attend one at a time. Wait for that call to end, or record "
+                "this one and upload it."
+            )
+            error_text = f"notetaker busy: {detail}"[:400]
+        else:
+            message = "Couldn't dispatch the notetaker to that meeting. Check the link."
+            error_text = f"join failed: {str(exc)[:400]}"
         async with await _get_db() as db:
-            await _set_bot(db, bot_row_id, status="failed",
-                           error=f"join failed: {str(exc)[:400]}")
+            await _set_bot(db, bot_row_id, status="failed", error=error_text)
             await db.execute(text("UPDATE meeting SET status='failed' WHERE id=:id"),
                              {"id": meeting_id})
             await db.commit()
-        _log.warning("notes.bot_join_failed", meeting_id=meeting_id, error=str(exc)[:200])
+        _log.warning("notes.bot_join_failed", meeting_id=meeting_id,
+                     busy=busy, error=str(exc)[:200])
         raise HTTPException(
-            status_code=502,
-            detail="Couldn't dispatch the notetaker to that meeting. Check the link.",
+            status_code=409 if busy else 502, detail=message
         ) from None
 
     async with await _get_db() as db:

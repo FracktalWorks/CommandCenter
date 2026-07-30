@@ -477,6 +477,68 @@ are scale plumbing for people running thousands of concurrent bots.
 
 ---
 
+## 4b. Multi-tenancy: one notetaker identity per organization
+
+The single-tenant design has a global bot identity and a single browser profile.
+The moment two organizations (or two users in different orgs) use the notetaker,
+that global is the thing that breaks — and the *email is the least of it*.
+
+### What actually breaks, worst first
+
+1. **A signed-in Chrome profile is exclusive.** Chrome takes a lock on its
+   user-data dir, so two concurrent meetings **cannot share one profile**. This
+   is a hard mutual exclusion, not a performance concern. (Guarded now: the
+   worker 409s a second dispatch instead of racing the lock — before this, the
+   second job would have failed deep in the launch or corrupted the profile that
+   makes unattended joining possible.)
+2. **Capacity.** Each bot is a real Chrome in a live WebRTC call: **1.5–3 vCPU
+   and 3–6 GB** by the providers' own published per-pod figures. The current VPS
+   has **2 vCPU** (RAM is fine at ~8 GB), so it seats **one** concurrent
+   meeting. No software change alters that; only more hosts do.
+3. **Identity commingling.** One Google account shared across orgs means Org A's
+   notetaker account sits in Org B's calls, and one browser profile holds Org A's
+   Google session while serving Org B's meeting. This is the same defect class
+   the repo already had to fix for agents (`agent_blob_instance` +
+   `quarantine_commingled_agent_data`) — worth reusing that thinking rather than
+   rediscovering it.
+4. **Attribution.** Two orgs dispatching the same display name to different
+   client calls is confusing at best and a disclosure at worst.
+
+Notably **not** broken: the notes data itself. `meeting` and `copilot_config` are
+already keyed by `owner_email`, and org-level access control landed in migration
+130 — so transcripts and notes don't leak today. The gap is the *joining* layer.
+
+### The design
+
+Mirror the email app, which already solved per-account isolation:
+
+- **`notetaker_identity` table keyed by `organization_id`** — bot email, display
+  name, sign-in state, profile handle. One row per org, exactly like
+  `email_account` per mailbox. The identity endpoints become org-scoped rather
+  than global, and the EXECUTIVE guard becomes "executive **of that org**".
+- **Profile per identity, not per worker.** `/profile` becomes
+  `/profiles/{organization_id}`, passed at dispatch. One volume, many profiles.
+- **One container per meeting** (the industry norm — Recall and Attendee both
+  run a pod per bot). The worker stays single-meeting; concurrency comes from
+  instances, and the gateway picks a free one.
+- **A queue with honest UX.** When every worker is busy, say so and hold the
+  request — "your notetaker will join when the current call ends" beats a
+  failure. Recall models this as login groups with round-robin and a hard
+  `login_not_available` error when the pool is exhausted; we need the same
+  vocabulary long before we need their scale.
+- **Per-org bot naming** ("<Org> Notetaker") so attribution is unambiguous.
+
+### Sequencing note
+
+None of this is needed for one organization, and building it now would be
+speculative. But two things should happen *before* a second org is onboarded, or
+they become data-migration problems instead of design choices: the identity must
+be **a row keyed by org from the start** (not an env var), and the profile path
+must be **derived from that row** (not a constant). Both are cheap now and
+expensive later.
+
+---
+
 ## 5. Non-negotiable design rules
 
 Distilled from how the market gets blocked. These are constraints, not

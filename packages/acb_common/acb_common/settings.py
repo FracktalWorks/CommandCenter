@@ -76,6 +76,14 @@ class Settings(BaseSettings):
     gateway_port: int = 8000
     gateway_session_secret: str = "change-me-dev-only"
     allowed_email_domain: str = "fracktal.in"
+    #: Public origin of the gateway itself, e.g.
+    #: "https://api.commandcenter.fracktal.in". Set this when the platform
+    #: hands an inbound URL to an external system (a workflow's webhook
+    #: trigger): those callers must reach the gateway's own public route
+    #: directly, NOT the control-plane proxy, which re-serializes bodies
+    #: (breaking HMAC) and drops non-JSON payloads. Empty = the UI shows the
+    #: path and says the origin is unconfigured rather than inventing one.
+    public_api_base_url: str = ""
 
     # ClickUp (Phase 0)
     clickup_api_token: str = ""

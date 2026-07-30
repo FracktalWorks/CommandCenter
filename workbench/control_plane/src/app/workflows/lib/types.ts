@@ -70,6 +70,15 @@ export type WorkflowDetail = WorkflowSummary & {
   graph: WorkflowGraph;
   variables: Record<string, unknown>;
   hook_token?: string;
+  /**
+   * Absolute URL an external system posts to, as named by the GATEWAY
+   * (`public_api_base_url`) — never assembled from the browser's origin, which
+   * is the control plane and proxies JSON in a way that breaks HMAC.
+   * Empty when the gateway's public origin is unconfigured.
+   */
+  hook_url?: string;
+  /** The path alone, always present — shown when `hook_url` is empty. */
+  hook_path?: string;
   triggers: TriggerSpec[];
   versions: { version: number; published_by: string; published_at: string | null }[];
 };

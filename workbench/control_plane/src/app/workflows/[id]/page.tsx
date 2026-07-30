@@ -911,7 +911,8 @@ function EditorInner({ id }: { id: string }) {
       {showTriggers && (
         <TriggerPanel
           triggers={triggers}
-          hookToken={detail.hook_token}
+          hookUrl={detail.hook_url}
+          hookPath={detail.hook_path}
           published={published}
           onChange={(next) => {
             setTriggers(next);

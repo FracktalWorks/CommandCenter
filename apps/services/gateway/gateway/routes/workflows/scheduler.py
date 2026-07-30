@@ -28,6 +28,7 @@ from gateway.routes.workflows.core import _get_db, _log, parse_jsonb
 from gateway.routes.workflows.service import (
     RunRejected,
     load_version_serialized,
+    record_skipped_run,
     resume_run,
     start_run,
 )
@@ -42,15 +43,22 @@ def compute_due_fire(
     cron: str,
     last_fired_at: datetime | None,
     now: datetime,
+    timezone: str = "UTC",
 ) -> datetime | None:
     """The most recent cron tick in (last_fired_at, now], or None.
 
     Anchoring on the PREVIOUS tick before *now* (rather than walking forward
     from ``last_fired_at``) is what collapses downtime into one catch-up fire.
+
+    ``timezone`` is the maker's wall clock, not the server's: "0 9 * * 1-5" in
+    ``Asia/Kolkata`` means 9am in Kolkata on both sides of a DST boundary
+    anywhere else in the world. APScheduler's CronTrigger owns that arithmetic
+    — which is the whole reason it is used as the parser. Instants stay
+    UTC-aware end to end; only the *interpretation* of the expression is local.
     """
     from apscheduler.triggers.cron import CronTrigger
 
-    trigger = CronTrigger.from_crontab(cron, timezone="UTC")
+    trigger = CronTrigger.from_crontab(cron, timezone=timezone or "UTC")
     # CronTrigger only walks forward; find the last tick <= now by stepping
     # from a probe point one interval-ish behind now.
     probe = last_fired_at
@@ -58,6 +66,12 @@ def compute_due_fire(
         # Never fired (or absurdly stale): only fire ticks from now onward.
         nxt = trigger.get_next_fire_time(None, now)
         return None if nxt is None or nxt > now else nxt
+    # Never fired (or absurdly stale) is handled by the caller, which writes a
+    # baseline instead of firing — see _claim_baseline. Reaching here with
+    # probe=None would be the bootstrap trap: get_next_fire_time() only ever
+    # looks FORWARD, so "the next tick, if it is not in the future" is a
+    # condition that is false at every instant except an exact tick boundary,
+    # and a schedule that never fires never gets a last_fired_at to fire from.
     last_tick: datetime | None = None
     cursor: datetime | None = probe
     for _ in range(10000):  # hard bound: a minutely cron over a week of downtime
@@ -67,6 +81,24 @@ def compute_due_fire(
         last_tick = nxt
         cursor = nxt
     return last_tick
+
+
+async def _claim_baseline(db: Any, trigger_id: str, now: datetime) -> None:
+    """Arm a schedule that has never fired, without firing it.
+
+    Guarded on ``last_fired_at IS NULL`` so two workers seeing a new trigger
+    at the same moment cannot fight over the baseline, and so this can never
+    rewind a schedule that has already run.
+    """
+    await db.execute(
+        text(
+            """UPDATE workflow_triggers SET last_fired_at = :now
+               WHERE id = :id AND last_fired_at IS NULL"""
+        ),
+        {"id": trigger_id, "now": now},
+    )
+    await db.commit()
+    _log.info("workflows.schedule_armed", trigger_id=trigger_id)
 
 
 async def _scan_once(now: datetime | None = None) -> int:
@@ -92,8 +124,24 @@ async def _scan_once(now: datetime | None = None) -> int:
             cron = str(config.get("cron") or "").strip()
             if not cron:
                 continue
+            if row.last_fired_at is None:
+                # First sight of this schedule: arm it, do not fire it. A cron
+                # says WHEN, not "how far back to catch up", so a schedule
+                # created at 09:01 must not immediately fire this morning's
+                # 09:00. Recording the baseline is what lets the next scan
+                # compute a real interval — without it the trigger sits in a
+                # state that can never produce a tick, and the schedule simply
+                # never runs. (Measured: a new daily schedule fired 0 times in
+                # a simulated week before this.)
+                await _claim_baseline(db, str(row.trigger_id), now)
+                continue
             try:
-                due = compute_due_fire(cron, row.last_fired_at, now)
+                due = compute_due_fire(
+                    cron,
+                    row.last_fired_at,
+                    now,
+                    str(config.get("timezone") or "UTC"),
+                )
             except (ValueError, TypeError) as exc:
                 _log.warning(
                     "workflows.schedule_bad_cron",
@@ -115,12 +163,27 @@ async def _scan_once(now: datetime | None = None) -> int:
             await db.commit()
             if claimed.rowcount != 1:
                 continue
+            # From here the tick is CLAIMED and will never be re-offered, so
+            # every path out of this block must leave a trace. A schedule that
+            # quietly does nothing is the worst failure this app can have: the
+            # maker sees a gap in run history and no reason for it.
             serialized = await load_version_serialized(
                 db,
                 str(row.workflow_id),
                 int(row.latest_version),
             )
             if serialized is None:
+                await record_skipped_run(
+                    workflow_id=str(row.workflow_id),
+                    workflow_name=row.name,
+                    version=int(row.latest_version),
+                    trigger_kind="schedule",
+                    trigger_payload={"scheduled_at": due.isoformat()},
+                    reason=(
+                        f"published version {row.latest_version} is missing — "
+                        "republish the workflow"
+                    ),
+                )
                 continue
             try:
                 await start_run(
@@ -139,6 +202,14 @@ async def _scan_once(now: datetime | None = None) -> int:
                     "workflows.schedule_run_rejected",
                     workflow_id=str(row.workflow_id),
                     error=str(exc),
+                )
+                await record_skipped_run(
+                    workflow_id=str(row.workflow_id),
+                    workflow_name=row.name,
+                    version=int(row.latest_version),
+                    trigger_kind="schedule",
+                    trigger_payload={"scheduled_at": due.isoformat()},
+                    reason=f"tick skipped — {exc}",
                 )
     finally:
         await db.close()

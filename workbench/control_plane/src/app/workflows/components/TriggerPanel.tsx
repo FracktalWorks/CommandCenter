@@ -13,15 +13,31 @@ import type { TriggerSpec } from "../lib/types";
 const inputCls =
   "w-full rounded-lg border border-input bg-background px-2.5 py-1.5 text-xs text-foreground focus:outline-none focus:ring-1 focus:ring-ring";
 
+/** Suggestions only — the field accepts any IANA zone the server can resolve. */
+const COMMON_TIMEZONES = [
+  "UTC",
+  "Asia/Kolkata",
+  "Europe/London",
+  "Europe/Berlin",
+  "America/New_York",
+  "America/Los_Angeles",
+  "Asia/Singapore",
+  "Asia/Dubai",
+  "Australia/Sydney",
+];
+
 export default function TriggerPanel({
   triggers,
-  hookToken,
+  hookUrl: gatewayHookUrl,
+  hookPath,
   published,
   onChange,
   onClose,
 }: {
   triggers: TriggerSpec[];
-  hookToken?: string;
+  /** Absolute gateway URL from the server; "" when the origin is unset. */
+  hookUrl?: string;
+  hookPath?: string;
   published: boolean;
   onChange: (next: TriggerSpec[]) => void;
   onClose: () => void;
@@ -40,10 +56,13 @@ export default function TriggerPanel({
   );
   const [copied, setCopied] = useState(false);
 
-  const hookUrl =
-    typeof window !== "undefined" && hookToken
-      ? `${window.location.origin}/api/workflows/hooks/${hookToken}`
-      : "";
+  // The gateway names its own public URL (PUBLIC_API_BASE_URL). We do NOT
+  // assemble one from window.location: that origin is the control plane, and
+  // its /api proxy re-serializes JSON — which silently breaks any HMAC the
+  // sender computed. When the origin is unconfigured we show the path and say
+  // so, rather than handing out a URL that 404s in production.
+  const hookUrl = gatewayHookUrl ?? "";
+  const hookOriginMissing = !hookUrl && Boolean(hookPath);
 
   const upsert = (kind: "webhook" | "schedule" | "event", patch: Partial<TriggerSpec>) => {
     const rest = triggers.filter((t) => t.kind !== kind);
@@ -103,16 +122,17 @@ export default function TriggerPanel({
               <div className="flex items-center gap-1">
                 <input
                   readOnly
-                  value={hookUrl}
+                  value={hookUrl || hookPath || ""}
                   className={`${inputCls} font-mono text-[10px]`}
                 />
                 <button
                   onClick={() => {
-                    navigator.clipboard?.writeText(hookUrl);
+                    navigator.clipboard?.writeText(hookUrl || hookPath || "");
                     setCopied(true);
                     setTimeout(() => setCopied(false), 1500);
                   }}
-                  className="p-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground tech-transition shrink-0"
+                  disabled={!hookUrl && !hookPath}
+                  className="p-1.5 rounded-lg border border-border text-muted-foreground hover:text-foreground tech-transition shrink-0 disabled:opacity-50"
                   title="Copy URL"
                 >
                   <Copy className="w-3.5 h-3.5" />
@@ -120,6 +140,16 @@ export default function TriggerPanel({
               </div>
               {copied && (
                 <p className="text-[10px] text-success">Copied.</p>
+              )}
+              {hookOriginMissing && (
+                <p className="text-[10px] text-warning">
+                  Path only — set{" "}
+                  <code className="bg-secondary px-1 rounded">
+                    PUBLIC_API_BASE_URL
+                  </code>{" "}
+                  on the gateway to get a full URL. Point senders at the
+                  gateway host, not this one.
+                </p>
               )}
               <input
                 placeholder="Optional HMAC secret (X-CC-Signature)"
@@ -168,10 +198,33 @@ export default function TriggerPanel({
                 }
                 className={`${inputCls} font-mono`}
               />
+              <div className="flex items-center gap-1.5">
+                <span className="text-[10px] text-muted-foreground shrink-0">
+                  in
+                </span>
+                <input
+                  list="wf-timezones"
+                  placeholder="UTC"
+                  value={String(schedule.config.timezone ?? "")}
+                  onChange={(e) =>
+                    upsert("schedule", {
+                      config: { ...schedule.config, timezone: e.target.value },
+                    })
+                  }
+                  className={`${inputCls} font-mono`}
+                />
+                <datalist id="wf-timezones">
+                  {COMMON_TIMEZONES.map((tz) => (
+                    <option key={tz} value={tz} />
+                  ))}
+                </datalist>
+              </div>
               <p className="text-[10px] text-muted-foreground">
-                Five-field cron, UTC. e.g.{" "}
+                Five-field cron. e.g.{" "}
                 <code className="bg-secondary px-1 rounded">0 9 * * 1-5</code> =
-                weekdays 09:00.
+                weekdays 09:00 in the timezone above (blank = UTC). The zone is
+                a wall clock, so a 9am schedule stays 9am across daylight-saving
+                changes.
               </p>
               {!published && (
                 <p className="text-[10px] text-warning">

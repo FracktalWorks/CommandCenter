@@ -409,21 +409,21 @@ def test_solo_and_legacy_rows_are_never_filtered(clean) -> None:
 # ---------------------------------------------------------------------------
 
 @_needs_db
-def test_a_shared_room_neither_reads_nor_writes_personal_memory() -> None:
-    """The rule with the quietest failure mode, pinned to the source.
+def test_the_run_path_is_wired_to_the_run_clearance() -> None:
+    """The rule with the quietest failure mode, pinned where it is applied.
 
-    ``groups_sessions_authority.md`` §3: in a shared room the acting member's
-    private compartment is not injected, and the room's turns are not extracted
-    into it. Both directions are wrong and the second is worse, because nobody
-    ever sees it happen — one person's inbox facts simply start appearing in
-    another person's recall weeks later.
+    *What* a shared room may read and write is decided by
+    ``acb_memory.resolve_clearance`` and tested against that function directly
+    (``tests/unit/test_memory_compartments.py``) — a pure function, so the
+    properties are assertable without a model, a Redis, or an agent registry.
 
-    Asserted against the source rather than by running a model: the branch is
-    inside a 300-line streaming endpoint whose real execution needs Redis, an
-    agent registry, and a model. What must not regress is that the two call
-    sites are gated, and that the gate is not `_mem_user` — which also names
-    the session's owner and the acting member for authorship, and blanking it
-    would silently reassign both.
+    What THIS asserts is that the streaming endpoint actually consults it at
+    all four seams. The decision being right is worthless if a seam still reads
+    the caller's own compartment, and the seams sit inside a 300-line handler
+    whose real execution needs the whole stack — so they are checked in the
+    source. The specific thing that must never come back: `_mem_user` naming
+    the session owner and the acting member for authorship, which is why the
+    memory target is a SEPARATE variable rather than that one blanked out.
     """
     import inspect
 
@@ -431,13 +431,22 @@ def test_a_shared_room_neither_reads_nor_writes_personal_memory() -> None:
 
     src = inspect.getsource(agent_routes.run_agent_stream_endpoint)
 
-    # The read side: no personal Mem0 block in a shared room.
+    # 1. The clearance is resolved from the room's sharedness, once.
+    assert "resolve_clearance(" in src
+    assert "shared=_room_is_shared," in src
+    # 2. The memory TOOLS read and write the run's compartment — in a room the
+    #    room's, so remember/save_memory keep working and file what they learn
+    #    where the room can see it.
+    assert "_set_memory_user_id(_clearance.write)" in src
+    # 3. The prompt block reads the room and prefs compartments, and the
+    #    personal one only when the run is not shared.
     assert '_has_user = user_id != "anonymous" and not _room_is_shared' in src
-    # The tool side: remember/save_memory become no-ops rather than writing
-    # into whoever happened to type.
-    assert '_set_memory_user_id("" if _room_is_shared else user_id)' in src
-    # The write side: extraction is gated on its OWN variable.
-    assert '_extract_user = "" if _room_is_shared else _mem_user' in src
-    assert "if not (_extract_user and folded):" in src
-    # …and the session owner / authorship actor is still a real email.
+    assert "if _clearance.room:" in src
+    assert "if _clearance.prefs:" in src
+    # 4. The cached block is keyed by clearance, or a thread cached while solo
+    #    would serve the owner's private block to the room for the whole TTL.
+    assert "clearance=_clearance.fingerprint," in src
+    # 5. Run-boundary extraction targets the compartment, not the typer...
+    assert "_extract_user = _clearance.write if _room_is_shared else _mem_user" in src
+    # ...and the session owner / authorship actor is still a real email.
     assert '_mem_user = (user.email or "").strip()' in src

@@ -1534,14 +1534,27 @@ async def run_agent_stream_endpoint(
     # in shared rooms"). Agent and org memory are unaffected: they were never
     # one person's. A room of one takes neither branch.
     _room_is_shared = room is not None and room.is_shared
+
+    # Which compartments this run may read, and the one it may write. Solo
+    # resolves to exactly the three scopes and the write target it always had.
+    from acb_memory import resolve_clearance
+    _clearance = resolve_clearance(
+        actor=user_id if user_id != "anonymous" else "",
+        agent_name=agent_name,
+        thread_id=req.thread_id,
+        shared=_room_is_shared,
+    )
+
     try:
         from acb_skills.memory_tools import (  # noqa: PLC0415
             _set_memory_user_id,
             _set_memory_agent_name,
         )
-        # An empty user id makes remember/save_memory a no-op rather than a
-        # write into whoever happened to type.
-        _set_memory_user_id("" if _room_is_shared else user_id)
+        # remember/save_memory read and write THIS compartment. In a room that
+        # is the room's own, so the tools keep working and file what they learn
+        # where the room can see it — rather than into whoever happened to type,
+        # which is the write rule's whole point.
+        _set_memory_user_id(_clearance.write)
         _set_memory_agent_name(agent_name)
     except ImportError:
         pass
@@ -1573,11 +1586,34 @@ async def run_agent_stream_endpoint(
 
             async def _build_memory_block() -> str:
                 parts: list[str] = []
-                # Mem0: this user's private episodic facts
+                # Mem0: this user's private episodic facts. Never in a room —
+                # not the owner's, not the typer's. The scope key is simply not
+                # passed, so there is no retrieval to leak (memory-clearance.md
+                # §3.3: a boundary, not a request in a system prompt).
                 if _has_user:
                     mem_ctx = await get_memory_context(user_id, user_msg)
                     if mem_ctx:
                         parts.append("## Memory from past conversations\n" + mem_ctx)
+                # What this room has established. Replaces the personal
+                # compartment rather than adding to it: shared work is
+                # remembered where everyone in the room can see it.
+                if _clearance.room:
+                    room_ctx = await get_scoped_context(
+                        _clearance.room, user_msg, header="Room memory",
+                    )
+                    if room_ctx:
+                        parts.append(
+                            "## What this room has established\n" + room_ctx
+                        )
+                # How the person being answered likes to work. Safe to carry
+                # into a room: they are in it, and preferences describe them
+                # rather than disclosing what they told the agent in private.
+                if _clearance.prefs:
+                    prefs_ctx = await get_scoped_context(
+                        _clearance.prefs, user_msg, header="Preferences",
+                    )
+                    if prefs_ctx:
+                        parts.append("## How to answer this person\n" + prefs_ctx)
                 # Agent memory: shared across every user of this agent
                 agent_ctx = await get_scoped_context(
                     scope_key(agent=agent_name), user_msg, header="Agent memory"
@@ -1612,6 +1648,10 @@ async def run_agent_stream_endpoint(
                 redis=_redis,
                 thread_id=_mem_thread_id,
                 build=_build_memory_block,
+                # Without this a thread cached while solo would keep serving
+                # the owner's private block to the room for the rest of the
+                # TTL, undoing the read rule above.
+                clearance=_clearance.fingerprint,
             )
             if memory_context:
                 req.payload["memory_context"] = memory_context
@@ -1695,15 +1735,13 @@ async def run_agent_stream_endpoint(
         req.assistant_message_id or f"assistant-{thread_id}-{run_id}"
     )
     _mem_user = (user.email or "").strip()
-    # Who the run's turns are extracted into. Blank in a shared room, which
-    # makes the run-boundary extraction below a no-op: what several people said
-    # in a room is the room's, and writing it into one participant's private
-    # store is a disclosure nobody consented to. The room's own compartment is
-    # where this belongs and is not built yet (memory-clearance.md) — until it
-    # is, a shared room remembers nothing rather than remembering it in the
-    # wrong place. Deliberately NOT `_mem_user`, which also names the session's
-    # owner and the acting member for authorship, and must stay a real email.
-    _extract_user = "" if _room_is_shared else _mem_user
+    # Which compartment the run's turns are extracted into. What several people
+    # said in a room is the room's, so it files under `room:<thread_id>` and
+    # never into one participant's private store — a disclosure nobody
+    # consented to, and a silent one. Deliberately NOT `_mem_user`, which also
+    # names the session's owner and the acting member for authorship and must
+    # stay a real email.
+    _extract_user = _clearance.write if _room_is_shared else _mem_user
     _mem_message = str(req.payload.get("message") or "")
     _mem_history = [
         {"role": str(m.get("role") or "user"), "content": str(m.get("content") or "")}

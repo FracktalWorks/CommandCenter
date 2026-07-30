@@ -37,29 +37,38 @@ from typing import Any
 
 from acb_common import get_logger, get_settings
 
+from acb_memory.compartments import (
+    AGENT_SCOPE_PREFIX,
+    ORG_SCOPE_KEY,
+    PREFS_SCOPE_PREFIX,
+    ROOM_SCOPE_PREFIX,
+    scope_key,
+    scope_kind,
+)
+
 from ._gateway_env import gateway_only_env
 
 _log = get_logger("acb_memory.mem0")
 
-# Reserved scope namespaces. A human user_id is a plain email; agent/org scopes
-# use these prefixes so the three never collide in the shared collection.
-AGENT_SCOPE_PREFIX = "agent:"
-ORG_SCOPE_KEY = "org:global"
 
-
-def scope_key(*, user: str | None = None, agent: str | None = None, org: bool = False) -> str:
-    """Build the Mem0 ``user_id`` scope key for a memory read/write.
-
-    Exactly one of *user* / *agent* / *org* selects the scope:
-      scope_key(user="a@b.com")  → "a@b.com"        (that human's private memory)
-      scope_key(agent="sales")   → "agent:sales"    (shared across users of the agent)
-      scope_key(org=True)        → "org:global"     (organisation-wide shared memory)
-    """
-    if org:
-        return ORG_SCOPE_KEY
-    if agent:
-        return f"{AGENT_SCOPE_PREFIX}{agent}"
-    return user or ""
+# The scope vocabulary lives in compartments.py — ONE definition, because two
+# that can drift is how a partition boundary quietly stops matching itself.
+# Re-exported here (see the import above) so every existing
+# `from acb_memory.mem0_client import scope_key` keeps working, and named in
+# __all__ so the shim reads as deliberate rather than as unused imports.
+__all__ = [
+    "AGENT_SCOPE_PREFIX",
+    "ORG_SCOPE_KEY",
+    "PREFS_SCOPE_PREFIX",
+    "ROOM_SCOPE_PREFIX",
+    "MemoryClient",
+    "add_memories_background",
+    "get_memory_client",
+    "get_memory_context",
+    "get_scoped_context",
+    "scope_key",
+    "scope_kind",
+]
 
 
 class MemoryClient:

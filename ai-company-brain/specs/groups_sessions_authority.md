@@ -199,10 +199,13 @@ agent — §7 below.
   (`README.md` §5) and unbuilt.
 - **Steer.** Non-destructive mid-run guidance (`README.md` §4.6) is unbuilt, so
   the only way to redirect a run is still to supersede it.
-- **The room's memory compartment.** A shared room currently injects and
-  extracts *nothing* personal (§3's rule, enforced at both call sites in
-  `routes/agent.py`) — but it has no compartment of its own yet, so it simply
-  remembers nothing. `memory-clearance.md` is that work.
+- ✅ **The room's memory compartment** (2026-07-30). A shared room reads
+  `room:<thread_id>` + the typer's `prefs:` + agent + org, and writes what it
+  learns to the room. No participant's private compartment is read — the scope
+  key is never passed to `search()`, so there is nothing to leak rather than
+  something the model is asked to ignore. `acb_memory/compartments.py`.
+  Still open in `memory-clearance.md`: `subject:` compartments and the
+  registry, and the `prefs`/`user` backfill (so `prefs:` is empty for now).
 - **Groups admin UI.** `org_group` / `org_group_member` have no HTTP surface
   beyond read-time expansion; groups can be used as participant subjects but
   must be created in SQL.

@@ -50,6 +50,7 @@ async def get_session_memory(
     redis: Any,
     thread_id: str | None,
     build: Callable[[], Awaitable[str]],
+    clearance: str = "",
 ) -> str:
     """Return the session's memory block, fetching+caching it once per thread.
 
@@ -60,6 +61,15 @@ async def get_session_memory(
             with no session) caching is skipped and ``build`` is called directly.
         build: a zero-arg coroutine that fetches + assembles the fresh memory
             block (Mem0 + Graphiti). Only invoked on a cache miss.
+        clearance: fingerprint of the compartments the block was assembled
+            from (``acb_memory.Clearance.fingerprint``). **Part of the cache
+            key, and load-bearing.** A thread cached while solo built its block
+            from the owner's private compartment; if the key ignored clearance
+            that block would keep being served for the rest of the TTL after
+            somebody was invited in — handing the room exactly the private
+            facts the read rule excludes. Changing clearance changes the key,
+            so a newly shared room misses and rebuilds. Empty keeps the old
+            key, so callers with one clearance are unaffected.
 
     Returns:
         The memory block string (possibly empty). Never raises — on any Redis
@@ -70,6 +80,8 @@ async def get_session_memory(
         return await build()
 
     key = f"{_KEY_PREFIX}{thread_id}"
+    if clearance:
+        key = f"{key}:{clearance}"
 
     # ── Cache read ────────────────────────────────────────────────────
     try:
@@ -102,13 +114,40 @@ async def get_session_memory(
 
 
 async def invalidate_session_memory(*, redis: Any, thread_id: str) -> None:
-    """Drop the cached memory block for a thread (e.g. after a memory write).
+    """Drop every cached memory block for a thread (e.g. after a memory write).
 
-    Best-effort — a failure just means the block lives out its TTL.
+    A thread has one entry PER CLEARANCE since the key gained that suffix, so
+    this clears them all rather than the bare key — otherwise invalidation
+    would silently stop matching anything the moment a thread was shared, and
+    a written fact would take up to the TTL to appear.
+
+    Best-effort — a failure just means the blocks live out their TTL.
     """
     if redis is None or not thread_id:
         return
+    base = f"{_KEY_PREFIX}{thread_id}"
+
+    # The bare key first, in its own try: it is the only one a client without
+    # SCAN can have written, and it must not be left behind because the sweep
+    # of clearance variants below failed. Collapsing both into one block made a
+    # missing `scan` silently skip the delete entirely — worse than the
+    # single-key behaviour this replaced.
     try:
-        await redis.delete(f"{_KEY_PREFIX}{thread_id}")
+        await redis.delete(base)
     except Exception as exc:
         _log.debug("session_mem.invalidate_failed", error=str(exc))
+
+    # Then every per-clearance variant. A thread has at most a handful, so the
+    # scan is bounded and cheap.
+    try:
+        keys: list[str] = []
+        cursor = 0
+        while True:
+            cursor, found = await redis.scan(cursor, match=f"{base}:*", count=64)
+            keys.extend(found)
+            if cursor == 0:
+                break
+        if keys:
+            await redis.delete(*keys)
+    except Exception as exc:
+        _log.debug("session_mem.invalidate_variants_failed", error=str(exc))

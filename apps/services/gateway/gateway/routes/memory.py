@@ -47,91 +47,13 @@ router = APIRouter(
     dependencies=[Depends(require_internal_auth)],
 )
 
-#: Mirrors ``acb_memory.scope_key``. Duplicated as constants rather than
+#: Mirrors ``acb_memory.compartments``. Duplicated as constants rather than
 #: imported so authorization still works when Mem0 is not installed — a router
 #: that fails open because an optional dependency is missing is not a gate.
 AGENT_SCOPE_PREFIX = "agent:"
 ORG_SCOPE_KEY = "org:global"
-
-
-def _authorize_scope(scope: str, user: UserContext, *, write: bool) -> None:
-    """Raise 403 unless *user* may touch this memory scope.
-
-    One rule per scope shape, and an unrecognised shape is refused rather than
-    waved through — a scope vocabulary that grows must fail closed here, not
-    quietly become world-readable.
-
-    * **A person's own memory** is theirs alone. Deliberately not readable by
-      admins either: administering members is not the same as reading what
-      they told an agent in private, and nothing in the product needs it. If
-      that changes it should arrive as a named feature with an audit trail,
-      not as a side effect of holding ``admin:members:manage``.
-    * **Agent memory** is shared across the agent's users by design, so the
-      question is whether you are one of them — the same
-      ``agents:run:<name>`` check the run path already enforces.
-    * **Org memory** uses the permissions migration 131 seeded: everyone with
-      a role reads it, contributing to it is the gated act.
-    """
-    scope = (scope or "").strip()
-    if not scope:
-        raise HTTPException(status_code=404, detail="Unknown memory scope")
-
-    # The platform acting as itself (cron, service-to-service). It holds "*",
-    # so agent and org scopes pass as they do at every other enforcement seam.
-    #
-    # A PERSON'S scope is the exception, and deliberately so. `deps.py` §1b
-    # argues a narrower service grant is theatre because the token holder can
-    # assert any `X-User-Email` anyway — true, and beside the point here. The
-    # difference is between asserting an identity and *omitting* one: this bug
-    # existed because `lib/memory.ts` forgot the header and silently received
-    # god mode. Requiring the assertion makes that omission fail closed, and
-    # makes "who read this person's memory" answerable afterwards. Nothing
-    # in-process needs it — every production read and write goes through
-    # `acb_memory` directly, never over HTTP.
-    is_service = user.role is UserRole.AGENT and user.has_permission("*")
-    if is_service and "@" not in scope:
-        return
-
-    if scope == ORG_SCOPE_KEY:
-        needed = "memory:write_org" if write else "memory:read_org"
-        if not user.has_permission(needed):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Forbidden: organisation memory needs '{needed}'.",
-            )
-        return
-
-    if scope.startswith(AGENT_SCOPE_PREFIX):
-        agent = scope[len(AGENT_SCOPE_PREFIX):]
-        if not agent or not user.can_run_agent(agent):
-            raise HTTPException(
-                status_code=403,
-                detail=f"Forbidden: no access to agent '{agent}'.",
-            )
-        return
-
-    if "@" in scope:
-        if is_service:
-            _log.warning("memory.service_call_without_identity", scope=scope[:40])
-            raise HTTPException(
-                status_code=403,
-                detail=(
-                    "Forbidden: reading a person's memory requires acting as "
-                    "that person — send X-User-Email alongside the token."
-                ),
-            )
-        if scope.strip().lower() != (user.email or "").strip().lower():
-            _log.warning(
-                "memory.cross_user_denied",
-                actor=(user.email or "")[:40], scope=scope[:40],
-            )
-            raise HTTPException(
-                status_code=403,
-                detail="Forbidden: that is somebody else's private memory.",
-            )
-        return
-
-    raise HTTPException(status_code=404, detail="Unknown memory scope")
+ROOM_SCOPE_PREFIX = "room:"
+PREFS_SCOPE_PREFIX = "prefs:"
 
 
 class SearchRequest(BaseModel):
@@ -142,6 +64,107 @@ class SearchRequest(BaseModel):
 class AddRequest(BaseModel):
     messages: list[dict[str, str]]
     agent_id: str = "orchestrator"
+
+
+def _deny(detail: str, status_code: int = 403) -> HTTPException:
+    return HTTPException(status_code=status_code, detail=detail)
+
+
+def _authorize_org(user: UserContext, *, write: bool) -> None:
+    """Everyone with a role reads org memory; contributing to it is the gated
+    act, because an agent that can silently append is how org memory fills with
+    noise (migration 131)."""
+    needed = "memory:write_org" if write else "memory:read_org"
+    if not user.has_permission(needed):
+        raise _deny(f"Forbidden: organisation memory needs '{needed}'.")
+
+
+def _authorize_room(scope: str, user: UserContext, *, write: bool) -> None:
+    """A room's memory has exactly the room's audience, so membership already
+    answers this — the same predicate the transcript uses, because a room
+    compartment holds what the transcript established."""
+    thread_id = scope[len(ROOM_SCOPE_PREFIX):]
+    if not thread_id:
+        raise _deny("Unknown memory scope", 404)
+    from gateway.rooms import resolve_room_access
+    access = resolve_room_access(thread_id, user.email or "")
+    if not access.can_read or (write and not access.can_send):
+        raise _deny("Forbidden: that is another conversation's memory.")
+
+
+def _authorize_prefs(scope: str, user: UserContext) -> None:
+    """Preferences describe a person and travel with them into rooms, but they
+    remain that person's to read and change."""
+    owner = scope[len(PREFS_SCOPE_PREFIX):]
+    if not owner or owner.strip().lower() != (user.email or "").strip().lower():
+        raise _deny("Forbidden: those are somebody else's preferences.")
+
+
+def _authorize_agent(scope: str, user: UserContext) -> None:
+    """Agent memory is shared across the agent's users by design, so the
+    question is whether you are one of them — the same ``agents:run:<name>``
+    the run path enforces."""
+    agent = scope[len(AGENT_SCOPE_PREFIX):]
+    if not agent or not user.can_run_agent(agent):
+        raise _deny(f"Forbidden: no access to agent '{agent}'.")
+
+
+def _authorize_person(scope: str, user: UserContext) -> None:
+    """A person's episodic memory is theirs alone.
+
+    Deliberately not readable by admins: administering members is not the same
+    as reading what they told an agent in private, and nothing in the product
+    needs it. If that changes it should arrive as a named feature with an audit
+    trail, not as a side effect of holding ``admin:members:manage``.
+    """
+    if scope.strip().lower() != (user.email or "").strip().lower():
+        _log.warning(
+            "memory.cross_user_denied",
+            actor=(user.email or "")[:40], scope=scope[:40],
+        )
+        raise _deny("Forbidden: that is somebody else's private memory.")
+
+
+def _authorize_scope(scope: str, user: UserContext, *, write: bool) -> None:
+    """Raise 403/404 unless *user* may touch this memory scope.
+
+    One rule per scope shape, and an unrecognised shape is refused rather than
+    waved through — a scope vocabulary that grows must fail closed here, not
+    quietly become world-readable.
+    """
+    scope = (scope or "").strip()
+    if not scope:
+        raise _deny("Unknown memory scope", 404)
+
+    #: Scopes naming a PERSON or a membership rather than a shared store. A
+    #: service principal must assert an identity to reach any of them: omitting
+    #: an identity has to fail closed, since omission is how the original hole
+    #: happened (`lib/memory.ts` forgot the header and got god mode).
+    personal = (
+        "@" in scope
+        or scope.startswith(PREFS_SCOPE_PREFIX)
+        or scope.startswith(ROOM_SCOPE_PREFIX)
+    )
+    if user.role is UserRole.AGENT and user.has_permission("*"):
+        if not personal:
+            return
+        _log.warning("memory.service_call_without_identity", scope=scope[:40])
+        raise _deny(
+            "Forbidden: reading a person's memory requires acting as that "
+            "person — send X-User-Email alongside the token."
+        )
+
+    if scope == ORG_SCOPE_KEY:
+        return _authorize_org(user, write=write)
+    if scope.startswith(ROOM_SCOPE_PREFIX):
+        return _authorize_room(scope, user, write=write)
+    if scope.startswith(PREFS_SCOPE_PREFIX):
+        return _authorize_prefs(scope, user)
+    if scope.startswith(AGENT_SCOPE_PREFIX):
+        return _authorize_agent(scope, user)
+    if "@" in scope:
+        return _authorize_person(scope, user)
+    raise _deny("Unknown memory scope", 404)
 
 
 # ---------------------------------------------------------------------------

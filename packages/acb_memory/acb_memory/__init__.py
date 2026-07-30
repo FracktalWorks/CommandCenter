@@ -10,6 +10,7 @@ Two memory layers:
 Both are *optional* — if not configured, every public function returns a
 graceful empty result and the agents work normally without memory.
 """
+from acb_memory.compartments import Clearance, resolve_clearance
 from acb_memory.mem0_client import (
     MemoryClient,
     get_memory_client,
@@ -21,6 +22,9 @@ from acb_memory.mem0_client import (
     get_scoped_all,
     AGENT_SCOPE_PREFIX,
     ORG_SCOPE_KEY,
+    PREFS_SCOPE_PREFIX,
+    ROOM_SCOPE_PREFIX,
+    scope_kind,
 )
 from acb_memory.graphiti_client import (
     GraphitiClient,
@@ -55,6 +59,12 @@ __all__ = [
     "get_scoped_all",
     "AGENT_SCOPE_PREFIX",
     "ORG_SCOPE_KEY",
+    "PREFS_SCOPE_PREFIX",
+    "ROOM_SCOPE_PREFIX",
+    "scope_kind",
+    # Compartments — which scopes a run may read, and where its facts go.
+    "Clearance",
+    "resolve_clearance",
     "GraphitiClient",
     "get_graphiti_client",
     "search_entity_timeline",

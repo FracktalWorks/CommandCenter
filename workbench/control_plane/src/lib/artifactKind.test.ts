@@ -1,0 +1,68 @@
+import { describe, expect, it } from "vitest";
+
+import { classifyArtifact, isArtifactPath, isRenderable } from "./artifactKind";
+
+describe("classifyArtifact", () => {
+  // The mobile bug this module exists to prevent: ArtifactViewerModal is the
+  // ONLY artifact viewer on a phone (the side panel is desktop-only), and it had
+  // its own copy of this logic where html/jsx/tsx fell through to CODE_EXTS. A
+  // full-page artifact rendered on desktop and showed as source on mobile.
+  it("classifies .html as a rendered artifact, not code", () => {
+    expect(classifyArtifact("report.html", "outputs/report.html")).toBe("html");
+    expect(classifyArtifact("report.htm", "outputs/report.htm")).toBe("html");
+  });
+
+  it("classifies .jsx/.tsx under outputs/ as a React artifact", () => {
+    expect(classifyArtifact("d.jsx", "outputs/d.jsx")).toBe("react");
+    expect(classifyArtifact("d.tsx", "outputs/d.tsx")).toBe("react");
+    expect(classifyArtifact("d.jsx", "/outputs/d.jsx")).toBe("react");
+  });
+
+  it("leaves .jsx/.tsx outside outputs/ as source code", () => {
+    // An agent reading its own source must never have the viewer build and run it.
+    expect(classifyArtifact("Foo.tsx", "src/components/Foo.tsx")).toBe("code");
+    expect(classifyArtifact("page.jsx", "app/page.jsx")).toBe("code");
+  });
+
+  it("prefers a real document type over the code-extension list", () => {
+    // pdf/docx are checked before CODE_EXTS for the same reason html is.
+    expect(classifyArtifact("a.pdf", "outputs/a.pdf")).toBe("pdf");
+    expect(classifyArtifact("a.docx", "outputs/a.docx")).toBe("docx");
+    expect(classifyArtifact("a", "outputs/a", "application/pdf")).toBe("pdf");
+  });
+
+  it("classifies the ordinary kinds unchanged", () => {
+    expect(classifyArtifact("n.md", "outputs/n.md")).toBe("markdown");
+    expect(classifyArtifact("r.py", "outputs/r.py")).toBe("code");
+    expect(classifyArtifact("c.png", "outputs/c.png")).toBe("image");
+    expect(classifyArtifact("d.csv", "outputs/d.csv")).toBe("code");
+    expect(classifyArtifact("l.log", "outputs/l.log")).toBe("text");
+    expect(classifyArtifact("b.bin", "outputs/b.bin")).toBe("binary");
+  });
+
+  it("is case-insensitive about extensions", () => {
+    expect(classifyArtifact("R.HTML", "outputs/R.HTML")).toBe("html");
+    expect(classifyArtifact("D.JSX", "outputs/D.JSX")).toBe("react");
+  });
+});
+
+describe("isArtifactPath", () => {
+  it("accepts outputs/ with or without a leading slash", () => {
+    expect(isArtifactPath("outputs/a.jsx")).toBe(true);
+    expect(isArtifactPath("/outputs/a.jsx")).toBe(true);
+  });
+  it("rejects anything else, including a nested outputs/", () => {
+    expect(isArtifactPath("src/outputs/a.jsx")).toBe(false);
+    expect(isArtifactPath("inputs/a.jsx")).toBe(false);
+  });
+});
+
+describe("isRenderable", () => {
+  it("is true for exactly the kinds with a rendered view", () => {
+    expect(isRenderable("html")).toBe(true);
+    expect(isRenderable("react")).toBe(true);
+    for (const k of ["markdown", "code", "image", "pdf", "docx", "text", "binary"] as const) {
+      expect(isRenderable(k)).toBe(false);
+    }
+  });
+});

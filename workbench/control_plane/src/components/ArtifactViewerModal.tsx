@@ -13,15 +13,15 @@
  *   other               → hex-dump excerpt + download button
  */
 
-import React, { useEffect, useRef, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
+import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
 import { useTheme } from "next-themes";
-import { classifyArtifact, extOf, isRenderable, type ArtifactKind }
-  from "@/lib/artifactKind";
+import { classifyArtifact, extOf, isRenderable } from "@/lib/artifactKind";
 import type { FileEntry } from "./ArtifactSidebar";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -279,6 +279,11 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   // `showSource` flips to the code view without entering edit mode, which is the
   // only way to inspect an artifact on mobile (there is no side panel there).
   const [showSource, setShowSource] = useState(false);
+  // Same reason as DocumentPane: a full-page artifact has no props.icons, so
+  // resolve the icons its own source references or ccIcon() returns nothing.
+  const source = state.status === "rendered" ? state.content : "";
+  const icons = useMemo(() => buildIconMap(iconsUsedIn(source)), [source]);
+  const draftIcons = useMemo(() => buildIconMap(iconsUsedIn(editContent)), [editContent]);
   const { resolvedTheme } = useTheme();
   const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
@@ -585,9 +590,9 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
                     {renderable ? (
                       editContent.trim() ? (
                         state.status === "rendered" && state.kind === "react" ? (
-                          <SandboxedReact code={editContent} theme={theme} />
+                          <SandboxedReact code={editContent} theme={theme} icons={draftIcons} />
                         ) : (
-                          <SandboxedHtml html={editContent} theme={theme} />
+                          <SandboxedHtml html={editContent} theme={theme} icons={draftIcons} />
                         )
                       ) : (
                         <p className="text-muted-foreground text-sm italic">
@@ -659,9 +664,9 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
             // should use the whole sheet, which matters most on a phone.
             <div className="-mx-6 -my-6 h-full min-h-[60vh]">
               {state.kind === "html" ? (
-                <SandboxedHtml html={state.content} theme={theme} chromeless />
+                <SandboxedHtml html={state.content} theme={theme} icons={icons} chromeless />
               ) : (
-                <SandboxedReact code={state.content} theme={theme} chromeless />
+                <SandboxedReact code={state.content} theme={theme} icons={icons} chromeless />
               )}
             </div>
           )}

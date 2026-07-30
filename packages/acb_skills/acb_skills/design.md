@@ -216,6 +216,28 @@ presenting:
   Use it for something substantial and multi-section: an analysis, a plan, a
   briefing, an audit — anything the user will keep or scroll through.
 
+### Logos, icons and images — what actually works
+
+Artifacts run offline in a locked sandbox (`default-src 'none'`, `img-src data:`).
+**Every remote URL fails silently** — no broken-image icon, no console error, just
+nothing. That includes company logos from Clearbit, Google favicons, CDN icon
+sets, and Google Fonts. If you write one, the tool result will now tell you.
+
+Three things that DO work:
+
+| Want | Use | Notes |
+|---|---|---|
+| An icon | `<Icon name="trending-up" />` from `@cc/ui`, or `<span data-cc-icon="trending-up">` in HTML | Any [Lucide](https://lucide.dev/icons) name. Resolved to inline SVG by the parent, so no network. Inherits `currentColor`. |
+| A company logo / photo | A `data:` URI | Only if you already hold the bytes. There is no way to fetch one. |
+| A chart, diagram, sparkline | The kit blocks (`Chart`, `Spark`, `Bars`, `Donuts`, `cc-arch`) | Pure CSS/inline SVG — this is the intended route, not an image. |
+
+The icon **name must be a literal string** — `<Icon name="rocket" />` works,
+`<Icon name={someVariable} />` cannot be seen by the resolver and renders nothing.
+
+When you want a brand mark you cannot embed, use the company's initials in a
+`cc-node` or a `Chip` instead. That reads as deliberate; a missing image reads as
+broken.
+
 ### Which surface? Let the volume decide
 
 Pick the surface from the shape and size of the answer, before writing any UI:
@@ -324,7 +346,8 @@ Wrap the whole document in `<div class="cc-report">…</div>`. Blocks:
 - `cc-steps` of `cc-step` (each has a `<div class="cc-n">1</div>` + `<h4>`/`<p>`) —
   numbered sequence (ONLY when order truly matters).
 - `cc-phase` rows (each has `<span class="cc-badge">Phase 1</span>` + content) —
-  a phased plan / roadmap.
+  a phased plan / roadmap. `cc-badge` is a standalone solid label chip and is
+  safe anywhere — inside a callout, a table cell, next to a heading.
 
 **Data-viz & decision blocks (USE THESE for charts, KPIs, decisions, and
 architecture — never hand-roll SVG paths or bar math).** These are pure

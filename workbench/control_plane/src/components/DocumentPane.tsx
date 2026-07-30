@@ -19,7 +19,7 @@
  * watches it stream in.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -27,6 +27,7 @@ import { useTheme } from "next-themes";
 import { Eye, Pencil, Save, RotateCcw, Download, Loader2 } from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
+import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
 import { classifyArtifact, isRenderable, type ArtifactKind }
   from "@/lib/artifactKind";
 
@@ -63,6 +64,11 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const lastLoadedRef = useRef<string>("");
+
+  // Full-page artifacts have no props.icons to declare with, so the icons
+  // come from what the source actually references (see iconsUsedIn).
+  const icons = useMemo(() => buildIconMap(iconsUsedIn(content)), [content]);
+  const draftIcons = useMemo(() => buildIconMap(iconsUsedIn(draft)), [draft]);
 
   const loadText = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -268,9 +274,9 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             {kind === "markdown" ? (
               <MarkdownBody content={draft} />
             ) : kind === "react" ? (
-              <SandboxedReact code={draft} theme={theme} />
+              <SandboxedReact code={draft} theme={theme} icons={draftIcons} />
             ) : (
-              <SandboxedHtml html={draft} theme={theme} />
+              <SandboxedHtml html={draft} theme={theme} icons={draftIcons} />
             )}
           </div>
         )}
@@ -285,7 +291,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
   } else if (kind === "html") {
     body = (
       <div className="flex-1 min-h-0">
-        <SandboxedHtml html={content} theme={theme} chromeless />
+        <SandboxedHtml html={content} theme={theme} icons={icons} chromeless />
       </div>
     );
   } else if (kind === "react") {
@@ -304,7 +310,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
       </div>
     ) : (
       <div className="flex-1 min-h-0">
-        <SandboxedReact code={content} theme={theme} chromeless />
+        <SandboxedReact code={content} theme={theme} icons={icons} chromeless />
       </div>
     );
   } else {

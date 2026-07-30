@@ -60,6 +60,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     _log.info("gateway.startup", env=settings.acb_env)
 
+    # Ownership bootstrap: if NO member holds `owner`, provision the first
+    # EXECUTIVE_EMAILS address (creating its app_user row). Startup is the
+    # first place the database AND the environment are both readable —
+    # migration 128's SQL bootstrap can only promote rows that already exist,
+    # which is how the 2026-07-30 lockout happened (empty app_user → zero
+    # members → an invite-only model with no inviter). No-op whenever any
+    # owner exists; never blocks startup.
+    try:
+        from acb_auth import ensure_owner_bootstrap  # noqa: PLC0415
+
+        await ensure_owner_bootstrap()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("gateway.owner_bootstrap_skipped", error=str(exc)[:200])
+
     if _HAS_MAF:
         _log.info("gateway.ag_ui_registered", path="/copilot/chat")
 

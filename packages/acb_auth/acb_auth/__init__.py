@@ -7,6 +7,7 @@ Two guard styles coexist:
   roles plus per-user allow/deny overrides. See
   ``ai-company-brain/specs/org_access_control.md``.
 """
+from acb_auth.access import ensure_owner_bootstrap
 from acb_auth.access import invalidate as invalidate_access
 from acb_auth.access import resolve_access, resolve_session_access
 from acb_auth.deps import (
@@ -70,6 +71,7 @@ __all__ = [
     "permission_matches",
     "validate_permission",
     # resolution
+    "ensure_owner_bootstrap",
     "resolve_access",
     "resolve_session_access",
     "invalidate_access",

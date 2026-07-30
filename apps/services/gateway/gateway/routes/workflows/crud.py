@@ -130,6 +130,70 @@ async def create_workflow(
     }
 
 
+@router.post("/{workflow_id}/duplicate", status_code=201)
+async def duplicate_workflow(
+    workflow_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Copy a workflow into a fresh DRAFT (spec F1).
+
+    Everything editable travels: graph, variables, triggers (kind/config/
+    enabled — safe to copy verbatim because triggers only fire for PUBLISHED
+    workflows, and the copy starts as a draft with no versions). The webhook
+    hook token is always regenerated: it is a credential, never cloned.
+    """
+    db = await _get_db()
+    try:
+        row = await load_workflow_or_404(db, workflow_id)
+        triggers = await load_triggers(db, workflow_id)
+        name = f"{row.name} (copy)"[:120]
+        new = (
+            await db.execute(
+                text(
+                    """INSERT INTO workflows
+                       (name, description, owner_email, hook_token, graph, variables)
+                   VALUES (:name, :description, :owner, :token,
+                           :graph ::jsonb, :variables ::jsonb)
+                   RETURNING *"""
+                ),
+                {
+                    "name": name,
+                    "description": row.description or "",
+                    "owner": _uid(user),
+                    "token": new_hook_token(),
+                    "graph": json.dumps(parse_jsonb(row.graph, {}), default=str),
+                    "variables": json.dumps(parse_jsonb(row.variables, {}), default=str),
+                },
+            )
+        ).fetchone()
+        for t in triggers:
+            await db.execute(
+                text(
+                    """INSERT INTO workflow_triggers (workflow_id, kind, config, enabled)
+                       VALUES (:wid, :kind, :config ::jsonb, :enabled)"""
+                ),
+                {
+                    "wid": str(new.id),
+                    "kind": t["kind"],
+                    "config": json.dumps(t["config"], default=str),
+                    "enabled": t["enabled"],
+                },
+            )
+        await db.commit()
+    finally:
+        await db.close()
+    return {
+        **_row_summary(new),
+        "graph": parse_jsonb(new.graph, {}),
+        "variables": parse_jsonb(new.variables, {}),
+        "triggers": [
+            # id/last_fired_at belong to the source's triggers, not the copy's.
+            {k: v for k, v in t.items() if k not in ("id", "last_fired_at")}
+            for t in triggers
+        ],
+    }
+
+
 @router.get("/{workflow_id}")
 async def get_workflow(
     workflow_id: str,

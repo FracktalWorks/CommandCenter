@@ -1,7 +1,7 @@
 # Workflows App — Project Plan (deterministic automation over the agent fleet)
 
 > **Product:** CommandCenter · **Feature:** Workflows app (`/workflows`) · **Updated:** 2026-07-30 · **Version:** 0.2
-> **Status:** 🔄 Slices 1+2 built — data model (migration 132) + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio + **Workflow Copilot (F14)** + **keyword capability search (F15; semantic → BO‑22)** + **event triggers (F10)** + **approval node with pause/resume via the Action Broker inbox (F11)** + **workflows as agent tools (F13)** + **run-history drill-in (F9 complete: a history row replays its recorded node results onto the canvas)**. All five trigger kinds live: manual, api, webhook, schedule, event. Engine semantics are locked by a golden trajectory eval (`evals/trajectories/test_workflow_engine_trajectory.py`, CI-blocking); orphaned `running` rows are swept to `failed` at gateway startup (paused runs survive — resume rebuilds from the pause snapshot).
+> **Status:** 🔄 Slices 1+2 built — data model (migration 132) + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio + **Workflow Copilot (F14)** + **keyword capability search (F15; semantic → BO‑22)** + **event triggers (F10)** + **approval node with pause/resume via the Action Broker inbox (F11)** + **workflows as agent tools (F13)** + **run-history drill-in (F9 complete: a history row replays its recorded node results onto the canvas)** + **F1/F6 complete (gallery search + duplicate/delete, version rollback via the status-badge popover)**. All five trigger kinds live: manual, api, webhook, schedule, event. Engine semantics are locked by a golden trajectory eval (`evals/trajectories/test_workflow_engine_trajectory.py`, CI-blocking); orphaned `running` rows are swept to `failed` at gateway startup (paused runs survive — resume rebuilds from the pause snapshot).
 > **Parent RFC:** [`docs/workflow-editor/README.md`](../../docs/workflow-editor/README.md) — stack selection (React Flow), the compile-to-MAF-Workflows decision, data model, editor UX, trigger taxonomy. Read it for *how*; this doc is *what, why, and why now*. Interactive mockup: `docs/workflow-editor/mockup.html`.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape) · [`docs/app-workshop/README.md`](../../docs/app-workshop/README.md) §4.0 (the platform contract this app also enforces).
 > **Policy amendment:** ADR-028 (see `system_architecture.md`) amends ADR-014 and `project_plan.md` C-09 / §2 non-goals — see §10.
@@ -158,8 +158,8 @@ Modules are the "programmatic modules generated via a conversational interface" 
 
 ## 6. API surface (gateway `routes/workflows/`)
 
-- `GET/POST /workflows` · `GET/PUT/DELETE /workflows/{id}` — CRUD on the edit-model
-- `POST /workflows/{id}/publish` — compile + snapshot version; `GET /workflows/{id}/versions`
+- `GET/POST /workflows` · `GET/PUT/DELETE /workflows/{id}` — CRUD on the edit-model; `POST /workflows/{id}/duplicate` — copy into a fresh draft (graph/variables/triggers travel; the webhook hook token is regenerated — it is a credential, never cloned)
+- `POST /workflows/{id}/publish` — compile + snapshot version; `GET /workflows/{id}/versions`; `POST /workflows/{id}/versions/{v}/rollback` — republish version *v* as a NEW version (F6: rollback never mutates history, and never gates on the current catalog — drift is returned as non-blocking `warnings`; the draft edit-model is untouched)
 - `POST /workflows/{id}/run` — manual/API trigger (body = trigger payload); `POST /workflows/hooks/{hook_token}` — inbound webhook trigger (unauthenticated route, secret-token-addressed, per-workflow)
 - `GET /workflows/{id}/runs` · `GET /workflows/runs/{run_id}` — history + per-node detail; `GET /workflows/runs/{run_id}/stream` — SSE live events
 - `GET /workflows/catalog` — the node palette: agents (live registry), integration actions, modules, logic/trigger/output node types

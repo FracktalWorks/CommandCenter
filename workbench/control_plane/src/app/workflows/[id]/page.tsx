@@ -59,6 +59,7 @@ import {
   getCatalog,
   getWorkflow,
   publishWorkflow,
+  rollbackWorkflow,
   runWorkflow,
   updateWorkflow,
   validateWorkflow,
@@ -147,6 +148,7 @@ function EditorInner({ id }: { id: string }) {
   const [saving, setSaving] = useState(false);
   const [busy, setBusy] = useState<string | null>(null);
   const [showTriggers, setShowTriggers] = useState(false);
+  const [showVersions, setShowVersions] = useState(false);
   const [showTestPayload, setShowTestPayload] = useState(false);
   const [testPayload, setTestPayload] = useState('{\n  "body": "example"\n}');
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
@@ -537,6 +539,32 @@ function EditorInner({ id }: { id: string }) {
     }
   }, [id, save, testPayload, applyIssues, setNodeRunStatus]);
 
+  // Rollback = republish an old version (spec F6). The draft canvas is left
+  // alone — only the LIVE version changes; detail refreshes for the badge.
+  const onRollback = useCallback(
+    async (version: number) => {
+      setBusy("rollback");
+      setNotice(null);
+      try {
+        const res = await rollbackWorkflow(id, version);
+        const wf = await getWorkflow(id);
+        setDetail(wf);
+        setShowVersions(false);
+        setNotice(
+          `Rolled back — v${res.version} is live (a copy of v${res.rolled_back_to})` +
+            (res.warnings.length
+              ? ` · ${res.warnings.length} catalog warning(s); validate the draft.`
+              : "."),
+        );
+      } catch (e) {
+        setNotice(String(e instanceof Error ? e.message : e));
+      } finally {
+        setBusy(null);
+      }
+    },
+    [id],
+  );
+
   const onPublish = useCallback(async () => {
     setBusy("publish");
     setNotice(null);
@@ -603,16 +631,73 @@ function EditorInner({ id }: { id: string }) {
           }}
           className="bg-transparent text-sm font-semibold text-foreground focus:outline-none focus:ring-1 focus:ring-ring rounded-md px-1.5 py-0.5 min-w-0 w-48 sm:w-64"
         />
-        <span
-          className={`text-[10px] px-2 py-0.5 rounded-full border shrink-0 ${
-            published
-              ? "bg-success/10 text-success border-success/20"
-              : "bg-warning/10 text-warning border-warning/20"
-          }`}
-        >
-          {detail.status}
-          {detail.latest_version ? ` · v${detail.latest_version}` : ""}
-        </span>
+        <div className="relative shrink-0">
+          <button
+            onClick={() =>
+              detail.versions.length > 0 && setShowVersions((s) => !s)
+            }
+            disabled={detail.versions.length === 0}
+            title={
+              detail.versions.length > 0
+                ? "Version history — roll back to an earlier version"
+                : undefined
+            }
+            className={`text-[10px] px-2 py-0.5 rounded-full border ${
+              published
+                ? "bg-success/10 text-success border-success/20"
+                : "bg-warning/10 text-warning border-warning/20"
+            } ${detail.versions.length > 0 ? "hover:ring-1 hover:ring-ring cursor-pointer" : "cursor-default"}`}
+          >
+            {detail.status}
+            {detail.latest_version ? ` · v${detail.latest_version}` : ""}
+          </button>
+          {showVersions && (
+            <div className="absolute left-0 top-7 z-30 w-80 rounded-xl border border-border bg-popover shadow-lg p-2">
+              <div className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide px-1.5 pb-1">
+                Versions — rollback republishes a copy
+              </div>
+              <div className="max-h-64 overflow-y-auto scrollbar-thin">
+                {[...detail.versions]
+                  .sort((a, b) => b.version - a.version)
+                  .map((v) => (
+                    <div
+                      key={v.version}
+                      className="flex items-center gap-2 px-1.5 py-1 text-[11px] rounded-md hover:bg-secondary/50"
+                    >
+                      <span className="text-foreground font-medium">
+                        v{v.version}
+                      </span>
+                      <span className="text-muted-foreground truncate">
+                        {v.published_by}
+                      </span>
+                      <span className="ml-auto text-muted-foreground shrink-0">
+                        {v.published_at
+                          ? new Date(v.published_at).toLocaleString()
+                          : ""}
+                      </span>
+                      {v.version === detail.latest_version && published ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded-full bg-success/10 text-success border border-success/20 shrink-0">
+                          live
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => onRollback(v.version)}
+                          disabled={busy !== null}
+                          className="text-[10px] px-1.5 py-0.5 rounded-md border border-border text-foreground hover:bg-secondary tech-transition disabled:opacity-50 shrink-0"
+                        >
+                          {busy === "rollback" ? (
+                            <Loader2 className="w-3 h-3 animate-spin" />
+                          ) : (
+                            "Roll back"
+                          )}
+                        </button>
+                      )}
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
         <button
           onClick={() => setShowTriggers((s) => !s)}
           className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition shrink-0"

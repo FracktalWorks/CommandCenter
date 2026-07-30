@@ -15,16 +15,24 @@ import { useRouter } from "next/navigation";
 import {
   Boxes,
   Clock,
+  Copy,
   Loader2,
   Plus,
   RefreshCw,
+  Search,
+  Trash2,
   Workflow as WorkflowIcon,
   Zap,
 } from "lucide-react";
 import Tabs from "@/components/Tabs";
 import FilterPills from "@/components/FilterPills";
 import ModuleStudio from "./components/ModuleStudio";
-import { createWorkflow, listWorkflows } from "./lib/api";
+import {
+  createWorkflow,
+  deleteWorkflow,
+  duplicateWorkflow,
+  listWorkflows,
+} from "./lib/api";
 import type { WorkflowSummary } from "./lib/types";
 
 const STATUS_BADGE: Record<string, string> = {
@@ -46,7 +54,10 @@ export default function WorkflowsPage() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [filter, setFilter] = useState("all");
+  const [query, setQuery] = useState("");
   const [creating, setCreating] = useState(false);
+  const [actioning, setActioning] = useState<string | null>(null);
+  const [confirmDelete, setConfirmDelete] = useState<string | null>(null);
 
   // Fetch-on-mount wiring: same pattern (and lint carve-out) as
   // build/apps/page.tsx.
@@ -69,10 +80,18 @@ export default function WorkflowsPage() {
   /* eslint-enable react-hooks/set-state-in-effect */
 
   const filtered = useMemo(() => {
-    if (filter === "published") return rows.filter((r) => r.status === "published");
-    if (filter === "drafts") return rows.filter((r) => r.status === "draft");
-    return rows;
-  }, [rows, filter]);
+    let out = rows;
+    if (filter === "published") out = out.filter((r) => r.status === "published");
+    if (filter === "drafts") out = out.filter((r) => r.status === "draft");
+    const q = query.trim().toLowerCase();
+    if (q)
+      out = out.filter(
+        (r) =>
+          r.name.toLowerCase().includes(q) ||
+          (r.description ?? "").toLowerCase().includes(q),
+      );
+    return out;
+  }, [rows, filter, query]);
 
   const onCreate = useCallback(async () => {
     setCreating(true);
@@ -84,6 +103,43 @@ export default function WorkflowsPage() {
       setCreating(false);
     }
   }, [router]);
+
+  const onDuplicate = useCallback(
+    async (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      setActioning(id);
+      try {
+        const copy = await duplicateWorkflow(id);
+        router.push(`/workflows/${copy.id}`);
+      } catch (err) {
+        setError(String(err instanceof Error ? err.message : err));
+        setActioning(null);
+      }
+    },
+    [router],
+  );
+
+  // Two-click delete: first click arms the button, second click deletes.
+  const onDelete = useCallback(
+    async (e: React.MouseEvent, id: string) => {
+      e.stopPropagation();
+      if (confirmDelete !== id) {
+        setConfirmDelete(id);
+        return;
+      }
+      setConfirmDelete(null);
+      setActioning(id);
+      try {
+        await deleteWorkflow(id);
+        await load();
+      } catch (err) {
+        setError(String(err instanceof Error ? err.message : err));
+      } finally {
+        setActioning(null);
+      }
+    },
+    [confirmDelete, load],
+  );
 
   return (
     <div className="flex flex-col h-full">
@@ -134,23 +190,35 @@ export default function WorkflowsPage() {
         <ModuleStudio />
       ) : (
         <>
-          <FilterPills
-            items={[
-              { id: "all", label: "All", count: rows.length },
-              {
-                id: "published",
-                label: "Published",
-                count: rows.filter((r) => r.status === "published").length,
-              },
-              {
-                id: "drafts",
-                label: "Drafts",
-                count: rows.filter((r) => r.status === "draft").length,
-              },
-            ]}
-            activeId={filter}
-            onChange={setFilter}
-          />
+          <div className="flex items-center border-b border-border shrink-0">
+            <FilterPills
+              className="border-b-0 flex-1 min-w-0"
+              items={[
+                { id: "all", label: "All", count: rows.length },
+                {
+                  id: "published",
+                  label: "Published",
+                  count: rows.filter((r) => r.status === "published").length,
+                },
+                {
+                  id: "drafts",
+                  label: "Drafts",
+                  count: rows.filter((r) => r.status === "draft").length,
+                },
+              ]}
+              activeId={filter}
+              onChange={setFilter}
+            />
+            <div className="relative pr-3 sm:pr-4 shrink-0">
+              <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-muted-foreground pointer-events-none" />
+              <input
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="Search workflows…"
+                className="w-36 sm:w-56 rounded-lg border border-input bg-background pl-8 pr-2.5 py-1.5 text-xs text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+              />
+            </div>
+          </div>
 
           <div className="flex-1 overflow-y-auto">
             <div className="p-4 sm:p-6">
@@ -171,7 +239,15 @@ export default function WorkflowsPage() {
                   </button>
                 </div>
               )}
-              {!loading && !error && filtered.length === 0 && (
+              {!loading && !error && filtered.length === 0 && rows.length > 0 && (
+                <div className="flex flex-col items-center justify-center h-48 gap-3 text-center">
+                  <Search className="w-8 h-8 text-muted-foreground/50" />
+                  <p className="text-sm text-muted-foreground">
+                    No workflows match. Try a different search or filter.
+                  </p>
+                </div>
+              )}
+              {!loading && !error && rows.length === 0 && (
                 <div className="flex flex-col items-center justify-center h-48 gap-3 text-center">
                   <WorkflowIcon className="w-8 h-8 text-muted-foreground/50" />
                   <p className="text-sm text-muted-foreground">
@@ -189,20 +265,58 @@ export default function WorkflowsPage() {
               {!loading && !error && filtered.length > 0 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-3">
                   {filtered.map((wf) => (
-                    <button
+                    <div
                       key={wf.id}
+                      role="button"
+                      tabIndex={0}
                       onClick={() => router.push(`/workflows/${wf.id}`)}
-                      className="text-left rounded-xl border border-border bg-card p-4 hover:border-primary/40 tech-transition group"
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") router.push(`/workflows/${wf.id}`);
+                      }}
+                      onMouseLeave={() => {
+                        if (confirmDelete === wf.id) setConfirmDelete(null);
+                      }}
+                      className="text-left rounded-xl border border-border bg-card p-4 hover:border-primary/40 tech-transition group cursor-pointer"
                     >
                       <div className="flex items-start justify-between gap-2">
                         <div className="w-9 h-9 rounded-lg bg-gradient-to-br from-primary/20 to-accent/15 flex items-center justify-center shrink-0">
                           <WorkflowIcon className="w-5 h-5 text-primary" />
                         </div>
-                        <span
-                          className={`text-[10px] px-2 py-0.5 rounded-full border ${STATUS_BADGE[wf.status] ?? STATUS_BADGE.draft}`}
-                        >
-                          {wf.status}
-                        </span>
+                        <div className="flex items-center gap-1">
+                          {actioning === wf.id ? (
+                            <Loader2 className="w-3.5 h-3.5 animate-spin text-muted-foreground" />
+                          ) : (
+                            <span className="hidden group-hover:flex items-center gap-1">
+                              <button
+                                onClick={(e) => onDuplicate(e, wf.id)}
+                                title="Duplicate workflow"
+                                className="p-1 rounded-md text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition"
+                              >
+                                <Copy className="w-3.5 h-3.5" />
+                              </button>
+                              <button
+                                onClick={(e) => onDelete(e, wf.id)}
+                                title={
+                                  confirmDelete === wf.id
+                                    ? "Click again to delete permanently"
+                                    : "Delete workflow"
+                                }
+                                className={`p-1 rounded-md tech-transition ${
+                                  confirmDelete === wf.id
+                                    ? "text-destructive bg-destructive/10 ring-1 ring-destructive/40"
+                                    : "text-muted-foreground hover:text-destructive hover:bg-secondary"
+                                }`}
+                              >
+                                <Trash2 className="w-3.5 h-3.5" />
+                              </button>
+                            </span>
+                          )}
+                          <span
+                            className={`text-[10px] px-2 py-0.5 rounded-full border ${STATUS_BADGE[wf.status] ?? STATUS_BADGE.draft}`}
+                          >
+                            {wf.status}
+                          </span>
+                        </div>
                       </div>
                       <div className="mt-3 font-medium text-sm text-foreground group-hover:text-primary tech-transition truncate">
                         {wf.name}
@@ -231,7 +345,7 @@ export default function WorkflowsPage() {
                           </span>
                         )}
                       </div>
-                    </button>
+                    </div>
                   ))}
                 </div>
               )}

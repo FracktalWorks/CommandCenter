@@ -84,6 +84,24 @@ export async function updateWorkflow(
   }));
 }
 
+export async function duplicateWorkflow(id: string): Promise<WorkflowDetail> {
+  return json(await fetch(`${BASE}/${id}/duplicate`, { method: "POST" }));
+}
+
+export async function rollbackWorkflow(
+  id: string,
+  version: number,
+): Promise<{
+  version: number;
+  rolled_back_to: number;
+  status: string;
+  warnings: GraphIssue[];
+}> {
+  return json(
+    await fetch(`${BASE}/${id}/versions/${version}/rollback`, { method: "POST" }),
+  );
+}
+
 export async function deleteWorkflow(id: string): Promise<void> {
   const res = await fetch(`${BASE}/${id}`, { method: "DELETE" });
   if (!res.ok && res.status !== 204) throw new ApiError(`${res.status}`, res.status);

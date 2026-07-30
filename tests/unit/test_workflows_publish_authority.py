@@ -19,6 +19,9 @@ LIVE_ROUTES = {
     "/workflows/{workflow_id}/publish",
     "/workflows/{workflow_id}/versions/{version}/rollback",
     "/workflows/{workflow_id}/disable",
+    # Re-enable arms the triggers again — same authority as publish, and the
+    # escape hatch out of the R2 auto-disable policy.
+    "/workflows/{workflow_id}/enable",
 }
 
 #: Authoring routes that must stay open to any member holding the feature —

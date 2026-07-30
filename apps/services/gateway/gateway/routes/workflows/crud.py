@@ -59,6 +59,12 @@ def _row_summary(row: Any) -> dict[str, Any]:
         "latest_version": row.latest_version,
         "created_at": iso(row.created_at),
         "updated_at": iso(row.updated_at),
+        # Why a workflow is off — written by the human who hit Disable or by
+        # the R2 auto-disable policy (migration 134). ``getattr`` so a gateway
+        # running ahead of its migration degrades to "no reason" instead of
+        # 500-ing the whole gallery.
+        "disabled_reason": getattr(row, "disabled_reason", None),
+        "disabled_at": iso(getattr(row, "disabled_at", None)),
     }
 
 

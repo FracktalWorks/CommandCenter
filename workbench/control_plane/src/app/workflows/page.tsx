@@ -13,6 +13,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   Boxes,
   Clock,
   Copy,
@@ -83,6 +84,7 @@ export default function WorkflowsPage() {
     let out = rows;
     if (filter === "published") out = out.filter((r) => r.status === "published");
     if (filter === "drafts") out = out.filter((r) => r.status === "draft");
+    if (filter === "disabled") out = out.filter((r) => r.status === "disabled");
     const q = query.trim().toLowerCase();
     if (q)
       out = out.filter(
@@ -205,6 +207,14 @@ export default function WorkflowsPage() {
                   label: "Drafts",
                   count: rows.filter((r) => r.status === "draft").length,
                 },
+                // Auto-disabled workflows are the ones that need a human
+                // (spec R2) — they get their own pill so they are one click
+                // away instead of buried in a grid of healthy cards.
+                {
+                  id: "disabled",
+                  label: "Disabled",
+                  count: rows.filter((r) => r.status === "disabled").length,
+                },
               ]}
               activeId={filter}
               onChange={setFilter}
@@ -324,6 +334,12 @@ export default function WorkflowsPage() {
                       <div className="text-xs text-muted-foreground mt-0.5 line-clamp-2 min-h-[2rem]">
                         {wf.description || "No description"}
                       </div>
+                      {wf.status === "disabled" && wf.disabled_reason && (
+                        <div className="mt-2 flex items-start gap-1.5 rounded-lg border border-warning/20 bg-warning/10 px-2 py-1.5 text-[10px] leading-snug text-warning">
+                          <AlertTriangle className="w-3 h-3 shrink-0 mt-px" />
+                          <span className="line-clamp-2">{wf.disabled_reason}</span>
+                        </div>
+                      )}
                       <div className="mt-3 flex items-center gap-3 text-[10px] text-muted-foreground">
                         <span className="flex items-center gap-1">
                           <Zap className="w-3 h-3" />

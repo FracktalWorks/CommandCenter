@@ -37,11 +37,13 @@ import {
 import "@xyflow/react/dist/style.css";
 import { useTheme } from "next-themes";
 import {
+  AlertTriangle,
   ArrowLeft,
   BadgeCheck,
   ChevronDown,
   Loader2,
   Play,
+  Power,
   Rocket,
   Save,
   ShieldCheck,
@@ -58,6 +60,8 @@ import TriggerPanel from "../components/TriggerPanel";
 import WorkflowNode, { type CCNodeData } from "../components/WorkflowNode";
 import {
   ApiError,
+  disableWorkflow,
+  enableWorkflow,
   getCatalog,
   getWorkflow,
   publishWorkflow,
@@ -590,6 +594,49 @@ function EditorInner({ id }: { id: string }) {
     [id],
   );
 
+  // Take offline — the deliberate half of spec R2's disabled state. Keeps the
+  // published version intact; only the triggers stop.
+  const onDisable = useCallback(async () => {
+    setBusy("disable");
+    setNotice(null);
+    try {
+      await disableWorkflow(id);
+      const wf = await getWorkflow(id);
+      setDetail(wf);
+      setShowVersions(false);
+      setNotice("Taken offline — no trigger fires until you re-enable it.");
+    } catch (e) {
+      setNotice(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(null);
+    }
+  }, [id]);
+
+  // Re-enable = put the existing live version back on its triggers (spec R2).
+  // Distinct from Publish on purpose: when the auto-disable policy trips on a
+  // transient outage, the graph is fine and a new version would be noise.
+  const onEnable = useCallback(async () => {
+    setBusy("enable");
+    setNotice(null);
+    try {
+      const res = await enableWorkflow(id);
+      setDetail((d) =>
+        d
+          ? { ...d, status: "published", disabled_reason: null, disabled_at: null }
+          : d,
+      );
+      setNotice(
+        res.already_live
+          ? "Already live."
+          : `Re-enabled — v${res.version} is live again.`,
+      );
+    } catch (e) {
+      setNotice(String(e instanceof Error ? e.message : e));
+    } finally {
+      setBusy(null);
+    }
+  }, [id]);
+
   const onPublish = useCallback(async () => {
     setBusy("publish");
     setNotice(null);
@@ -725,6 +772,27 @@ function EditorInner({ id }: { id: string }) {
                     </div>
                   ))}
               </div>
+              {published && (
+                <div className="border-t border-border mt-1.5 pt-1.5">
+                  <button
+                    onClick={onDisable}
+                    disabled={busy !== null || !canPublish}
+                    title={
+                      canPublish
+                        ? "Stop every trigger without deleting anything"
+                        : "Disabling changes what runs live — needs workflows:publish."
+                    }
+                    className="w-full flex items-center gap-1.5 px-1.5 py-1 text-[11px] rounded-md text-muted-foreground hover:text-destructive hover:bg-secondary/50 tech-transition disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {busy === "disable" ? (
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                    ) : (
+                      <Power className="w-3 h-3" />
+                    )}
+                    Take offline — stops all triggers, keeps the version
+                  </button>
+                </div>
+              )}
             </div>
           )}
         </div>
@@ -809,6 +877,36 @@ function EditorInner({ id }: { id: string }) {
           </button>
         </div>
       </div>
+
+      {detail.status === "disabled" && (
+        <div className="flex items-center gap-2 px-3 sm:px-4 py-2 border-b border-warning/20 bg-warning/10 shrink-0">
+          <AlertTriangle className="w-4 h-4 text-warning shrink-0" />
+          <p className="text-xs text-warning min-w-0">
+            <span className="font-medium">Not live — no trigger fires. </span>
+            {detail.disabled_reason ??
+              "This workflow is disabled. Re-enable it to put its published version back on its triggers."}
+          </p>
+          <button
+            onClick={onEnable}
+            disabled={busy !== null || !canPublish || !detail.latest_version}
+            title={
+              !detail.latest_version
+                ? "Never published — use Publish instead."
+                : canPublish
+                  ? "Put the published version back on its triggers"
+                  : "Re-enabling needs the workflows:publish permission — ask an admin."
+            }
+            className="ml-auto shrink-0 rounded-lg border border-warning/30 px-2.5 py-1.5 text-xs font-medium text-warning hover:bg-warning/15 tech-transition flex items-center gap-1 disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {busy === "enable" ? (
+              <Loader2 className="w-3.5 h-3.5 animate-spin" />
+            ) : (
+              <Power className="w-3.5 h-3.5" />
+            )}
+            Re-enable
+          </button>
+        </div>
+      )}
 
       {showTriggers && (
         <TriggerPanel

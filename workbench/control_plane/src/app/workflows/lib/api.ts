@@ -123,6 +123,13 @@ export async function disableWorkflow(id: string): Promise<{ status: string }> {
   return json(await fetch(`${BASE}/${id}/disable`, { method: "POST" }));
 }
 
+/** Put a disabled workflow back on its existing live version (spec R2). */
+export async function enableWorkflow(
+  id: string,
+): Promise<{ status: string; version: number; already_live: boolean }> {
+  return json(await fetch(`${BASE}/${id}/enable`, { method: "POST" }));
+}
+
 export async function runWorkflow(
   id: string, payload: Record<string, unknown>, draft: boolean,
 ): Promise<{ run_id: string; status: string; version: number }> {

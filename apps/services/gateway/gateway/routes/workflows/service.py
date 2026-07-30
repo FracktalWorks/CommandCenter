@@ -15,6 +15,10 @@ restarts is BO-20's scope; a run interrupted by a restart is marked failed by
 the startup sweep (``reconcile_orphaned_runs``) and, for reads that race it,
 lazily on the next status read — never silently lost. Paused runs are exempt:
 resume rebuilds from the pause snapshot, so they survive restarts.
+
+Every terminal run also passes through ``evaluate_automation_health`` — the
+spec R2 mitigation that takes a published workflow off its triggers once its
+unattended runs have failed ``AUTO_DISABLE_AFTER`` times in a row.
 """
 
 from __future__ import annotations
@@ -46,6 +50,18 @@ MAX_CONCURRENT_RUNS = 8
 MAX_CONCURRENT_RUNS_PER_WORKFLOW = 2
 #: Hub entries are dropped this long after a run finishes.
 HUB_TTL_SECS = 600.0
+
+#: Trigger kinds that fire with nobody watching — the only ones the
+#: auto-disable policy counts (spec R2). ``manual`` is somebody sitting in the
+#: editor pressing Run, and ``api`` is an agent or caller passing its own
+#: payload: neither repeats on its own, and neither should be able to take a
+#: workflow away from everyone else because one caller sent bad arguments.
+UNATTENDED_TRIGGERS = frozenset({"schedule", "webhook", "event"})
+#: Consecutive unattended failures that disable a published workflow.
+AUTO_DISABLE_AFTER = 5
+
+#: Rendered once from the constant above — a literal fragment, never input.
+_UNATTENDED_SQL = ", ".join(f"'{kind}'" for kind in sorted(UNATTENDED_TRIGGERS))
 
 
 # ── The in-process run event hub ─────────────────────────────────────────────
@@ -216,6 +232,7 @@ async def start_run(
             trigger_payload=trigger_payload,
             variables=variables or {},
             started_by=started_by,
+            trigger_kind=trigger_kind,
         ),
         name=f"workflow-run:{run_id}",
     )
@@ -235,6 +252,10 @@ async def _execute_run(
     trigger_payload: dict[str, Any],
     variables: dict[str, Any],
     started_by: str,
+    # Deliberately not defaulted: the auto-disable policy only counts
+    # unattended kinds, so a call site that forgets to pass this would make the
+    # policy silently never fire. Required means the compiler asks instead.
+    trigger_kind: str,
     precomputed: dict[str, Any] | None = None,
     resolved_approvals: set[str] | None = None,
     elapsed_waits: set[str] | None = None,
@@ -322,6 +343,12 @@ async def _execute_run(
             user=started_by or None,
             phase="end",
             run_id=run_id,
+            status=status,
+        )
+        await evaluate_automation_health(
+            workflow_id,
+            workflow_name,
+            trigger_kind=trigger_kind,
             status=status,
         )
 
@@ -414,6 +441,112 @@ async def reconcile_orphaned_runs() -> int:
     if count:
         _log.info("workflows.orphaned_runs_reconciled", count=count)
     return count
+
+
+# ── Automation health (spec R2 — silent drift) ───────────────────────────────
+
+
+async def evaluate_automation_health(
+    workflow_id: str,
+    workflow_name: str,
+    *,
+    trigger_kind: str,
+    status: str,
+) -> bool:
+    """Disable a published workflow whose unattended runs keep failing.
+
+    Spec R2 asks for a "disabled-on-repeated-failure policy with notification"
+    because a published workflow keeps firing on its schedule long after the
+    business around it moved on — and nobody reads a run list that has been
+    green for six months. ``AUTO_DISABLE_AFTER`` consecutive failures from
+    unattended triggers is the platform admitting the automation is broken and
+    stopping it, rather than failing loudly into an empty room forever.
+
+    Three deliberate narrowings keep this from firing on a working system:
+
+    - **Unattended triggers only** (``UNATTENDED_TRIGGERS``). A maker debugging
+      with the Run button must never disable production.
+    - **Consecutive**, derived from ``workflow_runs`` rather than a counter
+      column: one success breaks the streak with no bookkeeping to get wrong,
+      and the number always matches the history a human reads.
+    - **Only runs after ``health_since``**, which publish/rollback/enable reset.
+      Without that window a re-enabled workflow would re-disable on its next
+      failure, since the old failures are still the newest rows.
+
+    Notification is in-product: the reason is persisted on the workflow (the
+    gallery and editor show it), a warning is logged, and the activity feed
+    gets a ``disabled`` event so it surfaces in /observability. Outward
+    notification (email the owner) is an outward write and belongs to the
+    Action Broker path, not here.
+
+    Returns True when this call is the one that disabled the workflow.
+    """
+    if status != "failed" or trigger_kind not in UNATTENDED_TRIGGERS:
+        return False
+    reason = (
+        f"Auto-disabled after {AUTO_DISABLE_AFTER} consecutive failed runs "
+        "from unattended triggers. Fix the workflow, then re-enable it."
+    )
+    try:
+        db = await _get_db()
+        try:
+            rows = (
+                await db.execute(
+                    text(
+                        f"""SELECT r.status FROM workflow_runs r
+                              JOIN workflows w ON w.id = r.workflow_id
+                             WHERE r.workflow_id = :wid
+                               AND w.status = 'published'
+                               AND r.trigger_kind IN ({_UNATTENDED_SQL})
+                               AND r.status IN ('succeeded', 'failed', 'cancelled')
+                               AND (w.health_since IS NULL
+                                    OR r.started_at > w.health_since)
+                             ORDER BY r.started_at DESC
+                             LIMIT :limit"""
+                    ),
+                    {"wid": workflow_id, "limit": AUTO_DISABLE_AFTER},
+                )
+            ).fetchall()
+            if len(rows) < AUTO_DISABLE_AFTER or any(r.status != "failed" for r in rows):
+                return False
+            # CAS on status: two runs failing at once, or a human disabling
+            # concurrently, must produce exactly one disable.
+            result = await db.execute(
+                text(
+                    """UPDATE workflows SET status = 'disabled',
+                           disabled_reason = :reason, disabled_at = now(),
+                           updated_at = now()
+                       WHERE id = :id AND status = 'published'"""
+                ),
+                {"id": workflow_id, "reason": reason},
+            )
+            await db.commit()
+            if not result.rowcount:
+                return False
+        finally:
+            await db.close()
+    except Exception as exc:  # a health check must never fail a run
+        _log.warning(
+            "workflows.health_check_failed",
+            workflow_id=workflow_id,
+            error=str(exc)[:160],
+        )
+        return False
+    _log.warning(
+        "workflows.auto_disabled",
+        workflow_id=workflow_id,
+        workflow_name=workflow_name,
+        consecutive_failures=AUTO_DISABLE_AFTER,
+    )
+    publish_workflow_activity(
+        workflow_id,
+        workflow_name,
+        phase="disabled",
+        status="auto_disabled",
+        reason=reason,
+        consecutive_failures=AUTO_DISABLE_AFTER,
+    )
+    return True
 
 
 # ── Approval pause / resume (spec F11 — rides the Action Broker inbox) ───────
@@ -585,6 +718,10 @@ async def resume_run(run_id: str, *, resumed_by: str = "approver") -> dict[str, 
             trigger_payload=snapshot.get("trigger_payload") or {},
             variables=snapshot.get("variables") or {},
             started_by=resumed_by,
+            # The gate was crossed, but the run still belongs to whatever
+            # triggered it — a scheduled run that fails after its approval
+            # counts toward the health streak like any other.
+            trigger_kind=str(getattr(run, "trigger_kind", "manual") or "manual"),
             precomputed=precomputed,
             resolved_approvals=set() if is_wait else {gate_node},
             elapsed_waits={gate_node} if is_wait else set(),

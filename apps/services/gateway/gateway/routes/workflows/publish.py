@@ -10,9 +10,13 @@ AUTHORITY (spec Q3): drafting and test-running need only ``feature:workflows``
 — a draft fires no triggers and its writes are still broker-held. Publishing
 ARMS the thing: webhooks, cron ticks, and event bindings start running it
 unattended against production systems. So every endpoint here — publish,
-rollback, disable — requires ``workflows:publish`` (seeded to owner/admin/
-manager by migration 133). Rollback and disable share it because they change
-the live version just as surely as publish does.
+rollback, disable, enable — requires ``workflows:publish`` (seeded to owner/
+admin/manager by migration 133). They share it because each one changes what
+runs live just as surely as publish does.
+
+This module is also where the spec R2 health window is reset: publish,
+rollback, and enable each stamp ``health_since``, which is the instant the
+auto-disable policy starts counting failures from (``service.py``).
 """
 
 from __future__ import annotations
@@ -24,6 +28,7 @@ from acb_auth import UserContext, get_current_user, require_permission
 from fastapi import Depends, HTTPException
 from gateway.routes.workflows.core import (
     _get_db,
+    _log,
     _uid,
     iso,
     load_workflow_or_404,
@@ -96,7 +101,9 @@ async def publish_workflow(
         await db.execute(
             text(
                 """UPDATE workflows SET status = 'published',
-                       latest_version = :v, updated_at = now()
+                       latest_version = :v, updated_at = now(),
+                       disabled_reason = NULL, disabled_at = NULL,
+                       health_since = now()
                    WHERE id = :id"""
             ),
             {"id": workflow_id, "v": version},
@@ -168,7 +175,9 @@ async def rollback_workflow(
         await db.execute(
             text(
                 """UPDATE workflows SET status = 'published',
-                       latest_version = :v, updated_at = now()
+                       latest_version = :v, updated_at = now(),
+                       disabled_reason = NULL, disabled_at = NULL,
+                       health_since = now()
                    WHERE id = :id"""
             ),
             {"id": workflow_id, "v": new_version},
@@ -213,15 +222,81 @@ async def disable_workflow(
     workflow_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> dict[str, Any]:
-    """Stop all triggers firing without deleting anything (spec R2)."""
+    """Stop all triggers firing without deleting anything (spec R2).
+
+    The reason is recorded the same way the auto-disable policy records its
+    own, so the gallery answers "why is this off?" identically whether a human
+    or the platform switched it off.
+    """
     db = await _get_db()
     try:
         await load_workflow_or_404(db, workflow_id)
+        reason = f"Disabled by {_uid(user)}"
         await db.execute(
-            text("UPDATE workflows SET status = 'disabled', updated_at = now() WHERE id = :id"),
+            text(
+                """UPDATE workflows SET status = 'disabled',
+                       disabled_reason = :reason, disabled_at = now(),
+                       updated_at = now()
+                   WHERE id = :id"""
+            ),
+            {"id": workflow_id, "reason": reason},
+        )
+        await db.commit()
+    finally:
+        await db.close()
+    return {"workflow_id": workflow_id, "status": "disabled", "disabled_reason": reason}
+
+
+@router.post("/{workflow_id}/enable", dependencies=[require_permission(PUBLISH_PERMISSION)])
+async def enable_workflow(
+    workflow_id: str,
+    user: UserContext = Depends(get_current_user),
+) -> dict[str, Any]:
+    """Put a disabled workflow back on its existing live version (spec R2).
+
+    The recovery half of disable — and of the auto-disable policy, which is
+    only a defensible thing to ship because getting back out of it is one
+    click. Publishing would also re-enable, but it would mint a pointless new
+    version when the fix was upstream (a credential rotated, an API back up)
+    and nothing in the graph changed.
+
+    Resetting ``health_since`` is what makes re-enabling stick: the failures
+    that tripped the policy are still the newest rows in ``workflow_runs``, so
+    without a fresh window the very next failure would re-disable immediately.
+    It carries the same authority as publish because it arms the automation
+    just as surely.
+    """
+    db = await _get_db()
+    try:
+        row = await load_workflow_or_404(db, workflow_id)
+        if not row.latest_version:
+            raise HTTPException(
+                status_code=409,
+                detail="Workflow has never been published — publish it instead",
+            )
+        if row.status == "published":
+            return {
+                "workflow_id": workflow_id,
+                "status": "published",
+                "version": int(row.latest_version),
+                "already_live": True,
+            }
+        await db.execute(
+            text(
+                """UPDATE workflows SET status = 'published',
+                       disabled_reason = NULL, disabled_at = NULL,
+                       health_since = now(), updated_at = now()
+                   WHERE id = :id"""
+            ),
             {"id": workflow_id},
         )
         await db.commit()
     finally:
         await db.close()
-    return {"workflow_id": workflow_id, "status": "disabled"}
+    _log.info("workflows.re_enabled", workflow_id=workflow_id, by=_uid(user))
+    return {
+        "workflow_id": workflow_id,
+        "status": "published",
+        "version": int(row.latest_version),
+        "already_live": False,
+    }

@@ -57,6 +57,13 @@ export type WorkflowSummary = {
   last_run_status?: RunStatus | null;
   last_run_at?: string | null;
   trigger_count?: number;
+  /**
+   * Why the workflow is off — set by whoever hit Disable, or by the
+   * auto-disable policy after repeated unattended failures (spec R2).
+   * Only meaningful when `status === "disabled"`.
+   */
+  disabled_reason?: string | null;
+  disabled_at?: string | null;
 };
 
 export type WorkflowDetail = WorkflowSummary & {

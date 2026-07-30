@@ -1,4 +1,4 @@
-"""The agent file store partitions by instance (migration 130).
+"""The agent file store partitions by instance (migration 134).
 
 Spec: ai-company-brain/specs/memory_architecture.md §5.3, §6.1
 
@@ -42,7 +42,7 @@ def _db_reachable() -> bool:
 
 _needs_db = pytest.mark.skipif(
     not _db_reachable(),
-    reason="no reachable Postgres with migration 130 (agent_blob.instance) — "
+    reason="no reachable Postgres with migration 134 (agent_blob.instance) — "
     "live instance-partition tests skipped (run on the VPS / any box with the DB)",
 )
 

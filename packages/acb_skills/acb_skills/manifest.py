@@ -253,7 +253,7 @@ class AgentManifest:
         return f"agent:{self.slug}#{suffix}" if suffix else f"agent:{self.slug}"
 
     def blob_instance(self, actor: str | None = None) -> str:
-        """The ``agent_blob.instance`` value for this run (see migration 130)."""
+        """The ``agent_blob.instance`` value for this run (see migration 134)."""
         return self.instance_key(actor)
 
     def resolve_tool_surface(

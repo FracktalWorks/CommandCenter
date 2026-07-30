@@ -3,7 +3,7 @@
 > **Status:** 🔄 spec accepted, implementation starting
 > **Created:** 2026-07-29
 > **Answers:** [`org_access_control.md` §10](org_access_control.md#10-handoff-multiplayer-agent-collaboration) — the handoff asked for exactly one spec covering the group primitive, `chat_session_participant`, and the authority rule, *before* shared transcripts exist and the decisions get expensive.
-> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 130/131).
+> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 134/135).
 
 Phase 1 of org access control shipped the resolved principal (`UserContext` +
 `EffectiveAccess`), default-deny authentication, feature and agent-run gating,
@@ -166,7 +166,7 @@ not after:
 - Agent file/memory instancing — orthogonal and already specced
   (`agent-kinds.md`); the only binding is that `t:<team>` keys now name
   `org_group.slug`.
-- The quarantine and instance partition work (migrations 130/131) — already
+- The quarantine and instance partition work (migrations 134/135) — already
   landed; this spec consumes it.
 
 ## 6. Order of work

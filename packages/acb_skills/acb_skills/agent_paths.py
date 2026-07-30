@@ -29,7 +29,7 @@ THE SPLIT
     state  {agents_clone_dir}/repos/{agent}/            when instance == ''
            {agents_clone_dir}/state/{agent}/{slug}/     when instance != ''
 
-``instance`` is the key migration 130 added to ``agent_blob``; this module is
+``instance`` is the key migration 134 added to ``agent_blob``; this module is
 the disk agreeing with the database. The vocabulary is the manifest's
 (:meth:`acb_skills.manifest.AgentManifest.instance_key`): ``''`` shared,
 ``u:<email>`` personal, ``t:<team>`` team.

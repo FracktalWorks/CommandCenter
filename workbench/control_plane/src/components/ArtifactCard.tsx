@@ -139,6 +139,17 @@ export default function ArtifactCard({
     onOpenInSidePanel?.(buildFileEntry());
   };
 
+  /**
+   * The one thing a click on this card should do: show the artifact RENDERED.
+   * Desktop puts it in the side panel (resizable, sits beside the chat); mobile
+   * has no side panel, so it opens as a full-bleed sheet. Same intent, different
+   * surface — the user should never have to know which.
+   */
+  const openRendered = () => {
+    if (!isMobile && onOpenInSidePanel) handleOpenPanel();
+    else handleOpen();
+  };
+
   // ── Image artifact: render inline thumbnail ─────────────────────────────
   if (image && !imgError) {
     return (
@@ -189,7 +200,26 @@ export default function ArtifactCard({
 
   // ── Non-image artifact: file card ───────────────────────────────────────
   return (
-    <div className="mt-3 rounded-xl border border-border/60 bg-card/60 px-3 py-2.5 flex items-center gap-3 group/card hover:border-primary/30/80 transition-colors">
+    <div
+      onClick={isDoc ? openRendered : undefined}
+      onKeyDown={
+        isDoc
+          ? (e) => {
+              if (e.key !== "Enter" && e.key !== " ") return;
+              e.preventDefault();
+              openRendered();
+            }
+          : undefined
+      }
+      role={isDoc ? "button" : undefined}
+      tabIndex={isDoc ? 0 : undefined}
+      aria-label={isDoc ? `Open ${artifact.name}` : undefined}
+      className={`mt-3 rounded-xl border border-border/60 bg-card/60 px-3 py-2.5 flex items-center gap-3 group/card transition-colors hover:border-primary/30/80 ${
+        isDoc
+          ? "cursor-pointer hover:bg-card focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+          : ""
+      }`}
+    >
       {/* Icon */}
       <div className="shrink-0 w-9 h-9 rounded-lg bg-secondary flex items-center justify-center">
         {fileIcon(artifact)}
@@ -217,7 +247,7 @@ export default function ArtifactCard({
       <div className="flex items-center gap-1 shrink-0">
         {isDoc && (isMobile || onOpenInSidePanel) && (
           <button
-            onClick={isMobile ? handleOpen : handleOpenPanel}
+            onClick={(e) => { e.stopPropagation(); openRendered(); }}
             className="flex items-center gap-1.5 rounded-lg bg-primary/10 px-2.5 py-1.5 text-[11px] font-medium text-primary hover:bg-primary/20 transition-colors"
             title={isMobile ? "Open the rendered artifact" : "Open in side panel — edit + live preview"}
           >
@@ -227,7 +257,7 @@ export default function ArtifactCard({
         )}
         {!isMobile && (
           <button
-            onClick={handleOpen}
+            onClick={(e) => { e.stopPropagation(); handleOpen(); }}
             className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
             title={isDoc ? "Open in modal viewer" : "Open in viewer"}
           >
@@ -237,6 +267,7 @@ export default function ArtifactCard({
         <a
           href={fileUrl}
           download={artifact.name}
+          onClick={(e) => e.stopPropagation()}
           className="rounded-lg p-1.5 text-muted-foreground hover:text-foreground hover:bg-secondary transition-colors"
           title="Download"
         >

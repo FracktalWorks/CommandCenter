@@ -88,7 +88,8 @@ export default function JoinCallModal({
               Send the notetaker to a call
             </h2>
             <p className="text-[11px] text-muted-foreground">
-              Google Meet, Zoom, or Teams — it joins, records, and writes notes.
+              Google Meet — it joins, records, and writes notes. (Zoom/Teams
+              are on the roadmap.)
             </p>
           </div>
           <button
@@ -125,17 +126,23 @@ export default function JoinCallModal({
             />
 
             {results && (
-              <div className="mt-2 space-y-1">
+              <div className="mt-2 space-y-1.5">
                 {results.map((r, i) => (
-                  <p
-                    key={i}
-                    className={`truncate text-[11px] ${
-                      r.ok ? "text-success" : "text-destructive"
-                    }`}
-                    title={r.error || r.url}
-                  >
-                    {r.ok ? "✓ Joining" : "✗ Failed"} — {r.url}
-                  </p>
+                  <div key={i} className="text-[11px]">
+                    <p
+                      className={`truncate ${
+                        r.ok ? "text-success" : "text-destructive"
+                      }`}
+                      title={r.url}
+                    >
+                      {r.ok ? "✓ Joining" : "✗ Failed"} — {r.url}
+                    </p>
+                    {!r.ok && r.error && (
+                      <p className="mt-0.5 rounded-md bg-destructive/10 px-2 py-1 leading-relaxed text-destructive">
+                        {r.error}
+                      </p>
+                    )}
+                  </div>
                 ))}
               </div>
             )}

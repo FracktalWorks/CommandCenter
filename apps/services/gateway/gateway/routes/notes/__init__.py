@@ -10,6 +10,7 @@ from gateway.routes.notes import agenda_progress as _agenda_progress  # noqa: F4
 from gateway.routes.notes import copilot as _copilot  # noqa: F401
 from gateway.routes.notes import copilot_agenda as _copilot_agenda  # noqa: F401
 from gateway.routes.notes import copilot_context as _copilot_context  # noqa: F401
+from gateway.routes.notes import dispatch as _dispatch  # noqa: F401
 from gateway.routes.notes import events as _events  # noqa: F401
 from gateway.routes.notes import glossary as _glossary  # noqa: F401
 from gateway.routes.notes import live as _live  # noqa: F401

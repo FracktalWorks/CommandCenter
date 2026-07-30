@@ -352,7 +352,15 @@ jobs:
             fi
 
             MB_ENABLED="$(grep -E '^MEETING_BOT_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
-            if [ "$MB_ENABLED" = "1" ]; then
+            # Never recreate the worker while a bot is in a live call — each
+            # bot is a Chrome inside the container, so `up --build` mid-meeting
+            # kills the notetaker someone is relying on (this happened). The
+            # skipped rebuild simply lands on the next deploy.
+            MB_ACTIVE="$(curl -fsS --max-time 5 http://127.0.0.1:8095/health 2>/dev/null \
+              | grep -o '"active":[0-9]*' | cut -d: -f2 || true)"
+            if [ "$MB_ENABLED" = "1" ] && [ -n "$MB_ACTIVE" ] && [ "$MB_ACTIVE" -gt 0 ] 2>/dev/null; then
+              echo "    ~ $MB_ACTIVE bot(s) in a call right now — keeping the running worker; rebuild deferred to the next deploy"
+            elif [ "$MB_ENABLED" = "1" ]; then
               # --build is cheap after the first run (layer cache); the first
               # deploy pulls the Playwright base image, which is large.
               # --env-file is explicit on purpose: compose resolves a bare .env

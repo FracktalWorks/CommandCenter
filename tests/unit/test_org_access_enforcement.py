@@ -116,6 +116,7 @@ GATED_ROUTERS: dict[str, set[str]] = {
         "/whatsapp/bridge/ingest",
         "/whatsapp/bridge/reclassify",
         "/whatsapp/bridge/labels",
+        "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
         # The bridge posts freshly-fetched profile-picture URLs (W17). Same
         # X-Bridge-Secret scheme as its siblings; gating it would silently

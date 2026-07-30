@@ -144,31 +144,35 @@ async def approve_all(
     body: BulkApproveRequest,
     user: UserContext = Depends(get_current_user),
 ) -> BulkApproveResponse:
-    """Approve every draft action item at or above a confidence threshold."""
+    """Dispatch every draft action item at or above a confidence threshold —
+    each to its kind's system (task / email / document), not all to tasks."""
+    # Deferred import: dispatch imports helpers from this module.
+    from gateway.routes.notes import dispatch as notes_dispatch
+
     async with await _get_db() as db:
         rows = (
             await db.execute(
                 text(
-                    "SELECT id, meeting_id, description, confidence, status, "
-                    "due_hint, segment_ids, resulting_task_id FROM action_item "
-                    "WHERE meeting_id=:mid AND status='draft' "
-                    "AND resulting_task_id IS NULL AND confidence >= :min"
+                    notes_dispatch._ACTION_COLS
+                    + "WHERE meeting_id=:mid AND status='draft' "
+                    "AND resulting_task_id IS NULL AND dispatch_ref IS NULL "
+                    "AND confidence >= :min"
                 ),
                 {"mid": meeting_id, "min": body.min_confidence},
             )
         ).fetchall()
-        created: list[str] = []
-        for action in rows:
-            task_id = await _create_task_from_action(db, user.email or "anonymous", action)
-            await db.execute(
-                text(
-                    "UPDATE action_item SET status='created', resulting_task_id=:tid "
-                    "WHERE id=:id"
-                ),
-                {"tid": task_id, "id": str(action.id)},
-            )
+        meeting = await notes_dispatch._load_meeting(db, meeting_id)
+    if meeting is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    created: list[str] = []
+    for action in rows:
+        ref, error = await notes_dispatch._dispatch(
+            action, meeting, user.email or "anonymous"
+        )
+        if error is None and ref is not None:
             created.append(str(action.id))
-        if created:
+    if created:
+        async with await _get_db() as db:
             await db.execute(
                 text(
                     "INSERT INTO audit_event (actor, action, target, payload) VALUES "
@@ -180,6 +184,6 @@ async def approve_all(
                     "p": json.dumps({"count": len(created), "min_confidence": body.min_confidence}),
                 },
             )
-        await db.commit()
+            await db.commit()
     _log.info("notes.actions_bulk_approved", meeting_id=meeting_id, count=len(created))
     return BulkApproveResponse(created=created)

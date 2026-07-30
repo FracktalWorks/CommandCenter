@@ -17,6 +17,11 @@ import React, { useEffect, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
+import SandboxedHtml from "@/components/SandboxedHtml";
+import SandboxedReact from "@/components/SandboxedReact";
+import { useTheme } from "next-themes";
+import { classifyArtifact, extOf, isRenderable, type ArtifactKind }
+  from "@/lib/artifactKind";
 import type { FileEntry } from "./ArtifactSidebar";
 
 // ─── Types ────────────────────────────────────────────────────────────────────
@@ -44,37 +49,14 @@ type ViewerState =
   | { status: "error"; message: string }
   | { status: "text"; content: string; lang?: string }
   | { status: "markdown"; content: string }
+  /** A runnable artifact: HTML for the sandbox, or React source to compile. */
+  | { status: "rendered"; content: string; kind: "html" | "react" }
   | { status: "image"; url: string }
   | { status: "pdf"; url: string }
   | { status: "docx"; html: string }
   | { status: "binary"; hex: string; filename: string };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
-
-function getExt(name: string): string {
-  return (name.split(".").pop() ?? "").toLowerCase();
-}
-
-const CODE_EXTS = new Set([
-  "py","ts","tsx","js","jsx","sh","bash","zsh","fish",
-  "yaml","yml","toml","json","sql","rs","go","java","c",
-  "cpp","cs","rb","php","swift","kt","scala","r","lua",
-  "html","css","scss","less","xml","graphql","proto",
-]);
-
-const IMAGE_EXTS = new Set(["png","jpg","jpeg","gif","webp","svg","ico","bmp","tiff"]);
-const TEXT_EXTS  = new Set(["txt","log","csv","tsv","rst","ini","cfg","conf","env"]);
-
-function classify(entry: FileEntry): "markdown" | "code" | "image" | "pdf" | "docx" | "text" | "binary" {
-  const ext = getExt(entry.name);
-  if (ext === "md" || ext === "mdx")  return "markdown";
-  if (CODE_EXTS.has(ext))              return "code";
-  if (IMAGE_EXTS.has(ext))             return "image";
-  if (ext === "pdf" || entry.mime_type === "application/pdf") return "pdf";
-  if (ext === "docx" || entry.mime_type === "application/vnd.openxmlformats-officedocument.wordprocessingml.document") return "docx";
-  if (TEXT_EXTS.has(ext) || entry.mime_type.startsWith("text/")) return "text";
-  return "binary";
-}
 
 function langFromExt(ext: string): string {
   const map: Record<string, string> = {
@@ -285,17 +267,27 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
   const blobUrlRef = useRef<string | null>(null);
 
   // Determine if this file type supports inline editing.
-  const kind = classify(entry);
+  const kind = classifyArtifact(entry.name, entry.path, entry.mime_type);
   const editable =
-    !readOnly && (kind === "markdown" || kind === "code" || kind === "text");
+    !readOnly &&
+    (kind === "markdown" || kind === "html" || kind === "react" ||
+     kind === "code" || kind === "text");
   const isMarkdown = kind === "markdown";
+  /** Kinds that have a RENDERED view distinct from their source. */
+  const renderable = isRenderable(kind);
+  // Rendered artifacts open rendered — that is the whole point of opening one.
+  // `showSource` flips to the code view without entering edit mode, which is the
+  // only way to inspect an artifact on mobile (there is no side panel there).
+  const [showSource, setShowSource] = useState(false);
+  const { resolvedTheme } = useTheme();
+  const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
 
   // Build the file URL and load content
   useEffect(() => {
     let cancelled = false;
     const fileUrl = externalDownloadUrl
       ?? `/api/agent/workspace/${sessionId}/file?path=${encodeURIComponent(entry.path)}`;
-    const kind = classify(entry);
+    const kind = classifyArtifact(entry.name, entry.path, entry.mime_type);
 
     // Revoke any previous blob URL
     if (blobUrlRef.current) {
@@ -348,8 +340,10 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
         if (!cancelled) {
           if (kind === "markdown") {
             setState({ status: "markdown", content: text });
+          } else if (kind === "html" || kind === "react") {
+            setState({ status: "rendered", content: text, kind });
           } else if (kind === "code") {
-            setState({ status: "text", content: text, lang: langFromExt(getExt(entry.name)) });
+            setState({ status: "text", content: text, lang: langFromExt(extOf(entry.name)) });
           } else {
             setState({ status: "text", content: text });
           }
@@ -437,11 +431,13 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
         throw new Error(`HTTP ${res.status}: ${err}`);
       }
       // Refresh state with new content.
-      const kind = classify(entry);
+      const kind = classifyArtifact(entry.name, entry.path, entry.mime_type);
       if (kind === "markdown") {
         setState({ status: "markdown", content: editContent });
+      } else if (kind === "html" || kind === "react") {
+        setState({ status: "rendered", content: editContent, kind });
       } else if (kind === "code") {
-        setState({ status: "text", content: editContent, lang: langFromExt(getExt(entry.name)) });
+        setState({ status: "text", content: editContent, lang: langFromExt(extOf(entry.name)) });
       } else {
         setState({ status: "text", content: editContent });
       }
@@ -471,7 +467,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
           <div className="flex items-center gap-2 shrink-0 ml-3">
             {editing ? (
               <>
-                {isMarkdown && (
+                {(isMarkdown || renderable) && (
                   <button
                     onClick={handleTogglePreview}
                     className={`rounded px-2 py-1 text-xs transition-colors ${
@@ -501,6 +497,15 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
               </>
             ) : (
               <>
+                {renderable && (
+                  <button
+                    onClick={() => setShowSource((v) => !v)}
+                    className="rounded px-2 py-1 text-xs text-muted-foreground bg-secondary hover:bg-secondary hover:text-foreground transition-colors"
+                    title={showSource ? "Show the rendered artifact" : "Show the source"}
+                  >
+                    {showSource ? "Preview" : "Code"}
+                  </button>
+                )}
                 <a
                   href={downloadUrl}
                   download={entry.name}
@@ -541,7 +546,7 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
         {/* Body — pb-safe keeps content above iOS home indicator */}
         <div className="flex-1 overflow-auto p-6 min-h-0 pb-safe">
           {editing ? (
-            isMarkdown && showPreview ? (
+            (isMarkdown || renderable) && showPreview ? (
               /* ═══ Markdown split view: editor (left) + live preview (right) ═══ */
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 h-full min-h-[45vh]">
                 {/* Left: raw markdown editor */}
@@ -577,7 +582,19 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
                     prose-th:text-foreground prose-td:text-muted-foreground
                     prose-img:rounded prose-img:mx-auto prose-img:max-w-full"
                   >
-                    {editContent.trim() ? (
+                    {renderable ? (
+                      editContent.trim() ? (
+                        state.status === "rendered" && state.kind === "react" ? (
+                          <SandboxedReact code={editContent} theme={theme} />
+                        ) : (
+                          <SandboxedHtml html={editContent} theme={theme} />
+                        )
+                      ) : (
+                        <p className="text-muted-foreground text-sm italic">
+                          Start typing to see a live preview…
+                        </p>
+                      )
+                    ) : editContent.trim() ? (
                       <ReactMarkdown
                         remarkPlugins={[remarkGfm]}
                         rehypePlugins={[rehypeRaw]}
@@ -635,6 +652,25 @@ export default function ArtifactViewerModal({ sessionId, entry, onClose, onDelet
             <div className="rounded border border-red-900/50 bg-red-950/30 p-4 text-sm text-red-400">
               {state.message}
             </div>
+          )}
+
+          {state.status === "rendered" && !showSource && (
+            // -mx-6 -my-6 cancels the modal body padding: a full-page artifact
+            // should use the whole sheet, which matters most on a phone.
+            <div className="-mx-6 -my-6 h-full min-h-[60vh]">
+              {state.kind === "html" ? (
+                <SandboxedHtml html={state.content} theme={theme} chromeless />
+              ) : (
+                <SandboxedReact code={state.content} theme={theme} chromeless />
+              )}
+            </div>
+          )}
+
+          {state.status === "rendered" && showSource && (
+            <CodeBlock
+              code={state.content}
+              lang={state.kind === "html" ? "html" : "tsx"}
+            />
           )}
 
           {state.status === "markdown" && (

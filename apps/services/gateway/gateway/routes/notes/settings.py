@@ -54,6 +54,12 @@ class NotesSettings(BaseModel):
     template_instructions: dict[str, str] = {}
     default_template: str | None = None
     bot_name: str | None = None
+    # Auto-dispatch of confident action items after notes generation (per
+    # kind). Emails are additionally recipient-gated at dispatch time: an
+    # unresolvable recipient always downgrades a send to a provider draft.
+    auto_dispatch_tasks: bool = True
+    auto_dispatch_emails: bool = True
+    auto_dispatch_docs: bool = True
 
 
 class TemplateInfo(BaseModel):
@@ -133,6 +139,9 @@ def _row_to_settings(row) -> NotesSettings:
         },
         default_template=row.default_template,
         bot_name=row.bot_name,
+        auto_dispatch_tasks=bool(getattr(row, "auto_dispatch_tasks", True)),
+        auto_dispatch_emails=bool(getattr(row, "auto_dispatch_emails", True)),
+        auto_dispatch_docs=bool(getattr(row, "auto_dispatch_docs", True)),
     )
 
 
@@ -216,15 +225,21 @@ async def put_settings(
             text(
                 "INSERT INTO copilot_config (owner_email, instructions, "
                 "copilot_default_on, copilot_sensitivity, template_instructions, "
-                "default_template, bot_name) "
-                "VALUES (:e, :i, :d, :s, CAST(:t AS JSONB), :tpl, :bn) "
+                "default_template, bot_name, auto_dispatch_tasks, "
+                "auto_dispatch_emails, auto_dispatch_docs) "
+                "VALUES (:e, :i, :d, :s, CAST(:t AS JSONB), :tpl, :bn, "
+                ":adt, :ade, :add) "
                 "ON CONFLICT (owner_email) DO UPDATE SET "
                 "instructions = EXCLUDED.instructions, "
                 "copilot_default_on = EXCLUDED.copilot_default_on, "
                 "copilot_sensitivity = EXCLUDED.copilot_sensitivity, "
                 "template_instructions = EXCLUDED.template_instructions, "
                 "default_template = EXCLUDED.default_template, "
-                "bot_name = EXCLUDED.bot_name, updated_at = now()"
+                "bot_name = EXCLUDED.bot_name, "
+                "auto_dispatch_tasks = EXCLUDED.auto_dispatch_tasks, "
+                "auto_dispatch_emails = EXCLUDED.auto_dispatch_emails, "
+                "auto_dispatch_docs = EXCLUDED.auto_dispatch_docs, "
+                "updated_at = now()"
             ),
             {
                 "e": email,
@@ -234,6 +249,9 @@ async def put_settings(
                 "t": json.dumps(overrides),
                 "tpl": body.default_template,
                 "bn": (body.bot_name or "").strip() or None,
+                "adt": body.auto_dispatch_tasks,
+                "ade": body.auto_dispatch_emails,
+                "add": body.auto_dispatch_docs,
             },
         )
         await db.commit()

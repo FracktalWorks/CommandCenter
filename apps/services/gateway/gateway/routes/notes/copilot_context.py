@@ -251,6 +251,39 @@ async def _system_context(people: list[str]) -> dict[str, str]:
     return {label: body for label, body in results if body}
 
 
+#: Agents a MID-CALL consult may ask, with how each should answer. Same
+#: registry names as the pre-meeting fan-out; kept separate because a live
+#: meeting needs terse, immediately-usable answers, not summaries.
+_CONSULT_AGENTS: tuple[tuple[str, str], ...] = (
+    ("crm", "agent-sales-assistant"),
+    ("tasks", "task-manager"),
+)
+
+_CONSULT_PROMPT = (
+    "A live meeting needs one specific fact. Answer the question below in "
+    "under 60 words using only what you can actually find in your systems; "
+    "no preamble. If you find nothing relevant, reply exactly: NONE.\n"
+    "QUESTION: {question}"
+)
+
+
+async def consult(question: str) -> dict[str, str]:
+    """Mid-call: ask the business agents ONE specific question the copilot
+    decided it needs (spec §5.2 'on-demand retrieval'). Parallel, bounded by
+    the same timeout as the pre-meeting fan-out, and never raises — a silent
+    consult just means the suggestion goes out ungrounded or not at all."""
+    q = (question or "").strip()
+    if not q:
+        return {}
+    results = await asyncio.gather(
+        *(
+            _ask_agent(label, agent, _CONSULT_PROMPT.format(question=q[:400]))
+            for label, agent in _CONSULT_AGENTS
+        )
+    )
+    return {label: body for label, body in results if body}
+
+
 # ── Assembly + per-session cache ────────────────────────────────────────────
 
 _CACHE: dict[str, ContextPack] = {}

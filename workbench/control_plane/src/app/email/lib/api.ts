@@ -590,6 +590,24 @@ export async function getMessageFacets(
   return gatewayFetch(`/email/messages/facets?${sp}`);
 }
 
+export interface ContactSuggestion {
+  email: string;
+  name: string;
+}
+
+/** Recipient autocomplete: known correspondents matching `q` (address or
+ *  display name) — people you've sent to, the learned contacts directory, and
+ *  known senders, strongest first. Best-effort ([] on failure). */
+export async function suggestContacts(
+  accountId: string | null | undefined,
+  q: string,
+  limit = 8
+): Promise<ContactSuggestion[]> {
+  const sp = new URLSearchParams({ q, limit: String(limit) });
+  if (accountId) sp.set("account_id", accountId);
+  return gatewayFetch(`/email/contacts/suggest?${sp}`);
+}
+
 export interface SearchEmailsParams {
   /** Search text (websearch syntax). Optional: a filters-only search (tag pills,
    *  from/to, unread/…) with no typed text is a first-class query. */

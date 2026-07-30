@@ -22,12 +22,29 @@ const DEFAULTS: NotesSettings = {
   copilot_instructions: "",
   copilot_default_on: false,
   copilot_sensitivity: "normal",
+  live_transcription: "auto",
   template_instructions: {},
   default_template: null,
   bot_name: null,
   auto_dispatch_tasks: true,
   auto_dispatch_emails: true,
   auto_dispatch_docs: true,
+};
+
+/** Streaming speech-to-text is billed per minute; the recording is transcribed
+ *  afterwards either way. So the honest framing is what you give up, not just
+ *  what you save. */
+const LIVE_MODE_HELP: Record<string, string> = {
+  auto:
+    "Streams only while the copilot is listening — the saving. Meetings " +
+    "without it still get a full transcript when they end, just no live " +
+    "captions or agenda tracking along the way.",
+  always:
+    "Always streams. Live captions and agenda coverage on every meeting, at " +
+    "a per-minute cost even when no agent is reading them.",
+  never:
+    "Never streams. Cheapest, and the copilot cannot run — it has nothing to " +
+    "listen to.",
 };
 
 const DISPATCH_TOGGLES: {
@@ -212,6 +229,32 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
               </div>
               <p className="mb-3 text-xs text-muted-foreground">
                 {SENSITIVITY_HELP[s.copilot_sensitivity]}
+              </p>
+
+              <p className="mb-1 text-xs font-medium">Live transcription</p>
+              <div className="mb-1 flex gap-2">
+                {(
+                  [
+                    ["auto", "With the copilot"],
+                    ["always", "Always"],
+                    ["never", "Never"],
+                  ] as const
+                ).map(([value, label]) => (
+                  <button
+                    key={value}
+                    onClick={() => setS({ ...s, live_transcription: value })}
+                    className={`rounded-lg border px-3 py-1 text-xs ${
+                      s.live_transcription === value
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border hover:bg-accent"
+                    }`}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+              <p className="mb-3 text-xs text-muted-foreground">
+                {LIVE_MODE_HELP[s.live_transcription] ?? LIVE_MODE_HELP.auto}
               </p>
 
               <p className="mb-1 text-xs font-medium">

@@ -93,6 +93,8 @@ export class MeetingRecorder {
   // Live captions (Deepgram streaming) — additive; failures never affect the
   // chunked-upload / batch path below.
   private live: LiveTranscription | null = null;
+  /** Pending retry after live was declined (copilot off). Cleared on stop. */
+  private liveRetry: ReturnType<typeof setTimeout> | null = null;
   private liveNode: ScriptProcessorNode | null = null;
   private liveSource: MediaStreamAudioSourceNode | null = null;
   private liveSink: GainNode | null = null;
@@ -237,6 +239,17 @@ export class MeetingRecorder {
     document.addEventListener("visibilitychange", this.visHandler);
   }
 
+  /** Try live again shortly. Only ever scheduled when live was *declined*, so
+   *  this costs nothing while the copilot stays off — one small request per
+   *  interval, versus a per-minute ASR bill. */
+  private scheduleLiveRetry(): void {
+    if (this.stopping || this.liveRetry !== null) return;
+    this.liveRetry = setTimeout(() => {
+      this.liveRetry = null;
+      if (!this.stopping && !this.live) void this.setupLive();
+    }, 30_000);
+  }
+
   /** Best-effort live captions: tap the audio graph and stream PCM to the
    *  configured STT provider (AssemblyAI, or Deepgram as fallback). */
   private async setupLive(): Promise<void> {
@@ -245,9 +258,13 @@ export class MeetingRecorder {
       onCaption: (c) => this.cb.onCaption?.(c),
       onUnavailable: (r) => this.cb.onLiveUnavailable?.(r),
     });
-    const ok = await live.start();
+    const ok = await live.start(this.meetingId);
     if (!ok || this.stopping || !this.audioCtx || !this.stream) {
       live.stop();
+      // Refused because nothing is reading the stream (copilot off) — retry
+      // periodically so switching the copilot ON mid-meeting starts captions
+      // rather than requiring a restart. Recording is unaffected either way.
+      this.scheduleLiveRetry();
       return;
     }
     this.live = live;
@@ -299,6 +316,10 @@ export class MeetingRecorder {
   async stop(): Promise<void> {
     if (this.stopping) return;
     this.stopping = true;
+    if (this.liveRetry !== null) {
+      clearTimeout(this.liveRetry);
+      this.liveRetry = null;
+    }
     this.cb.onState?.("finalizing");
     const durationS = this.elapsed();
 
@@ -323,6 +344,10 @@ export class MeetingRecorder {
   /** Abandon: stop capture without finalizing (user cancelled). */
   cancel(): void {
     this.stopping = true;
+    if (this.liveRetry !== null) {
+      clearTimeout(this.liveRetry);
+      this.liveRetry = null;
+    }
     try {
       if (this.recorder && this.recorder.state !== "inactive") this.recorder.stop();
     } catch {

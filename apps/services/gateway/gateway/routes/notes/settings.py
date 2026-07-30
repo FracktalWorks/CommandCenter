@@ -45,10 +45,34 @@ SENSITIVITY_LEVELS: dict[str, tuple[float, int]] = {
 _MAX_INSTRUCTIONS = 2000
 
 
+_LIVE_MODES = ("auto", "always", "never")
+
+
+def wants_live_transcription(mode: str, copilot_on: bool) -> bool:
+    """Whether to pay for streaming ASR on this meeting.
+
+    Streaming speech-to-text is billed per minute and runs the whole meeting.
+    With the copilot off nothing reads it in real time — the recording still
+    goes through the batch pipeline afterwards and yields the same transcript at
+    batch prices. So `auto` follows the copilot, which is where the saving is.
+
+    Pure, and defensive about an unknown mode: an unrecognised value falls back
+    to `auto` rather than to `always`, because the failure that silently spends
+    money is worse than the one that silently doesn't.
+    """
+    if mode == "always":
+        return True
+    if mode == "never":
+        return False
+    return bool(copilot_on)
+
+
 class NotesSettings(BaseModel):
     copilot_instructions: str = ""
     copilot_default_on: bool = False
     copilot_sensitivity: str = "normal"
+    #: auto | always | never — see wants_live_transcription().
+    live_transcription: str = "auto"
     # template key → instructions. Only user overrides; the effective value
     # falls back to the template's own default.
     template_instructions: dict[str, str] = {}
@@ -139,6 +163,7 @@ def _row_to_settings(row) -> NotesSettings:
         },
         default_template=row.default_template,
         bot_name=row.bot_name,
+        live_transcription=getattr(row, "live_transcription", None) or "auto",
         auto_dispatch_tasks=bool(getattr(row, "auto_dispatch_tasks", True)),
         auto_dispatch_emails=bool(getattr(row, "auto_dispatch_emails", True)),
         auto_dispatch_docs=bool(getattr(row, "auto_dispatch_docs", True)),
@@ -212,6 +237,10 @@ async def put_settings(
         raise HTTPException(
             status_code=400, detail=f"sensitivity must be one of {_SENSITIVITIES}"
         )
+    if body.live_transcription not in _LIVE_MODES:
+        raise HTTPException(
+            status_code=400, detail=f"live_transcription must be one of {_LIVE_MODES}"
+        )
     if body.default_template and body.default_template not in TEMPLATES:
         raise HTTPException(status_code=400, detail="unknown template")
     # Keep only overrides for templates we actually ship, trimmed.
@@ -225,9 +254,9 @@ async def put_settings(
             text(
                 "INSERT INTO copilot_config (owner_email, instructions, "
                 "copilot_default_on, copilot_sensitivity, template_instructions, "
-                "default_template, bot_name, auto_dispatch_tasks, "
-                "auto_dispatch_emails, auto_dispatch_docs) "
-                "VALUES (:e, :i, :d, :s, CAST(:t AS JSONB), :tpl, :bn, "
+                "default_template, bot_name, live_transcription, "
+                "auto_dispatch_tasks, auto_dispatch_emails, auto_dispatch_docs) "
+                "VALUES (:e, :i, :d, :s, CAST(:t AS JSONB), :tpl, :bn, :lt, "
                 ":adt, :ade, :add) "
                 "ON CONFLICT (owner_email) DO UPDATE SET "
                 "instructions = EXCLUDED.instructions, "
@@ -236,6 +265,7 @@ async def put_settings(
                 "template_instructions = EXCLUDED.template_instructions, "
                 "default_template = EXCLUDED.default_template, "
                 "bot_name = EXCLUDED.bot_name, "
+                "live_transcription = EXCLUDED.live_transcription, "
                 "auto_dispatch_tasks = EXCLUDED.auto_dispatch_tasks, "
                 "auto_dispatch_emails = EXCLUDED.auto_dispatch_emails, "
                 "auto_dispatch_docs = EXCLUDED.auto_dispatch_docs, "
@@ -249,6 +279,7 @@ async def put_settings(
                 "t": json.dumps(overrides),
                 "tpl": body.default_template,
                 "bn": (body.bot_name or "").strip() or None,
+                "lt": body.live_transcription,
                 "adt": body.auto_dispatch_tasks,
                 "ade": body.auto_dispatch_emails,
                 "add": body.auto_dispatch_docs,

@@ -206,9 +206,82 @@ async def _issue_live_token() -> LiveToken:
     )
 
 
+async def live_wanted(meeting_id: str) -> tuple[bool, str]:
+    """Should this meeting be streaming right now, and why/why not.
+
+    Streaming ASR is billed per minute for the whole meeting; the archival
+    recording produces the same transcript afterwards at batch prices. So with
+    nothing reading the stream in real time, it is pure spend. Never raises —
+    if we can't tell, allow it, because breaking live captions is worse than an
+    unexpected bill on one meeting."""
+    try:
+        from gateway.routes.notes.core import _get_db
+        from gateway.routes.notes.settings import (
+            load_for_meeting,
+            wants_live_transcription,
+        )
+        from sqlalchemy import text as _text
+
+        settings, _ = await load_for_meeting(meeting_id)
+        async with await _get_db() as db:
+            row = (
+                await db.execute(
+                    _text(
+                        "SELECT copilot_enabled FROM live_session "
+                        "WHERE meeting_id = CAST(:m AS UUID) AND status = 'live' "
+                        "ORDER BY started_at DESC LIMIT 1"
+                    ),
+                    {"m": meeting_id},
+                )
+            ).fetchone()
+        copilot_on = bool(row.copilot_enabled) if row is not None else False
+        if wants_live_transcription(settings.live_transcription, copilot_on):
+            return True, "wanted"
+        return False, (
+            "the copilot is off for this meeting — recording continues and the "
+            "transcript is written when it ends"
+            if settings.live_transcription == "auto"
+            else "live transcription is switched off in Note Taker settings"
+        )
+    except Exception as exc:
+        _log.warning("notes.live_wanted_failed", error=str(exc)[:200])
+        return True, "unknown"
+
+
+class LiveWanted(BaseModel):
+    wanted: bool
+    reason: str
+
+
+@router.get("/meetings/{meeting_id}/live/wanted", response_model=LiveWanted)
+async def read_live_wanted(
+    meeting_id: str,
+    authorization: str | None = Header(default=None),
+) -> LiveWanted:
+    """Cheap poll for the producers, so turning the copilot on mid-meeting
+    starts streaming and turning it off stops it. Bot-token authed because the
+    worker is the main caller."""
+    from gateway.routes.notes.live_transcript import _check_bot_auth
+
+    _check_bot_auth(authorization)
+    wanted, reason = await live_wanted(meeting_id)
+    return LiveWanted(wanted=wanted, reason=reason)
+
+
 @router.post("/stt/live-token", response_model=LiveToken)
-async def live_token(_user: UserContext = Depends(get_current_user)) -> LiveToken:
-    """Streaming credentials for the browser recorder (user-authenticated)."""
+async def live_token(
+    meeting_id: str | None = None,
+    _user: UserContext = Depends(get_current_user),
+) -> LiveToken:
+    """Streaming credentials for the browser recorder (user-authenticated).
+
+    With a meeting_id, refuses when nothing is listening — the recorder then
+    falls back to record-only, which is exactly the same end result minus the
+    per-minute bill."""
+    if meeting_id:
+        wanted, reason = await live_wanted(meeting_id)
+        if not wanted:
+            raise HTTPException(status_code=409, detail=reason)
     return await _issue_live_token()
 
 

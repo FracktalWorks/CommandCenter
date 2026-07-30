@@ -316,6 +316,9 @@ export interface NotesSettings {
   copilot_instructions: string;
   copilot_default_on: boolean;
   copilot_sensitivity: "low" | "normal" | "high";
+  /** auto = stream only while the copilot listens (saves per-minute ASR);
+   *  always = stream every meeting; never = record-and-transcribe only. */
+  live_transcription: "auto" | "always" | "never";
   /** Per-meeting-type overrides. Absent key = use the shipped default. */
   template_instructions: Record<string, string>;
   default_template: string | null;

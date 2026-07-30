@@ -126,6 +126,10 @@ GATED_ROUTERS: dict[str, set[str]] = {
     "gateway.routes.notes": {
         "/notes/meetings/{meeting_id}/live/segment",
         "/notes/stt/bot-live-token",
+        # The meeting-bot worker polls this to decide whether to keep paying for
+        # streaming ASR. Same bot-token auth as the two above — it runs in its
+        # own container and has no user session.
+        "/notes/meetings/{meeting_id}/live/wanted",
     },
     "gateway.routes.tasks": set(),
     "gateway.routes.chat": set(),

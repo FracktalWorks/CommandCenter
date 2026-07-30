@@ -56,10 +56,19 @@ export class LiveTranscription {
     this.cb = cb;
   }
 
-  /** Fetch a token and open the socket. Resolves true if live is running. */
-  async start(): Promise<boolean> {
+  /** Fetch a token and open the socket. Resolves true if live is running.
+   *
+   *  Passing the meeting lets the gateway refuse when nothing is reading the
+   *  stream — streaming ASR bills per minute, and with the copilot off the
+   *  recording still yields the same transcript afterwards at batch prices. A
+   *  refusal (409) is a normal outcome, not an error: the recorder carries on
+   *  without captions. */
+  async start(meetingId?: string): Promise<boolean> {
     try {
-      const res = await fetch("/api/notes/stt/live-token", { method: "POST" });
+      const url = meetingId
+        ? `/api/notes/stt/live-token?meeting_id=${encodeURIComponent(meetingId)}`
+        : "/api/notes/stt/live-token";
+      const res = await fetch(url, { method: "POST" });
       if (!res.ok) {
         const body = await res.json().catch(() => ({}));
         this.cb.onUnavailable?.(String(body?.detail ?? `token ${res.status}`));

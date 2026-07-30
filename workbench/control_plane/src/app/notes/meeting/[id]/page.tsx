@@ -9,20 +9,24 @@
 import { use, useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import {
+  AlertTriangle,
   ArrowLeft,
   Check,
   CheckSquare,
   Clock,
   ExternalLink,
+  FileText,
   Loader2,
   Mail,
   Pencil,
   Play,
   Plus,
   RefreshCw,
+  Radio,
   Sparkles,
   Trash2,
   Users,
+  Video,
   X,
 } from "lucide-react";
 import Link from "next/link";
@@ -34,13 +38,16 @@ import MeetingOutcomes from "../../components/MeetingOutcomes";
 import MeetingPrep from "../../components/MeetingPrep";
 import { speakerAvatar, speakerText } from "../../lib/speakers";
 import {
-  approveAction,
   approveAllActions,
   audioUrl,
+  botScreenshotUrl,
   deleteMeeting,
+  dispatchAction,
   eventsUrl,
   formatClock,
+  getBotDiagnostics,
   getMeeting,
+  getMeetingBot,
   getNote,
   identifySpeakers,
   listActions,
@@ -56,6 +63,8 @@ import {
 import type {
   ActionItem,
   Attendee,
+  BotDiagnostics,
+  MeetingBot,
   MeetingDetail,
   MeetingEvent,
 } from "../../lib/types";
@@ -94,19 +103,26 @@ export default function MeetingPage({
   const [savingSpeaker, setSavingSpeaker] = useState(false);
   const [templates, setTemplates] = useState<{ key: string; label: string }[]>([]);
   const [retranscribing, setRetranscribing] = useState(false);
+  const [bot, setBot] = useState<MeetingBot | null>(null);
+  const [botDiag, setBotDiag] = useState<BotDiagnostics | null>(null);
+  const [showBotDiag, setShowBotDiag] = useState(false);
+  const [deleting, setDeleting] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const scratchLoaded = useRef(false);
   const audioRef = useRef<HTMLAudioElement>(null);
 
   const refresh = useCallback(async () => {
     try {
-      const [m, note, acts] = await Promise.all([
+      const [m, note, acts, b] = await Promise.all([
         getMeeting(id),
         getNote(id).catch(() => null),
         listActions(id).catch(() => []),
+        getMeetingBot(id).catch(() => null),
       ]);
       setMeeting(m);
       setNotesMd(note?.notes_md ?? m.summary_md ?? null);
       setActions(acts);
+      setBot(b);
       // Seed the scratch editor once, then leave the user's live edits alone.
       if (!scratchLoaded.current) {
         setScratch(m.scratch_notes ?? "");
@@ -129,7 +145,9 @@ export default function MeetingPage({
   }, []);
 
   // Live pipeline progress over SSE. On every state change (and on terminal),
-  // refetch the detail so transcript/notes/actions stay in step.
+  // refetch the detail so transcript/notes/actions stay in step. The stream
+  // closes itself once the pipeline is terminal; a deleted meeting emits a
+  // named `gone` event.
   useEffect(() => {
     const es = new EventSource(eventsUrl(id));
     es.onmessage = (ev) => {
@@ -141,9 +159,13 @@ export default function MeetingPage({
         /* heartbeat / comment frame */
       }
     };
+    es.addEventListener("gone", () => {
+      es.close();
+      router.push("/notes");
+    });
     es.onerror = () => es.close();
     return () => es.close();
-  }, [id, refresh]);
+  }, [id, refresh, router]);
 
   async function onSummarize() {
     setSummarizing(true);
@@ -298,12 +320,24 @@ export default function MeetingPage({
   );
   const chipCls =
     "inline-flex items-center gap-1 rounded-full border border-border bg-card px-2.5 py-1 text-xs text-foreground";
-  async function onApprove(actionId: string) {
-    setActioning(actionId);
+  async function onApprove(a: ActionItem) {
+    setActioning(a.id);
     try {
-      await approveAction(actionId);
+      const res = await dispatchAction(a.id);
       await refresh();
-      flashToast("Task created — view in Tasks");
+      if (res.dispatch_error) {
+        setError(`Couldn't dispatch: ${res.dispatch_error}`);
+      } else if (res.kind === "email") {
+        flashToast(
+          res.dispatch_ref?.startsWith("sent:")
+            ? "Email sent"
+            : "Email drafted in your mailbox — recipient needs confirming"
+        );
+      } else if (res.kind === "document") {
+        flashToast("Document drafted — view in Artifacts");
+      } else {
+        flashToast("Task created — view in Tasks");
+      }
     } catch (e) {
       setError(String(e instanceof Error ? e.message : e));
     } finally {
@@ -330,7 +364,7 @@ export default function MeetingPage({
       await refresh();
       flashToast(
         created.length
-          ? `${created.length} task${created.length > 1 ? "s" : ""} created — view in Tasks`
+          ? `${created.length} item${created.length > 1 ? "s" : ""} dispatched`
           : "No draft items at 80%+ confidence"
       );
     } catch (e) {
@@ -342,9 +376,43 @@ export default function MeetingPage({
 
   const summaryRun = meeting?.runs.find((r) => r.kind === "summary");
   const transcribeRun = meeting?.runs.find((r) => r.kind === "transcribe");
+  // Busy reads the meeting's OWN runs too, not just SSE snapshots — a
+  // regenerate creates a queued run the stream may never report (it closes
+  // once terminal), and this flag is what drives the poll fallback below.
   const busy =
     meeting?.status === "processing" ||
-    progress?.runs.some((r) => r.status === "queued" || r.status === "running");
+    progress?.runs.some((r) => r.status === "queued" || r.status === "running") ||
+    meeting?.runs.some((r) => r.status === "queued" || r.status === "running");
+
+  // Poll while the pipeline works. The SSE stream is the fast path, but it
+  // dies silently (proxy blip, terminal-then-regenerate); this is the
+  // correctness net that keeps the page from freezing on stale state.
+  useEffect(() => {
+    if (!busy) return;
+    const t = setInterval(() => void refresh(), 5000);
+    return () => clearInterval(t);
+  }, [busy, refresh]);
+
+  // A dispatched notetaker that is still out there (or died trying) — the
+  // meeting page must tell that story; before, it showed "No transcript."
+  const botActive =
+    !!bot &&
+    ["requested", "joining", "waiting_room", "in_call", "processing"].includes(
+      bot.status
+    );
+  const botFailed =
+    !!bot && ["failed", "not_admitted"].includes(bot.status);
+
+  async function onShowBotDiag() {
+    setShowBotDiag((v) => !v);
+    if (!botDiag) {
+      try {
+        setBotDiag(await getBotDiagnostics(id));
+      } catch {
+        /* endpoint 404s when there was never a bot */
+      }
+    }
+  }
 
   // Diarization is only real on a provider that returns speakers (AssemblyAI,
   // Deepgram, or a local sherpa pass); Whisper alone returns none. Surface that
@@ -440,17 +508,45 @@ export default function MeetingPage({
               </span>
             </button>
           )}
+          <button
+            onClick={async () => {
+              setRefreshing(true);
+              await refresh();
+              setRefreshing(false);
+            }}
+            disabled={refreshing}
+            className="rounded-lg border border-border p-2 text-sm text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
+            aria-label="Refresh"
+            title="Refresh"
+          >
+            <RefreshCw className={`w-4 h-4 ${refreshing ? "animate-spin" : ""}`} />
+          </button>
           {meeting && (
             <button
               onClick={async () => {
                 if (!confirm("Delete this meeting, its audio and transcript?"))
                   return;
-                await deleteMeeting(id);
-                router.push("/notes");
+                setDeleting(true);
+                try {
+                  await deleteMeeting(id);
+                  router.push("/notes");
+                } catch (e) {
+                  setError(
+                    `Couldn't delete: ${String(e instanceof Error ? e.message : e)}`
+                  );
+                  setDeleting(false);
+                }
               }}
-              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition"
+              disabled={deleting}
+              className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive hover:bg-destructive/20 tech-transition disabled:opacity-60"
+              aria-label="Delete this meeting"
+              title="Delete this meeting"
             >
-              <Trash2 className="w-4 h-4" />
+              {deleting ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Trash2 className="w-4 h-4" />
+              )}
             </button>
           )}
         </div>
@@ -577,6 +673,104 @@ export default function MeetingPage({
             </div>
           )}
 
+          {/* The notetaker's own story — was it sent, is it in the call, why
+              did it fail. Without this card a failed join reads as a meeting
+              with mysteriously "No transcript." */}
+          {bot && (botActive || botFailed) && (
+            <div
+              className={`rounded-xl border p-4 ${
+                botFailed
+                  ? "border-destructive/40 bg-destructive/[0.04]"
+                  : "border-primary/25 bg-primary/[0.04]"
+              }`}
+            >
+              <div className="flex items-center gap-3">
+                <Video
+                  className={`w-5 h-5 shrink-0 ${
+                    botFailed ? "text-destructive" : "text-primary"
+                  }`}
+                />
+                <div className="min-w-0 flex-1">
+                  <p className="text-sm font-semibold text-foreground">
+                    {botFailed
+                      ? "The notetaker couldn't join this call"
+                      : bot.status === "in_call"
+                        ? "Notetaker is in the call, recording"
+                        : bot.status === "waiting_room"
+                          ? "Notetaker is knocking — someone in the call must admit it"
+                          : bot.status === "processing"
+                            ? "Notetaker left the call — processing the recording"
+                            : "Notetaker is joining the call…"}
+                  </p>
+                  <p className="text-[11px] text-muted-foreground truncate">
+                    {bot.meeting_url}
+                  </p>
+                </div>
+                {botActive && (
+                  <Link
+                    href={`/notes/live/${id}`}
+                    className="shrink-0 inline-flex items-center gap-1.5 rounded-lg border border-primary/30 px-2.5 py-1.5 text-xs text-primary hover:bg-primary/10 tech-transition"
+                  >
+                    <Radio className="w-3.5 h-3.5" />
+                    Live console
+                  </Link>
+                )}
+              </div>
+              {botFailed && bot.error && (
+                <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-xs leading-relaxed text-destructive">
+                  <AlertTriangle className="mt-0.5 w-3.5 h-3.5 shrink-0" />
+                  <span>{bot.error}</span>
+                </p>
+              )}
+              {botFailed && (
+                <div className="mt-2">
+                  <button
+                    onClick={() => void onShowBotDiag()}
+                    className="text-xs text-muted-foreground hover:text-foreground underline underline-offset-2 tech-transition"
+                  >
+                    {showBotDiag ? "Hide details" : "What did the bot see?"}
+                  </button>
+                  {showBotDiag && (
+                    <div className="mt-2 space-y-2">
+                      {botDiag?.diagnostics?.diagnostics?.controls?.length ? (
+                        <p className="text-[11px] text-muted-foreground">
+                          Buttons on the page:{" "}
+                          <span className="font-mono">
+                            {botDiag.diagnostics.diagnostics.controls
+                              .slice(0, 10)
+                              .join(" · ")}
+                          </span>
+                        </p>
+                      ) : null}
+                      {botDiag?.diagnostics?.diagnostics?.title ? (
+                        <p className="text-[11px] text-muted-foreground">
+                          Page title:{" "}
+                          <span className="font-mono">
+                            {botDiag.diagnostics.diagnostics.title}
+                          </span>
+                        </p>
+                      ) : null}
+                      {botDiag?.diagnostics?.has_screenshot ? (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img
+                          src={botScreenshotUrl(id)}
+                          alt="The meeting page exactly as the bot saw it"
+                          className="max-w-full rounded-lg border border-border"
+                        />
+                      ) : (
+                        <p className="text-[11px] text-muted-foreground">
+                          {botDiag
+                            ? "No screenshot was captured for this attempt."
+                            : "Loading details…"}
+                        </p>
+                      )}
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {busy && (
             <div className="rounded-xl border border-border bg-card p-4 flex items-center gap-3">
               <Loader2 className="w-4 h-4 animate-spin text-warning" />
@@ -602,7 +796,7 @@ export default function MeetingPage({
             </div>
           )}
 
-          {meeting?.status === "failed" && (
+          {meeting?.status === "failed" && !botFailed && (
             <div className="rounded-xl border border-destructive/40 bg-destructive/10 p-4">
               <p className="text-sm font-semibold text-destructive">
                 Pipeline failed
@@ -610,6 +804,7 @@ export default function MeetingPage({
               <p className="text-xs text-muted-foreground mt-1 font-mono break-all">
                 {summaryRun?.error ??
                   transcribeRun?.error ??
+                  bot?.error ??
                   "No error detail recorded."}
               </p>
             </div>
@@ -895,15 +1090,28 @@ export default function MeetingPage({
                       <button
                         onClick={onApproveAll}
                         disabled={actioning !== null}
+                        title="Tasks are created, emails sent (or drafted when the recipient is unclear), documents drafted"
                         className="text-[11px] rounded-md border border-border px-2 py-1 text-muted-foreground hover:text-foreground hover:border-primary/30 tech-transition disabled:opacity-60"
                       >
-                        Approve all ≥80%
+                        Dispatch all ≥80%
                       </button>
                     )}
                   </div>
                   <div className="space-y-2">
                     {actions.map((a) => {
-                      const busy = actioning === a.id || actioning === "all";
+                      const rowBusy = actioning === a.id || actioning === "all";
+                      const KindIcon =
+                        a.kind === "email"
+                          ? Mail
+                          : a.kind === "document"
+                            ? FileText
+                            : CheckSquare;
+                      const kindLabel =
+                        a.kind === "email"
+                          ? "Email"
+                          : a.kind === "document"
+                            ? "Document"
+                            : "Task";
                       return (
                         <div
                           key={a.id}
@@ -915,11 +1123,31 @@ export default function MeetingPage({
                                 : "border-border bg-card"
                           }`}
                         >
-                          <p
-                            className={`text-sm ${a.status === "rejected" ? "line-through text-muted-foreground" : "text-foreground"}`}
-                          >
-                            {a.description}
-                          </p>
+                          <div className="flex items-start gap-2">
+                            <span
+                              className="mt-0.5 inline-flex shrink-0 items-center gap-1 rounded-full bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground"
+                              title={`Dispatches as a ${kindLabel.toLowerCase()}`}
+                            >
+                              <KindIcon className="w-3 h-3" />
+                              {kindLabel}
+                            </span>
+                            <p
+                              className={`min-w-0 flex-1 text-sm ${a.status === "rejected" ? "line-through text-muted-foreground" : "text-foreground"}`}
+                            >
+                              {a.description}
+                            </p>
+                          </div>
+                          {a.kind === "email" && a.payload?.email_to && (
+                            <p className="mt-1 text-[10px] text-muted-foreground">
+                              To: {a.payload.email_to}
+                            </p>
+                          )}
+                          {a.dispatch_error && a.status !== "created" && (
+                            <p className="mt-1.5 flex items-start gap-1 rounded-md bg-destructive/10 px-2 py-1 text-[11px] text-destructive">
+                              <AlertTriangle className="mt-0.5 w-3 h-3 shrink-0" />
+                              {a.dispatch_error}
+                            </p>
+                          )}
                           <div className="flex items-center gap-2 mt-1.5">
                             <div className="flex-1 h-1 rounded-full bg-muted overflow-hidden">
                               <div
@@ -963,39 +1191,62 @@ export default function MeetingPage({
                             {a.status === "draft" && (
                               <>
                                 <button
-                                  onClick={() => onApprove(a.id)}
-                                  disabled={busy}
+                                  onClick={() => onApprove(a)}
+                                  disabled={rowBusy}
                                   className="flex-1 flex items-center justify-center gap-1 rounded-md bg-primary/10 text-primary px-2 py-1 text-xs hover:bg-primary/20 tech-transition disabled:opacity-60"
                                 >
-                                  {busy ? (
+                                  {rowBusy ? (
                                     <Loader2 className="w-3.5 h-3.5 animate-spin" />
                                   ) : (
                                     <Check className="w-3.5 h-3.5" />
                                   )}
-                                  Approve → Task
+                                  {a.kind === "email"
+                                    ? "Approve → Send email"
+                                    : a.kind === "document"
+                                      ? "Approve → Draft doc"
+                                      : "Approve → Task"}
                                 </button>
                                 <button
                                   onClick={() => onReject(a.id)}
-                                  disabled={busy}
+                                  disabled={rowBusy}
+                                  aria-label="Reject this action item"
+                                  title="Reject"
                                   className="flex items-center justify-center gap-1 rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-destructive hover:border-destructive/30 tech-transition disabled:opacity-60"
                                 >
                                   <X className="w-3.5 h-3.5" />
                                 </button>
                               </>
                             )}
-                            {a.status === "created" && (
-                              <Link
-                                href={
-                                  a.resulting_task_id
-                                    ? `/tasks?item=${a.resulting_task_id}`
-                                    : "/tasks"
-                                }
-                                className="flex items-center gap-1 text-xs text-success hover:underline"
-                              >
-                                <Check className="w-3.5 h-3.5" /> In Tasks
-                                <ExternalLink className="w-3 h-3" />
-                              </Link>
-                            )}
+                            {a.status === "created" &&
+                              (a.kind === "email" ? (
+                                <span className="flex items-center gap-1 text-xs text-success">
+                                  <Mail className="w-3.5 h-3.5" />
+                                  {a.dispatch_ref?.startsWith("sent:")
+                                    ? "Email sent"
+                                    : "Drafted in your mailbox"}
+                                </span>
+                              ) : a.kind === "document" ? (
+                                <Link
+                                  href="/artifacts"
+                                  className="flex items-center gap-1 text-xs text-success hover:underline"
+                                >
+                                  <FileText className="w-3.5 h-3.5" /> Draft in
+                                  Artifacts
+                                  <ExternalLink className="w-3 h-3" />
+                                </Link>
+                              ) : (
+                                <Link
+                                  href={
+                                    a.resulting_task_id
+                                      ? `/tasks?item=${a.resulting_task_id}`
+                                      : "/tasks"
+                                  }
+                                  className="flex items-center gap-1 text-xs text-success hover:underline"
+                                >
+                                  <Check className="w-3.5 h-3.5" /> In Tasks
+                                  <ExternalLink className="w-3 h-3" />
+                                </Link>
+                              ))}
                             {a.status === "rejected" && (
                               <span className="text-xs text-muted-foreground">
                                 Rejected

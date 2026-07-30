@@ -166,7 +166,7 @@ Every override row records `reason`, `set_by`, `set_at`. A permission model nobo
 
 ## 4. Schema
 
-`infra/postgres/128_org_access_control.sql`, idempotent per `infra/postgres/README.md`.
+`infra/postgres/130_org_access_control.sql`, idempotent per `infra/postgres/README.md`.
 
 ```sql
 organization(id, slug UNIQUE, display_name, domain, settings JSONB, created_at, updated_at)

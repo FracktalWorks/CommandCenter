@@ -96,3 +96,65 @@ def test_join_timeout_is_configurable_and_sane() -> None:
     assert meet.JOIN_TIMEOUT_S > 0
     # Below ~60s a host realistically cannot notice and click Admit in time.
     assert meet.JOIN_TIMEOUT_S >= 60
+
+
+# ── invite links are canonicalised before Chrome sees them ───────────────────
+# Decorated invite links (?authuser=0, calendar params) are one of the two ways
+# a signed-out browser gets bounced to Meet's marketing page (production
+# incident, screenshot-proven). The bare code + hl=en is the reliable form.
+
+def test_meet_urls_are_reduced_to_the_bare_code() -> None:
+    for url in (
+        "https://meet.google.com/abc-defg-hij",
+        "https://meet.google.com/abc-defg-hij?authuser=0&hs=122",
+        "https://meet.google.com/abc-defg-hij/",
+        "https://meet.google.com/ABC-DEFG-HIJ",
+    ):
+        assert meet.canonical_meet_url(url) == (
+            "https://meet.google.com/abc-defg-hij?hl=en"
+        ), url
+
+
+def test_non_meet_and_unusual_urls_pass_through() -> None:
+    for url in (
+        "https://us02web.zoom.us/j/1234567890",
+        "https://teams.microsoft.com/l/meetup-join/xyz",
+        "https://meet.google.com/lookup/abcdef",
+        "https://meet.google.com/landing",
+        "https://meet.google.com/",
+    ):
+        assert meet.canonical_meet_url(url) == url, url
+
+
+# ── the marketing page is recognised for what it is ──────────────────────────
+# Meet renders it client-side (URL unchanged) when it decides the visitor is a
+# bot; without this check it surfaces as a baffling "No join button".
+
+def test_landing_page_is_detected_from_body_copy() -> None:
+    assert meet.looks_like_landing(
+        "https://meet.google.com/abc-defg-hij",
+        "Google Meet — Video calls, enhanced with AI. Sign in. Try Meet for work.",
+    )
+    assert meet.looks_like_landing(
+        "https://meet.google.com/abc-defg-hij",
+        "Join a meeting now ... Enter code",
+    )
+
+
+def test_landing_page_is_detected_from_redirect_urls() -> None:
+    assert meet.looks_like_landing(
+        "https://workspace.google.com/products/meet/", ""
+    )
+    assert meet.looks_like_landing("https://meet.google.com/landing?foo=1", "")
+
+
+def test_green_room_is_not_mistaken_for_landing() -> None:
+    for body in (
+        "Ready to join? No one else is here",
+        "Asking to be let in...",
+        "What's your name?",
+        "",
+    ):
+        assert not meet.looks_like_landing(
+            "https://meet.google.com/abc-defg-hij", body
+        ), body

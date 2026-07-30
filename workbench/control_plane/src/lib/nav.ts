@@ -19,7 +19,7 @@ export type NavPane = {
   badge?: string;
   /**
    * Feature slug guarding this pane (org access control). Matches
-   * `feature_catalog.slug` in infra/postgres/128_org_access_control.sql. A
+   * `feature_catalog.slug` in infra/postgres/130_org_access_control.sql. A
    * pane without one is visible to every signed-in member.
    */
   feature?: string;

@@ -20,7 +20,7 @@ _GATEWAY_PORT = "8080"
 
 
 def _service() -> dict:
-    return yaml.safe_load(_COMPOSE.read_text())["services"]["meeting-bot"]
+    return yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))["services"]["meeting-bot"]
 
 
 def test_meeting_bot_is_not_in_the_core_profile() -> None:
@@ -52,7 +52,7 @@ def test_worker_can_reach_the_gateway_for_live_callbacks() -> None:
 
 
 def test_recordings_survive_a_container_restart() -> None:
-    compose = yaml.safe_load(_COMPOSE.read_text())
+    compose = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
     assert any("/data" in str(v) for v in _service()["volumes"])
     assert "acb-meeting-bot-data" in compose["volumes"]
 
@@ -61,7 +61,7 @@ def test_recordings_survive_a_container_restart() -> None:
 
 def test_deploy_wires_the_gateway_to_the_worker() -> None:
     """Without these the bot would run but the gateway couldn't dispatch to it."""
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert 'upsert_env MEETING_BOT_URL "http://127.0.0.1:8095"' in deploy
     assert 'upsert_env NOTES_BOT_PROVIDER "selfhosted"' in deploy
     # The worker calls back from inside its container, so localhost won't do.
@@ -69,7 +69,7 @@ def test_deploy_wires_the_gateway_to_the_worker() -> None:
 
 
 def test_deploy_generates_the_shared_secret_once() -> None:
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert "MEETING_BOT_TOKEN=$_mbtoken" in deploy
     # Only generated when absent — regenerating each deploy would break the
     # gateway/worker pair until both restarted.
@@ -79,13 +79,13 @@ def test_deploy_generates_the_shared_secret_once() -> None:
 def test_deploy_passes_the_app_env_file_explicitly() -> None:
     """Compose resolves a bare .env against the project dir (infra/), not the
     app root — so the substitutions would silently come out empty."""
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert 'docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml' in deploy
 
 
 def test_meeting_bot_failure_cannot_fail_the_deploy() -> None:
     """A bot build hiccup must skip the bot, never take down a deploy."""
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert "meeting bot build/start failed" in deploy
 
 
@@ -96,7 +96,7 @@ def test_live_caption_credentials_are_wired_by_default() -> None:
     env = _service()["environment"]
     assert "LIVE_TOKEN_URL" in env, "compose must pass the token URL to the worker"
 
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert "NOTES_LIVE_TOKEN_URL" in deploy
     assert "/notes/stt/bot-live-token" in deploy
     # The worker calls the gateway from inside its container, so it can't use

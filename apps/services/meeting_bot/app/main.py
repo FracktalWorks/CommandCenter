@@ -25,6 +25,7 @@ worker instance — scale by running more instances (each is ~1 headless Chrome)
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import os
 import uuid
@@ -67,6 +68,81 @@ class _Job:
 
 _JOBS: dict[str, _Job] = {}
 
+_TERMINAL = ("done", "failed", "left", "not_admitted")
+
+
+def _state_path(job_id: str) -> str:
+    return os.path.join(DATA_DIR, f"{job_id}.state.json")
+
+
+def _persist(job: _Job) -> None:
+    """Mirror the job's state to /data on every transition (atomic rename).
+
+    Jobs live in memory, but the worker is recreated by every deploy — before
+    this, a restart made GET /bots/{id} 404 and the gateway's row sat in
+    "joining" forever while the evidence (error text, diagnostics) vanished.
+    The screenshot already survives on the volume; now the story does too.
+    """
+    state = {
+        "id": job.id,
+        "meeting_url": job.meeting_url,
+        "bot_name": job.bot_name,
+        "status": job.status,
+        "error": job.error,
+        "diagnostics": job.diagnostics,
+        "recording": job.recording,
+    }
+    try:
+        os.makedirs(DATA_DIR, exist_ok=True)
+        tmp = _state_path(job.id) + ".tmp"
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(state, fh)
+        os.replace(tmp, _state_path(job.id))
+    except Exception:
+        _log.warning("bot.persist_failed id=%s", job.id, exc_info=True)
+
+
+def _load_persisted(job_id: str) -> _Job | None:
+    """Rehydrate a job another worker life wrote. In-flight statuses become a
+    clean failure — this process cannot rejoin a call it was never in."""
+    if not job_id or "/" in job_id or "\\" in job_id or ".." in job_id:
+        return None
+    try:
+        with open(_state_path(job_id), encoding="utf-8") as fh:
+            state = json.load(fh)
+    except Exception:
+        return None
+    job = _Job(
+        job_id,
+        str(state.get("meeting_url") or ""),
+        str(state.get("bot_name") or "AI Notetaker"),
+        None,
+    )
+    job.status = str(state.get("status") or "failed")
+    job.error = state.get("error")
+    job.diagnostics = state.get("diagnostics") or {}
+    rec = state.get("recording")
+    job.recording = rec if rec and os.path.isfile(rec) else None
+    if job.status not in _TERMINAL:
+        # Interrupted mid-meeting by a worker restart (deploys recreate the
+        # container). Keep a finished recording if one made it to disk.
+        if job.recording:
+            job.status = "done"
+        else:
+            job.status = "failed"
+            job.error = job.error or (
+                "The meeting-bot worker restarted (most likely a deploy) "
+                "while this bot was in flight — the join was lost. "
+                "Send the notetaker again."
+            )
+        _persist(job)
+    _JOBS[job_id] = job
+    return job
+
+
+def _get_job(job_id: str) -> _Job | None:
+    return _JOBS.get(job_id) or _load_persisted(job_id)
+
 
 def _auth(authorization: str | None) -> None:
     if TOKEN and authorization != f"Bearer {TOKEN}":
@@ -91,6 +167,7 @@ async def _run(job: _Job) -> None:
 
     def on_status(s: str) -> None:
         job.status = s
+        _persist(job)
 
     try:
         await join_and_record(
@@ -115,6 +192,8 @@ async def _run(job: _Job) -> None:
         job.status = "failed"
         job.error = f"{type(exc).__name__}: {str(exc)[:400]}"
         _log.exception("bot.crashed id=%s", job.id)
+    finally:
+        _persist(job)
 
 
 @app.get("/health")
@@ -139,6 +218,7 @@ async def create_bot(
     )
     job.status = "joining"
     _JOBS[job_id] = job
+    _persist(job)
     job.task = asyncio.create_task(_run(job))
     return {"id": job_id, "status": job.status}
 
@@ -151,7 +231,7 @@ async def say(
     The actuator for agent interjections; the runner drains this queue while
     in-call."""
     _auth(authorization)
-    job = _JOBS.get(bot_id)
+    job = _JOBS.get(bot_id)  # deliberately memory-only: can't speak after a restart
     if job is None:
         raise HTTPException(status_code=404, detail="unknown bot")
     text = (req.text or "").strip()
@@ -166,7 +246,7 @@ async def get_bot(
     bot_id: str, authorization: str | None = Header(default=None)
 ) -> dict:
     _auth(authorization)
-    job = _JOBS.get(bot_id)
+    job = _get_job(bot_id)
     if job is None:
         raise HTTPException(status_code=404, detail="unknown bot")
     # download_url null → the gateway falls back to GET /bots/{id}/recording.
@@ -185,7 +265,7 @@ async def get_diagnostics(
     ``/bots/{id}/screenshot``.
     """
     _auth(authorization)
-    job = _JOBS.get(bot_id)
+    job = _get_job(bot_id)
     if job is None:
         raise HTTPException(status_code=404, detail="unknown bot")
     diag = dict(job.diagnostics)
@@ -206,7 +286,7 @@ async def get_screenshot(
     """The green room as the bot saw it — the fastest way to tell a waiting
     room from a sign-in wall from a device dialog."""
     _auth(authorization)
-    job = _JOBS.get(bot_id)
+    job = _get_job(bot_id)
     shot = (job.diagnostics or {}).get("screenshot") if job else None
     if not shot or not os.path.isfile(shot):
         raise HTTPException(status_code=404, detail="no screenshot")
@@ -218,7 +298,7 @@ async def leave_bot(
     bot_id: str, authorization: str | None = Header(default=None)
 ) -> dict:
     _auth(authorization)
-    job = _JOBS.get(bot_id)
+    job = _get_job(bot_id)
     if job is None:
         raise HTTPException(status_code=404, detail="unknown bot")
     job.leave.set()  # the runner finalises the recording and leaves
@@ -230,7 +310,7 @@ async def get_recording(
     bot_id: str, authorization: str | None = Header(default=None)
 ) -> FileResponse:
     _auth(authorization)
-    job = _JOBS.get(bot_id)
+    job = _get_job(bot_id)
     if job is None or not job.recording or not os.path.isfile(job.recording):
         raise HTTPException(status_code=404, detail="no recording")
     return FileResponse(job.recording, media_type="audio/ogg")

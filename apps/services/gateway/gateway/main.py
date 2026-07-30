@@ -432,6 +432,7 @@ PUBLIC_ROUTES: frozenset[str] = frozenset({
     "/whatsapp/bridge/ingest",
     "/whatsapp/bridge/reclassify",
     "/whatsapp/bridge/labels",
+    "/whatsapp/bridge/avatars",
     "/whatsapp/bridge/paired",
     "/whatsapp/bridge/avatars",
 

@@ -176,13 +176,64 @@ with the next route:
 5. The sweep found ≥80 routes — so a broken path makes the suite fail rather than pass
    vacuously.
 
-### Not done here
+---
+
+## 5. The same rule on the Python side
+
+Enumerating who else holds the internal token — the step §1b's justification names but
+nobody had done — turned up the identical omission in the tool clients agents call the
+gateway through: `agent-whatsapp-assistant`, `agent-email-assistant`, and
+`skill-task-gtd`. All three had:
+
+```python
+user = _current_user_email()
+if user:
+    headers["X-User-Email"] = user     # ← and if not, the bearer alone
+```
+
+with `_current_user_email` documenting the outcome as *"Without either, gateway calls are
+unscoped."* Unscoped is the one thing they were not: they were scoped to everybody.
+
+`_headers()` now raises rather than returning identity-free headers. Unlike the BFF —
+where "no session" always means an unauthenticated request — a Python run can genuinely
+have no user, so this needs its own argument. It is this: every surface these clients
+reach is inherently per-person. A run with nobody attributed has no inbox, no chats and no
+task list to act on. It has nothing to do, not everything. These modules relay raised
+exceptions to the agent verbatim, so the message names the variable to set.
+
+Acceptance is `tests/unit/test_agent_gateway_identity.py` (9 tests), in the same two
+halves: behaviour, plus a source-level check that the header is never assigned
+conditionally. The source check is scoped to `_headers` — `_current_user_email` uses
+`if user:` legitimately to walk its fallback chain, and what must never be conditional is
+the assignment that decides whether the gateway is told who is asking.
+
+### The remaining §1b callers
+
+One legitimate identity-free caller remains in the repo: `acb_skills.write_artifact`
+`_notify`, which PATCHes `/agent/workspace/{sid}` and posts an event. It runs in the
+orchestrator process, not in agent-authored script code — `_script_env` grants scripts
+integration credentials, not the gateway token — so it is the platform acting as itself in
+the sense §1b means.
+
+---
+
+## 6. Not done here
 
 The §1b grant itself is unchanged: a bearer with no identity still resolves to
-`SERVICE_ACCESS` at the gateway. That is now reachable only by something already holding
-the internal token, which is the population §1b's reasoning was actually about. Narrowing
-it further — or requiring an explicit service-principal assertion — would break genuine
-cron and CI callers and belongs in its own change, with those callers enumerated first.
+`SERVICE_ACCESS`. With both the BFF and the Python clients failing closed, the paths that
+reach it are platform code holding the token, which is the population §1b's reasoning was
+actually about. Narrowing it further — or requiring an explicit service-principal
+assertion — is now a much smaller change than it was, but it still belongs in its own,
+with the deployment's cron and CI callers confirmed against the list above.
+
+Two adjacent things noticed and deliberately left alone, because neither is this change:
+
+- `scripts/setup_secrets.sh` seeds `GATEWAY_INTERNAL_TOKEN=${LITELLM_KEY}` — the two
+  secrets `deps.py` calls "deliberately distinct" start life as the same value, which is
+  the BO-2 residual #4 separation not taking effect on a fresh install.
+- `require_internal_auth` and `_get_internal_token` fail OPEN when no token is configured.
+  Documented and deliberate, but it means the invariant here rests on the token actually
+  being set.
 
 Verification was per-link rather than end-to-end: the proxy list, the missing `auth()`
 calls, and the gateway's response to a bearer-only request were each confirmed directly,

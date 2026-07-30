@@ -1,6 +1,21 @@
 # Multiplayer Agents — Analysis & Implementation Plan
 
-**Status:** Draft / RFC · **Date:** 2026-07-26 · **Owner:** vjvarada
+**Status:** Phases 0-1 built, 2-4 designed · **Date:** 2026-07-26 · **Last built:** 2026-07-30 · **Owner:** vjvarada
+
+> **What is real as of 2026-07-30.** Membership, shared history, presence, live
+> spectate, message authorship, the clearance filter, several agents per room,
+> and the whole room UX (header + cap banner, share sheet, presence rail,
+> attributed turns) are built and tested — §8's Phase 0 and Phase 1, plus the
+> parts of Phase 3 that could not wait (the authority rule, and personal memory
+> being excluded from shared rooms in both directions).
+>
+> **Floor control, steer, the turn queue, the observer lane, room memory
+> compartments, and per-participant cost attribution are designed here and NOT
+> built.** `chat_session.floor_mode` exists and defaults to `'open'`, which is
+> today's behaviour; the concurrent-run 409 is still the only thing standing
+> between two people and one thread. Read §5 and §8 as a plan, not a
+> description. The authoritative build state is
+> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §6.
 
 Turn CommandCenter agent sessions from a thousand private threads into **rooms** — shared,
 live, durable places where several people and one agent work the same problem together.

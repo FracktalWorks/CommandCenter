@@ -1,7 +1,7 @@
 # Groups, shared sessions, and whose authority runs the agent
 
-> **Status:** 🔄 spec accepted, implementation starting
-> **Created:** 2026-07-29
+> **Status:** ✅ steps 1-4 shipped, step 5 shipped in part — see §6
+> **Created:** 2026-07-29 · **Last built:** 2026-07-30
 > **Answers:** [`org_access_control.md` §10](org_access_control.md#10-handoff-multiplayer-agent-collaboration) — the handoff asked for exactly one spec covering the group primitive, `chat_session_participant`, and the authority rule, *before* shared transcripts exist and the decisions get expensive.
 > **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 132/133).
 
@@ -171,13 +171,72 @@ not after:
 
 ## 6. Order of work
 
-| # | Step | Depends on |
+| # | Step | State |
 |---|---|---|
-| 1 | Migration 134: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | — |
-| 2 | Wire agent instancing through the run path (files + disk together; `agent_paths.py` is the seam) | 132/133 ✅ |
-| 3 | Participant resolution + `intersect()` fold at run start; feed the two existing enforcement points | 1 |
-| 4 | `chat_message` authorship + clearance tag; replay filter | 1 |
-| 5 | Room UX: share flow, participant list, the visible cap, groups admin UI | 1–4 |
+| 1 | Migration 134: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | ✅ |
+| 2 | Wire agent instancing through the run path (files + disk together; `agent_paths.py` is the seam) | ✅ |
+| 3 | Participant resolution + `intersect()` fold at run start; feed the two existing enforcement points | ✅ |
+| 4 | `chat_message` authorship + clearance tag; replay filter (migration 135) | ✅ |
+| 5 | Room UX: share flow, participant list, the visible cap, groups admin UI | ◐ — see below |
 
-Steps 2 and 3 are independent and can proceed in parallel; 4 must ship no
-later than the first UI that lets a second person into a session.
+**What step 5 shipped.** `gateway/rooms.py` (`resolve_room_access` — the one
+predicate that replaced `WHERE user_id = :uid` everywhere, including
+`_thread_owner_ok`), `gateway/room_stream.py` (`cc:room:{tid}` + presence),
+`gateway/routes/rooms.py` (participants, agents, settings, presence, the live
+room stream, the share directory), and the workbench surfaces: room header with
+the visible cap, share sheet, presence rail, attributed turns, redaction stubs,
+the shared badge in the sidebar, and a watcher's composer that explains itself.
+Migration 135 also added `chat_session_agent`, so a room holds more than one
+agent — §7 below.
+
+**What step 5 did NOT ship, and must not be assumed:**
+
+- **Floor control.** `chat_session.floor_mode` exists and defaults to `'open'`,
+  which is today's behaviour. Nothing enforces `'driver'`; the only protection
+  against two people driving one thread remains the concurrent-run 409
+  (`agent.py _refuse_if_another_run_is_active`). The baton, the turn queue,
+  the observer lane and `moderated` mode are designed
+  (`README.md` §5) and unbuilt.
+- **Steer.** Non-destructive mid-run guidance (`README.md` §4.6) is unbuilt, so
+  the only way to redirect a run is still to supersede it.
+- **The room's memory compartment.** A shared room currently injects and
+  extracts *nothing* personal (§3's rule, enforced at both call sites in
+  `routes/agent.py`) — but it has no compartment of its own yet, so it simply
+  remembers nothing. `memory-clearance.md` is that work.
+- **Groups admin UI.** `org_group` / `org_group_member` have no HTTP surface
+  beyond read-time expansion; groups can be used as participant subjects but
+  must be created in SQL.
+
+## 7. Several agents in one room
+
+The room model above is about several *people*. The question it left open —
+several *agents* — is answered by `chat_session_agent` (migration 135) and one
+rule:
+
+> **A room's turn is answered by exactly one agent: the primary, unless the
+> message opens with `@name`.**
+
+- `chat_session.agent_name` keeps its meaning and is the room's **primary**
+  agent, so every existing read path (history, workspace, avatars, the run
+  trace) resolves an agent exactly as before. `chat_session_agent` is additive:
+  the others a member may address.
+- Addressing is forgiving but never ambiguous (`agent.py _match_mention`):
+  `@sales` finds `agent-sales-assistant`; a prefix that matches two agents
+  falls through to the primary rather than guessing which colleague's agent to
+  spend money on.
+- **Not broadcast.** A message that reached every agent in the room would
+  produce N answers to one question at N times the cost. Multi-agent rooms work
+  by addressing.
+- Agents are deliberately **not** `chat_session_participant` rows. Participants
+  are access principals whose `EffectiveAccess` the intersection folds; an
+  agent has none of its own — it acts at the room's. Putting agents in that
+  table would make the fold either fail on an unknown subject or, worse, treat
+  an agent as a person with no access and zero every room.
+- Adding an agent checks `assert_can_run_agent_in_session`, i.e. against the
+  intersection, not just the caller. An agent only *this* member may run would
+  otherwise be addable and then refuse mid-run for no visible reason.
+- **Agent-to-agent** work already existed as delegation (`call_agent` →
+  `SUB_AGENT_*` events nested under the delegating tool call). What it lacked
+  was visibility outside the tab that started it; delegated runs now publish
+  activity events carrying `delegated_by`, so the live feed reads "asked by
+  agent-reconciler" where a human-started run reads a person's email.

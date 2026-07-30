@@ -16,7 +16,77 @@ import ErrorCard from "@/components/ChatErrorCard";
 import { DismissableCard } from "@/components/ToolCardShell";
 import { useDismissedToolCards, dismissToolCard } from "@/lib/dismissedTools";
 import { openDoc, openGenUI } from "@/lib/sidePanelStore";
-import { AppWindow } from "lucide-react";
+import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
+import { capabilityLabel, type RoomParticipant } from "@/lib/rooms";
+import { AppWindow, Bot, EyeOff } from "lucide-react";
+
+/** The only part of a room participant a message bubble needs: a face. */
+export type BubbleParticipant = Pick<
+  RoomParticipant,
+  "subject" | "displayName" | "avatarUrl"
+>;
+
+/** Initials for a person with no avatar image — two letters at most. */
+function initialsOf(name: string): string {
+  const parts = name.trim().split(/[\s._-]+/).filter(Boolean);
+  const letters = parts.slice(0, 2).map((p) => p[0]).join("");
+  return (letters || name.slice(0, 1) || "?").toUpperCase();
+}
+
+/**
+ * Small circular face for another person's turn. `avatarUrl` when they have a
+ * picture, initials on a neutral surface when they don't — never a blank gap,
+ * because the avatar is what makes "not you" readable at a glance.
+ */
+function PersonAvatar({
+  name,
+  avatarUrl,
+}: {
+  name: string;
+  avatarUrl?: string | null;
+}) {
+  if (avatarUrl) {
+    return (
+      // eslint-disable-next-line @next/next/no-img-element
+      <img
+        src={avatarUrl}
+        alt={name}
+        title={name}
+        className="w-7 h-7 shrink-0 rounded-full border border-border object-cover"
+      />
+    );
+  }
+  return (
+    <div
+      title={name}
+      className="w-7 h-7 shrink-0 rounded-full border border-border bg-secondary flex items-center justify-center text-[10px] font-semibold text-muted-foreground"
+    >
+      {initialsOf(name)}
+    </div>
+  );
+}
+
+/**
+ * Name plate over an agent's turn, used only when the thread has more than one
+ * voice in it. Lives in its own component so the avatar map is fetched for the
+ * handful of labelled turns rather than once per message bubble in the thread.
+ */
+function AgentLabel({ agentName }: { agentName: string }) {
+  const avatars = useAgentAvatars();
+  return (
+    <div className="flex items-center gap-1.5 mb-1">
+      <AgentAvatar
+        libraryId={avatars[agentName]}
+        size={18}
+        title={agentName}
+        fallback={<Bot size={13} className="text-muted-foreground shrink-0" />}
+      />
+      <span className="text-[11px] font-medium text-muted-foreground">
+        {agentName}
+      </span>
+    </div>
+  );
+}
 
 function MessageBubble({
   message,
@@ -27,6 +97,9 @@ function MessageBubble({
   onResend,
   onRetryMessage,
   emailContext,
+  viewerEmail,
+  participants,
+  sessionAgentName,
 }: {
   message: ChatMessage;
   sessionId: string;
@@ -39,9 +112,42 @@ function MessageBubble({
   onResend?: (content: string) => void;
   onRetryMessage?: (m: ChatMessage) => void;
   emailContext?: { accountId?: string | null; emailId?: string | null };
+  /** Who is reading. Absent in a solo thread, where every human turn is yours. */
+  viewerEmail?: string;
+  /** Room members, for putting a name and a face on someone else's turn. */
+  participants?: BubbleParticipant[];
+  /** The thread's own agent — a turn from any OTHER agent gets a name plate. */
+  sessionAgentName?: string;
 }) {
+  // Deliberately NOT `role === "user"`.  `role` is the model's vocabulary: it
+  // says which side of the conversation a turn sits on, and in a room every
+  // person's turn is `role: "user"` — mine and yours alike.  Ownership is an
+  // authorship question, so it is answered from authorKind/authorEmail, with
+  // one fallback: a turn with no author at all is a pre-rooms row from a solo
+  // thread, and the only human who could have written it is the reader.
+  const isHuman = message.authorKind === "human" || message.authorKind === undefined;
+  const isMine =
+    isHuman &&
+    (!message.authorEmail ||
+      !viewerEmail ||
+      message.authorEmail.toLowerCase() === viewerEmail.toLowerCase());
   const isUser = message.role === "user";
   const isSystem = message.role === "system";
+  const author = message.authorEmail
+    ? participants?.find((p) => p.subject === message.authorEmail)
+    : undefined;
+  const authorName =
+    author?.displayName || message.authorEmail?.split("@")[0] || "Someone";
+  // Name an agent turn only where the name earns its space: a thread with a
+  // single agent already says whose reply this is in the header.
+  const otherVoices =
+    participants?.filter((p) => p.subject !== viewerEmail).length ?? 0;
+  const showAgentLabel =
+    message.authorKind === "agent" &&
+    !!message.authorEmail &&
+    (sessionAgentName
+      ? message.authorEmail !== sessionAgentName
+      : otherVoices > 0);
   const [editing, setEditing] = useState(false);
   const [editText, setEditText] = useState(message.content);
   const editRef = useRef<HTMLTextAreaElement>(null);
@@ -109,6 +215,40 @@ function MessageBubble({
     .filter((e) => e.name === "generative_ui" && e.value != null)
     .map((e) => e.value);
 
+  const timestamp = new Date(message.timestamp).toLocaleTimeString([], {
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+
+  // ═══ Redacted turn — this reader is not cleared for it ═══
+  // Checked before every other branch because the notice, not the turn, is what
+  // exists here: there is no markdown, no tools, no author to align against.
+  // Styled as a quiet aside rather than an error — nothing went wrong, the
+  // room's access boundary held.
+  if (message.redacted) {
+    const caps = message.redactedCaps ?? [];
+    return (
+      <div className="rounded-xl border border-border bg-secondary/40 px-3.5 py-2.5">
+        <div className="flex items-start gap-2">
+          <EyeOff size={14} className="mt-0.5 shrink-0 text-muted-foreground" />
+          <div className="min-w-0 space-y-1">
+            <p className="text-[12px] leading-relaxed text-muted-foreground">
+              {message.content}
+            </p>
+            {caps.length > 0 && (
+              <p className="text-[10px] text-muted-foreground/70">
+                Requires {caps.map(capabilityLabel).join(", ")}
+              </p>
+            )}
+          </div>
+          <div className="ml-auto text-[10px] text-muted-foreground/70 shrink-0">
+            {timestamp}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   if (isSystem) {
     const content = message.content;
     if (content.startsWith("__ERROR__")) {
@@ -146,11 +286,6 @@ function MessageBubble({
     );
   }
 
-  const timestamp = new Date(message.timestamp).toLocaleTimeString([], {
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-
   const handleEditSubmit = () => {
     const trimmed = editText.trim();
     if (trimmed && onResend) {
@@ -175,6 +310,38 @@ function MessageBubble({
     t.style.height = "auto";
     t.style.height = `${Math.min(Math.max(t.scrollHeight, 60), 300)}px`;
   };
+
+  // ═══ Someone ELSE's turn — left-aligned, with a face and a name ═══
+  // Mirrors the right-aligned "mine" bubble below rather than replacing it, so
+  // a thread reads as two columns: your side and theirs.  No edit affordance —
+  // resending another person's words as your own is not an edit.
+  if (isUser && isHuman && !isMine) {
+    return (
+      <div className="flex items-start gap-2.5 group">
+        <PersonAvatar name={authorName} avatarUrl={author?.avatarUrl} />
+        <div className="min-w-0 max-w-[88%] sm:max-w-[78%]">
+          <div className="flex items-baseline gap-2 mb-1 pl-0.5">
+            <span className="text-[11px] font-medium text-foreground">
+              {authorName}
+            </span>
+            <span className="text-[10px] text-muted-foreground">{timestamp}</span>
+          </div>
+          <div className="px-4 py-2.5 text-[13px] sm:text-sm leading-relaxed bg-secondary text-foreground rounded-2xl rounded-tl-md">
+            <p className="whitespace-pre-wrap break-words">{message.content}</p>
+          </div>
+          {message.content.trim() && (
+            <div className="flex items-center gap-2 mt-1 pl-0.5">
+              <MessageActionBar
+                content={message.content}
+                messageId={message.id}
+                role="user"
+              />
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  }
 
   if (isUser) {
     return (
@@ -257,6 +424,10 @@ function MessageBubble({
   // ═══ Assistant message — no bubble, renders directly ═══
   return (
     <div className="group">
+      {/* Which agent is speaking — only in a thread where that is a real
+          question (see showAgentLabel). The turn's layout is otherwise
+          untouched. */}
+      {showAgentLabel && <AgentLabel agentName={message.authorEmail!} />}
       {/* Content renders directly in the chat window — no wrapper bubble.
           ThinkingContainer, code blocks, and artifact cards have their own
           visual containers. Only the timestamp and action bar are added. */}
@@ -378,6 +549,28 @@ function MessageBubble({
 // messages that changed and skips the rest — without this, every streamed token
 // re-ran ReactMarkdown for every message in the thread. Callbacks are stable
 // (the parent useCallback's them), so comparing their identity is safe.
+//
+// Authorship rides on `message`, so the reference check above already catches a
+// turn that gains an author or becomes redacted (the store replaces the object).
+// What it does NOT catch is the room changing around a message that didn't:
+// the reader's own identity, and the participant list a name and avatar are
+// looked up in — both compared here, the latter field-wise because callers
+// commonly derive the array inline and a fresh array every render would defeat
+// the memo entirely.
+function sameParticipants(
+  a?: BubbleParticipant[],
+  b?: BubbleParticipant[],
+): boolean {
+  if (a === b) return true;
+  if (!a || !b || a.length !== b.length) return false;
+  return a.every(
+    (p, i) =>
+      p.subject === b[i].subject &&
+      p.displayName === b[i].displayName &&
+      p.avatarUrl === b[i].avatarUrl,
+  );
+}
+
 export default React.memo(MessageBubble, (a, b) =>
   a.message === b.message &&
   a.sessionId === b.sessionId &&
@@ -386,5 +579,8 @@ export default React.memo(MessageBubble, (a, b) =>
   a.onRetryMessage === b.onRetryMessage &&
   a.onFileOpen === b.onFileOpen &&
   a.emailContext?.accountId === b.emailContext?.accountId &&
-  a.emailContext?.emailId === b.emailContext?.emailId,
+  a.emailContext?.emailId === b.emailContext?.emailId &&
+  a.viewerEmail === b.viewerEmail &&
+  a.sessionAgentName === b.sessionAgentName &&
+  sameParticipants(a.participants, b.participants),
 );

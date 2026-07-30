@@ -29,6 +29,10 @@ import type { ElicitationQuestion, ElicitationAnswers } from "@/components/Elici
 import TodoPanel from "@/components/TodoPanel";
 import ContextRing from "@/components/ContextRing";
 import MessageBubble from "@/components/MessageBubble";
+import { RoomHeader } from "@/components/room/RoomHeader";
+import { PresenceRail } from "@/components/room/PresenceRail";
+import { useRoom } from "@/hooks/useRoom";
+import { peopleOf } from "@/lib/rooms";
 import { getMessages, saveMessages, fetchMessagesFromDb, getQueue, saveQueue, type PersistedMessage } from "@/lib/sessions";
 import { computeContextUsage, activeContextSlice, isCompactionCheckpoint } from "@/lib/tokenCount";
 import { serializeReasoning } from "@/lib/chatStream";
@@ -462,6 +466,13 @@ export default function AgentChat({
       agentState: m.agentState,
       customEvents: m.customEvents,
       todos: m.todos,
+      // Carried so a run this browser watched is attributed to the agent that
+      // produced it. The server owns human attribution — it stamps the
+      // authenticated caller — so a human author sent here would be ignored.
+      authorEmail: m.authorEmail,
+      authorKind: m.authorKind,
+      redacted: m.redacted,
+      redactedCaps: m.redactedCaps,
     }));
     saveMessages(sessionId, toSave);
   }, [messages, sessionId]);
@@ -890,6 +901,9 @@ export default function AgentChat({
         agent_state: m.agentState ?? null,
         custom_events: m.customEvents ?? [],
         todos: m.todos ?? [],
+        ...(m.authorKind === "agent"
+          ? { author_kind: "agent", author_email: m.authorEmail }
+          : {}),
       }));
       try {
         navigator.sendBeacon(
@@ -1449,8 +1463,23 @@ export default function AgentChat({
     return null;
   })();
 
+  // ── The room layer ────────────────────────────────────────────────────
+  // A conversation with nobody else in it costs one request and renders
+  // nothing: `shared` is false, so no rail, no banner, no stream, no
+  // heartbeat. Everything below keys off `shared` rather than off the room
+  // object, so solo chat is exactly the surface it has always been.
+  const viewerEmail = memoryUserId ?? "";
+  const { room, shared: isRoom, presence, timeline, refresh: refreshRoom } =
+    useRoom(sessionId, viewerEmail, { enabled: !compact });
+  const [railOpen, setRailOpen] = useState(false);
+  const roomPeople = useMemo(() => (room ? peopleOf(room) : []), [room]);
+  // A watcher reads the room and cannot drive its agents. The composer says so
+  // instead of failing the send with a 403 after they have typed a paragraph.
+  const canSend = room ? room.you.canSend : true;
+
   return (
-    <div className="flex flex-col h-full bg-background">
+    <div className="flex h-full bg-background">
+    <div className="flex flex-col h-full flex-1 min-w-0 bg-background">
       {/* Agent header — VS Code-style minimal bar (hidden in compact embeds,
           where the host provides its own toolbar). */}
       {!compact && (
@@ -1470,7 +1499,23 @@ export default function AgentChat({
             </svg>
           </a>
         )}
+        {isRoom && (
+          <button
+            onClick={() => setRailOpen((v) => !v)}
+            className="ml-auto shrink-0 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground hover:bg-secondary hover:text-foreground tech-transition lg:hidden"
+          >
+            {railOpen ? "Hide room" : "Room"}
+          </button>
+        )}
       </div>
+      )}
+
+      {/* Who is in this conversation, and what it costs the agents. Renders a
+          lone Share button while you are alone — see RoomHeader. */}
+      {!compact && (
+        <div className="shrink-0 border-b border-border bg-card/20 px-4 py-2">
+          <RoomHeader room={room} presence={presence} onChanged={refreshRoom} />
+        </div>
       )}
 
       {/* Missing integrations banner (compact) */}
@@ -1608,6 +1653,8 @@ export default function AgentChat({
                   emailContext={emailContext}
                   onFileOpen={handleFileOpen}
                   onResend={handleResend}
+                  viewerEmail={viewerEmail}
+                  participants={isRoom ? roomPeople : undefined}
                   onRetryMessage={prevUserMsg ? handleRetryMessage : undefined} />
                 {/* Inline HITL card — anchored to the asking assistant turn. */}
                 {msg.id === hitlAnchorId && renderHitlCards()}
@@ -1682,8 +1729,20 @@ export default function AgentChat({
         )}
 
         <div className="max-w-3xl mx-auto">
+          {/* A watcher reads the room and cannot drive its agents. Saying so
+              here is the difference between a boundary and a bug: the
+              alternative is a 403 after they have typed a paragraph. */}
+          {!canSend && (
+            <div className="mb-2 rounded-2xl border border-border bg-secondary/30 px-4 py-3 text-[12px] text-muted-foreground">
+              You are watching this conversation. Ask an owner to make you a
+              contributor if you need to send turns to its agents.
+            </div>
+          )}
           {/* Input pill — textarea + inline controls, unified container */}
-          <div className="rounded-2xl border border-border bg-secondary/50 focus-within:border-primary/40 tech-transition">
+          <div className={[
+            "rounded-2xl border border-border bg-secondary/50 focus-within:border-primary/40 tech-transition",
+            canSend ? "" : "pointer-events-none opacity-40",
+          ].join(" ")}>
             {/* Row 1: upload + textarea + send */}
             <div className="flex items-end gap-2 px-2 pt-2 pb-1">
               <FileUploadButton sessionId={sessionId}
@@ -1940,6 +1999,26 @@ export default function AgentChat({
         <ArtifactViewerModal sessionId={sessionId} entry={viewerEntry}
           onClose={() => setViewerEntry(null)} onDelete={() => setViewerEntry(null)} />
       )}
+    </div>
+
+    {/* The room's own side — people, agents, what just happened. Present on
+        wide screens whenever this is a room; a drawer below that. */}
+    {isRoom && room && (
+      <>
+        <div className="hidden lg:flex lg:shrink-0">
+          <PresenceRail room={room} presence={presence} timeline={timeline}
+            availableAgents={agents.map((a) => a.name)}
+            onChanged={refreshRoom} />
+        </div>
+        {railOpen && (
+          <div className="fixed inset-y-0 right-0 z-50 flex w-72 max-w-[85vw] lg:hidden">
+            <PresenceRail room={room} presence={presence} timeline={timeline}
+              availableAgents={agents.map((a) => a.name)}
+              onChanged={refreshRoom} onClose={() => setRailOpen(false)} />
+          </div>
+        )}
+      </>
+    )}
     </div>
   );
 }

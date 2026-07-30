@@ -73,6 +73,19 @@ export interface ChatMessage {
   todos?: { id: string; title: string; status: string }[];
   agentState?: Record<string, unknown>;
   customEvents?: { name: string; value: unknown }[];
+  /** Who authored this turn: a person's email, or an agent's registered name. */
+  authorEmail?: string;
+  /** Whose FACE to render — deliberately separate from `role`.
+   *  `role` is the model's vocabulary: which side of the conversation a turn
+   *  sits on. In a room that no longer answers the UI's question, because
+   *  `role: "user"` covers every human in the thread, not just the reader.
+   *  Absent on pre-authorship rows, which render exactly as they always did. */
+  authorKind?: "human" | "agent" | "system";
+  /** The reader is not cleared to see this turn; `content` is a notice, not the
+   *  original text. Render it as a boundary holding, never as an error. */
+  redacted?: boolean;
+  /** Capabilities the producing run held that the reader does not. */
+  redactedCaps?: string[];
 }
 
 // ── Session state ────────────────────────────────────────────────────────────

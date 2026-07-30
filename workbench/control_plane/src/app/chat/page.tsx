@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useMemo, useRef, Suspense } from "react";
 import { useSearchParams } from "next/navigation";
 import { useSession } from "next-auth/react";
-import { Bot, MessagesSquare, Search, Trash2 } from "lucide-react";
+import { Bot, MessagesSquare, Search, Trash2, Users } from "lucide-react";
 import BreathingCharacter, { characterForAgent } from "@/components/BreathingCharacter";
 import {
   getSessions,
@@ -553,6 +553,22 @@ function SessionList({
                           <span className={`truncate flex-1 ${isActive ? "font-semibold text-foreground" : "font-medium"}`}>
                             {s.title ?? s.name}
                           </span>
+                          {/* Shared rooms look different at a glance. A count
+                              rather than a generic icon, because "who else is
+                              in here" is the question the badge answers. */}
+                          {(s.participantCount ?? 0) > 1 && (
+                            <span
+                              className="inline-flex shrink-0 items-center gap-0.5 text-[10px] text-primary/80"
+                              title={
+                                s.isOwner === false
+                                  ? "Shared with you"
+                                  : `Shared · ${s.participantCount} in the room`
+                              }
+                            >
+                              <Users className="h-2.5 w-2.5" />
+                              {s.participantCount}
+                            </span>
+                          )}
                           <span className="shrink-0 text-[10px] text-muted-foreground/70 tabular-nums">
                             {relTime(s.updatedAt)}
                           </span>

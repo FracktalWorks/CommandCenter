@@ -263,6 +263,15 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.tasks_rollover_skipped", error=str(exc))
 
+    # Start the workflow schedule scanner — cron triggers for published
+    # workflows (routes/workflows/scheduler.py; spec workflows_app.md F8).
+    try:
+        from gateway.routes.workflows import start_workflow_scheduler
+        await start_workflow_scheduler()
+        _log.info("gateway.workflow_scheduler_started")
+    except Exception as exc:
+        _log.warning("gateway.workflow_scheduler_skipped", error=str(exc))
+
     # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
     # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
     # max_tokens=0 so the first real user request is a cache HIT, not a cold
@@ -299,6 +308,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         from gateway.routes.whatsapp.scheduler import stop_whatsapp_enrichment
         await stop_whatsapp_enrichment()
+    except Exception:
+        pass
+
+    # Stop the workflow schedule scanner
+    try:
+        from gateway.routes.workflows import stop_workflow_scheduler
+        await stop_workflow_scheduler()
     except Exception:
         pass
 
@@ -424,6 +440,12 @@ PUBLIC_ROUTES: frozenset[str] = frozenset({
     # Meeting-bot worker callbacks — machine-authed by MEETING_BOT_TOKEN.
     "/notes/meetings/{meeting_id}/live/segment",
     "/notes/stt/bot-live-token",
+
+    # Workflow webhook trigger — the unguessable per-workflow hook token IS
+    # the credential (+ optional HMAC); rate-limited and it only fires
+    # published workflows with an enabled webhook trigger. See
+    # routes/workflows/hooks.py.
+    "/workflows/hooks/{hook_token}",
 })
 
 def docs_enabled(env: str) -> bool:
@@ -935,6 +957,16 @@ try:
     from gateway.routes.apps import router as _apps_router
 
     app.include_router(_apps_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # Workflows app (ai-company-brain/specs/workflows_app.md) — visual
+    # automation builder: workflow CRUD/publish/runs, Module Studio, the node
+    # catalog, and the inbound webhook trigger (prefix /workflows).
+    from gateway.routes.workflows import router as _workflows_router
+
+    app.include_router(_workflows_router)
 except Exception:  # pragma: no cover
     pass
 

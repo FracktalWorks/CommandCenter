@@ -103,6 +103,13 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "All agent files · inputs · outputs · data",
         feature: "artifacts",
       },
+      {
+        href: "/workflows",
+        label: "Workflows",
+        icon: "Workflow",
+        note: "Visual automation across agents · tools · integrations",
+        feature: "workflows",
+      },
     ],
   },
 

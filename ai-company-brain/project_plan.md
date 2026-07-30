@@ -41,7 +41,7 @@ Operators work through a thin **Control Plane** (Next.js browser UI): one unifie
 
 **In:** Core engine (FastAPI event router + Dynamic Agent Loader + MAF orchestration); self-mutation loop; distributed `agent-*` / `skill-*` repos; ingest (ClickUp, Zoho, Odoo, Gmail/Outlook, WhatsApp, meetings); pull/push/ambient interaction; approval-gated writes via Action Broker; nightly reconciliation; encrypted Integration Registry; Control Plane (chat, HITL, observability); memory (Mem0 + Graphiti); email client app.
 
-**Out / non-goals:** in-app editing of agents/skills/workflows; any browser IDE (Theia, VS Code fork); visual workflow canvas; n8n or any second runtime; autonomous repo merges (human PR review + `max_mutation_attempts=1` mandatory); autonomous writes before Action Broker is live; customer-facing access; RBAC beyond admin/operator/contributor.
+**Out / non-goals:** in-app editing of agent/skill/app *code*; any browser IDE (Theia, VS Code fork); n8n or any second workflow *runtime* (the Workflows app composes DB-persisted workflow configuration compiled to MAF Workflows — ADR-028, `specs/workflows_app.md`); autonomous repo merges (human PR review + `max_mutation_attempts=1` mandatory); autonomous writes before Action Broker is live; customer-facing access; RBAC beyond admin/operator/contributor.
 
 ### Success criteria (v2.0)
 - Webhook → agent runs + telemetry logged in < 30 s (warm < 5 s).
@@ -207,7 +207,7 @@ VS Code + Git authoring (ongoing); mutation PR review (~2 h/wk when active); pro
 | C-06 | Mutation container needs the host Docker socket mapped into the orchestrator. |
 | C-07 | Indian DPDP Act 2023 — written employee consent before ingesting email/WhatsApp. |
 | C-08 | All interactive + autonomous execution runs on **MAF** paths. No net-new raw Copilot SDK runtime entrypoints for business-agent execution (Copilot SDK = mutation container only). |
-| C-09 | No in-app agent/skill editing; no browser IDE; no second workflow runtime (n8n). |
+| C-09 | No in-app agent/skill *code* editing; no browser IDE; no second workflow runtime (n8n) — workflow *composition* is DB-persisted config compiled to MAF Workflows (ADR-028). |
 
 ---
 

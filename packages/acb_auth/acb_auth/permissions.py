@@ -75,6 +75,7 @@ FEATURES: tuple[str, ...] = (
     "agents",
     "approvals",
     "integrations",
+    "workflows",
     "build.agents",
     "build.apps",
 )

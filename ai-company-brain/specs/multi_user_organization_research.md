@@ -1,6 +1,6 @@
 # Multi-User / Organization Architecture Research
 
-> **Status:** Research & design proposal — not implemented.  
+> **Status:** Research & design proposal. **§4 (identity, membership, roles, permissions) is now IMPLEMENTED** — see [`org_access_control.md`](org_access_control.md), which also carries §8 credential scoping and part of §7 memory scoping. The rest (§5 modules, §9 entity-graph RLS, §16 data-heavy scoping, §17 SaaS) remains research, and the modules/session-sharing portion is owned by the **multiplayer agent collaboration** workstream — see that spec's §10 handoff contract before building from this document.  
 > **Created:** 2026-07-07  
 > **Scope:** How CommandCenter evolves from a single-tenant "internal company brain" into a multi-user organization account where personal data stays private, shared resources are selectively visible, and an administrator controls settings, modules, and agents.  
 > **Companion docs:** [`project_plan.md`](../project_plan.md) · [`system_architecture.md`](../system_architecture.md) · [`learning-resources/05-auth-and-oauth.md`](../../learning-resources/05-auth-and-oauth.md) · [`specs/permissions_sandbox_b6.md`](permissions_sandbox_b6.md)

@@ -20,7 +20,7 @@ _GATEWAY_PORT = "8080"
 
 
 def _service() -> dict:
-    return yaml.safe_load(_COMPOSE.read_text())["services"]["meeting-bot"]
+    return yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))["services"]["meeting-bot"]
 
 
 def test_meeting_bot_is_not_in_the_core_profile() -> None:
@@ -31,15 +31,18 @@ def test_meeting_bot_is_not_in_the_core_profile() -> None:
     assert "core" not in profiles
 
 
-def test_host_port_does_not_collide_with_the_gateway() -> None:
+def test_published_ports_stay_on_loopback_and_clear_of_the_gateway() -> None:
     """The gateway owns 8080 on the VPS; publishing the bot there would break
-    the whole app rather than just the bot."""
+    the whole app rather than just the bot. And EVERY published port must be
+    loopback-only — one of them is an unauthenticated VNC view of a browser
+    holding a Google session."""
     ports = _service()["ports"]
-    assert len(ports) == 1
-    host_side = str(ports[0]).split(":")
-    # "127.0.0.1:8095:8080" → bound to loopback, host 8095, container 8080
-    assert host_side[0] == "127.0.0.1", "must not be reachable off-box"
-    assert host_side[1] != _GATEWAY_PORT, "collides with the gateway"
+    assert ports, "the worker must publish its API"
+    for mapping in ports:
+        # "127.0.0.1:8095:8080" → bound to loopback, host 8095, container 8080
+        host_side = str(mapping).split(":")
+        assert host_side[0] == "127.0.0.1", f"{mapping} is reachable off-box"
+        assert host_side[1] != _GATEWAY_PORT, f"{mapping} collides with the gateway"
 
 
 def test_chrome_gets_enough_shared_memory() -> None:
@@ -52,7 +55,7 @@ def test_worker_can_reach_the_gateway_for_live_callbacks() -> None:
 
 
 def test_recordings_survive_a_container_restart() -> None:
-    compose = yaml.safe_load(_COMPOSE.read_text())
+    compose = yaml.safe_load(_COMPOSE.read_text(encoding="utf-8"))
     assert any("/data" in str(v) for v in _service()["volumes"])
     assert "acb-meeting-bot-data" in compose["volumes"]
 
@@ -61,7 +64,7 @@ def test_recordings_survive_a_container_restart() -> None:
 
 def test_deploy_wires_the_gateway_to_the_worker() -> None:
     """Without these the bot would run but the gateway couldn't dispatch to it."""
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert 'upsert_env MEETING_BOT_URL "http://127.0.0.1:8095"' in deploy
     assert 'upsert_env NOTES_BOT_PROVIDER "selfhosted"' in deploy
     # The worker calls back from inside its container, so localhost won't do.
@@ -69,7 +72,7 @@ def test_deploy_wires_the_gateway_to_the_worker() -> None:
 
 
 def test_deploy_generates_the_shared_secret_once() -> None:
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert "MEETING_BOT_TOKEN=$_mbtoken" in deploy
     # Only generated when absent — regenerating each deploy would break the
     # gateway/worker pair until both restarted.
@@ -79,14 +82,48 @@ def test_deploy_generates_the_shared_secret_once() -> None:
 def test_deploy_passes_the_app_env_file_explicitly() -> None:
     """Compose resolves a bare .env against the project dir (infra/), not the
     app root — so the substitutions would silently come out empty."""
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert 'docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml' in deploy
 
 
 def test_meeting_bot_failure_cannot_fail_the_deploy() -> None:
-    """A bot build hiccup must skip the bot, never take down a deploy."""
-    deploy = _DEPLOY.read_text()
-    assert "meeting bot build/start failed" in deploy
+    """A bot build hiccup must skip the bot, never take down a deploy — and it
+    must SAY SO loudly, because the old container keeps serving and that reads
+    as a successful deploy (exactly what happened on 2026-07-30)."""
+    deploy = _DEPLOY.read_text(encoding="utf-8")
+    assert "meeting bot build/start FAILED" in deploy
+    assert "PREVIOUS image" in deploy, "must name the stale-image state"
+
+
+def test_meeting_bot_build_cannot_hang_the_deploy() -> None:
+    """The 2026-07-30 outage: novnc pulled in tzdata, whose postinst prompted
+    for a timezone, the build hung ~15 min until the deploy's SSH session died,
+    and the deploy reported success while the OLD image stayed live.
+
+    Two independent guards, both required: no tty for a prompt to read, and a
+    hard timeout so a hang can never consume the deploy.
+    """
+    deploy = _DEPLOY.read_text(encoding="utf-8")
+    build = [
+        ln for ln in deploy.splitlines()
+        if "up -d --build meeting-bot" in ln
+    ]
+    assert build, "the deploy must build the meeting bot somewhere"
+    window = deploy[deploy.index("MB_IMAGE_BEFORE"):]
+    assert "timeout 900" in window, "the build must be time-bounded"
+    assert "</dev/null" in window, "no tty — an apt prompt must fail, not hang"
+
+
+def test_the_dockerfile_installs_packages_noninteractively() -> None:
+    """The root cause, guarded at its source: any apt install in this image
+    must be non-interactive, or a dependency's postinst can hang the build."""
+    dockerfile = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "apps/services/meeting_bot/Dockerfile"
+    ).read_text(encoding="utf-8")
+    for line in dockerfile.splitlines():
+        if "apt-get install" in line:
+            assert "DEBIAN_FRONTEND=noninteractive" in line, line
 
 
 def test_live_caption_credentials_are_wired_by_default() -> None:
@@ -96,7 +133,7 @@ def test_live_caption_credentials_are_wired_by_default() -> None:
     env = _service()["environment"]
     assert "LIVE_TOKEN_URL" in env, "compose must pass the token URL to the worker"
 
-    deploy = _DEPLOY.read_text()
+    deploy = _DEPLOY.read_text(encoding="utf-8")
     assert "NOTES_LIVE_TOKEN_URL" in deploy
     assert "/notes/stt/bot-live-token" in deploy
     # The worker calls the gateway from inside its container, so it can't use

@@ -18,14 +18,21 @@ import asyncio
 import contextlib
 import logging
 import os
+import re
 import signal
 import subprocess
 from collections.abc import Callable
+from urllib.parse import urlsplit
 
 _log = logging.getLogger("meeting_bot.meet")
 
 PULSE_MONITOR = os.environ.get("PULSE_MONITOR", "meet.monitor")
 DIAG_DIR = os.environ.get("MEETING_BOT_DATA", "/data")
+#: Chrome profile directory. When set, the browser launches with a PERSISTENT
+#: profile, so a Google account signed in once (see /google-login) stays signed
+#: in — the difference between a bot Meet auto-denies as anonymous and one it
+#: lets knock (or admits straight away when it's on the invite).
+PROFILE_DIR = os.environ.get("MEET_PROFILE_DIR", "").strip()
 JOIN_TIMEOUT_S = int(os.environ.get("MEET_JOIN_TIMEOUT", "150"))
 MAX_DURATION_S = int(os.environ.get("MEET_MAX_DURATION", str(4 * 3600)))
 # End the call if the bot has been the only participant for this long (everyone
@@ -234,6 +241,117 @@ def classify_body(body: str) -> str | None:
     return None
 
 
+_MEET_CODE = re.compile(r"^/([a-z]{3}-[a-z]{4}-[a-z]{3})(?:[/?#]|$)", re.I)
+
+
+def canonical_meet_url(url: str) -> str:
+    """Reduce a meet.google.com link to its canonical bare form, in English.
+
+    Invite links arrive dressed up — ``?authuser=0&hs=122``, calendar tracking
+    params — and some of those decorations make Meet route a signed-out browser
+    to its marketing page instead of the green room. The bare
+    ``https://meet.google.com/xxx-yyyy-zzz`` form is the one guests handle most
+    reliably; ``hl=en`` pins the UI language so the phrase lists above match on
+    any box. Non-Meet URLs and unusual shapes (``/lookup/…``) pass through
+    untouched.
+    """
+    try:
+        parts = urlsplit(url)
+    except ValueError:
+        return url
+    if (parts.hostname or "").lower() != "meet.google.com":
+        return url
+    m = _MEET_CODE.match(parts.path or "")
+    if not m:
+        return url
+    return f"https://meet.google.com/{m.group(1).lower()}?hl=en"
+
+
+def chrome_launch_args() -> list[str]:
+    """Chrome flags shared by the join path and the Google-login path.
+
+    Meet sniffs for automation: Playwright's default launch adds
+    ``--enable-automation`` and leaves ``navigator.webdriver`` true, and either
+    is enough for Meet to route a signed-out visitor to its marketing page.
+    The login flow needs exactly the same disguise — Google's sign-in screen
+    blocks "this browser or app may not be secure" otherwise.
+    """
+    return [
+        "--no-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-blink-features=AutomationControlled",
+        "--use-fake-ui-for-media-stream",  # auto-accept the mic/cam prompt
+        "--autoplay-policy=no-user-gesture-required",
+        "--disable-notifications",
+        "--window-size=1280,720",
+        "--lang=en-US",
+    ]
+
+
+#: Meet's wording when it auto-declines an ANONYMOUS participant — the
+#: signed-out bot case. Distinct from a host who simply never clicked Admit:
+#: this arrives seconds after "Ask to join", not after a wait.
+_ANON_DENIED = (
+    "no one can join a meeting unless invited or admitted by the host",
+    "you can't join this video call",
+    "you cannot join this video call",
+)
+
+
+#: Cookies Google sets only for an authenticated session. Presence of any one
+#: means the browser is carrying a real account, which is the difference between
+#: "Meet declined an anonymous guest" and "this account isn't invited" — two
+#: failures with opposite remedies.
+_AUTH_COOKIES = ("SID", "__Secure-1PSID", "__Secure-3PSID", "SAPISID")
+
+
+async def _is_signed_in(context) -> bool:
+    """Whether the browser holds a Google session (never raises).
+
+    Deliberately cookie-based rather than a navigation: this runs on a failure
+    path where the page is already showing a refusal, and a page load there
+    would cost seconds and could itself fail.
+    """
+    try:
+        cookies = await context.cookies()
+    except Exception:
+        return False
+    return any(
+        c.get("name") in _AUTH_COOKIES and "google" in (c.get("domain") or "")
+        for c in cookies
+    )
+
+
+def is_anonymous_denial(body: str) -> bool:
+    """Whether a refusal is Google blocking a signed-out guest outright.
+
+    Worth its own branch because the remedy is specific and non-obvious: be in
+    the call when the bot knocks, allow link-guests to ask to join, or sign the
+    bot into a Google account (``/google-login``). Telling someone to "check
+    the link" here sends them looking for a problem that isn't there.
+    """
+    low = " ".join((body or "").lower().split())
+    return any(s in low for s in _ANON_DENIED)
+
+
+def looks_like_landing(url: str, body: str) -> bool:
+    """Whether the page is Meet's *marketing* page rather than a green room.
+
+    Meet renders this client-side (the URL often doesn't change) when it
+    decides the visitor isn't a real participant — the signature of a
+    signed-out browser that leaked ``navigator.webdriver`` or hit a decorated
+    invite link. It has no join button at all, so without this check it
+    surfaces as the misleading "No join button on the meeting page".
+    """
+    low_url = (url or "").lower()
+    if "workspace.google.com" in low_url or "meet.google.com/landing" in low_url:
+        return True
+    low = (body or "").lower()
+    if "try meet for work" in low or "video calls, enhanced with ai" in low:
+        return True
+    return "join a meeting now" in low and "enter code" in low
+
+
 async def _in_call(page) -> bool:
     """Whether we are actually inside the call (the leave control exists)."""
     for sel in (
@@ -280,11 +398,78 @@ async def _await_admission(page, on_status: Callable[[str], None]) -> str:
     return "timeout"
 
 
-def _participant_count(page) -> int:
-    """Best-effort current participant count (Meet shows it on a people pill).
-    Returns -1 when it can't be read (treated as 'not alone')."""
-    # Not reliably available headless; kept simple and optional.
-    return -1
+#: Meet says one of these once the call is over for us. Split from the kicked
+#: markers below because "the meeting ended" and "the host removed you" are
+#: different events: one is routine, the other is someone declining to be
+#: recorded, and that belongs in the notes rather than in a shrug.
+_ENDED_MARKERS = (
+    "you've left the meeting",
+    "you left the meeting",
+    "call ended",
+    "the meeting has ended",
+    "return to home screen",
+)
+_KICKED_MARKERS = (
+    "removed from the meeting",
+    "you were removed",
+    "someone removed you",
+)
+
+
+def classify_call_end(body: str) -> str | None:
+    """``ended`` / ``kicked`` / None from the page text.
+
+    Checks kicked FIRST: Meet's removal screen also offers "Return to home
+    screen", so testing the generic markers first would report every ejection
+    as an ordinary end.
+    """
+    low = (body or "").lower()
+    if any(m in low for m in _KICKED_MARKERS):
+        return "kicked"
+    if any(m in low for m in _ENDED_MARKERS):
+        return "ended"
+    return None
+
+
+#: How long to stay when nobody else ever showed up. Deliberately shorter than
+#: ALONE_TIMEOUT_S: a meeting that never started is a mistake to abandon
+#: quickly, whereas a call everyone has just left may still be coming back.
+NOONE_JOINED_TIMEOUT_S = int(os.environ.get("MEET_NOONE_JOINED_TIMEOUT", "300"))
+
+_COUNT_SCRIPT = """() => {
+  // 1. The people pill / participants button carries the count in its label.
+  for (const el of document.querySelectorAll('[aria-label]')) {
+    const m = (el.getAttribute('aria-label') || '')
+      .match(/(\\d+)\\s+(participants?|people|others?)/i);
+    if (m) return parseInt(m[1], 10);
+  }
+  // 2. Explicit participant tiles, when Meet renders them.
+  const tiles = document.querySelectorAll('[data-participant-id]');
+  if (tiles.length) return tiles.length;
+  // 3. The number Meet draws inside the show-everyone button.
+  const btn = document.querySelector('button[aria-label*="everyone" i]');
+  if (btn) {
+    const m = (btn.innerText || '').match(/\\d+/);
+    if (m) return parseInt(m[0], 10);
+  }
+  return -1;
+}"""
+
+
+async def _participant_count(page) -> int:
+    """Best-effort headcount for the call, or ``-1`` when it can't be read.
+
+    This reads the least stable thing in the whole worker — Meet's DOM is not a
+    public API and these selectors are the first that will rot. So it tries
+    three independent signals, and every caller treats ``-1`` as "not alone":
+    leaving a real meeting early loses the recording, while lingering in an
+    empty one only costs a few minutes of a worker. Fail towards staying.
+    """
+    try:
+        n = await page.evaluate(_COUNT_SCRIPT)
+        return int(n)
+    except Exception:
+        return -1
 
 
 def _start_ffmpeg(out_path: str) -> subprocess.Popen:
@@ -311,30 +496,58 @@ def _stop_ffmpeg(proc: subprocess.Popen) -> None:
             proc.kill()
 
 
-async def _wait_until_end(page, leave_event: asyncio.Event) -> None:
-    """Stay in the call until asked to leave, the call ends, or the cap is hit."""
+async def _wait_until_end(page, leave_event: asyncio.Event) -> str:
+    """Stay in the call until it's over. Returns WHY we stopped.
+
+    Four distinct exits, because they mean different things to whoever reads the
+    meeting afterwards: ``asked`` (someone hit Stop), ``ended`` (the call
+    finished), ``kicked`` (the host removed us — a recording someone declined),
+    ``noone_joined`` (we sat alone and nobody ever came), ``everyone_left``, and
+    ``max_duration``.
+
+    Two separate alone-timers, which is the part that matters: a bot that joins
+    an empty room must give up **soon** (the meeting was cancelled or the link
+    was wrong), while a bot whose call has emptied out waits longer in case
+    people are reconnecting. Collapsing them either abandons live meetings or
+    holds a worker for four hours on a meeting that never happened — and since
+    only one bot runs at a time, the latter takes the whole feature down with it.
+    """
     waited = 0
     alone_for = 0
+    seen_others = False
     while waited < MAX_DURATION_S:
         if leave_event.is_set():
-            return
+            return "asked"
         try:
-            body = (await page.inner_text("body")).lower()
+            body = await page.inner_text("body")
         except Exception:
             body = ""
-        if any(s in body for s in ("you've left the meeting", "you left the meeting",
-                                   "return to home screen", "call ended",
-                                   "removed from the meeting")):
-            return
-        n = _participant_count(page)
-        if n == 1:
+        end = classify_call_end(body)
+        if end == "kicked":
+            _log.warning("meet.removed_by_host")
+            return "kicked"
+        if end == "ended":
+            return "ended"
+
+        n = await _participant_count(page)
+        if n > 1:
+            # Someone else is here; from now on "alone" means they left.
+            seen_others = True
+            alone_for = 0
+        elif n == 1:
             alone_for += 5
-            if alone_for >= ALONE_TIMEOUT_S:
-                return
+            limit = ALONE_TIMEOUT_S if seen_others else NOONE_JOINED_TIMEOUT_S
+            if alone_for >= limit:
+                _log.info(
+                    "meet.leaving_alone seen_others=%s after=%ss", seen_others, alone_for
+                )
+                return "everyone_left" if seen_others else "noone_joined"
         else:
+            # -1: couldn't read the count. Never treat unknown as alone.
             alone_for = 0
         await asyncio.sleep(5)
         waited += 5
+    return "max_duration"
 
 
 async def _leave(page) -> None:
@@ -394,6 +607,14 @@ async def _green_room(page, job_id: str, bot_name: str) -> None:
     if await _click_join(page) is not None:
         return
     diag = await _snapshot(page, job_id, "no-join-button")
+    if looks_like_landing(diag.get("url") or "", diag.get("body") or ""):
+        raise MeetingBotError(
+            "Google Meet showed its landing page instead of the meeting — it "
+            "treated the notetaker as a bot or the link as invalid. Use a "
+            "direct https://meet.google.com/xxx-yyyy-zzz link and check the "
+            "meeting allows guests to knock.",
+            diagnostics=diag,
+        )
     controls = ", ".join(diag.get("controls", [])[:10]) or "none visible"
     raise MeetingBotError(
         f"No join button on the meeting page. Buttons Meet actually showed: "
@@ -411,6 +632,7 @@ async def join_and_record(
     live_callback: str | None = None,
     say_queue=None,
     job_id: str = "bot",
+    on_end_reason: Callable[[str], None] | None = None,
 ) -> None:
     from playwright.async_api import async_playwright
 
@@ -421,27 +643,41 @@ async def join_and_record(
         # on the box wasn't installed by THIS playwright version (otherwise the
         # launch dies with "Executable doesn't exist at .../chromium-<rev>").
         chrome_path = os.environ.get("CHROME_EXECUTABLE", "").strip() or None
-        browser = await p.chromium.launch(
-            headless=False,  # headful under Xvfb so the audio pipeline works
-            executable_path=chrome_path,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--use-fake-ui-for-media-stream",  # auto-accept the mic/cam prompt
-                "--autoplay-policy=no-user-gesture-required",
-                "--disable-notifications",
-                "--window-size=1280,720",
-            ],
-        )
-        context = await browser.new_context(
-            permissions=["microphone", "camera"],
-            viewport={"width": 1280, "height": 720},
-        )
-        page = await context.new_page()
+        common = {
+            "headless": False,  # headful under Xvfb so the audio pipeline works
+            "executable_path": chrome_path,
+            "ignore_default_args": ["--enable-automation"],
+            "args": chrome_launch_args(),
+        }
+        ctx_opts = {
+            "permissions": ["microphone", "camera"],
+            "viewport": {"width": 1280, "height": 720},
+            # English pinned so classify_body/looks_like_landing phrase match
+            # regardless of the host's geo-derived language.
+            "locale": "en-US",
+        }
+        browser = None
+        if PROFILE_DIR:
+            # Persistent profile → whatever account was signed in via
+            # /google-login is still signed in, so Meet sees a real user
+            # instead of an anonymous guest it can auto-decline.
+            os.makedirs(PROFILE_DIR, exist_ok=True)
+            _log.info("meet.using_profile dir=%s", PROFILE_DIR)
+            context = await p.chromium.launch_persistent_context(
+                PROFILE_DIR, **common, **ctx_opts
+            )
+            page = context.pages[0] if context.pages else await context.new_page()
+        else:
+            browser = await p.chromium.launch(**common)
+            context = await browser.new_context(**ctx_opts)
+            page = await context.new_page()
         rec: subprocess.Popen | None = None
         try:
-            _log.info("meet.goto url=%s name=%r", meeting_url, bot_name)
-            await page.goto(meeting_url, wait_until="load", timeout=60000)
+            url = canonical_meet_url(meeting_url)
+            if url != meeting_url:
+                _log.info("meet.url_canonicalised %s -> %s", meeting_url, url)
+            _log.info("meet.goto url=%s name=%r", url, bot_name)
+            await page.goto(url, wait_until="load", timeout=60000)
             # Meet hydrates its green room well after `load` fires, and slower
             # still on a 2-vCPU box. Wait for a real control rather than a fixed
             # sleep, falling through after 20 s so the snapshot shows the page.
@@ -451,11 +687,72 @@ async def join_and_record(
                 )
             await asyncio.sleep(2)
 
+            # Marketing page instead of a green room → Meet bounced us. Reload
+            # once (the first navigation sometimes races Meet's own routing);
+            # if it still refuses, fail with the real story, not "no button".
+            body = ""
+            with contextlib.suppress(Exception):
+                body = await page.inner_text("body")
+            if looks_like_landing(page.url, body):
+                _log.warning("meet.landing_page_detected — retrying once")
+                await page.goto(url, wait_until="load", timeout=60000)
+                with contextlib.suppress(Exception):
+                    await page.wait_for_selector(
+                        'button, [role="button"], input', timeout=20000
+                    )
+                await asyncio.sleep(2)
+                body = ""
+                with contextlib.suppress(Exception):
+                    body = await page.inner_text("body")
+                if looks_like_landing(page.url, body):
+                    diag = await _snapshot(page, job_id, "landing-page")
+                    raise MeetingBotError(
+                        "Google Meet showed its landing page instead of the "
+                        "meeting — it treated the notetaker as a bot or the "
+                        "link as invalid. Double-check the meeting link is a "
+                        "direct https://meet.google.com/xxx-yyyy-zzz code and "
+                        "that the meeting allows guests to knock; if this "
+                        "keeps happening Meet has likely tightened its "
+                        "automated-browser detection.",
+                        diagnostics=diag,
+                    )
+
             await _green_room(page, job_id, bot_name)
 
             admission = await _await_admission(page, on_status)
             if admission == "refused":
                 diag = await _snapshot(page, job_id, "refused")
+                if is_anonymous_denial(diag.get("body") or ""):
+                    # A configured profile dir is NOT the same as being signed
+                    # in — reporting it as such sent a debugging session down
+                    # the wrong path on 2026-07-30. Check the real thing.
+                    signed_in = await _is_signed_in(context)
+                    who = (
+                        "The notetaker IS signed in, so this is the meeting's "
+                        "own access policy, not anonymity: it isn't invited and "
+                        "the host hasn't allowed guests to knock. Put its "
+                        "address on the calendar invite."
+                        if signed_in else
+                        "The notetaker is signed OUT, and Meet auto-declines "
+                        "anonymous participants — the green-room fine print "
+                        "says \"system info will be sent to confirm you're not "
+                        "a bot\", and an automated browser fails that check. "
+                        "Verified 2026-07-30: this happens within ~3s even when "
+                        "the host is sitting in the call, so nobody is ever "
+                        "shown an Admit prompt to click."
+                    )
+                    raise MeetingBotError(
+                        "Google Meet declined the notetaker's request to join. "
+                        f"{who} What actually works, easiest first: (1) the "
+                        "host turns ON Quick access (in the call: Host controls "
+                        "→ Quick access) so guests skip admission entirely; "
+                        "(2) sign the notetaker into its own Google account and "
+                        "put that address on the calendar invite, which skips "
+                        "the knock altogether; (3) record the call with the "
+                        "platform's recorder and upload the file here.",
+                        status="not_admitted",
+                        diagnostics=diag,
+                    )
                 raise MeetingBotError(
                     "Google Meet refused the join. This link needs a signed-in "
                     "Google account, or the host has locked the call to invited "
@@ -481,7 +778,14 @@ async def join_and_record(
             live_stop = asyncio.Event()
             aux = _start_live_tasks(live_callback, say_queue, live_stop)
             try:
-                await _wait_until_end(page, leave_event)
+                reason = await _wait_until_end(page, leave_event)
+                _log.info("meet.call_over reason=%s", reason)
+                # Surfaced so the meeting can say WHY it stopped. "The host
+                # removed the notetaker" and "nobody ever joined" both produce a
+                # short or empty recording, and without this they look
+                # identical to a bot that simply broke.
+                if on_end_reason is not None:
+                    on_end_reason(reason)
             finally:
                 live_stop.set()
                 for t in aux:
@@ -492,5 +796,10 @@ async def join_and_record(
                 _stop_ffmpeg(rec)
             with contextlib.suppress(Exception):
                 await _leave(page)
-            await context.close()
-            await browser.close()
+            # A persistent context owns its browser — closing it is enough, and
+            # there is no separate handle to close.
+            with contextlib.suppress(Exception):
+                await context.close()
+            if browser is not None:
+                with contextlib.suppress(Exception):
+                    await browser.close()

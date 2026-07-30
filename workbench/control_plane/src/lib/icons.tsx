@@ -32,6 +32,7 @@ import {
   FolderOpen,
   Activity,
   ShieldCheck,
+  Workflow,
   type LucideIcon,
 } from "lucide-react";
 
@@ -52,6 +53,7 @@ const ICON_MAP: Record<string, LucideIcon> = {
   FolderOpen,
   Activity,
   ShieldCheck,
+  Workflow,
 };
 
 /** "message-circle" | "message_circle" | "messageCircle" → "MessageCircle". */

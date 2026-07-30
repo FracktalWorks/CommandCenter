@@ -21,6 +21,7 @@ from datetime import UTC
 import gateway.routes.whatsapp.transport.bridge as bridge
 from gateway.routes.whatsapp.transport.bridge import (
     bridge_secret_ok,
+    parse_avatars_payload,
     parse_bridge_payload,
     parse_labels_payload,
 )
@@ -445,6 +446,80 @@ async def test_labels_rejects_bad_secret(monkeypatch) -> None:
     assert resp.status_code == 403
 
 
+# ── avatars: pure parser ────────────────────────────────────────────────────────
+
+def test_parse_avatars_payload_normalizes() -> None:
+    avatars = parse_avatars_payload({
+        "avatars": [{
+            "wa_chat_id": "919990388@s.whatsapp.net",
+            "avatar_url": "https://pps.whatsapp.net/v/abc.jpg",
+            "avatar_hash": "hash-1",
+        }],
+    })
+    assert avatars == [{
+        "wa_chat_id": "919990388@s.whatsapp.net",
+        "avatar_url": "https://pps.whatsapp.net/v/abc.jpg",
+        "avatar_hash": "hash-1",
+    }]
+
+
+def test_parse_avatars_payload_skips_invalid() -> None:
+    avatars = parse_avatars_payload({
+        "avatars": [
+            {"wa_chat_id": "x@s.whatsapp.net"},           # missing url → skip
+            {"avatar_url": "https://pps.whatsapp.net/x"},  # missing chat id → skip
+            "not-a-dict",
+            {"wa_chat_id": "c@s.whatsapp.net",
+             "avatar_url": "https://pps.whatsapp.net/c.jpg"},  # no hash — fine
+        ],
+    })
+    assert len(avatars) == 1
+    assert avatars[0]["wa_chat_id"] == "c@s.whatsapp.net"
+    assert avatars[0]["avatar_hash"] is None
+
+
+def test_parse_avatars_payload_empty_is_total() -> None:
+    assert parse_avatars_payload({}) == []
+
+
+# ── avatars: ingest route ────────────────────────────────────────────────────────
+
+async def test_avatars_persists_upsert(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB()  # ownership check returns a truthy row
+    _patch_db(monkeypatch, db)
+    out = await bridge.bridge_avatars(_FakeRequest({
+        "account_id": "acc-1",
+        "avatars": [{"wa_chat_id": "9@s.whatsapp.net",
+                     "avatar_url": "https://pps.whatsapp.net/v/9.jpg",
+                     "avatar_hash": "h1"}],
+    }))
+    assert out["ok"] is True
+    assert out["avatars"] == 1
+    assert db.committed is True
+    joined = " ".join(sql for sql, _ in db.executed)
+    assert "INSERT INTO wa_chat_avatars" in joined
+
+
+async def test_avatars_unknown_account_acks(monkeypatch) -> None:
+    monkeypatch.delenv("WHATSAPP_BRIDGE_SECRET", raising=False)
+    db = _FakeDB(row=None)  # not owned / not whatsmeow
+    _patch_db(monkeypatch, db)
+    resp = await bridge.bridge_avatars(_FakeRequest({
+        "account_id": "acc-x",
+        "avatars": [{"wa_chat_id": "9@s.whatsapp.net",
+                     "avatar_url": "https://pps.whatsapp.net/v/9.jpg"}]}))
+    assert resp.status_code == 200
+    assert db.committed is False
+
+
+async def test_avatars_rejects_bad_secret(monkeypatch) -> None:
+    monkeypatch.setenv("WHATSAPP_BRIDGE_SECRET", "s3cr3t")
+    resp = await bridge.bridge_avatars(
+        _FakeRequest({"account_id": "a"}, headers={"X-Bridge-Secret": "no"}))
+    assert resp.status_code == 403
+
+
 # ── route registration ─────────────────────────────────────────────────────────
 
 def test_bridge_routes_registered() -> None:
@@ -457,3 +532,4 @@ def test_bridge_routes_registered() -> None:
     assert "/whatsapp/bridge/reclassify" in paths
     assert "/whatsapp/bridge/labels" in paths
     assert "/whatsapp/labels" in paths
+    assert "/whatsapp/bridge/avatars" in paths

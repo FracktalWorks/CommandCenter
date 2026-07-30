@@ -83,14 +83,23 @@ type SessionManager struct {
 
 	mu       sync.RWMutex
 	sessions map[string]*Session
+
+	// Bounded background queue for profile-picture fetches (W17) — see avatars.go.
+	avatarQueue chan avatarJob
 }
 
-// NewSessionManager wires the manager to its stores + gateway client.
+// NewSessionManager wires the manager to its stores + gateway client, and starts
+// the fixed-size worker pool that drains avatarQueue for the process lifetime.
 func NewSessionManager(c *sqlstore.Container, meta *MetaStore, gw *GatewayClient, log waLog.Logger) *SessionManager {
-	return &SessionManager{
+	m := &SessionManager{
 		container: c, meta: meta, gw: gw, log: log,
-		sessions: map[string]*Session{},
+		sessions:    map[string]*Session{},
+		avatarQueue: make(chan avatarJob, avatarQueueSize),
 	}
+	for range avatarWorkerCount {
+		go m.avatarWorker()
+	}
+	return m
 }
 
 func (m *SessionManager) get(accountID string) (*Session, bool) {

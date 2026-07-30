@@ -125,6 +125,14 @@ export interface ActionItem {
   due_hint: string | null;
   segment_ids: string[];
   resulting_task_id: string | null;
+  /** Which system a dispatch routes this to. */
+  kind: "task" | "email" | "document";
+  /** Extraction hints (owner_hint, email_to) used at dispatch time. */
+  payload: { owner_hint?: string; email_to?: string };
+  /** Where a dispatch landed: gtd id, `sent:<id>`, `draft:<id>`, `artifact:<agent>/<path>`. */
+  dispatch_ref: string | null;
+  /** Why the last dispatch failed (item stays draft so it can be retried). */
+  dispatch_error: string | null;
 }
 
 export interface NoteDoc {
@@ -225,9 +233,55 @@ export interface CopilotEvent {
     speakers?: string[];
     topic?: string;
     trigger?: string;
+    /** Mid-call agent lookup that grounded this (e.g. crm, tasks). */
+    consulted?: string[];
+    /** The question a `fact` event answered. */
+    question?: string;
   };
   token_cost: number;
   ts: number | null;
+}
+
+/** What the worker's browser saw when a join failed (bot diagnostics). */
+export interface BotDiagnostics {
+  status: MeetingBotStatus | string;
+  error: string | null;
+  diagnostics: {
+    status?: string;
+    error?: string | null;
+    has_screenshot?: boolean;
+    diagnostics?: {
+      tag?: string;
+      url?: string | null;
+      title?: string | null;
+      controls?: string[];
+      body?: string;
+    };
+  } | null;
+  diagnostics_error?: string;
+}
+
+/** The notetaker's own Google identity.
+ *
+ *  Google auto-declines anonymous participants, so `signed_in` is the single
+ *  fact that decides whether unattended joining can work at all. */
+export interface BotIdentity {
+  /** False when the active provider manages its own bot accounts (Recall) —
+   *  the UI hides the whole section rather than offering a no-op. */
+  supported: boolean;
+  /** null when the worker couldn't be reached — distinct from "signed out". */
+  signed_in: boolean | null;
+  email?: string | null;
+  /** Whether a persistent Chrome profile is configured. Without one a sign-in
+   *  cannot survive a restart, so it would be pointless. */
+  profile?: boolean;
+  credentials_configured?: boolean;
+  interactive_running?: boolean;
+  /** Interactive sign-in needs VNC to actually be watchable. */
+  vnc_enabled?: boolean;
+  unreachable?: boolean;
+  error?: string;
+  provider?: string;
 }
 
 /** What the copilot knows about a meeting before anyone speaks. */
@@ -269,6 +323,12 @@ export interface NotesSettings {
   template_instructions: Record<string, string>;
   default_template: string | null;
   bot_name: string | null;
+  /** Auto-dispatch confident action items after notes generation, per kind.
+   *  Emails are additionally recipient-gated server-side: an unresolvable
+   *  recipient always downgrades a send to a mailbox draft. */
+  auto_dispatch_tasks: boolean;
+  auto_dispatch_emails: boolean;
+  auto_dispatch_docs: boolean;
 }
 
 /** A meeting type, with the copilot guidance shipped for it. */

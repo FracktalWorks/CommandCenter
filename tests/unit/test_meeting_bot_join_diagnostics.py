@@ -96,3 +96,114 @@ def test_join_timeout_is_configurable_and_sane() -> None:
     assert meet.JOIN_TIMEOUT_S > 0
     # Below ~60s a host realistically cannot notice and click Admit in time.
     assert meet.JOIN_TIMEOUT_S >= 60
+
+
+# ── invite links are canonicalised before Chrome sees them ───────────────────
+# Decorated invite links (?authuser=0, calendar params) are one of the two ways
+# a signed-out browser gets bounced to Meet's marketing page (production
+# incident, screenshot-proven). The bare code + hl=en is the reliable form.
+
+def test_meet_urls_are_reduced_to_the_bare_code() -> None:
+    for url in (
+        "https://meet.google.com/abc-defg-hij",
+        "https://meet.google.com/abc-defg-hij?authuser=0&hs=122",
+        "https://meet.google.com/abc-defg-hij/",
+        "https://meet.google.com/ABC-DEFG-HIJ",
+    ):
+        assert meet.canonical_meet_url(url) == (
+            "https://meet.google.com/abc-defg-hij?hl=en"
+        ), url
+
+
+def test_non_meet_and_unusual_urls_pass_through() -> None:
+    for url in (
+        "https://us02web.zoom.us/j/1234567890",
+        "https://teams.microsoft.com/l/meetup-join/xyz",
+        "https://meet.google.com/lookup/abcdef",
+        "https://meet.google.com/landing",
+        "https://meet.google.com/",
+    ):
+        assert meet.canonical_meet_url(url) == url, url
+
+
+# ── the marketing page is recognised for what it is ──────────────────────────
+# Meet renders it client-side (URL unchanged) when it decides the visitor is a
+# bot; without this check it surfaces as a baffling "No join button".
+
+def test_landing_page_is_detected_from_body_copy() -> None:
+    assert meet.looks_like_landing(
+        "https://meet.google.com/abc-defg-hij",
+        "Google Meet — Video calls, enhanced with AI. Sign in. Try Meet for work.",
+    )
+    assert meet.looks_like_landing(
+        "https://meet.google.com/abc-defg-hij",
+        "Join a meeting now ... Enter code",
+    )
+
+
+def test_landing_page_is_detected_from_redirect_urls() -> None:
+    assert meet.looks_like_landing(
+        "https://workspace.google.com/products/meet/", ""
+    )
+    assert meet.looks_like_landing("https://meet.google.com/landing?foo=1", "")
+
+
+def test_green_room_is_not_mistaken_for_landing() -> None:
+    for body in (
+        "Ready to join? No one else is here",
+        "Asking to be let in...",
+        "What's your name?",
+        "",
+    ):
+        assert not meet.looks_like_landing(
+            "https://meet.google.com/abc-defg-hij", body
+        ), body
+
+
+# ── anonymous denial vs "nobody clicked Admit" ───────────────────────────────
+# The 2026-07-30 production failure: the join flow worked perfectly (name
+# filled, muted, "Ask to join" clicked) and Google declined the signed-out bot
+# within 3 seconds. It needs its own message because the remedies (be in the
+# call, allow link-guests, sign the bot in) are nothing like "check the link".
+
+def test_anonymous_denial_is_recognised_from_meets_own_words() -> None:
+    assert meet.is_anonymous_denial(
+        "You can't join this video call Return to home screen Submit feedback "
+        "Your meeting is safe No one can join a meeting unless invited or "
+        "admitted by the host Learn more"
+    )
+    assert meet.is_anonymous_denial(
+        "No one can join a meeting unless invited or admitted by the host"
+    )
+
+
+def test_waiting_and_ordinary_states_are_not_anonymous_denials() -> None:
+    for body in (
+        "Asking to be let in...",
+        "Waiting for the host to let you in",
+        "Ready to join?",
+        "",
+    ):
+        assert not meet.is_anonymous_denial(body), body
+
+
+def test_anonymous_denial_is_also_a_refusal() -> None:
+    """Both classifiers must agree it is terminal — the admission loop stops on
+    classify_body, and only then is the denial branch consulted."""
+    body = (
+        "You can't join this video call. No one can join a meeting unless "
+        "invited or admitted by the host"
+    )
+    assert meet.classify_body(body) == "refused"
+    assert meet.is_anonymous_denial(body)
+
+
+# ── the automation disguise is shared with the login path ────────────────────
+
+def test_launch_args_hide_automation_and_pin_english() -> None:
+    args = meet.chrome_launch_args()
+    assert "--disable-blink-features=AutomationControlled" in args
+    assert "--lang=en-US" in args
+    # --enable-automation is removed via ignore_default_args, so it must never
+    # be added back here.
+    assert not any("enable-automation" in a for a in args)

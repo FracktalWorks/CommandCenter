@@ -29,10 +29,12 @@ import {
 import SandboxedHtml from "@/components/SandboxedHtml";
 import {
   buildAppSrcDoc,
+  extractCcIconNames,
   useCcBridge,
   type CcToolConfirmDecision,
   type CcToolConfirmRequest,
 } from "../lib/ccBridge";
+import { buildIconMap } from "@/lib/iconSvg";
 import type { AppMeta, AppUsage, AppVersion } from "../lib/types";
 
 /** A pending `cc.tools.call()` confirm, waiting on the viewer's decision. */
@@ -399,6 +401,12 @@ export default function AppRunPage({
     () => (bundle ? buildAppSrcDoc(bundle, { slug, mode: "live" }) : null),
     [bundle, slug]
   );
+  // Same icon pre-resolution as the Workshop's preview — the published run
+  // page goes through the exact same sandboxed frame.
+  const runIcons = useMemo(
+    () => (srcDoc ? buildIconMap(extractCcIconNames(srcDoc)) : {}),
+    [srcDoc]
+  );
 
   const canEdit = app?.role === "own" || app?.role === "edit";
 
@@ -595,7 +603,7 @@ export default function AppRunPage({
       {/* ── The app, in the sandboxed frame ─────────────────────────── */}
       <div className="flex-1 min-h-0 flex flex-col">
         {srcDoc ? (
-          <SandboxedHtml chromeless html={srcDoc} theme={theme} />
+          <SandboxedHtml chromeless html={srcDoc} theme={theme} icons={runIcons} />
         ) : (
           <div className="flex flex-col items-center justify-center flex-1 gap-3 text-center px-6">
             <div className="w-11 h-11 rounded-xl bg-primary/10 flex items-center justify-center">

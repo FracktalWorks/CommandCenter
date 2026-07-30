@@ -19,7 +19,7 @@
  * watches it stream in.
  */
 
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import rehypeRaw from "rehype-raw";
@@ -27,43 +27,12 @@ import { useTheme } from "next-themes";
 import { Eye, Pencil, Save, RotateCcw, Download, Loader2 } from "lucide-react";
 import SandboxedHtml from "@/components/SandboxedHtml";
 import SandboxedReact from "@/components/SandboxedReact";
+import { buildIconMap, iconsUsedIn } from "@/lib/iconSvg";
+import { classifyArtifact, isRenderable, type ArtifactKind }
+  from "@/lib/artifactKind";
 
-type Kind = "markdown" | "html" | "react" | "code" | "image" | "text" | "binary";
-
-const CODE_EXTS = new Set([
-  "py", "ts", "tsx", "js", "jsx", "sh", "bash", "zsh", "fish",
-  "yaml", "yml", "toml", "json", "sql", "rs", "go", "java", "c",
-  "cpp", "cs", "rb", "php", "swift", "kt", "scala", "r", "lua",
-  "css", "scss", "less", "xml", "graphql", "proto", "csv", "tsv",
-]);
-const IMAGE_EXTS = new Set(["png", "jpg", "jpeg", "gif", "webp", "svg", "ico", "bmp"]);
-const TEXT_EXTS = new Set(["txt", "log", "rst", "ini", "cfg", "conf", "env", "md", "mdx"]);
-
-function extOf(name: string): string {
-  return (name.split(".").pop() ?? "").toLowerCase();
-}
-
-/**
- * A .jsx/.tsx file is only treated as a runnable React ARTIFACT when it lives
- * under outputs/ — that is where write_artifact puts generated deliverables.
- * Everywhere else (an agent editing src/components/Foo.tsx in a code workspace)
- * it stays source code, so opening a file to read it never silently turns into
- * building and running it.
- */
-function isArtifactPath(path: string): boolean {
-  return path.replace(/^\/+/, "").startsWith("outputs/");
-}
-
-function classify(name: string, path: string): Kind {
-  const ext = extOf(name);
-  if (ext === "md" || ext === "mdx") return "markdown";
-  if (ext === "html" || ext === "htm") return "html";
-  if ((ext === "jsx" || ext === "tsx") && isArtifactPath(path)) return "react";
-  if (CODE_EXTS.has(ext)) return "code";
-  if (IMAGE_EXTS.has(ext)) return "image";
-  if (TEXT_EXTS.has(ext)) return "text";
-  return "binary";
-}
+/** PDFs and Word docs have no renderer here — offer the download instead. */
+const UNDISPLAYABLE = new Set<ArtifactKind>(["pdf", "docx", "binary"]);
 
 interface DocumentPaneProps {
   sessionId: string;
@@ -74,10 +43,12 @@ interface DocumentPaneProps {
 }
 
 export default function DocumentPane({ sessionId, path, name, live }: DocumentPaneProps) {
-  const kind = classify(name, path);
+  const raw = classifyArtifact(name, path);
+  // Collapse what this pane cannot render into one "download it" state.
+  const kind: ArtifactKind | "binary" = UNDISPLAYABLE.has(raw) ? "binary" : raw;
   const editable =
-    kind === "markdown" || kind === "html" || kind === "react" || kind === "code" || kind === "text";
-  const previewable = kind === "markdown" || kind === "html" || kind === "react";
+    kind === "markdown" || isRenderable(kind) || kind === "code" || kind === "text";
+  const previewable = kind === "markdown" || isRenderable(kind);
 
   const { resolvedTheme } = useTheme();
   const theme: "light" | "dark" = resolvedTheme === "light" ? "light" : "dark";
@@ -93,6 +64,11 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
   const [saving, setSaving] = useState(false);
   const [dirty, setDirty] = useState(false);
   const lastLoadedRef = useRef<string>("");
+
+  // Full-page artifacts have no props.icons to declare with, so the icons
+  // come from what the source actually references (see iconsUsedIn).
+  const icons = useMemo(() => buildIconMap(iconsUsedIn(content)), [content]);
+  const draftIcons = useMemo(() => buildIconMap(iconsUsedIn(draft)), [draft]);
 
   const loadText = useCallback(
     async (opts?: { silent?: boolean }) => {
@@ -298,9 +274,9 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
             {kind === "markdown" ? (
               <MarkdownBody content={draft} />
             ) : kind === "react" ? (
-              <SandboxedReact code={draft} theme={theme} />
+              <SandboxedReact code={draft} theme={theme} icons={draftIcons} />
             ) : (
-              <SandboxedHtml html={draft} theme={theme} />
+              <SandboxedHtml html={draft} theme={theme} icons={draftIcons} />
             )}
           </div>
         )}
@@ -315,7 +291,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
   } else if (kind === "html") {
     body = (
       <div className="flex-1 min-h-0">
-        <SandboxedHtml html={content} theme={theme} chromeless />
+        <SandboxedHtml html={content} theme={theme} icons={icons} chromeless />
       </div>
     );
   } else if (kind === "react") {
@@ -334,7 +310,7 @@ export default function DocumentPane({ sessionId, path, name, live }: DocumentPa
       </div>
     ) : (
       <div className="flex-1 min-h-0">
-        <SandboxedReact code={content} theme={theme} chromeless />
+        <SandboxedReact code={content} theme={theme} icons={icons} chromeless />
       </div>
     );
   } else {

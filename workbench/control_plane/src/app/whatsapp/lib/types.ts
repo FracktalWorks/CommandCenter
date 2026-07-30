@@ -83,6 +83,7 @@ export type WaChat = {
   window_expires_at: string | null;
   snoozed_until: string | null; // set while snoozed (W6)
   labels: WaChatLabel[]; // native WhatsApp labels on this chat (W16)
+  avatar_url: string | null; // native WhatsApp profile picture, synced (W17)
 };
 
 // A native WhatsApp label/list the founder created, synced from their number

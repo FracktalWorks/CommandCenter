@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
-import { AlertTriangle, Loader2, Square, Video } from "lucide-react";
+import { AlertTriangle, Loader2, Radio, Square, Video } from "lucide-react";
 import { listActiveBots, stopBot } from "../lib/api";
 import type { MeetingBot, MeetingBotStatus } from "../lib/types";
 
@@ -92,11 +92,16 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
   // A bot that never got into the call fails for reasons only a human can fix
   // — admit it, sign it in, use a different link. Showing the status alone
   // ("Failed") tells you none of that, so the worker's own explanation is
-  // rendered verbatim.
-  const explains = (b: MeetingBot) =>
-    b.error && (b.status === "failed" || b.status === "not_admitted");
+  // rendered verbatim — with a fallback when no explanation survived, so a
+  // dead bot can never masquerade as a healthy one.
+  const isDead = (b: MeetingBot) =>
+    b.status === "failed" || b.status === "not_admitted";
+  const explainText = (b: MeetingBot) =>
+    b.error ||
+    "The notetaker didn't make it into this call and left no explanation. " +
+      "Open the meeting for diagnostics, or send it again.";
 
-  const running = bots.filter((b) => !explains(b)).length;
+  const running = bots.filter((b) => !isDead(b)).length;
 
   return (
     <div className="space-y-2">
@@ -108,7 +113,7 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
       </div>
       {bots.map((b) => {
         const meta = BOT_META[b.status] ?? BOT_META.processing;
-        const bad = explains(b);
+        const bad = isDead(b);
         return (
           <div
             key={b.id}
@@ -146,6 +151,16 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
               />
               {meta.label}
             </span>
+            {!bad && b.status === "in_call" && (
+              <button
+                onClick={() => router.push(`/notes/live/${b.meeting_id}`)}
+                className="shrink-0 rounded-lg border border-primary/30 p-1.5 text-primary hover:bg-primary/10 tech-transition"
+                title="Open the live console (transcript + copilot)"
+                aria-label="Open live console"
+              >
+                <Radio className="h-4 w-4" />
+              </button>
+            )}
             {!bad && (
               <button
                 onClick={() => void onStop(b.meeting_id)}
@@ -165,7 +180,7 @@ export default function ActiveBots({ reloadSignal, onChange }: ActiveBotsProps) 
           {bad && (
             <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] leading-relaxed text-destructive">
               <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
-              <span>{b.error}</span>
+              <span>{explainText(b)}</span>
             </p>
           )}
           </div>

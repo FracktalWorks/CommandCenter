@@ -34,6 +34,7 @@ from gateway.routes.apps._common import (
     read_workspace_manifest,
     record_app_audit,
     require_app_user,
+    require_app_viewer,
     resolve_ai_budget,
     resolve_ai_tier,
     router,
@@ -127,7 +128,7 @@ async def _month_ai_usage(db: Any, app_id: str) -> dict[str, Any]:
 @router.get("/{slug}/me")
 async def app_me(
     slug: str,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, str]:
     """Who is viewing — what ``cc.user()`` returns."""
     db = await _get_db()
@@ -145,7 +146,7 @@ async def list_storage_rows(
     slug: str,
     table: str,
     scope: str = Query("shared", description="'shared' (default) | 'user'"),
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, list[StorageRow]]:
     _validate_table(table)
     db = await _get_db()
@@ -173,7 +174,7 @@ async def get_storage_row(
     table: str,
     key: str,
     scope: str = Query("shared"),
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> StorageRow:
     _validate_table(table)
     db = await _get_db()
@@ -202,7 +203,7 @@ async def put_storage_row(
     table: str,
     key: str,
     body: StoragePut,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> StorageRow:
     _validate_table(table)
     if not key or len(key) > _MAX_KEY_CHARS:
@@ -274,7 +275,7 @@ async def delete_storage_row(
     table: str,
     key: str,
     scope: str = Query("shared"),
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, bool]:
     _validate_table(table)
     db = await _get_db()
@@ -346,7 +347,7 @@ def _cost_from_response(model: str, resp: Any) -> float:
 async def ai_complete(
     slug: str,
     body: AiCompleteRequest,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> Any:
     """Run one completion for the app, on the platform's tier routing, within
     the app's monthly token budget (429 ``ai_budget_exhausted`` when spent)."""
@@ -427,7 +428,7 @@ async def ai_complete(
 @router.get("/{slug}/usage")
 async def app_usage(
     slug: str,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_viewer),
 ) -> dict[str, Any]:
     """This calendar month's AI usage + budget (the info-popover numbers)."""
     db = await _get_db()

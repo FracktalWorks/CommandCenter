@@ -342,6 +342,16 @@ jobs:
             # mode is silent, so it is wired by default rather than left opt-in.
             upsert_env NOTES_LIVE_TOKEN_URL \
               "http://host.docker.internal:8080/notes/stt/bot-live-token"
+            # Persistent Chrome profile for the bot. Meet AUTO-DECLINES
+            # anonymous participants (they never get to knock) whenever the
+            # host isn't in the call yet or link-guests can't ask in — a
+            # signed-in profile is the only unattended fix. The dir is inside
+            # the container (its own volume); sign in once via
+            # POST /google-login. Defaults preserved on re-deploy.
+            grep -qE '^MEET_PROFILE_DIR=' "$ENV_FILE" || \
+              echo "MEET_PROFILE_DIR=/profile" >> "$ENV_FILE"
+            # Live VNC view of the bot's browser (loopback only). Default off.
+            grep -qE '^MEET_VNC=' "$ENV_FILE" || echo "MEET_VNC=0" >> "$ENV_FILE"
             # One shared secret, both directions (gateway -> worker, and the
             # worker's live-segment callback). Generated once, then reused.
             if ! grep -qE '^MEETING_BOT_TOKEN=.+' "$ENV_FILE"; then
@@ -352,22 +362,48 @@ jobs:
             fi
 
             MB_ENABLED="$(grep -E '^MEETING_BOT_ENABLED=' "$ENV_FILE" | head -1 | cut -d= -f2-)"
-            if [ "$MB_ENABLED" = "1" ]; then
+            # Never recreate the worker while a bot is in a live call — each
+            # bot is a Chrome inside the container, so `up --build` mid-meeting
+            # kills the notetaker someone is relying on (this happened). The
+            # skipped rebuild simply lands on the next deploy.
+            MB_ACTIVE="$(curl -fsS --max-time 5 http://127.0.0.1:8095/health 2>/dev/null \
+              | grep -o '"active":[0-9]*' | cut -d: -f2 || true)"
+            if [ "$MB_ENABLED" = "1" ] && [ -n "$MB_ACTIVE" ] && [ "$MB_ACTIVE" -gt 0 ] 2>/dev/null; then
+              echo "    ~ $MB_ACTIVE bot(s) in a call right now — keeping the running worker; rebuild deferred to the next deploy"
+            elif [ "$MB_ENABLED" = "1" ]; then
               # --build is cheap after the first run (layer cache); the first
               # deploy pulls the Playwright base image, which is large.
               # --env-file is explicit on purpose: compose resolves a bare .env
               # against the project directory (infra/), not the app root.
-              if docker compose --env-file "$ENV_FILE" -f infra/docker-compose.yml \
-                   --profile meetingbot up -d --build meeting-bot 2>&1 | tail -5; then
+              #
+              # `timeout` and </dev/null are both scar tissue: an apt postinst
+              # that prompts (tzdata asking "Geographic area:") hung this build
+              # for 15 minutes until the deploy's SSH session died, and the
+              # deploy then reported success from gateway health while the OLD
+              # bot image stayed live. Bounded + no tty means a prompt fails
+              # fast instead of eating the deploy.
+              MB_IMAGE_BEFORE="$(docker images -q acb-meeting-bot:latest 2>/dev/null || true)"
+              if timeout 900 docker compose --env-file "$ENV_FILE" \
+                   -f infra/docker-compose.yml --profile meetingbot \
+                   up -d --build meeting-bot </dev/null 2>&1 | tail -5; then
                 sleep 5
                 if curl -fsS --max-time 10 http://127.0.0.1:8095/health >/dev/null 2>&1; then
-                  echo "    meeting bot UP on 127.0.0.1:8095"
+                  MB_IMAGE_AFTER="$(docker images -q acb-meeting-bot:latest 2>/dev/null || true)"
+                  if [ -n "$MB_IMAGE_BEFORE" ] && \
+                     [ "$MB_IMAGE_BEFORE" = "$MB_IMAGE_AFTER" ]; then
+                    echo "    meeting bot UP on 127.0.0.1:8095 (image unchanged — nothing to rebuild)"
+                  else
+                    echo "    meeting bot UP on 127.0.0.1:8095 (image rebuilt)"
+                  fi
                 else
-                  echo "    ! meeting bot started but /health not answering yet"
+                  echo "    !! meeting bot started but /health not answering — join-by-link is DOWN"
                   docker logs --tail 20 acb-meeting-bot 2>&1 | sed 's/^/      /' || true
                 fi
               else
-                echo "    ! meeting bot build/start failed — join-by-link stays unavailable"
+                # Loud and specific: the old container is probably still serving,
+                # which is exactly the state that reads as "deployed" but isn't.
+                echo "    !! meeting bot build/start FAILED or timed out — join-by-link is running the PREVIOUS image"
+                tail -20 /tmp/mb-build.log 2>/dev/null | sed 's/^/      /' || true
               fi
             else
               echo "    MEETING_BOT_ENABLED=0 — meeting bot OFF (join-by-link unavailable)"
@@ -388,12 +424,17 @@ jobs:
             echo "Gateway is active"
 
             # ── App Workshop T2 (React) build vendor cache ────────────────────
-            # Shared, pinned react/react-dom/esbuild the app-builder agent's
-            # build script (apps/agents/agent-app-builder/build/build_t2.mjs)
-            # resolves against via esbuild's nodePaths — installed ONCE here,
-            # never per-app. Same default-resolution as CUSTOM_APPS_ROOT
-            # (already proven in production for the App Workshop): read an
-            # override from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+            # Shared, pinned react/react-dom/esbuild/lucide-react the
+            # app-builder agent's build script
+            # (apps/agents/agent-app-builder/build/build_t2.mjs) resolves
+            # against via esbuild's nodePaths — installed ONCE here, never
+            # per-app. Same default-resolution as CUSTOM_APPS_ROOT (already
+            # proven in production for the App Workshop): read an override
+            # from .env, else {AGENTS_CLONE_DIR:-$HOME/.acb/agents}.
+            # lucide-react: zero runtime deps of its own (only a react peer
+            # dep, already here) — pinned to the exact version
+            # workbench/control_plane itself uses, so every T2 app gets real
+            # icon components for free instead of hand-rolled SVGs.
             echo "==> Provisioning T2 (React) vendor cache for the App Workshop builder"
             T2_VENDOR_DIR="$(grep -E '^CUSTOM_APPS_T2_VENDOR_DIR=' "$ENV_FILE" 2>/dev/null | head -1 | cut -d= -f2-)"
             if [ -z "$T2_VENDOR_DIR" ]; then
@@ -403,9 +444,9 @@ jobs:
             mkdir -p "$T2_VENDOR_DIR"
             printf '%s\n' \
               '{ "name": "cc-app-workshop-t2-vendor", "private": true,' \
-              '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0" } }' \
+              '  "dependencies": { "react": "18.3.1", "react-dom": "18.3.1", "esbuild": "0.24.0", "lucide-react": "1.17.0" } }' \
               > "$T2_VENDOR_DIR/package.json"
-            if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ]; then
+            if [ ! -d "$T2_VENDOR_DIR/node_modules/react" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/esbuild" ] || [ ! -d "$T2_VENDOR_DIR/node_modules/lucide-react" ]; then
               (cd "$T2_VENDOR_DIR" && npm install --no-audit --no-fund --omit=dev) \
                 && echo "    + T2 vendor cache installed ($T2_VENDOR_DIR)" \
                 || echo "    ! T2 vendor install failed — T2 (React) apps will fail to build; T1 apps unaffected"

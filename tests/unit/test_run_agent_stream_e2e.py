@@ -19,6 +19,22 @@ import pytest
 
 from orchestrator import executor
 
+
+@pytest.fixture(autouse=True)
+def _clean_run_breadcrumbs():
+    """These tests drive the REAL run path, which stamps the cross-runtime
+    HITL breadcrumbs (``_WRITE_ARTIFACT_CONTEXT["session_id"]``, run queues)
+    as a production feature. In a shared test process a stale session id makes
+    ``resolve_relay_thread_id`` resolve a dead relay later — blocking HITL
+    tools then park on a Future instead of failing closed. Clear after each
+    test so state never leaks past this file."""
+    yield
+    from acb_skills.write_artifact import _WRITE_ARTIFACT_CONTEXT
+
+    _WRITE_ARTIFACT_CONTEXT.clear()
+    executor._RUN_QUEUES.clear()
+    executor._pending_user_input.clear()
+
 # The Tier-1→Tier-2 fallback discards one un-awaited run() coroutine from the
 # mock (it doesn't implement the native streaming interface); that's the whole
 # point of the fallback and is benign here. Filter just that RuntimeWarning.

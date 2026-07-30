@@ -102,4 +102,10 @@ async def receive(
     if event_type in _TASK_EVENTS and task_id:
         background_tasks.add_task(_normalise_task, task_id, event_type, payload)
 
+    # Fan out to registered event sinks (workflow event triggers) — a no-op
+    # unless the gateway wired a sink in at startup (event_hooks.py).
+    from ingestion.event_hooks import emit_event
+
+    background_tasks.add_task(emit_event, "clickup", event_type, payload)
+
     return {"status": "accepted"}

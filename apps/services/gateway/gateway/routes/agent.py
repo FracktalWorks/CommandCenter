@@ -18,16 +18,25 @@ POST /agent/webhook/{source}
 """
 from __future__ import annotations
 
+import hashlib
+import hmac
 import json
+import os
 import re
 import uuid
 from pathlib import Path
 from typing import Any
 
-from acb_auth import UserContext, get_current_user, require_internal_auth
+from acb_auth import (
+    UserContext,
+    assert_can_run_agent,
+    get_current_user,
+    require_internal_auth,
+    require_permission,
+)
 from acb_common import get_logger, get_settings
-from fastapi import (APIRouter, BackgroundTasks, Depends, HTTPException,
-                     Request, status)
+from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
+                     HTTPException, Request, status)
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 
@@ -773,10 +782,18 @@ async def list_agents(
     for a in merged:
         a["display_name"] = aliases.get(a["name"], "")
 
+    # ── Access filter (org access control, enforcement seam 2) ────────────
+    # This list feeds both the chat agent picker and the /agents management
+    # pane. Anyone who can manage agents sees the whole registry; everyone
+    # else sees only what they may actually run, so the picker never offers a
+    # choice that would 403 on use.
+    if not user.has_permission("agents:manage"):
+        merged = [a for a in merged if user.can_run_agent(a["name"])]
+
     return merged
 
 
-@router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone")
+@router.post("/{name}/pull", summary="Pull latest commits for an agent's local clone", dependencies=[require_permission("agents:manage")])
 async def pull_agent(
     name: str,
     user: UserContext = Depends(get_current_user),
@@ -889,7 +906,7 @@ async def pull_agent(
     }
 
 
-@router.post("", status_code=status.HTTP_201_CREATED, summary="Register an agent from a GitHub repo")
+@router.post("", status_code=status.HTTP_201_CREATED, summary="Register an agent from a GitHub repo", dependencies=[require_permission("agents:manage")])
 async def register_agent(
     req: RegisterAgentRequest,
     background_tasks: BackgroundTasks,
@@ -1084,7 +1101,7 @@ def _cleanup_agent_workspace(agent_name: str) -> bool:
         return False
 
 
-@router.delete("/{name}", summary="Remove a user-registered agent")
+@router.delete("/{name}", summary="Remove a user-registered agent", dependencies=[require_permission("agents:manage")])
 async def remove_agent(
     name: str,
     user: UserContext = Depends(get_current_user),
@@ -1145,7 +1162,7 @@ class PatchAgentRequest(BaseModel):
     status: str | None = None
 
 
-@router.patch("/{name}", summary="Update metadata for a user-registered agent")
+@router.patch("/{name}", summary="Update metadata for a user-registered agent", dependencies=[require_permission("agents:manage")])
 async def patch_agent(
     name: str,
     req: PatchAgentRequest,
@@ -1248,6 +1265,10 @@ async def run_agent_stream_endpoint(
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
     agent_name = _resolve_agent_for_run(req.agent, req.thread_id)
+    # Org access control, enforcement seam 2: the picker is filtered, but the
+    # endpoint is the boundary of record — a hand-crafted request naming an
+    # agent the member cannot run is refused here, not in the UI.
+    assert_can_run_agent(user, agent_name)
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
@@ -1723,6 +1744,7 @@ async def run_agent_sync(
     from orchestrator.executor import AgentRunError, run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
+    assert_can_run_agent(user, agent)
     run_id = req.run_id or str(uuid.uuid4())
 
     try:
@@ -1763,6 +1785,7 @@ async def run_agent_async(
     from orchestrator.executor import run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
+    assert_can_run_agent(user, agent)
     run_id = req.run_id or str(uuid.uuid4())
 
     async def _run() -> None:
@@ -2764,18 +2787,76 @@ async def _git_push_with_rebase(
     return success, new_sha if success else None
 
 
+_SIGNATURE_HEADER = "X-CC-Signature"
+
+
+def _webhook_secret(source: str) -> str:
+    """Shared secret for signing ``/agent/webhook/{source}``.
+
+    Per-source (``AGENT_WEBHOOK_SECRET_<SOURCE>``) wins over the global
+    ``AGENT_WEBHOOK_SECRET``, so one leaked integration does not authorise
+    every agent on the platform.
+    """
+    slug = "".join(c if c.isalnum() else "_" for c in source).upper()
+    return (
+        os.environ.get(f"AGENT_WEBHOOK_SECRET_{slug}", "").strip()
+        or os.environ.get("AGENT_WEBHOOK_SECRET", "").strip()
+    )
+
+
+def verify_webhook_signature(source: str, body: bytes, presented: str | None) -> None:
+    """HMAC-SHA256 over the raw body, or raise.
+
+    Unlike the bridge/bot-token checks elsewhere in the gateway, this one
+    **fails closed when unconfigured**. Those endpoints receive data; this one
+    *starts an agent run* — arbitrary tool use against real systems — and it is
+    reachable from the internet through Caddy. An unconfigured deployment
+    should not have that endpoint open, so a missing secret is a 503 naming
+    the fix rather than an implicit allow.
+
+    Safe to make strict: the audit found nothing calls this path today
+    (`FOUNDATION_AUDIT_REPORT.md` — the provider receivers live in
+    `ingestion/sources/*/webhook.py` and dispatch no agents), so there is no
+    working sender to break.
+    """
+    secret = _webhook_secret(source)
+    if not secret:
+        raise HTTPException(
+            status_code=503,
+            detail=(
+                "Agent webhooks are not configured. Set AGENT_WEBHOOK_SECRET "
+                f"(or AGENT_WEBHOOK_SECRET_{source.upper()}) and sign the "
+                f"request body with HMAC-SHA256 in {_SIGNATURE_HEADER}."
+            ),
+        )
+
+    supplied = (presented or "").strip()
+    if supplied.startswith("sha256="):
+        supplied = supplied[len("sha256="):]
+    expected = hmac.new(secret.encode(), body, hashlib.sha256).hexdigest()
+    if not supplied or not hmac.compare_digest(expected, supplied):
+        raise HTTPException(status_code=401, detail="Invalid webhook signature.")
+
+
 @router.post("/webhook/{source}", status_code=status.HTTP_202_ACCEPTED)
 async def receive_webhook(
     source: str,
     event: WebhookEvent,
     background_tasks: BackgroundTasks,
+    request: Request,
+    x_cc_signature: str | None = Header(default=None, alias=_SIGNATURE_HEADER),
 ) -> dict[str, Any]:
-    """Receive a webhook from an external source and route to the correct agent.
+    """Receive a signed webhook from an external source and route it to an agent.
 
-    No authentication required on this endpoint (called by external services).
-    Webhook signature verification is handled by the source-specific ingestion
-    routers (``ingestion/sources/*/webhook.py``); this endpoint is the v2
-    agent-dispatch layer on top.
+    **Authenticated by HMAC signature** (BO-2 residual #3). This endpoint
+    dispatches an agent run, so leaving it open made it a fourth run path that
+    bypassed ``assert_can_run_agent`` entirely — anyone who could reach the
+    gateway could trigger any agent with any payload.
+
+    A valid signature IS the authorization here: it proves the platform's own
+    secret produced the request, which is the same trust level as the internal
+    service token. There is no member to resolve, so no per-agent check
+    applies — which is exactly why the signature has to be mandatory.
 
     Routing logic:
     1. Look up (source, event_type) in ``_WEBHOOK_ROUTES`` for static MAF agents.
@@ -2784,6 +2865,8 @@ async def receive_webhook(
     3. Dispatch to the MAF executor (the sole agent execution runtime; the
        Copilot SDK is used only for self-mutation containers).
     """
+    verify_webhook_signature(source, await request.body(), x_cc_signature)
+
     agent_name: str | None = _WEBHOOK_ROUTES.get((source, event.event_type))
     agent_runtime = "maf"  # default for static routes — MAF executor (WBS 0.7)
 
@@ -2798,7 +2881,31 @@ async def receive_webhook(
             if agent_name:
                 break
 
+    # Workflows can bind to the same (source, event_type) events (workflow
+    # event triggers — routes/workflows/triggers.py). Dispatch is best-effort
+    # and independent of agent routing: the same event may fan out to both.
+    workflow_runs: list[dict[str, str]] = []
+    try:
+        from gateway.routes.workflows.triggers import dispatch_event  # noqa: PLC0415
+
+        workflow_runs = await dispatch_event(source, event.event_type, event.payload)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("webhook.workflow_dispatch_failed", error=str(exc)[:160])
+
     if not agent_name:
+        if workflow_runs:
+            _log.info(
+                "webhook.workflow_routed",
+                source=source,
+                event_type=event.event_type,
+                runs=len(workflow_runs),
+            )
+            return {
+                "status": "workflow_routed",
+                "source": source,
+                "event_type": event.event_type,
+                "workflow_runs": workflow_runs,
+            }
         _log.warning(
             "webhook.no_route",
             source=source,
@@ -2840,4 +2947,10 @@ async def receive_webhook(
         run_id=run_id,
     )
 
-    return {"status": "queued", "run_id": run_id, "agent": agent_name, "runtime": agent_runtime}
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "agent": agent_name,
+        "runtime": agent_runtime,
+        "workflow_runs": workflow_runs,
+    }

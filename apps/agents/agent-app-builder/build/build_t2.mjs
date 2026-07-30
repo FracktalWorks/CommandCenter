@@ -6,10 +6,10 @@
 // every existing publish/preview/durability path already reads dynamically.
 //
 // Two dependency modes, auto-detected per workspace:
-//   - Default (no app-local `node_modules`): resolve react/react-dom/esbuild
-//     from the shared, deploy-provisioned vendor cache; an import allowlist
-//     blocks anything else. Zero per-app install/disk cost — most T2 apps
-//     stay on this path.
+//   - Default (no app-local `node_modules`): resolve react/react-dom/
+//     lucide-react/esbuild from the shared, deploy-provisioned vendor cache;
+//     an import allowlist blocks anything else. Zero per-app install/disk
+//     cost — most T2 apps stay on this path.
 //   - Custom deps (app-local `node_modules` present, via
 //     `install_t2_deps.mjs`): standard npm resolution rooted at the
 //     workspace, no allowlist — the app can import anything it explicitly
@@ -64,6 +64,10 @@ const ALLOWED_IMPORTS = new Set([
   "react-dom/client",
   "react/jsx-runtime",
   "react/jsx-dev-runtime",
+  // Real icon components — same library workbench/control_plane itself uses
+  // (pinned to the same version in the vendor cache, see deploy.yml) — so a
+  // T2 app never needs to hand-roll SVGs or reach for emoji as iconography.
+  "lucide-react",
   ...(uiAvailable ? [UI_PACKAGE] : []),
 ]);
 

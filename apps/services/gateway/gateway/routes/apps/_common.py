@@ -116,6 +116,59 @@ async def require_app_user(
     return user
 
 
+def _is_service_principal(user: UserContext) -> bool:
+    """The internal-token caller, which holds `*` and bypasses org gates.
+
+    The app-builder agent reaches these routes with the internal token on the
+    member's behalf; the member's own access was already checked when they
+    invoked it.
+    """
+    return user.role is UserRole.AGENT and user.has_permission("*")
+
+
+async def require_app_viewer(
+    user: UserContext = Depends(require_app_user),
+) -> UserContext:
+    """Org-level gate for USING apps (`apps:use:*`).
+
+    Distinct from the per-app grant/visibility checks, which decide *which*
+    apps a viewer may open. This is the org-level off switch: a member denied
+    `apps:use:*` gets no custom apps at all, regardless of how any individual
+    app is shared. Without this the permission would appear in the admin UI
+    and do nothing, which is worse than not offering it.
+    """
+    if _is_service_principal(user):
+        return user
+    if not user.has_permission("apps:use:*"):
+        raise HTTPException(
+            status_code=403, detail="Forbidden: missing permission 'apps:use:*'."
+        )
+    return user
+
+
+async def require_app_author(
+    user: UserContext = Depends(require_app_user),
+) -> UserContext:
+    """Gate for AUTHORING apps (`feature:build.apps`) — the "app creator".
+
+    A separate dependency rather than a router-level gate because `/apps`
+    serves two audiences on one prefix: running a shared app is not the same
+    permission as building one. This is the check behind "don't give them the
+    app creator, but they can still use the apps the team shares".
+
+    Authoring implies use, so this does not additionally require
+    `apps:use:*` — an author locked out of their own app would be nonsense.
+    """
+    if _is_service_principal(user):
+        return user
+    if not user.has_permission("feature:build.apps"):
+        raise HTTPException(
+            status_code=403,
+            detail="Forbidden: missing permission 'feature:build.apps'.",
+        )
+    return user
+
+
 def _uid(user: UserContext | None) -> str:
     return getattr(user, "email", None) or "system:internal"
 

@@ -42,13 +42,16 @@ class Settings(BaseSettings):
     # All LLM calls use the litellm Python SDK directly (no separate proxy).
     litellm_base_url: str = "http://127.0.0.1:8080"
     litellm_master_key: str = "sk-local"
-    # Internal service token the gateway's /v1 + server-to-server endpoints
-    # authenticate against (acb_auth.require_internal_auth). Reads
-    # GATEWAY_INTERNAL_TOKEN; when unset the gateway falls back to
-    # litellm_master_key. Every BYOK/internal caller MUST present this token
-    # with the SAME precedence (gateway_internal_token → litellm_master_key),
-    # else a divergence between the two values yields a 401 that surfaces on
-    # Copilot BYOK agents as the misleading "Authorization error, run /login".
+    # SERVICE IDENTITY token — proves a caller *is* the platform and grants
+    # full authority (acb_auth.require_internal_auth / SERVICE_ACCESS). Reads
+    # GATEWAY_INTERNAL_TOKEN. Distinct from litellm_master_key ON PURPOSE:
+    # the LLM key is handed to every agent's BYOK client, so while the two
+    # were one value any agent could authenticate as the platform (BO-2
+    # residual #4). When this is unset the gateway still falls back to
+    # litellm_master_key so an un-migrated deployment keeps working, but it
+    # logs a warning on every resolution because the separation is then absent.
+    #
+    # Never hand this to a /v1 client — use `llm_api_key` below.
     gateway_internal_token: str = ""
 
     # Master encryption key for the provider key store (ADR-008).
@@ -349,6 +352,25 @@ class Settings(BaseSettings):
     # embedding history costs tokens + a background sweep. Turn on once migration
     # 111 has run. Reuses email_embedding_model/dim (one embedder for the app).
     whatsapp_semantic_search_enabled: bool = False
+
+    # ── Token accessors ────────────────────────────────────────────────────
+
+    @property
+    def llm_api_key(self) -> str:
+        """The key a ``/v1`` client should present. **Never the identity token.**
+
+        Use this for anything whose only job is routing LLM completions
+        through the gateway — BYOK clients, the Copilot SDK provider config,
+        the mutation container's env. Those all run (or execute) model-authored
+        code, so handing them ``gateway_internal_token`` would let an agent
+        authenticate as the platform.
+
+        Callers that hit gateway *business* APIs (``/tasks``, ``/email``,
+        ``/whatsapp``, workspace upload) still need
+        ``gateway_internal_token`` — until they act on behalf of a member
+        instead. See ai-company-brain/specs/org_access_control.md §8b.
+        """
+        return (self.litellm_master_key or "").strip() or "sk-local"
 
 
 @lru_cache(maxsize=1)

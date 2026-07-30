@@ -279,8 +279,16 @@ def test_react_node_is_not_run_through_the_html_linter(monkeypatch) -> None:
     assert res == {"ok": True}
 
 
-def test_react_source_written_as_jsx_is_not_linted(tmp_path, monkeypatch) -> None:
-    """A .jsx artifact is React source, so the HTML linter must not touch it."""
+def test_react_source_is_not_run_through_the_html_linter(tmp_path, monkeypatch) -> None:
+    """A .jsx artifact is React source — the HTML DOCUMENT linter must not touch it.
+
+    This test used to assert .jsx produced no warnings at all, using a remote
+    <img> as the example. That encoded the bug: the sandbox blocks remote images
+    (CSP img-src data:), so the logo silently vanished and the agent was told
+    nothing. The narrow remote-asset check now runs on JSX; what must NOT run is
+    the document linter, which would flag the missing cc-report wrapper and every
+    className as nonsense.
+    """
     wa = import_module("acb_skills.write_artifact")
     _prepare(wa, monkeypatch, tmp_path)
 
@@ -288,8 +296,13 @@ def test_react_source_written_as_jsx_is_not_linted(tmp_path, monkeypatch) -> Non
         "dashboard.jsx",
         'export default function A(){ return <img src="https://x.io/a.png"/>; }',
     ))
-    assert "warnings" not in res
     assert res["path"] == "outputs/dashboard.jsx"
+    # The remote asset IS reported now...
+    assert any("x.io" in w for w in res["warnings"])
+    # ...but none of the HTML-document findings are.
+    joined = " ".join(res["warnings"])
+    assert "cc-report" not in joined
+    assert "unknown class" not in joined
 
 
 def test_emit_generative_ui_inline_card_needs_no_report_wrapper(monkeypatch) -> None:
@@ -329,3 +342,69 @@ def test_registry_matches_sandbox_stylesheet() -> None:
         "the linter registers cc- classes the stylesheet no longer defines "
         f"(agents would be told they are valid): {sorted(stale_in_registry)}"
     )
+
+
+# ── React artifacts: the remote-asset check ────────────────────────────────
+# Reported symptom: "logos and images did not show up". The frame's CSP is
+# img-src data:, so a remote logo renders nothing — and React artifacts got NO
+# warning at all, because linting was gated on the .html extension.
+
+def test_remote_logo_in_react_source_is_an_error() -> None:
+    from acb_skills.artifact_lint import lint_artifact_source
+
+    out = lint_artifact_source(
+        'export default function A(){ return <img src="https://logo.clearbit.com/x.com"/>; }'
+    )
+    assert out and out[0].startswith("ERROR")
+    assert "logo.clearbit.com" in out[0]
+    # The message must say what to do instead, not just what failed.
+    assert "@cc/ui" in out[0] or "data:" in out[0]
+
+
+def test_remote_image_and_cdn_hosts_are_caught() -> None:
+    from acb_skills.artifact_lint import lint_artifact_source
+
+    for url in (
+        "https://example.com/logo.png",
+        "//cdn.jsdelivr.net/npm/x/y.svg",
+        "https://fonts.googleapis.com/css2?family=Inter",
+        "https://www.google.com/s2/favicons?domain=acme.com",
+    ):
+        out = lint_artifact_source(f'const L = "{url}";')
+        assert out, f"missed {url}"
+
+
+def test_offline_react_source_is_clean() -> None:
+    from acb_skills.artifact_lint import lint_artifact_source
+
+    assert lint_artifact_source(
+        'import { Report, Icon } from "@cc/ui";\n'
+        'export default function A(){ return <Report><Icon name="rocket"/>'
+        '<img src="data:image/png;base64,iVBOR"/></Report>; }'
+    ) == []
+    assert lint_artifact_source("") == []
+
+
+def test_jsx_artifact_is_linted_on_write(tmp_path, monkeypatch) -> None:
+    """The .jsx path must reach the source linter, not the HTML one."""
+    wa = import_module("acb_skills.write_artifact")
+    _prepare(wa, monkeypatch, tmp_path)
+
+    res = asyncio.run(wa.write_artifact(
+        "dash.jsx",
+        'export default function A(){ return <img src="https://logo.clearbit.com/a.com"/>; }',
+    ))
+    assert any("clearbit" in w for w in res["warnings"])
+
+
+def test_jsx_without_remote_assets_still_has_no_warnings(tmp_path, monkeypatch) -> None:
+    """JSX must not be run through the HTML document linter — it would flag the
+    missing cc-report wrapper and every className as nonsense."""
+    wa = import_module("acb_skills.write_artifact")
+    _prepare(wa, monkeypatch, tmp_path)
+
+    res = asyncio.run(wa.write_artifact(
+        "dash.jsx",
+        'export default function A(){ return <div className="cc-report">hi</div>; }',
+    ))
+    assert "warnings" not in res

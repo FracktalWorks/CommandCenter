@@ -22,6 +22,9 @@ dependencies = [
     # Résumé ingestion (Task Manager HR): PDF + DOCX text extraction.
     "pymupdf>=1.24",
     "python-docx>=1.1",
+    # Workflow schedule triggers: cron parsing only (CronTrigger), no
+    # scheduler process — see routes/workflows/scheduler.py.
+    "apscheduler>=3.10,<4",
 ]
 
 [build-system]

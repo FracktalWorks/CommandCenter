@@ -1169,8 +1169,24 @@ export default function AgentChat({
     inputRef.current?.focus();
   };
 
+  // Collapse the auto-grown textarea back to one line whenever the input is
+  // cleared. The auto-grow sets the height IMPERATIVELY on the `onInput` event
+  // (see the textarea below); clearing `input` via React state does NOT fire
+  // `onInput`, so without this the empty composer stays as tall as the
+  // just-sent multi-line message — it looks like a giant blank box while the
+  // agent is processing. Keyed on `input === ""` so it never fights the
+  // grow-on-type path.
+  useEffect(() => {
+    if (input === "" && inputRef.current) {
+      inputRef.current.style.height = "auto";
+    }
+  }, [input]);
+
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter inserts a newline (the textarea default) — sending is the Send
+    // button's job, so a mid-thought Enter never fires the prompt early.
+    // Ctrl/Cmd+Enter stays as the deliberate keyboard send.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit(e as unknown as React.FormEvent);
     }
@@ -1727,7 +1743,7 @@ export default function AgentChat({
                             "bg-primary"
                           }`}
                           aria-label={SEND_MODE_LABELS[sendMode]}
-                          title={`${SEND_MODE_LABELS[sendMode]} — press Enter`}>
+                          title={`${SEND_MODE_LABELS[sendMode]} — Ctrl+Enter`}>
                           {sendMode === "steer" ? <CornerDownRight size={14} strokeWidth={2} /> :
                            sendMode === "queue" ? <ListOrdered size={14} strokeWidth={2} /> :
                            <ArrowUp size={14} strokeWidth={2.5} />}

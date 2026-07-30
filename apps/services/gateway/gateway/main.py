@@ -5,7 +5,8 @@ import os
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 
-from acb_auth import UserContext, UserRole, get_current_user, require_role
+from acb_auth import (UserContext, UserRole, get_current_user,
+                      require_authenticated, require_role)
 from acb_common import configure_logging, get_logger, get_settings
 from fastapi import BackgroundTasks, Depends, FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -262,6 +263,25 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.tasks_rollover_skipped", error=str(exc))
 
+    # Workflow runs are in-process asyncio tasks (BO-20 pending): rows still
+    # 'running' from a previous process can never finish — mark them failed
+    # BEFORE the scheduler can start new runs. Paused runs survive restarts
+    # (resume rebuilds from the pause snapshot) and are left alone.
+    try:
+        from gateway.routes.workflows import reconcile_orphaned_runs
+        await reconcile_orphaned_runs()
+    except Exception as exc:
+        _log.warning("gateway.workflow_reconcile_skipped", error=str(exc))
+
+    # Start the workflow schedule scanner — cron triggers for published
+    # workflows (routes/workflows/scheduler.py; spec workflows_app.md F8).
+    try:
+        from gateway.routes.workflows import start_workflow_scheduler
+        await start_workflow_scheduler()
+        _log.info("gateway.workflow_scheduler_started")
+    except Exception as exc:
+        _log.warning("gateway.workflow_scheduler_skipped", error=str(exc))
+
     # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
     # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
     # max_tokens=0 so the first real user request is a cache HIT, not a cold
@@ -298,6 +318,13 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         from gateway.routes.whatsapp.scheduler import stop_whatsapp_enrichment
         await stop_whatsapp_enrichment()
+    except Exception:
+        pass
+
+    # Stop the workflow schedule scanner
+    try:
+        from gateway.routes.workflows import stop_workflow_scheduler
+        await stop_workflow_scheduler()
     except Exception:
         pass
 
@@ -372,11 +399,87 @@ async def _prewarm_prompt_cache() -> None:
         _log.debug("gateway.cache_prewarm_skipped", error=str(exc)[:150])
 
 
+# ── Public routes (BO-2 residual #1) ────────────────────────────────────────
+#
+# Everything not listed here requires authentication — a valid internal bearer
+# token, or a domain-verified X-User-Email that arrived with one. Default-deny
+# is applied once at the app level so a route added tomorrow is covered without
+# anyone remembering to add a guard. The failure mode of opt-in security is the
+# route nobody opted in, and that is exactly what happened to
+# /agent/workspace/{id}/history and /promote, which were reading and writing
+# agent workspaces anonymously until this landed.
+#
+# Every entry below either authenticates itself by another means or is a
+# liveness probe. Gating one would not restrict access — it would break
+# ingestion, sign-in, or the health check. Matching is on the route TEMPLATE,
+# so a path parameter cannot be crafted to spell a public path.
+PUBLIC_ROUTES: frozenset[str] = frozenset({
+    # Liveness. Deliberately says nothing beyond status + env name.
+    "/health",
+
+    # Provider webhook receivers — each verifies its own signature in
+    # ingestion/sources/*/webhook.py.
+    "/webhooks/clickup",
+    "/webhooks/gmail",
+    "/webhooks/zoho",
+
+    # Agent dispatch — HMAC-SHA256 over the raw body (X-CC-Signature), and it
+    # fails closed when unconfigured. See routes/agent.verify_webhook_signature.
+    "/agent/webhook/{source}",
+
+    # OAuth callbacks: browser redirects from the provider carrying no session.
+    # Trust comes from the HMAC-signed `state`. The authorize legs are
+    # user-initiated and stay gated.
+    "/integrations/oauth/callback/{service}",
+    "/email/oauth/{provider}/callback",
+
+    # Microsoft Graph change notification — validationToken echo + clientState.
+    "/email/webhook/microsoft",
+
+    # Meta webhook — verify-token on GET, signature on POST.
+    "/whatsapp/webhook",
+
+    # The Go bridge posts inbound messages with X-Bridge-Secret (constant-time
+    # compare in whatsapp/transport/bridge.bridge_secret_ok).
+    "/whatsapp/bridge/ingest",
+    "/whatsapp/bridge/reclassify",
+    "/whatsapp/bridge/labels",
+    "/whatsapp/bridge/avatars",
+    "/whatsapp/bridge/paired",
+
+    # Meeting-bot worker callbacks — machine-authed by MEETING_BOT_TOKEN.
+    "/notes/meetings/{meeting_id}/live/segment",
+    "/notes/stt/bot-live-token",
+
+    # Workflow webhook trigger — the unguessable per-workflow hook token IS
+    # the credential (+ optional HMAC); rate-limited and it only fires
+    # published workflows with an enabled webhook trigger. See
+    # routes/workflows/hooks.py.
+    "/workflows/hooks/{hook_token}",
+})
+
+def docs_enabled(env: str) -> bool:
+    """Whether to serve Swagger/ReDoc/openapi.json.
+
+    Swagger and ReDoc are the one surface the app-level auth dependency cannot
+    reach: FastAPI mounts them as plain Starlette routes with no dependency
+    chain. They publish the entire API surface, so outside dev the endpoints
+    simply do not exist. Read the schema against a local instance instead.
+    """
+    return env == "dev"
+
+
+_docs_enabled = docs_enabled(get_settings().acb_env)
+
 app = FastAPI(
     title="AI Company Brain — Gateway",
     version="0.0.1",
     description="Pull queries, push notifications, approvals. See ai-company-brain/system_architecture.md §3.",
     lifespan=lifespan,
+    dependencies=[require_authenticated(public=PUBLIC_ROUTES)],
+    docs_url="/docs" if _docs_enabled else None,
+    redoc_url="/redoc" if _docs_enabled else None,
+    openapi_url="/openapi.json" if _docs_enabled else None,
 )
 
 # ── CORS ── allow workbench dev server (port 3001) and production origin
@@ -864,6 +967,44 @@ try:
     from gateway.routes.apps import router as _apps_router
 
     app.include_router(_apps_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # Workflows app (ai-company-brain/specs/workflows_app.md) — visual
+    # automation builder: workflow CRUD/publish/runs, Module Studio, the node
+    # catalog, and the inbound webhook trigger (prefix /workflows).
+    from gateway.routes.workflows import router as _workflows_router
+
+    app.include_router(_workflows_router)
+
+    # Approval-node resume handler (workflow.resume_run) into the Action
+    # Broker registry, and the workflow event dispatcher into the ingestion
+    # event-hook registry — so provider webhooks can fire event triggers
+    # without ingestion importing upward.
+    from gateway.routes.workflows.broker_handlers import register_handlers
+
+    register_handlers()
+    try:
+        from gateway.routes.workflows.triggers import dispatch_event as _wf_dispatch
+        from ingestion.event_hooks import register_event_sink
+
+        register_event_sink(_wf_dispatch)
+    except Exception:  # pragma: no cover - ingestion optional in some deploys
+        pass
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # Org access control (ai-company-brain/specs/org_access_control.md) —
+    # member roster + lifecycle, roles, per-user overrides (prefix /admin),
+    # plus /auth/me, which every signed-in member calls to resolve their own
+    # feature and agent access.
+    from gateway.routes.admin import me_router as _me_router
+    from gateway.routes.admin import router as _admin_router
+
+    app.include_router(_admin_router)
+    app.include_router(_me_router)
 except Exception:  # pragma: no cover
     pass
 

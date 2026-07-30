@@ -13,7 +13,7 @@ from typing import Any
 
 import httpx
 import yaml
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_permission
 from acb_common import get_logger, get_settings
 from acb_llm.model_limits import FALLBACK_CONTEXT_WINDOWS, MODEL_CAPABILITIES
 from fastapi import APIRouter, Depends, HTTPException
@@ -589,7 +589,7 @@ async def get_llm_config(_user: UserContext = Depends(get_current_user)) -> LLMC
 # POST /settings/llm/tier  — patch one tier in config.yaml
 # ---------------------------------------------------------------------------
 
-@router.post("/llm/tier", response_model=TierInfo)
+@router.post("/llm/tier", response_model=TierInfo, dependencies=[require_permission("feature:models")])
 async def update_tier(
     req: TierUpdateRequest,
     _user: UserContext = Depends(get_current_user),
@@ -716,7 +716,7 @@ class TestResult(BaseModel):
     latency_ms: int
 
 
-@router.post("/llm/test", response_model=TestResult)
+@router.post("/llm/test", response_model=TestResult, dependencies=[require_permission("feature:models")])
 async def test_tier(
     req: TestRequest,
     _user: UserContext = Depends(get_current_user),
@@ -753,7 +753,7 @@ class ProviderKeyRequest(BaseModel):
     api_key: str
 
 
-@router.post("/llm/key")
+@router.post("/llm/key", dependencies=[require_permission("feature:models")])
 async def set_provider_key(
     req: ProviderKeyRequest,
     _user: UserContext = Depends(get_current_user),
@@ -791,7 +791,7 @@ class CopilotModelRequest(BaseModel):
     model: str   # e.g. "claude-sonnet-4-5", "gpt-4o", "o3-mini"
 
 
-@router.post("/llm/copilot-model")
+@router.post("/llm/copilot-model", dependencies=[require_permission("feature:models")])
 async def set_copilot_model(
     req: CopilotModelRequest,
     _user: UserContext = Depends(get_current_user),
@@ -944,8 +944,8 @@ async def list_enabled_models(
     }
 
 
-@router.post("/llm/enabled-models", status_code=201)
-@router.post("/llm/custom-models", status_code=201)
+@router.post("/llm/enabled-models", status_code=201, dependencies=[require_permission("feature:models")])
+@router.post("/llm/custom-models", status_code=201, dependencies=[require_permission("feature:models")])
 async def add_custom_model(
     req: CustomModelAddRequest,
     _user: UserContext = Depends(get_current_user),
@@ -994,7 +994,7 @@ async def add_custom_model(
     return EnabledModelEntry(**entry)
 
 
-@router.delete("/llm/enabled-models/{model_id:path}", status_code=200)
+@router.delete("/llm/enabled-models/{model_id:path}", status_code=200, dependencies=[require_permission("feature:models")])
 async def remove_enabled_model(
     model_id: str,
     _user: UserContext = Depends(get_current_user),
@@ -1023,7 +1023,7 @@ async def list_hidden_models(
     return raw if isinstance(raw, list) else []  # type: ignore[return-value]
 
 
-@router.post("/llm/hidden-models", status_code=201)
+@router.post("/llm/hidden-models", status_code=201, dependencies=[require_permission("feature:models")])
 async def hide_model(
     body: dict[str, str],
     _user: UserContext = Depends(get_current_user),
@@ -1044,7 +1044,7 @@ async def hide_model(
     return {"hidden": model_id}
 
 
-@router.delete("/llm/hidden-models/{model_id:path}", status_code=200)
+@router.delete("/llm/hidden-models/{model_id:path}", status_code=200, dependencies=[require_permission("feature:models")])
 async def unhide_model(
     model_id: str,
     _user: UserContext = Depends(get_current_user),

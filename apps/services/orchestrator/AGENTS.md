@@ -14,13 +14,14 @@ and streams chat responses as AG-UI events.
 
 ## Local Contracts
 
-1. executor.py is the single entry point for agent execution (streaming and batch). Injects platform tools, MCP server config from the registry, and integration credentials at runtime.
+1. executor.py is the single entry point for agent execution (streaming and batch). Injects platform tools, MCP server config from the registry, and integration credentials at runtime. Integration credentials are filtered by the ACTING MEMBER first (`_integration_authorizer` → `build_integrations(is_authorized=)`, org access control): an agent's config.json declares a want, not an entitlement, and the filter runs BEFORE the per-run env injection so an unauthorized credential never enters the run's environment. Runs with no attributable active member (cron, reconciler, webhooks) are deliberately unfiltered — see ai-company-brain/specs/org_access_control.md §8a. ⚠️ Every `/v1` client here (agents.py, _model_resolution.py, code_session.py, mutation.py, the executor's BYOK provider config) MUST read `settings.llm_api_key` — never `gateway_internal_token`, which is the service identity and must not reach model-authored code (§8b). A test in tests/unit/test_service_identity_and_webhook_auth.py fails if one does.
 2. copilot_agent.py provides CommandCenterCopilotAgent -- the MAF wrapper for Copilot SDK agents with BYOK + MCP server forwarding
 3. agents.py exports build_orchestrator_agent() -- the main orchestrator MAF Agent
 4. mutation.py handles Self_Mutation_Node -- spawns Docker sandbox on agent failure
 5. stream_relay.py buffers all SSE events to Redis Streams for fire-and-forget chat with live reconnection
 6. All agents must go through MAF -- no raw Copilot SDK paths for business execution
 7. mutation_runner.py runs inside the Docker sandbox -- uses Copilot SDK directly (by design)
+8. workflow_tools.py exposes published Workflows-app workflows to every agent as a three-tool trio (`list_workflows` / `run_workflow` / `get_workflow_run`) — the sibling of app_tools.py, injected through the same `_tool_injection` gated pipeline. Calls go in-process to `gateway.routes.workflows.service` (the same entrypoints the Run button and API use), so concurrency caps, run history, and the approval gates inside a workflow bind agent-triggered runs identically; a run paused at a Human-approval node reports itself as waiting in the approvals inbox — an agent cannot bypass the gate. Spec: ai-company-brain/specs/workflows_app.md F13
 
 ## Work Guidance
 

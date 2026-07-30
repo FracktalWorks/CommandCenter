@@ -314,13 +314,18 @@ def build_system_prompt(template: Template) -> str:
         _GROUNDING_RULES
         + "\nProduce notes covering these sections:\n"
         + section_lines
+        + "\n\nEach action item carries a 'kind': 'email' when the follow-up IS "
+        "sending someone an email/message (then set 'email_to' to the recipient "
+        "as named in the meeting), 'document' when the deliverable is a written "
+        "draft (proposal, spec, report), otherwise 'task'."
         + "\n\nReturn STRICT JSON only, no prose around it:\n"
         '{"title": str (≤12 words naming the meeting), '
         '"overview": str, '
         '"sections": [{"heading": str, "bullets": [str]}], '
         '"decisions": [{"text": str, "refs": [int]}], '
         '"action_items": [{"description": str, "owner_hint": str|null, '
-        '"due_hint": str|null, "refs": [int], "confidence": float 0..1}], '
+        '"due_hint": str|null, "refs": [int], "confidence": float 0..1, '
+        '"kind": "task"|"email"|"document", "email_to": str|null}], '
         '"open_questions": [str]}'
     )
 

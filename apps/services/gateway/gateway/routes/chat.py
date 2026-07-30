@@ -16,14 +16,17 @@ import asyncio
 import json
 from typing import Any
 
-from acb_auth import UserContext, get_current_user
+from acb_auth import UserContext, get_current_user, require_feature_router
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel
 
 _log = get_logger("gateway.chat")
 
-router = APIRouter(prefix="/chat", tags=["chat"])
+router = APIRouter(
+    prefix="/chat", tags=["chat"],
+    dependencies=[require_feature_router("chat")],
+)
 
 # ---------------------------------------------------------------------------
 # Pydantic request / response models

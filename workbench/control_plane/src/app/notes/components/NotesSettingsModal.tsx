@@ -13,9 +13,10 @@
  */
 
 import { useEffect, useState } from "react";
-import { Loader2, Settings2, Sparkles, X } from "lucide-react";
+import { Loader2, Send, Settings2, Sparkles, X } from "lucide-react";
 import { getNotesSettings, saveNotesSettings } from "../lib/api";
 import type { NotesSettings, TemplateInfo } from "../lib/types";
+import BotIdentitySection from "./BotIdentitySection";
 
 const DEFAULTS: NotesSettings = {
   copilot_instructions: "",
@@ -25,6 +26,9 @@ const DEFAULTS: NotesSettings = {
   template_instructions: {},
   default_template: null,
   bot_name: null,
+  auto_dispatch_tasks: true,
+  auto_dispatch_emails: true,
+  auto_dispatch_docs: true,
 };
 
 /** Streaming speech-to-text is billed per minute; the recording is transcribed
@@ -43,6 +47,30 @@ const LIVE_MODE_HELP: Record<string, string> = {
     "listen to.",
 };
 
+const DISPATCH_TOGGLES: {
+  key: "auto_dispatch_tasks" | "auto_dispatch_emails" | "auto_dispatch_docs";
+  label: string;
+  help: string;
+}[] = [
+  {
+    key: "auto_dispatch_tasks",
+    label: "Create tasks automatically",
+    help: "Confident action items become tasks in your task manager.",
+  },
+  {
+    key: "auto_dispatch_emails",
+    label: "Send committed emails automatically",
+    help:
+      "Only when the recipient is clearly one of the attendees — otherwise a " +
+      "draft is left in your mailbox instead. Nothing is ever guessed.",
+  },
+  {
+    key: "auto_dispatch_docs",
+    label: "Draft committed documents automatically",
+    help: "First drafts land in Artifacts, ready to edit.",
+  },
+];
+
 const SENSITIVITY_HELP: Record<string, string> = {
   low: "Rarely speaks up — long gaps, few interjections.",
   normal: "Balanced. A handful of well-timed points per meeting.",
@@ -55,6 +83,10 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [openType, setOpenType] = useState<string | null>(null);
+  // A failed load must BLOCK saving — otherwise the form shows defaults and
+  // "Save" silently overwrites the user's real settings with them.
+  const [loadFailed, setLoadFailed] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
 
   useEffect(() => {
     let alive = true;
@@ -64,7 +96,7 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
         setS({ ...DEFAULTS, ...p.settings });
         setTemplates(p.templates ?? []);
       })
-      .catch(() => {})
+      .catch(() => alive && setLoadFailed(true))
       .finally(() => alive && setLoading(false));
     return () => {
       alive = false;
@@ -82,11 +114,13 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
 
   async function onSave() {
     setSaving(true);
+    setSaveError(null);
     try {
       await saveNotesSettings(s);
       onClose();
-    } catch {
-      /* leave the form up so nothing is lost */
+    } catch (e) {
+      // Leave the form up so nothing is lost — but say why.
+      setSaveError(String(e instanceof Error ? e.message : e));
     } finally {
       setSaving(false);
     }
@@ -112,8 +146,49 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
           <div className="flex h-48 items-center justify-center">
             <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
           </div>
+        ) : loadFailed ? (
+          <div className="px-4 py-8 text-center text-sm text-destructive">
+            Couldn&apos;t load your settings — saving is disabled so they
+            aren&apos;t overwritten. Close and try again.
+          </div>
         ) : (
           <div className="flex-1 space-y-6 overflow-y-auto px-4 py-4">
+            {/* ── Notetaker account ───────────────────────────────────────
+                First, because it gates whether joining works at all: Google
+                refuses anonymous participants. Acts immediately (it's an
+                action, not a form field) so it ignores Save. */}
+            <BotIdentitySection />
+
+            {/* ── After-meeting dispatch ──────────────────────────────── */}
+            <section>
+              <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                <Send className="h-3.5 w-3.5" /> After each meeting
+              </h3>
+              <p className="mb-2 text-xs text-muted-foreground">
+                Confident action items (≥80%) are dispatched automatically when
+                notes are generated. Everything is auditable per item on the
+                meeting&apos;s Actions tab.
+              </p>
+              <div className="space-y-2">
+                {DISPATCH_TOGGLES.map((t) => (
+                  <label key={t.key} className="flex items-start gap-2">
+                    <input
+                      type="checkbox"
+                      checked={s[t.key]}
+                      onChange={(e) => setS({ ...s, [t.key]: e.target.checked })}
+                      className="mt-0.5"
+                    />
+                    <span className="text-sm">
+                      {t.label}
+                      <span className="block text-xs text-muted-foreground">
+                        {t.help}
+                      </span>
+                    </span>
+                  </label>
+                ))}
+              </div>
+            </section>
+
             {/* ── Copilot ─────────────────────────────────────────────── */}
             <section>
               <h3 className="mb-2 flex items-center gap-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -296,7 +371,12 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
           </div>
         )}
 
-        <div className="flex justify-end gap-2 border-t border-border px-4 py-3">
+        <div className="flex items-center justify-end gap-2 border-t border-border px-4 py-3">
+          {saveError && (
+            <p className="mr-auto text-xs text-destructive">
+              Couldn&apos;t save: {saveError}
+            </p>
+          )}
           <button
             onClick={onClose}
             className="rounded-lg border border-border px-3 py-1.5 text-sm hover:bg-accent"
@@ -305,7 +385,7 @@ export default function NotesSettingsModal({ onClose }: { onClose: () => void })
           </button>
           <button
             onClick={onSave}
-            disabled={saving || loading}
+            disabled={saving || loading || loadFailed}
             className="rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50"
           >
             {saving ? "Saving…" : "Save settings"}

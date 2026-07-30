@@ -27,6 +27,7 @@ from gateway.routes.apps._common import (
     _log,
     get_app_or_404,
     read_workspace_manifest,
+    require_app_author,
     require_app_user,
     resolve_app_file,
     router,
@@ -139,7 +140,7 @@ async def read_app_file(
 async def write_app_file(
     slug: str,
     body: AppFileWrite,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> AppFileEntry:
     data = body.content.encode("utf-8")
     if len(data) > MAX_SOURCE_FILE_BYTES:
@@ -175,7 +176,7 @@ async def write_app_file(
 async def delete_app_file(
     slug: str,
     path: str = Query(..., description="Relative path within the workspace"),
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Delete a file from an app's workspace (the Advanced/IDE view).
 
@@ -239,7 +240,7 @@ async def _run_build_t2(workspace: Path, script: Path) -> tuple[bool, str]:
 @router.post("/{slug}/build")
 async def build_app(
     slug: str,
-    user: UserContext = Depends(require_app_user),
+    user: UserContext = Depends(require_app_author),
 ) -> dict[str, Any]:
     """Rebuild a T2 (React) app's ``dist/bundle.html`` from ``src/*`` — the
     Advanced/IDE view's save-triggers-rebuild step for apps whose entry is a

@@ -1,4 +1,4 @@
--- 128_live_transcription_mode.sql — pay for streaming ASR only when something
+-- 135_live_transcription_mode.sql — pay for streaming ASR only when something
 -- is listening to it.
 --
 -- Why: streaming speech-to-text is billed per minute of audio, and it runs for

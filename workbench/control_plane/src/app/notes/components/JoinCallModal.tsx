@@ -88,7 +88,8 @@ export default function JoinCallModal({
               Send the notetaker to a call
             </h2>
             <p className="text-[11px] text-muted-foreground">
-              Google Meet, Zoom, or Teams — it joins, records, and writes notes.
+              Google Meet — it joins, records, and writes notes. (Zoom/Teams
+              are on the roadmap.)
             </p>
           </div>
           <button
@@ -125,20 +126,39 @@ export default function JoinCallModal({
             />
 
             {results && (
-              <div className="mt-2 space-y-1">
+              <div className="mt-2 space-y-1.5">
                 {results.map((r, i) => (
-                  <p
-                    key={i}
-                    className={`truncate text-[11px] ${
-                      r.ok ? "text-success" : "text-destructive"
-                    }`}
-                    title={r.error || r.url}
-                  >
-                    {r.ok ? "✓ Joining" : "✗ Failed"} — {r.url}
-                  </p>
+                  <div key={i} className="text-[11px]">
+                    <p
+                      className={`truncate ${
+                        r.ok ? "text-success" : "text-destructive"
+                      }`}
+                      title={r.url}
+                    >
+                      {r.ok ? "✓ Joining" : "✗ Failed"} — {r.url}
+                    </p>
+                    {!r.ok && r.error && (
+                      <p className="mt-0.5 rounded-md bg-destructive/10 px-2 py-1 leading-relaxed text-destructive">
+                        {r.error}
+                      </p>
+                    )}
+                  </div>
                 ))}
               </div>
             )}
+
+            {/* The single most common failure isn't a bug: Google refuses
+                guests outright when nobody is in the call yet. Saying so here
+                prevents the failure instead of explaining it afterwards. */}
+            <p className="mt-2 flex items-start gap-1.5 rounded-lg bg-warning/10 px-2.5 py-1.5 text-[10px] leading-relaxed text-warning">
+              <AlertCircle className="mt-0.5 h-3 w-3 shrink-0" />
+              <span>
+                Join the call yourself first, then admit the notetaker when it
+                knocks — Google turns guests away when no one is in the meeting
+                yet. To skip that, sign the notetaker into a Google account and
+                invite it like a person.
+              </span>
+            </p>
 
             <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
               The bot joins named so everyone can see it. Recording others may

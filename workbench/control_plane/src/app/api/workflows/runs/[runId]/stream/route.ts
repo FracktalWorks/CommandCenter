@@ -1,0 +1,58 @@
+/**
+ * GET /api/workflows/runs/[runId]/stream — live run events (SSE relay).
+ *
+ * Same shape as /api/observability/activity/stream: EventSource cannot send
+ * custom headers, so auth rides the Next session cookie here; the internal
+ * gateway token + user identity are attached server-side. Degraded upstreams
+ * return 200 with an SSE comment (never a non-SSE error body), and the client
+ * disconnect signal tears down the gateway stream.
+ */
+import { NextRequest } from "next/server";
+import { auth, isAuthEnabled } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders } from "@/lib/gateway";
+
+export const dynamic = "force-dynamic";
+export const runtime = "nodejs";
+
+export async function GET(
+  req: NextRequest,
+  ctx: { params: Promise<{ runId: string }> }
+): Promise<Response> {
+  if (isAuthEnabled && !(await auth())?.user?.email) {
+    return new Response('data: {"error":"unauthorized"}\n\n', {
+      status: 401,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+  const { runId } = await ctx.params;
+  let upstream: Response;
+  try {
+    upstream = await fetch(
+      `${GATEWAY_URL}/workflows/runs/${encodeURIComponent(runId)}/stream`,
+      {
+        headers: await gatewayHeaders(),
+        signal: req.signal, // client disconnect → cancel the gateway stream
+      }
+    );
+  } catch {
+    return new Response(": upstream unavailable\n\n", {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+  if (!upstream.ok || !upstream.body) {
+    return new Response(": upstream error\n\n", {
+      status: 200,
+      headers: { "Content-Type": "text/event-stream" },
+    });
+  }
+  return new Response(upstream.body, {
+    status: 200,
+    headers: {
+      "Content-Type": "text/event-stream",
+      "Cache-Control": "no-cache, no-transform",
+      Connection: "keep-alive",
+      "X-Accel-Buffering": "no",
+    },
+  });
+}

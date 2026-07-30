@@ -20,13 +20,16 @@ the queue is visible and auditable but still cannot perform any real write
 """
 from __future__ import annotations
 
-from acb_auth import UserContext, get_current_user, require_internal_auth
+from acb_auth import UserContext, get_current_user, require_feature_router, require_internal_auth
 from acb_common import get_logger
 from fastapi import APIRouter, Depends
 
 _log = get_logger("gateway.actions")
 
-router = APIRouter(prefix="/actions", tags=["actions"])
+router = APIRouter(
+    prefix="/actions", tags=["actions"],
+    dependencies=[require_feature_router("approvals")],
+)
 
 
 def _reviewer(user: UserContext | None) -> str:

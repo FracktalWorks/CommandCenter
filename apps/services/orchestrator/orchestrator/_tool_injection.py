@@ -827,6 +827,18 @@ def _inject_agent_tools(
         except Exception:  # noqa: BLE001
             _log.warning("executor.app_tools_injection_failed", agent=agent_name)
 
+    # ── Published workflows as tools (workflows_app.md F13) ────────────────
+    # Same stance as app tools: org-internal governed automations, always
+    # offered (list/run/status trio, not one tool per workflow), gated
+    # through the same _gate_injected_tool pipeline below. Any write inside
+    # a workflow is already broker-gated / approval-noded.
+    if agent_name:
+        try:
+            from orchestrator.workflow_tools import load_workflow_tools  # noqa: PLC0415
+            _extra_tools = _extra_tools + load_workflow_tools(agent_name)
+        except Exception:  # noqa: BLE001
+            _log.warning("executor.workflow_tools_injection_failed", agent=agent_name)
+
     # Gate every injected tool with the risk-aware permission policy (B6). This
     # closes the live gap where injected function-tools (web_search, …) executed
     # on the Copilot-BYOK/streaming path bypass the SDK's on_permission_request

@@ -19,11 +19,28 @@ from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
+from acb_auth import require_feature_router
 
 _log = get_logger("gateway.email")
 
 
-router = APIRouter(prefix="/email", tags=["email"])
+router = APIRouter(
+    prefix="/email", tags=["email"],
+    # Org access control. The OAuth callback is exempt: it is a browser
+    # redirect from Google/Microsoft carrying no session, and its trust comes
+    # from the HMAC-signed state parameter. Gating it would break account
+    # linking. `authorize` is NOT exempt — that leg is user-initiated.
+    # Exempt: provider-initiated entrypoints with their own trust.
+    #   oauth callback   — browser redirect from Google/Microsoft; trust comes
+    #                      from the HMAC-signed `state`. The `authorize` leg is
+    #                      user-initiated and stays gated.
+    #   webhook/microsoft— Graph change notification; validationToken echo +
+    #                      clientState check.
+    dependencies=[require_feature_router("email", exempt=[
+        "/email/oauth/{provider}/callback",
+        "/email/webhook/microsoft",
+    ])],
+)
 
 
 class EmailAddressModel(BaseModel):

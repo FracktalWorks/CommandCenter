@@ -12,6 +12,7 @@ import { DraftAssistant } from "./DraftAssistant";
 import { splitQuotedText } from "../lib/quoting";
 import { appendSignature, getSignatureText, stripSignature } from "../lib/signature";
 import { ArtifactAttachPicker } from "./ArtifactAttachPicker";
+import { RecipientInput } from "./RecipientInput";
 import { ComposerQuote, AiButton } from "./ComposerAI";
 
 interface ComposePanelProps {
@@ -271,24 +272,26 @@ export function ComposePanel({
           {/* To */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground w-8 flex-shrink-0">To:</span>
-            <input
-              type="text"
+            <RecipientInput
               value={to}
-              onChange={(e) => { dirty.current = true; setTo(e.target.value); }}
+              onChange={(v) => { dirty.current = true; setTo(v); }}
+              accountId={accountId}
+              ariaLabel="To recipients"
               placeholder="Email address..."
-              className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+              className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
             />
           </div>
 
           {/* Cc */}
           <div className="flex items-center gap-2">
             <span className="text-xs text-muted-foreground w-8 flex-shrink-0">Cc:</span>
-            <input
-              type="text"
+            <RecipientInput
               value={cc}
-              onChange={(e) => { dirty.current = true; setCc(e.target.value); }}
+              onChange={(v) => { dirty.current = true; setCc(v); }}
+              accountId={accountId}
+              ariaLabel="Cc recipients"
               placeholder="Cc..."
-              className="flex-1 bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
+              className="w-full bg-transparent text-sm text-foreground placeholder:text-muted-foreground outline-none"
             />
           </div>
 

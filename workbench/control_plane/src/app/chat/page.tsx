@@ -567,14 +567,16 @@ function SessionList({
                           </div>
                         )}
                       </div>
-                      {/* Delete — revealed on hover so rows stay clean */}
+                      {/* Delete — hover-revealed on pointer devices to keep rows
+                          clean, but ALWAYS visible on touch (no hover exists, so
+                          the button was unreachable on mobile). */}
                       <button
                         onClick={(e) => {
                           e.preventDefault();
                           e.stopPropagation();
                           onDelete(s.id);
                         }}
-                        className="ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all"
+                        className="ml-1 shrink-0 rounded-md p-1.5 text-muted-foreground/60 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [@media(hover:none)]:opacity-100 hover:text-destructive hover:bg-destructive/10 transition-all"
                         title="Delete conversation"
                         aria-label="Delete conversation"
                       >
@@ -825,6 +827,14 @@ function ChatPageInner() {
   const handleDeleteSession = useCallback(
     (id: string) => {
       const deleted = getSessions().find((s) => s.id === id);
+      // The delete control is now always tappable on touch, and deletion is
+      // irreversible (it wipes the conversation's history) — confirm first so a
+      // stray tap can't destroy a thread.
+      const label = deleted?.title ?? deleted?.name ?? "this conversation";
+      if (typeof window !== "undefined" &&
+          !window.confirm(`Delete "${label}"? This can't be undone.`)) {
+        return;
+      }
       deleteSession(id);
       const remaining = getSessions();
       setSessions(remaining);

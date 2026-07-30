@@ -84,8 +84,14 @@ def _hub_close(run_id: str) -> None:
     for queue in list(hub.queues):
         with contextlib.suppress(asyncio.QueueFull):
             queue.put_nowait(None)  # sentinel: stream over
-    loop = asyncio.get_running_loop()
-    loop.call_later(HUB_TTL_SECS, _HUBS.pop, run_id, None)
+
+    def _expire() -> None:
+        # Identity-guarded: a resumed run replaces the hub before the TTL
+        # fires, and the new hub must not be popped by the old timer.
+        if _HUBS.get(run_id) is hub:
+            _HUBS.pop(run_id, None)
+
+    asyncio.get_running_loop().call_later(HUB_TTL_SECS, _expire)
 
 
 # ── Real NodeServices ────────────────────────────────────────────────────────
@@ -227,6 +233,8 @@ async def _execute_run(
     trigger_payload: dict[str, Any],
     variables: dict[str, Any],
     started_by: str,
+    precomputed: dict[str, Any] | None = None,
+    resolved_approvals: set[str] | None = None,
 ) -> None:
     global _ACTIVE_TOTAL
     actor = f"workflow:{workflow_name or workflow_id}"
@@ -259,6 +267,8 @@ async def _execute_run(
             build_node_services(actor),
             variables=variables,
             emit=emit,
+            precomputed=precomputed,
+            resolved_approvals=resolved_approvals,
         )
         status, error = outcome.status, outcome.error
         await _finish_run(
@@ -269,6 +279,17 @@ async def _execute_run(
             node_results=outcome.node_results,
             outputs=outcome.outputs,
         )
+        if status == "paused" and outcome.paused_nodes:
+            await _hold_for_approval(
+                run_id=run_id,
+                workflow_id=workflow_id,
+                workflow_name=workflow_name,
+                node_id=outcome.paused_nodes[0],
+                serialized=serialized,
+                trigger_payload=trigger_payload,
+                variables=variables,
+                started_by=started_by,
+            )
     except Exception as exc:  # engine bugs must still close the run out
         error = f"{type(exc).__name__}: {exc}"[:500]
         _log.warning("workflows.run_crashed", run_id=run_id, error=error)
@@ -325,14 +346,17 @@ async def _finish_run(
     try:
         db = await _get_db()
         try:
+            # A paused run has not finished — finished_at stays NULL until
+            # the resumed execution reaches a terminal status.
+            finished = "now()" if status != "paused" else "NULL"
             await db.execute(
                 text(
-                    """UPDATE workflow_runs SET
+                    f"""UPDATE workflow_runs SET
                          status = :status, error = :error,
                          variables = :variables ::jsonb,
                          node_results = :node_results ::jsonb,
                          output = :output ::jsonb,
-                         finished_at = now()
+                         finished_at = {finished}
                        WHERE id = :id"""
                 ),
                 {
@@ -349,3 +373,163 @@ async def _finish_run(
             await db.close()
     except Exception as exc:  # pragma: no cover - best effort persistence
         _log.warning("workflows.finish_persist_failed", run_id=run_id, error=str(exc)[:160])
+
+
+# ── Approval pause / resume (spec F11 — rides the Action Broker inbox) ───────
+
+
+async def _hold_for_approval(
+    *,
+    run_id: str,
+    workflow_id: str,
+    workflow_name: str,
+    node_id: str,
+    serialized: dict[str, Any],
+    trigger_payload: dict[str, Any],
+    variables: dict[str, Any],
+    started_by: str,
+) -> None:
+    """Persist the pause and put the decision in the existing approvals inbox.
+
+    The proposal (action ``workflow.resume_run``) lands in ``pending_actions``
+    exactly like any outward write — the operator sees it at /approvals and
+    approving it fires this package's registered broker handler, which resumes
+    the run. Everything a resume needs travels in the pause snapshot, so even
+    a draft test run (no published version to reload) resumes cleanly.
+    """
+    node_label = next(
+        (
+            str(b.get("label") or node_id)
+            for b in serialized.get("blocks", [])
+            if str(b.get("id")) == node_id
+        ),
+        node_id,
+    )
+    action_id: str | None = None
+    try:
+        from action_broker.broker import AuthorityTier, propose, submit
+
+        proposal = propose(
+            actor=f"workflow:{workflow_name or workflow_id}",
+            action="workflow.resume_run",
+            target=f"workflow_run:{run_id}",
+            payload={
+                "run_id": run_id,
+                "workflow_id": workflow_id,
+                "workflow_name": workflow_name,
+                "node_id": node_id,
+                "node_label": node_label,
+                "requested_by": started_by,
+            },
+            authority=AuthorityTier.SUGGEST,  # always NEEDS_APPROVAL
+            destructive=False,
+        )
+        result = await submit(proposal)
+        action_id = str(result.get("action_id") or "") or None
+    except Exception as exc:
+        _log.warning("workflows.approval_propose_failed", run_id=run_id, error=str(exc)[:160])
+    try:
+        db = await _get_db()
+        try:
+            await db.execute(
+                text(
+                    """INSERT INTO workflow_run_pauses
+                       (run_id, node_id, snapshot, reason, status)
+                       VALUES (:run_id, :node_id, :snapshot ::jsonb,
+                               'approval', 'pending')"""
+                ),
+                {
+                    "run_id": run_id,
+                    "node_id": node_id,
+                    "snapshot": json.dumps(
+                        {
+                            "serialized": serialized,
+                            "trigger_payload": trigger_payload,
+                            "variables": variables,
+                            "workflow_id": workflow_id,
+                            "workflow_name": workflow_name,
+                            "started_by": started_by,
+                            "action_id": action_id,
+                        },
+                        default=str,
+                    ),
+                },
+            )
+            await db.commit()
+        finally:
+            await db.close()
+    except Exception as exc:  # pragma: no cover - best effort persistence
+        _log.warning("workflows.pause_persist_failed", run_id=run_id, error=str(exc)[:160])
+
+
+async def resume_run(run_id: str, *, resumed_by: str = "approver") -> dict[str, Any]:
+    """Resume a paused run: replay completed nodes from stored outputs and
+    pass the approved node. Called by the broker handler on approve."""
+    global _ACTIVE_TOTAL
+    db = await _get_db()
+    try:
+        run = (
+            await db.execute(
+                text("SELECT * FROM workflow_runs WHERE id = :id"),
+                {"id": run_id},
+            )
+        ).fetchone()
+        if run is None or run.status != "paused":
+            return {
+                "ok": False,
+                "error": f"run {run_id} is not paused" if run is not None else f"no run {run_id}",
+            }
+        pause = (
+            await db.execute(
+                text(
+                    "SELECT * FROM workflow_run_pauses "
+                    "WHERE run_id = :id AND status = 'pending' "
+                    "ORDER BY created_at DESC LIMIT 1"
+                ),
+                {"id": run_id},
+            )
+        ).fetchone()
+        if pause is None:
+            return {"ok": False, "error": f"run {run_id} has no pending pause"}
+        snapshot = parse_jsonb(pause.snapshot, {}) or {}
+        await db.execute(
+            text(
+                "UPDATE workflow_run_pauses SET status = 'resolved', "
+                "resolved_at = now() WHERE id = :id"
+            ),
+            {"id": str(pause.id)},
+        )
+        await db.execute(
+            text("UPDATE workflow_runs SET status = 'running' WHERE id = :id"),
+            {"id": run_id},
+        )
+        await db.commit()
+        node_results = parse_jsonb(run.node_results, {}) or {}
+    finally:
+        await db.close()
+
+    serialized = snapshot.get("serialized") or {}
+    precomputed = {
+        nid: res.get("output")
+        for nid, res in node_results.items()
+        if isinstance(res, dict) and res.get("status") == "ok"
+    }
+    workflow_id = str(snapshot.get("workflow_id") or run.workflow_id)
+    _HUBS[run_id] = RunHub()
+    _ACTIVE_TOTAL += 1
+    _ACTIVE_BY_WORKFLOW[workflow_id] = _ACTIVE_BY_WORKFLOW.get(workflow_id, 0) + 1
+    asyncio.get_running_loop().create_task(
+        _execute_run(
+            run_id=run_id,
+            workflow_id=workflow_id,
+            workflow_name=str(snapshot.get("workflow_name") or run.workflow_name),
+            serialized=serialized,
+            trigger_payload=snapshot.get("trigger_payload") or {},
+            variables=snapshot.get("variables") or {},
+            started_by=resumed_by,
+            precomputed=precomputed,
+            resolved_approvals={str(pause.node_id)},
+        ),
+        name=f"workflow-resume:{run_id}",
+    )
+    return {"ok": True, "resumed": True, "run_id": run_id, "node_id": str(pause.node_id)}

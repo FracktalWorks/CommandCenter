@@ -80,6 +80,7 @@ const TRIGGER_KIND_HINTS = [
   { kind: "manual" as const, hint: "Run button / POST /workflows/{id}/run" },
   { kind: "webhook" as const, hint: "per-workflow tokened URL (+ optional HMAC)" },
   { kind: "schedule" as const, hint: "cron expression, UTC" },
+  { kind: "event" as const, hint: "platform events (ClickUp/Zoho/Gmail changes)" },
 ];
 
 /** Edit-model graph → React Flow state (used on load and on copilot apply). */
@@ -122,6 +123,7 @@ function summarize(type: NodeType, config: Record<string, unknown>, catalog: Cat
     return `${config.left ?? ""} ${config.op ?? ""} ${config.right ?? ""}`.trim();
   if (type === "set")
     return Object.keys((config.assignments as object) ?? {}).join(", ");
+  if (type === "approval") return String(config.message ?? "pause for approval");
   if (type === "output") return String(config.value ?? "");
   return "";
 }

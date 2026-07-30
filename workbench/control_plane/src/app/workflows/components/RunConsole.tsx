@@ -14,6 +14,7 @@ import {
   Circle,
   History,
   Loader2,
+  PauseCircle,
   XCircle,
 } from "lucide-react";
 import { listRuns } from "../lib/api";
@@ -26,6 +27,8 @@ const STATUS_ICON = (status?: string) => {
     return <CheckCircle2 className="w-3.5 h-3.5 text-success" />;
   if (status === "error" || status === "failed")
     return <XCircle className="w-3.5 h-3.5 text-destructive" />;
+  if (status === "waiting" || status === "paused")
+    return <PauseCircle className="w-3.5 h-3.5 text-warning" />;
   return <Circle className="w-3 h-3 text-muted-foreground" />;
 };
 

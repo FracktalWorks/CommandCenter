@@ -165,6 +165,10 @@ async def get_run(
     if status == "running" and hub_for(str(row.id)) is None:
         status = "failed"
         error = error or "interrupted by a platform restart"
+    # Lazy reject reconciliation (spec F11): the broker only marks a rejected
+    # proposal — nothing calls back into the run. Reads reconcile it.
+    if status == "paused":
+        status, error = await _reconcile_rejected_pause(str(row.id), status, error)
     return {
         "id": str(row.id),
         "workflow_id": str(row.workflow_id),
@@ -252,3 +256,56 @@ async def stream_run(
 
 def _sse(event: dict[str, Any]) -> str:
     return f"data: {json.dumps(event, default=str)}\n\n"
+
+
+async def _reconcile_rejected_pause(
+    run_id: str, status: str, error: str | None
+) -> tuple[str, str | None]:
+    """If the pause's approvals-inbox proposal was rejected, the run is over:
+    mark it cancelled (and the pause rejected). Best-effort on read."""
+    try:
+        db = await _get_db()
+        try:
+            pause = (
+                await db.execute(
+                    text(
+                        "SELECT id, snapshot FROM workflow_run_pauses "
+                        "WHERE run_id = :id AND status = 'pending' "
+                        "ORDER BY created_at DESC LIMIT 1"
+                    ),
+                    {"id": run_id},
+                )
+            ).fetchone()
+            if pause is None:
+                return status, error
+            action_id = str((parse_jsonb(pause.snapshot, {}) or {}).get("action_id") or "")
+            if not action_id:
+                return status, error
+            action = (
+                await db.execute(
+                    text("SELECT status FROM pending_actions WHERE id = :id"),
+                    {"id": action_id},
+                )
+            ).fetchone()
+            if action is None or action.status != "rejected":
+                return status, error
+            await db.execute(
+                text(
+                    "UPDATE workflow_run_pauses SET status = 'rejected', "
+                    "resolved_at = now() WHERE id = :id"
+                ),
+                {"id": str(pause.id)},
+            )
+            await db.execute(
+                text(
+                    "UPDATE workflow_runs SET status = 'cancelled', "
+                    "error = :error, finished_at = now() WHERE id = :id"
+                ),
+                {"id": run_id, "error": "approval rejected"},
+            )
+            await db.commit()
+            return "cancelled", "approval rejected"
+        finally:
+            await db.close()
+    except Exception:
+        return status, error

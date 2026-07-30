@@ -15,7 +15,7 @@ from __future__ import annotations
 import asyncio
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from agent_framework import WorkflowBuilder, WorkflowContext, executor
@@ -31,16 +31,19 @@ from gateway.routes.workflows.engine.handlers import (
 RUN_TIMEOUT_SECS = 15 * 60.0
 
 EmitFn = Callable[[str, str, dict[str, Any]], None]
-"""emit(node_id, status, detail) — status: running | ok | error | skipped."""
+"""emit(node_id, status, detail) — status: running | ok | error | waiting |
+skipped | pending."""
 
 
 @dataclass(slots=True)
 class RunOutcome:
-    status: str  # succeeded | failed
+    status: str  # succeeded | failed | paused
     state: dict[str, Any]  # final merged run state (node outputs)
     node_results: dict[str, Any]  # node_id → {status, output|error, duration_ms}
     outputs: list[Any]  # values yielded by output nodes
     error: str | None = None
+    #: Approval nodes that halted their branch this run (status == "paused").
+    paused_nodes: list[str] = field(default_factory=list)
 
 
 @dataclass(slots=True)
@@ -69,9 +72,21 @@ async def execute_workflow(
     variables: dict[str, Any] | None = None,
     emit: EmitFn | None = None,
     run_timeout: float = RUN_TIMEOUT_SECS,
+    precomputed: dict[str, Any] | None = None,
+    resolved_approvals: set[str] | None = None,
 ) -> RunOutcome:
-    """Execute one compiled workflow version against a trigger payload."""
+    """Execute one compiled workflow version against a trigger payload.
+
+    *precomputed* replays a paused run: node ids mapped to their prior
+    outputs pass through instantly (emitted as cached ``ok``) so resume
+    re-walks the graph without re-running side effects.
+    *resolved_approvals* names approval nodes a human has approved — any
+    other approval node PAUSES its branch (outcome status ``paused``).
+    """
     emit = emit or _noop_emit
+    precomputed = precomputed or {}
+    resolved_approvals = resolved_approvals or set()
+    paused_nodes: list[str] = []
     blocks: list[dict[str, Any]] = list(serialized.get("blocks") or [])
     connections: list[dict[str, Any]] = list(serialized.get("connections") or [])
     entry_id = str(serialized.get("entry") or "")
@@ -102,6 +117,24 @@ async def execute_workflow(
 
         @executor(id=node_id)
         async def _run(token: _Token, ctx: WorkflowContext[_Token, Any]) -> None:
+            # Resume replay: a node that already ran passes its stored output
+            # through without re-executing (no repeated side effects).
+            if node_id in precomputed:
+                output = precomputed[node_id]
+                state[node_id] = output
+                node_results[node_id] = {"status": "ok", "output": output, "cached": True}
+                emit(node_id, "ok", {"output": output, "cached": True})
+                await _forward_cached(ctx, ntype, output, outputs)
+                return
+
+            # Human approval gate: unless a human resolved THIS node, the
+            # branch stops here — nothing downstream runs (spec F11).
+            if ntype == "approval" and node_id not in resolved_approvals:
+                paused_nodes.append(node_id)
+                node_results[node_id] = {"status": "waiting"}
+                emit(node_id, "waiting", {"type": ntype})
+                return
+
             emit(node_id, "running", {"type": ntype})
             started = time.monotonic()
             try:
@@ -173,14 +206,30 @@ async def execute_workflow(
     workflow = builder.build()
 
     error = await _run_compiled(workflow, run_timeout)
-    _mark_skipped(by_id, node_results, emit)
+    paused = bool(paused_nodes) and not error
+    # Nodes that never ran: "pending" while paused (they run on resume),
+    # "skipped" on a finished run (untaken branch / after a failure).
+    _mark_unrun(by_id, node_results, emit, "pending" if paused else "skipped")
     return RunOutcome(
-        status="failed" if error else "succeeded",
+        status="failed" if error else ("paused" if paused else "succeeded"),
         state=state,
         node_results=node_results,
         outputs=outputs,
         error=error,
+        paused_nodes=paused_nodes,
     )
+
+
+async def _forward_cached(
+    ctx: Any, ntype: str, output: Any, outputs: list[Any]
+) -> None:
+    """Route a replayed node's stored output onward (yield + branch token)."""
+    if ntype == "output":
+        value = output.get("value") if isinstance(output, dict) else output
+        outputs.append(value)
+        await ctx.yield_output(value)
+    branch = output.get("branch") if isinstance(output, dict) else None
+    await ctx.send_message(_Token(branch=branch if isinstance(branch, str) else None))
 
 
 async def _run_compiled(workflow: Any, run_timeout: float) -> str | None:
@@ -225,13 +274,15 @@ def _find_node_failure(exc: BaseException) -> _NodeFailure | None:
     return None
 
 
-def _mark_skipped(
+def _mark_unrun(
     by_id: dict[str, dict[str, Any]],
     node_results: dict[str, Any],
     emit: EmitFn,
+    status: str,
 ) -> None:
-    """Blocks that never ran (untaken branches / after a failure)."""
+    """Blocks that never ran — "skipped" on a finished run, "pending" while
+    the run is paused for approval (they execute on resume)."""
     for node_id in by_id:
         if node_id not in node_results:
-            node_results[node_id] = {"status": "skipped"}
-            emit(node_id, "skipped", {})
+            node_results[node_id] = {"status": status}
+            emit(node_id, status, {})

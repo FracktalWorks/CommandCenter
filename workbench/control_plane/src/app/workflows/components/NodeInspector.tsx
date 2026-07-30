@@ -303,6 +303,22 @@ export default function NodeInspector({
           </Field>
         )}
 
+        {type === "approval" && (
+          <Field label="Message for the approver">
+            <textarea
+              value={String(cfg.message ?? "")}
+              onChange={(e) => set("message", e.target.value)}
+              rows={3}
+              placeholder="OK to create the CRM record for {{trigger.company}}?"
+              className={inputCls}
+            />
+            <p className="text-[10px] text-muted-foreground mt-1">
+              The run pauses here and appears in the Approvals inbox. Approving
+              resumes it; rejecting cancels it.
+            </p>
+          </Field>
+        )}
+
         {type === "output" && (
           <Field label="Value ({{refs}} allowed)">
             <textarea

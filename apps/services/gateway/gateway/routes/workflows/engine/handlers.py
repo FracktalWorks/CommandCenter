@@ -22,6 +22,7 @@ NODE_TIMEOUTS: dict[str, float] = {
     "module": 15.0,
     "condition": 5.0,
     "set": 5.0,
+    "approval": 5.0,
     "output": 5.0,
     "trigger": 5.0,
 }
@@ -151,6 +152,11 @@ async def execute_node(
         if isinstance(vars_bucket, dict):
             vars_bucket.update(resolved)
         return resolved
+
+    if ntype == "approval":
+        # The runner pauses unresolved approvals before this handler runs;
+        # reaching it means a human approved — pass through.
+        return {"approved": True, "message": str(config.get("message") or "")}
 
     if ntype == "output":
         value = resolve_value(config.get("value"), state)

@@ -967,6 +967,21 @@ try:
     from gateway.routes.workflows import router as _workflows_router
 
     app.include_router(_workflows_router)
+
+    # Approval-node resume handler (workflow.resume_run) into the Action
+    # Broker registry, and the workflow event dispatcher into the ingestion
+    # event-hook registry — so provider webhooks can fire event triggers
+    # without ingestion importing upward.
+    from gateway.routes.workflows.broker_handlers import register_handlers
+
+    register_handlers()
+    try:
+        from gateway.routes.workflows.triggers import dispatch_event as _wf_dispatch
+        from ingestion.event_hooks import register_event_sink
+
+        register_event_sink(_wf_dispatch)
+    except Exception:  # pragma: no cover - ingestion optional in some deploys
+        pass
 except Exception:  # pragma: no cover
     pass
 

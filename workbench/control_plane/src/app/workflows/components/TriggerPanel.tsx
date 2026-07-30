@@ -34,6 +34,10 @@ export default function TriggerPanel({
     () => triggers.find((t) => t.kind === "schedule"),
     [triggers],
   );
+  const event = useMemo(
+    () => triggers.find((t) => t.kind === "event"),
+    [triggers],
+  );
   const [copied, setCopied] = useState(false);
 
   const hookUrl =
@@ -41,7 +45,7 @@ export default function TriggerPanel({
       ? `${window.location.origin}/api/workflows/hooks/${hookToken}`
       : "";
 
-  const upsert = (kind: "webhook" | "schedule", patch: Partial<TriggerSpec>) => {
+  const upsert = (kind: "webhook" | "schedule" | "event", patch: Partial<TriggerSpec>) => {
     const rest = triggers.filter((t) => t.kind !== kind);
     const current = triggers.find((t) => t.kind === kind) ?? {
       kind,
@@ -178,9 +182,70 @@ export default function TriggerPanel({
           )}
         </div>
 
+        <div>
+          <div className="flex items-center justify-between">
+            <span className="font-medium text-foreground">Platform event</span>
+            <input
+              type="checkbox"
+              checked={Boolean(event?.enabled)}
+              onChange={(e) =>
+                e.target.checked
+                  ? upsert("event", {
+                      enabled: true,
+                      config: { source: String(event?.config.source ?? "clickup") },
+                    })
+                  : remove("event")
+              }
+            />
+          </div>
+          {event?.enabled && (
+            <div className="mt-1.5 space-y-1">
+              <div className="flex gap-1.5">
+                <select
+                  value={String(event.config.source ?? "clickup")}
+                  onChange={(e) =>
+                    upsert("event", {
+                      config: { ...event.config, source: e.target.value },
+                    })
+                  }
+                  className={inputCls}
+                >
+                  <option value="clickup">clickup</option>
+                  <option value="zoho">zoho</option>
+                  <option value="gmail">gmail</option>
+                  <option value="custom">custom</option>
+                </select>
+                <input
+                  placeholder="event type (blank = all)"
+                  value={String(event.config.event_type ?? "")}
+                  onChange={(e) =>
+                    upsert("event", {
+                      config: { ...event.config, event_type: e.target.value },
+                    })
+                  }
+                  className={inputCls}
+                />
+              </div>
+              <p className="text-[10px] text-muted-foreground">
+                Fires on provider events (e.g. ClickUp{" "}
+                <code className="bg-secondary px-1 rounded">taskUpdated</code>)
+                and on signed posts to{" "}
+                <code className="bg-secondary px-1 rounded">
+                  /agent/webhook/&#123;source&#125;
+                </code>
+                . The event payload arrives as <code>{"{{trigger.*}}"}</code>.
+              </p>
+              {!published && (
+                <p className="text-[10px] text-warning">
+                  Fires only once the workflow is published.
+                </p>
+              )}
+            </div>
+          )}
+        </div>
+
         <p className="text-[10px] text-muted-foreground border-t border-border pt-2">
-          Trigger changes save with the workflow. Event triggers (CRM/task/email
-          events) arrive in a later slice.
+          Trigger changes save with the workflow.
         </p>
       </div>
     </div>

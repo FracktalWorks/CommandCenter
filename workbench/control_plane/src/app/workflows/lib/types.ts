@@ -7,7 +7,8 @@ export type RunStatus =
   | "queued" | "running" | "paused" | "succeeded" | "failed" | "cancelled";
 export type TriggerKind = "manual" | "api" | "schedule" | "webhook" | "event";
 export type NodeType =
-  | "trigger" | "agent" | "tool" | "module" | "condition" | "set" | "output";
+  | "trigger" | "agent" | "tool" | "module" | "condition" | "set"
+  | "approval" | "output";
 
 export type WorkflowNodeData = {
   label: string;
@@ -85,7 +86,7 @@ export type RunSummary = {
 };
 
 export type NodeResult = {
-  status: "ok" | "error" | "skipped";
+  status: "ok" | "error" | "skipped" | "waiting" | "pending";
   output?: unknown;
   error?: string;
   duration_ms?: number;
@@ -208,7 +209,7 @@ export const NODE_CATEGORY_STYLE: Record<
 };
 
 export function categoryForType(type: NodeType): string {
-  if (type === "condition" || type === "set") return "logic";
+  if (type === "condition" || type === "set" || type === "approval") return "logic";
   return type;
 }
 

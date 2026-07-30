@@ -16,7 +16,9 @@ import {
   GitBranch,
   Loader2,
   LogOut,
+  PauseCircle,
   SlidersHorizontal,
+  UserCheck,
   Wrench,
   XCircle,
   Zap,
@@ -31,6 +33,7 @@ const TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
   module: Boxes,
   condition: GitBranch,
   set: SlidersHorizontal,
+  approval: UserCheck,
   output: LogOut,
 };
 
@@ -38,7 +41,7 @@ export type CCNodeData = {
   label: string;
   nodeType: NodeType;
   summary?: string;
-  runStatus?: "running" | "ok" | "error" | "skipped";
+  runStatus?: "running" | "ok" | "error" | "skipped" | "waiting" | "pending";
   issueCount?: number;
   [key: string]: unknown;
 };
@@ -57,10 +60,13 @@ function WorkflowNodeInner(props: NodeProps) {
         ? "ring-2 ring-success/60"
         : data.runStatus === "error"
           ? "ring-2 ring-destructive/70"
-          : props.selected
-            ? "ring-2 ring-ring"
-            : "";
-  const dim = data.runStatus === "skipped" ? "opacity-50" : "";
+          : data.runStatus === "waiting"
+            ? "ring-2 ring-warning/70"
+            : props.selected
+              ? "ring-2 ring-ring"
+              : "";
+  const dim =
+    data.runStatus === "skipped" || data.runStatus === "pending" ? "opacity-50" : "";
 
   return (
     <div
@@ -95,6 +101,9 @@ function WorkflowNodeInner(props: NodeProps) {
             )}
             {data.runStatus === "error" && (
               <XCircle className="w-3.5 h-3.5 text-destructive" />
+            )}
+            {data.runStatus === "waiting" && (
+              <PauseCircle className="w-3.5 h-3.5 text-warning" />
             )}
           </span>
         </div>

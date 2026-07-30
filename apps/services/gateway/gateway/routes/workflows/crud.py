@@ -179,19 +179,7 @@ async def update_workflow(
         if len(encoded.encode()) > MAX_GRAPH_BYTES:
             raise HTTPException(status_code=413, detail="Graph too large")
     if body.triggers is not None:
-        for trig in body.triggers:
-            if trig.kind not in TRIGGER_KINDS:
-                raise HTTPException(
-                    status_code=422,
-                    detail=f"Unknown trigger kind '{trig.kind}'",
-                )
-            if trig.kind == "schedule":
-                cron = str(trig.config.get("cron") or "").strip()
-                if not cron or not _cron_is_valid(cron):
-                    raise HTTPException(
-                        status_code=422,
-                        detail="Schedule triggers need a valid cron expression",
-                    )
+        _validate_trigger_specs(body.triggers)
     db = await _get_db()
     try:
         row = await load_workflow_or_404(db, workflow_id)
@@ -287,6 +275,25 @@ async def validate_workflow(
         known_agents=known_agent_names(),
     )
     return {"ok": not issues, "issues": [i.as_dict() for i in issues]}
+
+
+def _validate_trigger_specs(triggers: list[TriggerSpec]) -> None:
+    """422 on malformed trigger bindings (kind vocabulary + per-kind config)."""
+    for trig in triggers:
+        if trig.kind not in TRIGGER_KINDS:
+            raise HTTPException(status_code=422, detail=f"Unknown trigger kind '{trig.kind}'")
+        if trig.kind == "schedule":
+            cron = str(trig.config.get("cron") or "").strip()
+            if not cron or not _cron_is_valid(cron):
+                raise HTTPException(
+                    status_code=422,
+                    detail="Schedule triggers need a valid cron expression",
+                )
+        if trig.kind == "event" and not str(trig.config.get("source") or "").strip():
+            raise HTTPException(
+                status_code=422,
+                detail="Event triggers need a source (e.g. clickup)",
+            )
 
 
 def _cron_is_valid(expr: str) -> bool:

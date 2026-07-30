@@ -38,6 +38,7 @@ NODE_TYPES = frozenset(
         "module",
         "condition",
         "set",
+        "approval",
         "output",
     }
 )

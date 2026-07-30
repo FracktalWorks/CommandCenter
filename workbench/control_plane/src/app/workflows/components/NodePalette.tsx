@@ -55,6 +55,8 @@ function dropForResult(r: SearchResult, catalog: Catalog | null): PaletteDrop | 
       return { nodeType: type, label: r.label, config: { left: "", op: "equals", right: "" } };
     if (type === "set")
       return { nodeType: type, label: r.label, config: { assignments: {} } };
+    if (type === "approval")
+      return { nodeType: type, label: r.label, config: { message: "" } };
     if (type === "output")
       return { nodeType: type, label: r.label, config: { value: "" } };
   }

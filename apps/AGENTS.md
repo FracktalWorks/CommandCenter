@@ -8,7 +8,7 @@ are *loaded by* a service at runtime and are never deployed on their own.
 ## `services/` — deployed FastAPI processes
 - gateway/ -- FastAPI entry point, AG-UI chat, agent routes, OAuth, integration credential management (DB-backed, encrypted at rest), MCP server registry, plugin registry
 - orchestrator/ -- Agent execution engine, mutation layer, MAF integration
-- ingestion/ -- ClickUp/Zoho webhook receivers, MCP servers
+- ingestion/ -- ClickUp/Zoho webhook receivers, MCP servers; `event_hooks.py` is a sink registry (post_sync pattern) the gateway subscribes workflow event triggers to — ingestion never imports upward
 - email_ingestion/ -- Multi-provider email sync engine (Gmail, Microsoft 365, IMAP/SMTP, aiosmtpd inbound, background scheduler)
 - reconciler/ -- Nightly source-of-truth diff and escalation
 - action_broker/ -- Approval-gated source-of-truth write executor: authority-tier disposition + fail-closed handler registry. **Decision core exists but ships with zero handlers and is not yet wired into the write path** — tracked as BO-1 (see `FOUNDATION_BUILDOUT_CHECKLIST.md`)

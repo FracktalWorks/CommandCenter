@@ -14,7 +14,7 @@
 --                        agent created or modified over time, so we can track and
 --                        directly access the full history of any file.
 --
--- The same schema is portable to MAF agents built on the Pomad Centre platform
+-- The same schema is portable to MAF agents on a second tenant deployment
 -- (agent_name is the only tenant/agent key; no CommandCenter-specific coupling).
 
 -- ── Current content — one row per live file ────────────────────────────────

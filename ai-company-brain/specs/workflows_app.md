@@ -51,14 +51,14 @@ The missing quadrant is **deterministic + self-serve**: the ops owner defines th
 - **Not an agent editor.** No editing of `agents.py`, instructions, or skills from the canvas — ADR-014's authoring rule stands for *code* artifacts.
 - **Not a second runtime.** No n8n, no LangGraph, no embedded workflow engine — the graph compiles to MAF Workflows (ADR-028). If MAF can't express something, the platform grows; the app never routes around it.
 - **Not a general-purpose code platform.** Modules are sandboxed, dependency-free, pure-transform Python; anything bigger belongs in a skill repo via PR (and Module Studio says so — the "builder refuses and redirects" rung of the platform contract ladder).
-- **Not multi-tenant marketplace tooling.** Workflows are org-internal; sharing/templates beyond this org are Phase 4+.
+- **Not multi-tenant marketplace tooling.** Workflows are org-internal; sharing/templates beyond this org are Phase 4+. *(Clarification 2026-08-01: the org-internal template gallery is Slice 3 — this non-goal refers to cross-org marketplace sharing, not in-org templates.)*
 - **No autonomous outward writes.** Same rule as everywhere else: write-class integration actions require the approval node / Action Broker disposition until BO‑1 lands fully.
 
 ---
 
 ## 2. Feature set (prioritized)
 
-Feature IDs `F1..F13`; Must/Should/Could is for v1 (phases in §8).
+Feature IDs `F1..F15`; Must/Should/Could is for v1 (phases in §8).
 
 | ID | Feature | Priority | Notes |
 |---|---|---|---|
@@ -211,9 +211,9 @@ Deferred to `FOUNDATION_BUILDOUT_CHECKLIST.md` per planning rules — not re-des
 
 Aligned to RFC §9, resequenced so each slice ships value:
 
-- **Slice 1 (this build):** migration 131 · gateway `routes/workflows/` + `workflows/` engine package (compiler → MAF `WorkflowBuilder`, handlers: trigger/agent/tool/condition/transform-module/set-variable/http/output) · module validator + restricted runner + conversational generator · manual + webhook + schedule triggers (croniter loop) · `/workflows` UI: gallery, editor (palette/canvas/inspector/console), Module Studio, run history · catalog endpoint · feature slug + nav.
+- **Slice 1 (this build):** migration 132 · gateway `routes/workflows/` + `workflows/` engine package (compiler → MAF `WorkflowBuilder`, handlers: trigger/agent/tool/condition/transform-module/set-variable/http/output) · module validator + restricted runner + conversational generator · manual + webhook + schedule triggers (croniter loop) · `/workflows` UI: gallery, editor (palette/canvas/inspector/console), Module Studio, run history · catalog endpoint · feature slug + nav.
 - **Slice 2 (shipped):** event triggers via `/agent/webhook/{source}` + the ClickUp receiver's event-hook sink; approval node via `workflow_run_pauses` snapshots + the Action Broker approvals inbox, with cached-replay resume. Also landed: the publish-gate write-class check (`write_without_approval`) and F13 workflow-as-tool. Remaining: streaming from the raw MAF event stream (engine-level per-node events stream today).
-- **Slice 3:** describe→generate→refine full-graph authoring; loops/parallel fan-out in the compiler; workflow-as-tool for the orchestrator; template gallery.
+- **Slice 3:** describe→generate→refine full-graph authoring; loops/parallel fan-out in the compiler; template gallery. (Workflow-as-tool for the orchestrator shipped early — F13, Slice 2.)
 - **Slice 4 (post-BO‑20/BO‑7):** durable queued runs; sandboxed module execution; MCP exposure; retention policies.
 
 ## 9. Key design decisions

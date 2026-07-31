@@ -6,6 +6,8 @@
 
 > **Companion document:** `FOUNDATION_BUILDOUT_CHECKLIST.md` lists every missing / partial / unwired capability with rationale, dependencies, approach, and priority.
 
+> **Update 2026-08-01 (doc-truth pass):** the findings below are a **2026-07-11 snapshot** and are preserved as the audit record — do not read them as current state. File paths predate the `apps/` → `apps/services/` restructure (e.g. `apps/gateway/` is now `apps/services/gateway/`). Current execution state is tracked in `FOUNDATION_BUILDOUT_CHECKLIST.md` and `ai-company-brain/work_plan.md`. Note: "BO-4" in §5 corresponds to what the checklist tracks as **BO-20** (event-bus consumer + durable job queue).
+
 ---
 
 ## 1. Executive summary

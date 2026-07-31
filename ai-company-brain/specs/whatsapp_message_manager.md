@@ -4,7 +4,13 @@
 > **Created:** 2026-07-23 · **Revised:** 2026-07-23 (v3 — calm-UI pass grounded in a prior-art
 > study; v2 — official WhatsApp Business Platform only, per founder decision; unofficial
 > linked-device routes dropped)
-> **Status:** 🧠 **PLANNING** — feature set, value map, architecture and UI mockups; no code yet.
+> **Status:** ✅ **BUILT W0–W14 per §11** (2026-07-24) — routes in
+> `apps/services/gateway/gateway/routes/whatsapp/`, migrations 102–111, 227 backend unit
+> tests; activation gated on env config (`WHATSAPP_ENRICHMENT`, `WHATSAPP_APP_SECRET`,
+> `WHATSAPP_PUBLIC_URL`, …) and Meta app review (Embedded Signup). §1–§10 are the design
+> record; §11 is the build log and current state.
+> *(Update 2026-08-01, doc-truth pass: header previously said "PLANNING — no code yet",
+> contradicting §11's own build log; verified against the repo.)*
 > **Mockups:** `mockups/whatsapp_message_manager.html` (7 screens + build notes, control-plane shell,
 > rebuilt around a single organizing spine — see §7)
 > **Anchors:** ADR-007 (WhatsApp via Meta Cloud API), `email_app_master_plan.md` (the vertical
@@ -428,6 +434,10 @@ the principle→screen→prior-art map, color-as-signal legend, and a component 
 ---
 
 ## 10. Suggested phasing
+
+> **Update 2026-08-01 (doc-truth pass):** this W0–W4 phasing is the original proposal and
+> is superseded by §11, which records what was actually built as W0–W14 (the build split
+> the work into finer slices and went well past W4). Read §11 for current state.
 
 - **W0 — Pipe + store (no AI):** Cloud API onboarding via Embedded Signup +
   coexistence; webhook ingestion → queue → idempotent upsert into

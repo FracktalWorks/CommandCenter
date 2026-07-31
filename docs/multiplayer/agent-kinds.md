@@ -42,6 +42,12 @@ formatters, linters, and one-shot utilities, and it removes an entire class of q
 
 ## 2. What the code does today
 
+> **Update 2026-08-01 (doc-truth pass): no longer the live behaviour.**
+> Instance-keying shipped — migration 136 added the instance key to
+> `agent_blob` and the run path now resolves instance-keyed agent memory
+> ([`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md)
+> §6, step 2). This section stands as the rationale and the pre-change history.
+
 Today **every agent has exactly one memory bucket, keyed by agent name, written by every user
 and read by every user.**
 
@@ -126,7 +132,8 @@ artefacts"* (`AGENTS.md`). The registry mirrors it; an org admin can override.
 ```
 
 ```sql
--- migration 119_agent_sharing.sql
+-- agent_sharing migration — number assigned at build time (still unbuilt;
+-- "119" predates migrations 136-139 landing)
 ALTER TABLE dynamic_agents
     ADD COLUMN IF NOT EXISTS instancing TEXT NOT NULL DEFAULT 'personal'
         CHECK (instancing IN ('personal','team','shared')),
@@ -137,6 +144,10 @@ ALTER TABLE dynamic_agents
         CHECK (memory_mode IN ('instance','none')),
     ADD COLUMN IF NOT EXISTS shareable  BOOLEAN NOT NULL DEFAULT false;
 ```
+
+> **Update 2026-08-01 (doc-truth pass):** the `dynamic_agents` sharing columns
+> above are still unbuilt, and this work is now owned by
+> `department_centers.md` Phase C (`work_plan.md` D3, WS-14).
 
 ### 3.1 The default must be `personal`
 
@@ -224,6 +235,9 @@ bucket to `quarantine:agent:<name>` — readable by nobody, deleted by nobody �
 instances relearn. An admin screen lists the quarantined facts so anything genuinely
 org-general can be promoted to `org:global` by hand. Bounded, reversible, and it never guesses.
 
+> **Update 2026-08-01 (doc-truth pass):** this recommendation shipped —
+> the quarantine of commingled agent data **landed as migration 137**.
+
 Then the actual decision, per agent we have today:
 
 | Agent | Instancing | Visibility | Shareable | Why |
@@ -276,10 +290,13 @@ the agent just seem dumber.
 Slots ahead of the memory work in [`memory-clearance.md`](memory-clearance.md) §7, because
 instancing decides what a compartment even is.
 
+**Update 2026-08-01 (doc-truth pass):** team-instanced agent rollout is owned by
+`work_plan.md` WS-14 (Centers C); this section is the design reference.
+
 | Phase | Work |
 |---|---|
 | **0** | Graphiti read scoping (§2.2) — pass a group filter, or disable `search_entity_timeline` until it is scoped. Alongside the `routes/memory.py` authorization fix. |
-| **3a′** *(before compartments)* | Migration 119 · `config.json` `sharing` block + registry mirror · `scope_key(instance=…)` · `agent_scope()` resolution at the four call sites · `shareable=false` disables the Share button · quarantine + admin review for existing buckets |
+| **3a′** *(before compartments)* | The agent-sharing migration (next free number at build time) · `config.json` `sharing` block + registry mirror · `scope_key(instance=…)` · `agent_scope()` resolution at the four call sites · `shareable=false` disables the Share button · quarantine + admin review for existing buckets |
 | **3b** | Team instances, the non-member banner (§7), transcript snapshots as the personal-agent escape hatch |
 
 **Acceptance for 3a′:** two users, one personal agent, memory enabled. Assert that no

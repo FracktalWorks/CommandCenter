@@ -11,8 +11,7 @@ them. Written after a full end-to-end review (backend + frontend + live VPS).
 > [`specs/agent_persistence_implementation.md`](specs/agent_persistence_implementation.md)
 > is the engineering reference (every function, table, and seam — read before
 > changing how persistence works). Required reading before building the
-> in-platform agent workbench or any new MAF agent (CommandCenter or Pomad
-> Centre). This doc explains the *layout*; the framework explains the *contract*;
+> in-platform agent workbench or any new MAF agent (this deployment or a future second tenant deployment). This doc explains the *layout*; the framework explains the *contract*;
 > the implementation reference explains *how it's built*.
 >
 > **The disk workspace described below is now a rehydratable cache** — the three

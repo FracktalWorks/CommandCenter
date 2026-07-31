@@ -19,7 +19,7 @@ stored in Postgres (the **source of truth**) with the on-disk workspace as a
 append a version-history row (**write-through**). On agent load the workspace is
 **rehydrated** from Postgres. A read that misses on disk is **faulted-in** from
 Postgres. Everything is keyed on `agent_name` alone, so it ports to any platform
-(Pomad Centre) unchanged. If Postgres is unavailable, every store call is a no-op
+(a second tenant deployment) unchanged. If Postgres is unavailable, every store call is a no-op
 and agents keep working off the disk cache.
 
 ```

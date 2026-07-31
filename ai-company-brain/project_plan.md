@@ -1,8 +1,9 @@
 # Project Plan — CommandCenter v2
 
-> **Org:** Fracktal Works · **Updated:** 2026-07-02 · **Version:** 3.1
+> **Org:** Fracktal Works · **Updated:** 2026-08-01 · **Version:** 3.1
 > Single source of truth for **what** we build (requirements), **when** (milestones), and **how much** (phased WBS). Absorbs the former `product_requirements.md` and `wbs.md`.
 > **Read first:** [`AGENTS.md`](AGENTS.md) — current build status, file index, glossary.
+> **Near-term sequencing and dispatch:** [`work_plan.md`](work_plan.md) (2026-07-31) — for ordering, that doc wins.
 > **Companions:** [`system_architecture.md`](system_architecture.md) (design + ADRs) · [`reference.md`](reference.md) (MAF / Copilot SDK / memory library notes) · [`agent_repo_compatibility.md`](agent_repo_compatibility.md) (how to build an agent) · [`specs/`](specs/) (per-feature specs).
 
 > **⚠️ Two work surfaces — this doc is the FEATURE roadmap (M3→M6). It is NOT the whole "what's left":**
@@ -42,6 +43,8 @@ Operators work through a thin **Control Plane** (Next.js browser UI): one unifie
 **In:** Core engine (FastAPI event router + Dynamic Agent Loader + MAF orchestration); self-mutation loop; distributed `agent-*` / `skill-*` repos; ingest (ClickUp, Zoho, Odoo, Gmail/Outlook, WhatsApp, meetings); pull/push/ambient interaction; approval-gated writes via Action Broker; nightly reconciliation; encrypted Integration Registry; Control Plane (chat, HITL, observability); memory (Mem0 + Graphiti); email client app.
 
 **Out / non-goals:** in-app editing of agent/skill/app *code*; any browser IDE (Theia, VS Code fork); n8n or any second workflow *runtime* (the Workflows app composes DB-persisted workflow configuration compiled to MAF Workflows — ADR-028, `specs/workflows_app.md`); autonomous repo merges (human PR review + `max_mutation_attempts=1` mandatory); autonomous writes before Action Broker is live; customer-facing access; RBAC beyond admin/operator/contributor.
+
+*(Update 2026-08-01, doc-truth pass: the "no second workflow runtime" non-goal stands **as amended by ADR-028** — the Workflows app has since shipped (`specs/workflows_app.md`), composing DB-persisted workflow config compiled to MAF Workflows; it is workflow composition, not a second runtime.)*
 
 ### Success criteria (v2.0)
 - Webhook → agent runs + telemetry logged in < 30 s (warm < 5 s).
@@ -114,7 +117,7 @@ Dynamic `as_tool()` agent registry (LLM routes by description, zero hard-coded r
 | **M2.5** | Interactive runtime unified — Copilot SDK Tier 1.5 streaming; CopilotKit removed | 2026-06-20 | ✅ PASSED |
 | **M2.6** | Foundation hardening — chat history, cloud sandbox, integration OAuth, AG-UI events | 2026-06-18 | ✅ PASSED |
 | **M2.7** | Universal tool injection — web search + inter-agent wiring | 2026-06-06 | ✅ PASSED |
-| **M2.8** | Memory live — Mem0 episodic + Graphiti bi-temporal KG | 2026-06-12 | ✅ PASSED |
+| **M2.8** | Memory live — Mem0 episodic + Graphiti bi-temporal KG | 2026-06-12 | ✅ PASSED *(Update 2026-08-01, doc-truth pass: this verified the plumbing, not activation — Mem0/Graphiti remain default-OFF in prod; activation is BO-21)* |
 | **M2.9** | Email app — multi-account client (Gmail/Outlook) + AI assistant | 2026-06-20 | 🔄 In progress — full client + automation suite live; consolidated plan + prioritized completion roadmap: [`specs/email_app_master_plan.md`](specs/email_app_master_plan.md) |
 | **M3** | Full Agent Ecosystem — Sales + Triage + Reconciler agents via UI | ~2026-08-26 | 🔲 Not started — platform work: Zoho + Gmail ingestion, entity resolution, Action Broker hardening |
 | **M4** | Capture live — meetings + WhatsApp + ambient triggers | ~2026-10-14 | 🔲 Not started |
@@ -143,7 +146,7 @@ Infra baseline (Postgres+pgvector, redis:7-alpine, CI); graph schema v0; ClickUp
 - 🔲 **1.7** LiteLLM BYOK forced for all sessions (consistent cost metering).
 
 ### Phase 1.5 — Dynamic Multi-Agent Orchestration ✅ (2026-06-05)
-`as_tool()` capability registry; `delegate_to_agent` + `spawn_copilot_agent`; agent auto-repair on `AgentLoadError` (researcher+editor); proactive skill sync; `/agents`, `/integrations`, `/settings/models` UIs; AG-UI→SSE fix; WorkflowBuilder wired (infra ready).
+`as_tool()` capability registry; `delegate_to_agent` + `spawn_copilot_agent`; agent auto-repair on `AgentLoadError` (researcher+editor); proactive skill sync; `/agents`, `/integrations`, `/settings/models` UIs; AG-UI→SSE fix; WorkflowBuilder wired (infra ready). *(Update 2026-08-01, doc-truth pass: that `WorkflowBuilder` import was never instantiated and was removed under BO-12; the real MAF WorkflowBuilder use shipped later via the ADR-028 workflows engine.)*
 
 ### Phase 1.6 — Universal Tool Injection + Inter-Agent Wiring ✅ (2026-06-06 · M2.7)
 Zero-credential `web_search`/`fetch_page`; `normalize_tools()` wrapping across all three injection paths; Tier-2 list-tool shimming; live agent-registry system-message addendum; 14/14 integration checks pass.
@@ -167,9 +170,9 @@ Action Broker full build; Suggest+Apply for ClickUp (from triage) and Zoho (from
 
 ### Phase 2.5 — Harness Hardening 🔄 (~3 ew · started 2026-07-02)
 Gap-closure workstream from the best-practices audit against [awesome-harness-engineering](https://github.com/ai-boost/awesome-harness-engineering). Full analysis + work queue: [`specs/harness_hardening_2026-07.md`](specs/harness_hardening_2026-07.md).
-- 🔄 **HH-1** Real eval harness: create `evals/` (Promptfoo golden cases + Inspect scenarios + offline trajectory tests for HITL/sub-agent/reconnect/tool-failure), un-scaffold `skill-eval.yml`. Supersedes the scaffold half of L2-01..06's "eval CI gate".
-- 🔄 **HH-2** Fail-closed `request_confirmation` for destructive actions + risk annotations (`read_only`/`destructive`/`idempotent`/`open_world`) on platform tools.
-- 🔄 **HH-3** Telemetry export path: LiteLLM OTEL callbacks (gated on `OTEL_EXPORTER_OTLP_ENDPOINT`), per-call cache/token usage into `audit_event`; backend selection stays in Phase 5.
+- ✅ **HH-1** Real eval harness: create `evals/` (Promptfoo golden cases + Inspect scenarios + offline trajectory tests for HITL/sub-agent/reconnect/tool-failure), un-scaffold `skill-eval.yml`. Supersedes the scaffold half of L2-01..06's "eval CI gate". *(Shipped 2026-07-02 — see `specs/harness_hardening_2026-07.md` status log.)*
+- ✅ **HH-2** Fail-closed `request_confirmation` for destructive actions + risk annotations (`read_only`/`destructive`/`idempotent`/`open_world`) on platform tools. *(Shipped 2026-07-02 — see `specs/harness_hardening_2026-07.md` status log.)*
+- ✅ **HH-3** Telemetry export path: LiteLLM OTEL callbacks (gated on `OTEL_EXPORTER_OTLP_ENDPOINT`), per-call cache/token usage into `audit_event`; backend selection stays in Phase 5. *(Shipped 2026-07-02 — see `specs/harness_hardening_2026-07.md` status log.)*
 - ✅ **HH-4** Automatic compaction — verified already shipped: `AgentChat.tsx` auto-compacts at 80% of the model's real context window (75/80 hysteresis, checkpoint model). Full token budgeting stays with [`specs/llm_caching_memory.md`](specs/llm_caching_memory.md).
 - ✅ **HH-5** `own_tool_scope` config key filters agent-baked tools (executor `_apply_own_tool_scope`, all three build sites); the email-assistant subset itself lands with [`specs/archive/email_tool_consolidation.md`](specs/archive/email_tool_consolidation.md).
 - 🔲 **HH-6** Sandbox normal agent runs (allowlist permission handler now; container isolation with Phase 5 hardening).
@@ -206,7 +209,7 @@ VS Code + Git authoring (ongoing); mutation PR review (~2 h/wk when active); pro
 | C-05 | All agent/skill artefacts promoted via PR with eval CI gate. Git is the single source of truth. |
 | C-06 | Mutation container needs the host Docker socket mapped into the orchestrator. |
 | C-07 | Indian DPDP Act 2023 — written employee consent before ingesting email/WhatsApp. |
-| C-08 | All interactive + autonomous execution runs on **MAF** paths. No net-new raw Copilot SDK runtime entrypoints for business-agent execution (Copilot SDK = mutation container only). |
+| C-08 | All interactive + autonomous execution runs on **MAF** paths. No net-new raw Copilot SDK runtime entrypoints for business-agent execution (Copilot SDK = mutation container only). *(Update 2026-08-01, doc-truth pass: the "mutation container only" clause is superseded by the BO-12 resolution — the Copilot SDK is the supported **second runtime for interactive coworker chat** (Tier 1.5), per the AGENTS.md non-negotiables; unification tracked in `specs/agent_architecture.md` §11.)* |
 | C-09 | No in-app agent/skill *code* editing; no browser IDE; no second workflow runtime (n8n) — workflow *composition* is DB-persisted config compiled to MAF Workflows (ADR-028). |
 
 ---

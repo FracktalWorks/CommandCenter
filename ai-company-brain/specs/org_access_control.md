@@ -308,7 +308,7 @@ Deploy order makes fail-closed safe: `apply_migrations.sh` runs before the gatew
 | Phase | Content | State |
 |---|---|---|
 | **1** | Schema, permission engine, admin API, member/role/access UI, nav + route gating, agent-run gate | 🔄 this spec |
-| **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; `email_account_member` | 🔲 |
+| **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; `email_account_member` | 🔲 — in progress as Centers Phases B/C (`specs/department_centers.md` §3 + `work_plan.md` WS-13/WS-14); `org_group` shipped (mig 138), admin UI + scoping remain |
 | **3** | Memory + credential scoping (research §7–§8) — the real seam-3 work | 🔄 authorization done (below); isolation deferred to BO-7 |
 | **4** | Entity-graph visibility + RLS safety net (research §9, §16.5) | 🔲 |
 | **5** | Consent records, access reviews, audit completeness (research §11.3) | 🔲 |
@@ -428,7 +428,7 @@ This section is the integration contract. Read it before designing multiplayer; 
 | Credential scoping | `build_integrations(..., is_authorized=)` + `executor._integration_authorizer` | Filters per acting member **before** creds enter the run env. |
 | Org-memory gate | `acb_skills/memory_tools._may("memory:write_org")` | Run-scoped predicate contextvar, set by the executor. |
 | Admin API + UI | gateway `routes/admin/`, workbench `/settings/members`, `/settings/roles` | Members, roles, per-user overrides, with provenance on every decision. |
-| Schema | `infra/postgres/128_*.sql`, `129_*.sql` | `organization`, membership on `app_user`, `org_role`, `org_role_permission`, `user_role`, `user_permission_override`, `feature_catalog`. |
+| Schema | `infra/postgres/130_org_access_control.sql` | `organization`, membership on `app_user`, `org_role`, `org_role_permission`, `user_role`, `user_permission_override`, `feature_catalog`. |
 
 ### 10.2 The four collisions
 
@@ -442,11 +442,15 @@ chat_session.user_id TEXT NOT NULL DEFAULT 'default'   -- comment still says "fu
 
 No participants table, no sharing, no visibility column. Multiplayer needs `chat_session_participant`; access control needs session visibility. One change, not two.
 
+> **Update 2026-08-01 (doc-truth pass):** shipped as migration 138 (`138_groups_and_session_participants.sql`) — `chat_session.visibility` + `chat_session_participant`, exactly the one change asked for. See `groups_sessions_authority.md` §2/§6.
+
 **3. Whose authority runs the agent — decide before transcripts exist.**
 
 Phase 1 resolved this implicitly for one user: `assert_can_run_agent` checks the caller, and `_integration_authorizer` keys off `event_payload["user_email"]`. With two people in a session the default answer becomes "whoever typed", and that leaks — a member denied Zoho sits in a session where another member triggers a Zoho-using agent, and the output lands in the shared transcript.
 
 **`EffectiveAccess.intersect()` already exists and is tested** (`permissions.py`). It was written so a sub-agent cannot exceed its invoking member, but the semantics are exactly "a shared session grants the intersection of its participants' access". If intersection is the rule, the primitive is there. If the rule is actor-only, that needs to be a stated decision with attribution visible in the UI — not a default nobody chose.
+
+> **Update 2026-08-01 (doc-truth pass):** decided and shipped — intersection, enforced at run start per `groups_sessions_authority.md` §3 (participant resolution + `intersect()` fold, feeding `_integration_authorizer` and `assert_can_run_agent`).
 
 **4. The transcript is a second exposure boundary.** Phase 1 gates *reaching* a feature. A shared transcript re-exposes whatever any participant's agent produced to everyone in the room. Two concrete cases:
 
@@ -454,6 +458,8 @@ Phase 1 resolved this implicitly for one user: `assert_can_run_agent` checks the
 - **Tool output.** A member without `integrations:use:zoho-crm` reads Zoho records in the shared transcript because a permitted member asked for them.
 
 Nothing in Phase 1 addresses this; every enforcement seam assumes one viewer per run. It is new surface that multiplayer introduces, and it is the item most likely to be discovered late.
+
+> **Update 2026-08-01 (doc-truth pass):** addressed — clearance tags on tool output + replay redaction shipped in migration 139 (`139_room_authorship_and_agents.sql`; `groups_sessions_authority.md` §4), and personal memory is not injected in shared rooms. Still open: the `memory-clearance.md` 3b/3c items (subject binding, extraction classification, the memory-disclosure share sheet).
 
 ### 10.3 Deliberately not built
 

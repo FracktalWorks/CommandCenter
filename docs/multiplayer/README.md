@@ -1,6 +1,6 @@
 # Multiplayer Agents — Analysis & Implementation Plan
 
-**Status:** Phases 0-1 built, 2-4 designed · **Date:** 2026-07-26 · **Last built:** 2026-07-30 · **Owner:** vjvarada
+**Status:** Phases 0-1 built, 2-4 designed · **Date:** 2026-07-26 · **Last built:** 2026-07-31 (merged to main) · **Owner:** vjvarada
 
 > **What is real as of 2026-07-30.** Membership, shared history, presence, live
 > spectate, message authorship, the clearance filter, several agents per room,
@@ -9,13 +9,23 @@
 > parts of Phase 3 that could not wait (the authority rule, and personal memory
 > being excluded from shared rooms in both directions).
 >
-> **Floor control, steer, the turn queue, the observer lane, room memory
-> compartments, and per-participant cost attribution are designed here and NOT
+> **Floor control, steer, the turn queue, the observer lane, and per-participant
+> cost attribution are designed here and NOT
 > built.** `chat_session.floor_mode` exists and defaults to `'open'`, which is
 > today's behaviour; the concurrent-run 409 is still the only thing standing
 > between two people and one thread. Read §5 and §8 as a plan, not a
 > description. The authoritative build state is
 > [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §6.
+>
+> **Update 2026-08-01 (doc-truth pass):** the workstream merged to main on
+> 2026-07-31. Room memory compartments are no longer on the not-built list —
+> they shipped 2026-07-30 ([`memory-clearance.md`](memory-clearance.md) §7,
+> `groups_sessions_authority.md` §6). The migrations landed as **136**
+> (`agent_blob` instance key), **137** (quarantine of commingled agent data),
+> **138** (`org_group`, `org_group_member`, `chat_session.visibility`,
+> `chat_session_participant`), and **139** (`chat_message`
+> author_email/author_kind, clearance tags, replay filter,
+> `chat_session_agent`).
 
 Turn CommandCenter agent sessions from a thousand private threads into **rooms** — shared,
 live, durable places where several people and one agent work the same problem together.
@@ -143,11 +153,21 @@ non-obvious ones and they are the reason this needs a design rather than a patch
 - `_patch_session` (`:151`), `_delete_session` (`:179`) — same predicate
 - `list_active_sessions` (`:438`) — cross-references `AND user_id = :uid`
 
+> **Update 2026-08-01 (doc-truth pass): no longer true.** The single-owner
+> predicates above were replaced by membership checks —
+> `resolve_room_access(session_id, email)` in
+> `apps/services/gateway/gateway/rooms.py` is the one authority for who may
+> read a session. This section stands as the pre-multiplayer record.
+
 ### 3.2 Control is single-owner
 
 `_thread_owner_ok(thread_id, user_id)` (`routes/agent.py:1651`) gates **reconnect** (`:1544`)
 and **cancel** (`:1674`). It is correct today and deliberately permissive (returns `True` for
 ephemeral threads and on DB error), but it encodes "one email owns one thread".
+
+> **Update 2026-08-01 (doc-truth pass): no longer true.** Reconnect and cancel
+> are now gated by `resolve_room_access` (`gateway/rooms.py`) rather than
+> `_thread_owner_ok`.
 
 ### 3.3 A second person's message destroys the first person's run — silently
 
@@ -181,6 +201,10 @@ SSE lines). A participant's message reaches the *agent* but never reaches the ot
 *browsers*. And `chat_message` (`infra/postgres/02_chat_history.sql:23`) has
 `role IN ('user','assistant','system')` (`:26`) and no author column — so in a room every human turn
 renders as an anonymous "user". You cannot tell who asked what.
+
+> **Update 2026-08-01 (doc-truth pass): fixed.** Migration 139 added
+> `chat_message.author_email` / `author_kind`, plus per-message clearance tags
+> and clearance-filtered replay redaction.
 
 ### 3.5 The run context is stitched from one person's private data
 
@@ -226,6 +250,9 @@ chat_session  (already exists — becomes the room)
   + chat_session_member  (new — who's in it and in what capacity)
   + cc:room:{thread_id}  (new Redis stream — room events that outlive runs)
 ```
+
+> **Update 2026-08-01 (doc-truth pass):** the proposed `chat_session_member`
+> shipped as **`chat_session_participant`** (migration 138).
 
 Why this and not a new abstraction:
 
@@ -274,6 +301,11 @@ ALTER TABLE chat_message
         CHECK (visibility IN ('room','private')),
     ADD COLUMN IF NOT EXISTS private_to   TEXT;             -- email, when visibility='private'
 ```
+
+> **Update 2026-08-01 (doc-truth pass):** as shipped, the participant table is
+> `chat_session_participant` (migration 138), and `floor_mode` landed with
+> `DEFAULT 'open'` — not the `'driver'` default drafted above; nothing enforces
+> `'driver'` yet. The `chat_message` authorship columns landed in migration 139.
 
 **Room roles are not org roles.** `owner` / `contributor` / `observer` describe a capacity
 *in this room*. `UserRole.EXECUTIVE` / `EMPLOYEE` describes authority *in the company*. §5.4
@@ -336,6 +368,14 @@ POST   /chat/sessions/{id}/handoff              {to, note?} — transfer owner/d
 PATCH  /chat/sessions/{id}/room                 visibility, floor_mode, context_policy,
                                                 history_visibility, max_contributors, budget
 ```
+
+> **Update 2026-08-01 (doc-truth pass):** the shipped surface is
+> `gateway/routes/rooms.py`, not the `/members` `/join` `/leave` draft above.
+> Real endpoint groups: `GET/PATCH /sessions/{id}/room` (room state +
+> settings), `POST/PATCH /sessions/{id}/participants[...]`,
+> `POST/DELETE /sessions/{id}/agents[...]`, `POST /sessions/{id}/presence`,
+> `GET /sessions/{id}/room-stream`, and `GET /directory` (share directory).
+> The floor/steer/handoff endpoints are still unbuilt.
 
 One helper replaces `_thread_owner_ok` everywhere:
 
@@ -444,6 +484,12 @@ Per-participant cost attribution rides the existing activity/cost feed: stamp
 show "1.2M tokens · Vijay 61% · Sanjay 39%".
 
 ### 5.4 The permission matrix
+
+> **Update 2026-08-01 (doc-truth pass):** the shipped role vocabulary is
+> **`owner` | `member` | `viewer`**
+> ([`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §2),
+> not the `observer` / `contributor` / `owner` triple used below. Read
+> "observer" as `viewer` and "contributor" as `member`.
 
 | Action | Observer | Contributor | Owner | Also requires |
 |---|---|---|---|---|
@@ -690,13 +736,16 @@ confidential-deal case safe, and it is detailed in
 
 ### Phase 1 — Read-only multiplayer (~1 week)
 
-- Migration 117 (membership, room columns) + backfill.
+- Membership + room columns — **landed as migration 138** (drafted here as 117) + backfill.
 - `resolve_room_access` replaces `_thread_owner_ok` at both call sites; membership predicate
   replaces `WHERE user_id = :uid` in the five `chat.py` helpers.
 - `cc:room:{tid}` stream; presence heartbeat; `PARTICIPANT_*` events.
 - Merged `/room-stream` SSE; frontend translator cases; presence rail.
 - Invite / join / leave; sessions sidebar shows shared rooms.
 - Shared rooms are pinned to `context_policy='none'` until Phase 3.
+  **Update 2026-08-01 (doc-truth pass):** superseded per §6.3 — clearance
+  compartments shipped 2026-07-30, so shared rooms run at room clearance;
+  `context_policy` survives only as the coarse `'none'` clean-room override.
 - **Acceptance:** Sanjay opens Vijay's running session, sees the last hour replay and then
   live tool calls, and cannot send, steer, or cancel.
 
@@ -714,7 +763,8 @@ confidential-deal case safe, and it is detailed in
 
 Expanded by [`memory-clearance.md`](memory-clearance.md) §7, which splits it into 3a/3b/3c.
 
-- **3a** — compartment registry (migration 118), `scope_key()` kinds, the `prefs`/`user`
+- **3a** — compartment registry (migration: next free number at build time — the registry
+  is still unbuilt; 118 was drafted before 136-139 landed), `scope_key()` kinds, the `prefs`/`user`
   split, clearance resolution at run start, read/write rules at both `routes/agent.py` memory
   call sites, `_set_memory_write_scope`.
 - **3b** — subject binding (bound rooms, inline declaration), entity-linked inference that may

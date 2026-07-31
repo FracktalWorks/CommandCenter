@@ -311,6 +311,11 @@ No feature above is an island; each plugs into a surface that already exists:
   actual_start, actual_end, source, external_event_id, recurrence_rule`.
   `item_id` nullable because breaks/rituals aren't tasks. Batch blocks join to
   members via `gtd_block_members(block_id, item_id, done_at)`.
+  *(Update 2026-08-01 (doc-truth pass): this column set is **CANONICAL** for
+  `gtd_time_blocks`. The table is specified in three places with different
+  shapes — `calendar_timeboxing.md` §3, here, and the comment at
+  `infra/postgres/76_gtd_scheduling.sql:14` — the other two now defer here.
+  The table is still unbuilt: no migration creates it as of 2026-08-01.)*
 - **`gtd_items`**: no change needed beyond what exists (leveraged, isTwoMinute,
   energy, estimates, actuals all present) — the redesign is mostly *surfacing*
   captured data.
@@ -342,6 +347,10 @@ No feature above is an island; each plugs into a surface that already exists:
   focus via the existing QuickCapture, ambient sound) — timer state is
   client-side; actuals API already exists. Focus Shield ships here if the
   notification surface exposes a hold/release hook; otherwise F2.
+  *(Update 2026-08-01 (doc-truth pass): the hold/release hook does NOT exist —
+  no notification-hold primitive anywhere in `control_plane/src`. Focus Shield
+  is therefore F2+, blocked on that platform primitive; also flagged in
+  `work_plan.md` WS-21.)*
 - **F2:** `gtd_time_blocks` + breaks in the packer + batch blocks + recurring
   ritual blocks + Email windows + Waiting-on chase block.
 - **F3:** ideal-week templates, Top-5 outcomes (Horizons build-out), mobile
@@ -356,3 +365,30 @@ No feature above is an island; each plugs into a surface that already exists:
 break / ritual blocks + meters; Focus Mode; Gap Filler; Startup ritual;
 Shutdown review; mobile Today timeline. Visual language matches the control
 plane's dark theme (cyan primary, gold = leverage).
+
+## 9. Acceptance & verification for F2/F3 open items (added 2026-08-01, doc-truth pass)
+
+- **F2 `gtd_time_blocks` — done when:** a migration creates the §5 table
+  (+ `gtd_block_members`) and blocks persist server-side — a timebox created on
+  one device survives reload and appears on a second device; the per-day
+  Focus-OS state currently in localStorage
+  (`app/tasks/lib/focusPrefs.ts`: One Thing, tomorrow seeds, ritual stamps,
+  timer prefs) is migrated to server-backed storage so it follows the user
+  across devices; breaks/rituals/batches exist as
+  `kind='break'|'ritual'|'batch'` rows, not client-side synthesis.
+- **F2 Email windows — done when:** a recurring Email window renders as a real
+  block, deep-links into the email app's triage, email-captured tasks route to
+  tomorrow's plan seed by default, and the end-of-day review reports email
+  planned-vs-actual like any block. *(Partial foundation already shipped
+  2026-07-23: recurring BLOCK/FOCUS windows — `gtd_settings.day_templates`,
+  mig `98_gtd_day_templates.sql` — can reserve an "Email" window on the grid;
+  the email-app deep-link, shield-hold and review accounting do not exist.)*
+- **F3 external sync — done when:** see `calendar_timeboxing.md` §13 (P4):
+  OAuth-backed `calendar_accounts`, `kind='external'` events the packer will
+  not book over, `POST /tasks/calendar/sync` no longer 501, two-way write.
+- **Verify:** `cd workbench/control_plane && npx tsc --noEmit && npm test`
+  (vitest); `pytest tests/unit -k calendar` — runs
+  `tests/unit/test_calendar_planner.py` (packer geometry, buffers, energy +
+  day-template windows, lunch carve-out) and
+  `tests/unit/test_email_calendar_context.py`; GTD API surface:
+  `pytest tests/unit/test_tasks_gtd.py`.

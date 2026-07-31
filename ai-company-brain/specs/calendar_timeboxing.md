@@ -1,11 +1,24 @@
 # Calendar & Timeboxing — feature spec + roadmap
 
-Status: **P0–P3 built** (2026-07-18). Branch `feat/calendar-app` / draft PR #71.
+Status: **P0–P3 SHIPPED to main** (PR #71 merged, commit `7a5c72b2`).
 The day/week/month grid, drag-drop + resize timeboxing, energy/capacity prefs,
 the AI "Plan my day" planner, chat-with-calendar tools, auto-reschedule
-roll-over, deadline radar, and overlap detection are all shipped to the branch.
-Only P4 (external Google/Outlook sync — needs OAuth creds) and P5 are deferred.
-Nothing auto-deploys until the PR is reviewed + merged.
+roll-over, deadline radar, and overlap detection are all live.
+Only P4 (external Google/Outlook sync — needs OAuth creds) and parts of P5
+remain deferred (see cross-map, §12).
+
+**Update 2026-08-01 (doc-truth pass):** the old "draft PR / nothing auto-deploys
+until reviewed + merged" caveat is obsolete — PR #71 merged
+(`7a5c72b2 feat(calendar): timeboxing app … (#71)`) and `CalendarView.tsx` +
+the calendar routes are in main. P3's "still to do" (nightly job + roll history)
+has ALSO shipped since: migration `infra/postgres/78_gtd_calendar_rollover.sql`
+(`gtd_rollover_log`, `auto_rollover` toggle, per-user `timezone`) and
+`start_auto_rollover()` launched at gateway startup (`gateway/main.py`).
+Roll-over SEMANTICS then changed in #235 (2026-07-26): unfinished blocks are
+RELEASED back to the unscheduled list (`rolled_to = NULL` in the log) for
+deliberate re-planning — NOT packed onto today — so §6's "rolls them to the
+next open slot" no longer describes shipped behaviour. Successor roadmap:
+`calendar_focus_os.md`.
 
 ## 1. Why
 
@@ -56,6 +69,12 @@ scheduled_end   TIMESTAMPTZ   -- end of the block; default start + estimate
 events (meetings that are NOT tasks) can live on the same grid via
 `kind='external'`. The grid component is written against a `TimeBlock[]`
 abstraction so this swap is non-breaking.
+
+> **Update 2026-08-01 (doc-truth pass):** `gtd_time_blocks` is still unbuilt —
+> no migration creates it. Its column set is specified in three places with
+> different shapes (here, `calendar_focus_os.md` §5, and the comment at
+> `infra/postgres/76_gtd_scheduling.sql:14`); **`calendar_focus_os.md` §5 is
+> canonical** — this section and the migration comment defer to it.
 
 ## 4. Views (scaffolded: day / week / month grid)
 
@@ -190,12 +209,20 @@ Microsoft Graph; encrypted tokens via `key_store`).
   packs overdue-incomplete blocks into today (deadline-aware) + the roll-over
   banner; deadline radar (due-soon badge + rail section + one-click timebox).
   *Still to do: a nightly automatic roll-over job (scheduler) + roll history.*
+  *(Update 2026-08-01: the nightly job + `gtd_rollover_log` history SHIPPED —
+  mig 78 + `start_auto_rollover()`; and #235 changed the semantics to
+  release-to-list, see the header note. P3 is CLOSED.)*
 - **P4 — external sync (DEFERRED — needs OAuth creds):** `calendar_accounts` +
   Google/Graph read (conflict-avoidance) then two-way write. Seamed at
   `GET /calendar/accounts` + `POST /calendar/sync` (501).
 - **P5 — DEFERRED:** `gtd_time_blocks` table (multiple blocks/task, external
   events on the grid) + continuous auto-scheduling engine + Pomodoro + ideal-week
   templates + learned-estimate heuristics.
+  *(Update 2026-08-01: the Pomodoro item SHIPPED via `calendar_focus_os.md` F1's
+  Focus Mode — pomodoro/flow timer with cycle dots, 2026-07-22,
+  `app/tasks/components/FocusMode.tsx`. Remaining Pomodoro-adjacent scope lives
+  under focus_os F2: break blocks in the packer + cycle telemetry feeding
+  learned estimates. The rest of P5 also tracks under focus_os F2/F3 — see §12.)*
 
 ## 11. Files this touches (map)
 
@@ -210,3 +237,36 @@ Microsoft Graph; encrypted tokens via `key_store`).
   `components/CalendarView.tsx` (+ day/week/month subviews), `page.tsx` (route
   calendar → `CalendarView`), `lib/taskAssistantPersona.ts` (calendar context,
   P2).
+
+## 12. Cross-map to `calendar_focus_os.md` F0–F3 (added 2026-08-01, doc-truth pass)
+
+| This doc | focus_os | State |
+|---|---|---|
+| P0–P2 (grid, timeboxing, planner, chat) | shipped foundation under F0/F1 | SHIPPED (PR #71; F0/F1 2026-07-22) |
+| P3 remainder (nightly roll-over + history) | — (closed here) | SHIPPED (mig 78 + #235 release-to-list) |
+| P4 external sync | F3 item | OPEN — `/tasks/calendar/sync` still 501 |
+| P5 `gtd_time_blocks` / batch / recurring blocks | F2 | OPEN (table unbuilt; focus_os §5 canonical) |
+| P5 Pomodoro | F1 Focus Mode | SHIPPED 2026-07-22 (`FocusMode.tsx`) |
+| P5 ideal-week templates / auto-scheduling / learned estimates | F3 | OPEN (partial: recurring windows, mig 98) |
+
+## 13. Acceptance & verification (added 2026-08-01, doc-truth pass)
+
+- **P3 nightly roll-over — SHIPPED; acceptance restated to match #235:** after a
+  user's local midnight, yesterday's unfinished flexible timeboxes are RELEASED
+  to the unscheduled rail on first load without user action
+  (`scheduled_start/end → NULL`, at most once per local day, `auto_rollover`
+  opt-out honoured), and each release is recorded as a `gtd_rollover_log` row
+  with `rolled_to = NULL`; re-planning them is deliberate (drag, or Rebuild my
+  day, which sweeps them in per #232).
+- **P4 external sync — OPEN; done when:** a `calendar_accounts` row can be
+  created through a real OAuth connect flow (Google/Graph, reusing the
+  `email/transport/oauth.py` pattern); external events render on the grid as
+  `kind='external'` and the planner/packer refuses to book over them;
+  `POST /tasks/calendar/sync` returns data instead of 501; two-way write pushes
+  a timeboxed block out as a real calendar event.
+- **Verify:** `cd workbench/control_plane && npx tsc --noEmit && npm test`
+  (vitest); `pytest tests/unit -k calendar` — runs
+  `tests/unit/test_calendar_planner.py` (packer geometry: free intervals,
+  buffers, energy windows, lunch carve-out, day templates) and
+  `tests/unit/test_email_calendar_context.py`; GTD API surface:
+  `pytest tests/unit/test_tasks_gtd.py`.

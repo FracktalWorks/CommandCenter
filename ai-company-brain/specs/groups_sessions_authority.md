@@ -3,7 +3,7 @@
 > **Status:** ✅ steps 1-4 shipped, step 5 shipped in part — see §6
 > **Created:** 2026-07-29 · **Last built:** 2026-07-30
 > **Answers:** [`org_access_control.md` §10](org_access_control.md#10-handoff-multiplayer-agent-collaboration) — the handoff asked for exactly one spec covering the group primitive, `chat_session_participant`, and the authority rule, *before* shared transcripts exist and the decisions get expensive.
-> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 136/133).
+> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 136/137).
 
 Phase 1 of org access control shipped the resolved principal (`UserContext` +
 `EffectiveAccess`), default-deny authentication, feature and agent-run gating,
@@ -54,7 +54,7 @@ org_group_member(group_id, user_id, role ∈ (lead|member),
 
 ## 2. Session participants and visibility
 
-The room model (`docs/multiplayer/README.md` §3) says thread-as-room. The
+The room model (`docs/multiplayer/README.md` §4.2) says thread-as-room. The
 schema change is the one §10.2.2 called for — **one change, not two**:
 
 ```sql
@@ -107,7 +107,7 @@ of the permitted member's Zoho query lands in a transcript the denied member
 reads (§10.2.4 case 2). Intersection is the only rule where *presence in the
 room* never grants anyone a read they don't hold. It is also the rule the
 memory design already chose independently — "a run reads at the clearance of
-its least-cleared viewer" (`memory-clearance.md` §4) — and the rule
+its least-cleared viewer" (`memory-clearance.md` §3.3) — and the rule
 `intersect()` was built and tested for. Three designs converging on the same
 rule is the strongest signal available that it is the right one.
 
@@ -129,7 +129,7 @@ it by removing Bob — both visible acts, neither a silent downgrade.
 compartment (`_memory_user_id`) is **not injected** when the session has more
 than one participant — one person's private context must not surface in
 another's view (§10.2.4 case 1). The room's own compartment
-(`scope_key(room=thread_id)`, `memory-clearance.md` §6.3) is what a shared
+(`scope_key(room=thread_id)`, `memory-clearance.md` §3.1) is what a shared
 session reads and writes. Preferences (tone, formatting — the `prefs:` split)
 remain per-typer and are injected as rendering hints, not content.
 
@@ -154,7 +154,7 @@ not after:
 - Because the room runs at intersection from the moment it *becomes* shared,
   redaction stubs only ever appear for messages that predate a
   participant's joining — the "declare shared mid-conversation" flow
-  (`README.md` §5) makes this the explicit moment the clearance drops.
+  (`README.md` §7.1) makes this the explicit moment the clearance drops.
 
 ## 5. What this does NOT change
 
@@ -166,14 +166,14 @@ not after:
 - Agent file/memory instancing — orthogonal and already specced
   (`agent-kinds.md`); the only binding is that `t:<team>` keys now name
   `org_group.slug`.
-- The quarantine and instance partition work (migrations 136/133) — already
+- The quarantine and instance partition work (migrations 136/137) — already
   landed; this spec consumes it.
 
 ## 6. Order of work
 
 | # | Step | State |
 |---|---|---|
-| 1 | Migration 134: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | ✅ |
+| 1 | Migration 138: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | ✅ |
 | 2 | Wire agent instancing through the run path (files + disk together; `agent_paths.py` is the seam) | ✅ |
 | 3 | Participant resolution + `intersect()` fold at run start; feed the two existing enforcement points | ✅ |
 | 4 | `chat_message` authorship + clearance tag; replay filter (migration 139) | ✅ |
@@ -186,7 +186,7 @@ predicate that replaced `WHERE user_id = :uid` everywhere, including
 room stream, the share directory), and the workbench surfaces: room header with
 the visible cap, share sheet, presence rail, attributed turns, redaction stubs,
 the shared badge in the sidebar, and a watcher's composer that explains itself.
-Migration 135 also added `chat_session_agent`, so a room holds more than one
+Migration 139 also added `chat_session_agent`, so a room holds more than one
 agent — §7 below.
 
 **What step 5 did NOT ship, and must not be assumed:**
@@ -208,7 +208,7 @@ agent — §7 below.
   registry, and the `prefs`/`user` backfill (so `prefs:` is empty for now).
 - **Groups admin UI.** `org_group` / `org_group_member` have no HTTP surface
   beyond read-time expansion; groups can be used as participant subjects but
-  must be created in SQL.
+  must be created in SQL. Owned by `work_plan.md` WS-13 (Centers Phase B).
 
 ## 7. Several agents in one room
 

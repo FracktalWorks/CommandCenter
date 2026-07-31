@@ -5,7 +5,7 @@
 > **Created:** 2026-06-17
 > **ADR references:** ADR-008 (**implemented** 2026-07-03), ADR-012 (Phase 2 deferred)
 > **WBS reference:** WBS 2.6 (semantic cache + token compression)
-> **Related files:** `packages/acb_llm/acb_llm/prompt_cache.py` (NEW — the transform), `packages/acb_llm/acb_llm/client.py`, `apps/gateway/gateway/routes/v1_compat.py` (agent-traffic choke point), `apps/orchestrator/orchestrator/executor.py`, `apps/orchestrator/orchestrator/agents.py`, `packages/acb_memory/acb_memory/session_cache.py` (NEW), `apps/gateway/gateway/main.py` (prewarm), `apps/agent-email-assistant/agents.py`
+> **Related files:** `packages/acb_llm/acb_llm/prompt_cache.py` (NEW — the transform), `packages/acb_llm/acb_llm/client.py`, `apps/services/gateway/gateway/routes/v1_compat.py` (agent-traffic choke point), `apps/services/orchestrator/orchestrator/executor.py`, `apps/services/orchestrator/orchestrator/agents.py`, `packages/acb_memory/acb_memory/session_cache.py` (NEW), `apps/services/gateway/gateway/main.py` (prewarm), `apps/agents/agent-email-assistant/agents.py`
 > **Companion plan:** [`specs/archive/email_tool_consolidation.md`](archive/email_tool_consolidation.md) — shrinking the tool surface (Phase 7 here depends on it)
 
 ---
@@ -209,6 +209,10 @@ This single-line change marks where the stable prefix ends. The sentinel is invi
 
 **3.2 — LiteLLM pre-call hook `acb_litellm_hooks.py`**
 
+> **Update 2026-08-01 (doc-truth pass):** does not apply — no LiteLLM proxy process exists (see
+> header); superseded by the SDK-level transform `acb_llm/prompt_cache.py::apply_prompt_caching`
+> at the gateway choke points. Do not create `infra/litellm/acb_litellm_hooks.py`.
+
 Create `infra/litellm/acb_litellm_hooks.py` (mounted into the LiteLLM container):
 
 ```python
@@ -251,6 +255,10 @@ litellm_settings:
 
 **3.3 — Tool-definition caching (function-calling agents) — REVISED**
 
+> **Update 2026-08-01 (doc-truth pass):** the "extend the Phase 3.2 LiteLLM hook" mechanics below
+> do not apply — no proxy process exists (see header); shipped as part of the SDK-level
+> `apply_prompt_caching` transform (marks the last tool for Anthropic tiers).
+
 > The original plan assumed all CommandCenter tools are *described in the system-prompt addendum* — true for the orchestrator / Copilot-SDK agents. It is **not** true for native-MAF agents that pass real function-tools: the **email-assistant sends ~63 tool schemas (~6,500 tokens) as a separate top-level `tools` array on every request**, entirely outside the system prompt. None of it is cached today, and it's the single largest static block for that agent.
 
 Anthropic caches in the order `tools` → `system` → `messages`, so the `tools` array is the FIRST cacheable block — caching it is the highest-value change for function-tool agents. Extend the Phase 3.2 LiteLLM hook to also mark the tool array:
@@ -287,7 +295,7 @@ Mind Anthropic's 4-breakpoint limit: tools + the split system prefix is already 
 
 **4.1 — Session memory cache in gateway agent route**
 
-In `apps/gateway/gateway/routes/agent.py`, before calling `get_memory_context()`:
+In `apps/services/gateway/gateway/routes/agent.py`, before calling `get_memory_context()`:
 
 ```python
 _mem_key = f"session_mem:{thread_id}"
@@ -300,7 +308,11 @@ else:
         await redis.setex(_mem_key, 600, memory_context)  # 10-minute session TTL
 ```
 
-Apply the same pattern in `apps/gateway/gateway/main.py` for the orchestrator `/copilot/chat` path (`enrich_instructions_with_memory()`).
+Apply the same pattern in `apps/services/gateway/gateway/main.py` for the orchestrator `/copilot/chat` path (`enrich_instructions_with_memory()`).
+
+> **Update 2026-08-01 (doc-truth pass):** the `/copilot/chat` path is slated for retirement under
+> `agent_architecture.md` §12 A1 (`work_plan.md` WS-8 — single runtime). Coordinate with that
+> workstream before investing further in this path (decision D4 context).
 
 **Tradeoff:** Memory does not update mid-session. This is acceptable because:
 - Agents can call `recall_timeline(entity, query)` explicitly for fresh data when needed
@@ -325,6 +337,11 @@ Only call `add_episode()` when `_is_episode_worthy()` returns True. This is a se
 ---
 
 ### Phase 5 — LiteLLM Proxy Redis Cache (Week 1, ~1 hour)
+
+> **Update 2026-08-01 (doc-truth pass):** the `infra/litellm/config.yaml` instructions below do
+> not apply — no proxy process exists (see header). Shipped SDK-side instead:
+> `client.py::_init_litellm_cache` installs `litellm.cache` (gated `LITELLM_REDIS_CACHE=1`,
+> per-call opt-in `enable_litellm_cache=True`).
 
 **Goal:** Exact-match prompt cache at the proxy layer — free wins for repeated identical calls (classification, triage, structured extraction).
 
@@ -362,7 +379,7 @@ Good candidates for opt-in caching:
 
 Anthropic's `max_tokens: 0` API feature (available since Feb 2026) lets you write to the cache without generating output or paying for completions.
 
-In `apps/gateway/gateway/main.py` startup event:
+In `apps/services/gateway/gateway/main.py` startup event:
 
 ```python
 @app.on_event("startup")
@@ -406,6 +423,10 @@ The email-assistant is the acute case: **63 tools, all injected every request, b
 
 ## Risk Assessment
 
+> **Update 2026-08-01 (doc-truth pass):** rows referencing "the LiteLLM hook" do not apply — no
+> proxy process exists (see header); the equivalent risks are carried by the SDK-level
+> `apply_prompt_caching` transform (unit-tested in `tests/unit/test_prompt_cache.py`).
+
 | Risk | Severity | Mitigation |
 |---|---|---|
 | Sentinel marker leaking into LLM context | Medium | LiteLLM hook consumes it before the request leaves; add an assertion in hook tests |
@@ -444,6 +465,9 @@ The email-assistant is the acute case: **63 tools, all injected every request, b
 
 ## Execution Order
 
+> **Update 2026-08-01 (doc-truth pass):** the `infra/litellm` rows below do not apply — no proxy
+> process exists (see header); superseded by the SDK-level cache at the gateway choke points.
+
 ```
 Week 1, Day 1   Phase 1.1   Cache token logging in acb_llm/client.py         ~1h
 Week 1, Day 1   Phase 5     LiteLLM Redis cache config (infra/litellm)         ~1h
@@ -470,6 +494,10 @@ Total implementation effort: **~18 hours** across 4 weeks.
 
 ## File Inventory
 
+> **Update 2026-08-01 (doc-truth pass):** the `infra/litellm/*` rows below do not apply — no proxy
+> process exists (see header). The file actually created was
+> `packages/acb_llm/acb_llm/prompt_cache.py` (the SDK-level transform).
+
 Files to create:
 
 | File | Purpose |
@@ -481,12 +509,12 @@ Files to modify:
 | File | Change |
 |---|---|
 | `packages/acb_llm/acb_llm/client.py` | Log cache tokens; add `cache_key` and `enable_litellm_cache` params |
-| `apps/orchestrator/orchestrator/executor.py` | Insert `<!-- CACHE BREAK -->` sentinel at memory injection boundary; (Phase 7.2) `tool_scope` for the email agent path |
+| `apps/services/orchestrator/orchestrator/executor.py` | Insert `<!-- CACHE BREAK -->` sentinel at memory injection boundary; (Phase 7.2) `tool_scope` for the email agent path |
 | `infra/litellm/acb_litellm_hooks.py` | (Phase 3.3) also add `cache_control` to the last entry of the `tools` array for Anthropic requests |
-| `apps/agent-email-assistant/agents.py` | (Phase 7) consolidate 63→~40 tools, trim mega-docstrings, drop UI-only tools, keep `_TOOLS` deterministically ordered — see `archive/email_tool_consolidation.md` |
+| `apps/agents/agent-email-assistant/agents.py` | (Phase 7) consolidate 63→~40 tools, trim mega-docstrings, drop UI-only tools, keep `_TOOLS` deterministically ordered — see `archive/email_tool_consolidation.md` |
 | `infra/litellm/config.yaml` | Enable Redis cache; register hook callback |
-| `apps/gateway/gateway/routes/agent.py` | Session-scoped memory cache in Redis |
-| `apps/gateway/gateway/main.py` | Session-scoped memory cache for `/copilot/chat` path; startup cache warming |
+| `apps/services/gateway/gateway/routes/agent.py` | Session-scoped memory cache in Redis |
+| `apps/services/gateway/gateway/main.py` | Session-scoped memory cache for `/copilot/chat` path; startup cache warming |
 | `packages/acb_memory/acb_memory/graphiti_client.py` | Episode worthiness filter |
 | `packages/acb_audit/` | Add `cache_read_tokens` / `cache_write_tokens` fields to AuditEvent |
 
@@ -519,6 +547,6 @@ For each phase:
 When each phase is implemented:
 - Update `ai-company-brain/system_architecture.md` ADR-008 status from "approved / unimplemented" to "implemented"
 - Update `ai-company-brain/project_plan.md` WBS 2.6 status (§6 Phase 2)
-- Update `apps/orchestrator/AGENTS.md` to note sentinel marker convention
+- Update `apps/services/orchestrator/AGENTS.md` to note sentinel marker convention
 - Update `packages/acb_llm/AGENTS.md` (or create if absent) to document cache parameters
 - Update `packages/acb_memory/` AGENTS.md to document session-scoped memory TTL contract

@@ -147,7 +147,8 @@ and you are in the room; episodic facts are not and may not be.
 ### 3.2 The compartment registry
 
 ```sql
--- migration 118_memory_compartments.sql
+-- memory_compartments migration — number assigned at build time (still unbuilt;
+-- "118" predates migrations 136-139 landing)
 CREATE TABLE IF NOT EXISTS memory_compartment (
     scope_key    TEXT PRIMARY KEY,          -- the Mem0 user_id partition value
     kind         TEXT NOT NULL CHECK (kind IN
@@ -462,7 +463,7 @@ Slots into the room plan in [`README.md`](README.md) §8.
 | Phase | Work |
 |---|---|
 | **0** *(with the room Phase 0)* | ✅ **Authorize `routes/memory.py`** (§2.1) — done 2026-07-30. |
-| **3a** | ◐ **Partly built 2026-07-30.** Done: `scope_key()` kinds (`room:`, `prefs:`), `acb_memory/compartments.py` with `resolve_clearance`, clearance resolution at run start, read/write rules at both `routes/agent.py` call sites, the memory tools' write scope, the room compartment end-to-end, and the session cache keyed by clearance. **Not built:** the compartment registry (migration 118) and `subject:` compartments — a room's audience is its participant list, which already exists, whereas a subject's needs the registry; and the `prefs`/`user` split has the vocabulary and the read path but **no backfill classifier**, so `prefs:` is empty until something writes to it (open question 1). |
+| **3a** | ◐ **Partly built 2026-07-30.** Done: `scope_key()` kinds (`room:`, `prefs:`), `acb_memory/compartments.py` with `resolve_clearance`, clearance resolution at run start, read/write rules at both `routes/agent.py` call sites, the memory tools' write scope, the room compartment end-to-end, and the session cache keyed by clearance. **Not built:** the compartment registry (migration: next free number at build time) and `subject:` compartments — a room's audience is its participant list, which already exists, whereas a subject's needs the registry; and the `prefs`/`user` split has the vocabulary and the read path but **no backfill classifier**, so `prefs:` is empty until something writes to it (open question 1). |
 | **3b** | Subject binding (bound rooms, inline declaration) · entity linking for inference · the private hint on the personal lane · extraction classification (§5.2) |
 | **3c** | Share sheet with the memory disclosure · waterline · memory inspector · "what would they see?" |
 

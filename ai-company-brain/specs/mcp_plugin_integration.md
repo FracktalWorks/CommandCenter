@@ -1,9 +1,20 @@
 # MCP & Plugin Integration — Design Brainstorm
 
-> **Status:** Brainstorm / Design proposal
+> **Status:** Phase A SHIPPED · Phases B–C not started (was: Brainstorm / Design proposal)
 > **Date:** 2026-06-14
 > **Scope:** How Model Context Protocol (MCP) servers and Claude-style plugins
 > extend CommandCenter beyond the current REST API integration model.
+
+> **Update 2026-08-01 (doc-truth pass):** **Phase A (MCP Server Registry, §6) is SHIPPED** —
+> the `mcp_servers` table (`infra/postgres/13_mcp_servers.sql`), gateway CRUD + connectivity-test
+> endpoints (`GET/POST/DELETE /integrations/mcp`, `POST /integrations/mcp/test` in
+> `apps/services/gateway/gateway/routes/integrations.py`), and per-run injection with the
+> `agent_scope` filter (`_inject_mcp_servers` in
+> `apps/services/orchestrator/orchestrator/_tool_injection.py`, invoked from `executor.py` on every
+> agent load) — see `core_module_map.md` B4. **Phases B (plugins) and C (store) remain not
+> started.** Per `work_plan.md` decision D7. Note the shipped injection differs from the §2.2
+> sketch: it writes `agent._mcp_servers` (the field the Copilot SDK actually reads), NOT
+> `default_options` — and it only takes effect on Copilot-SDK agents (see the §2.2 note).
 
 ---
 
@@ -105,6 +116,14 @@ REST APIs require us to write a resolver for every service (see
 │       tool manifests, injects tools into session             │
 └─────────────────────────────────────────────────────────────┘
 ```
+
+> **Update 2026-08-01 (doc-truth pass):** as shipped, `_inject_mcp_servers` is invoked for *every*
+> loaded agent, but it merges into `agent._mcp_servers` — a **Copilot-SDK** field (the SDK's
+> session config reads `self._mcp_servers`; `default_options["mcp_servers"]` as sketched above is
+> never read by anyone). Native-MAF agents (e.g. the email assistant) have no code path that reads
+> that attribute, so MCP injection is **effectively Copilot-only today — a silent no-op for
+> native-MAF agents**. A MAF-side MCP path is an open gap (also flagged in
+> `drawio_integration.md` §1.4 and `core_module_map.md` B4).
 
 ### 2.3 Credential Flow for MCP
 
@@ -305,6 +324,10 @@ tools where someone else runs the API. They complement each other.
 └─────────────────────────────────────────────────────────────┘
 ```
 
+> **Update 2026-08-01 (doc-truth pass):** unbuilt (Phase B). If implemented, don't copy this
+> Copilot-only sketch — the shipped platform tool injection (`_inject_agent_tools`) already covers
+> both runtimes (MAF `agent.tools` + Copilot `agent._tools`); plugin tools should ride that path.
+
 ### 3.4 OAuth 2 Flow for Plugins
 
 ```
@@ -467,6 +490,9 @@ a product.
 
 ### Phase A — MCP Server Registry (estimated: 1-2 weeks)
 
+> **Update 2026-08-01 (doc-truth pass):** SHIPPED — see the banner at the top of this document.
+> (Injection targets `agent._mcp_servers`, not `default_options`; the UI tab is a skeleton.)
+
 - [ ] New Postgres migration: `mcp_servers` table
 - [ ] Gateway CRUD endpoints: `GET/POST/DELETE /integrations/mcp/`
 - [ ] Gateway test endpoint: `POST /integrations/mcp/test`
@@ -541,6 +567,6 @@ a product.
 - [Claude Plugins documentation](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/plugins)
 - [OpenAPI 3.0 specification](https://spec.openapis.org/oas/v3.0.3)
 - CommandCenter Integration Registry: `packages/acb_skills/acb_skills/integrations.py`
-- Agent executor: `apps/orchestrator/orchestrator/executor.py`
+- Agent executor: `apps/services/orchestrator/orchestrator/executor.py` (MCP injection now in `apps/services/orchestrator/orchestrator/_tool_injection.py`)
 - System architecture: `ai-company-brain/system_architecture.md`
 - Agent builder guide: `ai-company-brain/agent_repo_compatibility.md`

@@ -5,7 +5,8 @@
 
 How an agent is defined, what it can see at each layer, how its knowledge is authored, and how
 it gets permanently better — for agents that live **inside CommandCenter**: first-party agents
-in `apps/agents/`, and agents built in-platform by the upcoming **Agent Creator**.
+in `apps/agents/`, and agents built in-platform by the upcoming **Agent Workshop**
+(`/build/agents` — `department_centers.md` §1).
 
 Externally-hosted agents cloned from third-party GitHub repos were the VS Code-era model. They
 still load, but they are no longer the shape the architecture is designed around, and nothing
@@ -47,7 +48,7 @@ So the central split:
 | | **Declarative agent** *(the default)* | **Code agent** *(the exception)* |
 |---|---|---|
 | Defined by | manifest + instructions + KB | manifest + `agents.py` |
-| Authored in | the Agent Creator, or a manifest file in-repo | VS Code, in `apps/agents/` |
+| Authored in | the Agent Workshop, or a manifest file in-repo | VS Code, in `apps/agents/` |
 | Stored in | Postgres — `agent_defs` + `agent_def_versions` | Git (the monorepo) |
 | Runs on | **one shared generic MAF builder** | its own factory |
 | Changed by | edit draft → publish version (approval-gated) | pull request |
@@ -68,7 +69,7 @@ It resolves three separate problems at once:
    CI, no third-party pushing to a shared repo. The DEV-ONLY limitation then applies only to
    **code agents**, which are first-party by definition. The hardest unresolved question about
    the workbench stops applying to the majority case.
-2. **The Agent Creator never has to generate Python.** That is where agent builders usually
+2. **The Agent Workshop never has to generate Python.** That is where agent builders usually
    fail — generated code needs review, tests, and a sandbox. Generating a *manifest* needs a
    schema validator.
 3. **The manifest becomes load-bearing instead of decorative** — see §3, where three agents
@@ -221,7 +222,7 @@ The App Workshop already solved "a non-engineer authors an artifact in-platform,
 versioned, publishable, shareable, and durable." An agent is the same problem.
 
 ```sql
--- migration 122_agent_definitions.sql  (mirrors 114/115)
+-- migration NNN_agent_definitions.sql (next free number at build time)  (mirrors 114/115)
 
 CREATE TABLE IF NOT EXISTS agent_defs (          -- the editable DRAFT (edit-model)
     id                 UUID PRIMARY KEY DEFAULT gen_random_uuid(),
@@ -233,7 +234,7 @@ CREATE TABLE IF NOT EXISTS agent_defs (          -- the editable DRAFT (edit-mod
     status             TEXT NOT NULL DEFAULT 'draft'
                          CHECK (status IN ('draft','live','archived')),
     live_version       INT,                      -- NULL until first publish
-    builder_session_id TEXT,                     -- the Agent Creator chat that made it
+    builder_session_id TEXT,                     -- the Agent Workshop chat that made it
     created_at         TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at         TIMESTAMPTZ NOT NULL DEFAULT now()
 );
@@ -382,7 +383,7 @@ embeddings + distilled summaries + metadata, queryable through one interface. Th
 what `mem0_memories` already does. So the KB is one more partition, not a new store:
 
 ```sql
--- migration 123_agent_kb.sql
+-- migration NNN_agent_kb.sql (next free number at build time)
 CREATE TABLE IF NOT EXISTS agent_kb_chunk (
     id           BIGSERIAL PRIMARY KEY,
     agent_slug   TEXT NOT NULL,
@@ -500,7 +501,7 @@ the existing prompt-caching work.
 ## 10. Lifecycle
 
 ```
-  Agent Creator  ──►  draft  ──►  validate  ──►  eval gate  ──►  publish v(n)  ──►  run
+  Agent Workshop ──►  draft  ──►  validate  ──►  eval gate  ──►  publish v(n)  ──►  run
    (a chat)             ▲                                                           │
                         │                                                           ▼
                  human approval ◄── propose ◄── promote ◄──────────────────  accumulate
@@ -508,9 +509,10 @@ the existing prompt-caching work.
                    prose diff)                instructions)
 ```
 
-1. **Create.** A conversation with the Agent Creator: *what should it do, who is it for, what
-   can it touch, what should it know.* It writes a **manifest + instructions + starter KB** —
-   never Python. Same shape as the App Workshop's describe-to-create bar.
+1. **Create.** A conversation in the Agent Workshop's describe-to-create flow: *what should it
+   do, who is it for, what can it touch, what should it know.* It writes a **manifest +
+   instructions + starter KB** — never Python. Same shape as the App Workshop's
+   describe-to-create bar.
 2. **Validate.** Manifest schema; declared integrations and skills resolve; delegation edges
    exist and don't cycle; **`runtime` matches the entrypoint** (§3.1); KB sources exist.
 3. **Eval gate.** Golden trajectories plus KB-recall pairs. Migration 06 already gates
@@ -643,6 +645,9 @@ Independently of the migration, **remove `PermissionHandler.approve_all` from al
 factories now** (§3.2) so the B6 risk-aware policy applies. That is a three-line fix and
 shouldn't wait for anything here.
 
+> **Update 2026-08-01 (doc-truth pass):** already fixed 2026-07-26 (§3.2). A0's remaining
+> scope is the startup runtime check only.
+
 ---
 
 ## 11.4 How this surfaces in chat
@@ -669,17 +674,21 @@ consequence stated — rather than being a default nobody chose.
 
 | Phase | Work | Depends on |
 |---|---|---|
-| **A0** | Drop `approve_all` from the three factories; add a startup check that `runtime` matches the entrypoint | — |
+| **A0** | Drop `approve_all` from the three factories — **already fixed 2026-07-26 (§3.2)**; A0's remaining scope is the startup check that `runtime` matches the entrypoint only | — |
 | **A1** | **Single runtime (§11):** audit what `/copilot/chat` still serves that `/agent/run/stream` doesn't; retire the Copilot-native `on_user_input_request` path in favour of the existing `ask_tools` platform tools; make `code_task` the only Copilot entry point | A0 |
-| **A** | Manifest schema + validator · `agent_defs`/`agent_def_versions`/`agent_def_grants` (122) · derive `dynamic_agents` from them · backfill all six | A0 |
+| **A** | Manifest schema + validator · `agent_defs`/`agent_def_versions`/`agent_def_grants` (migration: next free number at build time) · derive `dynamic_agents` from them · backfill all six | A0 |
 | **B** | The one generic `build_declarative_agent` · migrate task-manager and apis-config · retire their `agents.py` | A |
-| **C** | Agent Creator UI — describe-to-create, draft/publish/rollback, mirroring the Workshop | B |
-| **D** | Knowledge layer: migration 123 · source-aware chunking · `kb/INDEX.md` always-on · KB-recall evals | A |
+| **C** | Agent Workshop UI — the describe-to-create flow, draft/publish/rollback, mirroring the App Workshop | B |
+| **D** | Knowledge layer: migration (next free number at build time) · source-aware chunking · `kb/INDEX.md` always-on · KB-recall evals | A |
 | **E** | Retrieval quality: hybrid + IDF + age decay · distillation on ingest and on memory extraction | D |
 | **F** | Delegation modes + the clearance-intersection rule | A + multiplayer 3a |
 | **G** | Promotion loop: State → Knowledge proposals into the approval inbox | D + multiplayer 3a |
 
-A0 is a same-day fix. A–C are the Agent Creator's critical path and don't depend on the
+> **Update 2026-08-01 (doc-truth pass):** the "multiplayer 3a" dependency is partly shipped —
+> room compartments + clearance landed 2026-07-30 ✅; `subject:` compartments and the
+> compartment registry are still open. F and G block only on that open half.
+
+A0 is a same-day fix. A–C are the Agent Workshop's critical path and don't depend on the
 multiplayer work.
 
 **Acceptance for A:** every agent's runtime behaviour is derivable from its manifest alone —

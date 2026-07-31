@@ -57,11 +57,11 @@ on `agent_run`, and enforced by the executor.
 3. Remove `PermissionHandler.approve_all` from the three factories that set it
    (`agent_architecture.md` §3.2), restoring the B6 risk-aware handler.
 
-**Before the Agent Creator opens to non-engineers.** T2 for anything requesting shell. The
+**Before the Agent Workshop opens to non-engineers.** T2 for anything requesting shell. The
 mutation sandbox already containerises a Copilot session, so this is reuse of a proven path,
 not new infrastructure.
 
-**Before multi-tenant / Pomad Centre.** T2 becomes mandatory for *every* non-first-party
+**Before multi-tenant (a second org on this platform).** T2 becomes mandatory for *every* non-first-party
 agent regardless of tool surface, because the trust boundary moves from "our engineers" to
 "someone else entirely." At that point `DESIGN_LIMITATION_native_maf_mutation.md` must also be
 closed — though the declarative model already removes it for the majority case.
@@ -254,7 +254,7 @@ An honest review should say what not to churn.
   filters on, so an excluded compartment is never searched rather than searched-then-filtered.
   That is a real boundary, not a policy.
 - **Declarative agents.** Removes the mutation/tenant-isolation blocker, removes the
-  code-generation problem from the Agent Creator, and removes the class of failure where an
+  code-generation problem from the Agent Workshop, and removes the class of failure where an
   agent's own factory overrides platform policy (C1, C2, and the `approve_all` bypass are all
   instances of that class).
 - **Edit-model / run-model split.** Publishing never affects an in-flight run — the same

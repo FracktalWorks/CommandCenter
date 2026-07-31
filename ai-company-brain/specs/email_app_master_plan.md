@@ -9,7 +9,7 @@
 > - [`archive/email_tool_consolidation.md`](./archive/email_tool_consolidation.md) — tool-surface plan (63→42 done; unfinished merges carried into §6)
 > - [`archive/email_app_review.md`](./archive/email_app_review.md) — the M0→M9 build log (history only)
 >
-> **Evidence appendix:** [`email_feature_review_2026-07.md`](./email_feature_review_2026-07.md) —
+> **Evidence appendix:** [`archive/email_feature_review_2026-07.md`](./archive/email_feature_review_2026-07.md) *(archived 2026-08-01 per §9, Phases 1–2 being long complete)* —
 > the 2026-07-22 eight-agent full audit. Every defect referenced below (IDs like "review §2.1")
 > carries file:line evidence there. When an item in this plan lands, mark it here and, if it
 > came from the review, note the PR next to the review item.
@@ -55,7 +55,11 @@ second, new capability third.**
 **Architecture** (verified sound by the review): Next.js `/email` app (34 components) →
 FastAPI `routes/email/` layered package (`core` / `transport/` / `automation/` / `digest`,
 ~16.3k lines) → `email_ingestion` service (provider abstraction, per-account async sync loop,
-post-sync hook registry) → Postgres (migrations 17→87). One MAF agent (42 tools), dual-surface
+post-sync hook registry) → Postgres (migrations 17→87 — *Update 2026-08-01, doc-truth pass:
+"17→87" was the range as of 2026-07-22; later phases added 88 (attachments dedupe), 89
+(`internet_message_id`), 90 (snooze), 93 (Needs-Reply rename) and 119 (`email_contacts`,
+§3.14), and the repo migration head is 140+ — per the numbering rule, never take a "next
+free number" from a spec, only from `infra/postgres/`*). One MAF agent (42 tools), dual-surface
 chat. Single-writer seams verified: one message upsert, one rule matcher, one LLM-JSON choke
 point, one label writer, one signature assembler.
 
@@ -117,6 +121,7 @@ Phases 1-3 are **done and live** (every non-parked item). What remains, by kind:
 | **Owner decisions pending** | Build-or-kill batch-delete (§6 table — all six verified still present; one S PR) · manual pattern-add flow (badge exists, no create UI) · read-state push-on-open | §6, §7 Tier 2 |
 | **Before any 2nd user/account** | Phase 4 Tier 1 (OAuth owner-binding → session-across-I/O → LLM cap → N+1s/indexes → 401 mid-sync retry) | §7 |
 | **Hygiene, fold into next touch** | `followups.py` inline label-mirror → `actions.apply_label` · ~20 hand-rolled provider pairs → `provider_session` | §5 notes |
+| **Added 2026-08-01 (doc-truth pass)** — §3.14 contacts follow-ups (shipped 2026-07-27, post-dating this table) | Contact card + `email_contacts` (mig 119) are LIVE; open items: `PATCH /email/contacts/{email}` (manual edit honoring `manual_fields`) · `GET /email/contacts` (paged list/search) · duplicate-merge design (decide BEFORE a Contacts view ships) · avatars (needs extra OAuth scope) · optional post-sync backfill | §3.14 |
 
 ---
 
@@ -397,7 +402,7 @@ or API client to create a pattern by hand.
 | Doc | Role |
 |---|---|
 | **This file** | The plan + live status. Single source of truth for "what next". |
-| [`email_feature_review_2026-07.md`](./email_feature_review_2026-07.md) | Evidence appendix (defect detail, file:line). Archive when Phases 1-2 complete. |
+| [`archive/email_feature_review_2026-07.md`](./archive/email_feature_review_2026-07.md) | Evidence appendix (defect detail, file:line). ✅ Archived 2026-08-01 (doc-truth pass) per this row's own instruction — Phases 1-2 completed 2026-07-22. |
 | [`archive/email_ai_assistant.md`](./archive/email_ai_assistant.md) | Historical feature inventory + architecture detail + provider matrix (v2.0, 2026-06-29). |
 | [`archive/email_inbox_zero_parity_plan.md`](./archive/email_inbox_zero_parity_plan.md) | Historical parity roadmap; open items absorbed here. |
 | [`archive/email_tool_consolidation.md`](./archive/email_tool_consolidation.md) | Historical tool plan; closed at 42 tools (§6 decision). |

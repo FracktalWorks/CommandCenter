@@ -144,6 +144,9 @@ they're in the file tier — the exact mechanism the startup-guru pattern is bui
 the `{user_id}` in the URL. Any signed-in user can list, search, and delete any other user's
 memory scope.
 
+> **Update 2026-08-01 (doc-truth pass):** fixed 2026-07-30 — authorization shipped; see
+> `docs/multiplayer/memory-clearance.md` §2.1.
+
 ### 5.2 Graphiti writes are partitioned, reads are not
 
 `agent.py:1366` writes episodes with `group_id=user_id`; `graphiti_client.py:144` searches
@@ -159,6 +162,10 @@ This is worse than the Mem0 `agent:` bucket, for a specific reason: **Mem0 leaks
 semantically similar to the query; the file tier leaks the entire file.** `recall_notes(path)`
 with no query returns the whole thing (`note_tools.py:150`). One call, everything anyone ever
 wrote.
+
+> **Update 2026-08-01 (doc-truth pass):** superseded by migrations 136
+> (`agent_blob_instance` — the PK is now `(agent_name, instance, path)`) and 137
+> (`quarantine_commingled_agent_data`). The prose above stands as history of why.
 
 ### 5.4 …and it's model-directed, so it's also unreliable
 
@@ -217,7 +224,7 @@ ALTER TABLE agent_file_history
 `folder_of` and the write-through seams pass it through. This touches
 `blob_store.py`, the two write-through seams in `write_artifact.py` / `note_tools.py`, the
 gateway mirror helpers, and the executor's rehydrate call — all listed in
-`agent_persistence_implementation.md` §3–4.
+`agent_persistence_implementation.md` §3–4. Instancing rollout is owned by `work_plan.md` WS-14.
 
 **`outputs/` is the exception worth thinking about.** Deliverables are shared in a room even
 when the agent is personally instanced. Simplest correct rule: `agent-data/` and `inputs/` are
@@ -335,7 +342,7 @@ everyone using that instance forever after.
 |---|---|
 | `agent-data/` | Instance-keyed. Written only when the room's audience covers the instance. |
 | `inputs/` | Follows the uploader; promotable to `agent-data/` under the same write rule. |
-| `outputs/` | Room-readable — files are the deliverable (`README.md` §6.2). |
+| `outputs/` | Room-readable — files are the deliverable (`docs/multiplayer/README.md` §6.2). |
 
 ---
 
@@ -374,8 +381,8 @@ Interleaves with the multiplayer plan; the numbering matches
 
 | Phase | Work |
 |---|---|
-| **0** | Authorize `routes/memory.py` (§5.1) · scope Graphiti reads or disable the timeline call until scoped (§5.2) |
-| **3a′** | Migration 120 — instance-key the blob store (§6.1), alongside the memory-compartment work. These two must land together; splitting them leaves the more dangerous tier unpartitioned. |
+| **0** | ✅ done 2026-07-30 — Authorize `routes/memory.py` (§5.1) · scope Graphiti reads or disable the timeline call until scoped (§5.2) |
+| **3a′** | Landed as migration 136 (blob instance-keying + run-path wiring ✅ per `groups_sessions_authority.md` §6 step 2); remaining 3a′ scope: compartment registry + `subject:` compartments + `prefs`/`user` backfill. Instance-keying the blob store (§6.1) landed alongside the memory-compartment work, as required — splitting them would have left the more dangerous tier unpartitioned. |
 | **3b** | Deterministic budgeted file-tier injection (§6.2) · provenance markers (§6.3) · extraction gate (§6.4) |
 | **3c** | The memory chip and in-place correction (§6.7) · run-block capture for replay (§6.6) |
 | **4** | Compaction and decay (§6.4) · supersession — decide Graphiti-on vs interim field (§6.5) |
@@ -396,7 +403,7 @@ instance.
    **Partly answered:** `agent-startup-guru` keeps an `agent_memory_index.json` beside its
    long-term store — *always-load a small index, load entries on demand*. That is the shape
    the budget should take, so the question narrows to how big the index may be rather than how
-   big the memory may be. See [`agent_architecture.md`](agent_architecture.md) §5.5.
+   big the memory may be. See [`agent_architecture.md`](agent_architecture.md) §7.
 2. **Who curates the file tier — the agent or a human?** Agent-curated is the point of the
    pattern; human-reviewable is what makes it trustworthy. Probably: agent proposes, the
    promotion affordance in §6.7 is the human's veto.
@@ -412,5 +419,8 @@ instance.
    thread, which is already per-room, so it should be fine — but it must include the clearance
    set in the key, or a room whose membership changes serves a stale block computed at a wider
    clearance.
+   **Answered/built 2026-07-30:** the cache key now includes the clearance set, and
+   `invalidate_session_memory` clears every per-clearance variant rather than the bare key
+   (`acb_memory/session_cache.py`; `docs/multiplayer/memory-clearance.md` §7).
 
-Question 5 is a correctness issue, not a design preference — it should be resolved during 3a′.
+Question 5 is a correctness issue, not a design preference — it was resolved during 3a′, as required.

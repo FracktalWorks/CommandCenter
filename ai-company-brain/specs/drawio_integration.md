@@ -14,6 +14,14 @@
 > edit those files in the browser** as if in the native draw.io editor — from the artifact viewer,
 > a full-screen tab, and inline in chat.
 
+> **Update 2026-08-01 (doc-truth pass):** **nothing here is built** (verified — no `diagram-svc`
+> service, no `DrawioEditor.tsx`, no `drawio` compose service, no `create_diagram` tool). Owner is
+> still TBD. All file:line anchors in this document predate the `apps/` → `apps/services/`
+> restructure and the executor extractions (e.g. `_inject_agent_tools` / `_inject_mcp_servers` now
+> live in `apps/services/orchestrator/orchestrator/_tool_injection.py`, and MCP injection targets
+> `agent._mcp_servers`, not `_default_options` as §1.4 states) — **re-verify every anchor at
+> dispatch**. Tracked as `work_plan.md` WS-22.
+
 ---
 
 ## 0. TL;DR
@@ -227,7 +235,7 @@ freezes the `diagram-svc` API contract.
 | Editor iframe CSP | Scope to the self-hosted draw.io origin only; `allow-scripts allow-same-origin` (editor needs JS — unlike the email iframe). Validate `event.origin` in the bridge. |
 | Autosave load | Debounce `autosave → PUT`; consider draw.io diff-sync later for large diagrams. |
 | Deploy | `diagram-svc` + `drawio` join the compose `diagrams` profile; deploy stays `git push` → `git reset --hard` + migrations + restart (no new manual steps); **runtime-mutable state stays in Postgres/workspace, not tracked files**. |
-| Secret hygiene | Rotate the plaintext Hostinger token in `.vscode/mcp.json` (unrelated, but live). |
+| Secret hygiene | Rotate the plaintext Hostinger token in `.vscode/mcp.json` (unrelated, but live). **Update 2026-08-01 (doc-truth pass):** moved to the owner-gate secrets list (`work_plan.md` §6, WS-2) — tracked there; line kept for context. |
 
 ---
 

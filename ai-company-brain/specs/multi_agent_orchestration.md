@@ -8,6 +8,18 @@ Every claim marked ✅ below was **verified by execution** against the live VPS
 (`agent-framework-core==1.8.1`) or an isolated throwaway venv (`core==1.11.0` +
 `orchestrations==1.0.0`). Reproduction commands are in [§8](#8-appendix--reproduction).
 
+> **Update 2026-08-01 (doc-truth pass) — Phases 2–3 SUPERSEDED. Do not build a second workflow
+> engine from this document.** Phases 2 and 3 below (workflow graph spec, compiler, runner, editor
+> UI) and §5.3's "the workflow editor *is* the orchestrator" are superseded by the **shipped
+> Workflows app** — see [`workflows_app.md`](workflows_app.md), ADR-028, migration
+> `infra/postgres/132_workflows.sql`, gateway `apps/services/gateway/gateway/routes/workflows/`,
+> and the `/workflows` editor in the control plane — per `work_plan.md` decision **D6**.
+> §7 open question 1 (agent-invocable workflows) was answered by **F13 workflows-as-tools**
+> (shipped: `list_workflows` / `run_workflow` / `get_workflow_run`, see `workflows_app.md` F13);
+> open question 2 (Postgres vs repo files) was answered: **Postgres** (`132_workflows.sql`).
+> Phases 1 (context discipline), 4 (framework uplift) and 5 (orchestrations / collaborative chat)
+> **remain live**, tracked as `work_plan.md` WS-12.
+
 ---
 
 ## 1. Executive summary
@@ -278,6 +290,9 @@ behind MAF here.
 
 ### 5.3 The workflow editor *is* the orchestrator — a designed one
 
+> **Update 2026-08-01 (doc-truth pass):** superseded — the shipped Workflows app is that editor.
+> See the banner at the top of this document (decision D6).
+
 The hub-and-spoke instinct is right that coordination should be centralised. It lands at **L2**, not
 L1: the graph is the central authority, authored by a human, deterministic and traceable. This is
 strictly better than Magentic's LLM-in-the-routing-loop for our case, and it avoids the
@@ -397,6 +412,9 @@ stays bounded — each target's own `request_confirmation` gate still requires a
 
 ### Phase 2 — Workflow runtime *(≈1 week · no deps — core 1.8.1 suffices)*
 
+> **Update 2026-08-01 (doc-truth pass):** SUPERSEDED by the shipped Workflows app — see the banner
+> at the top of this document (decision D6). Kept for the record; do not implement.
+
 - **2.1 Multi-loader.** `ExitStack` over N `load_agent()` contexts. Today `load_agent` is a
   context manager yielding **one** agent per run; a graph needs N live at once. **This is the real
   work.**
@@ -414,6 +432,9 @@ stays bounded — each target's own `request_confirmation` gate still requires a
 `add_fan_in_edges`, `add_switch_case_edge_group`, `add_multi_selection_edge_group`.
 
 ### Phase 3 — Workflow editor UI *(≈1 week)*
+
+> **Update 2026-08-01 (doc-truth pass):** SUPERSEDED by the shipped Workflows app's `/workflows`
+> editor — see the banner at the top of this document (decision D6). Do not implement.
 
 Node palette from the live registry · canvas → graph spec · save/load · run + live trace.
 
@@ -504,8 +525,9 @@ on this.
 
 **Open questions**
 1. Should L2 workflows be **user-authored only**, or may an agent invoke a saved workflow via a tool?
+   *(Answered — see the banner at the top: F13 workflows-as-tools shipped.)*
 2. Where do workflow definitions live — Postgres (survives `git reset --hard`) or repo files?
-   Precedent says **Postgres**.
+   Precedent says **Postgres**. *(Answered — see the banner at the top: Postgres, migration 132.)*
 3. Does a node need HITL? `AgentExecutor` supports `request_info`; confirm it survives our SSE relay.
 4. Do we cap live nodes per workflow (`commandcenter-dev` alone is a 2.1 GB clone)?
 

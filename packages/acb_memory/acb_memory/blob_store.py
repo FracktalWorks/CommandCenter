@@ -15,7 +15,7 @@ Two tables (see infra/postgres/71_agent_blob_store.sql):
 
 Design notes:
   • Keyed by (agent_name, workspace-relative POSIX path). agent_name is the only
-    tenant key, so this is portable to Pomad Centre MAF agents unchanged.
+    tenant key, so this is portable to a second tenant deployment's MAF agents unchanged.
   • Only the three visible folders are stored (agent-data/inputs/outputs); other
     workspace files (source, .git, caches) are NOT — they come from the agent
     repo, not from accumulated state.

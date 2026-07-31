@@ -8,6 +8,29 @@
 > **Source studied:** [microsoft/vscode](https://github.com/microsoft/vscode) `src/vs/workbench/contrib/chat/browser/widget/chatContentParts/`  
 > **Additional source studied:** [CopilotKit/CopilotKit](https://github.com/CopilotKit/CopilotKit) — `packages/react-ui/src/components/chat/` (Chat.tsx, Messages.tsx, Input.tsx, Suggestions.tsx, AttachmentQueue.tsx); `packages/react-core/src/hooks/` (use-copilot-chat.ts, use-human-in-the-loop.ts, use-coagent.ts, use-langgraph-interrupt.ts)
 
+> **Update 2026-08-01 (doc-truth pass):** Phase 1 of this spec shipped (§0). The §12.3
+> HITL/interrupt design (terminal run + `resume[]` array) was **NOT built** — the shipped
+> HITL model is a `user_input_requested` SSE frame carrying a `request_id`, answered via
+> `POST /agent/respond-input`, which parks the run on the `_pending_user_input` future
+> registry (`apps/services/gateway/gateway/routes/agent.py`), rendered in the frontend as
+> `ElicitationCard.tsx` / `ConfirmationCard.tsx` — see `generative_ui_2.md` §2, which
+> **supersedes §12.3**. The live chat work queue is
+> `specs/archive/chat_implementation_review_2026-07.md` (per `task_manager_app.md` §9.3).
+>
+> Shipped from §11/§12 since this spec was written (each verified in
+> `workbench/control_plane/src`, 2026-08-01): §11 C ≈ `components/SuggestionPills.tsx` ·
+> E partial = `hooks/useAgentState.ts` · F ≈ `components/ChatErrorCard.tsx` · I ≈
+> `components/FileUploadButton.tsx`; from §12: II REASONING_* (`route.ts` handles
+> `REASONING_MESSAGE_CONTENT` alongside legacy `THINKING_*`), III `TOOL_CALL_RESULT`
+> (folded into the `TOOL_CALL_END` case), IV `STATE_SNAPSHOT`, VI generative UI via
+> `CUSTOM` — all in `app/api/agent/chat/route.ts`.
+>
+> **Still open:** §12 V `STEP_STARTED`/`STEP_FINISHED` (no handler anywhere in
+> `control_plane/src` as of 2026-08-01), VII capability discovery, VIII frontend-defined
+> tools, IX activity events, X `REASONING_ENCRYPTED_VALUE`, XI `parentRunId`/time travel;
+> §11 H dev console, J push-to-talk. §10's checklist was never maintained — §0 plus this
+> banner are the status of record.
+
 ---
 
 ## 0. Phase 1 status (completed 2026-06-05)
@@ -392,6 +415,10 @@ Total estimated effort: **2–3 engineer-days** (simpler than the original 4-day
 ---
 
 ## 10. Acceptance criteria
+
+> **Update 2026-08-01 (doc-truth pass):** this checklist was never maintained after
+> Phase 1 shipped — the unchecked boxes below do NOT mean "not done". §0 and the banner
+> at the top of this doc are the status of record.
 
 - [ ] Sending a message immediately shows a `ThinkingContainer` with shimmer title — **no blank screen**
 - [ ] Container title starts `"Thinking…"`, transitions to `"Working: <tool label>"` on first tool call
@@ -878,6 +905,12 @@ Our current `route.ts` translates a subset of AG-UI events. Here is the complete
 ---
 
 ### 12.3 Interrupt protocol — world-class approval UI
+
+> **Update 2026-08-01 (doc-truth pass):** SUPERSEDED — this terminal-run + `resume[]`
+> design was never built. The shipped HITL model is `request_id` +
+> `POST /agent/respond-input`, parking the run on the `_pending_user_input` future
+> registry (gateway `routes/agent.py`) with `ElicitationCard`/`ConfirmationCard` in the
+> frontend; see `generative_ui_2.md` §2. This section is kept as protocol reference only.
 
 The AG-UI interrupt spec is far more complete than what we studied from CopilotKit. It defines a **terminal run model**: the agent *ends the run* with an interrupt, and the client *starts a new run* with a `resume` array. This is different from pausing mid-stream.
 

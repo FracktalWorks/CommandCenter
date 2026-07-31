@@ -1,7 +1,7 @@
 # Task Manager App — Project Plan (GTD philosophy)
 
 > **Product:** CommandCenter · **Feature:** Task Manager App (Getting Things Done) · **Updated:** 2026-06-30 · **Version:** 0.2 (planning — reviewed)
-> **Status:** 🔄 build in progress on `main` — frontend slices 1–2.5 (Shell/Browse, Clarify, Inbox depth) **plus the capture/clarify backend**: migration `48_task_manager_gtd.sql`, the provider interface layer with the **ClickUp connector** (multi-workspace `task_accounts`), the **gateway `/tasks` API**, **`skill-task-gtd` + the rewritten `task-manager` agent**, and the frontend wired live (mock fallback when the gateway is absent). **Resume point: Slice 3 — Engage "Now" (F4) · sync-pull of existing provider tasks.** See §9.1/§9.2.
+> **Status:** 🔄 build in progress on `main` — frontend slices 1–2.5 (Shell/Browse, Clarify, Inbox depth) **plus the capture/clarify backend**: migration `48_task_manager_gtd.sql`, the provider interface layer with the **ClickUp connector** (multi-workspace `task_accounts`), the **gateway `/tasks` API**, **`skill-task-gtd` + the rewritten `task-manager` agent**, and the frontend wired live (mock fallback when the gateway is absent). ~~Resume point: Slice 3 — Engage "Now" (F4) · sync-pull of existing provider tasks.~~ **Update 2026-08-01 (doc-truth pass):** that resume point is long past — `POST /tasks/sync` shipped 2026-07-03 (live in `apps/services/gateway/gateway/routes/tasks/sync.py`), `EngageView.tsx` exists, and the AssistantRail went live 2026-07-03. **§9.3 (dev runbook + "Next in line") is the authoritative status section of this doc**; work after it (prioritization matrix, calendar/timeboxing, HR epic, card actions) lives in its own specs.
 > **v0.2 review pass:** reconciled the GTD "lightweight project" vs "first-class project" framing (§5.1); clarified the delegation-write vs Action-Broker sequencing (§6, Phase 3); pinned the migration (`48_*`, idempotent, FK-dependency apply order — §4); placed the new GTD tools in `skill-task-gtd` over the canonical store and demoted `skill-clickup-sync` to the reference connector (§3.1); matched the gateway route to the `routes/<app>/` package precedent (§8); de-duplicated horizon levels vs projects/items (§4); aligned F1 capture channels with the phasing (Q3); added a build-order summary (§9).
 > **Sibling spec:** [`archive/email_ai_assistant.md`](archive/email_ai_assistant.md) — the Task Manager app deliberately mirrors its architecture (multi-panel client + AI assistant + provider abstraction + Postgres sync + automation engine + follow-up tracking). Read it first; this doc reuses its patterns by reference. (Email's living plan is now [`email_app_master_plan.md`](email_app_master_plan.md).)
 
@@ -132,7 +132,7 @@ Each GTD step becomes a first-class surface in the app. This is the product's fe
 | C14 | **Capture-with-note + date-hint seam** | inline editor adds an optional note (shown on the card); a local date-phrase detector surfaces a "tomorrow?" chip → snooze — the seam where the AI capture parser will suggest defer/due dates | ✅ built (note); date parse = local stub | AI NL parse → **[plumbing]** |
 | C15 | **Session momentum** | live "N processed" counter and an inbox-zero celebration when you clear the last item | ✅ built | — |
 | C17 | **At-a-glance AI hints** | each inbox card shows the assistant's *pre-read* — likely disposition + who to delegate to + matched project + destination (a **ClickUp/Jira** chip vs Local) — so you see the *shape* of your commitments (mine vs delegate vs project) before opening anything. A hint, not a decision; Clarify still confirms. Directly reduces overwhelm on a full inbox | ✅ built (heuristic `proposeClarification`) | agent-side read → **[plumbing]** |
-| C16 | **Persistence** | captures/edits survive across sessions and devices | 🔲 | **[plumbing]** — needs the `/tasks` API + DB; client-side localStorage deferred (SSR-hydration risk in this Next setup, and real persistence is cross-device) |
+| C16 | **Persistence** | captures/edits survive across sessions and devices | ✅ shipped *(Update 2026-08-01, doc-truth pass: the `/tasks` API + Postgres store landed with B1 (§9.1) — captures persist server-side, mock fallback only when the gateway is absent)* | — |
 
 **Mind-dump → inbox pipeline (how it feeds in, and the review gate)**
 
@@ -144,7 +144,7 @@ brain-dump text ─▶ [ATOMIZE] ─▶ candidate items ─▶ [REVIEW] ─▶ i
 
 - **Today (no backend):** ATOMIZE = naive **line split** (one non-empty line → one candidate). The **review gate is real** — parsed items appear in an editable list (edit / remove / add-another); nothing lands in the inbox until "Add N to inbox". This is the correctness check the user asked for.
 - **With AI [plumbing]:** ATOMIZE becomes an **agent call** — split run-on prose into atomic actions, normalize, and **flag near-duplicates** against existing captures (embeddings). Output populates the *same* review list, so the human still confirms before anything is filed. This respects the GTD boundary (**AI prepares; the user decides**) and keeps capture ≠ clarify. Endpoint: `POST /tasks/capture/atomize` → `{items: [...], duplicates: [...]}`.
-| C7 | Multi-source capture | email / chat / Slack / meeting line → inbox item with a **source chip** (the "few buckets → one inbox" rule) | 🔲 | **[plumbing]** email/chat→task ingestion (`source` already in the model) |
+| C7 | Multi-source capture | email / chat / Slack / meeting line → inbox item with a **source chip** (the "few buckets → one inbox" rule) | 🔶 partial *(Update 2026-08-01, doc-truth pass: email→task capture SHIPPED 2026-07-03 — `routes/tasks/capture_email.py`, see §9.3; Slack/meeting-line channels still open)* | **[plumbing]** remaining chat/Slack/meeting→task ingestion (`source` already in the model) |
 | C8 | Voice capture | dictate → item | 🔲 | **[plumbing]** speech-to-text |
 
 **AI in the Capture stage — the boundary, then the opportunities**
@@ -636,7 +636,7 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 | `GET` | `/tasks/insights` | Whole-inbox signals: bucket counts, oldest capture, stale waiting-fors, projects w/o next action | ✅ shipped |
 | `POST` | `/tasks/projects/plan` | Natural-planning for a project | 🔲 |
 | `POST` | `/tasks/review` | Run weekly review → summary | 🔲 |
-| `POST` | `/tasks/sync` | Pull existing provider tasks into `gtd_items` | 🔲 next |
+| `POST` | `/tasks/sync` | Pull existing provider tasks into `gtd_items` | ✅ shipped 2026-07-03 (per §9.3; route live in `routes/tasks/sync.py`, plus `GET /tasks/sync/status`) *(status corrected 2026-08-01, doc-truth pass)* |
 | `POST` | `/tasks/ai/chat` · `/ai/quick-action` | Assistant chat / quick actions | 🔲 (agent chat runs via the generic `/agent` route today) |
 | `GET` | `/tasks/oauth/{provider}/authorize` · `/callback` | OAuth connect (token-based connect shipped; OAuth later) | 🔲 |
 
@@ -654,11 +654,11 @@ The desktop 4-panel layout collapses to a **single-pane** flow on ≤767px (`use
 | 1 — Browse | F1 capture · F3 lists/contexts | ✅ done | `CaptureBar`, `ItemList`/`ItemRow`, `ProjectsList`, `ItemDetail`, `SourceBadge` |
 | 2 — Clarify | F2 decision tree | ✅ done | `ClarifyPanel` + `taskStore.clarify` + mocked `suggestClarification` |
 | 2.5 — Inbox depth (Capture stage) | C1–C6 (§2.1) | ✅ done | dedicated capture-first `InboxView` + `ClarifyModal` (de-email-ified); ubiquitous hotkey capture (`QuickCapture`, `C`/`⌘K`), brain-dump/mind-sweep + trigger list, oldest-item aging signal, undo. AI sweep / multi-source / voice = **[plumbing]** later |
-| 3 — Engage "Now" | F4 | 🔲 **NEXT** | filter Next Actions by context + time + energy; unlocks the `Engage · Now` nav (currently "soon") |
+| 3 — Engage "Now" | F4 | ✅ done *(Update 2026-08-01, doc-truth pass: `EngageView.tsx` exists in the repo — the 🔲 NEXT that stood here was stale)* | filter Next Actions by context + time + energy; unlocks the `Engage · Now` nav |
 | 4 — Weekly Review | F5 | 🔲 | get-clear / get-current / get-creative wizard; surface no-next-action projects + stale waiting-fors |
 | 5 — Waiting-For / Delegate | F6 | 🔲 | dedicated monitoring view (delegation already partly in Clarify) |
 | 6 — Plan / Horizons | F8 · F7 | 🔲 | natural-planning project flow + Horizons (currently "soon") |
-| 7 — Assistant wired | F9 | 🔲 | replace the mocked suggestion + rail with the live `task-manager` agent (stream + quick actions) |
+| 7 — Assistant wired | F9 | ✅ done *(Update 2026-08-01, doc-truth pass: AssistantRail live 2026-07-03 per §9.3 item 4 — `AssistantRail.tsx` is a live AgentChat wrapper)* | replace the mocked suggestion + rail with the live `task-manager` agent (stream + quick actions) |
 
 | B1 — Backend: capture/clarify/organize | §9.2 Ph. 1–2 core | ✅ done | migration `48_*` · `routes/tasks/` package (20 endpoints, §8) · `providers.py` interface layer + **ClickUp connector** (multi-workspace, encrypted per-account tokens) · `skill-task-gtd` + rewritten `agent-task-manager` · `/api/tasks` proxy + live store hydration with **mock fallback** · `WorkspacesModal` connect flow · e2e-verified (capture→persist→clarify→organize vs real Postgres) |
 
@@ -749,8 +749,11 @@ not-mirrored ClickUp lists shown muted+disabled, no-next-action warning + open-
 task count per project. Tests: hierarchy routes registered + model placement +
 CreateLocalProjectRequest defaults (64). GtdProject gained `spaceId/folderId`.
 
-**Still not built (from §7 wishlist):** EngageView, WeeklyReview, WaitingForView
-(dedicated), HorizonsView, ProjectPlanner.
+**Still not built (from §7 wishlist):** ~~EngageView~~, WeeklyReview, WaitingForView
+(dedicated), HorizonsView, ProjectPlanner. *(Update 2026-08-01, doc-truth pass:
+`EngageView.tsx` has since shipped — struck above; the other four are still absent
+from `src/app/tasks/components/`, though `CalendarView.tsx` + `FocusMode.tsx` were
+added by the calendar workstream.)*
 
 ### 9.2 Backend phases (after the UI slices)
 
@@ -785,7 +788,7 @@ workspace; one account row per workspace, several companies fine).
 **Verify**
 ```bash
 .venv/bin/python -m pytest tests/unit/test_tasks_gtd.py tests/unit/test_hitl_stall_suppression.py -q
-.venv/bin/python -m ruff check apps/gateway/gateway/routes/tasks apps/skill-task-gtd apps/agent-task-manager
+.venv/bin/python -m ruff check apps/services/gateway/gateway/routes/tasks apps/skills/skill-task-gtd apps/agents/agent-task-manager
 cd workbench/control_plane && npx eslint src/app/tasks && npm run build
 ```
 
@@ -795,8 +798,8 @@ cd workbench/control_plane && npx eslint src/app/tasks && npm run build
 | Spec (this doc) | `ai-company-brain/specs/task_manager_app.md` |
 | DB migrations | `infra/postgres/48_task_manager_gtd.sql` · `49_gtd_people.sql` |
 | HR seed + import | `infra/seed/hr/` · `scripts/import_hr_people.py` |
-| Gateway API (21 endpoints, §8) | `apps/gateway/gateway/routes/tasks/` (`core` · `accounts` · `items` · `ai` · `people` · `providers`) |
-| Agent | `apps/agent-task-manager/` + `apps/skill-task-gtd/` (10 tools) |
+| Gateway API (21 endpoints, §8) | `apps/services/gateway/gateway/routes/tasks/` (`core` · `accounts` · `items` · `ai` · `people` · `providers` — path corrected 2026-08-01, doc-truth pass; the package has since grown: `sync` · `calendar` · `capture_email` · `planning` · `priority` · …) |
+| Agent | `apps/agents/agent-task-manager/` + `apps/skills/skill-task-gtd/` (10 tools) — paths corrected 2026-08-01 (agents/skills moved under `apps/agents/` · `apps/skills/`) |
 | Frontend | `workbench/control_plane/src/app/tasks/` (+ proxy `src/app/api/tasks/[...path]/`) |
 | Tests | `tests/unit/test_tasks_gtd.py` (18) · `test_hitl_stall_suppression.py` |
 
@@ -829,6 +832,10 @@ capability-aware delegation); GTD agent tool surface.
    sweep → rail quick actions.
 5. Live workload sync for `gtd_people` + overload warnings (§6.1 later-list).
 6. OAuth connect flow; more connectors (Asana/Jira/Linear); generic MCP connector.
+
+> **Update 2026-08-01 (doc-truth pass):** the later calendar/timeboxing workstream
+> (migrations 76–80, `CalendarView.tsx`, `FocusMode.tsx`) is documented in
+> `calendar_timeboxing.md` + `calendar_focus_os.md` — this doc predates it.
 
 **Known gaps / footnotes** — `schema.generated.sql` not yet regenerated (needs
 pgvector; run `scripts/dump_schema.sh` on the PC). HITL question-card fix

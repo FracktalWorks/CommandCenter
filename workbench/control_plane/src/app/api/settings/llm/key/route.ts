@@ -1,6 +1,11 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
+// These handlers resolve the signed-in member, so they can never be
+// statically evaluated. Without this, `next build`'s page-data collection
+// runs them with no request and no session.
+export const dynamic = "force-dynamic";
+
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
 
 // Provider → env-var map (mirrors settings.py _PROVIDER_ENV_MAP).

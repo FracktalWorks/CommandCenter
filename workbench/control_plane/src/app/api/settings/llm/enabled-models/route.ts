@@ -5,13 +5,21 @@
 import { NextRequest, NextResponse } from "next/server";
 import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
+// These handlers resolve the signed-in member, so they can never be
+// statically evaluated. Without this, `next build`'s page-data collection
+// runs them with no request and no session.
+export const dynamic = "force-dynamic";
+
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
 
-const HEADERS = await gatewayHeaders({ "Content-Type": "application/json" });
 
 export async function GET(): Promise<NextResponse> {
   const me = await requireIdentity();
   if (me instanceof NextResponse) return me;
+  // Built per request, never hoisted to module scope: these headers name
+  // the acting member, so a module constant would bind whoever imported
+  // first and serve every later caller as them.
+  const HEADERS = await gatewayHeaders({ "Content-Type": "application/json" });
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/enabled-models`, {
       headers: HEADERS,
@@ -27,6 +35,10 @@ export async function GET(): Promise<NextResponse> {
 export async function POST(req: NextRequest): Promise<NextResponse> {
   const me = await requireIdentity();
   if (me instanceof NextResponse) return me;
+  // Built per request, never hoisted to module scope: these headers name
+  // the acting member, so a module constant would bind whoever imported
+  // first and serve every later caller as them.
+  const HEADERS = await gatewayHeaders({ "Content-Type": "application/json" });
   const body = await req.json();
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/enabled-models`, {

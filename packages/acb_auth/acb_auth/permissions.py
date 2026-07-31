@@ -75,6 +75,7 @@ FEATURES: tuple[str, ...] = (
     "agents",
     "approvals",
     "integrations",
+    "workflows",
     "build.agents",
     "build.apps",
 )
@@ -87,6 +88,10 @@ CAPABILITIES: tuple[str, ...] = (
     "apps:use:*",
     "apps:create",
     "apps:publish",
+    # Drafting and TEST-running a workflow needs only `feature:workflows`;
+    # this is the right to make one live — publish a version, roll back to an
+    # earlier one, or disable it. See specs/workflows_app.md Q3.
+    "workflows:publish",
     "admin:members:read",
     "admin:members:invite",
     "admin:members:manage",

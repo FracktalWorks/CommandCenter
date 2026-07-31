@@ -198,7 +198,7 @@ The blob store gains the same instance key the memory compartments get in
 identically and one mental model covers both.
 
 ```sql
--- migration 132_agent_blob_instance.sql (NEVER mutate 71 in place — deployed DBs ran it)
+-- migration 136_agent_blob_instance.sql (NEVER mutate 71 in place — deployed DBs ran it)
 ALTER TABLE agent_blob
     ADD COLUMN IF NOT EXISTS instance TEXT NOT NULL DEFAULT '';   -- '' = shared, u:<email>, t:<team>
 ALTER TABLE agent_file_history

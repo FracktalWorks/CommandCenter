@@ -3,7 +3,7 @@
 > **Status:** ✅ steps 1-4 shipped, step 5 shipped in part — see §6
 > **Created:** 2026-07-29 · **Last built:** 2026-07-30
 > **Answers:** [`org_access_control.md` §10](org_access_control.md#10-handoff-multiplayer-agent-collaboration) — the handoff asked for exactly one spec covering the group primitive, `chat_session_participant`, and the authority rule, *before* shared transcripts exist and the decisions get expensive.
-> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 132/133).
+> **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 136/133).
 
 Phase 1 of org access control shipped the resolved principal (`UserContext` +
 `EffectiveAccess`), default-deny authentication, feature and agent-run gating,
@@ -166,7 +166,7 @@ not after:
 - Agent file/memory instancing — orthogonal and already specced
   (`agent-kinds.md`); the only binding is that `t:<team>` keys now name
   `org_group.slug`.
-- The quarantine and instance partition work (migrations 132/133) — already
+- The quarantine and instance partition work (migrations 136/133) — already
   landed; this spec consumes it.
 
 ## 6. Order of work
@@ -176,7 +176,7 @@ not after:
 | 1 | Migration 134: `org_group`, `org_group_member`, `chat_session.visibility`, `chat_session_participant` + backfill | ✅ |
 | 2 | Wire agent instancing through the run path (files + disk together; `agent_paths.py` is the seam) | ✅ |
 | 3 | Participant resolution + `intersect()` fold at run start; feed the two existing enforcement points | ✅ |
-| 4 | `chat_message` authorship + clearance tag; replay filter (migration 135) | ✅ |
+| 4 | `chat_message` authorship + clearance tag; replay filter (migration 139) | ✅ |
 | 5 | Room UX: share flow, participant list, the visible cap, groups admin UI | ◐ — see below |
 
 **What step 5 shipped.** `gateway/rooms.py` (`resolve_room_access` — the one
@@ -213,7 +213,7 @@ agent — §7 below.
 ## 7. Several agents in one room
 
 The room model above is about several *people*. The question it left open —
-several *agents* — is answered by `chat_session_agent` (migration 135) and one
+several *agents* — is answered by `chat_session_agent` (migration 139) and one
 rule:
 
 > **A room's turn is answered by exactly one agent: the primary, unless the

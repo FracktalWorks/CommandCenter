@@ -295,7 +295,9 @@ function MessageBubble({
   };
 
   const handleEditKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter inserts a newline (matches the main composer) — only Ctrl/Cmd+
+    // Enter (or the Send button) submits the edited message.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleEditSubmit();
     } else if (e.key === "Escape") {
@@ -356,7 +358,7 @@ function MessageBubble({
                   ✏️ Editing message
                 </span>
                 <span className="text-[10px] text-muted-foreground hidden sm:block">
-                  Enter to send · Esc to cancel · Shift+Enter for new line
+                  Ctrl+Enter to send · Esc to cancel · Enter for new line
                 </span>
               </div>
 

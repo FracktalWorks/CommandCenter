@@ -97,6 +97,7 @@ feature:tasks           feature:notes           feature:memory
 feature:dashboard       feature:observability   feature:artifacts
 feature:agents          feature:approvals       feature:integrations
 feature:models          feature:build.agents    feature:build.apps
+feature:workflows
 
 # Agents
 agents:run:*            # run any agent
@@ -106,6 +107,10 @@ agents:manage           # register / update / remove
 # Custom Apps (org level; app_grants remains the per-app rung)
 apps:use:*              apps:create             apps:publish
 
+# Workflows (drafting + Test runs need only feature:workflows; this is the
+# right to ARM one — publish / rollback / disable). See specs/workflows_app.md Q3.
+workflows:publish
+
 # Administration
 admin:members:read      admin:members:invite    admin:members:manage
 admin:roles:manage      admin:access:manage     admin:settings:manage
@@ -113,6 +118,8 @@ admin:audit:read
 
 # Data + platform
 data:org:read           integrations:manage
+integrations:use:*      # which services an agent run may get credentials for
+memory:read_org         memory:write_org
 ```
 
 `feature:*` matches `feature:whatsapp`; `agents:run:*` matches `agents:run:agent-sales`; a bare `*` matches everything. `*` in a non-final position is rejected at write time — wildcards that match *inward* (`feature:*:read`) make the grant set impossible to reason about, and nothing needs them.

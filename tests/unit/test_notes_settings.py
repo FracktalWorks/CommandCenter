@@ -108,3 +108,38 @@ def test_catalogue_exposes_defaults_so_the_ui_can_show_them() -> None:
     assert set(cat) == set(TEMPLATES)
     assert cat["retro"].copilot_default
     assert cat["retro"].label
+
+
+# ── paying for streaming ASR only when something reads it ────────────────────
+
+def test_auto_follows_the_copilot() -> None:
+    """The saving. Streaming is billed per minute for the whole meeting; with
+    the copilot off nothing consumes it in real time, and the recording still
+    yields the same transcript afterwards at batch prices."""
+    from gateway.routes.notes.settings import wants_live_transcription
+
+    assert wants_live_transcription("auto", copilot_on=True) is True
+    assert wants_live_transcription("auto", copilot_on=False) is False
+
+
+def test_always_and_never_ignore_the_copilot() -> None:
+    """`always` buys back live captions on copilot-less meetings; `never` is the
+    floor. Neither should be second-guessed by the copilot's state."""
+    from gateway.routes.notes.settings import wants_live_transcription
+
+    assert wants_live_transcription("always", copilot_on=False) is True
+    assert wants_live_transcription("never", copilot_on=True) is False
+
+
+def test_an_unknown_mode_fails_closed_on_spend() -> None:
+    """Of the two ways to be wrong, silently spending money is the worse one —
+    so garbage falls back to `auto`, not to `always`."""
+    from gateway.routes.notes.settings import wants_live_transcription
+
+    assert wants_live_transcription("", copilot_on=False) is False
+    assert wants_live_transcription("nonsense", copilot_on=False) is False
+    assert wants_live_transcription("nonsense", copilot_on=True) is True
+
+
+def test_default_mode_is_auto() -> None:
+    assert NotesSettings().live_transcription == "auto"

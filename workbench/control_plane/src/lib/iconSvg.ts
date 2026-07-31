@@ -46,3 +46,7 @@ export function buildIconMap(
   }
   return out;
 }
+
+/** Re-exported so callers that resolve icons import from one place. The scanner
+ *  itself lives in iconRefs.ts, free of any React dependency. */
+export { iconsUsedIn } from "@/lib/iconRefs";

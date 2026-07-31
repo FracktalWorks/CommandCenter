@@ -258,7 +258,7 @@ async def put_file(
         instance:  Partition key — ``""`` (shared, and every pre-migration row),
                    ``"u:<email>"`` for a personal agent, ``"t:<team>"`` for a
                    team one. Defaults to ``""`` so a caller that doesn't know
-                   about instances sees exactly what it saw before migration 132.
+                   about instances sees exactly what it saw before migration 136.
     """
     if not agent_name or not is_stored_path(path):
         return None

@@ -261,6 +261,29 @@ export interface BotDiagnostics {
   diagnostics_error?: string;
 }
 
+/** The notetaker's own Google identity.
+ *
+ *  Google auto-declines anonymous participants, so `signed_in` is the single
+ *  fact that decides whether unattended joining can work at all. */
+export interface BotIdentity {
+  /** False when the active provider manages its own bot accounts (Recall) —
+   *  the UI hides the whole section rather than offering a no-op. */
+  supported: boolean;
+  /** null when the worker couldn't be reached — distinct from "signed out". */
+  signed_in: boolean | null;
+  email?: string | null;
+  /** Whether a persistent Chrome profile is configured. Without one a sign-in
+   *  cannot survive a restart, so it would be pointless. */
+  profile?: boolean;
+  credentials_configured?: boolean;
+  interactive_running?: boolean;
+  /** Interactive sign-in needs VNC to actually be watchable. */
+  vnc_enabled?: boolean;
+  unreachable?: boolean;
+  error?: string;
+  provider?: string;
+}
+
 /** What the copilot knows about a meeting before anyone speaks. */
 export interface MeetingContext {
   /** Layer 1 — what you told it. The highest-value source. */
@@ -293,6 +316,9 @@ export interface NotesSettings {
   copilot_instructions: string;
   copilot_default_on: boolean;
   copilot_sensitivity: "low" | "normal" | "high";
+  /** auto = stream only while the copilot listens (saves per-minute ASR);
+   *  always = stream every meeting; never = record-and-transcribe only. */
+  live_transcription: "auto" | "always" | "never";
   /** Per-meeting-type overrides. Absent key = use the shipped default. */
   template_instructions: Record<string, string>;
   default_template: string | null;

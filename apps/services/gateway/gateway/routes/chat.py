@@ -10,7 +10,7 @@ DELETE /chat/sessions/{session_id}             Delete session + all its messages
 GET    /chat/sessions/{session_id}/messages    Fetch messages the caller may read
 POST   /chat/sessions/{session_id}/messages    Upsert a batch of messages
 
-Authorization moved from ownership to membership (migration 134 + gateway/rooms.py).
+Authorization moved from ownership to membership (migration 138 + gateway/rooms.py).
 Every predicate that used to be ``WHERE user_id = :uid`` is now "is this person
 in this room", which is the same question when the room has one member. Two
 paths were not gated at all before and are now: ``POST /chat/sessions`` could
@@ -185,7 +185,7 @@ def _ensure_session(
              "agent_name": agent_name or "orchestrator"},
         )
         # A session is a room of one from birth. Creating the owner row here
-        # rather than only in migration 134's backfill means membership is
+        # rather than only in migration 138's backfill means membership is
         # never something a session acquires later — every read path can trust
         # the participant table instead of falling back to chat_session.user_id.
         if user_id and "@" in user_id:

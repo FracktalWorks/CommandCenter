@@ -149,3 +149,43 @@ def test_terminal_failure_statuses_are_not_active() -> None:
     """The window above is a display concern only; polling must still stop."""
     assert "failed" not in mb.ACTIVE_STATUSES
     assert "not_admitted" not in mb.ACTIVE_STATUSES
+
+
+# ── Platform support is enforced, not implied ────────────────────────────────
+# The self-hosted worker's join flow is written against Google Meet's DOM. A
+# Zoom or Teams link used to be ACCEPTED and dispatched, and the bot then
+# reported "no join button on the meeting page" — a baffling answer to "why
+# didn't it join my Teams call?". The honest refusal belongs at dispatch.
+
+def test_only_meet_is_driveable_by_the_selfhosted_worker() -> None:
+    from gateway.routes.notes.meeting_bot import SELFHOSTED_PLATFORMS
+
+    assert SELFHOSTED_PLATFORMS == ("meet",)
+
+
+def test_zoom_and_teams_links_are_still_recognised_as_their_platform() -> None:
+    """Detection must keep working even though we can't join them — the tag is
+    what tells the user WHICH platform we're declining."""
+    from gateway.routes.notes.meeting_bot import detect_platform
+
+    assert detect_platform("https://us02web.zoom.us/j/123456789") == "zoom"
+    assert detect_platform(
+        "https://teams.microsoft.com/l/meetup-join/19%3ameeting_abc"
+    ) == "teams"
+    assert detect_platform("https://meet.google.com/abc-defg-hij") == "meet"
+
+
+def test_unsupported_message_names_the_platform_and_an_alternative() -> None:
+    """A refusal that doesn't say what to do instead is just a dead end."""
+    from gateway.routes.notes.meeting_bot import unsupported_platform_message
+
+    zoom = unsupported_platform_message("zoom")
+    assert "Zoom" in zoom
+    assert "upload" in zoom.lower(), "must point at the path that does work"
+
+    teams = unsupported_platform_message("teams")
+    assert "Teams" in teams
+
+    # An unknown platform must still produce usable guidance, not a KeyError.
+    other = unsupported_platform_message("wildly-unknown")
+    assert "upload" in other.lower()

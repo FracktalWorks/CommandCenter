@@ -1,5 +1,5 @@
 -- ============================================================================
--- 135_room_authorship_and_agents.sql — a transcript that knows who said what
+-- 139_room_authorship_and_agents.sql — a transcript that knows who said what
 -- ============================================================================
 -- Spec: ai-company-brain/specs/groups_sessions_authority.md §4 (the transcript
 --       boundary) + docs/multiplayer/README.md §3.4, §4.3.
@@ -34,7 +34,7 @@
 -- already could; a reader who wasn't must hold every capability the run held.
 -- `fp` keeps the hash for cheap equality checks and log correlation.
 --
--- Idempotent. Depends on: 02_chat_history.sql, 134_groups_and_session_participants.sql.
+-- Idempotent. Depends on: 02_chat_history.sql, 138_groups_and_session_participants.sql.
 -- ============================================================================
 
 -- ── Message authorship ──────────────────────────────────────────────────────

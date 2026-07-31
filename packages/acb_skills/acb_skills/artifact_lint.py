@@ -332,6 +332,46 @@ def _check_slop(tree: _Tree) -> list[Finding]:
 
 # ── Entry point ────────────────────────────────────────────────────────────
 
+_SOURCE_REMOTE_RE = re.compile(
+    r"""["'`](?:https?:)?//[^\s"'`]+\.(?:png|jpe?g|gif|webp|svg|ico|avif|bmp)\b""",
+    re.I,
+)
+_SOURCE_CDN_RE = re.compile(
+    r"""["'`](?:https?:)?//(?:cdn|unpkg|jsdelivr|fonts\.googleapis|fonts\.gstatic|"""
+    r"""logo\.clearbit|www\.google\.com/s2|icons\.duckduckgo)[^\s"'`]*""",
+    re.I,
+)
+
+
+def lint_artifact_source(source: str) -> list[str]:
+    """Lint a REACT artifact's source for the mistakes the sandbox swallows.
+
+    The HTML linter cannot run on JSX — `className`, `style={{}}` and a bare
+    component module look nothing like a cc-report document, so it would produce
+    only noise. But the one failure that matters most is shared: the frame's CSP
+    is ``img-src data:``, so a remote logo or image silently renders nothing.
+    That is exactly the "logos didn't show up" report, and it produced no warning
+    at all because linting was gated on the .html extension.
+
+    Deliberately narrow — remote asset URLs and the icon/CDN hosts agents reach
+    for by habit. Everything else about JSX is left to the compiler.
+    """
+    if not source or not source.strip():
+        return []
+    hits: list[str] = []
+    for rx in (_SOURCE_REMOTE_RE, _SOURCE_CDN_RE):
+        hits.extend(m.strip("\"'`") for m in rx.findall(source))
+    out: list[str] = []
+    for url in dict.fromkeys(hits):
+        out.append(
+            f"ERROR: remote asset {url[:80]!r} will not load — artifacts run "
+            f"offline (CSP img-src data:), so remote logos and images render as "
+            f"nothing. Use an <Icon name=\"…\"/> from @cc/ui, inline an SVG, or "
+            f"embed the image as a data: URI."
+        )
+    return out[:_MAX_FINDINGS]
+
+
 def lint_artifact_html(html: str, *, full_page: bool = True) -> list[str]:
     """Lint generated artifact HTML; return human-readable findings, worst first.
 

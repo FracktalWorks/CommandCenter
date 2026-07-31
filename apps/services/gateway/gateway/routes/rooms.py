@@ -5,7 +5,7 @@ Spec: ``docs/multiplayer/README.md`` §4.5 (API surface), §7 (UX),
 
 Mounted under ``/chat`` alongside the history CRUD, because a room *is* a chat
 session — there is no second object. Everything here reads or writes the two
-tables migration 134 and 135 added and nothing else::
+tables migration 138 and 139 added and nothing else::
 
     GET    /chat/sessions/{id}/room              the whole room state, one call
     PATCH  /chat/sessions/{id}/room              visibility / floor / history

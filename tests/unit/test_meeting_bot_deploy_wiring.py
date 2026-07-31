@@ -31,15 +31,18 @@ def test_meeting_bot_is_not_in_the_core_profile() -> None:
     assert "core" not in profiles
 
 
-def test_host_port_does_not_collide_with_the_gateway() -> None:
+def test_published_ports_stay_on_loopback_and_clear_of_the_gateway() -> None:
     """The gateway owns 8080 on the VPS; publishing the bot there would break
-    the whole app rather than just the bot."""
+    the whole app rather than just the bot. And EVERY published port must be
+    loopback-only — one of them is an unauthenticated VNC view of a browser
+    holding a Google session."""
     ports = _service()["ports"]
-    assert len(ports) == 1
-    host_side = str(ports[0]).split(":")
-    # "127.0.0.1:8095:8080" → bound to loopback, host 8095, container 8080
-    assert host_side[0] == "127.0.0.1", "must not be reachable off-box"
-    assert host_side[1] != _GATEWAY_PORT, "collides with the gateway"
+    assert ports, "the worker must publish its API"
+    for mapping in ports:
+        # "127.0.0.1:8095:8080" → bound to loopback, host 8095, container 8080
+        host_side = str(mapping).split(":")
+        assert host_side[0] == "127.0.0.1", f"{mapping} is reachable off-box"
+        assert host_side[1] != _GATEWAY_PORT, f"{mapping} collides with the gateway"
 
 
 def test_chrome_gets_enough_shared_memory() -> None:
@@ -84,9 +87,43 @@ def test_deploy_passes_the_app_env_file_explicitly() -> None:
 
 
 def test_meeting_bot_failure_cannot_fail_the_deploy() -> None:
-    """A bot build hiccup must skip the bot, never take down a deploy."""
+    """A bot build hiccup must skip the bot, never take down a deploy — and it
+    must SAY SO loudly, because the old container keeps serving and that reads
+    as a successful deploy (exactly what happened on 2026-07-30)."""
     deploy = _DEPLOY.read_text(encoding="utf-8")
-    assert "meeting bot build/start failed" in deploy
+    assert "meeting bot build/start FAILED" in deploy
+    assert "PREVIOUS image" in deploy, "must name the stale-image state"
+
+
+def test_meeting_bot_build_cannot_hang_the_deploy() -> None:
+    """The 2026-07-30 outage: novnc pulled in tzdata, whose postinst prompted
+    for a timezone, the build hung ~15 min until the deploy's SSH session died,
+    and the deploy reported success while the OLD image stayed live.
+
+    Two independent guards, both required: no tty for a prompt to read, and a
+    hard timeout so a hang can never consume the deploy.
+    """
+    deploy = _DEPLOY.read_text(encoding="utf-8")
+    build = [
+        ln for ln in deploy.splitlines()
+        if "up -d --build meeting-bot" in ln
+    ]
+    assert build, "the deploy must build the meeting bot somewhere"
+    window = deploy[deploy.index("MB_IMAGE_BEFORE"):]
+    assert "timeout 900" in window, "the build must be time-bounded"
+    assert "</dev/null" in window, "no tty — an apt prompt must fail, not hang"
+
+
+def test_the_dockerfile_installs_packages_noninteractively() -> None:
+    """The root cause, guarded at its source: any apt install in this image
+    must be non-interactive, or a dependency's postinst can hang the build."""
+    dockerfile = (
+        pathlib.Path(__file__).resolve().parents[2]
+        / "apps/services/meeting_bot/Dockerfile"
+    ).read_text(encoding="utf-8")
+    for line in dockerfile.splitlines():
+        if "apt-get install" in line:
+            assert "DEBIAN_FRONTEND=noninteractive" in line, line
 
 
 def test_live_caption_credentials_are_wired_by_default() -> None:

@@ -1716,7 +1716,7 @@ async def run_agent(
             # this resolved path so they stay consistent.  When unset, the
             # agent operates in its own clone directory.
             # A personal/team agent instead lands in its tenant state dir —
-            # the same key its blob-store rows carry (migration 132).
+            # the same key its blob-store rows carry (migration 136).
             _agent_instance = _resolve_agent_instance(
                 loaded.config, agent_name,
                 str(
@@ -1794,7 +1794,7 @@ async def run_agent(
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_agent_dir
                 # The blob-store partition every write-through must carry —
-                # keeping disk and store on the SAME tenant key (migration 132).
+                # keeping disk and store on the SAME tenant key (migration 136).
                 _WRITE_ARTIFACT_CONTEXT["instance"] = _agent_instance
                 # Declared+resolved integrations for this run — read by
                 # list_integrations (discoverability) and code_tools
@@ -2319,7 +2319,7 @@ async def run_agent_stream(
                 _WRITE_ARTIFACT_CONTEXT["run_id"] = run_id
                 _WRITE_ARTIFACT_CONTEXT["workspace_root"] = _effective_ws
                 # The blob-store partition every write-through must carry —
-                # keeping disk and store on the SAME tenant key (migration 132).
+                # keeping disk and store on the SAME tenant key (migration 136).
                 _WRITE_ARTIFACT_CONTEXT["instance"] = _agent_instance
                 # Declared+resolved integrations for this run — read by
                 # list_integrations (discoverability) and code_tools

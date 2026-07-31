@@ -140,7 +140,8 @@ def legacy_access(role: str | None) -> EffectiveAccess:
     if slug in ("admin", "agent_service"):
         return build_access(
             ["feature:*", "agents:run:*", "agents:manage", "apps:use:*",
-             "apps:create", "apps:publish", "admin:members:read",
+             "apps:create", "apps:publish", "workflows:publish",
+             "admin:members:read",
              "admin:members:invite", "admin:members:manage",
              "admin:roles:manage", "admin:access:manage",
              "admin:settings:manage", "admin:audit:read",
@@ -358,7 +359,7 @@ async def resolve_session_access(
       every active member (an org-visible room is readable by all of them,
       so all of them cap it).
     * The actor is always included, so a solo session — or any session
-      recorded before migration 134 — resolves to exactly the actor's own
+      recorded before migration 138 — resolves to exactly the actor's own
       access, byte-identically to today. Everything here activates only when
       a second distinct member exists.
     * Each member resolves through :func:`resolve_access` (shared 60s cache);

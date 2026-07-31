@@ -231,11 +231,14 @@ function buildSrcDoc(
      min-height keeps every control's TAP target comfortable on a touch
      screen (published apps run in whoever's browser opens them, phone
      included) without changing the compact visual size — padding still
-     controls how the control LOOKS, min-height only pads the hit area. */
+     controls how the control LOOKS, min-height only pads the hit area.
+     44px matches Apple HIG / Material Design's minimum touch target size —
+     the same number CommandCenter's own mobile bottom-nav bar already uses
+     (see globals.css), not a separate convention for built apps. */
   button, .cc-btn {
     font: inherit; cursor: pointer; border-radius: calc(var(--cc-radius) - 0.25rem);
     border: 1px solid var(--cc-border); background: var(--cc-secondary);
-    color: var(--cc-fg); padding: 0.4rem 0.8rem; min-height: 2.25rem;
+    color: var(--cc-fg); padding: 0.4rem 0.8rem; min-height: 2.75rem;
     transition: background 0.2s var(--cc-ease), border-color 0.2s var(--cc-ease);
   }
   button:hover, .cc-btn:hover { border-color: var(--cc-primary); }
@@ -245,7 +248,7 @@ function buildSrcDoc(
   input, select, textarea {
     font: inherit; color: var(--cc-fg); background: var(--cc-card);
     border: 1px solid var(--cc-border); border-radius: calc(var(--cc-radius) - 0.25rem);
-    padding: 0.35rem 0.55rem; outline: none; min-height: 2.25rem;
+    padding: 0.35rem 0.55rem; outline: none; min-height: 2.75rem;
   }
   input:focus, select:focus, textarea:focus {
     border-color: var(--cc-primary);
@@ -319,6 +322,9 @@ function buildSrcDoc(
   .cc-callout .cc-tag {
     font-family: var(--cc-mono); font-size: 10px; text-transform: uppercase;
     letter-spacing: 0.1em; color: var(--cc-accent); padding-top: 2px; white-space: nowrap;
+    /* Grid children stretch by default; the tag must hug its text and stay at
+       the top of a multi-line callout, not run the height of the panel. */
+    align-self: start; height: fit-content;
   }
   .cc-callout p { margin: 0; max-width: none; }
   .cc-callout-key {
@@ -378,9 +384,18 @@ function buildSrcDoc(
   /* Phase ribbon. */
   .cc-phase { display: grid; grid-template-columns: auto 1fr; gap: 16px; padding: 0.85rem 0; border-bottom: 1px solid var(--cc-border); }
   .cc-phase:last-child { border-bottom: none; }
-  .cc-phase .cc-badge {
+  /* Badge — a solid label chip. Deliberately NOT scoped to .cc-phase: agents
+     reuse it inside .cc-callout, table cells and headings, and when it was
+     phase-only it either came out unstyled or, as a bare grid child, stretched
+     to the full row height — a solid block of primary colour instead of a chip.
+     The fit-content + self alignment keeps it chip-sized in ANY grid or flex
+     parent, which is the whole failure mode. */
+  .cc-badge {
     font-family: var(--cc-mono); font-size: 11px; font-weight: 600; color: var(--cc-primary-fg);
-    background: var(--cc-primary); border-radius: 8px; padding: 4px 11px; height: fit-content; white-space: nowrap;
+    background: var(--cc-primary); border-radius: 8px; padding: 4px 11px; white-space: nowrap;
+    display: inline-flex; align-items: center;
+    width: fit-content; height: fit-content;
+    align-self: start; justify-self: start;
   }
   .cc-phase h4 { margin: 0.1rem 0 0.3rem; font-size: 15px; }
   .cc-phase ul { margin: 0.3rem 0 0; padding-left: 18px; font-size: 13px; color: var(--cc-muted); }
@@ -407,7 +422,14 @@ function buildSrcDoc(
     font-size: 30px; font-weight: 640; line-height: 1; color: var(--cc-fg);
     font-variant-numeric: tabular-nums; letter-spacing: -0.02em;
   }
-  .cc-stat .cc-v small { font-size: 14px; font-weight: 500; color: var(--cc-muted); }
+  /* Unit/suffix. Needs its own gap and line-height: without them a wordy unit
+     ("risk-adjusted", "near-close") jams straight into the number, and inherits
+     line-height:1 so a wrapped second line collides with the digits above. */
+  .cc-stat .cc-v small {
+    font-size: 14px; font-weight: 500; color: var(--cc-muted);
+    display: inline-block; margin-left: 0.3em; line-height: 1.25;
+    letter-spacing: 0; vertical-align: baseline;
+  }
   .cc-stat .cc-d { font-size: 12px; margin-top: 6px; font-variant-numeric: tabular-nums; }
   .cc-stat .cc-d.cc-up { color: var(--cc-success); }
   .cc-stat .cc-d.cc-down { color: var(--cc-danger); }

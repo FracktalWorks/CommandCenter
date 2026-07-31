@@ -694,7 +694,7 @@ def _match_mention(mention: str, candidates: list[str]) -> str | None:
 def _address_agent(req: AgentRunRequest, room) -> str:
     """Which agent answers this turn.
 
-    A room can hold several agents (migration 135). An unaddressed turn goes to
+    A room can hold several agents (migration 139). An unaddressed turn goes to
     the primary; ``@name`` addresses one of the others. Outside a room — and
     for any mention that names nobody present — this is exactly
     ``_resolve_agent_for_run``, so nothing about single-agent chat changes.
@@ -1987,7 +1987,7 @@ async def reconnect_agent_stream(
 def _thread_owner_ok(thread_id: str, user_id: str) -> bool:
     """True if *user_id* may WATCH *thread_id*, or it is not a persisted session.
 
-    Ownership became membership when sessions became rooms (migration 134): a
+    Ownership became membership when sessions became rooms (migration 138): a
     viewer invited to watch a run must be able to hold the replay stream open,
     which is the whole of read-only multiplayer. The permissive cases are
     unchanged and still deliberate — an absent session row (ephemeral / legacy
@@ -3209,7 +3209,31 @@ async def receive_webhook(
             if agent_name:
                 break
 
+    # Workflows can bind to the same (source, event_type) events (workflow
+    # event triggers — routes/workflows/triggers.py). Dispatch is best-effort
+    # and independent of agent routing: the same event may fan out to both.
+    workflow_runs: list[dict[str, str]] = []
+    try:
+        from gateway.routes.workflows.triggers import dispatch_event  # noqa: PLC0415
+
+        workflow_runs = await dispatch_event(source, event.event_type, event.payload)
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("webhook.workflow_dispatch_failed", error=str(exc)[:160])
+
     if not agent_name:
+        if workflow_runs:
+            _log.info(
+                "webhook.workflow_routed",
+                source=source,
+                event_type=event.event_type,
+                runs=len(workflow_runs),
+            )
+            return {
+                "status": "workflow_routed",
+                "source": source,
+                "event_type": event.event_type,
+                "workflow_runs": workflow_runs,
+            }
         _log.warning(
             "webhook.no_route",
             source=source,
@@ -3251,4 +3275,10 @@ async def receive_webhook(
         run_id=run_id,
     )
 
-    return {"status": "queued", "run_id": run_id, "agent": agent_name, "runtime": agent_runtime}
+    return {
+        "status": "queued",
+        "run_id": run_id,
+        "agent": agent_name,
+        "runtime": agent_runtime,
+        "workflow_runs": workflow_runs,
+    }

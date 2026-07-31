@@ -16,6 +16,7 @@ import { DraftAssistant } from "./DraftAssistant";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { getSignatureText, stripSignature } from "../lib/signature";
+import { RecipientInput } from "./RecipientInput";
 import { TaskCaptureModal, type CommitmentContext } from "./TaskCaptureModal";
 import { ContactTrigger, RecipientList } from "./ContactCard";
 
@@ -624,11 +625,13 @@ export function DraftCard({
       </div>
       <div className="space-y-2">
         <div className="flex items-center gap-2">
-          <input
+          <RecipientInput
             value={to}
-            onChange={(e) => { dirty.current = true; setTo(e.target.value); }}
+            onChange={(v) => { dirty.current = true; setTo(v); }}
+            accountId={draft.accountId || selectedAccountId}
+            ariaLabel="To recipients"
             placeholder="To (comma-separated)"
-            className={`${INPUT} flex-1`}
+            className={`${INPUT} w-full`}
           />
           {!showCc && (
             <button
@@ -642,17 +645,23 @@ export function DraftCard({
         </div>
         {showCc && (
           <>
-            <input
+            <RecipientInput
               value={cc}
-              onChange={(e) => setCc(e.target.value)}
+              onChange={setCc}
+              accountId={draft.accountId || selectedAccountId}
+              ariaLabel="Cc recipients"
               placeholder="Cc (comma-separated)"
-              className={INPUT}
+              wrapperClassName="relative"
+              className={`${INPUT} w-full`}
             />
-            <input
+            <RecipientInput
               value={bcc}
-              onChange={(e) => setBcc(e.target.value)}
+              onChange={setBcc}
+              accountId={draft.accountId || selectedAccountId}
+              ariaLabel="Bcc recipients"
               placeholder="Bcc (comma-separated)"
-              className={INPUT}
+              wrapperClassName="relative"
+              className={`${INPUT} w-full`}
             />
           </>
         )}

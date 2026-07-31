@@ -195,8 +195,10 @@ for both from the first round, not as a later pass:
   card on a narrow screen rather than reflowing — that's the expected pattern
   for tabular data, not a bug to work around.
 - **Touch targets are handled for you.** Native buttons/inputs from the
-  design system already have a comfortable minimum tap height — don't shrink
-  them with your own padding overrides.
+  design system already have a 44px minimum tap height (Apple HIG / Material
+  Design's standard, and the same number CommandCenter's own mobile nav
+  uses) — don't shrink them with your own padding overrides or a `height`
+  that's smaller than the content needs.
 - **Check it before you end the round.** The Workshop's preview pane has a
   desktop/phone-width toggle (top-right of the Preview tab) — after a round
   that touches layout, switch to the phone width and confirm nothing clips,

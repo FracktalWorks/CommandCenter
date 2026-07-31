@@ -1,5 +1,5 @@
 -- ============================================================================
--- 135_quarantine_commingled_agent_data.sql — retire pre-instance file content
+-- 139_quarantine_commingled_agent_data.sql — retire pre-instance file content
 -- ============================================================================
 -- Spec: ai-company-brain/specs/memory_architecture.md §5.3
 --       ai-company-brain/specs/agent_platform_hardening_2026-07.md H4
@@ -44,7 +44,7 @@
 -- traffic and therefore the most visible if recall regresses.
 --
 -- Idempotent: re-running moves nothing, because the rows are already out of ''.
--- Depends on: 134_agent_blob_instance.sql.
+-- Depends on: 138_agent_blob_instance.sql.
 -- ============================================================================
 
 DO $$

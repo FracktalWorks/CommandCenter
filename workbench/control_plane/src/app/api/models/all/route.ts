@@ -118,6 +118,25 @@ const LITELLM_MODELS: { id: string; label: string; group: string; provider: stri
   { id: "copilot/o3-mini",       label: "o3-mini (Copilot)",        group: "LiteLLM — Copilot", provider: "github" },
 ];
 
+/** Speech-to-text models (Deepgram, AssemblyAI, Whisper, …) are enabled via
+ *  Settings → Models to power the Note Taker's STT tier — they take audio in
+ *  and return a transcript, not a chat completion, so they can't drive
+ *  AgentChat or a Custom App. Mirrors the gateway's own
+ *  `_is_transcription_model` heuristic (routes/settings.py) so a model
+ *  enabled for STT never leaks into the chat/App-Workshop picker. */
+function isVoiceOnlyModel(id: string, provider: string): boolean {
+  const mid = id.toLowerCase();
+  return (
+    provider === "deepgram" ||
+    provider === "assemblyai" ||
+    mid.startsWith("deepgram/") ||
+    mid.startsWith("assemblyai/") ||
+    mid.includes("whisper") ||
+    mid.includes("transcribe") ||
+    /\/nova-/.test(mid)
+  );
+}
+
 export async function GET(): Promise<
   NextResponse<UnifiedModelsResponse | typeof UNAUTHENTICATED>
 > {
@@ -239,6 +258,9 @@ export async function GET(): Promise<
   //      Settings → Models → eye icon (stored in infra/enabled_models.json).
   //      Nothing else.  The LITELLM_MODELS built-in list is only used as a
   //      display-label lookup — it never adds models to the picker on its own.
+  //      Speech-to-text models (Deepgram, AssemblyAI, Whisper) can be enabled
+  //      here too — for the Note Taker's STT tier, not chat — so this group
+  //      is filtered through isVoiceOnlyModel() before it reaches the picker.
   //
   const providerLabel: Record<string, string> = {
     gemini: "Gemini", openai: "OpenAI", anthropic: "Anthropic",
@@ -306,7 +328,8 @@ export async function GET(): Promise<
     ...enabledModels
       .filter((m) => !hiddenSet.has(m.id)
         && !tierModels.some((t) => t.id === m.id)
-        && m.provider !== "github")
+        && m.provider !== "github"
+        && !isVoiceOnlyModel(m.id, m.provider))
       .map(resolveModel),
   ];
 

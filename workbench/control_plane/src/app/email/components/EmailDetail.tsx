@@ -22,6 +22,7 @@ import { DraftAssistant } from "./DraftAssistant";
 import { MessageContent } from "./MessageContent";
 import { AttachmentList } from "./AttachmentList";
 import { getSignatureText, seededBody, stripSignature } from "../lib/signature";
+import { RecipientInput } from "./RecipientInput";
 import { ConversationView, DraftCard, isDraftEmail } from "./ConversationView";
 import { ContactTrigger, RecipientList } from "./ContactCard";
 import { LabelMenu } from "./LabelMenu";
@@ -1093,12 +1094,13 @@ export function EmailDetail({ email }: EmailDetailProps) {
             {/* Recipients */}
             <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
               <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">To</span>
-              <input
-                type="text"
+              <RecipientInput
                 value={replyTo}
-                onChange={(e) => { replyDirty.current = true; setReplyTo(e.target.value); }}
+                onChange={(v) => { replyDirty.current = true; setReplyTo(v); }}
+                accountId={selectedAccountId}
+                ariaLabel="To recipients"
                 placeholder="Recipients (comma-separated)…"
-                className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
               />
               {/* Reveal Cc/Bcc on a sender-only reply where they're hidden. */}
               {!showReplyCc && (
@@ -1115,22 +1117,24 @@ export function EmailDetail({ email }: EmailDetailProps) {
               <>
                 <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
                   <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Cc</span>
-                  <input
-                    type="text"
+                  <RecipientInput
                     value={replyCc}
-                    onChange={(e) => { replyDirty.current = true; setReplyCc(e.target.value); }}
+                    onChange={(v) => { replyDirty.current = true; setReplyCc(v); }}
+                    accountId={selectedAccountId}
+                    ariaLabel="Cc recipients"
                     placeholder="Cc…"
-                    className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                    className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
                   />
                 </div>
                 <div className="px-4 py-1.5 border-b border-border flex items-center gap-2">
                   <span className="text-[10px] text-muted-foreground w-7 flex-shrink-0">Bcc</span>
-                  <input
-                    type="text"
+                  <RecipientInput
                     value={replyBcc}
-                    onChange={(e) => { replyDirty.current = true; setReplyBcc(e.target.value); }}
+                    onChange={(v) => { replyDirty.current = true; setReplyBcc(v); }}
+                    accountId={selectedAccountId}
+                    ariaLabel="Bcc recipients"
                     placeholder="Bcc…"
-                    className="flex-1 bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
+                    className="w-full bg-transparent text-xs text-foreground placeholder:text-muted-foreground outline-none"
                   />
                 </div>
               </>

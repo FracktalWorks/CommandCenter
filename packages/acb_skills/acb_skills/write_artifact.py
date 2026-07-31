@@ -290,10 +290,21 @@ async def write_artifact(
     # Advisory lint for HTML documents. The sandbox fails silently (a CDN link is
     # just blocked, a typo'd cc- class just renders unstyled), so surface those
     # mistakes here while the agent can still fix them. Never blocks the write.
-    if target.suffix.lower() in {".html", ".htm"} and isinstance(content, str):
-        from acb_skills.artifact_lint import lint_artifact_html
+    _suffix = target.suffix.lower()
+    if _suffix in {".html", ".htm", ".jsx", ".tsx"} and isinstance(content, str):
+        from acb_skills.artifact_lint import (  # noqa: PLC0415
+            lint_artifact_html,
+            lint_artifact_source,
+        )
 
-        warnings = lint_artifact_html(content, full_page=True)
+        # JSX is not HTML — running the document linter on it yields only noise.
+        # But the CSP failure is shared, and it is silent, so React artifacts get
+        # the narrow remote-asset check.
+        warnings = (
+            lint_artifact_html(content, full_page=True)
+            if _suffix in {".html", ".htm"}
+            else lint_artifact_source(content)
+        )
         if warnings:
             result["warnings"] = warnings
             result["warning_note"] = (

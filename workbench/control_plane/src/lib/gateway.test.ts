@@ -187,19 +187,48 @@ describe("the route surface", () => {
     expect(offenders).toEqual([]);
   });
 
-  it("establishes who is asking in every handler that reaches the gateway", () => {
-    // Every exported handler in a forwarding route must resolve an identity
-    // before it forwards. `proxyToGateway` does it internally; `currentIdentity`
-    // is for the route that must answer a signed-out caller with a body rather
-    // than a 401 (/auth/me); everything else says so with `requireIdentity`.
-    const HANDLER = /export async function (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/g;
-    const RESOLVES = /requireIdentity\(\)|currentIdentity\(\)/g;
+  it("establishes who is asking wherever it reaches the gateway", () => {
+    // The unit is the FUNCTION that calls gatewayHeaders, not the exported
+    // handler. Counting guards against handlers looked equivalent and was not:
+    // a route whose four verbs all delegate to one `forward()` needs the guard
+    // in `forward`, and counting would demand four. It fired on exactly that
+    // shape the first time main's workflows routes met this test.
+    //
+    // Note this is about ANSWERING correctly, not about safety — gatewayHeaders
+    // throwing is what makes an unguarded call fail closed. Without the guard
+    // that throw becomes a 502, telling a signed-out caller the gateway is down
+    // rather than that they need to sign in.
+    //
+    // `currentIdentity` counts too: SSE routes must answer in `text/event-stream`
+    // rather than JSON, and /auth/me answers a signed-out caller with a body.
+    // Two arrangements both satisfy it, so the check is a disjunction:
+    //   (a) every exported handler resolves, and helpers inherit that; or
+    //   (b) every function that calls gatewayHeaders resolves for itself.
+    // Requiring (b) alone would flag the many routes whose verbs guard and then
+    // delegate to a shared `forward()`, which are perfectly safe.
+    const RESOLVES = /requireIdentity\(\)|currentIdentity\(\)/;
     const offenders: string[] = [];
     for (const r of ROUTES) {
-      if (!/gatewayHeaders|headersActingAs/.test(r.src)) continue;
-      const handlers = [...r.src.matchAll(HANDLER)].length;
-      const guards = [...r.src.matchAll(RESOLVES)].length;
-      if (guards < handlers) offenders.push(`${r.rel} (${guards}/${handlers})`);
+      if (!/\b(gatewayHeaders|headersActingAs)\s*\(/.test(r.src)) continue;
+      const fns = r.src.split(/\n(?=(?:export )?(?:async )?function )/);
+
+      const handlers = fns.filter((f) =>
+        /^export async function (GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b/.test(f)
+      );
+      const everyHandlerGuards =
+        handlers.length > 0 && handlers.every((f) => RESOLVES.test(f));
+
+      const touchers = fns.filter((f) =>
+        /\b(gatewayHeaders|headersActingAs)\s*\(/.test(f)
+      );
+      const everyToucherGuards = touchers.every((f) => RESOLVES.test(f));
+
+      if (!everyHandlerGuards && !everyToucherGuards) {
+        const bad = touchers
+          .filter((f) => !RESOLVES.test(f))
+          .map((f) => f.match(/function (\w+)/)?.[1] ?? "?");
+        offenders.push(`${r.rel} → ${bad.join(", ")}`);
+      }
     }
     expect(offenders).toEqual([]);
   });

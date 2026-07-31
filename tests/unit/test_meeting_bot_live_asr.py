@@ -251,3 +251,68 @@ def test_worker_sends_the_model_the_gateway_chose() -> None:
         monkey.undo()
     assert "speech_model=u3-rt-pro" in url
     assert "speaker_labels=true" in url
+
+
+# ── paying only while something reads the stream ─────────────────────────────
+
+def test_wanted_url_derives_from_the_callback() -> None:
+    """No new field in the join contract — the per-meeting callback the gateway
+    already sends carries the meeting id."""
+    cb = "http://gw:8080/notes/meetings/abc-123/live/segment"
+    assert live._wanted_url(cb) == "http://gw:8080/notes/meetings/abc-123/live/wanted"
+
+
+def test_live_check_fails_open() -> None:
+    """If the gateway can't be reached we keep streaming. Losing captions on a
+    real meeting is worse than one meeting's spend, and the gateway's own check
+    fails open the same way."""
+    import asyncio
+
+    import pytest
+
+    monkey = pytest.MonkeyPatch()
+
+    class _Boom:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): raise RuntimeError("gateway down")
+
+    import httpx
+    monkey.setattr(httpx, "AsyncClient", lambda **kw: _Boom())
+    try:
+        cb = "http://gw/notes/meetings/m1/live/segment"
+        assert asyncio.run(live._live_wanted(cb)) is True
+    finally:
+        monkey.undo()
+
+
+def test_live_check_honours_a_refusal() -> None:
+    import asyncio
+
+    import pytest
+
+    monkey = pytest.MonkeyPatch()
+
+    class _Resp:
+        def raise_for_status(self): pass
+        def json(self): return {"wanted": False, "reason": "the copilot is off"}
+
+    class _Client:
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): return False
+        async def get(self, *a, **k): return _Resp()
+
+    import httpx
+    monkey.setattr(httpx, "AsyncClient", lambda **kw: _Client())
+    try:
+        cb = "http://gw/notes/meetings/m1/live/segment"
+        assert asyncio.run(live._live_wanted(cb)) is False
+    finally:
+        monkey.undo()
+
+
+def test_no_callback_means_no_gate() -> None:
+    """A worker with nowhere to post segments isn't in a gated flow at all."""
+    import asyncio
+
+    assert asyncio.run(live._live_wanted("")) is True

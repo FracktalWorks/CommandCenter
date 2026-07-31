@@ -1,6 +1,9 @@
 # Visual Workflow Editor — Analysis & Implementation Plan
 
-**Status:** Draft / RFC · **Date:** 2026-07-16 · **Owner:** vjvarada
+**Status:** RFC accepted — v1 slice built 2026-07-30 (product spec:
+`ai-company-brain/specs/workflows_app.md` · policy: ADR-028 · code: gateway
+`routes/workflows/` + workbench `/workflows` + migration `132_workflows.sql`)
+· **Date:** 2026-07-16 · **Owner:** vjvarada
 
 A no-code, node-based builder that lets makers compose **automated workflows** from
 CommandCenter's existing agents, tools, and integrations — triggered on command, by
@@ -482,6 +485,13 @@ multi-agent workflow nodes.
   [Variables](https://learn.microsoft.com/en-us/microsoft-copilot-studio/authoring-variables-about).
 - Sim — <https://github.com/simstudioai/sim> (Apache-2.0).
 - open-agent-builder — <https://github.com/firecrawl/open-agent-builder> (MIT).
+- n8n — <https://github.com/n8n-io/n8n> (Sustainable Use License; read for
+  patterns, not code). Two things taken from it: **typed node parameters** —
+  each node declares its inputs so the panel is a generated form rather than a
+  JSON box (our `args_schema` → `engine/tool_args.py`), and **golden workflow
+  fixtures** — a directory of whole workflows paired with expected output,
+  driven by one generic runner, so adding coverage is adding a file
+  (`evals/trajectories/workflows/*.json`).
 - CommandCenter internals: `apps/services/orchestrator/orchestrator/executor.py`,
   `packages/acb_skills/acb_skills/agent_tools.py`,
   `packages/acb_skills/acb_skills/integrations.py`,

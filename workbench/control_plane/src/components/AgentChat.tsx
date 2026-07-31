@@ -1199,7 +1199,10 @@ export default function AgentChat({
   }, [input]);
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-    if (e.key === "Enter" && !e.shiftKey) {
+    // Enter inserts a newline (the textarea default) — sending is the Send
+    // button's job, so a mid-thought Enter never fires the prompt early.
+    // Ctrl/Cmd+Enter stays as the deliberate keyboard send.
+    if (e.key === "Enter" && (e.ctrlKey || e.metaKey)) {
       e.preventDefault();
       handleSubmit(e as unknown as React.FormEvent);
     }
@@ -1801,7 +1804,7 @@ export default function AgentChat({
                             "bg-primary"
                           }`}
                           aria-label={SEND_MODE_LABELS[sendMode]}
-                          title={`${SEND_MODE_LABELS[sendMode]} — press Enter`}>
+                          title={`${SEND_MODE_LABELS[sendMode]} — Ctrl+Enter`}>
                           {sendMode === "steer" ? <CornerDownRight size={14} strokeWidth={2} /> :
                            sendMode === "queue" ? <ListOrdered size={14} strokeWidth={2} /> :
                            <ArrowUp size={14} strokeWidth={2.5} />}

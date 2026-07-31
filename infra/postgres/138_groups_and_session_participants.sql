@@ -1,5 +1,5 @@
 -- ============================================================================
--- 134_groups_and_session_participants.sql — the two shared primitives
+-- 138_groups_and_session_participants.sql — the two shared primitives
 -- ============================================================================
 -- Spec: ai-company-brain/specs/groups_sessions_authority.md §1–§2
 --       (answers org_access_control.md §10.2 collisions 1 and 2)

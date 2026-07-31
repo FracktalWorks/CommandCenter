@@ -21,6 +21,7 @@ and streams chat responses as AG-UI events.
 5. stream_relay.py buffers all SSE events to Redis Streams for fire-and-forget chat with live reconnection
 6. All agents must go through MAF -- no raw Copilot SDK paths for business execution
 7. mutation_runner.py runs inside the Docker sandbox -- uses Copilot SDK directly (by design)
+8. workflow_tools.py exposes published Workflows-app workflows to every agent as a three-tool trio (`list_workflows` / `run_workflow` / `get_workflow_run`) — the sibling of app_tools.py, injected through the same `_tool_injection` gated pipeline. Calls go in-process to `gateway.routes.workflows.service` (the same entrypoints the Run button and API use), so concurrency caps, run history, and the approval gates inside a workflow bind agent-triggered runs identically; a run paused at a Human-approval node reports itself as waiting in the approvals inbox — an agent cannot bypass the gate. Spec: ai-company-brain/specs/workflows_app.md F13
 
 ## Work Guidance
 

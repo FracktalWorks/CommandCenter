@@ -16,6 +16,7 @@ from __future__ import annotations
 from typing import Any
 
 from acb_auth import UserContext, get_current_user
+from acb_auth.permissions import CAPABILITIES
 from fastapi import APIRouter, Depends
 
 from gateway.routes.admin._common import get_db, get_org_id
@@ -83,6 +84,14 @@ async def get_me(user: UserContext = Depends(get_current_user)) -> dict[str, Any
         "features": list(access.allowed_features()),
         "agents": [n for n in _agent_names() if access.can_run_agent(n)],
         "permissions": sorted(access.granted),
+        # Resolved yes/no for every concrete capability, so the browser never
+        # re-implements the wildcard rule (an owner holds "*", not the literal
+        # string). `permissions` above stays the raw grant patterns for the
+        # admin screens that display them. Wildcard capabilities are omitted:
+        # they are answered per-target ("agents" above), not as a flat yes.
+        "capabilities": [
+            c for c in CAPABILITIES if "*" not in c and access.has(c)
+        ],
         "denied": sorted(access.denied),
         "is_admin": access.has("admin:members:read"),
     }

@@ -5,14 +5,11 @@
  * audit event (acb_audit). Forwards the signed-in user's email so the audit
  * actor is the real user.
  */
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const runtime = "nodejs";
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me";
 
 interface FeedbackBody {
   message_id?: string;
@@ -21,6 +18,8 @@ interface FeedbackBody {
 }
 
 export async function POST(req: NextRequest): Promise<Response> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   let body: FeedbackBody;
   try {
     body = (await req.json()) as FeedbackBody;
@@ -31,10 +30,7 @@ export async function POST(req: NextRequest): Promise<Response> {
     return new Response("message_id and vote ('up'|'down') are required", { status: 400 });
   }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${INTERNAL_TOKEN}`,
-  };
+  const headers: Record<string, string> = await gatewayHeaders({ "Content-Type": "application/json" });
   try {
     const session = await auth();
     if (session?.user?.email) headers["X-User-Email"] = session.user.email;

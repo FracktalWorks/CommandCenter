@@ -29,7 +29,7 @@ from typing import Any
 
 from acb_auth import (
     UserContext,
-    assert_can_run_agent,
+    assert_can_run_agent_in_session,
     get_current_user,
     require_internal_auth,
     require_permission,
@@ -38,6 +38,7 @@ from acb_common import get_logger, get_settings
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request, status)
 from fastapi.responses import StreamingResponse
+from gateway.room_stream import publish_room_event
 from pydantic import BaseModel
 
 _log = get_logger("gateway.agent")
@@ -64,6 +65,96 @@ class AgentRunRequest(BaseModel):
     fold-and-persist at run end (core_loop_unification Phase 1, P0-3) upserts
     the SAME row the live translator checkpoints, keeping the two writers
     idempotent.  Falls back to ``assistant-{thread}-{run_id}`` when absent."""
+    think_mode: str = "auto"
+    """Reasoning depth the chat UI selected: ``auto`` | ``thinking`` | ``max``.
+
+    Previously honoured only on ``/copilot/chat``, so the thinking toggle did
+    nothing for named agents.  Porting it here is the prerequisite for retiring
+    that endpoint (agent_architecture.md §11.1.1); ``auto`` is a no-op, so the
+    default path is unchanged."""
+
+
+#: Reasoning depths the chat UI can request.  Anything else falls back to auto.
+_THINK_MODES: frozenset[str] = frozenset({"auto", "thinking", "max"})
+
+
+def _resolve_think_mode(req: AgentRunRequest) -> str:
+    """Resolve the requested reasoning depth from either place it can arrive.
+
+    ``route.ts``'s named-agent branch has been sending ``think_mode`` inside
+    ``payload`` all along, where nothing read it — which is why the chat UI's
+    thinking toggle silently did nothing for named agents while working on
+    ``/copilot/chat`` (agent_architecture.md §11.1.1).  Reading both means the
+    existing frontend is fixed with no frontend change, and the top-level field
+    is there for future callers.
+
+    Unknown values resolve to ``"auto"`` rather than being passed through: the
+    downstream mapping ignores them anyway, and normalising here keeps the run
+    log honest about what was actually applied.
+    """
+    top = (req.think_mode or "").strip().lower()
+    if top in _THINK_MODES and top != "auto":
+        return top
+    nested = str(req.payload.get("think_mode") or "").strip().lower()
+    if nested in _THINK_MODES and nested != "auto":
+        return nested
+    return "auto"
+
+
+async def _refuse_if_another_run_is_active(thread_id: str, actor: str) -> None:
+    """409 when starting a run would destroy somebody ELSE's in-flight run.
+
+    Starting a run on an already-active thread cancels the previous one *and*
+    deletes its event log (``run_detached`` → ``mark_active(reset=True)``). That
+    is correct when you supersede your OWN run — steer, retry, Quick action —
+    and destructive the moment two people share a thread: the first person's
+    work vanishes with no error, because the cancel path deliberately suppresses
+    ``RUN_ERROR`` (it treats cancellation as a supersede, not a failure).
+    See ``docs/multiplayer/README.md`` §3.3.
+
+    So the guard keys on WHO owns the live run, not merely on one existing.
+    Every same-user path is untouched; only a different person is refused.
+
+    Fails OPEN — unknown owner (a run predating actor tracking, a Redis hiccup)
+    or an anonymous caller (cron, service-to-service) proceeds. That matches
+    ``_thread_owner_ok``'s contract and the asymmetry behind it: a false refusal
+    blocks legitimate work, while a false allow merely restores today's
+    behaviour.
+
+    When floor control lands (§5.1) the condition becomes "does not hold the
+    floor" and this same 409 grows the steer/queue/request-floor options.
+    """
+    if not actor:
+        return
+    try:
+        from orchestrator.stream_relay import get_run_actor, is_active
+
+        if not await is_active(thread_id):
+            return
+        owner = await get_run_actor(thread_id)
+    except Exception:  # never block a run because the check itself failed
+        _log.warning("agent.active_run_check_failed", thread_id=thread_id[:12])
+        return
+
+    if not owner or owner == actor:
+        return
+
+    _log.info(
+        "agent.run_refused_active_run",
+        thread_id=thread_id[:12], owner=owner[:20], actor=actor[:20],
+    )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail={
+            "error": "run_in_progress",
+            "message": (
+                f"{owner} has a run in progress on this conversation. "
+                "Starting another would cancel it and discard its transcript."
+            ),
+            "threadId": thread_id,
+            "holder": owner,
+        },
+    )
 
 
 class AgentRunResponse(BaseModel):
@@ -194,6 +285,30 @@ _AGENT_REGISTRY: list[dict] = [
         "local_path": "apps/agents/agent-whatsapp-assistant",
         "integrations": [],
         "optional_integrations": [],
+    },
+    {
+        "name": "orchestrator",
+        "description": (
+            "Orchestrator — the default chat agent. Routes to specialist agents, "
+            "retrieves company data across ClickUp/Zoho/Odoo, and carries "
+            "cross-session memory."
+        ),
+        "tags": ["orchestrator", "core", "routing"],
+        "status": "live",
+        # Native MAF: apps/agents/agent-orchestrator/agents.py returns
+        # build_orchestrator_agent(), a real agent_framework.Agent. Labelling it
+        # github-copilot would route it through the Copilot SDK and 402.
+        "agent_runtime": "maf",
+        "local_path": "apps/agents/agent-orchestrator",
+        "integrations": [],
+        "optional_integrations": [],
+        # Why this entry exists (agent_architecture.md §11.1.1): the wrapper at
+        # apps/agents/agent-orchestrator/ was written to "eliminate the separate
+        # /copilot/chat endpoint path in main.py and the isOrchestrator branching
+        # in route.ts" — but it was never registered, so _validate_agent_name
+        # 422'd "orchestrator" and the wrapper was unreachable. Registering it
+        # makes the named-agent path real; retiring /copilot/chat is a separate,
+        # frontend-side step that depends on this one.
     },
 ]
 
@@ -506,6 +621,117 @@ def _validate_agent_name(name: str) -> str:
 # chat_session row yet). It must NEVER reach a run dispatch as a literal agent
 # name — see _resolve_agent_for_run below.
 _UNRESOLVED_AGENT_SENTINELS = {"unknown", "", "undefined", "null", "none"}
+
+
+#: A leading ``@name`` addresses one agent in a room. Only leading, and only
+#: one: "@sales what about @finance's number" asks sales about finance, it does
+#: not start two runs. Multi-agent rooms work by ADDRESSING, not by broadcast —
+#: a message that reaches every agent produces N answers to one question and
+#: N times the cost, which is not what anyone means by "ask the room".
+_MENTION_RE = re.compile(r"^\s*@([A-Za-z0-9][A-Za-z0-9._-]*)\s*")
+
+
+def _resolve_room(thread_id: str, email: str):
+    """This person's place in the room, or ``None`` when rooms are unavailable.
+
+    ``None`` — not a refusal — is the answer when the room layer cannot be
+    consulted, because the run path predates rooms and must keep working
+    without them.
+    """
+    if not thread_id or not email:
+        return None
+    try:
+        from gateway.rooms import resolve_room_access
+        return resolve_room_access(thread_id, email)
+    except Exception:
+        _log.warning("agent.room_resolve_failed", thread_id=thread_id[:12], exc_info=True)
+        return None
+
+
+def _room_agents(thread_id: str) -> list[tuple[str, str]]:
+    """[(agent_name, role)] for a room, primary first. Empty on any failure."""
+    if not thread_id:
+        return []
+    try:
+        from acb_graph import get_session
+        from sqlalchemy import text
+        with get_session() as s:
+            rows = s.execute(
+                text(
+                    "SELECT agent_name, role FROM chat_session_agent "
+                    "WHERE session_id = :sid ORDER BY role DESC, added_at"
+                ),
+                {"sid": thread_id},
+            ).fetchall()
+        return [(r.agent_name, r.role) for r in rows]
+    except Exception:
+        return []
+
+
+def _match_mention(mention: str, candidates: list[str]) -> str | None:
+    """Match a typed ``@name`` against the agents present, forgivingly.
+
+    People type ``@sales`` for ``agent-sales-assistant``. Exact match wins,
+    then the ``agent-`` prefix is optional, then a unique prefix match — but
+    only if it is unique: an ambiguous mention falls through to the primary
+    agent rather than guessing which colleague's agent to spend money on.
+    """
+    want = mention.strip().lower()
+    if not want:
+        return None
+    lowered = {c.lower(): c for c in candidates}
+    if want in lowered:
+        return lowered[want]
+    if f"agent-{want}" in lowered:
+        return lowered[f"agent-{want}"]
+    starts = [
+        original for low, original in lowered.items()
+        if low.startswith(want) or low.removeprefix("agent-").startswith(want)
+    ]
+    return starts[0] if len(starts) == 1 else None
+
+
+def _address_agent(req: AgentRunRequest, room) -> str:
+    """Which agent answers this turn.
+
+    A room can hold several agents (migration 139). An unaddressed turn goes to
+    the primary; ``@name`` addresses one of the others. Outside a room — and
+    for any mention that names nobody present — this is exactly
+    ``_resolve_agent_for_run``, so nothing about single-agent chat changes.
+    """
+    requested = _resolve_agent_for_run(req.agent, req.thread_id)
+    if room is None or not req.thread_id:
+        return requested
+
+    message = str(req.payload.get("message") or "")
+    match = _MENTION_RE.match(message)
+    if not match:
+        return requested
+
+    present = [name for name, _role in _room_agents(req.thread_id)]
+    if not present:
+        return requested
+    addressed = _match_mention(match.group(1), present)
+    if not addressed or addressed == requested:
+        return requested
+    try:
+        return _validate_agent_name(addressed)
+    except Exception:
+        return requested
+
+
+#: How much of a turn the room sees before it is persisted. The transcript is
+#: the durable record; this is the "Vijay asked…" line in the live rail, and a
+#: whole message there would duplicate content the history endpoint serves with
+#: the room's redaction rules applied.
+_ROOM_PREVIEW_CHARS = 280
+
+
+def _room_preview(req: AgentRunRequest) -> str:
+    text_ = str(req.payload.get("message") or "").strip()
+    if len(text_) <= _ROOM_PREVIEW_CHARS:
+        return text_
+    return text_[:_ROOM_PREVIEW_CHARS] + "…"
 
 
 def _resolve_agent_for_run(agent: str | None, thread_id: str | None) -> str:
@@ -1262,13 +1488,36 @@ async def run_agent_stream_endpoint(
     Use this instead of ``POST /agent/run`` whenever the caller wants live
     tool-call visibility (e.g. the control-plane chat UI).
     """
+    import asyncio
+
     from orchestrator.executor import run_agent_stream  # noqa: PLC0415
 
-    agent_name = _resolve_agent_for_run(req.agent, req.thread_id)
+    # Room guard: sending is a contributor's act. A viewer invited to WATCH a
+    # conversation must not be able to drive its agents — otherwise "add them
+    # as a viewer" is a one-click way around the room's roles entirely.
+    actor_email = getattr(user, "email", "") or ""
+    room = await asyncio.to_thread(
+        _resolve_room, req.thread_id or "", actor_email,
+    )
+    if room is not None and not room.can_send:
+        raise HTTPException(status_code=403, detail=room.denied("send messages"))
+
+    agent_name = _address_agent(req, room)
     # Org access control, enforcement seam 2: the picker is filtered, but the
     # endpoint is the boundary of record — a hand-crafted request naming an
     # agent the member cannot run is refused here, not in the UI.
-    assert_can_run_agent(user, agent_name)
+    await assert_can_run_agent_in_session(user, agent_name, req.thread_id)
+
+    # The other people in the room find out what was asked, and by whom, the
+    # moment it is asked — the run stream carries only the agent's side.
+    if room is not None and room.is_shared:
+        await publish_room_event(req.thread_id or "", {
+            "type": "USER_MESSAGE",
+            "author": actor_email,
+            "agentName": agent_name,
+            "content": _room_preview(req),
+        })
+
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
 
@@ -1276,12 +1525,36 @@ async def run_agent_stream_endpoint(
     # user_id scopes THIS user's private memory (remember/save_memory); the
     # agent name scopes the agent's cross-user memory (recall_agent/…). Org
     # memory is a fixed global scope, so it needs no per-run context.
+    #
+    # In a SHARED room this is switched off entirely. One person's private
+    # facts must not be stitched into a context whose output the whole room
+    # reads, and the room's turns must not be extracted into the typer's
+    # personal store — both directions are wrong, and the second is worse
+    # because it is silent (groups_sessions_authority.md §3, "personal memory
+    # in shared rooms"). Agent and org memory are unaffected: they were never
+    # one person's. A room of one takes neither branch.
+    _room_is_shared = room is not None and room.is_shared
+
+    # Which compartments this run may read, and the one it may write. Solo
+    # resolves to exactly the three scopes and the write target it always had.
+    from acb_memory import resolve_clearance
+    _clearance = resolve_clearance(
+        actor=user_id if user_id != "anonymous" else "",
+        agent_name=agent_name,
+        thread_id=req.thread_id,
+        shared=_room_is_shared,
+    )
+
     try:
         from acb_skills.memory_tools import (  # noqa: PLC0415
             _set_memory_user_id,
             _set_memory_agent_name,
         )
-        _set_memory_user_id(user_id)
+        # remember/save_memory read and write THIS compartment. In a room that
+        # is the room's own, so the tools keep working and file what they learn
+        # where the room can see it — rather than into whoever happened to type,
+        # which is the write rule's whole point.
+        _set_memory_user_id(_clearance.write)
         _set_memory_agent_name(agent_name)
     except ImportError:
         pass
@@ -1309,15 +1582,38 @@ async def run_agent_stream_endpoint(
         # anonymous user; the per-user Mem0/Graphiti blocks stay gated on a
         # real user_id.
         if user_msg:
-            _has_user = user_id != "anonymous"
+            _has_user = user_id != "anonymous" and not _room_is_shared
 
             async def _build_memory_block() -> str:
                 parts: list[str] = []
-                # Mem0: this user's private episodic facts
+                # Mem0: this user's private episodic facts. Never in a room —
+                # not the owner's, not the typer's. The scope key is simply not
+                # passed, so there is no retrieval to leak (memory-clearance.md
+                # §3.3: a boundary, not a request in a system prompt).
                 if _has_user:
                     mem_ctx = await get_memory_context(user_id, user_msg)
                     if mem_ctx:
                         parts.append("## Memory from past conversations\n" + mem_ctx)
+                # What this room has established. Replaces the personal
+                # compartment rather than adding to it: shared work is
+                # remembered where everyone in the room can see it.
+                if _clearance.room:
+                    room_ctx = await get_scoped_context(
+                        _clearance.room, user_msg, header="Room memory",
+                    )
+                    if room_ctx:
+                        parts.append(
+                            "## What this room has established\n" + room_ctx
+                        )
+                # How the person being answered likes to work. Safe to carry
+                # into a room: they are in it, and preferences describe them
+                # rather than disclosing what they told the agent in private.
+                if _clearance.prefs:
+                    prefs_ctx = await get_scoped_context(
+                        _clearance.prefs, user_msg, header="Preferences",
+                    )
+                    if prefs_ctx:
+                        parts.append("## How to answer this person\n" + prefs_ctx)
                 # Agent memory: shared across every user of this agent
                 agent_ctx = await get_scoped_context(
                     scope_key(agent=agent_name), user_msg, header="Agent memory"
@@ -1352,6 +1648,10 @@ async def run_agent_stream_endpoint(
                 redis=_redis,
                 thread_id=_mem_thread_id,
                 build=_build_memory_block,
+                # Without this a thread cached while solo would keep serving
+                # the owner's private block to the room for the rest of the
+                # TTL, undoing the read rule above.
+                clearance=_clearance.fingerprint,
             )
             if memory_context:
                 req.payload["memory_context"] = memory_context
@@ -1435,6 +1735,13 @@ async def run_agent_stream_endpoint(
         req.assistant_message_id or f"assistant-{thread_id}-{run_id}"
     )
     _mem_user = (user.email or "").strip()
+    # Which compartment the run's turns are extracted into. What several people
+    # said in a room is the room's, so it files under `room:<thread_id>` and
+    # never into one participant's private store — a disclosure nobody
+    # consented to, and a silent one. Deliberately NOT `_mem_user`, which also
+    # names the session's owner and the acting member for authorship and must
+    # stay a real email.
+    _extract_user = _clearance.write if _room_is_shared else _mem_user
     _mem_message = str(req.payload.get("message") or "")
     _mem_history = [
         {"role": str(m.get("role") or "user"), "content": str(m.get("content") or "")}
@@ -1454,7 +1761,7 @@ async def run_agent_stream_endpoint(
         # completed after a browser-gone/reconnect contributed nothing to
         # Mem0. The gateway is now the single extraction owner for this path
         # (route.ts no longer extracts for named agents). Best-effort.
-        if not (_mem_user and folded):
+        if not (_extract_user and folded):
             return
         try:
             from acb_memory import add_memories_background  # noqa: PLC0415
@@ -1467,11 +1774,16 @@ async def run_agent_stream_endpoint(
             )
             if conv:
                 await add_memories_background(
-                    _mem_user, conv, agent_id=agent_name,
+                    _extract_user, conv, agent_id=agent_name,
                 )
         except Exception:  # noqa: BLE001 — extraction must never kill the relay
             _log.warning("agent.run_end_memory_extraction_failed",
                          thread_id=thread_id[:12])
+
+    _actor = (getattr(user, "email", "") or "").strip()
+    await _refuse_if_another_run_is_active(thread_id, _actor)
+
+    _think_mode = _resolve_think_mode(req)
 
     agent_gen = run_agent_stream(
         agent_name,
@@ -1479,6 +1791,7 @@ async def run_agent_stream_endpoint(
         run_id=run_id,
         thread_id=thread_id,
         model=req.model,
+        think_mode=_think_mode,
     )
 
     async def _serve():
@@ -1486,6 +1799,7 @@ async def run_agent_stream_endpoint(
             async for evt in run_detached(
                 thread_id, agent_gen, tee=False,
                 on_complete=_persist_on_complete,
+                actor=_actor or None,
             ):
                 yield f"data: {json.dumps(evt)}\n\n"
         except Exception:  # noqa: BLE001
@@ -1593,10 +1907,11 @@ async def reconnect_agent_stream(
     from orchestrator.stream_relay import (replay_events, stream_exists,
                                            subscribe_events)
 
-    # Ownership guard (same policy as cancel): the replayed stream contains the
-    # whole conversation — text, tool args, reasoning — so it must never be
-    # readable across users. Block only when the session exists AND belongs to
-    # a different user; ephemeral/legacy threads (no row) stay reachable.
+    # Membership guard: the replayed stream contains the whole conversation —
+    # text, tool args, reasoning — so it must never be readable by someone
+    # outside the room. Participants and viewers may hold it open, which is how
+    # a second person watches a run work; ephemeral threads (no session row)
+    # stay reachable for the person who started them.
     actor = getattr(user, "email", None) or "default"
     if not await _asyncio.to_thread(_thread_owner_ok, thread_id, actor):
         raise HTTPException(status_code=403, detail="Not your conversation")
@@ -1670,24 +1985,34 @@ async def reconnect_agent_stream(
 
 
 def _thread_owner_ok(thread_id: str, user_id: str) -> bool:
-    """True if *thread_id* is owned by *user_id* OR not a persisted session.
+    """True if *user_id* may WATCH *thread_id*, or it is not a persisted session.
 
-    Permissive by design: returns True when the session row is absent
-    (ephemeral / legacy thread) or on any DB error, so legitimate cancels are
-    never blocked.  Returns False only when the session exists for a DIFFERENT
-    user.
+    Ownership became membership when sessions became rooms (migration 138): a
+    viewer invited to watch a run must be able to hold the replay stream open,
+    which is the whole of read-only multiplayer. The permissive cases are
+    unchanged and still deliberate — an absent session row (ephemeral / legacy
+    thread) and any DB error resolve to True, so legitimate solo operations are
+    never blocked by an infra hiccup.
+
+    The name is kept because it is the guard two endpoints already name; what
+    it means is now "may read this room".
     """
     try:
-        from acb_graph import get_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
-        with get_session() as s:
-            row = s.execute(
-                text("SELECT user_id FROM chat_session WHERE id = :id"),
-                {"id": thread_id},
-            ).first()
-        if row is None:
-            return True
-        return row.user_id == user_id
+        from gateway.rooms import resolve_room_access
+        return resolve_room_access(thread_id, user_id).can_read
+    except Exception:  # noqa: BLE001
+        return True
+
+
+def _thread_control_ok(thread_id: str, user_id: str) -> bool:
+    """True if *user_id* may STOP a run in *thread_id*.
+
+    Watching and stopping are different rights: a viewer sees the transcript
+    but cannot end somebody else's work. Same permissive fallbacks.
+    """
+    try:
+        from gateway.rooms import resolve_room_access
+        return resolve_room_access(thread_id, user_id).can_cancel
     except Exception:  # noqa: BLE001
         return True
 
@@ -1714,13 +2039,16 @@ async def cancel_agent_run(
 
     from orchestrator.stream_relay import cancel_run  # noqa: PLC0415
 
-    # Ownership guard: a thread_id maps to a chat_session.  Block only when the
-    # session exists AND belongs to a different user (prevents one user
-    # cancelling another's run).  Allow when not found (ephemeral/legacy thread)
-    # or on DB hiccup, so legitimate cancels never get stuck.
+    # Control guard: stopping a run is a contributor's act, not a viewer's.
+    # A viewer who could cancel would be able to end work they were only
+    # invited to watch. Allow when the session is not found (ephemeral/legacy
+    # thread) or on a DB hiccup, so legitimate cancels never get stuck.
     actor = getattr(user, "email", None) or "default"
-    if not await asyncio.to_thread(_thread_owner_ok, thread_id, actor):
-        raise HTTPException(status_code=403, detail="Not your conversation")
+    if not await asyncio.to_thread(_thread_control_ok, thread_id, actor):
+        raise HTTPException(
+            status_code=403,
+            detail="You are watching this conversation and cannot stop its run.",
+        )
 
     _log.info(
         "agent.cancel_request",
@@ -1744,7 +2072,7 @@ async def run_agent_sync(
     from orchestrator.executor import AgentRunError, run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
-    assert_can_run_agent(user, agent)
+    await assert_can_run_agent_in_session(user, agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
 
     try:
@@ -1785,7 +2113,7 @@ async def run_agent_async(
     from orchestrator.executor import run_agent  # noqa: PLC0415
 
     agent = _resolve_agent_for_run(req.agent, req.thread_id)
-    assert_can_run_agent(user, agent)
+    await assert_can_run_agent_in_session(user, agent, req.thread_id)
     run_id = req.run_id or str(uuid.uuid4())
 
     async def _run() -> None:

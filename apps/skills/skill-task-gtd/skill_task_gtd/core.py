@@ -98,14 +98,33 @@ def _internal_token() -> str:
 
 
 def _headers() -> dict[str, str]:
-    headers = {
+    """Internal bearer + the acting user, which is not optional.
+
+    The gateway reads a bearer-matched call with no ``X-User-Email`` as the
+    platform acting as ITSELF and grants SERVICE_ACCESS — every permission
+    there is (``acb_auth/deps.py`` §1b). So omitting the header when the user
+    was unknown did not leave the call "unscoped"; it widened it to everyone's
+    data.
+
+    Failing closed is also the more correct answer here rather than merely the
+    safer one: every endpoint these tools reach is inherently per-person, so a
+    run with nobody attributed has no inbox, no chats and no task list to act
+    on. It has nothing to do, not everything.
+
+    See ``docs/multiplayer/bff-identity.md``.
+    """
+    user = _current_user_email()
+    if not user:
+        raise RuntimeError(
+            "No acting user for this run, so there is nobody to act as — "
+            "refusing to call the gateway as the platform itself. The run "
+            "should set ACB_AGENT_USER_EMAIL."
+        )
+    return {
         "Authorization": f"Bearer {_internal_token()}",
         "Content-Type": "application/json",
+        "X-User-Email": user,
     }
-    user = _current_user_email()
-    if user:
-        headers["X-User-Email"] = user
-    return headers
 
 
 async def _request(method: str, path: str, **kwargs: Any) -> Any:

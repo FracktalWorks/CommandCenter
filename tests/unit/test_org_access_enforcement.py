@@ -118,6 +118,10 @@ GATED_ROUTERS: dict[str, set[str]] = {
         "/whatsapp/bridge/labels",
         "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
+        # The bridge posts freshly-fetched profile-picture URLs (W17). Same
+        # X-Bridge-Secret scheme as its siblings; gating it would silently
+        # stop avatar sync, not restrict any member.
+        "/whatsapp/bridge/avatars",
     },
     "gateway.routes.email": {
         "/email/oauth/{provider}/callback",

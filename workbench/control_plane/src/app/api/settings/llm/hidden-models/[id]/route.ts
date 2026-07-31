@@ -2,17 +2,16 @@
  * DELETE /api/settings/llm/hidden-models/[id] — unhide a model
  */
 import { NextRequest, NextResponse } from "next/server";
+import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 export async function DELETE(
   _req: NextRequest,
   { params }: { params: Promise<{ id: string }> },
 ): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { id } = await params;
   const modelId = decodeURIComponent(id);
   try {
@@ -20,7 +19,7 @@ export async function DELETE(
       `${GATEWAY}/settings/llm/hidden-models/${encodeURIComponent(modelId)}`,
       {
         method: "DELETE",
-        headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        headers: await gatewayHeaders(),
         signal: AbortSignal.timeout(6_000),
       },
     );

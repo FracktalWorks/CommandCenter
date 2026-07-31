@@ -3,12 +3,26 @@
   "description": "API Configuration Assistant — discovers APIs, generates credential schemas, and guides setup. Ask me to add any API service by name.",
   "version": "0.1.0",
   "runtime": "maf",
+  "sharing": {
+    "instancing": "shared",
+    "visibility": "organization",
+    "shareable": true,
+    "outputs_visibility": "instance"
+  },
   "skill_repos": [],
   "mcp_servers": {},
   "max_mutation_attempts": 1,
-  "tags": ["configuration", "apis", "setup", "credentials", "admin"],
+  "tags": [
+    "configuration",
+    "apis",
+    "setup",
+    "credentials",
+    "admin"
+  ],
   "integrations": [],
-  "optional_integrations": ["serpapi"],
+  "optional_integrations": [
+    "serpapi"
+  ],
   "tool_scope": [
     "ask_questions",
     "web_search",

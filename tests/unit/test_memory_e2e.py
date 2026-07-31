@@ -440,13 +440,18 @@ def test_copilot_chat_memory_extraction_importable() -> None:
 # ═══════════════════════════════════════════════════════════════════════════
 
 def test_memory_list_endpoint_exists() -> None:
-    """GET /memory/{user_id} must be registered."""
+    """GET /memory/{scope} must be registered.
+
+    The parameter is a scope key (``acb_memory.scope_key``) — an email, an
+    ``agent:<name>``, or ``org:global`` — not a user id. Only the URL shape is
+    asserted; renaming the parameter changes nothing for callers.
+    """
     from gateway.main import app
 
     paths = {r.path for r in app.routes if hasattr(r, "path")}
     memory_paths = sorted(p for p in paths if "/memory" in p)
-    assert any("{user_id}" in p for p in memory_paths), (
-        f"No /memory/{{user_id}} route. Memory paths: {memory_paths}"
+    assert any("{scope}" in p for p in memory_paths), (
+        f"No /memory/{{scope}} route. Memory paths: {memory_paths}"
     )
 
 
@@ -454,10 +459,19 @@ def test_memory_status_endpoint_returns_valid_json(monkeypatch) -> None:
     """GET /memory/{user_id}/status returns flat fields with bools + count."""
     from gateway.main import app
 
-    # /memory/* now requires the internal Bearer token (audit C6/BO-2).
+    # /memory/* needs the internal Bearer token (audit C6/BO-2) AND, for a
+    # person's own scope, an asserted identity — the token alone used to be
+    # enough, which is what made a colleague's memories readable by URL.
     monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "test-internal-token")
-    _auth = {"Authorization": "Bearer test-internal-token"}
+    _auth = {
+        "Authorization": "Bearer test-internal-token",
+        "X-User-Email": "test@example.com",
+    }
     with TestClient(app) as client:
+        assert client.get(
+            "/memory/test@example.com/status",
+            headers={"Authorization": "Bearer test-internal-token"},
+        ).status_code == 403
         r = client.get("/memory/test@example.com/status", headers=_auth)
         assert r.status_code == 200
         data = r.json()
@@ -474,7 +488,10 @@ def test_memory_search_endpoint_exists(monkeypatch) -> None:
     from gateway.main import app
 
     monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "test-internal-token")
-    _auth = {"Authorization": "Bearer test-internal-token"}
+    _auth = {
+        "Authorization": "Bearer test-internal-token",
+        "X-User-Email": "test@example.com",
+    }
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.post(
             "/memory/test@example.com/search",
@@ -492,7 +509,10 @@ def test_memory_add_endpoint_returns_202(monkeypatch) -> None:
     from gateway.main import app
 
     monkeypatch.setenv("GATEWAY_INTERNAL_TOKEN", "test-internal-token")
-    _auth = {"Authorization": "Bearer test-internal-token"}
+    _auth = {
+        "Authorization": "Bearer test-internal-token",
+        "X-User-Email": "test@example.com",
+    }
     with TestClient(app, raise_server_exceptions=False) as client:
         r = client.post(
             "/memory/test@example.com/add",

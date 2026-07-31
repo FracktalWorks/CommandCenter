@@ -10,17 +10,12 @@
  * separate chat message.
  */
 
-import { NextRequest } from "next/server";
+import { NextRequest, NextResponse } from "next/server";
 import { auth } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 interface RespondInputRequest {
   request_id: string;
@@ -32,6 +27,8 @@ interface RespondInputRequest {
 }
 
 export async function POST(req: NextRequest) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const session = await auth();
   if (!session) {
     return new Response(JSON.stringify({ error: "Unauthorized" }), {
@@ -60,10 +57,7 @@ export async function POST(req: NextRequest) {
   try {
     const res = await fetch(`${GATEWAY_URL}/agent/respond-input`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
-      },
+      headers: await gatewayHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({
         request_id: body.request_id,
         answer: body.answer,

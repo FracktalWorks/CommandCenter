@@ -2,13 +2,20 @@
 
 Endpoints
 ---------
-GET    /chat/sessions                          List all sessions for the caller
+GET    /chat/sessions                          List every room the caller is in
 POST   /chat/sessions                          Upsert a session (create or update metadata)
 PATCH  /chat/sessions/{session_id}             Update session title / preview / count
 DELETE /chat/sessions/{session_id}             Delete session + all its messages (CASCADE)
 
-GET    /chat/sessions/{session_id}/messages    Fetch all messages for a session
+GET    /chat/sessions/{session_id}/messages    Fetch messages the caller may read
 POST   /chat/sessions/{session_id}/messages    Upsert a batch of messages
+
+Authorization moved from ownership to membership (migration 138 + gateway/rooms.py).
+Every predicate that used to be ``WHERE user_id = :uid`` is now "is this person
+in this room", which is the same question when the room has one member. Two
+paths were not gated at all before and are now: ``POST /chat/sessions`` could
+overwrite any session's metadata by id, and ``POST .../messages`` could write
+messages into any session id. Both were reachable by any authenticated user.
 """
 from __future__ import annotations
 
@@ -19,6 +26,7 @@ from typing import Any
 from acb_auth import UserContext, get_current_user, require_feature_router
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException, status
+from gateway.rooms import SESSION_VISIBLE_SQL, RoomAccess, resolve_room_access
 from pydantic import BaseModel
 
 _log = get_logger("gateway.chat")
@@ -56,6 +64,12 @@ class MessageRecord(BaseModel):
     reasoning: str | None = None
     agent_state: dict[str, Any] | None = None
     custom_events: list[Any] = []
+    #: Who produced this turn — a member's email, or an agent's registered name
+    #: when ``author_kind == 'agent'``. Clients MAY send it; the server
+    #: overrides it for human turns with the authenticated caller, because a
+    #: client-supplied author is a client-supplied identity.
+    author_email: str | None = None
+    author_kind: str | None = None      # human | agent | system
 
 
 # ---------------------------------------------------------------------------
@@ -63,17 +77,26 @@ class MessageRecord(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _get_sessions(user_id: str) -> list[dict]:
+    """Every room this person can open, newest first.
+
+    The list is the room list now, so it carries what the sidebar needs to
+    distinguish "mine" from "shared with me" without a second round trip per
+    row: the creator, the visibility, and how many people are in it.
+    """
     from acb_graph import get_session  # noqa: PLC0415
     from sqlalchemy import text  # noqa: PLC0415
 
     with get_session() as s:
         rows = s.execute(
             text(
-                "SELECT id, agent_name, title, last_preview, message_count, "
-                "created_at, updated_at "
-                "FROM chat_session "
-                "WHERE user_id = :uid "
-                "ORDER BY updated_at DESC"
+                "SELECT s.id, s.agent_name, s.title, s.last_preview, "
+                "       s.message_count, s.created_at, s.updated_at, "
+                "       s.user_id, COALESCE(s.visibility, 'private') AS visibility, "
+                "       (SELECT count(*) FROM chat_session_participant p "
+                "          WHERE p.session_id = s.id) AS participant_count "
+                "FROM chat_session s "
+                f"WHERE {SESSION_VISIBLE_SQL} "
+                "ORDER BY s.updated_at DESC"
             ),
             {"uid": user_id},
         ).fetchall()
@@ -86,6 +109,11 @@ def _get_sessions(user_id: str) -> list[dict]:
             "messageCount": r.message_count,
             "createdAt": r.created_at.isoformat(),
             "updatedAt": r.updated_at.isoformat(),
+            "visibility": r.visibility,
+            "isOwner": r.user_id == user_id,
+            # >1 means somebody else is in here too. The sidebar shows a shared
+            # badge on exactly this signal, so it never lies about a solo thread.
+            "participantCount": int(r.participant_count or 0),
         }
         for r in rows
     ]
@@ -107,6 +135,13 @@ def _upsert_session(user_id: str, req: SessionUpsertRequest) -> None:
                     last_preview  = COALESCE(EXCLUDED.last_preview, chat_session.last_preview),
                     message_count = EXCLUDED.message_count,
                     updated_at    = now()
+                WHERE chat_session.user_id = :uid
+                   OR EXISTS (
+                       SELECT 1 FROM chat_session_participant p
+                       WHERE p.session_id = chat_session.id
+                         AND p.subject = :uid
+                         AND p.role IN ('owner', 'member')
+                   )
                 """
             ),
             {
@@ -149,6 +184,26 @@ def _ensure_session(
             {"id": session_id, "uid": user_id or "default",
              "agent_name": agent_name or "orchestrator"},
         )
+        # A session is a room of one from birth. Creating the owner row here
+        # rather than only in migration 138's backfill means membership is
+        # never something a session acquires later — every read path can trust
+        # the participant table instead of falling back to chat_session.user_id.
+        if user_id and "@" in user_id:
+            s.execute(
+                text(
+                    "INSERT INTO chat_session_participant (session_id, subject, role) "
+                    "VALUES (:id, :uid, 'owner') ON CONFLICT DO NOTHING"
+                ),
+                {"id": session_id, "uid": user_id},
+            )
+        if agent_name:
+            s.execute(
+                text(
+                    "INSERT INTO chat_session_agent (session_id, agent_name, role) "
+                    "VALUES (:id, :agent, 'primary') ON CONFLICT DO NOTHING"
+                ),
+                {"id": session_id, "agent": agent_name},
+            )
 
 
 def _patch_session(session_id: str, user_id: str, req: SessionPatchRequest) -> bool:
@@ -171,8 +226,8 @@ def _patch_session(session_id: str, user_id: str, req: SessionPatchRequest) -> b
     with get_session() as s:
         result = s.execute(
             text(
-                f"UPDATE chat_session SET {', '.join(sets)} "  # noqa: S608
-                "WHERE id = :id AND user_id = :uid"
+                f"UPDATE chat_session s SET {', '.join(sets)} "  # noqa: S608
+                "WHERE s.id = :id AND " + SESSION_VISIBLE_SQL
             ),
             params,
         )
@@ -184,8 +239,19 @@ def _delete_session(session_id: str, user_id: str) -> bool:
     from sqlalchemy import text  # noqa: PLC0415
 
     with get_session() as s:
+        # Deliberately NOT the membership predicate: deleting takes the room
+        # away from everyone in it, so it stays an owner's act. A member who
+        # wants out leaves (DELETE /chat/sessions/{id}/participants/{me}).
         result = s.execute(
-            text("DELETE FROM chat_session WHERE id = :id AND user_id = :uid"),
+            text(
+                "DELETE FROM chat_session s "
+                "WHERE s.id = :id AND ("
+                "    s.user_id = :uid"
+                "    OR EXISTS (SELECT 1 FROM chat_session_participant p"
+                "               WHERE p.session_id = s.id AND p.subject = :uid"
+                "                 AND p.role = 'owner')"
+                ")"
+            ),
             {"id": session_id, "uid": user_id},
         )
         return result.rowcount > 0
@@ -196,8 +262,11 @@ def _get_messages(
     user_id: str,
     limit: int | None = None,
     before: int | None = None,
+    *,
+    room: RoomAccess | None = None,
+    held_permissions: frozenset[str] | None = None,
 ) -> list[dict]:
-    """Fetch messages for a session, always returned oldest→newest.
+    """Fetch messages this person may read, always returned oldest→newest.
 
     When ``limit`` is given, returns only the most recent ``limit`` messages
     (windowed lazy-load).  ``before`` is a ``timestamp_ms`` cursor: only
@@ -206,27 +275,45 @@ def _get_messages(
 
     When ``limit`` is omitted the full history is returned (backward compatible
     with callers that expect every message, e.g. compaction).
+
+    Two room rules apply on top, and only ever in a room — a solo session takes
+    neither branch and returns exactly what it always did:
+
+    * the **waterline**: a late joiner in a ``since_join`` room never sees the
+      turns that predate them (``chat_session_participant.join_message_ts``);
+    * the **clearance filter**: a turn produced by a run acting on capabilities
+      the reader does not hold comes back as a redaction stub rather than
+      content (``groups_sessions_authority.md`` §4).
     """
     from acb_graph import get_session  # noqa: PLC0415
     from sqlalchemy import text  # noqa: PLC0415
 
     with get_session() as s:
-        # Verify session belongs to this user.
-        owns = s.execute(
-            text("SELECT 1 FROM chat_session WHERE id = :id AND user_id = :uid"),
-            {"id": session_id, "uid": user_id},
-        ).first()
-        if not owns:
+        if room is None:
+            visible = s.execute(
+                text(
+                    "SELECT 1 FROM chat_session s WHERE s.id = :id AND "
+                    + SESSION_VISIBLE_SQL
+                ),
+                {"id": session_id, "uid": user_id},
+            ).first()
+            if not visible:
+                return []
+        elif not room.can_read:
             return []
 
         cols = (
             "SELECT id, role, content, timestamp_ms, tool_events, progress_lines, "
-            "reasoning, agent_state, custom_events FROM chat_message WHERE session_id = :sid"
+            "reasoning, agent_state, custom_events, author_email, author_kind, "
+            "authority FROM chat_message WHERE session_id = :sid"
         )
         params: dict = {"sid": session_id}
         if before is not None:
             cols += " AND timestamp_ms < :before"
             params["before"] = before
+        if room is not None and room.since_message_ts is not None:
+            cols += " AND timestamp_ms >= :waterline"
+            params["waterline"] = room.since_message_ts
 
         if limit is not None and limit > 0:
             # Newest-first with LIMIT, then reverse to oldest→newest below.
@@ -244,20 +331,66 @@ def _get_messages(
     if limit is not None and limit > 0:
         rows = list(reversed(rows))
 
-    return [
-        {
-            "id": r.id,
-            "role": r.role,
-            "content": r.content,
-            "timestamp": r.timestamp_ms,
-            "toolEvents": r.tool_events or [],
-            "progressLines": r.progress_lines or [],
-            "reasoning": r.reasoning,
-            "agentState": r.agent_state,
-            "customEvents": r.custom_events or [],
-        }
-        for r in rows
-    ]
+    return [_render_message(r, user_id, held_permissions) for r in rows]
+
+
+#: What a reader sees instead of a turn produced above their clearance.
+REDACTION_NOTICE = (
+    "This turn was produced by a run using access you do not hold, so its "
+    "content is not shown to you."
+)
+
+
+def _render_message(
+    r: Any, viewer: str, held: frozenset[str] | None,
+) -> dict[str, Any]:
+    """One stored row as the client sees it — redacted if the reader is not cleared.
+
+    The rule (``groups_sessions_authority.md`` §4): a turn carries the clearance
+    of the run that produced it. Somebody who was in the room when it ran has
+    already seen it, so they always see it again. Anyone else must hold every
+    capability the run held — otherwise the model may have laundered restricted
+    content into text that looks innocuous, and the only safe render is a stub.
+
+    ``authority`` is NULL on every solo and pre-135 row, which is why this
+    function is a no-op for them rather than a filter they have to pass.
+    """
+    body = {
+        "id": r.id,
+        "role": r.role,
+        "content": r.content,
+        "timestamp": r.timestamp_ms,
+        "toolEvents": r.tool_events or [],
+        "progressLines": r.progress_lines or [],
+        "reasoning": r.reasoning,
+        "agentState": r.agent_state,
+        "customEvents": r.custom_events or [],
+        "authorEmail": getattr(r, "author_email", None),
+        "authorKind": getattr(r, "author_kind", None),
+    }
+
+    authority = getattr(r, "authority", None)
+    if not isinstance(authority, dict):
+        return body
+    if viewer in (authority.get("members") or []):
+        return body
+    caps = [c for c in (authority.get("caps") or []) if isinstance(c, str)]
+    if not caps:
+        return body
+    missing = [c for c in caps if held is None or c not in held]
+    if not missing:
+        return body
+
+    return {
+        **body,
+        "content": REDACTION_NOTICE,
+        "toolEvents": [],
+        "progressLines": [],
+        "reasoning": None,
+        "customEvents": [],
+        "redacted": True,
+        "redactedCaps": sorted(missing),
+    }
 
 
 #: Columns whose value is a RUN ARTIFACT — accumulated from the agent's event
@@ -281,16 +414,28 @@ MONOTONIC_MESSAGE_COLUMNS = ("tool_events", "progress_lines", "custom_events")
 #: ever grow within a turn, so "keep what we have" is always the safe merge.
 #: ``content`` stays a plain overwrite — it is genuinely rewritten in place as
 #: the answer streams and is un-folded at RUN_FINISHED.
+#: Authorship is SET ONCE. The same three writers race on a row, and two of
+#: them (the browser re-POSTing its list, the translator's checkpoints) send
+#: whatever the client has — which for an assistant row folded by the gateway
+#: is nothing. COALESCE-keeping the stored value means the first writer to know
+#: who produced a turn is the one that decides, and no later writer can rename
+#: an author. That is the property attribution needs: a name in a transcript
+#: must not be rewritable by anyone who can POST to the session.
 _MESSAGE_UPSERT_SQL = """
     INSERT INTO chat_message
         (id, session_id, role, content, timestamp_ms,
-         tool_events, progress_lines, reasoning, agent_state, custom_events)
+         tool_events, progress_lines, reasoning, agent_state, custom_events,
+         author_email, author_kind, authority)
     VALUES
         (:id, :sid, :role, :content, :ts,
          CAST(:tool_events AS jsonb), CAST(:progress_lines AS jsonb),
-         :reasoning, CAST(:agent_state AS jsonb), CAST(:custom_events AS jsonb))
+         :reasoning, CAST(:agent_state AS jsonb), CAST(:custom_events AS jsonb),
+         :author_email, :author_kind, CAST(:authority AS jsonb))
     ON CONFLICT (session_id, id) DO UPDATE SET
         content        = EXCLUDED.content,
+        author_email   = COALESCE(chat_message.author_email, EXCLUDED.author_email),
+        author_kind    = COALESCE(chat_message.author_kind,  EXCLUDED.author_kind),
+        authority      = COALESCE(chat_message.authority,    EXCLUDED.authority),
         tool_events    = CASE
             WHEN jsonb_array_length(COALESCE(EXCLUDED.tool_events, '[]'::jsonb)) > 0
             THEN EXCLUDED.tool_events ELSE chat_message.tool_events END,
@@ -305,15 +450,32 @@ _MESSAGE_UPSERT_SQL = """
 """
 
 
-def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
+def _upsert_messages(
+    session_id: str,
+    messages: list[MessageRecord],
+    *,
+    actor_email: str | None = None,
+    agent_name: str | None = None,
+    authority: dict[str, Any] | None = None,
+) -> None:
+    """Write a batch of turns, stamping who produced each one.
+
+    Attribution is derived here, not trusted from the client: a human turn is
+    the authenticated caller's, full stop. ``role`` still decides which side of
+    the conversation a turn sits on (the model's vocabulary); ``author_*``
+    decides whose face the room renders next to it, and the two never mix.
+    """
     from acb_graph import get_session  # noqa: PLC0415
     from sqlalchemy import text  # noqa: PLC0415
 
     if not messages:
         return
 
+    authority_json = json.dumps(authority) if authority else None
+
     with get_session() as s:
         for m in messages:
+            kind, author = _attribute(m, actor_email, agent_name)
             s.execute(
                 text(_MESSAGE_UPSERT_SQL),
                 {
@@ -327,8 +489,30 @@ def _upsert_messages(session_id: str, messages: list[MessageRecord]) -> None:
                     "reasoning": m.reasoning,
                     "agent_state": json.dumps(m.agent_state) if m.agent_state is not None else None,
                     "custom_events": json.dumps(m.custom_events),
+                    "author_email": author,
+                    "author_kind": kind,
+                    # Only agent output carries a clearance — a human's own
+                    # words are theirs regardless of what the run could reach.
+                    "authority": authority_json if kind == "agent" else None,
                 },
             )
+
+
+def _attribute(
+    m: MessageRecord, actor_email: str | None, agent_name: str | None,
+) -> tuple[str | None, str | None]:
+    """(author_kind, author_email) for one record.
+
+    A client may TELL us a turn is an agent's — that is information we don't
+    otherwise have when the browser saves a run it just watched. It may not
+    tell us which HUMAN authored a turn: that is an identity claim, and the
+    authenticated caller is the only answer we accept.
+    """
+    if m.role == "system":
+        return "system", None
+    if m.role == "assistant" or m.author_kind == "agent":
+        return "agent", (m.author_email or agent_name or None)
+    return "human", (actor_email or None)
 
 
 # ---------------------------------------------------------------------------
@@ -380,16 +564,51 @@ async def get_messages(
     limit: int | None = None,
     before: int | None = None,
 ) -> list[dict]:
-    """Return messages oldest→newest.
+    """Return messages oldest→newest, subject to this reader's room access.
 
     Optional query params enable windowed lazy-loading:
     - ``limit``: return only the most recent N messages.
     - ``before``: a ``timestamp_ms`` cursor; only messages older than it are
       returned (used together with ``limit`` to page backwards on scroll-up).
     """
+    email = user.email or "default"
+    room = await asyncio.to_thread(resolve_room_access, session_id, email)
+    if not room.can_read:
+        # Historically a non-owner got [] rather than 403, and clients rely on
+        # that: a session the browser knows locally but the server has never
+        # seen must render empty, not error.
+        return []
+
+    held = await _held_permissions(user, room)
     return await asyncio.to_thread(
-        _get_messages, session_id, user.email or "default", limit, before
+        _get_messages, session_id, email, limit, before,
+        room=room, held_permissions=held,
     )
+
+
+async def _held_permissions(
+    user: UserContext, room: RoomAccess,
+) -> frozenset[str] | None:
+    """The capabilities this reader holds, or ``None`` when nothing is filtered.
+
+    Resolving access costs a round trip, so it is only paid in a shared room —
+    a solo transcript has no rows carrying a clearance to compare against.
+    """
+    if not room.is_shared:
+        return None
+    access = getattr(user, "access", None)
+    allowed = getattr(access, "allowed", None)
+    if allowed:
+        return frozenset(allowed)
+    try:
+        from acb_auth import resolve_access
+        resolved = await resolve_access(user.email or "")
+        return frozenset(resolved.allowed)
+    except Exception:
+        # Fail closed on the FILTER, not on the read: an unknown clearance
+        # redacts the handful of rows that carry one and shows the rest.
+        _log.warning("chat.clearance_resolve_failed", exc_info=True)
+        return frozenset()
 
 
 @router.post(
@@ -402,9 +621,25 @@ async def save_messages(
     messages: list[MessageRecord],
     user: UserContext = Depends(get_current_user),
 ) -> dict:
+    """Persist the client's view of a conversation.
+
+    This endpoint had no authorization at all: any authenticated caller could
+    write turns into any session id, which in a single-owner world was invisible
+    and in a shared one is forgery. It now requires the ability to send in the
+    room, and stamps the authenticated caller as the author of every human turn.
+    """
     if len(messages) > 500:
         raise HTTPException(status_code=400, detail="Maximum 500 messages per upsert")
-    await asyncio.to_thread(_upsert_messages, session_id, messages)
+
+    email = user.email or "default"
+    room = await asyncio.to_thread(resolve_room_access, session_id, email)
+    if not room.can_send:
+        raise HTTPException(status_code=403, detail=room.denied("save messages"))
+
+    await asyncio.to_thread(
+        _upsert_messages, session_id, messages,
+        actor_email=email, agent_name=room.agent_name,
+    )
     return {"ok": True, "saved": len(messages)}
 
 
@@ -495,14 +730,13 @@ async def list_active_sessions(
         with get_session() as s:
             rows = s.execute(
                 text(
-                    "SELECT id, agent_name, title "
-                    "FROM chat_session "
-                    "WHERE id = ANY(:ids) AND user_id = :uid"
+                    "SELECT s.id, s.agent_name, s.title "
+                    "FROM chat_session s "
+                    "WHERE s.id = ANY(:ids) AND " + SESSION_VISIBLE_SQL
                 ),
                 {"ids": active_threads, "uid": user_id},
             ).fetchall()
 
-        found_ids = {r.id for r in rows}
         result = [
             {
                 "threadId": r.id,
@@ -511,10 +745,21 @@ async def list_active_sessions(
             }
             for r in rows
         ]
-        # Include threads that are active in Redis but not yet in Postgres
-        # (race condition: agent started but session row not yet upserted).
+
+        # Threads that are active in Redis but have no session row yet (the
+        # agent started before the frontend's upsert landed) still belong in
+        # the list. Threads that DO have a row and were filtered out belong to
+        # someone else: including them leaked a live thread id to every user,
+        # which the old `not in found_ids` fallback did on every poll.
+        with get_session() as s:
+            known = {
+                row.id for row in s.execute(
+                    text("SELECT id FROM chat_session WHERE id = ANY(:ids)"),
+                    {"ids": active_threads},
+                ).fetchall()
+            }
         for tid in active_threads:
-            if tid not in found_ids:
+            if tid not in known:
                 result.append({
                     "threadId": tid,
                     "agentName": "unknown",

@@ -26,7 +26,11 @@ import httpx
 
 GATEWAY = os.environ.get("E2E_GATEWAY_URL", os.environ.get("GATEWAY_BASE_URL", "http://127.0.0.1:8080"))
 TOKEN = os.environ.get("E2E_TOKEN", os.environ.get("GATEWAY_INTERNAL_TOKEN", os.environ.get("LITELLM_MASTER_KEY", "sk-local-dev-change-me")))
-AUTH = {"Authorization": f"Bearer {TOKEN}"}
+# The memory endpoints scope by identity, not just by token: a personal scope
+# needs the platform to say WHO it is acting for (gateway/routes/memory.py
+# _authorize_scope). The token alone reaches shared scopes only.
+E2E_ACTOR = os.environ.get("E2E_ACTOR", "e2e-memory-test@fracktal.in")
+AUTH = {"Authorization": f"Bearer {TOKEN}", "X-User-Email": E2E_ACTOR}
 
 PASS = 0
 FAIL = 0
@@ -265,7 +269,7 @@ async def test_copilot_agent_context(client: httpx.AsyncClient) -> None:
 async def test_cross_session_memory(client: httpx.AsyncClient) -> None:
     print("\n── Cross-session Mem0 memory ──")
 
-    user_id = "e2e-memory-test@fracktal.in"
+    user_id = E2E_ACTOR   # must match the asserted identity
 
     # First session: deposit facts
     tid1 = str(uuid.uuid4())

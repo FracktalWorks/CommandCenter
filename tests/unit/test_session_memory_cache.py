@@ -28,8 +28,11 @@ class _FakeRedis:
         self.setex_calls += 1
         self.store[key] = value
 
-    async def delete(self, key: str) -> None:
-        self.store.pop(key, None)
+    async def delete(self, *keys: str) -> None:
+        # Variadic, like redis-py's own `delete(*names)`. A single-key double
+        # made the production call look broken when it was the double that was.
+        for key in keys:
+            self.store.pop(key, None)
 
 
 @pytest.fixture(autouse=True)
@@ -142,3 +145,45 @@ async def test_invalidate_drops_the_session_block():
     assert redis.store  # something cached
     await invalidate_session_memory(redis=redis, thread_id="t6")
     assert "session_mem:t6" not in redis.store
+
+
+@pytest.mark.asyncio
+async def test_invalidate_clears_every_clearance_variant():
+    """A thread has one cache entry per clearance since the key gained that
+    suffix, so invalidation must clear them all — otherwise a written fact
+    takes up to the TTL to show up in a shared room."""
+    redis = _FakeRedis()
+
+    async def build() -> str:
+        return "A"
+
+    await get_session_memory(redis=redis, thread_id="t7", build=build, clearance="solo")
+    await get_session_memory(redis=redis, thread_id="t7", build=build, clearance="room")
+    assert len(redis.store) == 2
+
+    async def _scan(cursor, match="", count=64):
+        prefix = match.rstrip("*")
+        return 0, [k for k in redis.store if k.startswith(prefix)]
+
+    redis.scan = _scan
+    await invalidate_session_memory(redis=redis, thread_id="t7")
+    assert redis.store == {}
+
+
+@pytest.mark.asyncio
+async def test_invalidate_still_drops_the_base_key_without_scan():
+    """A client with no SCAN must not lose invalidation entirely.
+
+    Both deletes used to share one try block, so a missing `scan` skipped the
+    base delete too — silently doing nothing, which is worse than the
+    single-key behaviour it replaced.
+    """
+    redis = _FakeRedis()
+
+    async def build() -> str:
+        return "A"
+
+    await get_session_memory(redis=redis, thread_id="t8", build=build)
+    assert redis.store
+    await invalidate_session_memory(redis=redis, thread_id="t8")   # no .scan
+    assert redis.store == {}

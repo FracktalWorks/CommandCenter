@@ -842,12 +842,23 @@ export function useAgentChat({
           { signal: AbortSignal.timeout(5000) }
         );
         if (!res.ok) return;
+        // The gateway serves this endpoint in camelCase (chat.py
+        // _render_message) and always has. This mapper read snake_case, so
+        // every recovery poll rebuilt messages with an empty tool timeline, no
+        // reasoning, no todos and no generative-UI cards. The "only grows"
+        // merge below hid it for messages the browser had already streamed —
+        // but a message it had NOT (a refresh mid-run, and now another
+        // participant's turn arriving) came back stripped.
         const remote = await res.json() as Array<{
           id: string; role: string; content: string;
-          timestamp: number; tool_events?: unknown[];
-          progress_lines?: string[]; reasoning?: string | null;
-          agent_state?: Record<string, unknown> | null;
-          custom_events?: unknown[];
+          timestamp: number; toolEvents?: unknown[];
+          progressLines?: string[]; reasoning?: string | null;
+          agentState?: Record<string, unknown> | null;
+          customEvents?: unknown[];
+          authorEmail?: string | null;
+          authorKind?: "human" | "agent" | "system" | null;
+          redacted?: boolean;
+          redactedCaps?: string[];
         }>;
         if (!Array.isArray(remote) || remote.length === 0) return;
 
@@ -861,29 +872,35 @@ export function useAgentChat({
           role: r.role as "user" | "assistant" | "system",
           content: r.content ?? "",
           timestamp: r.timestamp ?? Date.now(),
-          toolEvents: (r.tool_events as ToolEvent[]) ?? [],
-          progressLines: r.progress_lines ?? [],
+          toolEvents: (r.toolEvents as ToolEvent[]) ?? [],
+          progressLines: r.progressLines ?? [],
           // Split WITHOUT dropping empty segments — block indices must stay
           // aligned with each tool's reasoningCutoff (empty sentinels are
           // skipped at render time instead).
           reasoningBlocks: parseReasoning(r.reasoning),
-          agentState: r.agent_state ?? undefined,
+          agentState: r.agentState ?? undefined,
           // Restore the todo list from agent_state (where it was persisted
           // by persistAssistantMessage).  Mirrors the mapping in
           // sessions.ts fetchMessagesFromDb so the Todos panel survives
           // polling recovery after a page refresh mid-stream.
           todos: (
-            (r.agent_state as Record<string, unknown> | null)
+            (r.agentState as Record<string, unknown> | null)
               ?.todos as { id: string; title: string; status: string }[] | undefined
           ),
           // Restore real message segments (Phase 3b) so segment-native
           // rendering survives a reload/poll — the renderer prefers these over
           // the folded content when present.
           segments: (
-            (r.agent_state as Record<string, unknown> | null)
+            (r.agentState as Record<string, unknown> | null)
               ?.segments as { id: string; text: string }[] | undefined
           ),
-          customEvents: (r.custom_events as Array<{ name: string; value: unknown }>) ?? [],
+          customEvents: (r.customEvents as Array<{ name: string; value: unknown }>) ?? [],
+          // `null` means a pre-authorship row — keep it undefined so the
+          // bubble falls back to the un-attributed rendering.
+          authorEmail: r.authorEmail ?? undefined,
+          authorKind: r.authorKind ?? undefined,
+          redacted: r.redacted || undefined,
+          redactedCaps: r.redactedCaps,
         }));
 
         // Content-aware merge.  Handles two recovery cases:
@@ -921,7 +938,12 @@ export function useAgentChat({
               rm.content.length > localMatch.content.length ||
               (rm.toolEvents?.length ?? 0) > (localMatch.toolEvents?.length ?? 0) ||
               (rm.reasoningBlocks?.length ?? 0) > (localMatch.reasoningBlocks?.length ?? 0) ||
-              (rm.customEvents?.length ?? 0) > (localMatch.customEvents?.length ?? 0)
+              (rm.customEvents?.length ?? 0) > (localMatch.customEvents?.length ?? 0) ||
+              // Authorship arriving for the first time is itself news: an
+              // optimistic local turn has no author until the server stamps
+              // one, and without this the name never appears until the next
+              // token grows the row.
+              (!!rm.authorKind && !localMatch.authorKind)
             ) {
               const idx = merged.findIndex((m) => m.id === rm.id);
               if (idx >= 0) {
@@ -936,11 +958,26 @@ export function useAgentChat({
                 merged[idx] = {
                   ...localMatch,
                   ...rm,
+                  // A poll can now fire for authorship alone, so the content
+                  // must not shrink just because the server row is a beat
+                  // behind.  A redacted row is the exception: its notice is
+                  // the whole point and always wins.
+                  content: rm.redacted || rm.content.length >= localMatch.content.length
+                    ? rm.content
+                    : localMatch.content,
                   toolEvents: richer(rm.toolEvents, localMatch.toolEvents),
                   customEvents: richer(rm.customEvents, localMatch.customEvents),
                   reasoningBlocks: richer(rm.reasoningBlocks, localMatch.reasoningBlocks),
                   progressLines: richer(rm.progressLines, localMatch.progressLines),
                   segments: richer(rm.segments, localMatch.segments),
+                  // Authorship only ever GROWS, same as the lists above: a poll
+                  // that answers from a pre-authorship row (or an older
+                  // gateway) carries `undefined`, and spreading that over a
+                  // name we already know would silently un-attribute the turn.
+                  authorEmail: rm.authorEmail ?? localMatch.authorEmail,
+                  authorKind: rm.authorKind ?? localMatch.authorKind,
+                  redacted: rm.redacted ?? localMatch.redacted,
+                  redactedCaps: rm.redactedCaps ?? localMatch.redactedCaps,
                   streaming: false,
                 };
                 changed = true;
@@ -961,7 +998,15 @@ export function useAgentChat({
                 rm.content.length >= m.content.length,
             );
             if (supersedesIdx >= 0) {
-              merged[supersedesIdx] = { ...rm, streaming: false };
+              const superseded = merged[supersedesIdx];
+              merged[supersedesIdx] = {
+                ...rm,
+                // Same "only grows" rule — the local partial may already know
+                // which agent spoke even when this server row does not.
+                authorEmail: rm.authorEmail ?? superseded.authorEmail,
+                authorKind: rm.authorKind ?? superseded.authorKind,
+                streaming: false,
+              };
               changed = true;
               continue;
             }

@@ -3,19 +3,15 @@
  * POST /api/settings/llm/enabled-models   — enable a model
  */
 import { NextRequest, NextResponse } from "next/server";
+import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
-const HEADERS = {
-  "Content-Type": "application/json",
-  Authorization: `Bearer ${INTERNAL_TOKEN}`,
-};
+const HEADERS = await gatewayHeaders({ "Content-Type": "application/json" });
 
 export async function GET(): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/enabled-models`, {
       headers: HEADERS,
@@ -29,6 +25,8 @@ export async function GET(): Promise<NextResponse> {
 }
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const body = await req.json();
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/enabled-models`, {

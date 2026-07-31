@@ -8,8 +8,7 @@
  * disconnect signal tears down the gateway stream.
  */
 import { NextRequest } from "next/server";
-import { auth, isAuthEnabled } from "@/auth";
-import { GATEWAY_URL, gatewayHeaders } from "@/lib/gateway";
+import { GATEWAY_URL, currentIdentity, gatewayHeaders } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 export const runtime = "nodejs";
@@ -18,7 +17,9 @@ export async function GET(
   req: NextRequest,
   ctx: { params: Promise<{ runId: string }> }
 ): Promise<Response> {
-  if (isAuthEnabled && !(await auth())?.user?.email) {
+  // Kept SSE-shaped rather than using requireIdentity's JSON 401: EventSource
+  // surfaces a non-SSE body as an opaque connection error.
+  if (!(await currentIdentity())) {
     return new Response('data: {"error":"unauthorized"}\n\n', {
       status: 401,
       headers: { "Content-Type": "text/event-stream" },

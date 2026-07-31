@@ -8,7 +8,7 @@
  * this proxy buffers response bodies.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { GATEWAY_URL, gatewayHeaders } from "@/lib/gateway";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
@@ -26,6 +26,13 @@ async function forward(
   req: NextRequest,
   params: Promise<{ path?: string[] }>
 ): Promise<NextResponse> {
+  // Guarded here rather than in each verb: all four delegate to this, and
+  // `gatewayHeaders` throwing inside the try below would surface as a 502,
+  // which tells an unauthenticated caller the gateway is down rather than
+  // that they are not signed in.
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
+
   const { path = [] } = await params;
   const upstream = buildUpstreamUrl(path, req);
   try {

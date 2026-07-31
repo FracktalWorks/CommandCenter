@@ -86,14 +86,23 @@ class WorkspacePatchRequest(BaseModel):
 # Helpers
 # ---------------------------------------------------------------------------
 
-def _agent_name_for_workspace(workspace: Path) -> str:
-    """The blob-store agent key for a resolved workspace root.
+def _blob_key_for_workspace(workspace: Path) -> tuple[str, str]:
+    """The blob-store ``(agent_name, instance)`` key for a workspace root.
 
-    Workspaces live at ``{agents_clone_dir}/repos/<agent_name>``, so the
-    directory basename IS the agent name — the same key the agent-side
-    write-through uses (write_artifact._current_agent_name).
+    A shared workspace lives at ``{agents_clone_dir}/repos/<agent_name>`` (the
+    basename IS the agent name); a tenant workspace at
+    ``{agents_clone_dir}/state/<agent_name>/<slug>`` carries its instance in
+    the ``.cc-instance`` marker. One mapping, shared with the agent-side
+    write-through (``acb_skills.agent_paths.workspace_blob_key``), so a file
+    edited in the file manager lands in the SAME partition the run that
+    created it used.
     """
-    return workspace.name
+    try:
+        from acb_skills.agent_paths import workspace_blob_key
+
+        return workspace_blob_key(workspace)
+    except Exception:
+        return workspace.name, ""
 
 
 async def _mirror_gateway_write(
@@ -111,21 +120,23 @@ async def _mirror_gateway_write(
     outside agent-data/inputs/outputs or when the store is unavailable.
     """
     try:
-        from acb_memory import is_stored_path, put_file  # noqa: PLC0415
+        from acb_memory import is_stored_path, put_file
     except ImportError:
         return
     rel = rel_path.replace("\\", "/")
     if not is_stored_path(rel):
         return
-    import mimetypes as _mt  # noqa: PLC0415
+    import mimetypes as _mt
 
     mime = _mt.guess_type(rel)[0] or "application/octet-stream"
+    agent, instance = _blob_key_for_workspace(workspace)
     try:
         await put_file(
-            _agent_name_for_workspace(workspace), rel, data,
+            agent, rel, data,
             mime_type=mime, action=action, session_id=session_id, actor="user",
+            instance=instance,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("workspace.blob_mirror_failed", path=rel, error=str(exc)[:200])
 
 
@@ -137,18 +148,19 @@ async def _faultin_from_store(workspace: Path, rel_path: str) -> bool:
     """
     rel = rel_path.replace("\\", "/").lstrip("/")
     try:
-        from acb_memory import get_file, is_stored_path  # noqa: PLC0415
+        from acb_memory import get_file, is_stored_path
     except ImportError:
         return False
     if not is_stored_path(rel):
         return False
-    data = await get_file(_agent_name_for_workspace(workspace), rel)
+    agent, instance = _blob_key_for_workspace(workspace)
+    data = await get_file(agent, rel, instance=instance)
     if data is None:
         return False
     dest = _safe_resolve(workspace, rel)
     dest.parent.mkdir(parents=True, exist_ok=True)
     dest.write_bytes(data)
-    _log.info("workspace.faulted_in", agent=_agent_name_for_workspace(workspace), path=rel)
+    _log.info("workspace.faulted_in", agent=agent, path=rel)
     return True
 
 
@@ -157,33 +169,38 @@ async def _mirror_gateway_delete(
 ) -> None:
     """Write-through a gateway file delete into the blob store."""
     try:
-        from acb_memory import delete_file, is_stored_path  # noqa: PLC0415
+        from acb_memory import delete_file, is_stored_path
     except ImportError:
         return
     rel = rel_path.replace("\\", "/")
     if not is_stored_path(rel):
         return
+    agent, instance = _blob_key_for_workspace(workspace)
     try:
         await delete_file(
-            _agent_name_for_workspace(workspace), rel,
-            session_id=session_id, actor="user",
+            agent, rel,
+            session_id=session_id, actor="user", instance=instance,
         )
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         _log.warning("workspace.blob_delete_mirror_failed", path=rel, error=str(exc)[:200])
 
 
-def _get_workspace_path(session_id: str) -> Path | None:
+def _get_workspace_path(
+    session_id: str, user_email: str | None = None,
+) -> Path | None:
     """Look up workspace_path from Postgres for this session.
 
     Fallback chain:
-    1. Explicit ``workspace_path`` column (set by write_artifact or PATCH endpoint).
-    2. Agent clone directory derived from the session's ``agent_name``:
-       - Dynamic registry ``local_path`` → use as-is.
-       - GitHub-registered agent → ``{agents_clone_dir}/repos/{agent_name}``.
+    1. Explicit ``workspace_path`` column (set by write_artifact or PATCH
+       endpoint) — for an instanced agent this already points at the tenant
+       state dir the run used, so no user is needed to resolve it.
+    2. Agent workspace derived from the session's ``agent_name``, resolved
+       for the viewing member (``user_email``) so a personal agent's session
+       browser opens the viewer's own partition even before its first run.
     """
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
 
         with _db_session() as s:
             row = s.execute(
@@ -203,35 +220,57 @@ def _get_workspace_path(session_id: str) -> Path | None:
         if not agent_name or agent_name in ("orchestrator", "default"):
             return None
 
-        return _resolve_agent_workspace(agent_name)
+        return _resolve_agent_workspace(agent_name, user_email)
 
     except Exception as exc:
         _log.warning("workspace.db_lookup_failed", session_id=session_id, error=str(exc))
     return None
 
 
-def _agent_workspace_dir(agent_name: str) -> Path | None:
-    """Return the on-disk workspace (clone-cache) directory for an agent.
+def _agent_instance_for(agent_name: str, user_email: str | None) -> str:
+    """The tenant partition a viewer resolves to for *agent_name*.
 
-    This MUST mirror ``loader.load_agent``, which ALWAYS runs an agent from
-    ``{agents_clone_dir}/repos/{agent_name}`` (``clone_as=agent_name``) —
-    whether the agent is sourced from a GitHub repo or a local ``local_path``.
-    The registry's ``local_path`` is only a *load-time source pointer*: the
-    loader copies it into the clone-cache and runs from there, so the agent
-    and all its artefacts (``outputs/``, ``inputs/``, ``agent-data/``) live in
-    the cache, NOT at ``local_path``.  Using ``local_path`` as the workspace
-    points the file browsers at the (artefact-free) monorepo source — which is
-    exactly why generated files were invisible in the UI.
+    Reads the agent's ``sharing`` declaration from its clone's ``config.json``
+    (the same file the executor resolves at run time) and keys it by the
+    viewing member — so the file manager, the artifact viewer and the email
+    attachment flow open the SAME directory the member's runs write to.
+
+    ``''`` for every shared agent, for anonymous/internal callers, and on any
+    read/parse failure — i.e. exactly today's behaviour unless the agent
+    explicitly declared otherwise. Never raises.
+    """
+    if not user_email or "@" not in user_email:
+        return ""
+    try:
+        import json
+
+        from acb_skills.manifest import AgentManifest
+
+        code_dir = _agent_clone_dir(agent_name)
+        if code_dir is None:
+            return ""
+        cfg_path = code_dir / "config.json"
+        if not cfg_path.is_file():
+            return ""
+        cfg = json.loads(cfg_path.read_text(encoding="utf-8", errors="replace"))
+        return AgentManifest.from_config(cfg, name=agent_name).instance_key(
+            user_email,
+        )
+    except Exception:
+        return ""
+
+
+def _agent_clone_dir(agent_name: str) -> Path | None:
+    """The agent's clone-cache checkout, or ``None`` if it has never run.
 
     Tries the bare agent name first, then the ``agent-`` prefixed variant,
     since older clones may use either convention.  Each name is looked up
     under BOTH the configured ``agents_clone_dir`` and the legacy
     ``/tmp/acb_agents`` default — older clones (created before the clone root
     moved under ``$HOME``) still live in ``/tmp`` until the agent next runs,
-    and we must still surface their files.  Returns ``None`` when no clone
-    exists yet (the agent has never run, so it has no artefacts).
+    and we must still surface their files.
     """
-    from acb_common import get_settings  # noqa: PLC0415
+    from acb_common import get_settings
 
     settings = get_settings()
     configured = getattr(
@@ -258,6 +297,42 @@ def _agent_workspace_dir(agent_name: str) -> Path | None:
     return None
 
 
+def _agent_workspace_dir(
+    agent_name: str, user_email: str | None = None,
+) -> Path | None:
+    """Return the on-disk workspace directory for an agent.
+
+    This MUST mirror ``loader.load_agent`` + the executor's directory
+    resolution: a shared agent runs from ``{agents_clone_dir}/repos/{agent}``
+    (``clone_as=agent_name``) — whether sourced from a GitHub repo or a local
+    ``local_path``.  The registry's ``local_path`` is only a *load-time source
+    pointer*: the loader copies it into the clone-cache and runs from there,
+    so the agent and all its artefacts (``outputs/``, ``inputs/``,
+    ``agent-data/``) live in the cache, NOT at ``local_path``.  Using
+    ``local_path`` as the workspace points the file browsers at the
+    (artefact-free) monorepo source — which is exactly why generated files
+    were invisible in the UI.
+
+    ``user_email`` makes the resolution tenant-aware: a ``personal``/``team``
+    agent resolves to that member's state directory
+    (:func:`acb_skills.agent_paths.agent_state_dir`) — the directory their
+    runs actually write to — created on first resolution so every caller's
+    ``is_dir()`` contract holds.  Callers WITHOUT a user (startup sweeps,
+    dep-status checks) keep the clone dir, byte-identically, as do all
+    shared agents.  Returns ``None`` when no clone exists yet (the agent has
+    never run, so it has no artefacts).
+    """
+    code_dir = _agent_clone_dir(agent_name)
+    if code_dir is None:
+        return None
+    instance = _agent_instance_for(agent_name, user_email)
+    if instance:
+        from acb_skills.agent_paths import ensure_state_dir
+
+        return ensure_state_dir(code_dir.name, instance)
+    return code_dir
+
+
 def _canonical_workspace_dir(agent_name: str) -> Path:
     """The path the loader WOULD use for *agent_name* — whether or not it
     exists on disk yet.
@@ -267,7 +342,7 @@ def _canonical_workspace_dir(agent_name: str) -> Path:
     still appears in the artifacts viewer with empty folders, instead of
     vanishing entirely just because it has no clone yet.
     """
-    from acb_common import get_settings  # noqa: PLC0415
+    from acb_common import get_settings
 
     settings = get_settings()
     configured = getattr(
@@ -276,17 +351,19 @@ def _canonical_workspace_dir(agent_name: str) -> Path:
     return Path(configured) / "repos" / agent_name
 
 
-def _resolve_agent_workspace(agent_name: str) -> Path | None:
+def _resolve_agent_workspace(
+    agent_name: str, user_email: str | None = None,
+) -> Path | None:
     """Return the workspace directory for a named agent.
 
-    Always resolves to the clone-cache directory the loader actually runs the
-    agent from (``{agents_clone_dir}/repos/{agent_name}``).  See
-    :func:`_agent_workspace_dir` for why the registry ``local_path`` is never
-    used here.
+    Resolves to the directory the loader actually runs the agent from — the
+    clone cache, or the viewing member's tenant state dir for an instanced
+    agent (see :func:`_agent_workspace_dir` for both rules, and for why the
+    registry ``local_path`` is never used here).
     """
     try:
-        return _agent_workspace_dir(agent_name)
-    except Exception as exc:  # noqa: BLE001
+        return _agent_workspace_dir(agent_name, user_email)
+    except Exception as exc:
         _log.warning(
             "workspace.agent_resolve_failed",
             agent=agent_name,
@@ -453,9 +530,9 @@ async def get_workspace_tree(
     If the session has no explicit workspace_path set, the agent's clone
     directory is used automatically (derived from the session's agent_name).
     """
-    import asyncio  # noqa: PLC0415
+    import asyncio
     loop = asyncio.get_event_loop()
-    workspace = await loop.run_in_executor(None, _get_workspace_path, session_id)
+    workspace = await loop.run_in_executor(None, _get_workspace_path, session_id, _user.email)
     if workspace is None or not workspace.exists():
         return WorkspaceTree(session_id=session_id, root="", files=[])
 
@@ -470,9 +547,9 @@ async def get_workspace_file(
     _user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a single file from the session workspace."""
-    import asyncio  # noqa: PLC0415
+    import asyncio
     workspace = await asyncio.get_event_loop().run_in_executor(
-        None, _get_workspace_path, session_id
+        None, _get_workspace_path, session_id, _user.email
     )
     if workspace is None or not workspace.exists():
         raise HTTPException(status_code=404, detail="Workspace not found for session")
@@ -521,8 +598,8 @@ async def set_workspace_path(
 ) -> None:
     """Record the workspace_path for a session (called by write_artifact tool)."""
     try:
-        from acb_graph import get_session as _db_session  # noqa: PLC0415
-        from sqlalchemy import text  # noqa: PLC0415
+        from acb_graph import get_session as _db_session
+        from sqlalchemy import text
 
         def _write():
             with _db_session() as s:
@@ -620,7 +697,7 @@ async def stream_artifact_events(
 # POST /workspace/{session_id}/upload  — user file upload
 # ---------------------------------------------------------------------------
 
-from fastapi import UploadFile  # noqa: E402
+from fastapi import UploadFile
 
 _MAX_UPLOAD_BYTES = 25 * 1024 * 1024  # 25 MB per file
 _ALLOWED_EXTENSIONS = {
@@ -647,7 +724,7 @@ async def upload_files(
     uploaded files and their paths so it can reference them.
     """
     workspace = await asyncio.get_event_loop().run_in_executor(
-        None, _get_workspace_path, session_id
+        None, _get_workspace_path, session_id, _user.email
     )
     if workspace is None:
         raise HTTPException(
@@ -738,10 +815,14 @@ async def upload_artifact(
 ) -> list[FileEntry]:
     """Upload file(s) directly into an AGENT's workspace folder (by agent name,
     not chat session). Used by the email rule editor to add draft attachments —
-    files land in ``repos/{agent}/{category}/`` and can then be picked via
-    ``GET /agent/artifacts?agent=…&category=…``."""
+    files land in the uploader's workspace for the agent (their tenant state
+    dir for an instanced agent, else ``repos/{agent}``) and can then be picked
+    via ``GET /agent/artifacts?agent=…&category=…`` — which resolves the SAME
+    directory for the same member."""
     cat = category if category in ("agent-data", "inputs", "outputs") else "agent-data"
-    workspace = _canonical_workspace_dir(agent)
+    workspace = _agent_workspace_dir(agent, _user.email) or _canonical_workspace_dir(
+        agent,
+    )
     upload_dir = workspace / cat
     try:
         upload_dir.mkdir(parents=True, exist_ok=True)
@@ -810,7 +891,7 @@ async def delete_workspace_file(
 ) -> DeleteResponse:
     """Delete a file from the session workspace."""
     workspace = await asyncio.get_event_loop().run_in_executor(
-        None, _get_workspace_path, session_id
+        None, _get_workspace_path, session_id, _user.email
     )
     if workspace is None or not workspace.exists():
         raise HTTPException(
@@ -862,11 +943,12 @@ class PromoteRequest(BaseModel):
 
 @router.post("/workspace/{session_id}/promote")
 async def promote_input_to_agent_data(
-    session_id: str, body: PromoteRequest
+    session_id: str, body: PromoteRequest,
+    _user: UserContext = Depends(get_current_user),
 ) -> FileEntry:
     """Move an inputs/ file into agent-data/ (permanent, prompt-shaping storage)."""
     workspace = await asyncio.get_event_loop().run_in_executor(
-        None, _get_workspace_path, session_id
+        None, _get_workspace_path, session_id, _user.email
     )
     if workspace is None or not workspace.exists():
         raise HTTPException(status_code=404, detail="workspace not found")
@@ -917,7 +999,8 @@ async def promote_input_to_agent_data(
 
 @router.get("/workspace/{session_id}/history")
 async def get_workspace_history(
-    session_id: str, path: str | None = None, limit: int = 200
+    session_id: str, path: str | None = None, limit: int = 200,
+    _user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Version history for this agent's files (all, or one *path*), newest first.
 
@@ -925,15 +1008,16 @@ async def get_workspace_history(
     can track and directly access the full history of any file.
     """
     workspace = await asyncio.get_event_loop().run_in_executor(
-        None, _get_workspace_path, session_id
+        None, _get_workspace_path, session_id, _user.email
     )
     if workspace is None:
         return {"history": []}
     try:
-        from acb_memory import file_history  # noqa: PLC0415
+        from acb_memory import file_history
     except ImportError:
         return {"history": []}
-    rows = await file_history(_agent_name_for_workspace(workspace), path, limit)
+    agent, instance = _blob_key_for_workspace(workspace)
+    rows = await file_history(agent, path, limit, instance=instance)
     return {"history": rows}
 
 
@@ -962,10 +1046,10 @@ async def write_workspace_file(
     Accepts text (encoding='utf-8') and binary (encoding='base64') content.
     Returns the updated FileEntry with fresh stat metadata.
     """
-    import base64  # noqa: PLC0415
+    import base64
 
     loop = asyncio.get_event_loop()
-    workspace = await loop.run_in_executor(None, _get_workspace_path, session_id)
+    workspace = await loop.run_in_executor(None, _get_workspace_path, session_id, _user.email)
     if workspace is None or not workspace.exists():
         raise HTTPException(
             status_code=404, detail="Workspace not found for session"
@@ -1047,12 +1131,15 @@ class ArtifactListResponse(BaseModel):
     artifacts: list[ArtifactEntry]
 
 
-def _discover_agent_workspaces() -> dict[str, Path]:
+def _discover_agent_workspaces(
+    user_email: str | None = None,
+) -> dict[str, Path]:
     """Return a dict of {agent_name: workspace_path} for all *live* agents.
 
     Collects the names of every live agent from the registries, then resolves
-    each to its clone-cache directory via :func:`_agent_workspace_dir` — the
-    same path the loader runs the agent from and writes artefacts to.  The
+    each via :func:`_agent_workspace_dir` for the viewing member — the same
+    path the loader runs the agent from and writes artefacts to (the member's
+    own tenant dir for an instanced agent).  The
     registry ``local_path`` is deliberately ignored as a workspace (it is only
     a load-time source pointer; see :func:`_agent_workspace_dir`).
 
@@ -1065,28 +1152,28 @@ def _discover_agent_workspaces() -> dict[str, Path]:
 
     # ── 1. Static registry (in-code _AGENT_REGISTRY) ──────────────────────
     try:
-        from gateway.routes.agent import _AGENT_REGISTRY  # noqa: PLC0415
+        from gateway.routes.agent import _AGENT_REGISTRY
         for entry in _AGENT_REGISTRY:
             name = entry.get("name")
             if name:
                 names.add(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── 2. Dynamic registry (Postgres-backed) — live agents only ──────────
     try:
         from gateway.routes.agent import \
-            _load_dynamic_agents  # noqa: PLC0415
+            _load_dynamic_agents
         for entry in _load_dynamic_agents():
             name = entry.get("name")
             if name and entry.get("status", "live") == "live":
                 names.add(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── 3. Agents.json file (legacy fallback) ─────────────────────────────
     try:
-        import json as _json  # noqa: PLC0415
+        import json as _json
         agents_file = Path(__file__).resolve()
         for _ in range(8):
             agents_file = agents_file.parent
@@ -1099,7 +1186,7 @@ def _discover_agent_workspaces() -> dict[str, Path]:
                 name = entry.get("name")
                 if name:
                     names.add(name)
-    except Exception:  # noqa: BLE001
+    except Exception:
         pass
 
     # ── Resolve each name to its workspace.  Prefer an existing clone; fall
@@ -1110,8 +1197,10 @@ def _discover_agent_workspaces() -> dict[str, Path]:
     workspaces: dict[str, Path] = {}
     for name in names:
         try:
-            ws = _agent_workspace_dir(name) or _canonical_workspace_dir(name)
-        except Exception:  # noqa: BLE001
+            ws = _agent_workspace_dir(name, user_email) or _canonical_workspace_dir(
+                name,
+            )
+        except Exception:
             continue
         workspaces[name] = ws
 
@@ -1140,7 +1229,7 @@ def _walk_agent_artifacts(
     noise and secrets; the listing is capped at ``_MAX_TREE_FILES``.  When
     *category_filter* names a special dir, only that subtree is walked.
     """
-    import datetime as _dt  # noqa: PLC0415
+    import datetime as _dt
 
     entries: list[ArtifactEntry] = []
     emitted_dirs: set[str] = set()
@@ -1267,7 +1356,7 @@ async def get_artifacts(
     for every known agent.  Supports optional filtering by agent name and
     category.
     """
-    import asyncio as _asyncio  # noqa: PLC0415
+    import asyncio as _asyncio
     loop = _asyncio.get_event_loop()
 
     # Validate category filter early
@@ -1278,7 +1367,9 @@ async def get_artifacts(
                    f"{', '.join(sorted(_VISIBLE_WORKSPACE_DIRS))}.",
         )
 
-    workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
+    workspaces = await loop.run_in_executor(
+        None, _discover_agent_workspaces, _user.email
+    )
 
     # Filter by agent if requested
     if agent:
@@ -1308,9 +1399,11 @@ async def get_artifact_file(
     _user: UserContext = Depends(get_current_user),
 ) -> StreamingResponse:
     """Stream a single file from any agent's workspace (global artifact view)."""
-    import asyncio as _asyncio  # noqa: PLC0415
+    import asyncio as _asyncio
     loop = _asyncio.get_event_loop()
-    workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
+    workspaces = await loop.run_in_executor(
+        None, _discover_agent_workspaces, _user.email
+    )
     workspace = workspaces.get(agent)
     if workspace is None or not workspace.exists():
         raise HTTPException(
@@ -1367,11 +1460,13 @@ async def write_artifact_file(
     Accepts text (encoding='utf-8') and binary (encoding='base64') content.
     Returns the updated ArtifactEntry with fresh stat metadata.
     """
-    import asyncio as _asyncio  # noqa: PLC0415
-    import base64  # noqa: PLC0415
+    import asyncio as _asyncio
+    import base64
     loop = _asyncio.get_event_loop()
 
-    workspaces = await loop.run_in_executor(None, _discover_agent_workspaces)
+    workspaces = await loop.run_in_executor(
+        None, _discover_agent_workspaces, _user.email
+    )
     workspace = workspaces.get(agent)
     if workspace is None or not workspace.exists():
         raise HTTPException(

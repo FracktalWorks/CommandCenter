@@ -6,16 +6,15 @@
  * doesn't support live discovery or if the API call fails.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 export const dynamic = "force-dynamic";
 
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const provider = req.nextUrl.searchParams.get("provider") ?? "";
   if (!provider) {
     return NextResponse.json({ detail: "provider param required" }, { status: 400 });
@@ -24,7 +23,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     const r = await fetch(
       `${GATEWAY}/settings/llm/provider-models?provider=${encodeURIComponent(provider)}`,
       {
-        headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        headers: await gatewayHeaders(),
         signal: AbortSignal.timeout(10_000),
       },
     );

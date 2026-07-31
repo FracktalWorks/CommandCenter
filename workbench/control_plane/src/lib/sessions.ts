@@ -22,6 +22,17 @@ export interface ChatSession {
   title?: string;
   /** Last ~120 chars of the most recent assistant turn, shown as a subtitle. */
   lastPreview?: string;
+  /**
+   * Room facts, server-sourced. A session shared with you appears in your list
+   * because the gateway resolves membership — localStorage cannot know about a
+   * room somebody else added you to, so these are only ever set by the merge
+   * below and never invented locally.
+   */
+  visibility?: "private" | "people" | "org";
+  /** False when someone else created this conversation and shared it with you. */
+  isOwner?: boolean;
+  /** >1 means somebody else is in here too. Drives the shared badge. */
+  participantCount?: number;
 }
 
 const STORAGE_KEY = "cc-chat-sessions";
@@ -209,10 +220,25 @@ export async function fetchAndMergeSessionsFromDb(): Promise<ChatSession[]> {
       messageCount: number;
       createdAt: string;
       updatedAt: string;
+      visibility?: ChatSession["visibility"];
+      isOwner?: boolean;
+      participantCount?: number;
     }>;
 
     const local = getSessions();
     const localIds = new Set(local.map((s) => s.id));
+    // Membership is the server's answer, so it is refreshed on every merge
+    // rather than only for sessions the browser has never seen. A room you
+    // were added to this morning must gain its badge without you clearing
+    // localStorage.
+    const byId = new Map(remote.map((r) => [r.id, r]));
+    for (const s of local) {
+      const r = byId.get(s.id);
+      if (!r) continue;
+      s.visibility = r.visibility;
+      s.isOwner = r.isOwner;
+      s.participantCount = r.participantCount;
+    }
 
     // Add any sessions from Postgres that aren't in localStorage.
     for (const r of remote) {
@@ -237,6 +263,9 @@ export async function fetchAndMergeSessionsFromDb(): Promise<ChatSession[]> {
           messageCount: r.messageCount,
           title: r.title,
           lastPreview: r.lastPreview,
+          visibility: r.visibility,
+          isOwner: r.isOwner,
+          participantCount: r.participantCount,
         });
       }
     }
@@ -277,6 +306,13 @@ export interface PersistedMessage {
   /** Real assistant-message segments (Phase 3b) — restored from
    *  agent_state.segments so segment-native rendering survives a reload. */
   segments?: { id: string; text: string }[];
+  /** Authorship (see ChatMessage in chatStore.ts). `authorKind` is who to show
+   *  as the speaker; `role` only says which side of the conversation it is. */
+  authorEmail?: string;
+  authorKind?: "human" | "agent" | "system";
+  /** Server-side redaction — content is a notice, not the turn's real text. */
+  redacted?: boolean;
+  redactedCaps?: string[];
 }
 
 const MESSAGES_PREFIX = "cc-msgs-";
@@ -389,6 +425,15 @@ export function saveMessages(sessionId: string, messages: PersistedMessage[]): v
       return Object.keys(st).length > 0 ? st : null;
     })(),
     custom_events: m.customEvents ?? [],
+    // Authorship is asserted ONLY for agent turns.  The server overrides the
+    // author of a human turn with the authenticated caller, so a client that
+    // sent `author_kind: "human"` would either be ignored or be trying to
+    // speak as someone else — never send it.  An agent turn is different: a
+    // browser persisting a run it merely watched is the only party that knows
+    // WHICH agent spoke, so that attribution has to travel with the row.
+    ...(m.authorKind === "agent"
+      ? { author_kind: "agent", author_email: m.authorEmail ?? null }
+      : {}),
   }));
   fetch(`/api/chat/sessions/${sessionId}/messages`, {
     method: "POST",
@@ -436,6 +481,10 @@ export async function fetchMessagesFromDb(
       agentState?: Record<string, unknown>;
       customEvents?: { name: string; value: unknown }[];
       todos?: { id: string; title: string; status: string }[];
+      authorEmail?: string | null;
+      authorKind?: "human" | "agent" | "system" | null;
+      redacted?: boolean;
+      redactedCaps?: string[];
     }>;
     // Map Postgres `reasoning` field to localStorage `reasoningBlocks`.
     // Split on the block separator WITHOUT dropping empty segments so block
@@ -455,6 +504,13 @@ export async function fetchMessagesFromDb(
       segments: r.agentState?.segments as
         | { id: string; text: string }[]
         | undefined,
+      // Authorship.  `null` is how the server spells "pre-authorship row";
+      // normalise it to undefined so the renderer's "no author known" branch
+      // (which is the old, unattributed look) is a single check.
+      authorEmail: r.authorEmail ?? undefined,
+      authorKind: r.authorKind ?? undefined,
+      redacted: r.redacted || undefined,
+      redactedCaps: r.redactedCaps,
     }));
     // Update localStorage cache with authoritative Postgres data — only on a
     // full (unpaginated) fetch.  A windowed/paginated fetch must not shrink or

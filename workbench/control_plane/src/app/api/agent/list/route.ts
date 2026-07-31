@@ -9,14 +9,10 @@
 import { NextResponse } from "next/server";
 import { readFileSync } from "fs";
 import { resolve } from "path";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ?? process.env.LITELLM_MASTER_KEY ?? "sk-local-dev-change-me";
-
-// Static fallback — mirrors _AGENT_REGISTRY in gateway/routes/agent.py.
 // Shown when the gateway is down so the picker still renders.
 const STATIC_FALLBACK: AgentEntry[] = [
   { name: "task-manager",  description: "ClickUp task management",              tags: ["tasks"],    status: "live", agent_runtime: "maf" },
@@ -70,9 +66,11 @@ export interface AgentEntry {
 }
 
 export async function GET(): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   try {
     const res = await fetch(`${GATEWAY_URL}/agent`, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(4_000),
     });
     if (res.ok) {

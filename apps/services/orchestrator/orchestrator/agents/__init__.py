@@ -4,7 +4,6 @@
 # though this package shadows the same-named module file.
 import importlib
 import importlib.util
-import sys as _sys
 from pathlib import Path as _Path
 
 # Load orchestrator/agents.py as a distinct module (bypasses this package).
@@ -21,10 +20,19 @@ spawn_copilot_agent = _mod.spawn_copilot_agent
 delegate_to_agent = _mod.delegate_to_agent
 enrich_instructions_with_memory = _mod.enrich_instructions_with_memory
 search_timeline = _mod.search_timeline
+# Private by convention, but it is the ONE gateway-/v1/ client factory — the
+# declarative builder (orchestrator.declarative) is a second legitimate consumer
+# inside this package, and re-exporting beats duplicating the token-precedence
+# and identity-header logic it encapsulates.
+_make_openai_client = _mod._make_openai_client
 
 __all__ = [
-    "build_orchestrator_agent", "build_agents",
-    "retrieve_entity_context", "retrieve_sales_context",
-    "spawn_copilot_agent", "delegate_to_agent",
-    "enrich_instructions_with_memory", "search_timeline",
+    "build_agents",
+    "build_orchestrator_agent",
+    "delegate_to_agent",
+    "enrich_instructions_with_memory",
+    "retrieve_entity_context",
+    "retrieve_sales_context",
+    "search_timeline",
+    "spawn_copilot_agent",
 ]

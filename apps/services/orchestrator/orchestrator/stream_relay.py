@@ -52,6 +52,17 @@ _log = get_logger("orchestrator.stream_relay")
 
 STREAM_PREFIX = "cc:stream"
 ACTIVE_PREFIX = "cc:active"
+# Who started the in-flight run on a thread. Kept in its own key rather than in
+# the ACTIVE value because ``is_active``/``touch_active``/``push_event`` all
+# compare or rewrite that value as the literal "1"; overloading it would make
+# every one of those sites actor-aware for no benefit.
+#
+# This exists so a SECOND person cannot destroy a FIRST person's run. A new run
+# on an already-active thread cancels the previous one and wipes its event log
+# (``run_detached`` → ``mark_active(reset=True)``) — correct when you supersede
+# your own run (steer/retry/Quick action), catastrophic the moment two people
+# share a thread. See docs/multiplayer/README.md §3.3 / §5.2.
+RUN_ACTOR_PREFIX = "cc:runactor"
 # Cap on entries per thread stream. Every SSE frame is one entry — reasoning
 # models emit one entry per token delta, so a long tool-heavy turn can run to
 # tens of thousands of entries. Trimming evicts the OLDEST entries (RUN_STARTED
@@ -69,6 +80,10 @@ def _stream_key(thread_id: str) -> str:
 
 def _active_key(thread_id: str) -> str:
     return f"{ACTIVE_PREFIX}:{thread_id}"
+
+
+def _run_actor_key(thread_id: str) -> str:
+    return f"{RUN_ACTOR_PREFIX}:{thread_id}"
 
 
 # Shared, process-wide async Redis client with an internal connection pool.
@@ -280,7 +295,9 @@ async def subscribe_events(
         pass  # shared pooled client — never closed per-call
 
 
-async def mark_active(thread_id: str, *, reset: bool = False) -> None:
+async def mark_active(
+    thread_id: str, *, reset: bool = False, actor: str | None = None,
+) -> None:
     """Mark a thread's agent as currently running.
 
     Args:
@@ -290,14 +307,42 @@ async def mark_active(thread_id: str, *, reset: bool = False) -> None:
                    makes ``replay_events(since_id="0-0")`` always correct
                    for the run in progress (previous turns live in
                    Postgres, not Redis).
+        actor:     Who started this run (an email).  Recorded so a later
+                   caller can tell whether superseding this run would be
+                   somebody destroying their OWN work or somebody else's —
+                   see :func:`get_run_actor`.  Omitted/empty leaves no actor
+                   recorded, which callers must treat as "unknown, allow".
     """
     r = await _get_client()
     try:
         if reset:
             await r.delete(_stream_key(thread_id))
         await r.set(_active_key(thread_id), "1", ex=STREAM_TTL_SECONDS)
+        if actor:
+            await r.set(_run_actor_key(thread_id), actor, ex=STREAM_TTL_SECONDS)
+        else:
+            # A run with no known actor must not inherit the previous one's,
+            # or an anonymous/internal run would look like it belongs to
+            # whoever ran last and could be refused on their behalf.
+            await r.delete(_run_actor_key(thread_id))
     finally:
         pass  # shared pooled client — never closed per-call
+
+
+async def get_run_actor(thread_id: str) -> str | None:
+    """Who owns the in-flight run on *thread_id*, or None if unknown.
+
+    None means "no run, or a run we can't attribute" — never "nobody owns it".
+    Callers must fail OPEN on None (allow the supersede), matching
+    ``_thread_owner_ok``'s permissive contract: a Redis hiccup or a legacy run
+    started before actors were recorded must not block a legitimate retry.
+    """
+    try:
+        r = await _get_client()
+        return await r.get(_run_actor_key(thread_id)) or None
+    except Exception:  # attribution is advisory, never a blocker
+        _log.warning("stream_relay.get_run_actor_failed", thread_id=thread_id[:12])
+        return None
 
 
 async def mark_inactive(thread_id: str) -> None:
@@ -305,6 +350,9 @@ async def mark_inactive(thread_id: str) -> None:
     r = await _get_client()
     try:
         await r.delete(_active_key(thread_id))
+        # Drop the actor with the active flag: a finished run has no owner, so
+        # the next caller must not be refused against a stale one.
+        await r.delete(_run_actor_key(thread_id))
         # Also refresh the stream TTL so late reconnectors can still replay.
         await r.expire(_stream_key(thread_id), STREAM_TTL_SECONDS)
     finally:
@@ -662,6 +710,7 @@ async def run_detached(
     *,
     tee: bool = False,
     on_complete: Any = None,
+    actor: str | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run *gen* (an SSE-line async generator) in a DETACHED background task
     and yield its events from the Redis stream.
@@ -684,6 +733,10 @@ async def run_detached(
                    run-boundary lifecycle hook; the gateway attaches the
                    authoritative fold-and-persist here (core_loop_unification
                    Phase 1).  Best-effort: exceptions are swallowed.
+        actor:     Who is starting this run.  Recorded on the thread so a later
+                   caller can be told whose run they would destroy.  The REFUSAL
+                   itself lives at the route (``/agent/run/stream`` returns 409);
+                   by the time we get here, superseding has been authorised.
 
     Yields:
         Parsed event dicts with ``_stream_id`` (Redis entry ID) attached.
@@ -698,7 +751,10 @@ async def run_detached(
             pass
 
     # Fresh run boundary: clear previous events so replay-from-0 is exact.
-    await mark_active(thread_id, reset=True)
+    # NOTE this DELETES the previous run's event log — which is why reaching
+    # here at all is gated upstream (§3.3): only the run's own owner may
+    # supersede it.
+    await mark_active(thread_id, reset=True, actor=actor)
 
     async def _drain() -> None:
         try:

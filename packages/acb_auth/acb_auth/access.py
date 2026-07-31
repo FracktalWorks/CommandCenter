@@ -256,8 +256,24 @@ async def resolve_access(
 
     if row is None:
         # Authenticated by the IdP but not provisioned here. No access, and
-        # deliberately not auto-provisioned: an admin invites people.
-        return EffectiveAccess(is_active=False)
+        # deliberately not auto-provisioned: an admin invites people. Logged
+        # loudly because the 2026-07-30 lockout was exactly this branch firing
+        # silently — the operator saw a dead-end screen with no server-side
+        # trace of WHO was being refused or WHY. Cached like every other
+        # resolution, so the warning fires once per TTL, not per request.
+        _log.warning(
+            "access_unprovisioned_signin",
+            email=key,
+            detail=(
+                "authenticated by the IdP but has no app_user row — an owner "
+                "must invite them via /settings/members (or see "
+                "ensure_owner_bootstrap if NOBODY holds owner)"
+            ),
+        )
+        refused = EffectiveAccess(is_active=False)
+        if use_cache:
+            _cache_put(key, refused)
+        return refused
 
     overrides: list[tuple[str, str]] = []
     for entry in row["overrides"] or []:
@@ -300,3 +316,205 @@ async def resolve_identity(email: str | None) -> tuple[str | None, str | None]:
     if row is None:
         return None, None
     return row["id"], row["org"]
+
+
+# ── Shared-session authority (groups_sessions_authority.md §3) ──────────────
+
+#: More per-session subjects than this is a data error, not a room.
+_MAX_PARTICIPANT_EXPANSION = 200
+
+_PARTICIPANT_SQL = """
+SELECT subject FROM chat_session_participant WHERE session_id = :sid
+"""
+
+_GROUP_MEMBER_SQL = """
+SELECT au.email
+FROM org_group g
+JOIN org_group_member m ON m.group_id = g.id
+JOIN app_user au ON au.id = m.user_id
+WHERE g.slug = :slug AND au.status = 'active'
+"""
+
+_ORG_MEMBER_SQL = """
+SELECT email FROM app_user WHERE status = 'active'
+"""
+
+
+async def resolve_session_access(
+    session_id: str | None,
+    actor_email: str | None,
+) -> tuple[EffectiveAccess, list[str]]:
+    """The authority a run in *session_id* acts with, and whose it is.
+
+    The rule (``groups_sessions_authority.md`` §3): **a shared run acts with
+    the intersection of every participant's resolved access — viewers
+    included — attributed to the typer.** Actor-authority ("whoever typed")
+    leaks by construction: the permitted member's tool output lands in a
+    transcript the denied member reads.
+
+    Mechanics:
+
+    * Participant subjects are expanded at read time — an email is itself,
+      ``group:<slug>`` becomes the group's active members, ``org`` becomes
+      every active member (an org-visible room is readable by all of them,
+      so all of them cap it).
+    * The actor is always included, so a solo session — or any session
+      recorded before migration 138 — resolves to exactly the actor's own
+      access, byte-identically to today. Everything here activates only when
+      a second distinct member exists.
+    * Each member resolves through :func:`resolve_access` (shared 60s cache);
+      a suspended member resolves inactive, which zeroes the intersection —
+      the room is capped until they are removed, which is the visible act.
+    * Fail-open to actor-only on any lookup error, matching
+      :func:`resolve_access`'s posture: the sharing feature must not become
+      a new way for a solo run to lose its authority. (Pre-133 databases land
+      here via the missing-table branch.)
+
+    Returns ``(access, members)`` where *members* is the sorted list of
+    emails the intersection covered — the provenance the room UI shows, so a
+    cap is never silent.
+    """
+    actor = (actor_email or "").lower().strip()
+    actor_access = await resolve_access(actor)
+    if not session_id:
+        return actor_access, [actor] if actor else []
+
+    emails: set[str] = {actor} if actor else set()
+    try:
+        from sqlalchemy import text
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            subjects = [
+                r[0]
+                for r in (
+                    await session.execute(
+                        text(_PARTICIPANT_SQL), {"sid": session_id},
+                    )
+                ).fetchall()
+            ]
+            for subject in subjects:
+                s = (subject or "").strip()
+                if not s:
+                    continue
+                if s == "org":
+                    rows = (await session.execute(text(_ORG_MEMBER_SQL))).fetchall()
+                    emails.update(r[0].lower() for r in rows if r[0])
+                elif s.startswith("group:"):
+                    rows = (
+                        await session.execute(
+                            text(_GROUP_MEMBER_SQL), {"slug": s[len("group:"):]},
+                        )
+                    ).fetchall()
+                    emails.update(r[0].lower() for r in rows if r[0])
+                elif "@" in s:
+                    emails.add(s.lower())
+                if len(emails) > _MAX_PARTICIPANT_EXPANSION:
+                    raise ValueError(
+                        f"session {session_id!r} expands past "
+                        f"{_MAX_PARTICIPANT_EXPANSION} members"
+                    )
+    except Exception as exc:
+        message = str(exc).lower()
+        if "does not exist" in message or "undefinedtable" in message:
+            _log.debug("session_access_tables_missing", session=session_id)
+        else:
+            _log.warning(
+                "session_access_resolve_failed",
+                session=session_id, error=str(exc)[:200],
+            )
+        return actor_access, sorted(emails)
+
+    if len(emails) <= 1:
+        return actor_access, sorted(emails)
+
+    folded = actor_access
+    for email in sorted(emails - {actor}):
+        folded = folded.intersect(await resolve_access(email))
+    return folded, sorted(emails)
+
+
+# ── Ownership bootstrap (the way back in) ───────────────────────────────────
+
+_BOOTSTRAP_OWNER_SQL = """
+WITH org AS (
+    SELECT id FROM organization WHERE slug = 'default'
+),
+member AS (
+    INSERT INTO app_user (email, display_name, role, status,
+                          organization_id, joined_at)
+    SELECT :email, :email, 'executive', 'active', org.id, now() FROM org
+    ON CONFLICT (email) DO UPDATE
+        SET status = 'active',
+            organization_id = COALESCE(app_user.organization_id,
+                                       EXCLUDED.organization_id)
+    RETURNING id
+)
+INSERT INTO user_role (user_id, role_id, assigned_by)
+SELECT member.id, r.id, 'bootstrap:executive_emails'
+FROM member, org_role r, org
+WHERE r.organization_id = org.id AND r.slug = 'owner'
+ON CONFLICT DO NOTHING
+"""
+
+_HAS_OWNER_SQL = """
+SELECT 1 FROM user_role ur
+JOIN org_role r ON r.id = ur.role_id AND r.slug = 'owner'
+LIMIT 1
+"""
+
+
+async def ensure_owner_bootstrap() -> str | None:
+    """If NOBODY holds ``owner``, provision the first ``EXECUTIVE_EMAILS``
+    address as an active owner — creating the ``app_user`` row if needed.
+
+    Exists because of the 2026-07-30 production lockout: the model is
+    invite-only ("an admin invites people"), and migration 128's SQL
+    bootstrap can only *promote an existing row* — SQL cannot read env vars,
+    so the spec's promised EXECUTIVE_EMAILS fallback was never implementable
+    there. On a deployment where ``app_user`` was empty, that left zero
+    members, zero owners, and **no inviter**: everyone authenticated, nobody
+    provisioned, and the only fix was hand-run SQL. This closes the loop at
+    gateway startup, the first place both the database AND the environment
+    are readable.
+
+    Deliberately narrow: it runs only when NO member holds ``owner`` — one
+    real owner anywhere (however provisioned) makes this a no-op forever, so
+    a stale or placeholder EXECUTIVE_EMAILS can never overwrite real
+    membership. Returns the provisioned email, or ``None`` when it did
+    nothing. Never raises: an ownerless deployment with a broken bootstrap
+    should still boot and serve /health, not crash-loop.
+    """
+    raw = os.environ.get("EXECUTIVE_EMAILS", "")
+    candidate = next(
+        (e.strip().lower() for e in raw.split(",") if "@" in e), None,
+    )
+    try:
+        from sqlalchemy import text  # noqa: PLC0415
+
+        factory = _get_session_factory()
+        async with factory() as session:
+            if (await session.execute(text(_HAS_OWNER_SQL))).first() is not None:
+                return None
+            if candidate is None:
+                _log.warning(
+                    "ownership_bootstrap_no_candidate",
+                    detail=(
+                        "no member holds 'owner' and EXECUTIVE_EMAILS names "
+                        "no address — nobody can grant access; set "
+                        "EXECUTIVE_EMAILS or provision an owner by SQL"
+                    ),
+                )
+                return None
+            await session.execute(text(_BOOTSTRAP_OWNER_SQL), {"email": candidate})
+            await session.commit()
+        invalidate(candidate)
+        _log.warning(
+            "ownership_bootstrapped",
+            email=candidate,
+            detail="no member held 'owner'; provisioned from EXECUTIVE_EMAILS",
+        )
+        return candidate
+    except Exception as exc:
+        _log.warning("ownership_bootstrap_failed", error=str(exc)[:200])
+        return None

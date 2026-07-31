@@ -517,3 +517,34 @@ def assert_can_run_agent(user: UserContext, agent_name: str) -> None:
             status_code=403,
             detail=f"Forbidden: no access to agent '{agent_name}'.",
         )
+
+
+async def assert_can_run_agent_in_session(
+    user: UserContext, agent_name: str, session_id: str | None,
+) -> None:
+    """:func:`assert_can_run_agent`, then the shared-session authority rule.
+
+    A shared run acts with the intersection of every participant's access
+    (``groups_sessions_authority.md`` §3), so the agent must be runnable by
+    the ROOM, not only by the typer — otherwise its output lands in a
+    transcript read by members who may not run it. The fold engages only
+    when a second member exists; a solo or pre-133 session is exactly the
+    plain gate. The refusal names the rule so the cap is never a mystery.
+    """
+    assert_can_run_agent(user, agent_name)
+    if user.role is UserRole.AGENT and user.has_permission("*"):
+        return  # internal service principal — no room to intersect
+    if not session_id:
+        return
+    from acb_auth.access import resolve_session_access
+
+    folded, members = await resolve_session_access(session_id, user.email)
+    if len(members) > 1 and not folded.can_run_agent(agent_name):
+        raise HTTPException(
+            status_code=403,
+            detail=(
+                f"Forbidden: agent '{agent_name}' is not runnable by every "
+                f"participant of this shared session — a shared run acts at "
+                f"the intersection of all participants' access."
+            ),
+        )

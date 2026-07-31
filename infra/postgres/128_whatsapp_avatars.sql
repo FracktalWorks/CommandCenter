@@ -1,5 +1,5 @@
 -- ============================================================================
--- 128_whatsapp_avatars.sql — native WhatsApp profile pictures, synced (W17)
+-- 132_whatsapp_avatars.sql — native WhatsApp profile pictures, synced (W17)
 -- ============================================================================
 -- Chats in the WhatsApp app render as colored initials — there was never a real
 -- photo synced for anyone. The whatsmeow (personal-number) bridge can fetch a

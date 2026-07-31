@@ -9,34 +9,15 @@
  * Body: { threadId: string }
  */
 
-import { NextRequest } from "next/server";
-import { auth, isAuthEnabled } from "@/auth";
+import { NextRequest, NextResponse } from "next/server";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
-
-const EXECUTIVE_EMAILS = new Set(
-  (process.env.EXECUTIVE_EMAILS ?? "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean),
-);
-
 export async function POST(req: NextRequest) {
-  const session = await auth();
-  // Gate only when auth is enabled (no-op in dev, where auth() returns null).
-  if (isAuthEnabled && !session?.user?.email) {
-    return new Response(JSON.stringify({ error: "Unauthorized" }), {
-      status: 401,
-      headers: { "Content-Type": "application/json" },
-    });
-  }
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
 
   let threadId = "";
   try {
@@ -55,17 +36,7 @@ export async function POST(req: NextRequest) {
     });
   }
 
-  const headers: Record<string, string> = {
-    "Content-Type": "application/json",
-    Authorization: `Bearer ${INTERNAL_TOKEN}`,
-  };
-  const email = session?.user?.email;
-  if (email) {
-    headers["X-User-Email"] = email;
-    headers["X-User-Role"] = EXECUTIVE_EMAILS.has(email.toLowerCase())
-      ? "executive"
-      : "employee";
-  }
+  const headers = await gatewayHeaders({ "Content-Type": "application/json" });
 
   try {
     const res = await fetch(

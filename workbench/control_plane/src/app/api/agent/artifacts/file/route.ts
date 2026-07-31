@@ -4,44 +4,13 @@
  * Proxy for the global artifact browser — read and write individual files.
  */
 import { NextRequest, NextResponse } from "next/server";
-import { auth } from "@/auth";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
-
-const EXECUTIVE_EMAILS = new Set(
-  (process.env.EXECUTIVE_EMAILS ?? "")
-    .split(",")
-    .map((e) => e.trim().toLowerCase())
-    .filter(Boolean)
-);
-
-async function buildGatewayHeaders(): Promise<Record<string, string>> {
-  const headers: Record<string, string> = {
-    Authorization: `Bearer ${INTERNAL_TOKEN}`,
-  };
-  try {
-    const session = await auth();
-    if (session?.user?.email) {
-      headers["X-User-Email"] = session.user.email;
-      headers["X-User-Role"] = EXECUTIVE_EMAILS.has(
-        session.user.email.toLowerCase()
-      )
-        ? "executive"
-        : "employee";
-    }
-  } catch {
-    // auth() may throw outside request context
-  }
-  return headers;
-}
-
 export async function GET(req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   try {
     const agent = req.nextUrl.searchParams.get("agent");
     const filePath = req.nextUrl.searchParams.get("path");
@@ -57,7 +26,7 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
     upstream.searchParams.set("path", filePath);
 
     const res = await fetch(upstream.toString(), {
-      headers: await buildGatewayHeaders(),
+      headers: await gatewayHeaders(),
     });
 
     if (!res.ok) {
@@ -80,6 +49,8 @@ export async function GET(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function PUT(req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   try {
     const agent = req.nextUrl.searchParams.get("agent");
     const filePath = req.nextUrl.searchParams.get("path");
@@ -99,7 +70,7 @@ export async function PUT(req: NextRequest): Promise<NextResponse> {
     const res = await fetch(upstream.toString(), {
       method: "PUT",
       headers: {
-        ...(await buildGatewayHeaders()),
+        ...(await gatewayHeaders()),
         "Content-Type": "application/json",
       },
       body: JSON.stringify(body),

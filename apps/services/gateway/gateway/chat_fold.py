@@ -371,6 +371,42 @@ def build_extraction_conversation(
 
 # ── Persistence entry point (run_detached on_complete hook) ─────────────────
 
+async def _run_authority(thread_id: str, actor: str) -> dict[str, Any] | None:
+    """The clearance this run acted under, or ``None`` for a solo run.
+
+    A shared run acts at the intersection of its participants' access
+    (``groups_sessions_authority.md`` §3), so the output it produced is only
+    safe for a reader who either was in the room at the time or independently
+    holds everything the run held. Recording both facts on the row is what lets
+    replay answer that question later, when the room's membership has moved on
+    (§4).
+
+    Solo runs record nothing: there is no intersection, the one participant has
+    already seen everything, and a NULL keeps every existing row and every
+    single-player row exactly as it was.
+    """
+    try:
+        from acb_auth import resolve_session_access
+
+        # Seeded with the acting member, exactly as the run itself was
+        # (executor._integration_authorizer): the intersection that produced
+        # this output includes the person who asked for it.
+        folded, members = await resolve_session_access(thread_id, actor)
+        if len(members) < 2:
+            return None
+        caps = sorted(
+            c for c in folded.allowed
+            if c.startswith(("integrations:use:", "agents:run:"))
+        )
+        return {"members": sorted(members), "caps": caps}
+    except Exception:
+        # A clearance we could not compute must not become a clearance of
+        # "none" — that would mark the turn as freely readable. NULL means
+        # "unlabelled", and unlabelled rows are governed by the waterline.
+        _log.warning("chat_fold.authority_failed", thread_id=thread_id[:12])
+        return None
+
+
 async def persist_final_assistant_message(
     thread_id: str,
     message_id: str,
@@ -463,7 +499,11 @@ async def persist_final_assistant_message(
             role="assistant",
             **folded,
         )
-        await asyncio.to_thread(_upsert_messages, thread_id, [record])
+        await asyncio.to_thread(
+            _upsert_messages, thread_id, [record],
+            actor_email=user_id, agent_name=agent_name,
+            authority=await _run_authority(thread_id, user_id),
+        )
         _log.info(
             "chat_fold.persisted",
             thread_id=thread_id[:12],

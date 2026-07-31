@@ -3,10 +3,22 @@
   "description": "AI copilot for a WhatsApp Business inbox — briefs, triages, summarizes groups, transcribes voice notes, and drafts replies and follow-up nudges. Drafts only; never sends.",
   "version": "0.1.0",
   "author": "CommandCenter",
-  "tags": ["whatsapp", "messaging", "triage", "drafting", "productivity"],
+  "tags": [
+    "whatsapp",
+    "messaging",
+    "triage",
+    "drafting",
+    "productivity"
+  ],
   "integrations": [],
   "optional_integrations": [],
   "runtime": "maf",
+  "sharing": {
+    "instancing": "personal",
+    "visibility": "organization",
+    "shareable": false,
+    "outputs_visibility": "instance"
+  },
   "icon": "MessageCircle",
   "category": "apps",
   "tool_scope": [

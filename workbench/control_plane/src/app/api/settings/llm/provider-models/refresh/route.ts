@@ -5,24 +5,20 @@
  * Trigger a live model refresh from all provider APIs, or get cache metadata.
  */
 import { NextRequest, NextResponse } from "next/server";
+import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 export const dynamic = "force-dynamic";
 
 export async function POST(req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const body = await req.json().catch(() => ({}));
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/provider-models/refresh`, {
       method: "POST",
-      headers: {
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
-        "Content-Type": "application/json",
-      },
+      headers: await gatewayHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(120_000), // up to 2 min for all providers
     });
@@ -34,11 +30,13 @@ export async function POST(req: NextRequest): Promise<NextResponse> {
 }
 
 export async function GET(): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   try {
     const r = await fetch(
       `${GATEWAY}/settings/llm/provider-models/cache-info`,
       {
-        headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+        headers: await gatewayHeaders(),
         signal: AbortSignal.timeout(5_000),
       },
     );

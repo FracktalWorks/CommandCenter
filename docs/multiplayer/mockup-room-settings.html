@@ -1,0 +1,351 @@
+<title>CommandCenter · Multiplayer Agents — Access &amp; Data</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --violet: hsl(262 60% 62%);
+    --sidebar: hsl(220 13% 9%);
+    --sidebar-accent: hsl(220 13% 13%);
+    --radius: 12px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --violet: hsl(262 60% 50%);
+    --sidebar: hsl(0 0% 98%);
+    --sidebar-accent: hsl(210 40% 94%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font-ui); background: var(--background); color: var(--foreground); font-size: 14px; -webkit-font-smoothing: antialiased; }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  .page { max-width: 940px; margin: 0 auto; padding: 26px 24px 60px; display: flex; flex-direction: column; gap: 20px; }
+  .crumb { font-size: 11.5px; color: var(--faint); display: flex; align-items: center; gap: 6px; }
+  .crumb b { color: var(--muted-foreground); font-weight: 600; }
+  h1 { margin: 0; font-size: 20px; font-weight: 680; letter-spacing: -0.015em; }
+  .lede { margin: 4px 0 0; font-size: 13px; color: var(--muted-foreground); line-height: 1.55; max-width: 640px; }
+
+  .card { border: 1px solid var(--border); background: var(--card); border-radius: 14px; padding: 16px 18px; display: flex; flex-direction: column; gap: 14px; }
+  .card > header { display: flex; align-items: flex-start; gap: 10px; }
+  .card > header .icon { color: var(--primary); margin-top: 1px; }
+  .card h2 { margin: 0; font-size: 14px; font-weight: 640; letter-spacing: -0.01em; }
+  .card header p { margin: 3px 0 0; font-size: 12px; color: var(--muted-foreground); line-height: 1.5; }
+
+  /* Choice cards */
+  .choices { display: grid; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); gap: 9px; }
+  .choice { text-align: left; border: 1px solid var(--border); background: var(--background); border-radius: 11px; padding: 11px 12px; display: flex; flex-direction: column; gap: 5px; transition: all .18s cubic-bezier(.4,0,.2,1); }
+  .choice:hover { border-color: var(--border-strong); }
+  .choice.on { border-color: hsl(198 89% 50% / .5); background: var(--primary-wash); }
+  .choice .t { display: flex; align-items: center; gap: 7px; font-size: 12.5px; font-weight: 620; }
+  .choice .t .rec { font-size: 9px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; color: var(--primary); background: hsl(198 89% 50% / .14); border-radius: 999px; padding: 2px 6px; }
+  .choice .d { font-size: 11.5px; color: var(--muted-foreground); line-height: 1.45; }
+  .radio { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid var(--border-strong); flex: none; }
+  .choice.on .radio { border-color: var(--primary); border-width: 4px; }
+
+  /* Members table */
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  th { text-align: left; font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); font-weight: 700; padding: 0 10px 8px; }
+  td { padding: 9px 10px; border-top: 1px solid var(--border); vertical-align: middle; }
+  .avatar { width: 24px; height: 24px; border-radius: 50%; display: grid; place-items: center; font-size: 9.5px; font-weight: 700; border: 1px solid var(--border-strong); }
+  .av-v { background: hsl(198 89% 50% / .2); color: hsl(198 89% 62%); }
+  .av-s { background: hsl(27 96% 61% / .2); color: hsl(27 96% 66%); }
+  .av-p { background: hsl(142 76% 47% / .18); color: hsl(142 66% 55%); }
+  .av-n { background: var(--secondary); color: var(--muted-foreground); }
+  .who { display: flex; align-items: center; gap: 9px; }
+  .who .em { font-size: 10.5px; color: var(--faint); }
+  .sel { display: inline-flex; align-items: center; gap: 6px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 4px 9px; font-size: 11.5px; color: var(--muted-foreground); }
+  .sel.owner { border-color: hsl(198 89% 50% / .4); color: var(--primary); }
+  .muted { color: var(--faint); font-size: 11.5px; }
+  .x { color: var(--faint); font-size: 11.5px; }
+  .x:hover { color: var(--destructive); }
+
+  .invite { display: flex; gap: 8px; align-items: center; border: 1px solid var(--border-strong); border-radius: 11px; padding: 8px 10px; background: var(--background); }
+  .invite .ph { flex: 1; font-size: 12.5px; color: var(--faint); }
+  .btn { display: inline-flex; align-items: center; gap: 6px; border-radius: 9px; padding: 6px 12px; font-size: 12.5px; font-weight: 550; border: 1px solid transparent; transition: all .18s; }
+  .btn-primary { background: var(--primary); color: var(--primary-foreground); font-weight: 620; }
+  .btn-primary:hover { opacity: .9; }
+  .btn-ghost { border-color: var(--border-strong); color: var(--muted-foreground); }
+  .btn-ghost:hover { color: var(--foreground); border-color: var(--primary); }
+
+  /* Dials */
+  .dials { display: flex; flex-direction: column; gap: 2px; }
+  .dial { display: flex; align-items: center; gap: 12px; padding: 10px 2px; border-bottom: 1px solid var(--border); }
+  .dial:last-child { border-bottom: none; }
+  .dial .lbl { min-width: 0; flex: 1; }
+  .dial .lbl b { display: block; font-size: 12.5px; font-weight: 600; }
+  .dial .lbl span { display: block; font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; line-height: 1.45; }
+  .stepper { display: flex; align-items: center; gap: 0; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; flex: none; }
+  .stepper button { width: 26px; height: 28px; color: var(--muted-foreground); font-size: 14px; }
+  .stepper button:hover { background: var(--secondary); color: var(--foreground); }
+  .stepper .v { min-width: 52px; text-align: center; font-size: 12.5px; font-variant-numeric: tabular-nums; font-weight: 600; border-left: 1px solid var(--border); border-right: 1px solid var(--border); padding: 5px 0; }
+  .toggle { width: 36px; height: 21px; border-radius: 999px; background: var(--secondary); position: relative; flex: none; border: 1px solid var(--border-strong); }
+  .toggle i { position: absolute; top: 2px; left: 2px; width: 15px; height: 15px; border-radius: 50%; background: var(--faint); transition: all .18s; }
+  .toggle.on { background: hsl(198 89% 50% / .25); border-color: hsl(198 89% 50% / .5); }
+  .toggle.on i { left: 17px; background: var(--primary); }
+
+  /* Privacy matrix */
+  .matrix { border: 1px solid var(--border); border-radius: 12px; overflow: hidden; }
+  .mrow { display: grid; grid-template-columns: 1fr 108px 108px 108px; align-items: center; font-size: 12.5px; }
+  .mrow > * { padding: 9px 12px; }
+  .mhead { background: var(--secondary); font-size: 10px; text-transform: uppercase; letter-spacing: .09em; color: var(--faint); font-weight: 700; }
+  .mrow + .mrow { border-top: 1px solid var(--border); }
+  .mrow .k { color: var(--foreground); }
+  .mrow .k span { display: block; font-size: 11px; color: var(--faint); margin-top: 2px; font-family: var(--font-mono); }
+  .cell { text-align: center; }
+  .yes { color: var(--success); }
+  .no { color: var(--faint); opacity: .45; }
+  .never { color: var(--destructive); font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; }
+
+  /* Bindings */
+  .bind { display: flex; align-items: center; gap: 11px; padding: 10px 12px; border: 1px solid var(--border); border-radius: 11px; background: var(--background); }
+  .bind .glyph { width: 30px; height: 30px; border-radius: 8px; display: grid; place-items: center; font-size: 14px; border: 1px solid var(--border-strong); flex: none; }
+  .bind .nm { font-size: 12.5px; font-weight: 600; }
+  .bind .as { font-size: 11px; color: var(--faint); margin-top: 1px; }
+  .bind .scope { margin-left: auto; font-size: 10px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; }
+  .scope.rw { color: var(--warning); background: hsl(47 96% 53% / .12); }
+  .scope.ro { color: var(--muted-foreground); background: var(--secondary); }
+
+  .warn { display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px; border-radius: 11px; border: 1px solid hsl(27 96% 61% / .3); background: hsl(27 96% 61% / .07); font-size: 12px; color: var(--muted-foreground); line-height: 1.55; }
+  .warn .icon { color: var(--accent); margin-top: 1px; }
+  .warn b { color: var(--foreground); font-weight: 600; }
+  .rule { display: flex; gap: 10px; align-items: flex-start; padding: 11px 13px; border-radius: 11px; border: 1px solid var(--border-strong); background: var(--background); font-size: 12px; color: var(--muted-foreground); line-height: 1.55; }
+  .rule .icon { color: var(--violet); margin-top: 1px; }
+  .rule b { color: var(--foreground); font-weight: 600; }
+</style>
+
+<div class="page">
+  <div class="crumb">
+    <span>Chat</span> <span style="opacity:.4">/</span> <b>Q3 pipeline reconciliation</b> <span style="opacity:.4">/</span> <span>Access &amp; data</span>
+  </div>
+  <div>
+    <h1>Access &amp; data</h1>
+    <p class="lede">Who can be in this room, who can drive the agent, and exactly which data crosses the boundary. Everything here is enforced server-side when the run context is assembled — not hidden in the interface.</p>
+  </div>
+
+  <!-- Who can be here -->
+  <section class="card">
+    <header>
+      <svg class="icon" viewBox="0 0 24 24"><path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/></svg>
+      <div><h2>Who can be here</h2><p>Room roles are separate from company roles. Being in this room never grants authority someone doesn't already have.</p></div>
+    </header>
+
+    <div class="choices">
+      <button class="choice"><span class="t"><i class="radio"></i>Private</span><span class="d">Only you. Behaves exactly like a normal conversation.</span></button>
+      <button class="choice on"><span class="t"><i class="radio"></i>Invite only<span class="rec">Current</span></span><span class="d">People you add. Not discoverable by anyone else.</span></button>
+      <button class="choice"><span class="t"><i class="radio"></i>Team</span><span class="d">Anyone in the module can find and join as an observer.</span></button>
+      <button class="choice"><span class="t"><i class="radio"></i>Organization</span><span class="d">Anyone at Fracktal can find and join as an observer.</span></button>
+    </div>
+
+    <div class="invite">
+      <svg class="icon" style="color:var(--faint)" viewBox="0 0 24 24"><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 11h-6"/></svg>
+      <span class="ph">Add by name or email…</span>
+      <span class="sel">Observer <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span>
+      <button class="btn btn-primary">Invite</button>
+    </div>
+
+    <table>
+      <thead><tr><th>Member</th><th>Room role</th><th>Company role</th><th>Sees history from</th><th></th></tr></thead>
+      <tbody>
+        <tr>
+          <td><span class="who"><span class="avatar av-v">VV</span><span>Vijay Varada<span class="em">vijay@fracktal.in</span></span></span></td>
+          <td><span class="sel owner">Owner</span></td>
+          <td><span class="muted">Executive</span></td>
+          <td><span class="muted">The beginning</span></td>
+          <td></td>
+        </tr>
+        <tr>
+          <td><span class="who"><span class="avatar av-s">SK</span><span>Sanjay Kulkarni<span class="em">sanjay@fracktal.in</span></span></span></td>
+          <td><span class="sel">Contributor <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></td>
+          <td><span class="muted">Employee</span></td>
+          <td><span class="muted">The beginning</span></td>
+          <td><button class="x">Remove</button></td>
+        </tr>
+        <tr>
+          <td><span class="who"><span class="avatar av-p">PN</span><span>Priya Nair<span class="em">priya@fracktal.in</span></span></span></td>
+          <td><span class="sel">Observer <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></td>
+          <td><span class="muted">Employee</span></td>
+          <td><span class="muted">10:24, when she joined</span></td>
+          <td><button class="x">Remove</button></td>
+        </tr>
+        <tr>
+          <td><span class="who"><span class="avatar av-n">AR</span><span>Arun Rao<span class="em">arun@fracktal.in</span></span></span></td>
+          <td><span class="sel">Observer <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></td>
+          <td><span class="muted">Employee</span></td>
+          <td><span class="muted">10:31, when he joined</span></td>
+          <td><button class="x">Remove</button></td>
+        </tr>
+      </tbody>
+    </table>
+
+    <div class="rule">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 22s8-4 8-10V5l-8-3-8 3v7c0 6 8 10 8 10z"/></svg>
+      <span><b>Room membership never escalates company permissions.</b> A contributor here can send turns and redirect the agent, but approving an outward write — sending an email, writing to Zoho, pushing a commit — still requires the company permission they already hold. The effective permission is always the narrower of the two.</span>
+    </div>
+  </section>
+
+  <!-- Who can drive -->
+  <section class="card">
+    <header>
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+      <div><h2>Who can work with the agent at once</h2><p>The agent holds one context and runs one task at a time. This decides how several people share it.</p></div>
+    </header>
+
+    <div class="choices">
+      <button class="choice"><span class="t"><i class="radio"></i>Solo</span><span class="d">Only the owner sends turns. Everyone else watches.</span></button>
+      <button class="choice on"><span class="t"><i class="radio"></i>Driver<span class="rec">Recommended</span></span><span class="d">One person holds the floor. Others steer, request it, or take a handoff.</span></button>
+      <button class="choice"><span class="t"><i class="radio"></i>Queue</span><span class="d">Anyone queues a turn; the agent works through them in order.</span></button>
+      <button class="choice"><span class="t"><i class="radio"></i>Open</span><span class="d">Anyone sends immediately. Best for small, fast, trusted rooms.</span></button>
+      <button class="choice"><span class="t"><i class="radio"></i>Moderated</span><span class="d">Observers post to a side lane; the driver promotes suggestions.</span></button>
+    </div>
+
+    <div class="dials">
+      <div class="dial">
+        <span class="lbl"><b>Contributors</b><span>People who can send turns and steer. Each one adds to the shared history every future turn pays for — this is the cap that actually matters.</span></span>
+        <span class="stepper"><button>−</button><span class="v">5</span><button>+</button></span>
+      </div>
+      <div class="dial">
+        <span class="lbl"><b>Observers</b><span>People who can watch and use the side lane. Cheap — one live cursor each.</span></span>
+        <span class="stepper"><button>−</button><span class="v">∞</span><button>+</button></span>
+      </div>
+      <div class="dial">
+        <span class="lbl"><b>Floor hold</b><span>How long the baton survives without a heartbeat, so a closed laptop can't hold the room hostage.</span></span>
+        <span class="stepper"><button>−</button><span class="v">120s</span><button>+</button></span>
+      </div>
+      <div class="dial">
+        <span class="lbl"><b>Room token budget</b><span>When it's spent, the room drops to read-only until you raise it. Spend is attributed per participant.</span></span>
+        <span class="stepper"><button>−</button><span class="v">5M</span><button>+</button></span>
+      </div>
+      <div class="dial">
+        <span class="lbl"><b>Anyone can answer the agent's questions</b><span>When the agent parks on a question, the floor holder answers first; after 60s it opens to any contributor so a long task never stalls on one person.</span></span>
+        <span class="toggle on"><i></i></span>
+      </div>
+    </div>
+  </section>
+
+  <!-- Context policy -->
+  <section class="card">
+    <header>
+      <svg class="icon" viewBox="0 0 24 24"><path d="M12 2a7 7 0 0 0-7 7c0 2.4 1.2 4 2 5l.5 3h9l.5-3c.8-1 2-2.6 2-5a7 7 0 0 0-7-7z"/><path d="M9 21h6"/></svg>
+      <div><h2>What the agent remembers, and for whom</h2><p>The most consequential setting here. It decides whether one person's private context can reach a transcript the whole room reads.</p></div>
+    </header>
+
+    <div class="choices">
+      <button class="choice on">
+        <span class="t"><i class="radio"></i>Room<span class="rec">Recommended</span></span>
+        <span class="d">The agent uses this room's memory plus agent and company memory. <b style="color:var(--foreground)">No one's personal memory is used.</b> What it learns here is written back to the room.</span>
+      </button>
+      <button class="choice">
+        <span class="t"><i class="radio"></i>Driver's context</span>
+        <span class="d">Also loads the floor holder's personal memory. Needs their consent each session, and everyone sees a banner saying whose context is in play.</span>
+      </button>
+      <button class="choice">
+        <span class="t"><i class="radio"></i>Clean room</span>
+        <span class="d">No memory at all. For audits, customer demos, and anything that has to be reproducible.</span>
+      </button>
+    </div>
+
+    <div class="warn">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <span><b>Memory follows the room, not the person.</b> Facts the agent learns in here land in this room's memory. They reach company-wide memory only when someone explicitly promotes them, and they never land in anyone's personal store. There is no automatic path in the other direction either — personal memory is never pulled into a shared room unless you choose "Driver's context" above.</span>
+    </div>
+  </section>
+
+  <!-- Acting identity -->
+  <section class="card">
+    <header>
+      <svg class="icon" viewBox="0 0 24 24"><rect x="2" y="4" width="20" height="16" rx="2"/><path d="M2 8l10 6 10-6"/></svg>
+      <div><h2>What the agent can act as</h2><p>Fixed when a run starts and stamped into every audit record. It does not change when the floor changes hands.</p></div>
+    </header>
+
+    <div style="display:flex;flex-direction:column;gap:8px">
+      <div class="bind">
+        <span class="glyph" style="background:linear-gradient(135deg,hsl(0 63% 60% / .22),hsl(27 96% 61% / .16))">Z</span>
+        <span><span class="nm">Zoho CRM</span><span class="as">as vijay@fracktal.in · deals, contacts</span></span>
+        <span class="scope rw">Read + write</span>
+      </div>
+      <div class="bind">
+        <span class="glyph" style="background:linear-gradient(135deg,hsl(262 60% 62% / .22),hsl(198 89% 50% / .14))">O</span>
+        <span><span class="nm">Odoo ERP</span><span class="as">service account · invoices, journal lines</span></span>
+        <span class="scope ro">Read only</span>
+      </div>
+      <div class="bind">
+        <span class="glyph" style="background:linear-gradient(135deg,hsl(142 76% 47% / .2),hsl(198 89% 50% / .14))">C</span>
+        <span><span class="nm">ClickUp</span><span class="as">team workspace · Delivery space</span></span>
+        <span class="scope rw">Read + write</span>
+      </div>
+      <div class="bind" style="border-style:dashed;opacity:.7">
+        <span class="glyph" style="background:var(--secondary)">+</span>
+        <span><span class="nm">Add a connection</span><span class="as">The owner of the connection has to approve it</span></span>
+      </div>
+    </div>
+
+    <div class="rule">
+      <svg class="icon" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>
+      <span><b>Nobody in this room can see a credential.</b> Keys and tokens are never rendered, never returned by an API, and never enter the agent's context — the room only ever sees what a tool chose to return.</span>
+    </div>
+  </section>
+
+  <!-- Privacy matrix -->
+  <section class="card">
+    <header>
+      <svg class="icon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M2 12s3.6-7 10-7 10 7 10 7-3.6 7-10 7-10-7-10-7z"/></svg>
+      <div><h2>What crosses the boundary</h2><p>The full picture, with current settings applied.</p></div>
+    </header>
+
+    <div class="matrix">
+      <div class="mrow mhead"><span>Data</span><span class="cell">You</span><span class="cell">The room</span><span class="cell">The company</span></div>
+      <div class="mrow"><span class="k">Messages and who sent them<span>chat_message.content</span></span><span class="cell yes">●</span><span class="cell yes">●</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">Tool calls and results<span>chat_message.tool_events</span></span><span class="cell yes">●</span><span class="cell yes">●</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">The agent's reasoning<span>chat_message.reasoning</span></span><span class="cell yes">●</span><span class="cell yes">●</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">Files the agent writes<span>chat_session.workspace_path</span></span><span class="cell yes">●</span><span class="cell yes">●</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">Cost and token spend<span>per participant</span></span><span class="cell yes">●</span><span class="cell yes">●</span><span class="cell yes">●</span></div>
+      <div class="mrow"><span class="k">Facts learned in this room<span>memory scope: room</span></span><span class="cell yes">●</span><span class="cell yes">●</span><span class="cell no">on promote</span></div>
+      <div class="mrow"><span class="k">Your personal memory<span>mem0 user scope</span></span><span class="cell yes">●</span><span class="cell no">○</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">Your private asks and notes<span>visibility = private</span></span><span class="cell yes">●</span><span class="cell no">on promote</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">History before you joined<span>history_visibility</span></span><span class="cell yes">depends</span><span class="cell yes">●</span><span class="cell no">○</span></div>
+      <div class="mrow"><span class="k">Credentials, keys, tokens<span>provider_keys · integration_credentials</span></span><span class="cell never">Never</span><span class="cell never">Never</span><span class="cell never">Never</span></div>
+    </div>
+
+    <div style="display:flex;gap:8px;justify-content:flex-end">
+      <button class="btn btn-ghost">Export this room's audit trail</button>
+      <button class="btn btn-primary">Save</button>
+    </div>
+  </section>
+</div>

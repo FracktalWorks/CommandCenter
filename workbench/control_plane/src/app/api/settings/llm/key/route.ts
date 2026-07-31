@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
+import { gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 const GATEWAY = process.env.GATEWAY_BASE_URL ?? "http://localhost:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 // Provider → env-var map (mirrors settings.py _PROVIDER_ENV_MAP).
 // Used as a fallback when the gateway rejects the provider because it's
@@ -22,6 +19,8 @@ const PROVIDER_ENV_MAP: Record<string, string> = {
 };
 
 export async function POST(req: NextRequest) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const body = await req.json() as { provider?: string; api_key?: string };
   const provider = body.provider ?? "";
   const apiKey   = body.api_key ?? "";
@@ -30,10 +29,7 @@ export async function POST(req: NextRequest) {
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/key`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
-      },
+      headers: await gatewayHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(8_000),
     });
@@ -68,10 +64,7 @@ export async function POST(req: NextRequest) {
   try {
     const r2 = await fetch(`${GATEWAY}/integrations/configure`, {
       method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
-      },
+      headers: await gatewayHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ vars: [{ key: envVar, value: apiKey.trim() }] }),
       signal: AbortSignal.timeout(8_000),
     });
@@ -86,6 +79,8 @@ export async function POST(req: NextRequest) {
 }
 
 export async function DELETE(req: NextRequest) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   const { searchParams } = new URL(req.url);
   const provider = searchParams.get("provider") ?? "";
 
@@ -96,10 +91,7 @@ export async function DELETE(req: NextRequest) {
   try {
     const r = await fetch(`${GATEWAY}/settings/llm/key`, {
       method: "DELETE",
-      headers: {
-        "Content-Type": "application/json",
-        Authorization: `Bearer ${INTERNAL_TOKEN}`,
-      },
+      headers: await gatewayHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ provider }),
       signal: AbortSignal.timeout(8_000),
     });

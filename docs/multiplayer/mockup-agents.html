@@ -1,0 +1,313 @@
+<title>CommandCenter · Agents — Personal &amp; shared</title>
+<style>
+  /* ---- Design tokens — mirrored from workbench/control_plane/src/app/globals.css ---- */
+  :root {
+    color-scheme: dark;
+    --font-ui: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+    --font-mono: ui-monospace, "SF Mono", "JetBrains Mono", Menlo, monospace;
+    --background: hsl(220 13% 8%);
+    --card: hsl(220 13% 10%);
+    --popover: hsl(220 13% 12%);
+    --secondary: hsl(220 13% 14%);
+    --muted: hsl(220 13% 15%);
+    --border: hsl(220 13% 16%);
+    --border-strong: hsl(220 13% 24%);
+    --foreground: hsl(210 40% 98%);
+    --muted-foreground: hsl(215 20% 65%);
+    --faint: hsl(215 15% 48%);
+    --primary: hsl(198 89% 50%);
+    --primary-foreground: hsl(220 13% 8%);
+    --primary-wash: hsl(198 89% 50% / 0.09);
+    --accent: hsl(27 96% 61%);
+    --destructive: hsl(0 63% 60%);
+    --success: hsl(142 76% 47%);
+    --warning: hsl(47 96% 53%);
+    --violet: hsl(262 60% 62%);
+    --sidebar: hsl(220 13% 9%);
+    --sidebar-accent: hsl(220 13% 13%);
+    --radius: 12px;
+    --shadow-lg: 0 16px 50px hsl(220 13% 2% / 0.7);
+  }
+  :root[data-theme="light"] {
+    color-scheme: light;
+    --background: hsl(0 0% 100%);
+    --card: hsl(0 0% 100%);
+    --popover: hsl(0 0% 100%);
+    --secondary: hsl(210 40% 96%);
+    --muted: hsl(210 40% 96%);
+    --border: hsl(214 32% 91%);
+    --border-strong: hsl(214 32% 82%);
+    --foreground: hsl(222 84% 5%);
+    --muted-foreground: hsl(215 16% 47%);
+    --faint: hsl(215 16% 60%);
+    --primary: hsl(198 89% 35%);
+    --primary-foreground: hsl(0 0% 100%);
+    --primary-wash: hsl(198 89% 35% / 0.07);
+    --violet: hsl(262 60% 50%);
+    --sidebar: hsl(0 0% 98%);
+    --sidebar-accent: hsl(210 40% 94%);
+    --shadow-lg: 0 16px 50px hsl(222 84% 5% / 0.18);
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body { font-family: var(--font-ui); background: var(--background); color: var(--foreground); font-size: 14px; -webkit-font-smoothing: antialiased; overflow: hidden; }
+  button { font-family: inherit; cursor: pointer; color: inherit; background: none; border: none; padding: 0; }
+  :focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; border-radius: 6px; }
+  .icon { width: 15px; height: 15px; stroke: currentColor; stroke-width: 1.8; fill: none; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+  .icon-sm { width: 13px; height: 13px; }
+
+  .shell { display: grid; grid-template-columns: 1fr 396px; height: 100vh; }
+  .main { overflow: auto; padding: 20px 24px 50px; min-width: 0; }
+
+  .head { display: flex; align-items: flex-end; gap: 14px; margin-bottom: 18px; }
+  .head h1 { margin: 0; font-size: 19px; font-weight: 680; letter-spacing: -0.015em; }
+  .head p { margin: 3px 0 0; font-size: 12.5px; color: var(--muted-foreground); }
+  .head .spacer { flex: 1; }
+  .btn { display: inline-flex; align-items: center; gap: 7px; border-radius: 10px; padding: 8px 14px; font-size: 13px; font-weight: 600; border: 1px solid transparent; }
+  .btn-primary { background: var(--primary); color: var(--primary-foreground); }
+  .btn-ghost { border-color: var(--border-strong); color: var(--muted-foreground); }
+  .btn-ghost:hover { color: var(--foreground); border-color: var(--primary); }
+
+  /* the two-axis explainer */
+  .axes { border: 1px solid var(--border); background: var(--card); border-radius: 14px; padding: 14px 16px; margin-bottom: 20px;
+          background-image: radial-gradient(700px 130px at 15% 0%, hsl(262 60% 62% / .07), transparent); }
+  .axes h2 { margin: 0 0 3px; font-size: 13.5px; font-weight: 640; }
+  .axes > p { margin: 0 0 12px; font-size: 12px; color: var(--muted-foreground); line-height: 1.5; max-width: 640px; }
+  .grid2 { display: grid; grid-template-columns: 128px 1fr 1fr 1fr; gap: 1px; background: var(--border); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; }
+  .grid2 > * { background: var(--background); padding: 9px 11px; font-size: 11.5px; }
+  .grid2 .h { background: var(--secondary); font-size: 9.5px; text-transform: uppercase; letter-spacing: .08em; color: var(--faint); font-weight: 700; }
+  .grid2 .rh { background: var(--secondary); font-size: 10.5px; color: var(--muted-foreground); font-weight: 600; display: flex; align-items: center; }
+  .grid2 .cell b { display: block; font-size: 12px; font-weight: 620; color: var(--foreground); }
+  .grid2 .cell span { display: block; font-size: 10.5px; color: var(--faint); margin-top: 2px; line-height: 1.4; }
+  .grid2 .cell.empty { color: var(--faint); opacity: .4; }
+  .grid2 .cell.hl { background: var(--primary-wash); }
+
+  /* agent rows */
+  .sec { font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); font-weight: 700; margin: 22px 0 9px; display: flex; align-items: center; gap: 8px; }
+  .sec .ln { flex: 1; height: 1px; background: var(--border); }
+  .rows { display: flex; flex-direction: column; gap: 7px; }
+  .row { display: flex; align-items: center; gap: 12px; border: 1px solid var(--border); background: var(--card); border-radius: 12px; padding: 11px 13px; text-align: left; width: 100%; transition: all .18s cubic-bezier(.4,0,.2,1); }
+  .row:hover { border-color: var(--border-strong); }
+  .row.on { border-color: hsl(198 89% 50% / .5); background: var(--primary-wash); }
+  .glyph { width: 34px; height: 34px; border-radius: 9px; display: grid; place-items: center; font-size: 15px; flex: none; border: 1px solid var(--border-strong); }
+  .g-p { background: linear-gradient(135deg, hsl(198 89% 50% / .2), hsl(262 60% 62% / .14)); }
+  .g-t { background: linear-gradient(135deg, hsl(27 96% 61% / .2), hsl(0 63% 60% / .12)); }
+  .g-s { background: linear-gradient(135deg, hsl(142 76% 47% / .18), hsl(198 89% 50% / .12)); }
+  .row .nm { font-size: 13px; font-weight: 600; letter-spacing: -0.005em; }
+  .row .ds { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; line-height: 1.4; }
+  .tags { display: flex; align-items: center; gap: 6px; margin-left: auto; flex: none; }
+  .tag { font-size: 9.5px; font-weight: 700; letter-spacing: .05em; text-transform: uppercase; padding: 3px 8px; border-radius: 999px; white-space: nowrap; }
+  .tag.personal { color: var(--violet); background: hsl(262 60% 62% / .14); }
+  .tag.team { color: var(--accent); background: hsl(27 96% 61% / .12); }
+  .tag.shared { color: var(--success); background: hsl(142 76% 47% / .12); }
+  .tag.vis { color: var(--muted-foreground); background: var(--secondary); }
+  .tag.nosh { color: var(--faint); background: var(--secondary); display: inline-flex; align-items: center; gap: 4px; }
+
+  /* ---- right panel ---- */
+  .panel { background: var(--sidebar); border-left: 1px solid var(--border); overflow: auto; padding: 18px 16px 44px; display: flex; flex-direction: column; gap: 15px; }
+  .phead { display: flex; align-items: flex-start; gap: 11px; }
+  .phead h2 { margin: 0; font-size: 15.5px; font-weight: 660; }
+  .phead .key { font-family: var(--font-mono); font-size: 10.5px; color: var(--faint); display: block; margin-top: 3px; }
+  .block { border: 1px solid var(--border); background: var(--card); border-radius: 12px; padding: 12px 13px; display: flex; flex-direction: column; gap: 10px; }
+  .block h3 { margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--faint); font-weight: 700; }
+  .opt { display: flex; align-items: flex-start; gap: 9px; border: 1px solid var(--border); background: var(--background); border-radius: 10px; padding: 9px 11px; text-align: left; }
+  .opt.on { border-color: hsl(262 60% 62% / .5); background: hsl(262 60% 62% / .07); }
+  .radio { width: 13px; height: 13px; border-radius: 50%; border: 1.5px solid var(--border-strong); flex: none; margin-top: 1px; }
+  .opt.on .radio { border-color: var(--violet); border-width: 4px; }
+  .opt .t { font-size: 12.5px; font-weight: 600; }
+  .opt .d { font-size: 11.5px; color: var(--muted-foreground); margin-top: 2px; line-height: 1.45; }
+  .opts { display: flex; flex-direction: column; gap: 6px; }
+
+  .kv { display: flex; align-items: center; gap: 8px; font-size: 11.5px; color: var(--muted-foreground); }
+  .kv .icon { color: var(--faint); }
+  .kv b { color: var(--foreground); font-weight: 600; }
+  .kv .v { margin-left: auto; }
+  .sel { display: inline-flex; align-items: center; gap: 5px; border: 1px solid var(--border-strong); border-radius: 8px; padding: 3px 9px; font-size: 11.5px; color: var(--muted-foreground); }
+  .toggle { width: 34px; height: 20px; border-radius: 999px; background: var(--secondary); position: relative; flex: none; border: 1px solid var(--border-strong); margin-left: auto; }
+  .toggle i { position: absolute; top: 2px; left: 2px; width: 14px; height: 14px; border-radius: 50%; background: var(--faint); transition: all .18s; }
+  .toggle.on { background: hsl(198 89% 50% / .25); border-color: hsl(198 89% 50% / .5); }
+  .toggle.on i { left: 16px; background: var(--primary); }
+
+  .effect { border: 1px solid hsl(262 60% 62% / .3); background: linear-gradient(180deg, hsl(262 60% 62% / .06), transparent); border-radius: 12px; padding: 12px 13px; display: flex; flex-direction: column; gap: 9px; }
+  .effect h3 { margin: 0; font-size: 10px; text-transform: uppercase; letter-spacing: .1em; color: var(--violet); font-weight: 700; }
+  .erow { display: flex; align-items: flex-start; gap: 8px; font-size: 11.5px; color: var(--muted-foreground); line-height: 1.5; }
+  .erow .icon { margin-top: 1.5px; }
+  .erow .yes { color: var(--success); }
+  .erow .no { color: var(--destructive); }
+  .erow b { color: var(--foreground); font-weight: 600; }
+  .erow code { font-family: var(--font-mono); font-size: 10.5px; color: var(--violet); background: hsl(262 60% 62% / .1); border-radius: 4px; padding: 1px 5px; }
+
+  .warn { border: 1px solid hsl(47 96% 53% / .35); background: hsl(47 96% 53% / .08); border-radius: 11px; padding: 11px 12px; font-size: 11.5px; color: var(--muted-foreground); line-height: 1.55; display: flex; gap: 9px; align-items: flex-start; }
+  .warn .icon { color: var(--warning); margin-top: 1px; }
+  .warn b { color: var(--foreground); font-weight: 620; }
+  .pfoot { display: flex; gap: 8px; }
+</style>
+
+<div class="shell">
+  <main class="main">
+    <div class="head">
+      <div>
+        <h1>Agents</h1>
+        <p>Twelve registered · who can use each one, and whose memory it keeps.</p>
+      </div>
+      <span class="spacer"></span>
+      <button class="btn btn-ghost">Memory quarantine <span style="color:var(--warning);font-weight:700">3</span></button>
+      <button class="btn btn-primary">Register an agent</button>
+    </div>
+
+    <section class="axes">
+      <h2>Two separate questions</h2>
+      <p>Who may <b>use</b> an agent is not the same as whose <b>memory</b> it keeps. The email agent is the proof: everyone in the company should have one, and nobody should see anyone else's.</p>
+      <div class="grid2">
+        <span class="h"></span>
+        <span class="h">One brain per person</span>
+        <span class="h">One brain per team</span>
+        <span class="h">One brain, everyone</span>
+
+        <span class="rh">Only you can use it</span>
+        <span class="cell hl"><b>Startup coach</b><span>Yours alone, end to end</span></span>
+        <span class="cell empty">—</span>
+        <span class="cell empty">—</span>
+
+        <span class="rh">Your team can use it</span>
+        <span class="cell empty">—</span>
+        <span class="cell hl"><b>Sales assistant</b><span>The team talks to one brain</span></span>
+        <span class="cell empty">—</span>
+
+        <span class="rh">Anyone can use it</span>
+        <span class="cell hl"><b>Email agent</b><span>Everyone gets their own</span></span>
+        <span class="cell empty">—</span>
+        <span class="cell hl"><b>Reconciler</b><span>No per-person state at all</span></span>
+      </div>
+    </section>
+
+    <div class="sec">Personal — one instance per person <span class="ln"></span></div>
+    <div class="rows">
+      <button class="row on">
+        <span class="glyph g-p">🧭</span>
+        <span style="flex:1;min-width:0"><span class="nm">startup-coach</span><span class="ds">Founder coaching — goals, blockers, and the things you'd only say out loud once</span></span>
+        <span class="tags">
+          <span class="tag personal">Personal</span><span class="tag vis">Only you</span>
+          <span class="tag nosh"><svg class="icon" style="width:10px;height:10px" viewBox="0 0 24 24"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg>Not shareable</span>
+        </span>
+      </button>
+      <button class="row">
+        <span class="glyph g-p">✉️</span>
+        <span style="flex:1;min-width:0"><span class="nm">email-assistant</span><span class="ds">Drafts, triage, and reply memory for your own mailbox</span></span>
+        <span class="tags"><span class="tag personal">Personal</span><span class="tag vis">Anyone</span><span class="tag nosh">Not shareable</span></span>
+      </button>
+      <button class="row">
+        <span class="glyph g-p">💬</span>
+        <span style="flex:1;min-width:0"><span class="nm">whatsapp-assistant</span><span class="ds">Your WhatsApp threads, commitments, and saved replies</span></span>
+        <span class="tags"><span class="tag personal">Personal</span><span class="tag vis">Anyone</span><span class="tag nosh">Not shareable</span></span>
+      </button>
+      <button class="row">
+        <span class="glyph g-p">✅</span>
+        <span style="flex:1;min-width:0"><span class="nm">task-manager</span><span class="ds">Your GTD system — contexts, horizons, planning</span></span>
+        <span class="tags"><span class="tag personal">Personal</span><span class="tag vis">Anyone</span><span class="tag shared" style="background:var(--secondary);color:var(--muted-foreground)">Rooms OK</span></span>
+      </button>
+      <button class="row">
+        <span class="glyph g-p">🎯</span>
+        <span style="flex:1;min-width:0"><span class="nm">triage</span><span class="ds">Routes your email, WhatsApp, and meeting notes</span></span>
+        <span class="tags"><span class="tag personal">Personal</span><span class="tag vis">Anyone</span><span class="tag nosh">Not shareable</span></span>
+      </button>
+    </div>
+
+    <div class="sec">Team — one shared brain per team <span class="ln"></span></div>
+    <div class="rows">
+      <button class="row">
+        <span class="glyph g-t">📈</span>
+        <span style="flex:1;min-width:0"><span class="nm">sales</span><span class="ds">Zoho pipeline, deals, follow-ups — one brain the whole sales team talks to</span></span>
+        <span class="tags"><span class="tag team">Team · Sales</span><span class="tag vis">6 people</span><span class="tag shared" style="background:var(--secondary);color:var(--muted-foreground)">Rooms OK</span></span>
+      </button>
+      <button class="row">
+        <span class="glyph g-t">🧾</span>
+        <span style="flex:1;min-width:0"><span class="nm">billing</span><span class="ds">Invoices, dunning, and payment chasing</span></span>
+        <span class="tags"><span class="tag team">Team · Finance</span><span class="tag vis">3 people</span><span class="tag shared" style="background:var(--secondary);color:var(--muted-foreground)">Rooms OK</span></span>
+      </button>
+      <button class="row">
+        <span class="glyph g-t">🚚</span>
+        <span style="flex:1;min-width:0"><span class="nm">delivery</span><span class="ds">Project delivery monitoring and push notifications</span></span>
+        <span class="tags"><span class="tag team">Team · Delivery</span><span class="tag vis">5 people</span><span class="tag shared" style="background:var(--secondary);color:var(--muted-foreground)">Rooms OK</span></span>
+      </button>
+    </div>
+
+    <div class="sec">Shared — one brain, no per-person state <span class="ln"></span></div>
+    <div class="rows">
+      <button class="row">
+        <span class="glyph g-s">⚖️</span>
+        <span style="flex:1;min-width:0"><span class="nm">reconciler</span><span class="ds">Nightly source-of-truth diff across ClickUp, Zoho, and Odoo</span></span>
+        <span class="tags"><span class="tag shared">Shared</span><span class="tag vis">Anyone</span></span>
+      </button>
+      <button class="row">
+        <span class="glyph g-s">🗺️</span>
+        <span style="flex:1;min-width:0"><span class="nm">strategy</span><span class="ds">Weekly digest and planning — org-level, no personal state</span></span>
+        <span class="tags"><span class="tag shared">Shared</span><span class="tag vis">Exec</span></span>
+      </button>
+    </div>
+  </main>
+
+  <!-- ---------------- panel ---------------- -->
+  <aside class="panel">
+    <div class="phead">
+      <span class="glyph g-p" style="width:40px;height:40px;border-radius:11px;font-size:18px">🧭</span>
+      <div>
+        <h2>startup-coach</h2>
+        <span class="key">declared in config.json · agent-startup-coach</span>
+      </div>
+    </div>
+
+    <div class="block">
+      <h3>Whose memory does it keep?</h3>
+      <div class="opts">
+        <button class="opt on"><i class="radio"></i><span><span class="t">One brain per person</span><span class="d">Every user gets their own instance. Nothing crosses between them.</span></span></button>
+        <button class="opt"><i class="radio"></i><span><span class="t">One brain per team</span><span class="d">Everyone on the team talks to the same accumulated memory.</span></span></button>
+        <button class="opt"><i class="radio"></i><span><span class="t">One brain, everyone</span><span class="d">A single shared memory across the whole company.</span></span></button>
+        <button class="opt"><i class="radio"></i><span><span class="t">Remembers nothing</span><span class="d">Stateless. Nothing is written at all.</span></span></button>
+      </div>
+    </div>
+
+    <div class="block">
+      <h3>Who can use it</h3>
+      <div class="kv">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        <span>Visibility</span><span class="v"><span class="sel">Only me <svg class="icon icon-sm" viewBox="0 0 24 24"><path d="M6 9l6 6 6-6"/></svg></span></span>
+      </div>
+      <div class="kv" style="border-top:1px solid var(--border);padding-top:10px">
+        <svg class="icon icon-sm" viewBox="0 0 24 24"><circle cx="18" cy="5" r="3"/><circle cx="6" cy="12" r="3"/><circle cx="18" cy="19" r="3"/><path d="M8.6 13.5l6.8 4M15.4 6.5l-6.8 4"/></svg>
+        <span>Conversations can become rooms</span>
+        <span class="toggle"><i></i></span>
+      </div>
+    </div>
+
+    <div class="effect">
+      <h3>What this means</h3>
+      <div class="erow">
+        <svg class="icon icon-sm yes" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+        <span>Its memory is keyed <code>agent:startup-coach#u:you</code> — no other person's run can query it, and it can't query theirs.</span>
+      </div>
+      <div class="erow">
+        <svg class="icon icon-sm yes" viewBox="0 0 24 24"><path d="M20 6L9 17l-5-5"/></svg>
+        <span>It still reads <b>company memory</b> and any deal you're on. Isolation is between instances, not from the company.</span>
+      </div>
+      <div class="erow">
+        <svg class="icon icon-sm no" viewBox="0 0 24 24"><path d="M18 6L6 18M6 6l12 12"/></svg>
+        <span>Its conversations <b>cannot be shared live</b>. The Share button is off, and says why.</span>
+      </div>
+      <div class="erow">
+        <svg class="icon icon-sm" style="color:var(--muted-foreground)" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M8 8h8M8 12h8M8 16h5"/></svg>
+        <span>You can still <b>share a read-only transcript</b> of one conversation — people can read what happened, but nobody can talk to your coach.</span>
+      </div>
+    </div>
+
+    <div class="warn">
+      <svg class="icon" viewBox="0 0 24 24"><path d="M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/><path d="M12 9v4M12 17h.01"/></svg>
+      <span><b>This agent has 41 memories from before instances existed</b>, written by 3 people into one pool. We can't tell whose is whose, so switching to per-person will move them to <b>quarantine</b> — unreadable, undeleted — and each instance starts fresh. Review them in Memory quarantine.</span>
+    </div>
+
+    <div class="pfoot">
+      <button class="btn btn-ghost">Cancel</button>
+      <button class="btn btn-primary" style="flex:1;justify-content:center">Save &amp; quarantine</button>
+    </div>
+  </aside>
+</div>

@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from "next/server";
+import { requireIdentity } from "@/lib/gateway";
 
 /**
  * POST /api/chat/suggestions — generate contextual follow-up suggestions.
@@ -11,7 +12,7 @@ import { NextRequest, NextResponse } from "next/server";
 const LITELLM_BASE_URL =
   process.env.COPILOT_LLM_BASE_URL ?? process.env.LITELLM_BASE_URL ?? "http://127.0.0.1:8080/v1";
 const LITELLM_KEY =
-  process.env.LITELLM_MASTER_KEY ?? process.env.GATEWAY_INTERNAL_TOKEN ?? "sk-local-dev-change-me";
+  process.env.LITELLM_MASTER_KEY ?? "";
 const SUGGESTION_MODEL = process.env.SUGGESTION_MODEL ?? "deepseek/deepseek-chat";
 
 /** Ensure the base URL ends with /v1 (env values vary). */
@@ -21,6 +22,8 @@ function v1Base(): string {
 }
 
 export async function POST(req: NextRequest) {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   let body: { userMessage?: string; assistantMessage?: string; agentName?: string };
   try {
     body = await req.json();

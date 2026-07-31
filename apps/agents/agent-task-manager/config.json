@@ -3,6 +3,12 @@
   "description": "GTD task manager \u2014 captures thoughts, clarifies the inbox, organizes to Local or a connected PM workspace (ClickUp), and answers status/progress/workload questions with citations.",
   "version": "0.2.0",
   "runtime": "maf",
+  "sharing": {
+    "instancing": "shared",
+    "visibility": "organization",
+    "shareable": true,
+    "outputs_visibility": "instance"
+  },
   "skill_repos": [
     "skill-task-gtd"
   ],

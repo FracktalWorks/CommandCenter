@@ -31,7 +31,6 @@ from pathlib import Path
 from typing import Any
 
 from agent_framework_github_copilot import GitHubCopilotAgent
-from copilot.types import PermissionHandler
 
 _INSTRUCTIONS_FILE = Path(__file__).parent / "instructions.md"
 INSTRUCTIONS = _INSTRUCTIONS_FILE.read_text(encoding="utf-8") if _INSTRUCTIONS_FILE.exists() else (
@@ -116,6 +115,10 @@ def _llm_provider() -> dict[str, Any]:
 
 
 def build_agent() -> GitHubCopilotAgent:
+    # No on_permission_request here: the executor injects the risk-aware
+    # permission handler (permission_policy) when none is set.  Setting one
+    # here pre-populates ``_permission_handler``, which makes the executor's
+    # ``if ... is None`` guard skip — silently disabling B6 for this agent.
     return GitHubCopilotAgent(
         instructions=INSTRUCTIONS,
         tools=_TOOLS,
@@ -123,7 +126,6 @@ def build_agent() -> GitHubCopilotAgent:
             "model": "tier-balanced",
             "provider": _llm_provider(),
             "mcp_servers": {},
-            "on_permission_request": PermissionHandler.approve_all,
         },
     )
 

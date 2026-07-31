@@ -19,14 +19,9 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
-const INTERNAL_TOKEN =
-  process.env.GATEWAY_INTERNAL_TOKEN ??
-  process.env.LITELLM_MASTER_KEY ??
-  "sk-local-dev-change-me";
 
 export interface GitHubAccountInfo {
   token_configured: boolean;
@@ -41,9 +36,11 @@ export interface GitHubAccountInfo {
 }
 
 export async function GET(_req: NextRequest): Promise<NextResponse> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
   try {
     const res = await fetch(`${GATEWAY_URL}/integrations/github/account`, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(12_000),
     });
     if (res.ok) {

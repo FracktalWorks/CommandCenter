@@ -60,6 +60,20 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     configure_logging(settings.log_level)
     _log.info("gateway.startup", env=settings.acb_env)
 
+    # Ownership bootstrap: if NO member holds `owner`, provision the first
+    # EXECUTIVE_EMAILS address (creating its app_user row). Startup is the
+    # first place the database AND the environment are both readable —
+    # migration 128's SQL bootstrap can only promote rows that already exist,
+    # which is how the 2026-07-30 lockout happened (empty app_user → zero
+    # members → an invite-only model with no inviter). No-op whenever any
+    # owner exists; never blocks startup.
+    try:
+        from acb_auth import ensure_owner_bootstrap  # noqa: PLC0415
+
+        await ensure_owner_bootstrap()
+    except Exception as exc:  # noqa: BLE001
+        _log.warning("gateway.owner_bootstrap_skipped", error=str(exc)[:200])
+
     if _HAS_MAF:
         _log.info("gateway.ag_ui_registered", path="/copilot/chat")
 
@@ -446,6 +460,7 @@ PUBLIC_ROUTES: frozenset[str] = frozenset({
     "/whatsapp/bridge/labels",
     "/whatsapp/bridge/avatars",
     "/whatsapp/bridge/paired",
+    "/whatsapp/bridge/avatars",
 
     # Meeting-bot worker callbacks — machine-authed by MEETING_BOT_TOKEN.
     "/notes/meetings/{meeting_id}/live/segment",
@@ -508,24 +523,18 @@ app.add_middleware(
 def _apply_thinking_mode(opts: dict, think_mode: str) -> None:
     """Apply thinking/reasoning mode to agent options.
 
-    Maps our three thinking modes to model-specific parameters:
-    - "thinking": enable chain-of-thought with moderate budget
-    - "max":      enable chain-of-thought with maximum budget
-    - "auto":     no override (model decides)
-
-    For Copilot SDK models, this adds a 'thinking' block.
-    For LiteLLM models, this adds 'reasoning_effort' or 'thinking'.
+    Thin delegate to the single implementation in
+    ``orchestrator._model_resolution`` — the named-agent path
+    (``/agent/run/stream``) needs the same mapping, and two copies is how the
+    two run paths' memory injection silently diverged
+    (agent_architecture.md §11.1.2).  Kept as a module-level name so existing
+    callers and tests here are unaffected; it disappears with ``/copilot/chat``.
     """
-    if think_mode == "thinking":
-        # Moderate reasoning depth
-        opts["model_params"] = opts.get("model_params", {})
-        opts["model_params"]["reasoning_effort"] = "medium"
-        opts["thinking"] = {"type": "enabled", "budget_tokens": 4000}
-    elif think_mode == "max":
-        # Maximum reasoning depth
-        opts["model_params"] = opts.get("model_params", {})
-        opts["model_params"]["reasoning_effort"] = "high"
-        opts["thinking"] = {"type": "enabled", "budget_tokens": 16000}
+    from orchestrator._model_resolution import (
+        _apply_thinking_mode as _shared,
+    )
+
+    _shared(opts, think_mode)
 
 if _HAS_MAF:
     try:
@@ -930,6 +939,16 @@ try:
     from gateway.routes.chat import router as _chat_router
 
     app.include_router(_chat_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
+    # Rooms share /chat's prefix — a room IS a chat session — but live in their
+    # own module because membership, presence, and the live room stream are a
+    # different concern from history CRUD.
+    from gateway.routes.rooms import router as _rooms_router
+
+    app.include_router(_rooms_router)
 except Exception:  # pragma: no cover
     pass
 

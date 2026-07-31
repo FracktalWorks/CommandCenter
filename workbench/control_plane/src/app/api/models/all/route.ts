@@ -33,6 +33,7 @@
  */
 
 import { NextResponse } from "next/server";
+import { GATEWAY_URL, gatewayHeaders, requireIdentity, UNAUTHENTICATED } from "@/lib/gateway";
 
 export const dynamic = "force-dynamic";
 
@@ -61,8 +62,6 @@ export interface UnifiedModelsResponse {
   source: string;
   configured_providers: string[];
 }
-
-const GATEWAY_URL = process.env.GATEWAY_BASE_URL ?? "http://127.0.0.1:8000";
 
 const COPILOT_FALLBACK: { id: string; label: string; context_window?: number }[] = [
   { id: "auto", label: "auto (SDK picks)", context_window: 200_000 },
@@ -138,11 +137,11 @@ function isVoiceOnlyModel(id: string, provider: string): boolean {
   );
 }
 
-export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
-  const INTERNAL_TOKEN =
-    process.env.GATEWAY_INTERNAL_TOKEN ??
-    process.env.LITELLM_MASTER_KEY ??
-    "sk-local-dev-change-me";
+export async function GET(): Promise<
+  NextResponse<UnifiedModelsResponse | typeof UNAUTHENTICATED>
+> {
+  const me = await requireIdentity();
+  if (me instanceof NextResponse) return me;
 
   // ── Get live provider status from the gateway ─────────────────────────────
   // The gateway writes keys to os.environ immediately when saved, so it always
@@ -153,7 +152,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
   let gatewayReachable = false;
   try {
     const provRes = await fetch(`${GATEWAY_URL}/settings/llm`, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(3_000),
     });
     if (provRes.ok) {
@@ -189,7 +188,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
   const hiddenSet = new Set<string>();
   try {
     const cr = await fetch(`${GATEWAY_URL}/settings/llm/enabled-models`, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(3_000),
     });
     if (cr.ok) {
@@ -348,7 +347,7 @@ export async function GET(): Promise<NextResponse<UnifiedModelsResponse>> {
   let ctxMap: Record<string, number> = {};
   try {
     const cwRes = await fetch(`${GATEWAY_URL}/settings/llm/context-windows`, {
-      headers: { Authorization: `Bearer ${INTERNAL_TOKEN}` },
+      headers: await gatewayHeaders(),
       signal: AbortSignal.timeout(3_000),
     });
     if (cwRes.ok) ctxMap = (await cwRes.json()) as Record<string, number>;

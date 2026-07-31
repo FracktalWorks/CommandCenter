@@ -49,13 +49,21 @@ def _current_agent_name() -> str:
     """Best-effort agent name for the current run (blob-store key).
 
     Prefers the explicit context value the executor sets; falls back to the
-    workspace_root basename ({agents_clone_dir}/repos/<agent_name>).
+    workspace_root basename ({agents_clone_dir}/repos/<agent_name>). A tenant
+    state dir ({agents_clone_dir}/state/<agent_name>/<slug>) puts the SLUG in
+    the basename — keying blobs by slug would silently shard one agent's
+    store — so the agent name is its parent there.
     """
     name = _WRITE_ARTIFACT_CONTEXT.get("agent_name")
     if name:
         return str(name)
     root = _WRITE_ARTIFACT_CONTEXT.get("workspace_root")
-    return Path(root).name if root else ""
+    if not root:
+        return ""
+    p = Path(root)
+    if p.parent.parent.name == "state":
+        return p.parent.name
+    return p.name
 
 
 async def mirror_to_blob_store(
@@ -74,7 +82,7 @@ async def mirror_to_blob_store(
     on-disk file is already written, so this never blocks the agent.
     """
     try:
-        from acb_memory import is_stored_path, put_file  # noqa: PLC0415
+        from acb_memory import is_stored_path, put_file
     except ImportError:
         return
     if not is_stored_path(rel_path):
@@ -91,6 +99,10 @@ async def mirror_to_blob_store(
         run_id=_WRITE_ARTIFACT_CONTEXT.get("run_id"),
         session_id=_WRITE_ARTIFACT_CONTEXT.get("session_id"),
         actor=actor,
+        # The run's tenant partition, set by the executor alongside
+        # workspace_root — disk and store must carry the SAME key, or a
+        # personal agent's files rehydrate into the wrong person's run.
+        instance=_WRITE_ARTIFACT_CONTEXT.get("instance", ""),
     )
 
 
@@ -238,7 +250,7 @@ async def write_artifact(
     # Write-through to the authoritative blob store (agent-data/inputs/outputs).
     # Fire-and-forget: the disk file is already written, so a store outage never
     # blocks the agent.
-    import asyncio as _asyncio  # noqa: PLC0415
+    import asyncio as _asyncio
     _asyncio.ensure_future(mirror_to_blob_store(
         clean_path, data, mime_type=mime,
         action="modify" if (_existed and overwrite) else "create",
@@ -741,7 +753,7 @@ async def emit_generative_ui(ui: str) -> dict:
     if spec.get("type") == "html":
         _code = (spec.get("props") or {}).get("code")
         if isinstance(_code, str):
-            from acb_skills.artifact_lint import lint_artifact_html  # noqa: PLC0415
+            from acb_skills.artifact_lint import lint_artifact_html
 
             _ui_warnings = lint_artifact_html(_code, full_page=False)
 
@@ -756,15 +768,15 @@ async def emit_generative_ui(ui: str) -> dict:
     _fut = None
     if _blocking:
         try:
-            import asyncio as _asyncio  # noqa: PLC0415
-            import uuid as _uuid  # noqa: PLC0415
+            import asyncio as _asyncio
+            import uuid as _uuid
 
-            from orchestrator.executor import _pending_user_input  # noqa: PLC0415
+            from orchestrator.executor import _pending_user_input
             _request_id = _uuid.uuid4().hex
             _fut = _asyncio.get_running_loop().create_future()
             _pending_user_input[_request_id] = _fut
             spec["request_id"] = _request_id
-        except Exception:  # noqa: BLE001 — degrade to non-blocking emit
+        except Exception:
             _blocking, _request_id, _fut = False, None, None
 
     # Push the CUSTOM event into the active run's SSE queue. resolve_run_queue
@@ -778,7 +790,7 @@ async def emit_generative_ui(ui: str) -> dict:
         queue = resolve_run_queue(session_id)
         if queue is None:
             if _request_id is not None:
-                from orchestrator.executor import _pending_user_input  # noqa: PLC0415
+                from orchestrator.executor import _pending_user_input
                 _pending_user_input.pop(_request_id, None)
             return {"ok": False, "error": "no active run stream to render into"}
         await queue.put({
@@ -791,7 +803,7 @@ async def emit_generative_ui(ui: str) -> dict:
         # Park until the user interacts (heartbeats the relay so the run
         # stays visibly alive — same wait as every other HITL surface).
         try:
-            from orchestrator.executor import (  # noqa: PLC0415
+            from orchestrator.executor import (
                 _pending_user_input,
                 wait_user_future,
             )
@@ -804,7 +816,7 @@ async def emit_generative_ui(ui: str) -> dict:
                 "response": _result.get("answer", ""),
                 **_warn_fields(_ui_warnings),
             }
-        except Exception:  # noqa: BLE001 — timeout or wait failure
+        except Exception:
             return {
                 "ok": True,
                 "response": None,

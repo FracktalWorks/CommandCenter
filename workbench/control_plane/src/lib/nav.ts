@@ -201,7 +201,7 @@ export const NAV_SECTIONS: NavSection[] = [
         href: "/settings/members",
         label: "Members & Roles",
         icon: "UserCog",
-        note: "People · roles · per-user access",
+        note: "People · teams · roles · per-user access",
         adminOnly: true,
       },
     ],

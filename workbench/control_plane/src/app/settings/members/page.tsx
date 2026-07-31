@@ -141,6 +141,12 @@ export default function MembersPage() {
             <RefreshCw size={16} />
           </button>
           <Link
+            href="/settings/groups"
+            className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
+          >
+            Teams
+          </Link>
+          <Link
             href="/settings/roles"
             className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
           >

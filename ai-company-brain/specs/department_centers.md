@@ -1,6 +1,6 @@
 # Department Centers — one platform, many projections
 
-**Status:** Phase A shipped (UI scaffold + feature gating) · **Date:** 2026-07-31 · **Owner:** vjvarada
+**Status:** Phase A shipped (UI scaffold + feature gating); Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-01 · **Owner:** vjvarada
 
 The commitment this document records: **CommandCenter stays one deployment, and
 departments get Centers — scoped projections of the same platform, never
@@ -90,10 +90,22 @@ Phase A (this scaffold) is shipped. Each later phase is independently
 shippable and folds in the pending items from earlier plans it depends on.
 
 ### Phase B — Groups become real *(the unlock; do first)*
-- **Groups admin UI** over `org_group` / `org_group_member` (mig 138) — CRUD +
-  membership + lead role. Flagged as the gap in `groups_sessions_authority.md` §6.
-- Seed the six groups (slug = center slug). Backfill: grant each member their
-  department's `center.*` feature alongside group membership (one admin action).
+
+> **Update 2026-08-01: first two bullets shipped pending review.** Gateway
+> `/admin/groups` CRUD + membership (`routes/admin/groups.py`, gated on the
+> members-admin permissions; the center-feature grant additionally requires
+> `admin:access:manage`), the `/settings/groups` admin surface ("Teams" in UI
+> copy, per §1), and a seed migration for the six groups (idempotent,
+> DO NOTHING so admin edits survive redeploys). Verified by
+> `tests/unit/test_admin_groups.py`. The directory read view (bullet 3) is
+> still open.
+
+- ✅ **Groups admin UI** over `org_group` / `org_group_member` (mig 138) — CRUD +
+  membership + lead role. Was flagged as the gap in `groups_sessions_authority.md` §6.
+- ✅ Seed the six groups (slug = center slug). Backfill: adding a member grants
+  their department's `center.*` feature alongside group membership (one admin
+  action — an allow override with reason `group membership: <slug>`; removing
+  membership deliberately does NOT auto-revoke it).
 - People Center's "Directory & org chart" is the same data rendered — build the
   read view here, not a parallel store.
 

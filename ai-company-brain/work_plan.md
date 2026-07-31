@@ -91,7 +91,7 @@ gap; calendar P3 was found already shipped (with revised roll-over semantics).
 
 | WS | Workstream | State | Next / notes |
 |---|---|---|---|
-| WS-13 | **Centers B — groups become real** (groups admin UI, seed six groups, People directory read view) | 🟢 | The unlock for everything below. Single owner: Centers B (groups spec §6 step 5 and org_access Phase 2 are mirrors). |
+| WS-13 | **Centers B — groups become real** (groups admin UI, seed six groups, People directory read view) | 🟡 | Groups admin UI + six-group seed **built 2026-08-01, pending owner review** (`routes/admin/groups.py`, `/settings/groups`, seed migration; see `department_centers.md` Phase B update). People directory read view still open. The unlock for everything below. Single owner: Centers B (groups spec §6 step 5 and org_access Phase 2 are mirrors). |
 | WS-14 | **Centers C — scoping deepens** (tasks team slice, shared mailboxes, team-instanced agents, per-Center approvals) | 🟡 WS-13 + D3 | Audit correction: the blob/memory substrate is live but the **`dynamic_agents` sharing columns do not exist** (agent-kinds' "migration 119" was never built) — Centers C includes that migration per D3. |
 | WS-15 | **Centers D — dashboards + Company Center** (Center dashboards, personal dashboard, weekly digest workflows, orchestrator org-memory fix per D4) | 🟡 WS-13 | Digest workflows double as `workflows_app.md` G1 launch metric — one artifact, both scorecards. |
 | WS-16 | **Centers E — AI budgets** (per-member caps at the LLM choke points; per-room degrade later) | 🟡 WS-6 | Subjects per D2. |

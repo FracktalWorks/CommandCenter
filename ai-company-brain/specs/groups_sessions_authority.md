@@ -1,7 +1,7 @@
 # Groups, shared sessions, and whose authority runs the agent
 
 > **Status:** ✅ steps 1-4 shipped, step 5 shipped in part — see §6
-> **Created:** 2026-07-29 · **Last built:** 2026-07-30
+> **Created:** 2026-07-29 · **Last built:** 2026-08-01 (groups admin UI, pending review — owned by WS-13/Centers B)
 > **Answers:** [`org_access_control.md` §10](org_access_control.md#10-handoff-multiplayer-agent-collaboration) — the handoff asked for exactly one spec covering the group primitive, `chat_session_participant`, and the authority rule, *before* shared transcripts exist and the decisions get expensive.
 > **Companions:** [`docs/multiplayer/README.md`](../../docs/multiplayer/README.md) (the room model and UX), [`memory-clearance.md`](../../docs/multiplayer/memory-clearance.md) (compartments), [`agent-kinds.md`](../../docs/multiplayer/agent-kinds.md) (instancing), [`memory_architecture.md`](memory_architecture.md) §5.3 (the file-store partition, migrations 136/137).
 
@@ -206,9 +206,16 @@ agent — §7 below.
   something the model is asked to ignore. `acb_memory/compartments.py`.
   Still open in `memory-clearance.md`: `subject:` compartments and the
   registry, and the `prefs`/`user` backfill (so `prefs:` is empty for now).
-- **Groups admin UI.** `org_group` / `org_group_member` have no HTTP surface
-  beyond read-time expansion; groups can be used as participant subjects but
-  must be created in SQL. Owned by `work_plan.md` WS-13 (Centers Phase B).
+- ✅ **Groups admin UI** (2026-08-01, pending owner review). Gateway
+  `/admin/groups` — list with members, CRUD, membership add/remove with the
+  `lead` role — in `gateway/routes/admin/groups.py`, plus the
+  `/settings/groups` admin surface ("Teams") and a seed migration for the six
+  Center groups. Owned by `work_plan.md` WS-13 (Centers Phase B); details and
+  the center-feature grant semantics live in `department_centers.md` §3
+  Phase B. Groups still only SCOPE — the admin surface writes membership,
+  never permissions (the one bridge, the opt-in `center.<slug>` feature grant
+  on add, goes through `user_permission_override` with provenance and its own
+  `admin:access:manage` gate).
 
 ## 7. Several agents in one room
 

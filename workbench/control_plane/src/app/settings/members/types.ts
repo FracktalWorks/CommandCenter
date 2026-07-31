@@ -12,6 +12,31 @@ export type Member = {
   last_login_at?: string;
 };
 
+/** org_group membership row, as the groups API returns it. */
+export type GroupMember = {
+  email: string;
+  display_name: string;
+  /** "lead" manages the group's membership; it is group-scoped, not a permission bundle. */
+  role: "lead" | "member";
+  added_by: string;
+  added_at: string;
+};
+
+/**
+ * org_group — the scoping primitive (groups_sessions_authority.md §1).
+ * UI copy says "team" when addressing humans; the primitive is group, and
+ * for the six Center groups the slug IS the center slug (department_centers.md §1).
+ */
+export type Group = {
+  slug: string;
+  display_name: string;
+  description: string;
+  /** Slug pairs with a `center.<slug>` feature: grant toggle shown, delete hidden. */
+  is_center: boolean;
+  member_count: number;
+  members: GroupMember[];
+};
+
 export type Role = {
   slug: string;
   display_name: string;

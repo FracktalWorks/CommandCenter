@@ -135,7 +135,11 @@ export function canSeePath(access: Access, pathname: string): boolean {
   if (isAlwaysAllowed(pathname)) return true;
   // Admin surfaces are gated on the resolved admin flag, not a feature slug —
   // they have no nav pane of their own.
-  if (pathname.startsWith("/settings/members") || pathname.startsWith("/settings/roles")) {
+  if (
+    pathname.startsWith("/settings/members") ||
+    pathname.startsWith("/settings/roles") ||
+    pathname.startsWith("/settings/groups")
+  ) {
     return access.is_admin;
   }
   const slug = featureForPath(pathname);

@@ -1,0 +1,314 @@
+// ── Departmental Centers — the registry ───────────────────────────────────
+//
+// A Center is a scoped PROJECTION of the one platform, not a separate app:
+// a department's slice of apps, agents, memory, and workflows, gated by a
+// `center.<slug>` feature (feature_catalog, migration 140) and — once access
+// control Phase 2 lands — backed by an org_group of the same slug.
+//
+// This file is the single source of truth for the scaffold: the sidebar
+// (lib/nav.ts), the landing pages (app/centers/[slug]), the home grid, and
+// the route→feature map (lib/access.ts) all derive from it. Sub-apps carry a
+// build status so the scaffold is honest about what exists: `live` items link
+// to a real surface today (sometimes unscoped — noted per item); `planned`
+// items are the buildout backlog, visible so the destination is legible.
+//
+// Spec trail: ai-company-brain/specs/org_access_control.md §5 (modules are
+// Phase 2), groups_sessions_authority.md §1 (org_group is the primitive),
+// docs/multiplayer/agent-kinds.md §6 (team-instanced agents per department).
+
+export type CenterAppStatus = "live" | "planned";
+
+export type CenterApp = {
+  label: string;
+  /** What this sub-app is for — real content, shown on the Center page. */
+  note: string;
+  /** Lucide icon name (resolveIcon handles the full set). */
+  icon: string;
+  status: CenterAppStatus;
+  /** Where it opens today. Live items only; planned items have no href. */
+  href?: string;
+  /** Caveat when the live surface is not yet scoped to the Center. */
+  caveat?: string;
+};
+
+export type Center = {
+  slug: string;
+  name: string;
+  icon: string;
+  tagline: string;
+  /** feature_catalog slug gating this Center (migration 140). */
+  feature: string;
+  /** The org_group.slug this Center projects, once groups have an admin UI. */
+  group: string;
+  apps: CenterApp[];
+};
+
+export const CENTERS: Center[] = [
+  {
+    slug: "sales",
+    name: "Sales Center",
+    icon: "Handshake",
+    tagline: "Pipeline, quotations, and follow-ups for the sales team",
+    feature: "center.sales",
+    group: "sales",
+    apps: [
+      {
+        label: "Sales dashboard",
+        note: "Pipeline health, quota progress, follow-ups due — the team's morning view",
+        icon: "LayoutDashboard",
+        status: "planned",
+      },
+      {
+        label: "Tasks",
+        note: "The sales team's slice of tasks and projects",
+        icon: "CheckSquare",
+        status: "live",
+        href: "/tasks",
+        caveat: "Opens the full Tasks app today — the team-scoped slice arrives with groups",
+      },
+      {
+        label: "Proposal generator",
+        note: "Quotations and proposals from templates — deal terms in, branded PDF out",
+        icon: "FileText",
+        status: "planned",
+      },
+      {
+        label: "Pipeline (Zoho CRM)",
+        note: "Deals, stages, and contact history from the CRM the team already uses",
+        icon: "KanbanSquare",
+        status: "planned",
+      },
+      {
+        label: "Shared mailbox",
+        note: "sales@ as a team-owned account with per-member access",
+        icon: "Mail",
+        status: "planned",
+      },
+      {
+        label: "Lead intake workflow",
+        note: "Webhook lead → triage agent → CRM draft staged for approval",
+        icon: "Workflow",
+        status: "planned",
+      },
+    ],
+  },
+  {
+    slug: "marketing",
+    name: "Marketing Center",
+    icon: "Megaphone",
+    tagline: "Campaigns, content, and the public face of the company",
+    feature: "center.marketing",
+    group: "marketing",
+    apps: [
+      {
+        label: "Marketing dashboard",
+        note: "Campaign performance, content calendar, channel health at a glance",
+        icon: "LayoutDashboard",
+        status: "planned",
+      },
+      {
+        label: "Campaigns",
+        note: "Plan and track campaigns across channels with agent-drafted assets",
+        icon: "Target",
+        status: "planned",
+      },
+      {
+        label: "Content studio",
+        note: "Brochures, datasheets, and case studies — drafted, reviewed, versioned",
+        icon: "Palette",
+        status: "planned",
+      },
+      {
+        label: "Website & SEO",
+        note: "Site updates and search visibility, proposed as approvable changes",
+        icon: "Globe",
+        status: "planned",
+      },
+      {
+        label: "Social scheduler",
+        note: "Queue and publish posts; agents draft, humans approve",
+        icon: "CalendarClock",
+        status: "planned",
+      },
+      {
+        label: "Newsletter",
+        note: "Audience segments and sends — the Hostinger Reach integration is already connected",
+        icon: "Send",
+        status: "planned",
+      },
+    ],
+  },
+  {
+    slug: "finance",
+    name: "Finance Center",
+    icon: "Landmark",
+    tagline: "Receivables, payments, and the numbers that run the company",
+    feature: "center.finance",
+    group: "finance",
+    apps: [
+      {
+        label: "Finance dashboard",
+        note: "Cash position, receivables aging, collections due this week",
+        icon: "LayoutDashboard",
+        status: "planned",
+      },
+      {
+        label: "Invoices & receivables",
+        note: "Outstanding invoices from the books, with aging and status",
+        icon: "Receipt",
+        status: "planned",
+      },
+      {
+        label: "Payment follow-ups",
+        note: "Dunning sequences drafted by the billing agent, gated by approval",
+        icon: "BellRing",
+        status: "planned",
+      },
+      {
+        label: "Expenses & approvals",
+        note: "Expense capture and approval routing",
+        icon: "Wallet",
+        status: "planned",
+      },
+      {
+        label: "Purchase orders",
+        note: "PO lifecycle against vendors, linked to procurement",
+        icon: "ClipboardList",
+        status: "planned",
+      },
+    ],
+  },
+  {
+    slug: "operations",
+    name: "Operations Center",
+    icon: "Factory",
+    tagline: "Production, inventory, dispatch, and service for the machines",
+    feature: "center.operations",
+    group: "operations",
+    apps: [
+      {
+        label: "Ops dashboard",
+        note: "Builds in progress, dispatches due, open service tickets",
+        icon: "LayoutDashboard",
+        status: "planned",
+      },
+      {
+        label: "Production tracker",
+        note: "Printer builds and assembly stages from order to QC",
+        icon: "Cog",
+        status: "planned",
+      },
+      {
+        label: "Inventory & BOM",
+        note: "Stock levels against bills of material; flag shortages before they block builds",
+        icon: "Boxes",
+        status: "planned",
+      },
+      {
+        label: "Procurement",
+        note: "Vendor orders and lead times, linked to finance POs",
+        icon: "ShoppingCart",
+        status: "planned",
+      },
+      {
+        label: "Dispatch & installations",
+        note: "Shipping, delivery, and on-site installation scheduling",
+        icon: "Truck",
+        status: "planned",
+      },
+      {
+        label: "Service & AMC tickets",
+        note: "Support queue, warranty and AMC coverage, spare-part requests",
+        icon: "LifeBuoy",
+        status: "planned",
+      },
+    ],
+  },
+  {
+    slug: "people",
+    name: "People Center",
+    icon: "Users",
+    tagline: "The team itself — directory, onboarding, leave, and hiring",
+    feature: "center.people",
+    group: "people",
+    apps: [
+      {
+        label: "People dashboard",
+        note: "Who's in, who's out, open roles, onboarding in progress",
+        icon: "LayoutDashboard",
+        status: "planned",
+      },
+      {
+        label: "Directory & org chart",
+        note: "Members and groups — the same org_group records that scope the Centers",
+        icon: "Network",
+        status: "planned",
+      },
+      {
+        label: "Onboarding",
+        note: "Checklists that provision accounts, access, and first-week tasks",
+        icon: "UserPlus",
+        status: "planned",
+      },
+      {
+        label: "Leave & attendance",
+        note: "Requests and approvals, visible to the person and their lead",
+        icon: "CalendarDays",
+        status: "planned",
+      },
+      {
+        label: "Hiring pipeline",
+        note: "Roles, candidates, and interview stages",
+        icon: "UserSearch",
+        status: "planned",
+      },
+    ],
+  },
+  {
+    slug: "company",
+    name: "Company Center",
+    icon: "Building2",
+    tagline: "The founder's cockpit — every Center rolled up into one view",
+    feature: "center.company",
+    group: "company",
+    apps: [
+      {
+        label: "Company dashboard",
+        note: "The org-wide overview, fed by every Center",
+        icon: "LayoutDashboard",
+        status: "live",
+        href: "/dashboard",
+      },
+      {
+        label: "Live activity",
+        note: "Every agent and model activation across the company, in real time",
+        icon: "Activity",
+        status: "live",
+        href: "/observability",
+      },
+      {
+        label: "Approvals",
+        note: "The one inbox for outward writes awaiting a human decision",
+        icon: "ShieldCheck",
+        status: "live",
+        href: "/approvals",
+      },
+      {
+        label: "Weekly digests",
+        note: "Scheduled workflow roll-ups from each Center into one executive brief",
+        icon: "Newspaper",
+        status: "planned",
+      },
+      {
+        label: "Company knowledge",
+        note: "Org-wide memory every agent reads — reviewed, corrected, versioned",
+        icon: "BookOpen",
+        status: "planned",
+      },
+    ],
+  },
+];
+
+export function centerBySlug(slug: string): Center | undefined {
+  return CENTERS.find((c) => c.slug === slug);
+}

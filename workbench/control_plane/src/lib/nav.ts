@@ -1,14 +1,22 @@
 // ── Navigation structure for CommandCenter Control Plane ─────────────────
 //
-// The sidebar is organised into three sections:
-//   1. Apps      — end-user AI-powered applications (Chat, Email, Tasks, etc.)
-//   2. Configure — low-level platform configuration (Models, Agents, Integrations)
-//   3. Build     — extend the platform (Agent Workbench, Custom Apps)
+// The sidebar is organised around the Centers model (one platform, many
+// projections — see ai-company-brain/specs/org_access_control.md §5):
+//   1. Personal Center — apps mapped one-to-one with the signed-in user
+//   2. Centers         — departmental projections (Sales, Marketing, …),
+//                        each gated by its `center.<slug>` feature and
+//                        landing on /centers/<slug>
+//   3. Studio          — cross-cutting creation surfaces, scoped per person
+//                        or department at the object level (chat sessions,
+//                        workflows, apps, agents)
+//   4. Admin           — platform configuration and governance
 //
-// Used by the desktop Sidebar and the mobile navigation drawer so both stay in sync.
-// `PANES` (flat list) is kept for backward-compatible consumers that don't need sections.
+// Used by the desktop Sidebar and the mobile navigation drawer so both stay
+// in sync. `PANES` (flat list) is kept for backward-compatible consumers.
 //
 // icon = Lucide icon name (rendered via dynamic import in Sidebar / AppShell).
+
+import { CENTERS } from "@/lib/centers";
 
 export type NavPane = {
   href: string;
@@ -19,33 +27,39 @@ export type NavPane = {
   badge?: string;
   /**
    * Feature slug guarding this pane (org access control). Matches
-   * `feature_catalog.slug` in infra/postgres/130_org_access_control.sql. A
-   * pane without one is visible to every signed-in member.
+   * `feature_catalog.slug` in infra/postgres/130_org_access_control.sql
+   * (+ 140_center_features.sql for the Centers). A pane without one is
+   * visible to every signed-in member.
    */
   feature?: string;
+  /**
+   * Pane gated on the resolved admin flag instead of a feature slug —
+   * mirrors canSeePath()'s admin-surface rule in lib/access.ts.
+   */
+  adminOnly?: boolean;
 };
 
 export type NavSection = {
   id: string;
   label: string;
   /** When true the section heading is rendered as a smaller, muted subheading
-   *  (like Configure / Build) instead of a prominent section header like Apps. */
+   *  (like Studio / Admin) instead of a prominent section header. */
   sub?: boolean;
   items: NavPane[];
 };
 
 export const NAV_SECTIONS: NavSection[] = [
-  // ── Apps ──────────────────────────────────────────────────────────────
+  // ── Personal Center — the user's own slice of every personal app ──────
   {
-    id: "apps",
-    label: "Apps",
+    id: "personal",
+    label: "Personal Center",
     items: [
       {
-        href: "/chat",
-        label: "Chat",
-        icon: "MessageCircle",
-        note: "AI conversations · sessions · memory",
-        feature: "chat",
+        href: "/dashboard",
+        label: "Dashboard",
+        icon: "LayoutDashboard",
+        note: "Your day across your apps · company view today",
+        feature: "dashboard",
       },
       {
         href: "/email",
@@ -62,13 +76,6 @@ export const NAV_SECTIONS: NavSection[] = [
         feature: "whatsapp",
       },
       {
-        href: "/memory",
-        label: "Memories",
-        icon: "Brain",
-        note: "Facts · episodic · knowledge graph",
-        feature: "memory",
-      },
-      {
         href: "/tasks",
         label: "Tasks",
         icon: "CheckSquare",
@@ -83,18 +90,11 @@ export const NAV_SECTIONS: NavSection[] = [
         feature: "notes",
       },
       {
-        href: "/dashboard",
-        label: "Dashboard",
-        icon: "LayoutDashboard",
-        note: "Company overview",
-        feature: "dashboard",
-      },
-      {
-        href: "/observability",
-        label: "Live Activity",
-        icon: "Activity",
-        note: "Agent & model activations in real time",
-        feature: "observability",
+        href: "/memory",
+        label: "Memories",
+        icon: "Brain",
+        note: "Facts · episodic · knowledge graph",
+        feature: "memory",
       },
       {
         href: "/artifacts",
@@ -103,6 +103,35 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "All agent files · inputs · outputs · data",
         feature: "artifacts",
       },
+    ],
+  },
+
+  // ── Centers — departmental projections of the same platform ──────────
+  {
+    id: "centers",
+    label: "Centers",
+    items: CENTERS.map((c) => ({
+      href: `/centers/${c.slug}`,
+      label: c.name,
+      icon: c.icon,
+      note: c.tagline,
+      feature: c.feature,
+    })),
+  },
+
+  // ── Studio — create things; each object is personally or team scoped ──
+  {
+    id: "studio",
+    label: "Studio",
+    sub: true,
+    items: [
+      {
+        href: "/chat",
+        label: "Chat",
+        icon: "MessageCircle",
+        note: "AI conversations · sessions · rooms",
+        feature: "chat",
+      },
       {
         href: "/workflows",
         label: "Workflows",
@@ -110,13 +139,27 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "Visual automation across agents · tools · integrations",
         feature: "workflows",
       },
+      {
+        href: "/build/apps",
+        label: "App Workshop",
+        icon: "PlusSquare",
+        note: "User-created applications",
+        feature: "build.apps",
+      },
+      {
+        href: "/build/agents",
+        label: "Agent Workshop",
+        icon: "Wrench",
+        note: "MAF agents & skills",
+        feature: "build.agents",
+      },
     ],
   },
 
-  // ── Configure ─────────────────────────────────────────────────────────
+  // ── Admin — platform configuration and governance ─────────────────────
   {
-    id: "configure",
-    label: "Configure",
+    id: "admin",
+    label: "Admin",
     sub: true,
     items: [
       {
@@ -128,7 +171,7 @@ export const NAV_SECTIONS: NavSection[] = [
       },
       {
         href: "/agents",
-        label: "Agents",
+        label: "Agent Registry",
         icon: "Bot",
         note: "Register · manage · commits · remove",
         feature: "agents",
@@ -147,28 +190,19 @@ export const NAV_SECTIONS: NavSection[] = [
         note: "APIs · MCP servers · plugins",
         feature: "integrations",
       },
-    ],
-  },
-
-  // ── Build ─────────────────────────────────────────────────────────────
-  {
-    id: "build",
-    label: "Build",
-    sub: true,
-    items: [
       {
-        href: "/build/agents",
-        label: "Agent Workbench",
-        icon: "Wrench",
-        note: "MAF agents & skills",
-        feature: "build.agents",
+        href: "/observability",
+        label: "Live Activity",
+        icon: "Activity",
+        note: "Agent & model activations in real time",
+        feature: "observability",
       },
       {
-        href: "/build/apps",
-        label: "Custom Apps",
-        icon: "PlusSquare",
-        note: "User-created applications",
-        feature: "build.apps",
+        href: "/settings/members",
+        label: "Members & Roles",
+        icon: "UserCog",
+        note: "People · roles · per-user access",
+        adminOnly: true,
       },
     ],
   },
@@ -185,12 +219,16 @@ export const PANES: NavPane[] = NAV_SECTIONS.flatMap((s) => s.items);
  * list so the nav does not flicker from complete to filtered on first paint.
  */
 export function visibleSections(
-  allowedFeatures: string[] | null
+  allowedFeatures: string[] | null,
+  isAdmin = false
 ): NavSection[] {
   if (allowedFeatures === null) return NAV_SECTIONS;
   const allowed = new Set(allowedFeatures);
   return NAV_SECTIONS.map((section) => ({
     ...section,
-    items: section.items.filter((p) => !p.feature || allowed.has(p.feature)),
+    items: section.items.filter((p) => {
+      if (p.adminOnly) return isAdmin;
+      return !p.feature || allowed.has(p.feature);
+    }),
   })).filter((section) => section.items.length > 0);
 }

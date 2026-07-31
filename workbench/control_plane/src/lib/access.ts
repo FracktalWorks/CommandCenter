@@ -11,6 +11,8 @@
 // Nothing here is a security boundary. Hiding a nav item is a courtesy; the
 // gateway's require_permission() is what actually refuses the request.
 
+import { CENTERS } from "@/lib/centers";
+
 export type Access = {
   email: string;
   user_id: string;
@@ -59,6 +61,9 @@ export const NO_ACCESS: Access = {
 // feature_catalog table (infra/postgres/130_org_access_control.sql).
 
 const HREF_FEATURES: ReadonlyArray<[string, string]> = [
+  // Departmental Centers — each landing page is gated by its own feature
+  // (feature_catalog rows seeded in 140_center_features.sql).
+  ...CENTERS.map((c): [string, string] => [`/centers/${c.slug}`, c.feature]),
   ["/chat", "chat"],
   ["/email", "email"],
   ["/inbox", "email"],

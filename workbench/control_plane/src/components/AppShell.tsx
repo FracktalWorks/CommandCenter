@@ -179,7 +179,10 @@ function MobileBottomNavInner({
   // Same access filter as the desktop Sidebar — the two navs must agree, or a
   // pane hidden on desktop reappears in the phone drawer.
   const { access, loading: accessLoading } = useAccess();
-  const navSections = visibleSections(accessLoading ? null : access.features);
+  const navSections = visibleSections(
+    accessLoading ? null : access.features,
+    access.is_admin,
+  );
 
   const menuContent = (
     <>

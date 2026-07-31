@@ -4,8 +4,8 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useEffect, useState } from "react";
 import { useSession, signOut } from "next-auth/react";
-import { ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
-import { visibleSections, type NavPane, type NavSection } from "@/lib/nav";
+import { ChevronDown, ChevronLeft, ChevronRight, LogOut, Command } from "lucide-react";
+import { NAV_SECTIONS, visibleSections, type NavPane, type NavSection } from "@/lib/nav";
 import { useAccess } from "@/components/AccessProvider";
 import { resolveIcon } from "@/lib/icons";
 import ThemeToggle from "@/components/ThemeToggle";
@@ -28,7 +28,37 @@ export default function Sidebar() {
   // member can reach. `null` while unresolved keeps the full list, so the
   // nav does not visibly shrink on first paint.
   const { access, loading: accessLoading } = useAccess();
-  const sections = visibleSections(accessLoading ? null : access.features);
+  const sections = visibleSections(
+    accessLoading ? null : access.features,
+    access.is_admin,
+  );
+
+  // Per-section fold state, persisted so the layout survives reloads. Stored
+  // as a map of FOLDED ids — unknown/new sections therefore default to open.
+  const [foldedSections, setFoldedSections] = useState<Record<string, boolean>>({});
+  useEffect(() => {
+    try {
+      const raw = localStorage.getItem(FOLD_KEY);
+      if (raw) setFoldedSections(JSON.parse(raw));
+    } catch {
+      // Corrupt/unavailable storage — start with everything open.
+    }
+  }, []);
+  const toggleSection = (id: string) =>
+    setFoldedSections((prev) => persistFolds({ ...prev, [id]: !prev[id] }));
+
+  // Navigating into a folded section unfolds it (once per navigation — the
+  // user can still fold it again while staying on the page).
+  useEffect(() => {
+    if (!pathname) return;
+    setFoldedSections((prev) => {
+      const owner = NAV_SECTIONS.find((s) =>
+        s.items.some((p) => pathname.startsWith(p.href)),
+      );
+      if (!owner || !prev[owner.id]) return prev;
+      return persistFolds({ ...prev, [owner.id]: false });
+    });
+  }, [pathname]);
 
   // Poll agent list for behind_by counts — shows "N updates" badge on Agents
   useEffect(() => {
@@ -120,6 +150,8 @@ export default function Sidebar() {
             section={section}
             pathname={pathname}
             collapsed={collapsed}
+            folded={!!foldedSections[section.id]}
+            onToggle={() => toggleSection(section.id)}
             agentUpdateCount={agentUpdateCount}
             pinnedApps={pinnedApps}
           />
@@ -163,16 +195,32 @@ export default function Sidebar() {
 // Section block
 // ---------------------------------------------------------------------------
 
+/** localStorage key for the folded-section map (Record<sectionId, true>). */
+const FOLD_KEY = "cc-nav-folded-sections";
+
+function persistFolds(next: Record<string, boolean>): Record<string, boolean> {
+  try {
+    localStorage.setItem(FOLD_KEY, JSON.stringify(next));
+  } catch {
+    // Storage unavailable (private mode) — fold state just won't persist.
+  }
+  return next;
+}
+
 function NavSectionBlock({
   section,
   pathname,
   collapsed,
+  folded,
+  onToggle,
   agentUpdateCount = 0,
   pinnedApps = [],
 }: {
   section: NavSection;
   pathname: string | null;
   collapsed: boolean;
+  folded: boolean;
+  onToggle: () => void;
   agentUpdateCount?: number;
   pinnedApps?: PinnedApp[];
 }) {
@@ -195,31 +243,47 @@ function NavSectionBlock({
     );
   }
 
+  // A folded section keeps showing the item you are ON — the current location
+  // must never vanish from the nav.
+  const items = folded
+    ? section.items.filter((p) => pathname?.startsWith(p.href))
+    : section.items;
+
   return (
     <div className="px-2 py-1.5">
-      {/* Section heading */}
-      <div
-        className={
+      {/* Section heading — click to fold/unfold */}
+      <button
+        onClick={onToggle}
+        aria-expanded={!folded}
+        className={`group flex w-full items-center justify-between rounded-md px-2 text-left uppercase tracking-wider font-semibold hover:text-sidebar-foreground tech-transition ${
           section.sub
-            ? "px-2 py-1 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground/70"
-            : "px-2 py-1.5 text-[11px] font-semibold uppercase tracking-wider text-muted-foreground"
-        }
+            ? "py-1 text-[10px] text-muted-foreground/70"
+            : "py-1.5 text-[11px] text-muted-foreground"
+        }`}
       >
-        {section.label}
-      </div>
+        <span>{section.label}</span>
+        <ChevronDown
+          size={12}
+          className={`shrink-0 text-muted-foreground/50 group-hover:text-muted-foreground tech-transition ${
+            folded ? "-rotate-90" : ""
+          }`}
+        />
+      </button>
 
       {/* Section items */}
-      <div className="flex flex-col gap-0.5">
-        {section.items.map((p) => (
-          <NavLink
-            key={p.href}
-            pane={p}
-            pathname={pathname}
-            badge={p.href === "/agents" && agentUpdateCount > 0 ? agentUpdateCount : undefined}
-            pinnedApps={p.href === "/build/apps" ? pinnedApps : undefined}
-          />
-        ))}
-      </div>
+      {items.length > 0 && (
+        <div className="flex flex-col gap-0.5">
+          {items.map((p) => (
+            <NavLink
+              key={p.href}
+              pane={p}
+              pathname={pathname}
+              badge={p.href === "/agents" && agentUpdateCount > 0 ? agentUpdateCount : undefined}
+              pinnedApps={p.href === "/build/apps" ? pinnedApps : undefined}
+            />
+          ))}
+        </div>
+      )}
     </div>
   );
 }

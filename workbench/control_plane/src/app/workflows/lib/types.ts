@@ -133,12 +133,27 @@ export type CatalogAgent = {
   integrations: string[];
 };
 
+/** One declared argument of a tool action, parsed server-side. */
+export type ToolArg = {
+  name: string;
+  type: "string" | "number" | "boolean" | "object" | "array";
+  required: boolean;
+  description: string;
+};
+
 export type CatalogTool = {
   action: string;
   label: string;
   description: string;
   integration: string | null;
+  /** Raw declaration, e.g. `{ "headers": "object?|Extra headers" }`. */
   args_schema: Record<string, string>;
+  /**
+   * The same contract parsed by the gateway. Render fields from THIS — the
+   * browser must never re-implement the `type?|description` mini-language, or
+   * the editor and the publish gate will disagree about what is required.
+   */
+  args?: ToolArg[];
   read_only: boolean;
   destructive: boolean;
   open_world: boolean;

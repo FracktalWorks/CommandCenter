@@ -404,13 +404,17 @@ async def _apply_round(
                 for n in unresolved
             )
             from gateway.routes.workflows.catalog import known_agent_names
-            from gateway.routes.workflows.tools import destructive_action_names
+            from gateway.routes.workflows.tools import (
+                destructive_action_names,
+                tool_arg_schemas,
+            )
 
             issues = validate_graph(
                 graph,
                 known_modules=set(name_to_id.values()),
                 known_agents=known_agent_names() or None,
                 destructive_actions=destructive_action_names(),
+                tool_schemas=tool_arg_schemas(),
             )
             problems.extend(
                 f"{i.code}: {i.message}" + (f" (node {i.node_id})" if i.node_id else "")

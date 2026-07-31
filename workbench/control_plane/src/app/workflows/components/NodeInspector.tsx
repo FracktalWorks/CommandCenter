@@ -6,12 +6,13 @@
  * available roots are shown as hint chips (trigger, vars, upstream node ids).
  */
 
-import { useCallback } from "react";
+import { useCallback, useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
 import type {
   Catalog,
   GraphIssue,
   NodeType,
+  ToolArg,
   TriggerKind,
   WorkflowGraphNode,
 } from "../lib/types";
@@ -58,6 +59,117 @@ function JsonField({
       spellCheck={false}
       className={`${inputCls} font-mono text-[11px]`}
     />
+  );
+}
+
+/**
+ * One typed field per declared tool argument (spec F3 / RFC §2.2 — Sim's
+ * `subBlocks` pattern: the integration catalog carries the parameter contract,
+ * so the form is data, not per-tool UI code).
+ *
+ * Values stay in the same `config.args` object the raw JSON editor writes, so
+ * switching between the two views is lossless and the run-model is unchanged.
+ * Every field accepts `{{refs}}`, including typed ones — a reference resolves
+ * at run time and is exempt from type checking on both sides.
+ */
+function ToolArgsForm({
+  args,
+  value,
+  onChange,
+}: {
+  args: ToolArg[];
+  value: Record<string, unknown>;
+  onChange: (next: Record<string, unknown>) => void;
+}) {
+  const set = (name: string, raw: string, type: ToolArg["type"]) => {
+    const next = { ...value };
+    if (raw.trim() === "") {
+      delete next[name];
+    } else if (type === "object" || type === "array") {
+      // Structured fields hold JSON — unless the maker wrote a reference,
+      // which is a string until the run resolves it.
+      if (raw.includes("{{")) {
+        next[name] = raw;
+      } else {
+        try {
+          next[name] = JSON.parse(raw);
+        } catch {
+          next[name] = raw; // keep the draft; validation names it
+        }
+      }
+    } else if (type === "number" && !raw.includes("{{")) {
+      const n = Number(raw);
+      next[name] = Number.isFinite(n) ? n : raw;
+    } else {
+      next[name] = raw;
+    }
+    onChange(next);
+  };
+
+  const asText = (v: unknown) =>
+    v === undefined || v === null
+      ? ""
+      : typeof v === "string"
+        ? v
+        : JSON.stringify(v);
+
+  return (
+    <div className="space-y-2">
+      {args.map((arg) => (
+        <div key={arg.name}>
+          <div className="flex items-baseline gap-1">
+            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
+              {arg.name}
+            </span>
+            {arg.required ? (
+              <span className="text-[10px] text-destructive" title="Required">
+                *
+              </span>
+            ) : (
+              <span className="text-[9px] text-muted-foreground/60">optional</span>
+            )}
+            <span className="ml-auto text-[9px] text-muted-foreground/60 font-mono">
+              {arg.type}
+            </span>
+          </div>
+          {arg.type === "boolean" ? (
+            <select
+              value={String(value[arg.name] ?? "")}
+              onChange={(e) => {
+                const next = { ...value };
+                if (e.target.value === "") delete next[arg.name];
+                else next[arg.name] = e.target.value === "true";
+                onChange(next);
+              }}
+              className={inputCls}
+            >
+              <option value="">—</option>
+              <option value="true">true</option>
+              <option value="false">false</option>
+            </select>
+          ) : (
+            <input
+              value={asText(value[arg.name])}
+              onChange={(e) => set(arg.name, e.target.value, arg.type)}
+              placeholder={
+                arg.type === "object"
+                  ? '{"key": "value"} or {{node.output}}'
+                  : arg.type === "array"
+                    ? '["a", "b"] or {{node.list}}'
+                    : "value or {{node.field}}"
+              }
+              spellCheck={false}
+              className={`${inputCls} ${arg.type === "object" || arg.type === "array" ? "font-mono text-[11px]" : ""}`}
+            />
+          )}
+          {arg.description && (
+            <p className="text-[10px] text-muted-foreground mt-0.5">
+              {arg.description}
+            </p>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
@@ -137,6 +249,17 @@ export default function NodeInspector({
     (key: string, value: unknown) => onConfig({ [key]: value }),
     [onConfig],
   );
+  // Escape hatch for arguments the form cannot express (a whole object pasted
+  // from a previous run, an argument added to the action since this version
+  // was published). Per-node so leaving it open on one node does not follow
+  // you to the next.
+  const [rawArgsFor, setRawArgsFor] = useState<string | null>(null);
+  const selectedTool = useMemo(() => {
+    const action = node
+      ? String((node.data.config as Record<string, unknown>).action ?? "")
+      : "";
+    return (catalog?.tools ?? []).find((t) => t.action === action) ?? null;
+  }, [catalog, node]);
 
   if (!node) {
     return (
@@ -158,6 +281,7 @@ export default function NodeInspector({
 
   const cfg = node.data.config as Record<string, unknown>;
   const type = node.type as NodeType;
+  const rawArgs = rawArgsFor === node.id;
   const nodeIssues = issues.filter((i) => i.node_id === node.id);
 
   return (
@@ -274,13 +398,41 @@ export default function NodeInspector({
                 ))}
               </select>
             </Field>
-            <Field label="Arguments (JSON, {{refs}} allowed)">
-              <JsonField
-                key={`${node.id}:args`}
-                value={cfg.args}
-                onChange={(v) => set("args", v)}
-              />
-            </Field>
+            {selectedTool?.args?.length && !rawArgs ? (
+              <>
+                <ToolArgsForm
+                  args={selectedTool.args}
+                  value={(cfg.args ?? {}) as Record<string, unknown>}
+                  onChange={(v) => set("args", v)}
+                />
+                <button
+                  onClick={() => setRawArgsFor(node.id)}
+                  className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                >
+                  Edit as JSON
+                </button>
+              </>
+            ) : (
+              <>
+                <Field label="Arguments (JSON, {{refs}} allowed)">
+                  <JsonField
+                    key={`${node.id}:args`}
+                    value={cfg.args}
+                    onChange={(v) => set("args", v)}
+                  />
+                </Field>
+                {/* Only offer the way back when there is a form to go back to:
+                    an action with no declared arguments has nothing to render. */}
+                {selectedTool?.args?.length ? (
+                  <button
+                    onClick={() => setRawArgsFor(null)}
+                    className="text-[10px] text-muted-foreground hover:text-foreground underline"
+                  >
+                    Back to fields
+                  </button>
+                ) : null}
+              </>
+            )}
           </>
         )}
 

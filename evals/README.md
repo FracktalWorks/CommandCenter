@@ -8,6 +8,27 @@ Three complementary layers, from cheapest/most-deterministic to most realistic:
 | [`inspect/scenarios.py`](inspect/scenarios.py) | Skill scenarios scored on the structural contract (citations, JSON shape) via Inspect AI | mockllm smoke in CI; live model locally | blocking (smoke) |
 | [`promptfoo.yaml`](promptfoo.yaml) + per-skill `skills/**/evals/cases.yaml` | Golden-case outputs of each skill against a real model | Yes (`LITELLM_BASE_URL`) | opt-in until CI secrets are wired |
 
+## Golden workflow fixtures (`trajectories/workflows/*.json`)
+
+A corpus of whole workflows paired with their expected outcome, executed by one
+generic runner (`test_workflow_fixtures.py`). The pattern is n8n's: **adding
+coverage is adding a JSON file**, not writing a test.
+
+Each fixture carries its own catalog (agents, module source), its stubs (what
+each agent/tool returns), the edit-model graph, the trigger payload, and an
+`expect` block. Two shapes:
+
+- `"expect": {"publishable": false, "issues": ["tool_args"]}` — compiling MUST
+  fail with those issue codes. These pin the publish gates.
+- otherwise — run status, per-node status/output, yielded outputs, and **which
+  seams were crossed** (`agent_calls`, `tool_calls`, `tool_args`). That last
+  part is the point: a workflow that reports "succeeded" while never calling
+  the integration is exactly what a shallower assertion would miss.
+
+Tool argument schemas and destructive-action names come from the **real**
+registry, not the fixture — so a fixture breaks when the shipped catalog
+changes, which is the early warning you want.
+
 ## Layout
 
 ```

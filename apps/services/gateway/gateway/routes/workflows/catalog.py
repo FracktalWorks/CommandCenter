@@ -179,12 +179,18 @@ def _integration_entries() -> list[dict[str, Any]]:
 
 
 def _tool_entry(spec: Any) -> dict[str, Any]:
+    from gateway.routes.workflows.engine.tool_args import parse_args_schema
+
     return {
         "action": spec.action,
         "label": spec.label,
         "description": spec.description,
         "integration": spec.integration,
+        # Raw declaration (kept for anything reading the contract verbatim)
+        # plus the parsed form the editor renders fields from — the browser
+        # must not re-implement the mini-language, or the two drift.
         "args_schema": spec.args_schema,
+        "args": [a.as_dict() for a in parse_args_schema(spec.args_schema)],
         "read_only": spec.read_only,
         "destructive": spec.destructive,
         "open_world": spec.open_world,

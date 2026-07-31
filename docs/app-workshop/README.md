@@ -1042,7 +1042,17 @@ obviously mediocre," so the instruction is to actually LOOK at the preview
 (the new desktop/phone toggle) rather than trust the code read, and to judge
 against four concrete criteria (coherent, original — avoid "purple gradients
 over white cards" — craft, functional) instead of a vague "does it look
-good"; suggest-a-change — remaining.
+good"; two externally-referenced Claude Skills (`ui-styling`,
+`ui-ux-pro-max` from `nextlevelbuilder/ui-ux-pro-max-skill`) were evaluated
+for portable content — `ui-styling` (shadcn/Radix/Tailwind) doesn't apply,
+since T2's esbuild pipeline has no PostCSS/Tailwind step and `@cc/ui`
+already covers the component-kit role; `ui-ux-pro-max`'s rule content
+surfaced one real, fixable gap: its documented 44×44px (iOS) / 48×48dp
+(Android) minimum touch target is CommandCenter's own established number
+too (already used by the app shell's mobile nav bar), but the injected
+design-token CSS in `SandboxedHtml` had shipped at 36px — bumped to 44px,
+and `instructions.md`'s touch-target line now states the number instead of
+"comfortable minimum"; suggest-a-change — remaining.
 
 **Phase 3 — Real URLs & automations (3–5 wk).** Usercontent-subdomain serving with the
 full CSP header set + scoped short-TTL tokens; `cc.agents.run`; cron/webhook triggers

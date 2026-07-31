@@ -15,7 +15,6 @@ import {
   isUnresolvedAgent,
   type ChatSession,
 } from "@/lib/sessions";
-import type { Mem0Memory } from "@/lib/memory";
 import { buildEmailAssistantPersona } from "@/app/email/lib/emailAssistantPersona";
 import { getAssistantSettings } from "@/app/email/lib/api";
 import AgentChat from "@/components/AgentChat";
@@ -34,8 +33,8 @@ import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
 
 // Agent names that receive the CommandCenter persona (general-purpose brain).
-// All agents get persistent Mem0 memory — the panel shows for every agent,
-// and conversations are saved to Mem0 regardless of agent type.
+// All agents get persistent Mem0 memory — conversations are saved to Mem0
+// regardless of agent type; memories are managed at /memory.
 const PERSONA_AGENTS = new Set(["orchestrator", "default"]);
 
 // CommandCenter persona injected as system context for the default agent.
@@ -274,82 +273,6 @@ function AgentPickerModal({
         </div>
         </div>
       </div>
-    </div>
-  );
-}
-
-// ---------------------------------------------------------------------------
-// Memory panel shown in the left sidebar
-// ---------------------------------------------------------------------------
-
-function MemoryPanel({
-  memories,
-  onDelete,
-  onRefresh,
-}: {
-  memories: Mem0Memory[];
-  userId: string;
-  onDelete: (id: string) => void;
-  onRefresh?: () => void;
-}) {
-  if (memories.length === 0) {
-    return (
-      <div className="mt-4 rounded-md border border-border bg-card/40 p-3">
-        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Memory
-        </div>
-        <p className="mt-1.5 text-xs text-muted-foreground">
-          No memories yet. CommandCenter will learn from your conversations.
-        </p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="mt-4 rounded-md border border-border bg-card/40 p-3">
-      <div className="mb-2 flex items-center justify-between">
-        <div className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          Memory ({memories.length})
-        </div>
-        <div className="flex items-center gap-1.5">
-          {onRefresh && (
-            <button
-              onClick={onRefresh}
-              className="text-muted-foreground hover:text-muted-foreground transition-colors"
-              title="Refresh memories"
-            >
-              <svg width="11" height="11" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5">
-                <path d="M14 8A6 6 0 1 1 8 2" />
-                <path d="M14 2v4h-4" />
-              </svg>
-            </button>
-          )}
-          <a
-            href="/memory"
-            className="text-xs text-muted-foreground hover:text-blue-400 transition-colors"
-            title="Open full memory manager"
-          >
-            →
-          </a>
-        </div>
-      </div>
-      <ul className="flex flex-col gap-1.5 max-h-48 overflow-y-auto">
-        {memories.map((m) => (
-          <li key={m.id} className="group flex items-start gap-1.5">
-            <span className="mt-0.5 shrink-0 text-muted-foreground">•</span>
-            <span className="text-xs text-muted-foreground leading-relaxed flex-1">
-              {m.memory}
-            </span>
-            <button
-              onClick={() => onDelete(m.id)}
-              className="ml-1 shrink-0 text-muted-foreground/50 hover:text-red-400 transition-colors text-xs"
-              title="Delete memory"
-            >
-              ✕
-            </button>
-          </li>
-        ))}
-      </ul>
     </div>
   );
 }
@@ -651,14 +574,9 @@ function ChatPageInner() {
 
   const [sessions, setSessions] = useState<ChatSession[]>([]);
   const [activeSessionId, setActiveSessionId] = useState<string>("");
-  // Cross-conversation memory (load + 30s poll + delete) — shared with the
-  // email-assistant rail via useChatMemories.
-  const {
-    memories,
-    loaded: memoriesLoaded,
-    refresh: loadMemories,
-    remove: handleDeleteMemory,
-  } = useChatMemories(userId);
+  // Cross-conversation memory (load + 30s poll) — injected into AgentChat for
+  // continuity; managed in the full memory manager at /memory, not here.
+  const { memories } = useChatMemories(userId);
 
   // ── Email-assistant parity ────────────────────────────────────────────────
   // Give the email-assistant the SAME account-aware context in the chat app
@@ -948,14 +866,6 @@ function ChatPageInner() {
           onDelete={handleDeleteSession}
           agentAliases={agentAliasMap}
         />
-        {memoriesLoaded && (
-          <MemoryPanel
-            memories={memories}
-            userId={userId}
-            onDelete={handleDeleteMemory}
-            onRefresh={loadMemories}
-          />
-        )}
       </div>
     </>
   );
@@ -1023,11 +933,10 @@ function ChatPageInner() {
     } else if (drawerTabRef.current === "files" && filesRef.current) {
       openDrawer(filesRef.current);
     }
-    // Keyed on the data that rebuilds the drawer content (incl. memories, so the
-    // open chats drawer's MemoryPanel refreshes); openDrawer only updates
-    // AppShell state (won't loop — our own deps don't change from it).
+    // Keyed on the data that rebuilds the drawer content; openDrawer only
+    // updates AppShell state (won't loop — our own deps don't change from it).
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sessions, artifactUpdates, activeSessionId, drawerIsOpen, memories]);
+  }, [sessions, artifactUpdates, activeSessionId, drawerIsOpen]);
 
   // ── Render ─────────────────────────────────────────────────────────────
   return (
@@ -1100,15 +1009,6 @@ function ChatPageInner() {
               onDelete={handleDeleteSession}
               agentAliases={agentAliasMap}
             />
-
-            {memoriesLoaded && (
-              <MemoryPanel
-                memories={memories}
-                userId={userId}
-                onDelete={handleDeleteMemory}
-                onRefresh={loadMemories}
-              />
-            )}
 
             <div className="mt-auto pt-6 text-[10px] text-muted-foreground/50">
               Memory persists to Mem0 · Sessions in localStorage

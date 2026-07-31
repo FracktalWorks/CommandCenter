@@ -28,6 +28,7 @@ from gateway.routes.workflows.engine.templating import (
     RESERVED_ROOTS,
     collect_refs,
 )
+from gateway.routes.workflows.engine.tool_args import check_args
 
 SERIALIZED_VERSION = 1
 
@@ -171,14 +172,18 @@ def validate_graph(
     known_modules: set[str] | None = None,
     known_agents: set[str] | None = None,
     destructive_actions: set[str] | None = None,
+    tool_schemas: dict[str, dict[str, str]] | None = None,
 ) -> list[GraphIssue]:
     """Design-time validation. Returns ALL issues (empty list = publishable).
 
     ``known_modules`` / ``known_agents``, when provided, let publish verify
     referenced capabilities actually exist; ``destructive_actions`` names the
     write-class tool actions that REQUIRE a Human-approval node upstream
-    (spec success criterion #5). The pure structural checks never need any
-    of them (the editor calls this without context for live badges).
+    (spec success criterion #5); ``tool_schemas`` maps each action to its
+    declared arguments so a tool node missing a required one is caught here
+    rather than at 3am inside a published run. The pure structural checks
+    never need any of them (the editor calls this without context for live
+    badges).
     """
     parsed, issues = _parse(graph)
     if issues:
@@ -203,6 +208,8 @@ def validate_graph(
             known_modules=known_modules,
             known_agents=known_agents,
         )
+        if tool_schemas is not None and _node_type(node) == "tool":
+            _validate_tool_args(nid, node, tool_schemas, issues)
         # Write-class actions need a human gate upstream (platform contract
         # rung 3 — the runtime broker gates them too; this makes the intent
         # explicit in the graph before anything publishes).
@@ -222,6 +229,27 @@ def validate_graph(
                     )
                 )
     return issues
+
+
+def _validate_tool_args(
+    nid: str,
+    node: dict[str, Any],
+    tool_schemas: dict[str, dict[str, str]],
+    issues: list[GraphIssue],
+) -> None:
+    """A tool node must supply the arguments its action declares.
+
+    An unknown action is left alone: ``_validate_node`` already reports the
+    missing/unknown action, and stacking "and also every argument is wrong"
+    on top of that buries the one issue the maker can act on.
+    """
+    config = _node_config(node)
+    action = str(config.get("action") or "").strip()
+    schema = tool_schemas.get(action)
+    if not action or schema is None:
+        return
+    for problem in check_args(schema, config.get("args"), action=action):
+        issues.append(GraphIssue("tool_args", problem, nid))
 
 
 def _validate_edges(
@@ -438,6 +466,7 @@ def compile_graph(
     known_modules: set[str] | None = None,
     known_agents: set[str] | None = None,
     destructive_actions: set[str] | None = None,
+    tool_schemas: dict[str, dict[str, str]] | None = None,
 ) -> dict[str, Any]:
     """Compile the edit-model to the serialized run-model, or raise.
 
@@ -449,6 +478,7 @@ def compile_graph(
         known_modules=known_modules,
         known_agents=known_agents,
         destructive_actions=destructive_actions,
+        tool_schemas=tool_schemas,
     )
     if issues:
         raise GraphValidationError(issues)

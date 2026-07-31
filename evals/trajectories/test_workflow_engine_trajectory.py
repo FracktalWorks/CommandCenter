@@ -23,6 +23,7 @@ import pytest
 from gateway.routes.workflows.engine.graph import compile_graph
 from gateway.routes.workflows.engine.handlers import NodeExecutionError, NodeServices
 from gateway.routes.workflows.engine.runner import execute_workflow
+from gateway.routes.workflows.tools import tool_arg_schemas
 
 KNOWN_AGENTS = {"summarizer"}
 KNOWN_MODULES = {"mod-clean"}
@@ -55,7 +56,7 @@ def _graph() -> dict:
             _node("check", "condition", {"left": "{{trigger.priority}}", "op": "equals", "right": "high"}),
             _node("clean", "module", {"module_id": "mod-clean", "inputs": {"text": "{{summarize.result}}"}}),
             _node("gate", "approval", {"message": "Approve task creation"}),
-            _node("write", "tool", {"action": "clickup.create_task", "args": {"name": "{{clean.cleaned}}"}}),
+            _node("write", "tool", {"action": "clickup.create_task", "args": {"list_id": "LIST-1", "name": "{{clean.cleaned}}"}}),
             _node("out_hi", "output", {"value": "{{write.task_id}}"}),
             _node("out_lo", "output", {"value": "low priority — no task"}),
         ],
@@ -111,6 +112,9 @@ def serialized() -> dict:
         known_agents=KNOWN_AGENTS,
         known_modules=KNOWN_MODULES,
         destructive_actions=DESTRUCTIVE,
+        # Against the REAL declarations: this fixture graph must stay
+        # publishable as the tool catalog evolves, not merely runnable.
+        tool_schemas=tool_arg_schemas(),
     )
 
 
@@ -185,7 +189,13 @@ async def test_resume_replays_without_repeating_side_effects(serialized: dict) -
 
     assert outcome.status == "succeeded"
     assert resumed.agent_calls == []  # replayed, not re-run
-    assert resumed.tool_calls == [("clickup.create_task", {"name": "pump order stuck at packing"}, "workflow")]
+    assert resumed.tool_calls == [
+        (
+            "clickup.create_task",
+            {"list_id": "LIST-1", "name": "pump order stuck at packing"},
+            "workflow",
+        )
+    ]
     assert outcome.outputs == ["T-1"]
     assert outcome.node_results["gate"]["output"]["approved"] is True
     assert outcome.node_results["summarize"]["cached"] is True

@@ -22,6 +22,7 @@ from typing import Any
 
 from acb_common import get_logger
 from gateway.routes.workflows.engine.handlers import NodeExecutionError
+from gateway.routes.workflows.engine.tool_args import check_args, parse_args_schema
 
 _log = get_logger("gateway.workflows.tools")
 
@@ -59,6 +60,22 @@ def list_tools() -> list[WorkflowToolSpec]:
     return list(_TOOL_REGISTRY.values())
 
 
+def tool_arg_schemas() -> dict[str, dict[str, str]]:
+    """``{action: args_schema}`` for the graph validator.
+
+    Passed as data rather than imported, because ``engine.graph`` must not
+    depend on this module — the engine is transport-free and this registry sits
+    above it.
+    """
+    return {spec.action: dict(spec.args_schema) for spec in _TOOL_REGISTRY.values()}
+
+
+def tool_arg_specs(action: str) -> list[dict[str, Any]]:
+    """Parsed arguments for one action — what the editor renders fields from."""
+    spec = _TOOL_REGISTRY.get(action)
+    return [a.as_dict() for a in parse_args_schema(spec.args_schema if spec else None)]
+
+
 async def execute_tool(
     action: str,
     args: dict[str, Any],
@@ -68,6 +85,14 @@ async def execute_tool(
     spec = _TOOL_REGISTRY.get(action)
     if spec is None or spec.handler is None:
         raise NodeExecutionError(f"tool '{action}' has no registered handler — it cannot run")
+    # Publish already checked this, but a run can reach here from a draft Test,
+    # a copilot-authored graph, or a version published before the argument was
+    # added. Refusing here beats handing a malformed payload to an integration
+    # — or to the Action Broker, which would file a proposal for a write that
+    # cannot succeed.
+    problems = check_args(spec.args_schema, args, action=action)
+    if problems:
+        raise NodeExecutionError("; ".join(problems))
     return await spec.handler(args, actor)
 
 
@@ -207,7 +232,12 @@ register_tool(
         read_only=False,
         destructive=False,
         open_world=True,
-        args_schema={"url": "string", "method": "string", "headers": "object?", "body": "object?"},
+        args_schema={
+            "url": "string|Full https:// URL. Public hosts only.",
+            "method": "string|GET, POST, PUT, PATCH, DELETE or HEAD.",
+            "headers": "object?|Extra request headers.",
+            "body": "object?|JSON body. Ignored for GET and HEAD.",
+        },
         handler=_http_request,
     )
 )
@@ -222,10 +252,10 @@ register_tool(
         destructive=True,
         open_world=False,
         args_schema={
-            "list_id": "string",
-            "name": "string",
-            "description": "string?",
-            "assignees": "array?",
+            "list_id": "string|ClickUp list the task is created in.",
+            "name": "string|Task title.",
+            "description": "string?|Task body (plain text or markdown).",
+            "assignees": "array?|ClickUp user ids to assign.",
         },
         handler=_broker_write("clickup.create_task", target_field="list_id"),
     )
@@ -240,7 +270,7 @@ register_tool(
         read_only=False,
         destructive=False,
         open_world=False,
-        args_schema={"message": "string"},
+        args_schema={"message": "string|Text posted to the activity feed."},
         handler=_notify,
     )
 )

@@ -1,0 +1,17 @@
+{
+  "name": "gate — a reference to a node that cannot supply it",
+  "description": "The state bus only flows downstream. Referencing a node that is not an ancestor is a value that will never exist at run time, so it must not publish.",
+  "catalog": {"agents": ["triage"], "modules": {}},
+  "graph": {
+    "nodes": [
+      {"id": "start", "type": "trigger", "position": {"x": 0, "y": 0}, "data": {"label": "Manual", "config": {"kind": "manual"}}},
+      {"id": "note", "type": "set", "position": {"x": 0, "y": 1}, "data": {"label": "Set", "config": {"assignments": {"who": "{{ghost.name}}"}}}},
+      {"id": "done", "type": "output", "position": {"x": 0, "y": 2}, "data": {"label": "Done", "config": {"value": "{{note.who}}"}}}
+    ],
+    "edges": [
+      {"id": "e1", "source": "start", "target": "note"},
+      {"id": "e2", "source": "note", "target": "done"}
+    ]
+  },
+  "expect": {"publishable": false, "issues": ["unresolved_ref"]}
+}

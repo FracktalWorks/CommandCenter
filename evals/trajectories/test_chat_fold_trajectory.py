@@ -427,8 +427,12 @@ async def test_detached_run_persists_final_message(monkeypatch):
     )
     monkeypatch.setattr(
         chat_routes, "_upsert_messages",
-        lambda sid, msgs: (calls.append(f"upsert:{sid}"),
-                           persisted.append((sid, msgs)))[-1],
+        # **kw: the real signature grew authorship (actor_email, agent_name,
+        # authority) when sessions became rooms. A positional-only double would
+        # raise TypeError inside persist_final_assistant_message's blanket
+        # except, which turns a signature drift into a silent no-persist.
+        lambda sid, msgs, **kw: (calls.append(f"upsert:{sid}"),
+                                 persisted.append((sid, msgs)))[-1],
     )
 
     # The E2 run-trace write (added after this test) hits Postgres; offline it
@@ -500,7 +504,7 @@ async def test_cancelled_run_still_persists_partial_turn(monkeypatch):
     )
     monkeypatch.setattr(
         chat_routes, "_upsert_messages",
-        lambda sid, msgs: persisted.append(msgs),
+        lambda sid, msgs, **kw: persisted.append(msgs),
     )
     # Stub the E2 run-trace DB write (see the sibling test) — offline it blocks
     # on the Postgres connection timeout for minutes.

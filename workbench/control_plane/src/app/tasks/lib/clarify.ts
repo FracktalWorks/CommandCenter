@@ -42,6 +42,11 @@ export interface ClarifyProposal {
   projectId?: string;
   /** true when the project was inferred by the assistant (vs already set on the item) */
   projectInferred?: boolean;
+  /** the space (and optional folder) a NEW project/list should be created
+   *  under — set when the user's guidance named a destination without an
+   *  existing project match; pre-selects the Where target (server only). */
+  targetSpaceId?: string;
+  targetFolderId?: string;
   /** how sure the assistant is about this disposition */
   confidence: Confidence;
   /** short why, shown under the proposal */

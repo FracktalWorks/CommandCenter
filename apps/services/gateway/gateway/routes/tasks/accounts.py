@@ -383,6 +383,57 @@ async def create_account_project(
         await db.close()
 
 
+class CreateAccountFolderRequest(BaseModel):
+    name: str
+    space_id: str
+
+
+@router.post("/accounts/{account_id}/folders", status_code=201)
+async def create_account_folder(
+    account_id: str,
+    req: CreateAccountFolderRequest,
+    user: UserContext = Depends(get_current_user),
+):
+    """Create a NEW folder in the workspace under the chosen space (ClickUp:
+    space → folder → list) — a user-approved provider write, same posture as
+    create_account_project. The folder is appended to the cached hierarchy so
+    the Clarify picker can immediately create lists inside it."""
+    name = (req.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="Folder name is required")
+    db = await _get_db()
+    try:
+        row = await _assert_account_owner(db, account_id, _uid(user))
+        creds = json.loads(_key_store().decrypt(row.credentials_encrypted))
+        provider = build_provider(
+            row.provider, creds, row.workspace_id, str(row.id))
+        created = await provider.create_folder(
+            row.workspace_id, req.space_id, name)
+
+        cache = _parse_jsonb(row.schema_cache) or {}
+        for sp in cache.get("hierarchy") or []:
+            if str(sp.get("id")) != str(req.space_id):
+                continue
+            sp.setdefault("folders", []).append({
+                "id": created["id"], "name": created["name"], "lists": [],
+            })
+            break
+        await db.execute(
+            text("""UPDATE task_accounts
+                    SET schema_cache = :cache, updated_at = now()
+                    WHERE id = :id"""),
+            {"id": account_id, "cache": json.dumps(cache)},
+        )
+        await db.commit()
+        return {
+            "folder_id": created["id"],
+            "space_id": req.space_id,
+            "name": created["name"],
+        }
+    finally:
+        await db.close()
+
+
 async def _refresh_schema(db: Any, account_id: str, user_id: str) -> None:
     """Fetch the schema through the connector; cache it + mirror projects.
 

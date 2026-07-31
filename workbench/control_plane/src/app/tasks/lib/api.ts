@@ -921,6 +921,24 @@ export async function fetchLocalHierarchy(): Promise<LocalHierarchy> {
   };
 }
 
+/** Create a NEW provider folder (ClickUp: space → folder → list) under a
+ *  space — an explicit user-approved provider write from the picker's
+ *  "new folder" action. */
+export async function apiCreateAccountFolder(
+  accountId: string,
+  req: { name: string; spaceId: string }
+): Promise<{ folderId: string; spaceId: string; name: string }> {
+  const r = await gatewayFetch<Raw>(`/accounts/${accountId}/folders`, {
+    method: "POST",
+    body: JSON.stringify({ name: req.name, space_id: req.spaceId }),
+  });
+  return {
+    folderId: String(r.folder_id ?? ""),
+    spaceId: String(r.space_id ?? req.spaceId),
+    name: String(r.name ?? req.name),
+  };
+}
+
 export async function apiCreateSpace(name: string): Promise<LocalSpace> {
   const r = await gatewayFetch<Raw>(`/spaces`, {
     method: "POST",
@@ -1302,6 +1320,8 @@ export async function apiClarifyPropose(
       : { source: "LOCAL", provider: "local" },
     projectId: r.project_id ? String(r.project_id) : undefined,
     projectInferred: Boolean(r.project_inferred),
+    targetSpaceId: r.target_space_id ? String(r.target_space_id) : undefined,
+    targetFolderId: r.target_folder_id ? String(r.target_folder_id) : undefined,
     confidence: String(r.confidence ?? "medium") as Confidence,
     rationale: String(r.rationale ?? ""),
     status: r.status ? String(r.status) : undefined,

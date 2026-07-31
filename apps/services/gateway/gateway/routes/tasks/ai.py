@@ -569,12 +569,112 @@ def _resolve_project_match(token: str, projects: list[Any]) -> Any | None:
     return best if best_score >= 2 else None
 
 
+def _collect_places(
+    accounts: list[dict[str, Any]],
+    local_spaces: list[Any] | None = None,
+    local_folders: list[Any] | None = None,
+) -> list[dict[str, Any]]:
+    """Flatten every place a task/list can be FILED INTO — each connected
+    workspace (root, spaces, folders) plus the LOCAL space/folder tree — into
+    one ordered list. The brief tokenizes it as [D#] and ``_resolve_place``
+    maps a token back to the same row, mirroring the [P#] project contract.
+
+    A workspace/local ROOT row (space_id=None) means "this destination,
+    place unspecified" — enough to flip the card's destination pill even when
+    the model can't name a space."""
+    places: list[dict[str, Any]] = []
+    for acct in accounts:
+        label = acct.get("label") or acct.get("provider") or "workspace"
+        aid = str(acct.get("id"))
+        places.append({"account_id": aid, "account_label": label,
+                       "space_id": None, "space_name": None,
+                       "folder_id": None, "folder_name": None})
+        for sp in acct.get("hierarchy") or []:
+            sid, sname = str(sp.get("id") or ""), sp.get("name") or ""
+            if not sid:
+                continue
+            places.append({"account_id": aid, "account_label": label,
+                           "space_id": sid, "space_name": sname,
+                           "folder_id": None, "folder_name": None})
+            for f in sp.get("folders") or []:
+                fid = str(f.get("id") or "")
+                if not fid:
+                    continue
+                places.append({"account_id": aid, "account_label": label,
+                               "space_id": sid, "space_name": sname,
+                               "folder_id": fid,
+                               "folder_name": f.get("name") or ""})
+    places.append({"account_id": None, "account_label": "Local (private)",
+                   "space_id": None, "space_name": None,
+                   "folder_id": None, "folder_name": None})
+    folders_by_space: dict[str, list[Any]] = {}
+    for f in local_folders or []:
+        folders_by_space.setdefault(str(f.space_id), []).append(f)
+    for s in local_spaces or []:
+        sid, sname = str(s.id), s.name
+        places.append({"account_id": None, "account_label": "Local",
+                       "space_id": sid, "space_name": sname,
+                       "folder_id": None, "folder_name": None})
+        for f in folders_by_space.get(sid, []):
+            places.append({"account_id": None, "account_label": "Local",
+                           "space_id": sid, "space_name": sname,
+                           "folder_id": str(f.id), "folder_name": f.name})
+    return places
+
+
+def _place_label(pl: dict[str, Any]) -> str:
+    parts = [str(pl.get("account_label") or "")]
+    if pl.get("space_name"):
+        parts.append(str(pl["space_name"]))
+    if pl.get("folder_name"):
+        parts.append(str(pl["folder_name"]))
+    return " › ".join(p for p in parts if p)
+
+
+def _places_brief(places: list[dict[str, Any]]) -> str:
+    """One [D#]-tokenized line per filing place, workspace roots included."""
+    lines = []
+    for idx, pl in enumerate(places[:80]):
+        kind = ("folder" if pl.get("folder_id")
+                else "space" if pl.get("space_id")
+                else "workspace")
+        lines.append(f"- [D{idx}] {_place_label(pl)} ({kind})")
+    return "\n".join(lines) or "(none)"
+
+
+def _resolve_place(
+    token: str, places: list[dict[str, Any]],
+) -> dict[str, Any] | None:
+    """Map the LLM's `where_match` back to a real place. Accepts the [D#]
+    token (authoritative) OR a fuzzy name match over the place path, so a
+    model that echoes "ClickUp › Proposals" still resolves. Returns None for
+    '', 'none', or no match — the model can't invent a destination."""
+    t = (token or "").strip()
+    if not t or t.lower() in ("none", "null", "no", "n/a"):
+        return None
+    m = re.fullmatch(r"\[?[dD](\d+)\]?", t)
+    if m:
+        i = int(m.group(1))
+        return places[i] if 0 <= i < len(places) else None
+    want = _tokenize(t)
+    if not want:
+        return None
+    best, best_score = None, 0
+    for pl in places:
+        have = _tokenize(_place_label(pl))
+        score = len(want & have)
+        if score > best_score:
+            best, best_score = pl, score
+    return best if best_score >= 1 else None
+
+
 async def _llm_propose(
     item: Any, people: list[dict], projects: list[Any],
     account_statuses: dict[str, list[str]], model: str,
     user_context: str | None = None,
     memory_context: str = "",
     contexts: list[str] | None = None,
+    places: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any] | None:
     """LLM clarify core. Returns a ``core``-shaped dict (same keys propose()
     produces: disposition, next_action, optional outcome/context/energy/
@@ -665,7 +765,16 @@ async def _llm_propose(
         "peak-energy window (flow takes ~15 minutes to enter and one "
         "interruption to lose), so the planner treats them differently. "
         "Administrative, reactive, communication, and errand-like work is "
-        "false. Independent of important/leveraged.\n\n"
+        "false. Independent of important/leveraged.\n"
+        "7. `where_match`: WHERE this should be FILED, as a [D#] token from "
+        "FILING PLACES — but ONLY when there's a clear signal: the USER "
+        "GUIDANCE names a destination ('put it in ClickUp', 'file it under "
+        "Proposals', 'keep it local'), or the item obviously belongs in one "
+        "listed place. Prefer `project_match` when an existing project fits; "
+        "use `where_match` when the right project doesn't exist yet (a NEW "
+        "one will be created under that place — pick the most specific "
+        "space/folder that fits, or the bare workspace token when only the "
+        "tool is clear). Return null when there's no signal — never guess.\n\n"
         "Rules: next_action is PHYSICAL and visible ('Call Sanjay re: quote', "
         "not 'handle quote'). Only delegate to a person in the list. Give a "
         "one-sentence `rationale`. Do not invent projects or people.\n"
@@ -686,6 +795,7 @@ async def _llm_propose(
         '"energy": "low"|"medium"|"high"|null, '
         '"time_estimate_mins": int|null, '
         '"assignee_name": str|null, "project_match": str|null, '
+        '"where_match": str|null, '
         '"complexity": "single"|"subtasks"|"project", '
         '"subtasks": [str], "is_vague": bool, "suggested_title": str|null, '
         '"due_date": str|null, "important": bool, "leveraged": bool, '
@@ -699,6 +809,9 @@ async def _llm_propose(
         + (f"\n\nUSER GUIDANCE (trusted — the user's own words about what this is "
            f"and how to set it up):\n{guidance}" if guidance else "")
         + f"\n\nACTIVE PROJECTS:\n{_projects_brief(projects)}"
+        + (f"\n\nFILING PLACES (workspaces › spaces › folders a new "
+           f"project/list can be created under):\n{_places_brief(places)}"
+           if places else "")
         + f"\n\nTEAM (for delegation):\n{_people_brief(people)}"
         + f"\n\nWORKSPACE STAGES: {', '.join(stages) or '(none)'}"
         + (f"\n\nPAST CLARIFICATION PATTERNS:\n{memory_context}"
@@ -779,6 +892,13 @@ async def _llm_propose(
         str(data.get("project_match") or ""), projects)
     if matched_project is not None:
         core["llm_project"] = matched_project
+
+    # Explicit filing place ("put it in ClickUp under Proposals") — resolved
+    # to a real workspace/space/folder; the model can't invent one.
+    if places:
+        place = _resolve_place(str(data.get("where_match") or ""), places)
+        if place is not None:
+            core["llm_place"] = place
 
     # Complexity + suggested subtasks (Phase 2 consumes these; harmless now).
     complexity = str(data.get("complexity") or "").strip().lower()
@@ -875,6 +995,31 @@ def propose_with_llm(
             merged.pop("outcome", None)
         matched_existing = True
 
+    # Explicit filing place (the user's guidance named a destination, §clarify
+    # steering): without an existing-project match, the chosen place decides
+    # the HOME — the destination pill (account vs local) and, when it named a
+    # space/folder, the Where target a NEW project/list is created under. An
+    # llm_project match already carries its own home, so the place never
+    # overrides it. Purely additive keys — llm_core without llm_place (every
+    # golden-eval case) leaves the deterministic routing untouched.
+    place = llm_core.get("llm_place")
+    if (place is not None and llm_project is None
+            and merged["disposition"] in (
+                "NEXT", "PROJECT", "CALENDAR", "WAITING")):
+        place_account = place.get("account_id")
+        # A keyword-scaffold project match that lives in a DIFFERENT home than
+        # the user's explicit destination is stale — drop it rather than file
+        # into a place the user just steered away from.
+        if (merged.get("project_id")
+                and (base.get("account_id") or None) != (place_account or None)):
+            merged["project_id"] = None
+            merged["project_inferred"] = False
+        merged["account_id"] = place_account
+        if place.get("space_id"):
+            merged["target_space_id"] = place["space_id"]
+            if place.get("folder_id"):
+                merged["target_folder_id"] = place["folder_id"]
+
     # Dedup guard (eval-locked, mirrors propose()): a capture that matched an
     # EXISTING active project files there as a NEXT action — the LLM must not
     # re-promote it to PROJECT and spawn a duplicate. Honour the deterministic
@@ -911,6 +1056,9 @@ def _apply_reclarify_binding(proposal: dict[str, Any], item: Any) -> dict[str, A
             str(item.project_id) if item.project_id else None)
         proposal["project_inferred"] = False
         proposal["locked_destination"] = True
+        # A locked destination can't take a new-home target either.
+        proposal.pop("target_space_id", None)
+        proposal.pop("target_folder_id", None)
     return proposal
 
 
@@ -1055,11 +1203,13 @@ async def clarify_item(
             text(PROJECT_SELECT + " WHERE p.user_id = :uid"), {"uid": uid},
         )).fetchall()
         accounts = (await db.execute(
-            text("SELECT id, schema_cache FROM task_accounts WHERE user_id = :uid"),
+            text("""SELECT id, label, provider, schema_cache
+                    FROM task_accounts WHERE user_id = :uid"""),
             {"uid": uid},
         )).fetchall()
         account_statuses: dict[str, list[str]] = {}
         members: list[dict] = []
+        account_briefs: list[dict] = []
         for a in accounts:
             cache = _parse_jsonb(a.schema_cache) or {}
             account_statuses[str(a.id)] = [
@@ -1067,6 +1217,23 @@ async def clarify_item(
             for m in cache.get("members") or []:
                 if isinstance(m, dict) and m.get("name"):
                     members.append(m)
+            account_briefs.append({
+                "id": str(a.id), "label": a.label, "provider": a.provider,
+                "hierarchy": [h for h in cache.get("hierarchy") or []
+                              if isinstance(h, dict)],
+            })
+        # Every place a task/list can be filed (workspaces › spaces › folders
+        # + the local tree): lets guidance like "put this in ClickUp under
+        # Proposals" actually steer the destination (where_match).
+        local_spaces = (await db.execute(
+            text("SELECT id, name FROM gtd_spaces WHERE user_id = :uid "
+                 "ORDER BY sort_key ASC NULLS LAST, name"),
+            {"uid": uid})).fetchall()
+        local_folders = (await db.execute(
+            text("SELECT id, space_id, name FROM gtd_folders "
+                 "WHERE user_id = :uid ORDER BY sort_key ASC NULLS LAST, name"),
+            {"uid": uid})).fetchall()
+        places = _collect_places(account_briefs, local_spaces, local_folders)
         # Org-knowledge people (skills + availability, §6.1) power the
         # cognition; provider members are the fallback when none imported.
         from gateway.routes.tasks.people import fetch_people_for_clarify
@@ -1098,7 +1265,8 @@ async def clarify_item(
             llm_core = await _llm_propose(
                 item, people, projects, account_statuses, models["clarify"],
                 user_context=note, memory_context=memory_context,
-                contexts=await _user_contexts(db, uid))
+                contexts=await _user_contexts(db, uid),
+                places=places)
         proposal = propose_with_llm(
             item, people, projects, account_statuses, llm_core)
         # Attach the chosen owner's live load so the card can warn at assign

@@ -26,6 +26,7 @@ _WRITERS: dict[str, tuple[str, tuple[str, ...]]] = {
     "clickup.create_project": (
         "_raw_create_project", ("name", "space_id", "folder_id"),
     ),
+    "clickup.create_folder": ("_raw_create_folder", ("name", "space_id")),
 }
 
 

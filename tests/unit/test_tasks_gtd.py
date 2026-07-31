@@ -798,6 +798,201 @@ def test_status_stage_heuristic_guesses_by_name():
     assert guess_stage_for_status("done", ["TODO", "IN PROCESS"]) == "TODO"
 
 
+# ---------------------------------------------------------------------------
+# Clarify filing places (where_match) — guidance-steered destination
+# ---------------------------------------------------------------------------
+
+def _places():
+    accounts = [{
+        "id": "acct-1", "label": "Fracktal", "provider": "clickup",
+        "hierarchy": [{
+            "id": "sp-1", "name": "Engineering",
+            "folders": [{"id": "fo-1", "name": "Proposals", "lists": []}],
+            "lists": [],
+        }],
+    }]
+    local_spaces = [SimpleNamespace(id="ls-1", name="Home")]
+    local_folders = [SimpleNamespace(id="lf-1", space_id="ls-1", name="Chores")]
+    return tasks_ai._collect_places(accounts, local_spaces, local_folders)
+
+
+def test_collect_places_orders_roots_spaces_folders():
+    places = _places()
+    labels = [tasks_ai._place_label(p) for p in places]
+    # Workspace root first, then its spaces/folders, then the local tree.
+    assert labels[0] == "Fracktal"
+    assert "Fracktal › Engineering" in labels
+    assert "Fracktal › Engineering › Proposals" in labels
+    assert "Local (private)" in labels
+    assert "Local › Home › Chores" in labels
+
+
+def test_resolve_place_token_fuzzy_and_sentinels():
+    places = _places()
+    # [D#] token indexes the collected order (authoritative).
+    assert tasks_ai._resolve_place("[D0]", places)["account_id"] == "acct-1"
+    folder = tasks_ai._resolve_place("D2", places)
+    assert folder["folder_id"] == "fo-1" and folder["space_id"] == "sp-1"
+    # Fuzzy: the model echoed the place path instead of the token.
+    fuzzy = tasks_ai._resolve_place("Engineering Proposals", places)
+    assert fuzzy is not None and fuzzy["folder_id"] == "fo-1"
+    # Sentinels / out-of-range / no overlap → None (never invents a place).
+    assert tasks_ai._resolve_place("none", places) is None
+    assert tasks_ai._resolve_place("", places) is None
+    assert tasks_ai._resolve_place("[D99]", places) is None
+    assert tasks_ai._resolve_place("zzz qqq", places) is None
+
+
+def test_llm_overlay_place_sets_destination_and_where_target():
+    """Guidance like 'put this in ClickUp under Proposals' arrives as llm_place
+    — without an existing-project match it decides the account AND the Where
+    target a NEW list will be created under."""
+    place = {"account_id": "acct-1", "account_label": "Fracktal",
+             "space_id": "sp-1", "space_name": "Engineering",
+             "folder_id": "fo-1", "folder_name": "Proposals"}
+    llm_core = {
+        "disposition": "PROJECT",
+        "next_action": "Draft the MC-EME proposal outline",
+        "outcome": "MC-EME drone proposal submitted",
+        "confidence": "high",
+        "rationale": "User asked to file it in ClickUp under Proposals.",
+        "complexity": "project",
+        "llm_place": place,
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("Update the IDEX proposal for MC-EME"), [], [],
+        {"acct-1": ["Backlog"]}, llm_core)
+    assert merged["account_id"] == "acct-1"
+    assert merged["target_space_id"] == "sp-1"
+    assert merged["target_folder_id"] == "fo-1"
+
+
+def test_llm_overlay_place_drops_project_matched_in_another_home():
+    """An explicit destination overrides a keyword-scaffold project match that
+    lives elsewhere — the user just steered AWAY from that home."""
+    projects = [_project("p-local", "IDEX proposal work", None)]
+    place = {"account_id": "acct-1", "account_label": "Fracktal",
+             "space_id": "sp-1", "space_name": "Engineering",
+             "folder_id": None, "folder_name": None}
+    llm_core = {
+        "disposition": "NEXT",
+        "next_action": "Reformat the proposal for MC-EME",
+        "confidence": "medium",
+        "rationale": "Filed per the user's destination.",
+        "llm_place": place,
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("Update the IDEX proposal draft"), [], projects, {}, llm_core)
+    assert merged["account_id"] == "acct-1"
+    assert merged["project_id"] is None
+    assert merged["project_inferred"] is False
+    assert merged["target_space_id"] == "sp-1"
+
+
+def test_llm_overlay_existing_project_match_beats_place():
+    """An llm_project match already carries its own home — the place never
+    re-routes it."""
+    projects = [_project("p1", "Acme rollout", "acct-9")]
+    place = {"account_id": "acct-1", "account_label": "Other",
+             "space_id": "sp-1", "space_name": "Engineering",
+             "folder_id": None, "folder_name": None}
+    llm_core = {
+        "disposition": "NEXT",
+        "next_action": "Email Acme the revised quote",
+        "confidence": "high",
+        "rationale": "Belongs to the rollout.",
+        "llm_project": projects[0],
+        "llm_place": place,
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("send Acme the new quote"), [], projects, {}, llm_core)
+    assert merged["project_id"] == "p1"
+    assert merged["account_id"] == "acct-9"
+    assert "target_space_id" not in merged
+
+
+def test_llm_overlay_place_local_keeps_it_local():
+    place = {"account_id": None, "account_label": "Local",
+             "space_id": "ls-1", "space_name": "Home",
+             "folder_id": None, "folder_name": None}
+    llm_core = {
+        "disposition": "NEXT",
+        "next_action": "Sort the tax receipts",
+        "confidence": "medium",
+        "rationale": "Private errand, kept local.",
+        "llm_place": place,
+    }
+    merged = tasks_ai.propose_with_llm(
+        _item("sort receipts"), [], [], {"acct-1": ["To-do"]}, llm_core)
+    assert merged["account_id"] is None
+    assert merged["target_space_id"] == "ls-1"
+
+
+def test_reclarify_binding_pops_where_target():
+    """A SYNCED task's locked destination can't take a new-home target."""
+    item = SimpleNamespace(source="SYNCED", account_id="acct-1",
+                           project_id="p1")
+    proposal = {"account_id": "acct-2", "project_id": "p9",
+                "target_space_id": "sp-1", "target_folder_id": "fo-1"}
+    out = tasks_ai._apply_reclarify_binding(proposal, item)
+    assert out["account_id"] == "acct-1"
+    assert out["project_id"] == "p1"
+    assert out["locked_destination"] is True
+    assert "target_space_id" not in out
+    assert "target_folder_id" not in out
+
+
+def test_llm_propose_parses_where_match(monkeypatch):
+    fake_content = json.dumps({
+        "disposition": "NEXT",
+        "next_action": "Draft the proposal skeleton",
+        "confidence": "medium",
+        "rationale": "Filed where the user asked.",
+        "where_match": "[D2]",
+    })
+    fake_resp = SimpleNamespace(
+        choices=[SimpleNamespace(message=SimpleNamespace(content=fake_content))])
+
+    async def fake_completion(**kwargs):
+        return fake_resp, kwargs.get("model")
+
+    monkeypatch.setattr(
+        "acb_llm.context.acompletion_with_fallback", fake_completion,
+        raising=False)
+    import asyncio
+    places = _places()
+    core = asyncio.run(tasks_ai._llm_propose(
+        _item("Draft proposal"), [], [], {}, "tier-fast", places=places))
+    assert core is not None
+    assert core["llm_place"]["folder_id"] == "fo-1"
+    # Without places the channel stays closed even if the model answered.
+    core2 = asyncio.run(tasks_ai._llm_propose(
+        _item("Draft proposal"), [], [], {}, "tier-fast"))
+    assert core2 is not None and "llm_place" not in core2
+
+
+# ---------------------------------------------------------------------------
+# ClickUp connector — create_folder (space → folder → list)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.asyncio
+async def test_clickup_create_folder_posts_to_space():
+    provider = ClickUpProvider("pk_123", "team-9")
+    fake_resp = SimpleNamespace(
+        status_code=200,
+        json=lambda: {"id": "fold-1", "name": "Proposals"},
+        text="",
+    )
+    with patch("gateway.routes.tasks.providers.httpx.AsyncClient") as client_cls:
+        http = client_cls.return_value.__aenter__.return_value
+        http.post = AsyncMock(return_value=fake_resp)
+        out = await provider.create_folder("team-9", "space-1", "Proposals")
+        args, kwargs = http.post.call_args
+        assert args[0].endswith("/space/space-1/folder")
+        assert kwargs["json"] == {"name": "Proposals"}
+    assert out == {"id": "fold-1", "name": "Proposals", "space_id": "space-1"}
+
+
 def test_seed_status_stage_map_keeps_user_choices():
     """Seeding auto-guesses unmapped statuses but never overrides an explicit
     user mapping; keys are normalized (lower/trim)."""

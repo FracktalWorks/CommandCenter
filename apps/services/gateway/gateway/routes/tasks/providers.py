@@ -256,6 +256,15 @@ class BaseTaskProvider(ABC):
         A user-approved write (invoked from the explicit "create project"
         UI action, same posture as push)."""
 
+    async def create_folder(
+        self, workspace_id: str, space_id: str, name: str,
+    ) -> dict[str, Any]:
+        """Create a folder under a space (the grouping level between space and
+        list) → {id, name, space_id}. A user-approved write from the picker's
+        "new folder" action. Default raises so a connector without folders
+        fails loudly rather than silently dropping the create."""
+        raise ProviderError(self.provider, "create_folder not supported", 501)
+
     @abstractmethod
     async def list_tasks(
         self, workspace_id: str, *, updated_since_ms: int | None = None
@@ -660,6 +669,36 @@ class ClickUpProvider(BaseTaskProvider):
              "args": {"name": name, "space_id": space_id, "folder_id": folder_id}},
             lambda: self._raw_create_project(name, space_id, folder_id),
         )
+
+    async def create_folder(
+        self, workspace_id: str, space_id: str, name: str,
+    ) -> dict[str, Any]:
+        """ClickUp: a Folder groups lists inside a space (space→folder→list)."""
+        return await self._broker_gate(
+            "clickup.create_folder",
+            f"space:{space_id}",
+            {"account_id": self._account_id,
+             "args": {"name": name, "space_id": space_id}},
+            lambda: self._raw_create_folder(name, space_id),
+        )
+
+    async def _raw_create_folder(
+        self, name: str, space_id: str,
+    ) -> dict[str, Any]:
+        """The actual ClickUp folder-create — bypasses the broker gate. Called
+        by the gate on auto-apply AND by the persistent handler on approval."""
+        r = await _clickup_send(
+            "POST", f"{_CLICKUP}/space/{space_id}/folder",
+            headers=self._headers(), json={"name": name})
+        if r.status_code >= 400:
+            raise ProviderError(
+                "clickup", f"create folder → {r.status_code}: {r.text[:200]}")
+        f = r.json()
+        return {
+            "id": str(f.get("id", "")),
+            "name": f.get("name", name),
+            "space_id": space_id,
+        }
 
     async def _raw_create_project(
         self, name: str, space_id: str, folder_id: str | None = None,

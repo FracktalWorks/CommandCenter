@@ -50,6 +50,7 @@ import {
   apiRefreshSchema,
   apiRefreshMembers,
   apiCreateAccountProject,
+  apiCreateAccountFolder,
   apiSyncTasks,
   apiAtomize,
   apiEnrichItem,
@@ -665,6 +666,12 @@ interface TaskState {
     accountId: string,
     req: { name: string; spaceId: string; folderId?: string },
   ) => Promise<{ projectId: string; providerRef: string; name: string }>;
+  /** Create a NEW provider folder (ClickUp: space → folder) under a space. */
+  createWorkspaceFolder: (
+    accountId: string,
+    spaceId: string,
+    name: string,
+  ) => Promise<void>;
   /** Duplicate-capture notice: the AI found the just-captured item is the
    *  same as (verdict "duplicate" — auto-skipped, undoable) or similar to
    *  (verdict "similar" — the user decides) an existing open item. */
@@ -1201,6 +1208,18 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       /* next hydrate reconciles */
     }
     return created;
+  },
+
+  /** Create a NEW provider folder under a space and refresh the account so
+   *  the picker's hierarchy shows it immediately (empty, ready for lists). */
+  createWorkspaceFolder: async (accountId, spaceId, name) => {
+    if (!name.trim()) return;
+    await apiCreateAccountFolder(accountId, { name: name.trim(), spaceId });
+    try {
+      set({ accounts: await fetchAccounts() });
+    } catch {
+      /* next hydrate reconciles */
+    }
   },
 
   skipToNextInbox: () =>

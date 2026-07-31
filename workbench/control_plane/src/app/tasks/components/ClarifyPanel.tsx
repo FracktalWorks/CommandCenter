@@ -137,6 +137,7 @@ export function ClarifyPanel({
   const accounts = useTaskStore((s) => s.accounts);
   const refreshAccountMembers = useTaskStore((s) => s.refreshAccountMembers);
   const createWorkspaceProject = useTaskStore((s) => s.createWorkspaceProject);
+  const createWorkspaceFolder = useTaskStore((s) => s.createWorkspaceFolder);
   const localHierarchy = useTaskStore((s) => s.localHierarchy);
   const loadLocalHierarchy = useTaskStore((s) => s.loadLocalHierarchy);
   const createLocalSpace = useTaskStore((s) => s.createLocalSpace);
@@ -269,6 +270,11 @@ export function ClarifyPanel({
       setAssignee(sp.suggestedAssignee ?? null);
       if (sp.target) setDest(sp.target);
       setProjectId(sp.projectId);
+      // A guidance-named destination ("put it in ClickUp under Proposals")
+      // arrives as a Where target — pre-select it so a Size=project commit
+      // creates the new list right there.
+      setTargetSpaceId(sp.targetSpaceId);
+      setTargetFolderId(sp.targetFolderId);
       setSubtasks(
         sp.complexity === "subtasks" || sp.complexity === "project"
           ? sp.suggestedSubtasks ?? []
@@ -358,6 +364,20 @@ export function ClarifyPanel({
       ? accounts.find((a) => a.id === (dest.accountId ?? destEntry(dest, providers)?.id))
       : undefined),
     [dest, accounts, providers],
+  );
+
+  // Folder creation follows the destination: a ClickUp dest gets a real
+  // provider folder (space → folder → list), local gets a gtd_folders row.
+  // Shared by both Where picker modes.
+  const createFolderForDest = useCallback(
+    async (spaceId: string, name: string) => {
+      if (dest.source === "SYNCED" && destAccount) {
+        await createWorkspaceFolder(destAccount.id, spaceId, name);
+      } else {
+        await createLocalFolder(spaceId, name);
+      }
+    },
+    [dest.source, destAccount, createWorkspaceFolder, createLocalFolder],
   );
 
   // ── LIVE delegate list ────────────────────────────────────────────────
@@ -1255,8 +1275,12 @@ export function ClarifyPanel({
                           localHierarchy={localHierarchy}
                           value={{ spaceId: targetSpaceId, folderId: targetFolderId }}
                           onChange={(v) => { setTargetSpaceId(v.spaceId); setTargetFolderId(v.folderId); }}
+                          /* Creating a provider SPACE isn't a supported write —
+                             the "New space…" row is local-only. Folders work in
+                             both homes (dest-aware). */
+                          canCreateSpace={dest.source === "LOCAL"}
                           onCreateSpace={createLocalSpace}
-                          onCreateFolder={createLocalFolder}
+                          onCreateFolder={createFolderForDest}
                         />
                       ) : (
                         <ProjectListTree
@@ -1275,6 +1299,7 @@ export function ClarifyPanel({
                               await createLocalProject({ outcome: name, spaceId, folderId });
                             }
                           }}
+                          onCreateFolder={createFolderForDest}
                         />
                       )}
 
@@ -1850,6 +1875,7 @@ function ProjectListTree({
   value,
   onChange,
   onCreate,
+  onCreateFolder,
 }: {
   dest: Target;
   destAccount: TaskAccount | undefined;
@@ -1859,6 +1885,7 @@ function ProjectListTree({
   value?: string;
   onChange: (id: string | undefined) => void;
   onCreate: (spaceId: string, folderId: string | undefined, name: string) => Promise<void>;
+  onCreateFolder: (spaceId: string, name: string) => Promise<void>;
 }) {
   const tree = useMemo(
     () => buildTree(dest, destAccount, localHierarchy, projectsForDest),
@@ -1874,6 +1901,7 @@ function ProjectListTree({
       emptyLabel="No project"
       onSelectLeaf={(node) => onChange(node?.projectId)}
       onCreate={onCreate}
+      onCreateFolder={onCreateFolder}
     />
   );
 }
@@ -1886,6 +1914,7 @@ function ProjectTargetTree({
   localHierarchy,
   value,
   onChange,
+  canCreateSpace,
   onCreateSpace,
   onCreateFolder,
 }: {
@@ -1894,6 +1923,8 @@ function ProjectTargetTree({
   localHierarchy: import("../lib/api").LocalHierarchy | null;
   value: { spaceId?: string; folderId?: string };
   onChange: (v: { spaceId?: string; folderId?: string }) => void;
+  /** Provider spaces can't be created (no such write) — local-only row. */
+  canCreateSpace: boolean;
   onCreateSpace: (name: string) => Promise<void>;
   onCreateFolder: (spaceId: string, name: string) => Promise<void>;
 }) {
@@ -1908,8 +1939,9 @@ function ProjectTargetTree({
         tree={tree}
         pickTypes={["space", "folder"]}
         value={selectedId}
-        newLabel={dest.source === "SYNCED" ? "New space…" : "New space…"}
+        newLabel="New space…"
         emptyLabel="Choose a space or folder"
+        allowCreateTop={canCreateSpace}
         onSelectTarget={(node) => {
           if (!node) return onChange({});
           if (node.type === "space") onChange({ spaceId: node.id });
@@ -1925,7 +1957,7 @@ function ProjectTargetTree({
           await onCreateFolder(spaceId, name);
         }}
       />
-      {dest.source === "LOCAL" && value.spaceId && !value.folderId && (
+      {value.spaceId && !value.folderId && (
         <InlineCreateFolder spaceId={value.spaceId} onCreate={onCreateFolder} />
       )}
     </div>
@@ -2004,6 +2036,8 @@ function TreePicker({
   onSelectLeaf,
   onSelectTarget,
   onCreate,
+  onCreateFolder,
+  allowCreateTop = true,
 }: {
   tree: TNode[];
   pickTypes: ("space" | "folder" | "list")[];
@@ -2014,6 +2048,10 @@ function TreePicker({
   onSelectLeaf?: (node: TNode | undefined) => void;
   onSelectTarget?: (node: TNode | undefined) => void;
   onCreate: (spaceId: string, folderId: string | undefined, name: string) => Promise<void>;
+  /** When given, expanded SPACE rows offer "New folder here…" (leaf mode). */
+  onCreateFolder?: (spaceId: string, name: string) => Promise<void>;
+  /** Whether the top-level create row (new space) is offered (target mode). */
+  allowCreateTop?: boolean;
 }) {
   const [q, setQ] = useState("");
   const [openIds, setOpenIds] = useState<Set<string>>(() => {
@@ -2073,6 +2111,22 @@ function TreePicker({
     }
   };
 
+  const submitCreateFolder = async (spaceId: string) => {
+    const name = newName.trim();
+    if (!name || creating || !onCreateFolder) return;
+    setCreating(true);
+    setCreateError(null);
+    try {
+      await onCreateFolder(spaceId, name);
+      setCreatingAt(null);
+      setNewName("");
+    } catch (err) {
+      setCreateError(err instanceof Error ? err.message : "Could not create it");
+    } finally {
+      setCreating(false);
+    }
+  };
+
   const row = (n: TNode, depth: number, ancestorSpaceId?: string) => {
     const selectable = pickTypes.includes(n.type);
     const sid = selId(n);
@@ -2082,15 +2136,20 @@ function TreePicker({
     const canSelect = selectable && !unmirrored;
     const active = canSelect && sid === value;
     const isSuggested = canSelect && sid === suggestedId;
-    const hasKids = !!n.children?.length;
+    // In leaf mode a space/folder is a navigation container even when EMPTY —
+    // it must still open, so the "New list here…" / "New folder here…" rows
+    // are reachable inside it. (Previously an empty folder was a dead end:
+    // lists could only ever be created at the space level.)
+    const expandable =
+      !!n.children?.length || (!!onSelectLeaf && n.type !== "list");
     const isOpen = openIds.has(n.id);
     const Icon = n.type === "space" ? HardDrive : n.type === "folder" ? FolderKanban : ListChecks;
     return (
       <div key={n.id}>
         <button
           type="button"
-          onClick={() => (hasKids && !canSelect ? toggle(n.id) : select(n))}
-          disabled={!canSelect && !hasKids}
+          onClick={() => (expandable && !canSelect ? toggle(n.id) : select(n))}
+          disabled={!canSelect && !expandable}
           title={unmirrored ? "Still syncing from ClickUp — available in a moment" : undefined}
           className={[
             "tech-transition flex w-full items-center gap-2 rounded-md border px-3 py-1.5 text-left text-[13px]",
@@ -2104,7 +2163,7 @@ function TreePicker({
                   : "border-transparent text-foreground/80 hover:bg-secondary",
           ].join(" ")}
         >
-          {hasKids ? (
+          {expandable ? (
             <ChevronRight
               onClick={(e) => { e.stopPropagation(); toggle(n.id); }}
               className={`h-3.5 w-3.5 shrink-0 text-muted-foreground transition-transform ${isOpen ? "rotate-90" : ""}`}
@@ -2122,9 +2181,9 @@ function TreePicker({
           {isSuggested && <Sparkles className="h-3 w-3 shrink-0 text-primary" />}
           {active && <Check className="h-3.5 w-3.5 shrink-0" />}
         </button>
-        {hasKids && isOpen && (
+        {expandable && isOpen && (
           <div className="flex flex-col gap-0.5 pb-1 pt-0.5">
-            {n.children!.map((c) => row(c, depth + 1, n.type === "space" ? n.id : ancestorSpaceId))}
+            {(n.children ?? []).map((c) => row(c, depth + 1, n.type === "space" ? n.id : ancestorSpaceId))}
             {/* "New X here" only where it's meaningful: a new list inside a
                 space/folder (leaf mode), handled by the caller's onCreate. */}
             {onSelectLeaf && (creatingAt === n.id ? (
@@ -2159,9 +2218,55 @@ function TreePicker({
                 onClick={() => { setCreatingAt(n.id); setNewName(""); setCreateError(null); }}
                 className={`tech-transition flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline ${depth === 2 ? "ml-8" : "ml-4"}`}
               >
-                <Plus className="h-3 w-3" /> {newLabel}
+                {/* Say WHICH level the new list lands on — a space with folders
+                    offers both "directly in this space" (folderless, the level
+                    above) and per-folder creation, and "here" hid that. */}
+                <Plus className="h-3 w-3" />{" "}
+                {newLabel.replace(
+                  "here…",
+                  n.type === "folder" ? "in this folder…" : "directly in this space…",
+                )}
               </button>
             ))}
+            {/* A space can also grow a new FOLDER (space → folder → list) so a
+                list can then be created inside it — the full ClickUp shape,
+                right from the picker. */}
+            {onSelectLeaf && onCreateFolder && n.type === "space" &&
+              (creatingAt === `folder:${n.id}` ? (
+                <div className="ml-4">
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      autoFocus
+                      value={newName}
+                      onChange={(e) => setNewName(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === "Enter") void submitCreateFolder(n.id);
+                        if (e.key === "Escape") setCreatingAt(null);
+                      }}
+                      placeholder="New folder name…"
+                      className="flex-1 rounded-md border border-border bg-background/60 px-2.5 py-1.5 text-base text-foreground focus:border-primary/50 focus:outline-none sm:text-[13px]"
+                    />
+                    <button
+                      type="button"
+                      disabled={!newName.trim() || creating}
+                      onClick={() => void submitCreateFolder(n.id)}
+                      className="tech-transition inline-flex items-center gap-1 rounded-md bg-primary px-2.5 py-1.5 text-[12px] font-medium text-primary-foreground disabled:opacity-50"
+                    >
+                      {creating ? <Loader2 className="h-3 w-3 animate-spin" /> : <Plus className="h-3 w-3" />}
+                      Create
+                    </button>
+                  </div>
+                  {createError && <p className="mt-1 text-[11px] text-destructive">{createError}</p>}
+                </div>
+              ) : (
+                <button
+                  type="button"
+                  onClick={() => { setCreatingAt(`folder:${n.id}`); setNewName(""); setCreateError(null); }}
+                  className="tech-transition ml-4 flex items-center gap-1.5 text-left text-[12px] text-primary hover:underline"
+                >
+                  <Plus className="h-3 w-3" /> New folder here…
+                </button>
+              ))}
           </div>
         )}
       </div>
@@ -2216,7 +2321,7 @@ function TreePicker({
       )}
       <div className="max-h-56 overflow-y-auto pr-0.5">
         {tree.map((sp) => row(sp, 1))}
-        {onSelectTarget && (
+        {onSelectTarget && allowCreateTop && (
           creatingAt === "top" ? (
             <div className="flex items-center gap-1.5">
               <input

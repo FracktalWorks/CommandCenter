@@ -28,6 +28,10 @@ class _FakeProvider:
         self.calls.append(("create_project", name, space_id, folder_id))
         return {"id": "L1"}
 
+    async def _raw_create_folder(self, name, space_id):
+        self.calls.append(("create_folder", name, space_id))
+        return {"id": "F1"}
+
 
 def _prop(action, payload):
     return SimpleNamespace(action=action, payload=payload)
@@ -85,13 +89,25 @@ def test_handler_refuses_unknown_action(monkeypatch):
         assert "no writer" in str(e)
 
 
-def test_register_wires_all_three_actions():
+def test_handler_dispatches_create_folder(monkeypatch):
+    fake = _FakeProvider()
+    _patch_resolve(monkeypatch, fake)
+    res = asyncio.run(bh._handle_task_write(_prop(
+        "clickup.create_folder",
+        {"account_id": "a", "args": {"name": "F", "space_id": "s1"}},
+    )))
+    assert res == {"id": "F1"}
+    assert fake.calls == [("create_folder", "F", "s1")]
+
+
+def test_register_wires_every_writer_action():
     import action_broker
     from action_broker.broker import _HANDLERS
     action_broker.clear_action_handlers()
     bh.register_task_broker_handlers()
     assert set(_HANDLERS) == {
         "clickup.create_task", "clickup.update_task", "clickup.create_project",
+        "clickup.create_folder",
     }
     action_broker.clear_action_handlers()
 

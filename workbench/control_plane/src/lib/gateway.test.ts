@@ -233,6 +233,46 @@ describe("the route surface", () => {
     expect(offenders).toEqual([]);
   });
 
+  it("never resolves an identity at module scope", () => {
+    // `const HEADERS = await gatewayHeaders(…)` at the top level is a
+    // top-level await: it runs at IMPORT time, once per process. Two things
+    // follow, and the second is the dangerous one.
+    //
+    // It breaks `next build` — page-data collection imports every route with
+    // no request and no session, so the throw escapes and the build dies. That
+    // is how this was found, on a deploy.
+    //
+    // And had it resolved, the headers would name whichever member happened to
+    // import first, and every later request would be served as them. A
+    // cross-user identity leak, from a line that looks like a constant.
+    //
+    // The earlier version of the sweep below printed `?()` for these files —
+    // it could not name the enclosing function because there wasn't one. That
+    // was the signal, unread; this is it made explicit.
+    const offenders: string[] = [];
+    for (const r of ROUTES) {
+      for (const line of r.src.split("\n")) {
+        if (/^\s*(export\s+)?(const|let|var)\s.*\bawait\s+(gatewayHeaders|headersActingAs)\s*\(/.test(line)
+            && !/^\s{2,}/.test(line)) {
+          offenders.push(`${r.rel}: ${line.trim()}`);
+        }
+      }
+    }
+    expect(offenders).toEqual([]);
+  });
+
+  it("marks every gateway-forwarding route dynamic", () => {
+    // A route that resolves the signed-in member can never be statically
+    // evaluated. Without `force-dynamic`, `next build` runs it during page-data
+    // collection — with no request, and therefore no session.
+    const offenders = ROUTES.filter(
+      (r) =>
+        /\b(gatewayHeaders|headersActingAs|requireIdentity|currentIdentity|proxyToGateway)\s*\(/.test(r.src) &&
+        !/export const dynamic = "force-dynamic"/.test(r.src)
+    );
+    expect(offenders.map((r) => r.rel)).toEqual([]);
+  });
+
   it("keeps every identity-free call to a written reason", () => {
     // serviceHeaders() takes a reason precisely so this is reviewable. An
     // empty string would satisfy the type and defeat the point.

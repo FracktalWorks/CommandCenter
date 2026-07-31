@@ -1,6 +1,9 @@
 import { NextRequest, NextResponse } from "next/server";
 import { requireIdentity } from "@/lib/gateway";
 
+// Resolves the signed-in member, so it is never statically evaluated.
+export const dynamic = "force-dynamic";
+
 /**
  * POST /api/chat/sessions/[sessionId]/compact
  *

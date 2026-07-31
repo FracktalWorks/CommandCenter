@@ -600,41 +600,17 @@ def _apply_own_tool_scope(agents: list[Any], own_scope: list[str] | None) -> Non
                 )
 
 
-def _inject_agent_tools(
-    agents: list[Any], *, is_sub_agent: bool = False,
-    tool_scope: list[str] | None = None, agent_name: str | None = None,
-) -> None:
-    """Inject cross-agent delegation tools into every loaded agent.
+def _collect_injectable_platform_tools() -> list[Any]:
+    """Import + return the statically importable platform tools, in injection order.
 
-    Adds ``call_agent`` and ``call_agent_background`` from ``acb_skills.agent_tools``
-    so that any agent — MAF or GitHub Copilot SDK — can delegate sub-tasks to
-    other registered agents without any changes to the external agent repo.
-
-    When ``is_sub_agent=True``, a compact addendum is appended to Copilot SDK
-    agents instead of the full workspace/commit guidance (~700 token saving per
-    sub-agent invocation).
-
-    When ``tool_scope`` is provided (from ``config.json: tool_scope``), only the
-    named tools are injected.  This prevents the Berkeley leaderboard failure mode
-    where every additional tool degrades model accuracy — inject only what the
-    agent actually needs.  ``None`` means inject all tools (default).
-
-    When ``agent_name`` is provided, Custom Apps granted to this agent
-    (``app_grants.subject`` = ``agents:*`` or ``agent:<agent_name>``, RFC
-    §4.7) are also injected as tools — one per declared manifest action,
-    named ``app_<slug>_<action>`` — via ``orchestrator.app_tools``. Unlike
-    ``tool_scope``, this is unconditional: a grant is an explicit per-agent
-    permission, not a platform tool a static scope narrows.
-
-    Injection is best-effort: failures are silently swallowed so they never
-    block the main agent execution path.
-
-    Injection targets:
-        MAF Agent                — appends to ``agent.tools`` (list)
-        GitHubCopilotAgent       — appends to ``agent._tools`` (list built at init;
-                                   merged into SessionConfig.tools at session creation)
-                                   + appends tool guidance to ``_default_options.system_message``
-        Legacy Copilot SDK path  — appends to ``agent._default_options.tools`` (list)
+    Pure collection/introspection — no agent is touched. This is the exact
+    import chain :func:`_inject_agent_tools` has always run (extracted
+    verbatim, WS-23 S1): an empty list means the mandatory delegation tools
+    are unavailable and injection would have bailed out entirely. Also
+    consumed read-only by the skills catalog (``acb_skills.skill_families`` +
+    ``GET /integrations/skills``) so the catalog can never drift from what
+    injection actually offers. Per-agent additions (granted Custom-App action
+    tools, the workflow trio) are NOT part of this static set.
     """
     try:
         from acb_skills.agent_tools import call_agent  # noqa: PLC0415
@@ -642,7 +618,7 @@ def _inject_agent_tools(
                                             call_agents_parallel)
         _all_tools = [call_agent, call_agents_parallel, call_agent_background]
     except ImportError:
-        return  # acb_skills not installed in this env — skip silently
+        return []  # acb_skills not installed in this env — skip silently
 
     # Zero-credential web tools — always available, no integration config needed.
     try:
@@ -776,6 +752,49 @@ def _inject_agent_tools(
         _all_tools = _all_tools + [github_search, github_repo_search]
     except ImportError:
         pass
+
+    return _all_tools
+
+
+def _inject_agent_tools(
+    agents: list[Any], *, is_sub_agent: bool = False,
+    tool_scope: list[str] | None = None, agent_name: str | None = None,
+) -> None:
+    """Inject cross-agent delegation tools into every loaded agent.
+
+    Adds ``call_agent`` and ``call_agent_background`` from ``acb_skills.agent_tools``
+    so that any agent — MAF or GitHub Copilot SDK — can delegate sub-tasks to
+    other registered agents without any changes to the external agent repo.
+
+    When ``is_sub_agent=True``, a compact addendum is appended to Copilot SDK
+    agents instead of the full workspace/commit guidance (~700 token saving per
+    sub-agent invocation).
+
+    When ``tool_scope`` is provided (from ``config.json: tool_scope``), only the
+    named tools are injected.  This prevents the Berkeley leaderboard failure mode
+    where every additional tool degrades model accuracy — inject only what the
+    agent actually needs.  ``None`` means inject all tools (default).
+
+    When ``agent_name`` is provided, Custom Apps granted to this agent
+    (``app_grants.subject`` = ``agents:*`` or ``agent:<agent_name>``, RFC
+    §4.7) are also injected as tools — one per declared manifest action,
+    named ``app_<slug>_<action>`` — via ``orchestrator.app_tools``. Unlike
+    ``tool_scope``, this is unconditional: a grant is an explicit per-agent
+    permission, not a platform tool a static scope narrows.
+
+    Injection is best-effort: failures are silently swallowed so they never
+    block the main agent execution path.
+
+    Injection targets:
+        MAF Agent                — appends to ``agent.tools`` (list)
+        GitHubCopilotAgent       — appends to ``agent._tools`` (list built at init;
+                                   merged into SessionConfig.tools at session creation)
+                                   + appends tool guidance to ``_default_options.system_message``
+        Legacy Copilot SDK path  — appends to ``agent._default_options.tools`` (list)
+    """
+    _all_tools = _collect_injectable_platform_tools()
+    if not _all_tools:
+        return  # acb_skills not installed in this env — skip silently
 
     # ── Tool scoping: a guaranteed core floor + optional per-agent scope ───
     # A config.json ``tool_scope`` narrows the injected set to only what the

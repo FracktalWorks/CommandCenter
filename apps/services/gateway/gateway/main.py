@@ -867,6 +867,14 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # WS-23 S1 — read-only skills catalog (skill families + token costs).
+    from gateway.routes.integrations_skills import router as _skills_router
+
+    app.include_router(_skills_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     # E2 Phase 3 — run diagnostics API over the agent_run trace store.
     from gateway.routes.debug import router as _debug_router
 

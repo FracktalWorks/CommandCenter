@@ -1,6 +1,6 @@
 # Skills Registry + per-agent skill toggles (WS-23)
 
-**Status:** Proposed 2026-08-01 · **Owner:** vjvarada · verified against code 2026-08-01
+**Status:** S1 shipped pending review 2026-08-01 (catalog + GET API + Skills tab + drift test); S2/S3 proposed · **Owner:** vjvarada · verified against code 2026-08-01
 **Owning workstream:** `work_plan.md` WS-23 (sequenced with WS-12 context discipline)
 
 ## 0. Thesis
@@ -96,6 +96,22 @@ panel: family checklist with a live context-cost meter ("enabled: 5 families ·
   *Done when:* every injected platform tool appears in exactly one family; the
   tab renders costs; a drift test fails CI if a tool is injected but missing
   from the registry (extends `test_tool_addendum_drift_trajectory.py`).
+  **SHIPPED pending review 2026-08-01.** `acb_skills/skill_families.py`
+  (registry + DI'd `build_catalog`), `_collect_injectable_platform_tools()`
+  extracted verbatim in `_tool_injection.py` (injection unchanged), gateway
+  `routes/integrations_skills.py` (`GET /integrations/skills`, same gate as
+  the sibling endpoints), Integrations → Skills tab, drift + route tests in
+  `tests/unit/test_skills_registry.py` / `test_integrations_skills_route.py`.
+  *Family set corrected to the code* (§3's list predated the grown core
+  floor): `core` (= the 19-tool `_CORE_STANDARD_TOOL_NAMES` floor — it
+  subsumes files-artifacts / notes / web-research / most coding), `memory`
+  (8), `history` (1), `coding` (3: install_dependency + GitHub code search),
+  `workflows` (3, scope-independent), `apps` (dynamic per-grant). email /
+  whatsapp / tasks-gtd / calendar are agents' OWN repo-baked tools (never
+  injected) and join the registry only via the WS-8 manifest work. Measured
+  baseline (chars/4 run-context tokenizer): full unscoped addendum ≈5.7k
+  tokens; addendum + all 34 static tool schemas ≈19.3k, of which the core
+  floor is ≈15.1k — the WS-12 Phase-1 instrument now exists.
 - **S2 — toggles + enforcement.** Table, PUT API, per-agent panel,
   intersection in `_resolve_injected_scope`. *Done when:* disabling a family
   removes its tools AND its addendum section from the next run (assert on the

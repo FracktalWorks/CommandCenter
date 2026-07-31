@@ -19,6 +19,15 @@ clone cache.
 3. agent_tools.py -- call_agent, call_agents_parallel, call_agent_background for cross-agent delegation.
 4. web_tools.py -- web_search (DuckDuckGo) and fetch_page (Jina Reader). Zero credential.
 5. write_artifact.py -- write_artifact tool for surfacing created files in the UI.
+5a. skill_families.py -- WS-23 skill-family registry (spec: ai-company-brain/specs/skills_registry.md).
+   `SKILL_FAMILIES` maps family slug -> {label, description, tool names} and must
+   cover EVERY tool `orchestrator._tool_injection` injects, each in exactly ONE
+   family; the `core` family must equal `_CORE_STANDARD_TOOL_NAMES` verbatim
+   (tests/unit/test_skills_registry.py is the drift gate — a newly injected tool
+   must be registered here or CI fails). `build_catalog()` measures per-family
+   token cost (marginal addendum + tool JSON schemas) through dependency-injected
+   renderer/tokenizer params — this module never imports orchestrator/gateway;
+   the gateway route (`routes/integrations_skills.py`) composes the real ones.
 6. artifact_lint.py -- lints agent-generated HTML before it reaches the sandbox.
    The sandbox (SandboxedHtml.tsx) fails SILENTLY: a CDN fetch is CSP-blocked, a
    typo'd `cc-` class renders unstyled, a `cc-bar` without `--v` draws empty. The

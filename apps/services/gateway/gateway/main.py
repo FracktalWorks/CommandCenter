@@ -875,6 +875,14 @@ except Exception:  # pragma: no cover
     pass
 
 try:
+    # WS-23 S2 — per-agent skill toggles (GET/PUT /agent/{name}/skills).
+    from gateway.routes.agent_skills import router as _agent_skills_router
+
+    app.include_router(_agent_skills_router)
+except Exception:  # pragma: no cover
+    pass
+
+try:
     # E2 Phase 3 — run diagnostics API over the agent_run trace store.
     from gateway.routes.debug import router as _debug_router
 

@@ -1,6 +1,6 @@
 # Skills Registry + per-agent skill toggles (WS-23)
 
-**Status:** S1 shipped pending review 2026-08-01 (catalog + GET API + Skills tab + drift test); S2/S3 proposed · **Owner:** vjvarada · verified against code 2026-08-01
+**Status:** S1 + S2 shipped pending review 2026-08-01 (catalog + toggles + enforcement); S3 proposed · **Owner:** vjvarada · verified against code 2026-08-01
 **Owning workstream:** `work_plan.md` WS-23 (sequenced with WS-12 context discipline)
 
 ## 0. Thesis
@@ -44,6 +44,17 @@ manifest declares.
 3. **No rows ⇒ today's behavior.** Absent settings change nothing. The
    separate decision to flip fail-open (`no tool_scope` ⇒ everything, C1) to
    fail-closed rides this feature *deliberately* as S3, never implicitly.
+
+**Decision note — scope-independent injections (S2, decided default, for
+owner review 2026-08-01).** Two families are injected after (and regardless
+of) `tool_scope` filtering; S1 flagged the question of whether toggles govern
+them. The S2 default: the **`workflows`** family toggle IS honored — an
+explicit admin disable removes the list/run/status trio at its append site
+(that is narrowing, which rule 1 permits). Granted **Custom-App action tools**
+(`app_<slug>_<action>`) are NOT governed by skill toggles: an app grant is an
+explicit per-agent permission with its own management surface (`app_grants`),
+so the `apps` family is excluded from toggling in the API (422) and shown as
+"managed via App grants" in the UI.
 
 ## 3. Design
 
@@ -118,6 +129,27 @@ panel: family checklist with a live context-cost meter ("enabled: 5 families ·
   stored run context, mig 50); core family is unlisted in the UI and
   un-disableable in the API (422); no-rows agents byte-identical to today
   (regression test on injected set).
+  **SHIPPED pending review 2026-08-01.** `agent_skill_setting` migration
+  (next-free number at build; the org-access override shape — reason/set_by
+  provenance columns, `instance=''` agent-wide, PK ready for §6 profiles) ·
+  `GET/PUT /agent/{name}/skills` in gateway `routes/agent_skills.py` (PUT
+  `admin:access:manage`-gated, replace-wholesale like member overrides;
+  core/apps/unknown → 422) · enforcement in `_resolve_injected_scope`
+  (settings resolved once at run start in `_inject_agent_tools` via the same
+  best-effort sync-DB mechanism as app grants/MCP; workflows honored at its
+  append site per the §2 decision note) · S1 catalog matrix now shows the
+  effective surface (declared scope ∩ enabled families, + per-row
+  `disabled_families`) · Agents-page side-panel Skills checklist with live
+  cost meter ("enabled: N families · ~X.Xk tokens") and a reason field ·
+  tests: `test_agent_skills_route.py` + `test_skill_toggle_enforcement.py`
+  incl. the byte-identical no-rows regression against
+  `_collect_injectable_platform_tools()`. *Deferred to S3:* the "addendum
+  section removed from the next run" half is asserted against the addendum
+  BUILDER (it already branches per tool, so a disabled family's section drops
+  from the rendered prose) — the stored-run-context (mig 50) assertion lands
+  with S3's generated addendum, not faked here. UI shows core locked rather
+  than unlisted (the cost meter needs the floor visible — its ≈15k tokens are
+  most of the story WS-12 cares about).
 - **S3 — generated addendum + fail-closed decision.** Addendum assembled from
   enabled families only; then (OWNER-GATE decision) flip absent-`tool_scope`
   from inject-everything to a named default profile.

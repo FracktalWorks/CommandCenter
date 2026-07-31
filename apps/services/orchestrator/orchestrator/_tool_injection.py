@@ -65,7 +65,44 @@ _CORE_STANDARD_TOOL_NAMES: frozenset[str] = frozenset({
 })
 
 
-def _resolve_injected_scope(tool_scope: list[str] | None) -> set[str] | None:
+def _load_disabled_skill_families(agent_name: str | None) -> frozenset[str]:
+    """Family slugs an admin explicitly disabled for *agent_name* (WS-23 S2).
+
+    Reads the ``agent_skill_setting`` table written by
+    ``PUT /agent/{name}/skills`` — a best-effort SYNC Postgres lookup,
+    mirroring how this injection path already resolves per-run settings
+    (``app_tools._granted_live_apps`` for app grants, ``_inject_mcp_servers``
+    for the MCP registry): a plain blocking ``acb_graph.get_session()`` call,
+    resolved once at run start from ``_inject_agent_tools``.
+
+    ANY failure — package missing, table not migrated yet, DB down — returns
+    the empty set, i.e. today's behavior (skills_registry.md rule 3: no rows
+    change nothing; settings must never be able to brick injection).
+    """
+    if not agent_name:
+        return frozenset()
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text  # noqa: PLC0415
+        with get_session() as s:
+            rows = s.execute(
+                text(
+                    "SELECT family FROM agent_skill_setting "
+                    "WHERE agent_name = :name AND instance = '' "
+                    "  AND enabled = false"
+                ),
+                {"name": agent_name},
+            ).fetchall()
+        return frozenset(str(r[0]) for r in rows)
+    except Exception:  # noqa: BLE001 — best-effort, never blocks injection
+        return frozenset()
+
+
+def _resolve_injected_scope(
+    tool_scope: list[str] | None,
+    *,
+    disabled_families: frozenset[str] | None = None,
+) -> set[str] | None:
     """Resolve which injected tool names an agent should receive.
 
     Returns ``None`` when there is no ``tool_scope`` (inject everything), or the
@@ -73,10 +110,52 @@ def _resolve_injected_scope(tool_scope: list[str] | None) -> set[str] | None:
     guaranteed :data:`_CORE_STANDARD_TOOL_NAMES` floor.  Unioning the core in
     means a scope can add specialist tools and narrow the rest, but can never
     strip the baseline (file writing, todo, web search, clarify, …).
+
+    ``disabled_families`` (WS-23 S2) applies the admin's per-agent skill
+    toggles as an INTERSECTION on top — the spec's rule 1, in the one place
+    both runtimes pass through::
+
+        effective = (declared tool_scope ∪ CORE) ∩ (enabled-family tools ∪ CORE)
+
+    A toggle can therefore only narrow within what the code declares. The core
+    floor is on both sides of the intersection so it always survives (rule 2;
+    a ``'core'`` slug in ``disabled_families`` is ignored defensively — the
+    API already refuses it with 422). With no disabled families the function
+    is byte-identical to its pre-S2 self, including the ``None`` sentinel for
+    unscoped agents (rule 3 — the fail-open flip is S3, owner-gated).
     """
-    if not tool_scope:
-        return None
-    return set(tool_scope) | set(_CORE_STANDARD_TOOL_NAMES)
+    base = (
+        set(tool_scope) | set(_CORE_STANDARD_TOOL_NAMES) if tool_scope else None
+    )
+    if not disabled_families:
+        return base
+    try:
+        from acb_skills.skill_families import SKILL_FAMILIES  # noqa: PLC0415
+    except ImportError:
+        return base  # registry unavailable — settings cannot apply safely
+    # Only families that are real, not the core floor, and carry static tools
+    # can narrow the injected set. ('apps' is dynamic — the API refuses it;
+    # 'workflows' tools are appended per-agent, and _inject_agent_tools also
+    # honors the toggle at that append site.)
+    relevant = {
+        slug for slug in disabled_families
+        if slug in SKILL_FAMILIES
+        and not SKILL_FAMILIES[slug].get("core")
+        and SKILL_FAMILIES[slug].get("tools")
+    }
+    if not relevant:
+        return base  # nothing narrowing ⇒ byte-identical to today (rule 3)
+    enabled_tools = set(_CORE_STANDARD_TOOL_NAMES)
+    for slug, fam in SKILL_FAMILIES.items():
+        if slug not in relevant:
+            enabled_tools |= set(fam["tools"])
+    if base is None:
+        # Unscoped agent: the declared side of the intersection is the whole
+        # registered platform surface (∪ CORE) — fail-open, then narrowed.
+        base = set(_CORE_STANDARD_TOOL_NAMES) | {
+            name for fam in SKILL_FAMILIES.values() for name in fam["tools"]
+        }
+    return base & enabled_tools
 
 
 def _build_output_discipline_block(*, compact: bool = False) -> str:
@@ -805,7 +884,20 @@ def _inject_agent_tools(
     # ALWAYS present no matter how the scope was written.  This is what stops an
     # agent whose scope forgot ``write_artifact`` from having no clean file-write
     # path and resorting to fragile shell heredocs.
-    _scope_names = _resolve_injected_scope(tool_scope)
+    #
+    # WS-23 S2: admin skill toggles resolve ONCE here at run start (same
+    # mechanism as app grants / MCP below — a best-effort DB read keyed by
+    # agent name) and intersect the scope. No rows ⇒ frozenset() ⇒ the resolve
+    # below is byte-identical to pre-S2 behavior (skills_registry.md rule 3).
+    _disabled_families = _load_disabled_skill_families(agent_name)
+    if _disabled_families:
+        _log.info(
+            "executor.skill_families_disabled",
+            agent=agent_name, families=sorted(_disabled_families),
+        )
+    _scope_names = _resolve_injected_scope(
+        tool_scope, disabled_families=_disabled_families,
+    )
     if _scope_names is not None:
         # Scope-typo guard (multi_agent_orchestration.md Phase 0.3): an entry
         # matching no injectable platform tool silently no-ops — the exact bug
@@ -851,7 +943,14 @@ def _inject_agent_tools(
     # offered (list/run/status trio, not one tool per workflow), gated
     # through the same _gate_injected_tool pipeline below. Any write inside
     # a workflow is already broker-gated / approval-noded.
-    if agent_name:
+    #
+    # The trio is appended AFTER scope filtering, so the S2 skill toggle is
+    # honored HERE: an explicit admin disable of the 'workflows' family
+    # removes it — that is narrowing, which rule 1 permits. (Granted
+    # Custom-App action tools above are deliberately NOT toggle-governed: an
+    # app grant is an explicit per-agent permission with its own management
+    # surface — spec §2 decision note.)
+    if agent_name and "workflows" not in _disabled_families:
         try:
             from orchestrator.workflow_tools import load_workflow_tools  # noqa: PLC0415
             _extra_tools = _extra_tools + load_workflow_tools(agent_name)

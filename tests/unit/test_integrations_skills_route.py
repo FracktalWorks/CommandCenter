@@ -54,6 +54,8 @@ def _hermetic(monkeypatch):
         sk, "_core_tool_names",
         lambda: frozenset(sf.SKILL_FAMILIES["core"]["tools"]),
     )
+    # S2: no stored skill settings unless a test injects them.
+    monkeypatch.setattr(sk, "_disabled_families_by_agent", lambda: {})
     yield
     sf.clear_cost_cache()
 
@@ -108,7 +110,27 @@ async def test_matrix_unscoped_agent_shows_all_families(monkeypatch):
     out = await sk.skills_catalog(user=USER)
     row = out["agents"][0]
     assert row["all_families"] is True
+    assert row["disabled_families"] == []
     assert set(row["families"]) == set(sf.SKILL_FAMILIES)
+
+
+@pytest.mark.asyncio
+async def test_matrix_reflects_stored_skill_settings(monkeypatch):
+    """S2: the matrix shows the EFFECTIVE surface — stored settings on top of
+    declared scope — including the scope-independent workflows family."""
+    _agents(monkeypatch, [{"name": "orchestrator"}], {"orchestrator": None})
+    monkeypatch.setattr(
+        sk, "_disabled_families_by_agent",
+        lambda: {"orchestrator": frozenset({"memory", "workflows"})},
+    )
+    out = await sk.skills_catalog(user=USER)
+    row = out["agents"][0]
+    assert row["disabled_families"] == ["memory", "workflows"]
+    assert "memory" not in row["families"]
+    assert "workflows" not in row["families"]
+    assert "core" in row["families"] and "history" in row["families"]
+    # An explicit disable means the agent no longer receives everything.
+    assert row["all_families"] is False
 
 
 def test_declared_tool_scope_reads_config_json(tmp_path, monkeypatch):

@@ -83,6 +83,33 @@ def _core_tool_names() -> frozenset[str]:
     return frozenset(_CORE_STANDARD_TOOL_NAMES)
 
 
+def _disabled_families_by_agent() -> dict[str, frozenset[str]]:
+    """agent name → families an admin disabled (WS-23 S2), best-effort.
+
+    Reads the same ``agent_skill_setting`` rows the enforcement seam
+    (``_tool_injection._load_disabled_skill_families``) resolves at run
+    start, so the matrix shows the EFFECTIVE surface — stored settings on top
+    of declared scope. Any failure (table not migrated, DB down) returns
+    empty: the catalog then shows declared scope only, exactly S1's view.
+    """
+    try:
+        from acb_graph import get_session  # noqa: PLC0415
+        from sqlalchemy import text as _text  # noqa: PLC0415
+        with get_session() as s:
+            rows = s.execute(
+                _text(
+                    "SELECT agent_name, family FROM agent_skill_setting "
+                    "WHERE instance = '' AND enabled = false"
+                ),
+            ).fetchall()
+        out: dict[str, set[str]] = {}
+        for r in rows:
+            out.setdefault(str(r[0]), set()).add(str(r[1]))
+        return {k: frozenset(v) for k, v in out.items()}
+    except Exception:  # noqa: BLE001 — settings must never break the catalog
+        return {}
+
+
 def _list_agents() -> list[dict[str, Any]]:
     """Every registered agent (static registry + dynamic table), best-effort."""
     try:
@@ -150,25 +177,38 @@ async def skills_catalog(
         core_tool_names=_core_tool_names(),
     )
 
+    disabled_map = _disabled_families_by_agent()
+
     agents_out: list[dict[str, Any]] = []
     for a in _list_agents():
         name = (a.get("name") or "").strip()
         if not name:
             continue
         scope = _declared_tool_scope(name, a.get("local_path"))
-        resolved = _resolve_injected_scope(scope)
+        # S2: stored settings intersect the declared scope — the SAME resolve
+        # the injection seam runs, so the matrix shows the effective surface.
+        disabled = disabled_map.get(name, frozenset())
+        resolved = _resolve_injected_scope(scope, disabled_families=disabled)
         fams = skill_families.families_for_scope(
             scope,
             resolved_scope=frozenset(resolved) if resolved is not None else None,
         )
+        # Scope-independent families (workflows) are honored at their own
+        # append site, not via the resolved tool set — subtract explicitly.
+        # core/apps stay: the API refuses toggling them, and enforcement
+        # ignores such rows defensively, so the display matches enforcement
+        # even against a hand-edited table.
+        fams = [f for f in fams if f not in disabled or f in ("core", "apps")]
         agents_out.append({
             "name": name,
             "description": a.get("description", ""),
             "tool_scope_declared": scope is not None,
             "families": fams,
+            # Families an admin explicitly toggled off (agent_skill_setting).
+            "disabled_families": sorted(disabled),
             # No tool_scope ⇒ injection is fail-open today (spec rule 3):
-            # the agent receives every family.
-            "all_families": scope is None,
+            # the agent receives every family (minus explicit disables).
+            "all_families": scope is None and not disabled,
         })
 
     return {**catalog, "agents": agents_out}

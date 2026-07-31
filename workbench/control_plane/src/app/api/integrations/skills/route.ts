@@ -32,8 +32,11 @@ export interface SkillAgentRow {
   name: string;
   description: string;
   tool_scope_declared: boolean;
+  /** Effective families: declared scope ∩ enabled families (WS-23 S2). */
   families: string[];
-  /** No tool_scope declared — injection is fail-open, agent gets everything. */
+  /** Families an admin explicitly toggled off (agent_skill_setting rows). */
+  disabled_families: string[];
+  /** No tool_scope declared and nothing disabled — fail-open, gets everything. */
   all_families: boolean;
 }
 

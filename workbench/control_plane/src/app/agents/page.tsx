@@ -37,6 +37,8 @@ import {
 import type { AgentEntry } from "@/app/api/agent/list/route";
 import type { MutationEntry } from "@/app/api/agent/mutations/route";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
+import type { SkillsCatalog, SkillFamily } from "@/app/api/integrations/skills/route";
+import type { AgentSkillSettings } from "@/app/api/agent/[name]/skills/route";
 import GitHubDeviceConnect from "@/components/GitHubDeviceConnect";
 import FilterPills from "@/components/FilterPills";
 import { AgentAvatar, useAgentAvatars, notifyAgentAvatarsChanged } from "@/components/AgentAvatar";
@@ -470,6 +472,237 @@ function PendingCommits({ agentName }: { agentName: string }) {
                 );
               })}
             </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Skills panel — per-agent skill-family toggles (WS-23 S2)
+// ---------------------------------------------------------------------------
+
+function fmtTokens(n: number): string {
+  return n >= 1000 ? `~${(n / 1000).toFixed(1)}k` : `~${n}`;
+}
+
+function AgentSkillsPanel({ agentName }: { agentName: string }) {
+  const [open, setOpen] = useState(false);
+  const [fetched, setFetched] = useState(false);
+  const [loading, setLoading] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const [families, setFamilies] = useState<SkillFamily[]>([]);
+  const [nonToggleable, setNonToggleable] = useState<Record<string, string>>({});
+  // Stored reasons per family (from existing rows), for display.
+  const [storedReasons, setStoredReasons] = useState<Record<string, string>>({});
+  // enabled state per family slug (default: everything enabled — no rows).
+  const [enabled, setEnabled] = useState<Record<string, boolean>>({});
+  // Baseline from the server, to compute dirtiness.
+  const [baseline, setBaseline] = useState<Record<string, boolean>>({});
+  const [reason, setReason] = useState("");
+
+  const applySettings = useCallback(
+    (fams: SkillFamily[], s: AgentSkillSettings) => {
+      const map: Record<string, boolean> = {};
+      for (const f of fams) map[f.slug] = !s.disabled_families.includes(f.slug);
+      const reasons: Record<string, string> = {};
+      for (const row of s.settings) if (row.reason) reasons[row.family] = row.reason;
+      setEnabled(map);
+      setBaseline(map);
+      setStoredReasons(reasons);
+      setNonToggleable(s.non_toggleable ?? {});
+    },
+    [],
+  );
+
+  const fetchAll = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const [cRes, sRes] = await Promise.all([
+        fetch("/api/integrations/skills"),
+        fetch(`/api/agent/${encodeURIComponent(agentName)}/skills`),
+      ]);
+      const cat = cRes.ok ? ((await cRes.json()) as SkillsCatalog) : null;
+      const st = sRes.ok ? ((await sRes.json()) as AgentSkillSettings) : null;
+      if (!cat || !st) {
+        const bad = !cRes.ok ? cRes : sRes;
+        const body = await bad.json().catch(() => ({}));
+        setError(String(body?.error ?? body?.detail ?? `Request failed (${bad.status})`));
+        return;
+      }
+      setFamilies(cat.families);
+      applySettings(cat.families, st);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setLoading(false);
+      setFetched(true);
+    }
+  }, [agentName, applySettings]);
+
+  const toggle = () => {
+    if (!open && !fetched) void fetchAll();
+    setOpen((v) => !v);
+  };
+
+  const dirty = families.some((f) => enabled[f.slug] !== baseline[f.slug]);
+  const enabledFams = families.filter((f) => !f.dynamic && enabled[f.slug] !== false);
+  const costTokens = enabledFams.reduce((sum, f) => sum + f.token_cost, 0);
+
+  const save = async () => {
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      // Replace-wholesale: rows only for families toggled OFF — no rows means
+      // the default (enabled), so re-enabling everything clears the table.
+      const settings = families
+        .filter((f) => !(f.slug in nonToggleable) && enabled[f.slug] === false)
+        .map((f) => ({ family: f.slug, enabled: false, reason: reason.trim() || storedReasons[f.slug] || "" }));
+      const res = await fetch(`/api/agent/${encodeURIComponent(agentName)}/skills`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ settings }),
+      });
+      const body = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        setError(String(body?.detail ?? body?.error ?? `HTTP ${res.status}`));
+      } else {
+        applySettings(families, body as AgentSkillSettings);
+        setReason("");
+        setSaved(true);
+        setTimeout(() => setSaved(false), 4000);
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="mt-3 border-t border-border pt-3">
+      <button
+        onClick={toggle}
+        className="flex items-center gap-2 text-xs text-muted-foreground hover:text-foreground transition-colors w-full text-left"
+      >
+        <span className="font-medium">Skills</span>
+        {fetched && !loading && families.length > 0 && (
+          <span className="text-[10px] text-muted-foreground">
+            enabled: {enabledFams.length} families · {fmtTokens(costTokens)} tokens of tool context
+          </span>
+        )}
+        {loading && <span className="text-[10px] text-muted-foreground">loading…</span>}
+        <span className="ml-auto text-muted-foreground/70">{open ? "▲" : "▼"}</span>
+      </button>
+
+      {open && (
+        <div className="mt-2 flex flex-col gap-1.5">
+          <p className="text-[10px] text-muted-foreground/70 leading-relaxed">
+            Toggles only narrow what this agent&apos;s code declares — a switch never grants
+            a tool the code never asked for. Costs are measured from the injected tool context.
+          </p>
+
+          {error && (
+            <div className="rounded-md border border-destructive/20 bg-destructive/5 px-3 py-2 text-[11px] text-destructive">
+              {error}
+            </div>
+          )}
+          {saved && (
+            <div className="rounded-md border border-success/20 bg-success/5 px-3 py-2 text-[11px] text-success">
+              ✓ Saved — applies from the next run.
+            </div>
+          )}
+
+          {families.map((f) => {
+            const locked = f.slug in nonToggleable;
+            const isOn = enabled[f.slug] !== false;
+            return (
+              <label
+                key={f.slug}
+                className={`flex items-start gap-2.5 rounded-lg border px-3 py-2 text-xs transition-colors ${
+                  locked
+                    ? "border-border/60 bg-secondary/30"
+                    : isOn
+                    ? "border-border bg-card/40 hover:border-primary/30 cursor-pointer"
+                    : "border-warning/20 bg-warning/5 hover:border-warning/40 cursor-pointer"
+                }`}
+                title={locked ? nonToggleable[f.slug] : f.description}
+              >
+                <input
+                  type="checkbox"
+                  checked={isOn}
+                  disabled={locked || saving}
+                  onChange={() => {
+                    setSaved(false);
+                    setEnabled((m) => ({ ...m, [f.slug]: !(m[f.slug] !== false) }));
+                  }}
+                  className="mt-0.5 accent-[var(--primary)] disabled:opacity-40"
+                />
+                <span className="min-w-0 flex-1">
+                  <span className="flex items-center gap-1.5 flex-wrap">
+                    <span className="font-medium text-foreground">{f.label}</span>
+                    {f.slug === "core" && (
+                      <span className="rounded border border-border/50 bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        always on
+                      </span>
+                    )}
+                    {f.slug === "apps" && (
+                      <span className="rounded border border-border/50 bg-secondary px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                        managed via App grants
+                      </span>
+                    )}
+                    {!isOn && !locked && (
+                      <span className="rounded border border-warning/20 bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning">
+                        disabled
+                      </span>
+                    )}
+                  </span>
+                  <span className="mt-0.5 block text-[10px] text-muted-foreground">
+                    {f.dynamic
+                      ? "per-grant tools, resolved at run time"
+                      : `${f.tool_count} tool${f.tool_count === 1 ? "" : "s"} · ${fmtTokens(f.token_cost)} tokens`}
+                    {storedReasons[f.slug] && !isOn ? ` · “${storedReasons[f.slug]}”` : ""}
+                  </span>
+                </span>
+              </label>
+            );
+          })}
+
+          {fetched && !loading && families.length === 0 && !error && (
+            <p className="text-xs text-muted-foreground/70 italic">Skills catalog unavailable.</p>
+          )}
+
+          {dirty && (
+            <div className="mt-1 flex flex-col gap-1.5">
+              <input
+                type="text"
+                value={reason}
+                onChange={(e) => setReason(e.target.value)}
+                placeholder="Why? (recorded with the change, like member overrides)"
+                className="w-full rounded-lg border border-border bg-secondary px-3 py-1.5 text-xs text-foreground placeholder-muted-foreground focus:border-primary focus:outline-none"
+              />
+              <div className="flex items-center gap-1.5">
+                <button
+                  onClick={() => void save()}
+                  disabled={saving}
+                  className="rounded bg-primary px-3 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 disabled:opacity-50 transition-colors"
+                >
+                  {saving ? "Saving…" : "Save skills"}
+                </button>
+                <button
+                  onClick={() => { setEnabled(baseline); setReason(""); }}
+                  disabled={saving}
+                  className="rounded border border-border px-3 py-1.5 text-xs text-muted-foreground hover:bg-secondary disabled:opacity-50 transition-colors"
+                >
+                  Reset
+                </button>
+              </div>
+            </div>
           )}
         </div>
       )}
@@ -1859,6 +2092,10 @@ function AgentSidePanel({
             )}
           </div>
         )}
+
+        {/* Per-agent skill toggles (WS-23 S2) — narrows the injected tool
+            families; keyed so switching agents remounts with fresh state. */}
+        <AgentSkillsPanel key={agent.name} agentName={agent.name} />
 
         {/* Show pending commits for ALL agents — any agent can have
             self-mutation commits awaiting review, not just github-copilot. */}

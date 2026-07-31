@@ -2422,7 +2422,8 @@ function SkillsTab() {
           <p className="text-sm text-muted-foreground mt-2 leading-relaxed max-w-xl">
             The platform injects these tool families into agents at run time. Costs are measured — each
             family&apos;s system-prompt addendum plus its tool schemas, counted with the run-context tokenizer.
-            Read-only for now; per-agent toggles arrive with the next phase.
+            The matrix shows each agent&apos;s effective surface (declared scope ∩ enabled families);
+            toggle families per agent from the Agents page side panel.
           </p>
         </div>
       </div>
@@ -2474,6 +2475,8 @@ function SkillsTab() {
                       <td key={f.slug} className="text-center px-3 py-2.5">
                         {a.families.includes(f.slug)
                           ? <Check className="w-3.5 h-3.5 text-success inline" />
+                          : (a.disabled_families ?? []).includes(f.slug)
+                          ? <span className="text-[10px] px-1.5 py-0.5 rounded bg-warning/10 text-warning" title="Explicitly disabled by an admin (skill toggle)">off</span>
                           : <span className="text-muted">—</span>}
                       </td>
                     ))}

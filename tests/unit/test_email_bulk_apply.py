@@ -435,3 +435,76 @@ async def test_cleaner_can_still_show_the_whole_mailbox() -> None:
     assert "<> 'archive'" not in captured["sql"]
     # Disposed mail is still out of scope in both modes.
     assert "'trash'" in captured["sql"]
+
+
+# ── Sender chips: every pill is a label a rule actually wrote ────────────────
+
+
+def test_sender_chips_show_the_conversation_labels_the_rules_write() -> None:
+    """The cleaner used to show a synthesized "Conversation" chip — inferred,
+    matching no rule in AI settings and no filter tab, and it MASKED the labels
+    the user's rules had genuinely applied. Chips are now the real per-message
+    labels: cleanup categories first, then Reply Zero's conversation state."""
+    from gateway.routes.email.automation import senders as s
+
+    # Ranked most-used first within each group.
+    assert s._cleanup_categories_ranked(
+        {"newsletter": 9, "marketing": 2}) == ["Newsletter", "Marketing"]
+    # Conversation labels are real, rule-written labels with display names.
+    assert s._CONVERSATION_DISPLAY["awaiting reply"] == "Awaiting Reply"
+    assert s._CONVERSATION_DISPLAY["fyi"] == "FYI"
+    # Legacy spellings collapse onto the modern name rather than duplicating it.
+    assert s._CONVERSATION_DISPLAY["reply"] == "Needs Reply"
+    assert s._CONVERSATION_DISPLAY["to reply"] == "Needs Reply"
+    assert s._CONVERSATION_DISPLAY["actioned"] == "Done"
+    # …and "Conversation" is not among them: it is a sender-level inference,
+    # never a label on a message.
+    assert s.CONVERSATION_SENDER_CATEGORY not in s._CONVERSATION_DISPLAY.values()
+
+
+def test_conversation_stays_a_sender_ranking_signal() -> None:
+    """Dropping the chip must not drop the classification: it is what lifts a
+    real correspondent above bulk mail in "important emails"."""
+    from gateway.routes.email import core
+
+    assert (core.CONVERSATION_SENDER_CATEGORY.lower()
+            in core.HUMAN_SENDER_CATEGORIES_LOWER)
+
+
+# ── Search: list rows don't pay for message bodies ──────────────────────────
+
+
+async def test_light_search_omits_message_bodies() -> None:
+    """The cleaner's sender drill-down renders subject + snippet only. Fetching
+    body_html for a page of marketing mail was megabytes of HTML parsed on the
+    main thread and thrown away — the reported page freeze."""
+    from gateway.routes.email.transport import search as sr
+
+    captured: dict = {}
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            sql = str(clause)
+            if "FROM email_messages em" in sql and "SELECT em.id" in sql:
+                captured["sql"] = sql
+            return MagicMock(
+                fetchall=MagicMock(return_value=[]),
+                fetchone=MagicMock(return_value=MagicMock(total=0)),
+                scalar=MagicMock(return_value=0),
+            )
+
+        async def close(self): ...
+
+    with patch.object(sr, "_get_db", AsyncMock(return_value=_DB())):
+        await sr.search_messages(
+            q=None, account_id="acc-1", folder="all", label=None, labels=None,
+            uncategorized=False, from_addr="news@site.com", to_addr=None,
+            is_read=None, is_starred=None, received_after=None,
+            received_before=None, has_attachments=None, sender_category=None,
+            importance=None, hybrid=False, light=True, page=1, page_size=4,
+            user=MagicMock(email="u@x.io"))
+
+    sql = captured["sql"]
+    # The column SHAPE is preserved (_row_to_message reads both) but empty.
+    assert "'' AS body_text" in sql and "NULL AS body_html" in sql
+    assert "em.body_html," not in sql

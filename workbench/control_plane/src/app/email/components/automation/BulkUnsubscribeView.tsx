@@ -66,6 +66,11 @@ const CATEGORY_TABS = [
  *  confused for a classification. */
 const UNCATEGORIZED = "__uncategorized__";
 
+/** How many of a sender's messages the drill-down loads at a time. Small on
+ *  purpose: expanding a sender used to fetch 25 messages at once, and you open
+ *  it to glance at what this sender sends, not to read a page of them. */
+const DRILL_PAGE = 4;
+
 /** Senders per request. This is a PAYLOAD bound, not a scope bound — the
  *  backend caps a single response at 1000, and everything past it is reachable
  *  by paging (`offset`). `total` says how many exist, so the list can offer the
@@ -1454,6 +1459,9 @@ export function BulkUnsubscribeView({
                 </div>
                 {expanded === s.email && (
                   <SenderMessages
+                    // Remount on a scope change so the paged list starts clean
+                    // instead of showing the previous scope's page.
+                    key={`${s.email}:${categoryTab}`}
                     accountId={accountId}
                     email={s.email}
                     category={categoryTab}
@@ -1622,27 +1630,45 @@ function SenderMessages({
   labelColors: Record<string, string | null>;
 }) {
   const [msgs, setMsgs] = useState<Email[] | null>(null);
+  const [total, setTotal] = useState(0);
+  const [loadingMore, setLoadingMore] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const scoped = category !== "all";
 
+  /** One page of this sender's mail. `light` because a row renders subject +
+   *  snippet only — pulling body_html for a page of marketing mail was
+   *  megabytes of HTML parsed and discarded, which is what froze the page. */
+  const fetchPage = useCallback(
+    (page: number) =>
+      searchEmails({
+        accountId,
+        fromAddr: email,
+        folder: "all",
+        light: true,
+        page,
+        pageSize: DRILL_PAGE,
+        // "Uncategorized" is the ABSENCE of a label, not a label — it has its
+        // own server-side predicate and would match nothing as a label name.
+        ...(category === UNCATEGORIZED
+          ? { uncategorized: true }
+          : scoped
+            ? { labels: [category] }
+            : {}),
+      }),
+    [accountId, email, category, scoped],
+  );
+
+  // No reset here: the call site keys this component on (sender, category), so
+  // changing either remounts it with fresh state rather than flashing the
+  // previous sender's messages while the new page loads.
   useEffect(() => {
     let alive = true;
-    searchEmails({
-      accountId,
-      fromAddr: email,
-      folder: "all",
-      pageSize: 25,
-      // "Uncategorized" is the ABSENCE of a label, not a label — it has its own
-      // server-side predicate and would match nothing as a label name.
-      ...(category === UNCATEGORIZED
-        ? { uncategorized: true }
-        : scoped
-          ? { labels: [category] }
-          : {}),
-    })
+    fetchPage(1)
       .then((r) => {
-        if (alive) setMsgs(r.emails);
+        if (!alive) return;
+        setMsgs(r.emails);
+        setTotal(r.total);
       })
       .catch((e) => {
         if (alive) setErr((e as Error).message || "Failed to load messages");
@@ -1650,13 +1676,31 @@ function SenderMessages({
     return () => {
       alive = false;
     };
-  }, [accountId, email, category, scoped]);
+  }, [fetchPage]);
+
+  const showMore = async () => {
+    if (!msgs || loadingMore) return;
+    setLoadingMore(true);
+    try {
+      const r = await fetchPage(Math.floor(msgs.length / DRILL_PAGE) + 1);
+      setMsgs((prev) => {
+        const seen = new Set((prev ?? []).map((m) => m.id));
+        return [...(prev ?? []), ...r.emails.filter((m) => !seen.has(m.id))];
+      });
+      setTotal(r.total);
+    } catch (e) {
+      setErr((e as Error).message || "Failed to load more");
+    } finally {
+      setLoadingMore(false);
+    }
+  };
 
   const act = async (id: string, action: "archive" | "trash") => {
     setBusyId(id);
     try {
       await bulkAction({ action, accountId, messageIds: [id] });
       setMsgs((prev) => (prev || []).filter((m) => m.id !== id));
+      setTotal((t) => Math.max(0, t - 1));
     } catch (e) {
       setErr((e as Error).message || "Action failed");
     } finally {
@@ -1760,6 +1804,19 @@ function SenderMessages({
           )}
         </div>
       ))}
+      {msgs.length < total && (
+        <button
+          onClick={showMore}
+          disabled={loadingMore}
+          className="flex items-center gap-1.5 py-1.5 text-[10px] text-primary hover:opacity-80 disabled:opacity-50"
+        >
+          {loadingMore && <Loader2 className="animate-spin" size={11} />}
+          Show {Math.min(DRILL_PAGE, total - msgs.length)} more
+          <span className="text-muted-foreground">
+            ({msgs.length} of {total})
+          </span>
+        </button>
+      )}
     </div>
   );
 }

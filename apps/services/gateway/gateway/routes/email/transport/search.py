@@ -183,6 +183,11 @@ async def search_messages(
         None, description="Provider importance: high | normal | low"),
     hybrid: bool = Query(
         False, description="Blend semantic (vector) similarity into the ranking"),
+    light: bool = Query(
+        False,
+        description="Omit message bodies — for callers that only render "
+                    "subject/snippet (list rows). Cuts the payload by orders "
+                    "of magnitude on HTML-heavy mail."),
     page: int = Query(1, ge=1),
     page_size: int = Query(50, ge=1, le=200),
     user: UserContext = Depends(get_current_user),
@@ -294,12 +299,20 @@ async def search_messages(
                     'MaxWords=18, MinWords=5, FragmentDelimiter=" … "'
                 ) AS highlight"""
             if text_q else "'' AS highlight")
+        # ``light``: keep the SELECT's SHAPE (every consumer, _row_to_message
+        # included, reads these two columns) but return empty bodies. A list row
+        # renders subject + snippet only, so shipping body_html for 25 marketing
+        # mails was megabytes of HTML parsed on the main thread and then thrown
+        # away — the Email Cleaner's sender drill-down froze the page on it.
+        body_select = (
+            "'' AS body_text, NULL AS body_html" if light
+            else "em.body_text, em.body_html")
         rows = (await db.execute(text(
             f"""SELECT em.id, em.provider_message_id, em.thread_id,
                        em.account_id, em.folder, em.labels,
                        em.from_address, em.to_addresses,
                        em.cc_addresses, em.bcc_addresses,
-                       em.subject, em.body_text, em.body_html,
+                       em.subject, {body_select},
                        em.snippet, em.has_attachments,
                        em.is_read, em.is_starred, em.is_flagged,
                        em.importance, em.categories,

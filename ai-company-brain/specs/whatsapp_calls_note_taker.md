@@ -318,7 +318,7 @@ Three WhatsApp-specific additions:
 ## 9. Open questions (verify before building)
 
 1. **Is calling enabled on our WABA?** Hard gate on Phase A.
-2. **Does meowcaller expose per-participant PCM in a group call, or a mixed downlink?** Decides whether we get free perfect diarization or fall back to clustering. *The single highest-value unknown.*
+2. ~~**Does meowcaller expose per-participant PCM in a group call, or a mixed downlink?**~~ **RESOLVED 2026-08-01 — see §10.** Per-participant PCM exists, keyed by participant JID. Remaining sub-question is only whether we upstream a hook or fork.
 3. **Does the Cloud API SDP offer let us pick a codec/sample rate**, or must we transcode OPUS → 16 kHz for `acb_stt`?
 4. **Can a Cloud API call be recorded under Meta's policy** as long as the caller is told? (BSPs do it, which suggests yes — confirm in writing.)
 5. **How stable is a paired notetaker session under call load?** whatsmeow sessions drop; a bridge that reconnects mid-call is worse than one that never joined.
@@ -327,7 +327,58 @@ Three WhatsApp-specific additions:
 
 ---
 
-## 10. Sources
+## 10. Addendum (2026-08-01) — CC *is* the call client, and speakers are attributed not diarized
+
+Two refinements from review that change the recommended shape. They supersede the framing in §7.1 for the personal/group path; §7's consent, rules and post-call design all still stand.
+
+### 10.1 Collapse it: one call surface in CC, two transports underneath
+
+Rather than "a notetaker contact you add to the call", the stronger model is **CommandCenter takes the call**. It unifies Phases A and B behind one UI:
+
+| You answer on | Transport | Calls covered | Status |
+|---|---|---|---|
+| **Business number** | Cloud API Business Calling (SDP/WebRTC leg) | 1:1 only | official |
+| **Personal number** | whatsmeow + meowcaller | **1:1 and group** | unofficial |
+
+For Surface A this isn't a workaround — **terminating the media leg yourself *is* the documented architecture**, so "take the call in CC" is exactly what Meta expects. For Surface C, `JotaDev66/WaCalls` already ships this shape (a browser call UI over whatsmeow + pion), which is useful corroboration that a CC-hosted dialer is viable.
+
+What it buys: no second number, no extra participant consuming one of the 32 slots, no "add the bot" step, and nothing *experimental* about joining — CC is simply a participant.
+
+What it costs, honestly:
+- **Behaviour change.** Calls must be taken in the browser, not on the phone. This is the main adoption risk and should be treated as the primary product question, not an implementation detail.
+- **Consent regresses.** With no visible notetaker in the participant list, §7.5's audible announcement and chat-thread message stop being belt-and-braces and become the *only* disclosure. They must be non-optional on this path.
+- Ban risk on the personal transport is unchanged.
+
+Keep the "add a notetaker participant" model (§7.3) as the alternative for users who won't move their calls off the phone.
+
+### 10.2 Group calls give attribution, not diarization
+
+**Confirmed in `meowcaller` source.** The structural argument is decisive: E2EE means the server cannot decrypt, therefore cannot mix, therefore mixing happens client-side, therefore the client necessarily receives N separately-decodable streams.
+
+`group_media_receive.go` decodes per participant, keyed by RTP SSRC, and returns PCM bundled with identity:
+
+```go
+type decodedParticipantAudio struct {
+    ParticipantID string
+    UserJID       types.JID   // the participant's phone number
+    DeviceJID     types.JID
+    SSRC          uint32
+    Timestamp     uint32
+    PCM           []float32
+}
+```
+
+`participantReceiveRegistry.DecodeAudio(packet)` resolves the receiver by SSRC, unprotects via `pipe.UnprotectAudio()`, decodes, and returns the above. Mixing happens strictly afterwards in `group_audio_mixer.go` (`Add(participantID, pcm)` → `MixChunk()`).
+
+**So this is not diarization — it is attribution.** No clustering, no embeddings, no `S1`/`S2` labels, no rename step. `UserJID` joins directly to `wa_contacts` and the transcript is correctly named by construction. This is strictly better than our Meet bot and better than the commercial notetakers, and it is the single strongest product argument for building this at all.
+
+**Gap:** the public sink (`SinkFunc(func(pcm []float32))`) exposes only the *mix*; the per-participant types are unexported. Exposing them is a small, well-scoped change at the point `DecodeAudio` already returns — best done as an **upstream PR** (MIT, actively maintained, and `engine_hook_test.go` suggests a hook mechanism to hang it off) rather than a fork we carry.
+
+**Cost decision — take it early.** Transcribing N streams separately is N× the STT bill. Default instead to: **transcribe the mix once**, and use the per-participant streams purely as a **speaker-activity timeline**, labelling each segment by whichever participant had energy at that timestamp. 1× cost, exact attribution, degrades gracefully under crosstalk. Reserve per-stream STT for calls where overlapping speech genuinely matters.
+
+---
+
+## 11. Sources
 
 - [Cloud API Calling — Meta for Developers](https://developers.facebook.com/documentation/business-messaging/whatsapp/calling)
 - [Calling — WhatsApp Cloud API docs](https://developers.facebook.com/docs/whatsapp/cloud-api/calling/)

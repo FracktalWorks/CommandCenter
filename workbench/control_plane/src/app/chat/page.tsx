@@ -15,7 +15,10 @@ import {
   isUnresolvedAgent,
   type ChatSession,
 } from "@/lib/sessions";
-import { buildEmailAssistantPersona } from "@/app/email/lib/emailAssistantPersona";
+import {
+  buildEmailAssistantPersona,
+  type PersonaAccountSettings,
+} from "@/app/email/lib/emailAssistantPersona";
 import { getAssistantSettings } from "@/app/email/lib/api";
 import AgentChat from "@/components/AgentChat";
 import { AgentAvatar, useAgentAvatars } from "@/components/AgentAvatar";
@@ -596,14 +599,6 @@ function ChatPageInner() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [activeAgentName]);
-  const emailAssistantPersona = useMemo(
-    () =>
-      activeAgentName === "email-assistant"
-        ? buildEmailAssistantPersona({ accounts: emailAccounts })
-        : undefined,
-    [activeAgentName, emailAccounts],
-  );
-
   // Lock the email-assistant chat to the account's configured chat_model — the
   // SAME single source of truth the email app uses (Assistant → Settings →
   // Models) — so the agent runs on the SAME model regardless of which surface
@@ -617,14 +612,40 @@ function ChatPageInner() {
   // (which the backend would coerce to a different tier). Refined to the
   // account's saved chat_model once the fetch resolves; kept on lookup failure.
   const [emailChatModel, setEmailChatModel] = useState<string | undefined>("tier-powerful");
+  // The account's standing configuration, fed into the persona below — same
+  // fetch, so the assistant behaves the same here as in the email app.
+  const [emailAcctSettings, setEmailAcctSettings] =
+    useState<PersonaAccountSettings | null>(null);
   useEffect(() => {
     if (activeAgentName !== "email-assistant" || !emailChatAccountId) return;
     let cancelled = false;
     getAssistantSettings(emailChatAccountId)
-      .then((s) => { if (!cancelled) setEmailChatModel(s.chat_model || "tier-powerful"); })
+      .then((s) => {
+        if (cancelled) return;
+        setEmailChatModel(s.chat_model || "tier-powerful");
+        setEmailAcctSettings({
+          about: s.about,
+          personal_instructions: s.personal_instructions,
+          writing_style: s.writing_style,
+          learned_writing_style: s.learned_writing_style,
+        });
+      })
       .catch(() => { /* keep the tier-powerful default on lookup failure */ });
     return () => { cancelled = true; };
   }, [activeAgentName, emailChatAccountId]);
+  // Declared after the settings it reads (the persona carries the active
+  // account's standing configuration, not just the account list).
+  const emailAssistantPersona = useMemo(
+    () =>
+      activeAgentName === "email-assistant"
+        ? buildEmailAssistantPersona({
+            accounts: emailAccounts,
+            selectedAccountId: emailChatAccountId,
+            settings: emailAcctSettings,
+          })
+        : undefined,
+    [activeAgentName, emailAccounts, emailChatAccountId, emailAcctSettings],
+  );
   const [showPicker, setShowPicker] = useState(false);
   // Desktop: collapsible side panel.  Mobile: drawer-based (never a sidebar).
   const [sessionPanelOpen, setSessionPanelOpen] = useState(true);

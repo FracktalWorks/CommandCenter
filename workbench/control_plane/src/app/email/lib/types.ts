@@ -588,6 +588,9 @@ export interface AssistantSettings {
   personal_instructions: string;
   /** Tone/length/style guidance for drafted replies (can be auto-derived). */
   writing_style: string;
+  /** Read-only: style distilled from how the user edits this account's drafts.
+   *  Advisory — an explicit `writing_style` outranks it. */
+  learned_writing_style?: string;
   /** Whether the assistant drafts replies for emails that need one. */
   draft_replies: boolean;
   /** Legacy alias for follow_up_awaiting_days (kept for back-compat). */

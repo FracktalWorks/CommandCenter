@@ -29,7 +29,10 @@ import {
 import { useActiveSessions } from "@/hooks/useActiveSessions";
 import { useChatMemories } from "@/hooks/useChatMemories";
 import { useEmailStore } from "../lib/emailStore";
-import { buildEmailAssistantPersona } from "../lib/emailAssistantPersona";
+import {
+  buildEmailAssistantPersona,
+  type PersonaAccountSettings,
+} from "../lib/emailAssistantPersona";
 import { getAssistantSettings } from "../lib/api";
 
 const AGENT = "email-assistant";
@@ -68,19 +71,35 @@ export function EmailAssistantChat({
   // Default to the documented email-chat default (tier-powerful) so a send
   // during the brief settings-fetch window uses a sensible model instead of
   // "auto". Refined to the account's saved chat_model once the fetch resolves.
+  // The ACTIVE account's assistant settings. Two things ride on this, both
+  // per-account: which chat model to run, and the standing configuration
+  // (about / instructions / writing style) the persona hands the agent — so
+  // switching mailboxes switches how the assistant behaves, not just which
+  // account_id it passes to tools.
   const [chatModel, setChatModel] = useState<string | undefined>("tier-powerful");
+  const [acctSettings, setAcctSettings] =
+    useState<PersonaAccountSettings | null>(null);
   useEffect(() => {
     if (!selectedAccountId) {
       setChatModel("tier-powerful");
+      setAcctSettings(null);
       return;
     }
     let cancelled = false;
     getAssistantSettings(selectedAccountId)
       .then((s) => {
-        if (!cancelled) setChatModel(s.chat_model || "tier-powerful");
+        if (cancelled) return;
+        setChatModel(s.chat_model || "tier-powerful");
+        setAcctSettings({
+          about: s.about,
+          personal_instructions: s.personal_instructions,
+          writing_style: s.writing_style,
+          learned_writing_style: s.learned_writing_style,
+        });
       })
       .catch(() => {
-        // Keep the tier-powerful default if the lookup fails.
+        // Keep the tier-powerful default if the lookup fails; the persona
+        // degrades to account-awareness without the standing orders.
       });
     return () => {
       cancelled = true;
@@ -186,8 +205,9 @@ export function EmailAssistantChat({
         accounts,
         selectedAccountId,
         openEmail: emails.find((e) => e.id === selectedEmailId) ?? null,
+        settings: acctSettings,
       }),
-    [accounts, emails, selectedAccountId, selectedEmailId],
+    [accounts, emails, selectedAccountId, selectedEmailId, acctSettings],
   );
 
   const activeSession = emailSessions.find((s) => s.id === activeId);

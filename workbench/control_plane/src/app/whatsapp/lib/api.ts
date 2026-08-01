@@ -6,6 +6,7 @@ import type {
   WaAccount,
   WaBridgeSession,
   WaCall,
+  WaCallDiagnostics,
   WaCallList,
   WaCategory,
   WaChat,
@@ -330,6 +331,22 @@ export function fetchCalls(accountId: string): Promise<WaCallList> {
   return getJSON<WaCallList>(
     `calls?account_id=${encodeURIComponent(accountId)}`,
     { calls: [], bridge_reachable: false }
+  );
+}
+
+export function fetchCallDiagnostics(accountId: string): Promise<WaCallDiagnostics> {
+  return getJSON<WaCallDiagnostics>(
+    `calls/diagnostics?account_id=${encodeURIComponent(accountId)}`,
+    {
+      account_id: accountId,
+      session_exists: false,
+      logged_in: false,
+      connected: false,
+      caller_ready: false,
+      active_calls: 0,
+      verdict: "Couldn't reach the gateway to check calling readiness.",
+      bridge_reachable: false,
+    }
   );
 }
 

@@ -16,20 +16,24 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import {
   AlertTriangle,
+  CheckCircle2,
   Loader2,
   Mic,
   Phone,
   PhoneIncoming,
   PhoneOff,
+  Stethoscope,
   Users,
+  XCircle,
 } from "lucide-react";
 import {
   callAction,
   fetchAccounts,
+  fetchCallDiagnostics,
   fetchCalls,
   placeCall,
 } from "../lib/api";
-import type { WaAccount, WaCall } from "../lib/types";
+import type { WaAccount, WaCall, WaCallDiagnostics } from "../lib/types";
 
 /** Phases where the call is still going — drives polling and the hangup button. */
 const LIVE_PHASES = new Set([
@@ -105,6 +109,9 @@ export default function WhatsAppCallsPage() {
   const [mode, setMode] = useState<"direct" | "group">("direct");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [diag, setDiag] = useState<WaCallDiagnostics | null>(null);
+  const [showDiag, setShowDiag] = useState(false);
+  const [prefillName, setPrefillName] = useState("");
   // Starts at 0 so the first server render has no clock to mismatch on; the
   // poll below fills it in once mounted.
   const [now, setNow] = useState(0);
@@ -115,6 +122,18 @@ export default function WhatsAppCallsPage() {
     () => (accounts ?? []).filter((a) => a.provider === "whatsmeow"),
     [accounts]
   );
+
+  // Prefill from a chat's "Call" link. Read off window.location rather than
+  // useSearchParams so the page needs no Suspense boundary. Prefilled, never
+  // auto-dialled — a URL that places a call on navigation is too easy to trip.
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search);
+    const to = q.get("to");
+    if (!to) return;
+    setTarget(to);
+    setPrefillName(q.get("name") || "");
+    if (to.endsWith("@g.us")) setMode("group");
+  }, []);
 
   useEffect(() => {
     void fetchAccounts().then((rows) => {
@@ -177,6 +196,12 @@ export default function WhatsAppCallsPage() {
     void refresh();
   }
 
+  async function runDiagnostics() {
+    if (!accountId) return;
+    setShowDiag(true);
+    setDiag(await fetchCallDiagnostics(accountId));
+  }
+
   async function act(action: "hangup" | "answer" | "reject", call: WaCall) {
     setError(null);
     const res = await callAction(action, accountId, call.call_id);
@@ -225,7 +250,9 @@ export default function WhatsAppCallsPage() {
         </h1>
         <p className="mt-0.5 text-xs text-muted-foreground">
           Place 1:1 and group calls from your paired personal number. Audio is
-          recorded on the bridge — the raw material for meeting notes.
+          recorded on the bridge — the raw material for meeting notes. The most
+          reliable way to dial is the <b>Call</b> button in a chat: it passes
+          that contact&apos;s WhatsApp id instead of a typed number.
         </p>
       </header>
 
@@ -295,7 +322,7 @@ export default function WhatsAppCallsPage() {
             }}
             placeholder={
               mode === "direct"
-                ? "+91 98765 43210"
+                ? "+919876543210  (or open a chat and press Call)"
                 : "Group id (…@g.us), or two or more numbers, comma-separated"
             }
             className="flex-1 rounded-lg border border-border bg-background px-3 py-2 font-mono text-xs text-foreground placeholder:text-muted-foreground/70 focus:outline-none focus:ring-1 focus:ring-ring"
@@ -321,12 +348,99 @@ export default function WhatsAppCallsPage() {
           </p>
         )}
 
-        {error && (
-          <p className="mt-2 rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive">
-            {error}
+        {prefillName && (
+          <p className="mt-2 text-[10px] text-muted-foreground">
+            Calling <b className="text-foreground">{prefillName}</b> from their
+            chat — using their WhatsApp id directly, so there&apos;s no number to
+            mistype.
           </p>
         )}
+
+        {error && (
+          <div className="mt-2 rounded-lg bg-destructive/10 px-2.5 py-2 text-[11px] text-destructive">
+            <p>{error}</p>
+            <button
+              onClick={() => void runDiagnostics()}
+              className="mt-1.5 inline-flex items-center gap-1 rounded-md bg-destructive/15 px-2 py-1 font-medium hover:bg-destructive/25 tech-transition"
+            >
+              <Stethoscope className="h-3 w-3" />
+              Check what&apos;s wrong
+            </button>
+          </div>
+        )}
       </div>
+
+      {/* Diagnostics — an offer that times out leaves no error to inspect, so
+          the useful question is which precondition failed. */}
+      {showDiag && (
+        <div className="mt-3 rounded-2xl border border-border bg-card p-4">
+          <div className="mb-2 flex items-center justify-between">
+            <h2 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <Stethoscope className="h-3.5 w-3.5" />
+              Calling readiness
+            </h2>
+            <button
+              onClick={() => void runDiagnostics()}
+              className="text-[10px] text-muted-foreground hover:text-foreground"
+            >
+              Re-check
+            </button>
+          </div>
+          {diag === null ? (
+            <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+          ) : (
+            <>
+              <dl className="grid grid-cols-2 gap-x-4 gap-y-1 text-[11px]">
+                {(
+                  [
+                    ["Bridge reachable", diag.bridge_reachable],
+                    ["Session exists", diag.session_exists],
+                    ["Connected to WhatsApp", diag.connected],
+                    ["Logged in", diag.logged_in],
+                    ["Calling stack attached", diag.caller_ready],
+                  ] as const
+                ).map(([label, ok]) => (
+                  <div key={label} className="flex items-center gap-1.5">
+                    {ok ? (
+                      <CheckCircle2 className="h-3.5 w-3.5 shrink-0 text-success" />
+                    ) : (
+                      <XCircle className="h-3.5 w-3.5 shrink-0 text-destructive" />
+                    )}
+                    <dt className="text-muted-foreground">{label}</dt>
+                  </div>
+                ))}
+              </dl>
+              <p className="mt-2 rounded-lg bg-secondary px-2.5 py-1.5 text-[11px] text-foreground">
+                {diag.verdict}
+              </p>
+              <div className="mt-2 space-y-0.5 text-[10px] text-muted-foreground">
+                {diag.own_jid && (
+                  <p>
+                    Calling as <span className="font-mono">{diag.own_jid}</span>
+                    {diag.push_name ? ` (${diag.push_name})` : ""}
+                  </p>
+                )}
+                <p>Active calls: {diag.active_calls}</p>
+                {diag.recording_dir && (
+                  <p>
+                    Recordings:{" "}
+                    <span className="font-mono">{diag.recording_dir}</span>
+                  </p>
+                )}
+              </div>
+              <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
+                Everything green but the call still times out? The offer is
+                reaching WhatsApp and going unanswered — watch{" "}
+                <code className="font-mono">
+                  journalctl -u acb-whatsapp-bridge -f
+                </code>{" "}
+                while you dial; it logs the number actually dialled and every
+                phase transition with timings.
+              </p>
+            </>
+          )}
+        </div>
+      )}
 
       {/* live calls */}
       {live.length > 0 && (

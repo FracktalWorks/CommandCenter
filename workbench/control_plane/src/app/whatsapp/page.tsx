@@ -20,6 +20,7 @@ import {
   MessageCircle,
   Mic,
   PanelRight,
+  Phone,
   Plus,
   Search,
   Send,
@@ -943,6 +944,19 @@ function Conversation({
             )}
           </div>
           <div className="ml-auto flex shrink-0 items-center gap-2">
+            {/* Call this chat. Hands the dialer the chat's JID rather than a
+                typed number — a JID is already canonical, so it skips the
+                phone-number parsing that silently breaks a call offer. The
+                dialer prefills but does not auto-dial: a link that places a
+                call on navigation is too easy to trip by accident. */}
+            <Link
+              href={`/whatsapp/calls?to=${encodeURIComponent(chat.wa_chat_id)}&name=${encodeURIComponent(chat.name || "")}`}
+              title={`Call ${chat.name || chat.wa_chat_id}`}
+              className="flex items-center gap-1 rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground hover:bg-muted hover:text-foreground"
+            >
+              <Phone className="h-3.5 w-3.5 shrink-0" />
+              <span className="hidden sm:inline">Call</span>
+            </Link>
             {isSnoozed ? (
               <button
                 onClick={doUnsnooze}

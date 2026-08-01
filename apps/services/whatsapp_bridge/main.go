@@ -128,7 +128,19 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /call/answer", s.auth(s.handleCallAction))
 	mux.HandleFunc("POST /call/reject", s.auth(s.handleCallAction))
 	mux.HandleFunc("GET /calls", s.auth(s.handleCallList))
+	mux.HandleFunc("GET /calls/diagnostics", s.auth(s.handleCallDiagnostics))
 	return mux
+}
+
+// handleCallDiagnostics reports whether an account can place a call, and if
+// not, which precondition is missing.
+func (s *Server) handleCallDiagnostics(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		http.Error(w, "session required", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.mgr.CallDiagnostics(session))
 }
 
 // handleCall places an outbound call. A `to` places a 1:1 call; a `group_id` or

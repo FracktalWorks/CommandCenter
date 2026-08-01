@@ -251,6 +251,42 @@ async def test_list_calls_ignores_malformed_rows(monkeypatch) -> None:
     assert [c.call_id for c in out.calls] == ["A"]
 
 
+# ── diagnostics ───────────────────────────────────────────────────────────────
+
+async def test_diagnostics_reports_bridge_verdict(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {
+        "account_id": "acct", "session_exists": True, "logged_in": True,
+        "connected": True, "caller_ready": True,
+        "own_jid": "919876543210:1@s.whatsapp.net", "push_name": "Vijay",
+        "active_calls": 0, "recording_dir": "/data/call-recordings",
+        "verdict": "Ready to place calls.",
+    })
+    out = await calls.call_diagnostics("acct", _User())
+    assert out.connected is True
+    assert out.caller_ready is True
+    assert out.verdict == "Ready to place calls."
+    assert out.bridge_reachable is True
+
+
+async def test_diagnostics_survives_a_down_bridge(monkeypatch) -> None:
+    """Diagnostics is what you reach for when things are broken — it must not
+    be the thing that breaks."""
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, calls._BRIDGE_DOWN, {"detail": "not reachable"})
+    out = await calls.call_diagnostics("acct", _User())
+    assert out.bridge_reachable is False
+    assert "reachable" in out.verdict.lower()
+
+
+async def test_diagnostics_enforces_account_ownership(monkeypatch) -> None:
+    _patch_db(monkeypatch, None)
+    _patch_bridge(monkeypatch, 200, {})
+    with pytest.raises(HTTPException) as exc:
+        await calls.call_diagnostics("someone-elses", _User())
+    assert exc.value.status_code == 404
+
+
 # ── inbound call-event seam ───────────────────────────────────────────────────
 
 class _Req:

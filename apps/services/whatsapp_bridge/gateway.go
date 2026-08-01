@@ -182,3 +182,11 @@ type avatarsPayload struct {
 func (g *GatewayClient) IngestAvatars(ctx context.Context, p avatarsPayload) error {
 	return g.post(ctx, "/whatsapp/bridge/avatars", p)
 }
+
+// CallEvent reports one voice call's current state (ringing, active, ended, …)
+// so the gateway can surface it live instead of polling. The body is the
+// callInfo snapshot from calls.go; the gateway treats it as advisory and always
+// re-reads the bridge for authoritative state.
+func (g *GatewayClient) CallEvent(ctx context.Context, info callInfo) error {
+	return g.post(ctx, "/whatsapp/bridge/call-event", info)
+}

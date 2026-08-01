@@ -19,6 +19,7 @@ import {
   Inbox,
   MessageSquare,
   MessageSquareText,
+  Phone,
   Plus,
   SlidersHorizontal,
   Smartphone,
@@ -32,6 +33,7 @@ type Tab = { href: string; label: string; icon: LucideIcon; exact?: boolean };
 
 const TABS: Tab[] = [
   { href: "/whatsapp", label: "Inbox", icon: Inbox, exact: true },
+  { href: "/whatsapp/calls", label: "Calls", icon: Phone },
   { href: "/whatsapp/insights", label: "Pulse", icon: Activity },
   { href: "/whatsapp/settings/categories", label: "Categories", icon: Tags },
   { href: "/whatsapp/settings/replies", label: "Replies", icon: MessageSquareText },

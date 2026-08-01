@@ -1,7 +1,7 @@
 # WhatsApp Calls → Note Taker — feasibility study & UX design
 
 > **Product:** CommandCenter · **Feature:** extend the AI Note Taker (`/notes`) to WhatsApp voice calls, including group calls
-> **Created:** 2026-08-01 · **Status:** 🔬 **FEASIBILITY STUDY — no code written.** Verdict + recommended path in §0; UX design in §7. Nothing here is built.
+> **Created:** 2026-08-01 · **Status:** 🔬 feasibility study · 🔄 **Surface C dialer BUILT 2026-08-01** — see §12. Placing/answering 1:1 + group calls from `/whatsapp/calls` works end to end and records each call to WAV; transcription is not wired yet. §0–§11 remain the design record.
 > **Siblings:** [`note_taker_app.md`](note_taker_app.md) (the note taker we're extending) · [`meeting_bot_platform_plan.md`](meeting_bot_platform_plan.md) (the bot-joins-a-call pattern) · [`whatsapp_message_manager.md`](whatsapp_message_manager.md) (the WhatsApp vertical we'd hang this off)
 > **Touches:** `apps/services/meeting_bot/` · `apps/services/whatsapp_bridge/` (Go + whatsmeow) · `gateway/routes/notes/meeting_bot.py` · `gateway/routes/whatsapp/`
 
@@ -398,3 +398,48 @@ type decodedParticipantAudio struct {
 - [JotaDev66/WaCalls — 1:1 WhatsApp calls via whatsmeow + pion/webrtc](https://github.com/JotaDev66/WaCalls)
 - [whatsmeow — Calls support (closed as not planned)](https://github.com/WhiskeySockets/Baileys/issues/40) *(Baileys equivalent request; whatsmeow media support likewise absent upstream)*
 - [whatsmeow events package — CallOffer / CallOfferNotice / CallTerminate](https://pkg.go.dev/go.mau.fi/whatsmeow/types/events)
+
+---
+
+## 12. Build log — the dialer (2026-08-01)
+
+Surface C is no longer theoretical. The bridge can place and answer calls, and
+`/whatsapp/calls` drives it.
+
+**What shipped**
+
+| Layer | Change |
+|---|---|
+| `apps/services/whatsapp_bridge/calls.go` | New. meowcaller on the existing whatsmeow session: place 1:1 (`Client.Call`), group by WhatsApp group id (`GroupCallByID`) or ad-hoc (`GroupCall`), answer/reject/hangup, a phase-tracking registry, per-call WAV recording, and a reaper for ended calls. |
+| `session.go` | `meowcaller.NewClient` attached in `newClient` — **before** `Connect`, which the library requires so its `<call>` interception precedes the receive loop. |
+| `main.go` | `POST /call`, `/call/{hangup,answer,reject}`, `GET /calls`. |
+| `gateway.go` | `CallEvent` → `/whatsapp/bridge/call-event`. |
+| `routes/whatsapp/transport/calls.py` | Authenticated proxy + the inbound event seam. Enforces account ownership, which the bridge cannot: it only knows a shared secret. |
+| `core.py` | `provider` exposed on the account model (the dialer must show only bridge numbers); `/bridge/call-event` added to the feature-gate exemptions. |
+| `whatsapp/calls/page.tsx` | The dialer: 1:1/group toggle, live call cards with phase + timer + recording flag, answer/decline for inbound, recent list. |
+| `tests/unit/test_whatsapp_calls.py` | 21 tests — ownership, bridge-down, error propagation, the secret gate. |
+
+**Deliberate choices**
+
+- **Inbound calls are never auto-answered.** A number that picks up strangers is
+  both a consent problem and a ban signal. They surface as ringing; a human
+  decides.
+- **Recording is on by default** because it's the note taker's whole point, but
+  it's one env var to disable and the UI says when a call is being recorded.
+- **Only bridge numbers appear in the dialer.** A Cloud API number would fail at
+  the gateway; better never to offer it.
+
+**Not done yet** — the seam is in place, the pipeline isn't attached:
+
+1. **Transcription.** `/bridge/call-event` logs the recording path; nothing feeds
+   it to `acb_stt` or creates a `meeting` row. That's the next slice.
+2. **Per-participant attribution (§10.2).** We record the *mixed* sink, so group
+   calls currently need ordinary diarization. Unlocking the real prize needs the
+   upstream per-participant hook.
+3. **Outbound audio.** No microphone path — the call sends silence, so it
+   listens but can't speak. Fine for note-taking; the consent announcement of
+   §7.5 needs a `Player` fed by TTS.
+4. **Consent announcement and the chat-thread notice** are designed (§7.5), not
+   built.
+
+---

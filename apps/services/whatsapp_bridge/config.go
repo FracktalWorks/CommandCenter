@@ -4,6 +4,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"time"
 )
 
 // Config is the bridge's runtime configuration, all from the environment so the
@@ -26,6 +27,13 @@ type Config struct {
 	FullHistory bool
 	// FullHistoryDays caps the requested history window (server ceiling ≈ 3 years).
 	FullHistoryDays uint32
+	// CallRecordDir is where each voice call's decoded peer audio is written as
+	// a 16 kHz mono WAV — the raw material the note-taker pipeline transcribes.
+	// Empty disables recording entirely (calls still connect).
+	CallRecordDir string
+	// CallReapAfter is how long an ended call stays queryable before it's
+	// dropped from the in-memory registry.
+	CallReapAfter time.Duration
 }
 
 func envBool(key string, def bool) bool {
@@ -64,5 +72,7 @@ func LoadConfig() Config {
 		StorePath:       env("WHATSAPP_BRIDGE_STORE", "./bridge-store.db"),
 		FullHistory:     envBool("WHATSAPP_BRIDGE_FULL_HISTORY", true),
 		FullHistoryDays: envUint("WHATSAPP_BRIDGE_FULL_HISTORY_DAYS", 365),
+		CallRecordDir:   env("WHATSAPP_BRIDGE_CALL_RECORD_DIR", "./call-recordings"),
+		CallReapAfter:   time.Duration(envUint("WHATSAPP_BRIDGE_CALL_REAP_MINS", 60)) * time.Minute,
 	}
 }

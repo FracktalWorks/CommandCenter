@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/purpshell/meowcaller"
 	qrcode "github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -40,6 +41,10 @@ var (
 type Session struct {
 	accountID string
 	client    *whatsmeow.Client
+	// caller is the voice-call stack wrapped around client. whatsmeow carries
+	// call signalling but no media, so this is what lets the number actually
+	// place and hear calls. Constructed before Connect (see newClient).
+	caller *meowcaller.Client
 
 	mu     sync.RWMutex
 	qr     string // data-URI PNG of the current pairing code, "" once live
@@ -86,15 +91,22 @@ type SessionManager struct {
 
 	// Bounded background queue for profile-picture fetches (W17) — see avatars.go.
 	avatarQueue chan avatarJob
+
+	// Live voice calls across every account — see calls.go.
+	calls *CallManager
 }
 
 // NewSessionManager wires the manager to its stores + gateway client, and starts
 // the fixed-size worker pool that drains avatarQueue for the process lifetime.
-func NewSessionManager(c *sqlstore.Container, meta *MetaStore, gw *GatewayClient, log waLog.Logger) *SessionManager {
+func NewSessionManager(
+	c *sqlstore.Container, meta *MetaStore, gw *GatewayClient,
+	log waLog.Logger, callRecordDir string,
+) *SessionManager {
 	m := &SessionManager{
 		container: c, meta: meta, gw: gw, log: log,
 		sessions:    map[string]*Session{},
 		avatarQueue: make(chan avatarJob, avatarQueueSize),
+		calls:       NewCallManager(gw, log, callRecordDir),
 	}
 	for range avatarWorkerCount {
 		go m.avatarWorker()
@@ -151,6 +163,11 @@ func (m *SessionManager) newClient(accountID string, device *store.Device) *Sess
 	client.EmitAppStateEventsOnFullSync = true
 	s := &Session{accountID: accountID, client: client, status: statusPairing}
 	client.AddEventHandler(m.handler(s))
+	// The calling stack intercepts low-level <call>/<ack> stanzas, so it has to
+	// be installed BEFORE Connect starts the receive loop — every caller of
+	// newClient connects afterwards, which is what makes this safe here.
+	s.caller = meowcaller.NewClient(client)
+	m.registerCallHandlers(s)
 	return s
 }
 

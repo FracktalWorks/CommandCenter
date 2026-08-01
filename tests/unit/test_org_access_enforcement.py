@@ -121,7 +121,10 @@ GATED_ROUTERS: dict[str, set[str]] = {
         # The bridge posts freshly-fetched profile-picture URLs (W17). Same
         # X-Bridge-Secret scheme as its siblings; gating it would silently
         # stop avatar sync, not restrict any member.
-        "/whatsapp/bridge/avatars",
+        # The bridge reports voice-call state transitions. Same secret scheme;
+        # it arrives from the Go service with no user session, so gating it
+        # would drop call events rather than restrict anyone.
+        "/whatsapp/bridge/call-event",
     },
     "gateway.routes.email": {
         "/email/oauth/{provider}/callback",

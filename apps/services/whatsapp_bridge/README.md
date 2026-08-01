@@ -63,6 +63,10 @@ Copy `.env.example` → `.env`. Key vars:
 - `WHATSAPP_BRIDGE_SECRET` — shared secret; set the **same** value on the gateway.
 - `WHATSAPP_BRIDGE_STORE` — sqlite path for the paired session (**treat as a
   secret**: whoever holds this file can send as the paired number).
+- `WHATSAPP_BRIDGE_CALL_RECORD_DIR` — where call audio is written (default
+  `./call-recordings`). Empty disables recording; calls still connect.
+- `WHATSAPP_BRIDGE_CALL_REAP_MINS` — how long an ended call stays queryable
+  before it's dropped from memory (default `60`).
 
 On the gateway set the matching pair:
 
@@ -93,6 +97,40 @@ docker run --rm -p 8790:8790 \
 Then in the app: **Integrations → WhatsApp → Connect a personal number**, scan
 the QR, and the number goes live. Sessions survive restarts (re-connected from
 the sqlite store on boot).
+
+## Voice calls
+
+The bridge can place and answer WhatsApp voice calls — 1:1 and group — from the
+paired number, the way WhatsApp Desktop does. whatsmeow carries call
+*signalling* only, so the media half comes from
+[meowcaller](https://github.com/purpshell/meowcaller): a pure-Go WhatsApp VoIP
+stack (MLow codec, SRTP, RTP, relay) that wraps the same session. It's attached
+in `newClient` **before** `Connect`, which the library requires so its low-level
+`<call>` interception is in place before the receive loop starts.
+
+```
+POST /call         {session, to}                     # 1:1
+POST /call         {session, group_id}               # ring a WhatsApp group
+POST /call         {session, targets:[a,b,…]}        # ad-hoc group call
+POST /call/hangup  {session, call_id}
+POST /call/answer  {session, call_id}                # inbound is never auto-answered
+POST /call/reject  {session, call_id}
+GET  /calls?session=<id>
+```
+
+Each call's decoded peer audio is recorded to
+`$WHATSAPP_BRIDGE_CALL_RECORD_DIR/<call-id>.wav` as 16 kHz mono — the format
+`acb_stt` already transcribes, which is what makes this the media seam for the
+note taker. State transitions are pushed to the gateway at
+`/whatsapp/bridge/call-event`.
+
+In the app: **WhatsApp → Calls**.
+
+> [!WARNING]
+> Placing calls from an unofficial client carries the same ban risk as the rest
+> of this service, and arguably more — automated calling is conspicuous. Group
+> calling in meowcaller is marked **experimental**. Recording other people is
+> regulated in many places: tell them.
 
 ## History backfill
 

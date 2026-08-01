@@ -1,150 +1,239 @@
 "use client";
 
 /**
- * The custom React Flow node card — color-coded by category (RFC §5.2:
- * color is a functional encoding), with live run-status ring during a test
- * run (queued → running → ok/err) and design-time issue badges.
+ * The custom React Flow node card — the unit the whole editor is read through,
+ * so it follows the mockup's anatomy (docs/workflow-editor/mockup.html §.node):
+ *
+ *   ▔▔▔▔▔▔▔▔▔  category accent bar (RFC §5.2 — colour is a functional encoding)
+ *   [icon]  KIND        ← what this block *is*, in the category hue
+ *           Title       ← what the maker called it
+ *   summary line(s)     ← what it will actually do, from its config
+ *   `detail` · badges   ← the agent / action / expression it is bound to
+ *   ─────────────────
+ *   ● status · 1.2s     node_id   ← live run state and the {{ref}} root
+ *
+ * A card has to answer "what does this step do?" without opening the inspector;
+ * everything below the title exists for that. Status comes from the SSE test
+ * run (queued → running → ok/err) or from a recorded run painted onto the
+ * canvas; issue badges come from design-time validation.
  */
 
 import { memo } from "react";
 import { Handle, Position, type NodeProps } from "@xyflow/react";
-import {
-  AlertTriangle,
-  Bot,
-  Boxes,
-  CheckCircle2,
-  GitBranch,
-  Loader2,
-  LogOut,
-  PauseCircle,
-  SlidersHorizontal,
-  Timer,
-  UserCheck,
-  Wrench,
-  XCircle,
-  Zap,
-} from "lucide-react";
+import { AlertTriangle, Loader2 } from "lucide-react";
 import { NODE_CATEGORY_STYLE, categoryForType } from "../lib/types";
+import { FALLBACK_ICON, NODE_ICON, NODE_KIND_LABEL } from "../lib/nodeVisuals";
 import type { NodeType } from "../lib/types";
 
-const TYPE_ICON: Record<string, React.ComponentType<{ className?: string }>> = {
-  trigger: Zap,
-  agent: Bot,
-  tool: Wrench,
-  module: Boxes,
-  condition: GitBranch,
-  set: SlidersHorizontal,
-  approval: UserCheck,
-  wait: Timer,
-  output: LogOut,
-};
+export type CCNodeRunStatus =
+  | "running"
+  | "ok"
+  | "error"
+  | "skipped"
+  | "waiting"
+  | "pending";
 
 export type CCNodeData = {
   label: string;
   nodeType: NodeType;
+  /** Plain-English sentence: what this step does with its current config. */
   summary?: string;
-  runStatus?: "running" | "ok" | "error" | "skipped" | "waiting" | "pending";
+  /** The capability it is bound to — agent name, tool action, expression. */
+  detail?: string;
+  /** Short flags worth seeing without selecting the node, e.g. "write". */
+  badges?: string[];
+  runStatus?: CCNodeRunStatus;
+  /** Wall time of the last run of this node, in ms. */
+  durationMs?: number;
   issueCount?: number;
   [key: string]: unknown;
 };
+
+/** Footer wording per run state — past tense once the node is done. */
+const STATUS_LABEL: Record<CCNodeRunStatus, string> = {
+  running: "running",
+  ok: "done",
+  error: "failed",
+  skipped: "skipped",
+  waiting: "waiting",
+  pending: "queued",
+};
+
+const STATUS_TONE: Record<CCNodeRunStatus, { dot: string; text: string }> = {
+  running: { dot: "bg-primary animate-pulse", text: "text-primary" },
+  ok: { dot: "bg-success", text: "text-success" },
+  error: { dot: "bg-destructive", text: "text-destructive" },
+  skipped: { dot: "bg-muted-foreground/50", text: "text-muted-foreground" },
+  waiting: { dot: "bg-warning animate-pulse", text: "text-warning" },
+  pending: { dot: "bg-muted-foreground/50", text: "text-muted-foreground" },
+};
+
+/** "820ms" / "3.9s" — same scale the run console prints. */
+function formatDuration(ms: number): string {
+  if (!Number.isFinite(ms) || ms < 0) return "";
+  if (ms < 1000) return `${Math.round(ms)}ms`;
+  return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+}
 
 function WorkflowNodeInner(props: NodeProps) {
   const data = props.data as CCNodeData;
   const type = data.nodeType;
   const category = categoryForType(type);
   const style = NODE_CATEGORY_STYLE[category] ?? NODE_CATEGORY_STYLE.logic;
-  const Icon = TYPE_ICON[type] ?? Zap;
+  const Icon = NODE_ICON[type] ?? FALLBACK_ICON;
+  const status = data.runStatus;
+  const tone = status ? STATUS_TONE[status] : null;
+  const issues = data.issueCount ?? 0;
 
+  // Selection, live status and validation all want the card's outline. Run
+  // state wins while a run is on screen — that is the thing you are watching.
   const ring =
-    data.runStatus === "running"
-      ? "ring-2 ring-primary animate-pulse"
-      : data.runStatus === "ok"
-        ? "ring-2 ring-success/60"
-        : data.runStatus === "error"
-          ? "ring-2 ring-destructive/70"
-          : data.runStatus === "waiting"
-            ? "ring-2 ring-warning/70"
+    status === "running"
+      ? "border-primary ring-2 ring-primary/30"
+      : status === "ok"
+        ? "border-success/50"
+        : status === "error"
+          ? "border-destructive ring-2 ring-destructive/25"
+          : status === "waiting"
+            ? "border-warning/60 ring-2 ring-warning/20"
             : props.selected
-              ? "ring-2 ring-ring"
-              : "";
-  const dim =
-    data.runStatus === "skipped" || data.runStatus === "pending" ? "opacity-50" : "";
+              ? "border-primary ring-2 ring-primary/25"
+              : issues > 0
+                ? "border-warning/50"
+                : style.border;
+  const dim = status === "skipped" || status === "pending" ? "opacity-45" : "";
+
+  const handleCls =
+    "!w-3 !h-3 !border-2 !bg-card !border-muted-foreground/70 hover:!border-primary";
 
   return (
     <div
-      className={`rounded-xl border bg-card shadow-sm w-52 tech-transition ${style.border} ${ring} ${dim}`}
+      className={`w-52 rounded-xl border bg-card shadow-sm overflow-hidden tech-transition ${ring} ${dim}`}
     >
+      {/* Category accent — readable when the graph is zoomed past the text */}
+      <div className={`h-[3px] w-full ${style.bar}`} />
+
       {type !== "trigger" && (
-        <Handle
-          type="target"
-          position={Position.Top}
-          className="!w-2.5 !h-2.5 !bg-muted-foreground !border-background"
-        />
+        <Handle type="target" position={Position.Top} className={handleCls} />
       )}
-      <div className="px-3 py-2">
-        <div className="flex items-center gap-1.5">
+
+      <div className="px-2.5 pt-2 pb-2">
+        <div className="flex items-start gap-2">
           <span
-            className={`inline-flex items-center gap-1 text-[9px] px-1.5 py-px rounded-full border ${style.chip}`}
+            className={`w-6 h-6 shrink-0 rounded-lg border grid place-items-center ${style.tile}`}
           >
-            <Icon className="w-2.5 h-2.5" />
-            {category}
+            <Icon className="w-3.5 h-3.5" />
           </span>
-          <span className="ml-auto flex items-center gap-1">
-            {(data.issueCount ?? 0) > 0 && (
-              <span title={`${data.issueCount} validation issue(s)`}>
-                <AlertTriangle className="w-3.5 h-3.5 text-warning" />
+          <div className="min-w-0 flex-1">
+            <div
+              className={`font-mono text-[8.5px] uppercase tracking-[0.12em] leading-tight ${style.text}`}
+            >
+              {NODE_KIND_LABEL[type] ?? type}
+            </div>
+            <div className="text-[12.5px] font-semibold text-foreground leading-snug truncate">
+              {data.label || type}
+            </div>
+          </div>
+          <span className="flex items-center gap-1 shrink-0 pt-0.5">
+            {issues > 0 && (
+              <span
+                title={`${issues} validation issue${issues === 1 ? "" : "s"} — see the inspector`}
+                className="flex items-center gap-0.5 text-warning"
+              >
+                <AlertTriangle className="w-3 h-3" />
+                {issues > 1 && (
+                  <span className="text-[9px] font-medium">{issues}</span>
+                )}
               </span>
             )}
-            {data.runStatus === "running" && (
-              <Loader2 className="w-3.5 h-3.5 text-primary animate-spin" />
-            )}
-            {data.runStatus === "ok" && (
-              <CheckCircle2 className="w-3.5 h-3.5 text-success" />
-            )}
-            {data.runStatus === "error" && (
-              <XCircle className="w-3.5 h-3.5 text-destructive" />
-            )}
-            {data.runStatus === "waiting" && (
-              <PauseCircle className="w-3.5 h-3.5 text-warning" />
+            {status === "running" && (
+              <Loader2 className="w-3 h-3 text-primary animate-spin" />
             )}
           </span>
         </div>
-        <div className="mt-1 text-xs font-medium text-foreground truncate">
-          {data.label || type}
-        </div>
-        {data.summary && (
-          <div className="text-[10px] text-muted-foreground truncate mt-0.5">
-            {data.summary}
+
+        {(data.summary || data.detail) && (
+          <div className="mt-1.5 space-y-1">
+            {data.summary && (
+              <p className="text-[10.5px] leading-[1.45] text-muted-foreground line-clamp-2">
+                {data.summary}
+              </p>
+            )}
+            {data.detail && (
+              <p
+                className="font-mono text-[9.5px] leading-tight text-foreground/80 bg-secondary/60 border border-border/60 rounded px-1.5 py-0.5 truncate"
+                title={data.detail}
+              >
+                {data.detail}
+              </p>
+            )}
+          </div>
+        )}
+
+        {(data.badges ?? []).length > 0 && (
+          <div className="mt-1.5 flex flex-wrap gap-1">
+            {(data.badges ?? []).map((badge) => (
+              <span
+                key={badge}
+                className="text-[8.5px] uppercase tracking-wide px-1.5 py-px rounded-full border border-border text-muted-foreground"
+              >
+                {badge}
+              </span>
+            ))}
           </div>
         )}
       </div>
+
+      {/* Footer: run state on the left, the {{ref}} root on the right */}
+      <div className="flex items-center gap-1.5 px-2.5 py-1 border-t border-border/70 bg-secondary/25">
+        <span
+          className={`w-1.5 h-1.5 rounded-full shrink-0 ${tone ? tone.dot : "bg-muted-foreground/40"}`}
+        />
+        <span
+          className={`font-mono text-[8.5px] uppercase tracking-[0.1em] ${tone ? tone.text : "text-muted-foreground/70"}`}
+        >
+          {status ? STATUS_LABEL[status] : "idle"}
+        </span>
+        {typeof data.durationMs === "number" && data.durationMs >= 0 && (
+          <span className="font-mono text-[8.5px] text-muted-foreground/70">
+            · {formatDuration(data.durationMs)}
+          </span>
+        )}
+        <span
+          className="ml-auto font-mono text-[8.5px] text-muted-foreground/60 truncate max-w-[46%]"
+          title={`Reference this block's output as {{${props.id}.field}}`}
+        >
+          {props.id}
+        </span>
+      </div>
+
       {type === "condition" ? (
         <>
           <Handle
             id="true"
             type="source"
             position={Position.Bottom}
-            style={{ left: "30%" }}
-            className="!w-2.5 !h-2.5 !bg-success !border-background"
+            style={{ left: "28%" }}
+            className="!w-3 !h-3 !border-2 !bg-card !border-success"
           />
           <Handle
             id="false"
             type="source"
             position={Position.Bottom}
-            style={{ left: "70%" }}
-            className="!w-2.5 !h-2.5 !bg-destructive !border-background"
+            style={{ left: "72%" }}
+            className="!w-3 !h-3 !border-2 !bg-card !border-muted-foreground"
           />
-          <div className="flex justify-between px-6 pb-1 -mt-1">
-            <span className="text-[8px] text-success">true</span>
-            <span className="text-[8px] text-destructive">false</span>
+          <div className="flex justify-between px-4 pb-1 -mt-px">
+            <span className="font-mono text-[8px] uppercase tracking-wider text-success">
+              yes
+            </span>
+            <span className="font-mono text-[8px] uppercase tracking-wider text-muted-foreground">
+              no
+            </span>
           </div>
         </>
       ) : type !== "output" ? (
-        <Handle
-          type="source"
-          position={Position.Bottom}
-          className="!w-2.5 !h-2.5 !bg-muted-foreground !border-background"
-        />
+        <Handle type="source" position={Position.Bottom} className={handleCls} />
       ) : null}
     </div>
   );

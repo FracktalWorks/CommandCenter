@@ -24,12 +24,19 @@ type Turn = {
 
 export default function CopilotPanel({
   workflowId,
+  seed,
   onApplyGraph,
   onUndo,
   canUndo,
   onModulesCreated,
 }: {
   workflowId: string;
+  /**
+   * A description submitted from the canvas prompt bar. `n` increments per
+   * submission so the same text twice still sends; the ref guard keeps a
+   * re-render from replaying one.
+   */
+  seed?: { text: string; n: number } | null;
   /** Apply a copilot graph to the canvas (snapshots the previous one). */
   onApplyGraph: (graph: WorkflowGraph) => void;
   onUndo: () => void;
@@ -41,16 +48,17 @@ export default function CopilotPanel({
   const [prompt, setPrompt] = useState("");
   const [busy, setBusy] = useState(false);
   const endRef = useRef<HTMLDivElement>(null);
+  const sentSeed = useRef(0);
 
   useEffect(() => {
     endRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [turns, busy]);
 
-  const send = async () => {
-    const message = prompt.trim();
+  const send = async (override?: string) => {
+    const message = (override ?? prompt).trim();
     if (!message || busy) return;
     setBusy(true);
-    setPrompt("");
+    if (!override) setPrompt("");
     setTurns((t) => [...t, { role: "user", content: message }]);
     try {
       const history = turns
@@ -80,6 +88,16 @@ export default function CopilotPanel({
       setBusy(false);
     }
   };
+
+  /* eslint-disable react-hooks/exhaustive-deps */
+  // A description typed on the canvas is sent here once, by nonce — `send` is
+  // re-created every render, so it must not be a dependency.
+  useEffect(() => {
+    if (!seed || seed.n === sentSeed.current) return;
+    sentSeed.current = seed.n;
+    void send(seed.text);
+  }, [seed]);
+  /* eslint-enable react-hooks/exhaustive-deps */
 
   return (
     <div className="w-52 sm:w-60 shrink-0 flex flex-col">
@@ -172,7 +190,7 @@ export default function CopilotPanel({
             className="flex-1 resize-none rounded-lg border border-input bg-background px-2.5 py-1.5 text-[11px] text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
           />
           <button
-            onClick={send}
+            onClick={() => send()}
             disabled={busy || !prompt.trim()}
             className="self-end rounded-lg bg-primary p-2 text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-50"
             title="Send"

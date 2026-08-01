@@ -202,40 +202,72 @@ export type GeneratedModule = {
   provenance: Record<string, unknown>;
 };
 
-/** Palette/canvas category color encoding (RFC §5.2 — functional, fixed). */
+/**
+ * Palette/canvas category colour encoding (RFC §5.2 — functional, fixed).
+ *
+ * `tile` is the icon plate carried by every surface that renders a block
+ * (palette row, canvas card, inspector header); `bar` is the card's top accent
+ * strip, which is what makes a category readable across a zoomed-out graph.
+ * Written out in full because Tailwind only keeps classes it can see.
+ */
 export const NODE_CATEGORY_STYLE: Record<
   string,
-  { chip: string; border: string; dot: string }
+  {
+    chip: string;
+    border: string;
+    dot: string;
+    tile: string;
+    text: string;
+    bar: string;
+  }
 > = {
   trigger: {
     chip: "bg-amber-500/10 text-amber-500 border-amber-500/20",
     border: "border-amber-500/40",
     dot: "bg-amber-500",
+    tile: "bg-amber-500/12 text-amber-500 border-amber-500/30",
+    text: "text-amber-500",
+    bar: "bg-amber-500",
   },
   agent: {
     chip: "bg-violet-500/10 text-violet-500 border-violet-500/20",
     border: "border-violet-500/40",
     dot: "bg-violet-500",
+    tile: "bg-violet-500/12 text-violet-500 border-violet-500/30",
+    text: "text-violet-500",
+    bar: "bg-violet-500",
   },
   tool: {
     chip: "bg-teal-500/10 text-teal-500 border-teal-500/20",
     border: "border-teal-500/40",
     dot: "bg-teal-500",
+    tile: "bg-teal-500/12 text-teal-500 border-teal-500/30",
+    text: "text-teal-500",
+    bar: "bg-teal-500",
   },
   module: {
     chip: "bg-sky-500/10 text-sky-500 border-sky-500/20",
     border: "border-sky-500/40",
     dot: "bg-sky-500",
+    tile: "bg-sky-500/12 text-sky-500 border-sky-500/30",
+    text: "text-sky-500",
+    bar: "bg-sky-500",
   },
   logic: {
     chip: "bg-slate-500/10 text-slate-400 border-slate-500/20",
     border: "border-slate-500/40",
     dot: "bg-slate-400",
+    tile: "bg-slate-500/12 text-slate-400 border-slate-500/30",
+    text: "text-slate-400",
+    bar: "bg-slate-400",
   },
   output: {
     chip: "bg-emerald-500/10 text-emerald-500 border-emerald-500/20",
     border: "border-emerald-500/40",
     dot: "bg-emerald-500",
+    tile: "bg-emerald-500/12 text-emerald-500 border-emerald-500/30",
+    text: "text-emerald-500",
+    bar: "bg-emerald-500",
   },
 };
 

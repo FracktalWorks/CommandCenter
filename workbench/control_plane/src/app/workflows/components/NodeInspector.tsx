@@ -8,6 +8,8 @@
 
 import { useCallback, useMemo, useState } from "react";
 import { Trash2 } from "lucide-react";
+import { FALLBACK_ICON, NODE_ICON, NODE_KIND_LABEL } from "../lib/nodeVisuals";
+import { NODE_CATEGORY_STYLE, categoryForType } from "../lib/types";
 import type {
   Catalog,
   GraphIssue,
@@ -283,16 +285,32 @@ export default function NodeInspector({
   const type = node.type as NodeType;
   const rawArgs = rawArgsFor === node.id;
   const nodeIssues = issues.filter((i) => i.node_id === node.id);
+  const headStyle =
+    NODE_CATEGORY_STYLE[categoryForType(type)] ?? NODE_CATEGORY_STYLE.logic;
+  const HeadIcon = NODE_ICON[type] ?? FALLBACK_ICON;
 
   return (
     <div className="w-64 xl:w-72 shrink-0 border-l border-border overflow-y-auto scrollbar-thin">
-      <div className="p-3 border-b border-border flex items-center justify-between">
-        <div className="min-w-0">
-          <div className="text-xs font-semibold text-foreground truncate">
-            {node.data.label || type}
-          </div>
-          <div className="text-[10px] text-muted-foreground">
-            {type} · <span className="font-mono">{node.id}</span>
+      {/* Header mirrors the card it belongs to: same plate, same kind eyebrow */}
+      <div className="p-3 border-b border-border flex items-start justify-between gap-2">
+        <div className="flex items-start gap-2 min-w-0">
+          <span
+            className={`w-7 h-7 shrink-0 rounded-lg border grid place-items-center ${headStyle.tile}`}
+          >
+            <HeadIcon className="w-3.5 h-3.5" />
+          </span>
+          <div className="min-w-0">
+            <div
+              className={`font-mono text-[8.5px] uppercase tracking-[0.12em] ${headStyle.text}`}
+            >
+              {NODE_KIND_LABEL[type] ?? type}
+            </div>
+            <div className="text-xs font-semibold text-foreground truncate">
+              {node.data.label || type}
+            </div>
+            <div className="font-mono text-[9.5px] text-muted-foreground truncate">
+              {node.id}
+            </div>
           </div>
         </div>
         {type !== "trigger" && (
@@ -550,20 +568,28 @@ export default function NodeInspector({
         )}
 
         {type !== "trigger" && (
-          <div>
-            <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide">
-              Available references
-            </span>
-            <div className="mt-1 flex flex-wrap gap-1">
+          <div className="pt-1">
+            <div className="flex items-center gap-2">
+              <span className="text-[10px] font-medium text-muted-foreground uppercase tracking-wide shrink-0">
+                Available data
+              </span>
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <div className="mt-1.5 flex flex-wrap gap-1">
               {["trigger", "vars", ...upstreamIds].map((root) => (
                 <code
                   key={root}
-                  className="text-[9px] bg-secondary text-foreground px-1.5 py-0.5 rounded"
+                  title="Paste this into any field above"
+                  className="font-mono text-[9.5px] px-1.5 py-0.5 rounded-md border border-primary/25 bg-primary/10 text-primary"
                 >
                   {`{{${root}.*}}`}
                 </code>
               ))}
             </div>
+            <p className="mt-1.5 text-[9.5px] text-muted-foreground">
+              Only blocks upstream of this one are listed — anything else has not
+              run yet when this block does.
+            </p>
           </div>
         )}
       </div>

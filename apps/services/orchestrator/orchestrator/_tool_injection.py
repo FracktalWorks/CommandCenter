@@ -266,13 +266,22 @@ def _gate_injected_tool(fn: Any) -> Any:
         except Exception:  # noqa: BLE001 — a gate bug must never brick a tool
             return True, "gate_error"
 
+    # Mid-run steer (docs/multiplayer/README.md §4.6): this wrapper is the one
+    # tool boundary that exists on EVERY tier — the executor's Tier-2 shim never
+    # runs on the native-streaming path, and the Copilot SDK has its own hooks —
+    # so pending guidance is drained here. No pending steer means byte-identical
+    # behaviour; the call is a dict lookup.
+    def _with_steer(result: Any) -> Any:
+        from orchestrator.steer import decorate_tool_result  # noqa: PLC0415
+        return decorate_tool_result(result)
+
     if inspect.iscoroutinefunction(fn):
         @functools.wraps(fn)
         async def _agated(*args: Any, **kwargs: Any) -> Any:
             allowed, reason = _gate(kwargs)
             if not allowed:
                 return f"[blocked by permission policy: {reason}]"
-            return await fn(*args, **kwargs)
+            return _with_steer(await fn(*args, **kwargs))
         return _agated
 
     @functools.wraps(fn)
@@ -280,7 +289,7 @@ def _gate_injected_tool(fn: Any) -> Any:
         allowed, reason = _gate(kwargs)
         if not allowed:
             return f"[blocked by permission policy: {reason}]"
-        return fn(*args, **kwargs)
+        return _with_steer(fn(*args, **kwargs))
     return _sgated
 
 

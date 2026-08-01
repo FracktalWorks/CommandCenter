@@ -698,6 +698,20 @@ export async function POST(req: NextRequest): Promise<Response> {
         { status: 502, headers: sseHeaders() }
       );
     }
+    // The second caller stands down (docs/multiplayer/README.md §4.6). When the
+    // gateway folded this message into a run that was already going it answers
+    // 202 with `{steered: true}` and NO stream — because the turn that is
+    // already running owns the answer. Passing the JSON through verbatim (not
+    // translating it into an SSE frame) is what keeps this surface from
+    // rendering a second assistant message: delivering from both sides is how
+    // one answer gets posted twice.
+    if (streamRes.status === 202) {
+      const body = await streamRes.text().catch(() => "{}");
+      return new Response(body, {
+        status: 202,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
     if (!streamRes.ok || !streamRes.body) {
       const text = await streamRes.text().catch(() => `status ${streamRes.status}`);
       return new Response(

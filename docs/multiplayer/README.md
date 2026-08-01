@@ -489,6 +489,71 @@ makes the destructive race impossible rather than merely unlikely.
 This one change converts a silent data-loss bug into an explicit product choice, and it is
 worth shipping on its own even if multiplayer stops here.
 
+> **Update 2026-08-01 (built).** Shipped, and with the sequence inverted per
+> [`multiplayer_prior_art_qm_2026-08.md`](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md)
+> §QM-1: **steer first, floor control re-decided afterwards.** What landed:
+>
+> - **The supersede rule, stated once: *you may supersede a run you own, and no
+>   other.*** "Own" is `cc:runactor:{thread_id}`, stamped at run start. It is
+>   enforced at **two** layers, not one. The route still answers `409`
+>   (`_refuse_if_another_run_is_active`), but the destructive statement itself —
+>   `mark_active(reset=True)`, which DELETEs `cc:stream:{thread_id}` — now raises
+>   `stream_relay.SupersedeRefused` before running. A guard at the route is a
+>   policy a new caller can forget; a guard at the destructive site is an
+>   invariant. That mattered immediately: `/copilot/chat` reached `run_detached`
+>   with **no actor at all**, so it was still a door onto this bug after the
+>   route-level 409 shipped. It now stamps its actor.
+> - **Fail-open is unchanged and deliberate**, in exactly the two cases
+>   `get_run_actor` documents: an unattributable run (legacy, Redis hiccup) and
+>   an anonymous caller (cron, service-to-service). A false refusal blocks real
+>   work; a false allow only restores the behaviour we already had.
+> - **Steer is the new default path** for the case the 409 was invented for. A
+>   message arriving for a thread with a live run is routed by a pure function
+>   (`orchestrator/steer.py::route_turn`) to one of four outcomes — drop the
+>   agent's own message, engage when nothing is running, abort on a *bare* stop,
+>   otherwise steer. "stop the staging deploy" steers; "stop" aborts.
+> - **The second caller stands down.** A steered turn answers `202` with
+>   `{"steered": true}` and **no stream**, and the surface suppresses its own
+>   assistant bubble. Delivering from both sides is how one answer gets posted
+>   twice — qm hit exactly that, and it is a test here.
+> - **Signals are durable and replayable.** A steer is written to
+>   `cc:steer:{thread_id}` *before* it is dispatched, so one aimed at a run that
+>   died mid-send survives and is replayed into the next run's message rather
+>   than lost. Delivery rides the existing `cc:control:` bus as a new `steer`
+>   applier — no new infrastructure, per §4.6.
+> - **Carve-out:** a human message during an *automation* turn engages its own
+>   run rather than steering into a cron. "Automation" reads the run's existing
+>   correlation `source` (`schedule` / `webhook` / `event` / `workflow`); unknown
+>   and empty both resolve to *human*, because mistaking a conversation for a
+>   cron would spawn the second concurrent run this whole section exists to stop.
+> - **Authority (`groups_sessions_authority.md` §3): a steer may not move the
+>   floor under a running turn.** The run records the participant roster its
+>   `intersect()` fold was taken over; a steer is admitted only from a principal
+>   inside it. Someone added to the room *after* the run started is refused with
+>   `409 steer_outside_run_floor` **and told why** — the turn has already
+>   resolved credentials and read memory at the wider floor, and neither
+>   un-reading that nor letting it keep acting above its viewers' clearance is
+>   acceptable. They send normally once the turn ends. Rooms shared by
+>   `group:<slug>` or `org` cannot be checked this precisely and fall back to the
+>   room's own send capability; naming participants individually is what buys the
+>   stricter guarantee.
+> - **Where the model actually reads it.** A native MAF run's input is built once
+>   by `_compose_maf_run_input` and consumed at run start — there is no message
+>   store to append to mid-run. The one channel that reliably carries text into a
+>   running model is a **tool's return value** (it is how `ask_user`'s answer
+>   arrives today), so a steer rides the next tool result. That is also the right
+>   moment on its own terms: at a tool boundary the model is between decisions,
+>   so injection cannot corrupt a half-streamed sentence.
+> - **`STEER_INJECTED` is a room event, not a run event** — `cc:room:`, per §4.4.
+>   Run events are folded into the transcript by *both* `gateway/chat_fold.py`
+>   and `lib/chatStream.ts`, so a new run-event type is a two-sided change; a
+>   steer is a fact about the room, not about the assistant message.
+>
+> **Still unbuilt and now genuinely open:** the five `floor_mode`s, the turn
+> queue, the observer lane. §QM-1's recommendation was to build steer and then
+> measure whether a baton still earns its place — that measurement is the next
+> decision, not a foregone one.
+
 ### 5.3 Capacity dials
 
 The instinct is to cap "people in the room". That is the wrong axis. **Observers are cheap;
@@ -787,6 +852,13 @@ confidential-deal case safe, and it is detailed in
   run; every stored message resolves to an author; a caller cannot read a memory scope they
   don't own.
 
+> **Update 2026-08-01 (built).** The two bullets above are now enforced at the
+> destructive site (`run_detached` raises `SupersedeRefused`), not only at the
+> route, and `/copilot/chat` — which reached that site with no actor and was
+> therefore still an open door — now stamps one. See §5.2's update for the
+> supersede rule as implemented. Regression cover:
+> `tests/unit/test_supersede_guard.py`.
+
 ### Phase 1 — Read-only multiplayer (~1 week)
 
 - Membership + room columns — **landed as migration 138** (drafted here as 117) + backfill.
@@ -811,6 +883,28 @@ confidential-deal case safe, and it is detailed in
 - Handoff with a note.
 - **Acceptance:** Sanjay requests the floor, Vijay grants it, Sanjay redirects the run
   mid-flight without cancelling it, and the transcript shows exactly who did what when.
+
+> **Update 2026-08-01 (re-scoped and partly built).** The order of this phase is
+> inverted per
+> [`multiplayer_prior_art_qm_2026-08.md`](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md)
+> §QM-1: **steer was built first**, and whether the five floor modes still earn
+> their place is now a measurement rather than a plan. Steering dissolves most of
+> the problem the baton was invented for — a second person's message lands in the
+> running turn instead of being refused — so the remaining question is what a
+> baton adds *on top of* that, not what it prevents.
+>
+> **Built:** the `steer` applier on `cc:control:`, draining at tool boundaries;
+> durable replayable signals (`cc:steer:`); the `202 {"steered": true}`
+> stand-down; the automation carve-out; the run-floor authority check; and the
+> §5.2 correctness fix underneath all of it. Details in §5.2's update.
+> **Not built and deliberately unscheduled:** the floor baton and all five
+> `floor_mode`s, the turn queue, the observer lane, handoff-with-a-note, and
+> HITL floor-holder routing. `chat_session.floor_mode` still exists and still
+> defaults to `'open'`; nothing enforces `'driver'`.
+>
+> The acceptance line above is therefore split: *"Sanjay redirects the run
+> mid-flight without cancelling it, and the room sees who did what when"* is met;
+> the floor request/grant half is not, and is pending the owner's re-decision.
 
 ### Phase 3 — The privacy boundary (~3 weeks)
 

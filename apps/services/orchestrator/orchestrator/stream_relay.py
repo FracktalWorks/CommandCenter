@@ -63,6 +63,17 @@ ACTIVE_PREFIX = "cc:active"
 # your own run (steer/retry/Quick action), catastrophic the moment two people
 # share a thread. See docs/multiplayer/README.md §3.3 / §5.2.
 RUN_ACTOR_PREFIX = "cc:runactor"
+# What KIND of turn is in flight, recorded from the run's ``source`` (the string
+# the executor already correlates every run by: "chat" for a person, "workflow"
+# / "schedule" / "webhook" / "event" for something that fired on its own).
+# Steering reads it for §QM-1's one carve-out: a human message arriving during
+# an automation turn starts its OWN run rather than folding into a cron.
+RUN_SOURCE_PREFIX = "cc:runsource"
+# The participant roster this run's authority intersection was folded over at
+# run start (groups_sessions_authority.md §3). A steer is admitted only from
+# somebody already inside it — see ``orchestrator.steer.is_inside_run_floor``
+# for why a participant added mid-run must wait for the turn to end.
+RUN_FLOOR_PREFIX = "cc:runfloor"
 # Cap on entries per thread stream. Every SSE frame is one entry — reasoning
 # models emit one entry per token delta, so a long tool-heavy turn can run to
 # tens of thousands of entries. Trimming evicts the OLDEST entries (RUN_STARTED
@@ -84,6 +95,40 @@ def _active_key(thread_id: str) -> str:
 
 def _run_actor_key(thread_id: str) -> str:
     return f"{RUN_ACTOR_PREFIX}:{thread_id}"
+
+
+def _run_source_key(thread_id: str) -> str:
+    return f"{RUN_SOURCE_PREFIX}:{thread_id}"
+
+
+def _run_floor_key(thread_id: str) -> str:
+    return f"{RUN_FLOOR_PREFIX}:{thread_id}"
+
+
+class SupersedeRefused(RuntimeError):
+    """Raised when a run start would destroy a transcript it does not own.
+
+    The §5.2 correctness fix has two layers and this is the inner one. The route
+    (``_refuse_if_another_run_is_active``) turns the situation into a 409 with a
+    product choice; this exception exists so the *destructive statement itself*
+    — ``mark_active(reset=True)``, which DELETEs ``cc:stream:{thread_id}`` — is
+    unreachable by a party who is not the legitimate superseder, no matter which
+    call site reaches ``run_detached``.
+
+    Defense in depth rather than belt-and-braces: ``run_detached`` has more than
+    one caller (``/agent/run/stream`` and ``/copilot/chat``), and a future third
+    one that forgets the route guard would otherwise re-open a silent data-loss
+    bug. A guard at the route is a policy; a guard here is an invariant.
+    """
+
+    def __init__(self, thread_id: str, owner: str, actor: str) -> None:
+        super().__init__(
+            f"{owner} owns the run in flight on this thread; "
+            f"{actor or 'an anonymous caller'} may not supersede it."
+        )
+        self.thread_id = thread_id
+        self.owner = owner
+        self.actor = actor
 
 
 # Shared, process-wide async Redis client with an internal connection pool.
@@ -296,7 +341,12 @@ async def subscribe_events(
 
 
 async def mark_active(
-    thread_id: str, *, reset: bool = False, actor: str | None = None,
+    thread_id: str,
+    *,
+    reset: bool = False,
+    actor: str | None = None,
+    source: str | None = None,
+    floor: list[str] | None = None,
 ) -> None:
     """Mark a thread's agent as currently running.
 
@@ -312,6 +362,14 @@ async def mark_active(
                    somebody destroying their OWN work or somebody else's —
                    see :func:`get_run_actor`.  Omitted/empty leaves no actor
                    recorded, which callers must treat as "unknown, allow".
+        source:    The run's correlation source ("chat", "workflow",
+                   "schedule", "webhook", …).  Recorded so a message arriving
+                   mid-run can tell a conversation from a cron and take
+                   §QM-1's automation carve-out.  See :func:`get_run_source`.
+        floor:     The participant roster this run's authority intersection was
+                   folded over.  Recorded so a steer from somebody who was not
+                   in that fold can be refused rather than silently moving the
+                   floor under a turn already executing.
     """
     r = await _get_client()
     try:
@@ -325,6 +383,24 @@ async def mark_active(
             # or an anonymous/internal run would look like it belongs to
             # whoever ran last and could be refused on their behalf.
             await r.delete(_run_actor_key(thread_id))
+        # Same reasoning for both of these: a fresh run must never inherit the
+        # previous one's kind or roster, or a chat turn following a cron would
+        # be read as a cron, and a steer would be checked against a floor that
+        # belonged to a run that has already ended.
+        if source:
+            await r.set(
+                _run_source_key(thread_id), source, ex=STREAM_TTL_SECONDS,
+            )
+        else:
+            await r.delete(_run_source_key(thread_id))
+        if floor:
+            await r.set(
+                _run_floor_key(thread_id),
+                json.dumps(sorted({str(m) for m in floor})),
+                ex=STREAM_TTL_SECONDS,
+            )
+        else:
+            await r.delete(_run_floor_key(thread_id))
     finally:
         pass  # shared pooled client — never closed per-call
 
@@ -345,6 +421,42 @@ async def get_run_actor(thread_id: str) -> str | None:
         return None
 
 
+async def get_run_source(thread_id: str) -> str:
+    """The in-flight run's correlation source, or ``""`` when unknown.
+
+    ``""`` and ``"chat"`` both mean "treat this as a conversation": an
+    unattributable run must never be mistaken for a cron, because that would
+    silently turn a steer into a second concurrent run.
+    """
+    try:
+        r = await _get_client()
+        return await r.get(_run_source_key(thread_id)) or ""
+    except Exception:  # noqa: BLE001 — advisory, never a blocker
+        _log.warning("stream_relay.get_run_source_failed",
+                     thread_id=thread_id[:12])
+        return ""
+
+
+async def get_run_floor(thread_id: str) -> list[str] | None:
+    """The participant roster the in-flight run's authority was folded over.
+
+    ``None`` means "not recorded" — a solo run, a run predating this key, or a
+    Redis miss — and every caller must fail OPEN on it, matching
+    :func:`get_run_actor`'s contract.
+    """
+    try:
+        r = await _get_client()
+        raw = await r.get(_run_floor_key(thread_id))
+        if not raw:
+            return None
+        parsed = json.loads(raw)
+        return [str(m) for m in parsed] if isinstance(parsed, list) else None
+    except Exception:  # noqa: BLE001
+        _log.warning("stream_relay.get_run_floor_failed",
+                     thread_id=thread_id[:12])
+        return None
+
+
 async def mark_inactive(thread_id: str) -> None:
     """Mark a thread's agent as finished."""
     r = await _get_client()
@@ -353,6 +465,10 @@ async def mark_inactive(thread_id: str) -> None:
         # Drop the actor with the active flag: a finished run has no owner, so
         # the next caller must not be refused against a stale one.
         await r.delete(_run_actor_key(thread_id))
+        # Kind and roster are facts about a RUN, not about a thread — a
+        # finished run must not lend either to whatever starts next.
+        await r.delete(_run_source_key(thread_id))
+        await r.delete(_run_floor_key(thread_id))
         # Also refresh the stream TTL so late reconnectors can still replay.
         await r.expire(_stream_key(thread_id), STREAM_TTL_SECONDS)
     finally:
@@ -711,6 +827,8 @@ async def run_detached(
     tee: bool = False,
     on_complete: Any = None,
     actor: str | None = None,
+    source: str | None = None,
+    floor: list[str] | None = None,
 ) -> AsyncIterator[dict[str, Any]]:
     """Run *gen* (an SSE-line async generator) in a DETACHED background task
     and yield its events from the Redis stream.
@@ -734,13 +852,48 @@ async def run_detached(
                    authoritative fold-and-persist here (core_loop_unification
                    Phase 1).  Best-effort: exceptions are swallowed.
         actor:     Who is starting this run.  Recorded on the thread so a later
-                   caller can be told whose run they would destroy.  The REFUSAL
-                   itself lives at the route (``/agent/run/stream`` returns 409);
-                   by the time we get here, superseding has been authorised.
+                   caller can be told whose run they would destroy.  The 409
+                   lives at the route (``/agent/run/stream``); the INVARIANT
+                   lives here — see :class:`SupersedeRefused`.
+        source:    Correlation source of this run ("chat", "workflow",
+                   "schedule", …).  Recorded so a message arriving mid-run can
+                   tell a conversation from an automation turn.
+        floor:     Participant roster whose access intersection this run acts
+                   at.  Recorded so a mid-run steer can be checked against it.
+
+    Raises:
+        SupersedeRefused: when a DIFFERENT party's run is in flight on this
+            thread.  Starting would delete a transcript this caller does not
+            own, so it does not start.
 
     Yields:
         Parsed event dicts with ``_stream_id`` (Redis entry ID) attached.
     """
+    # ── §5.2, the inner layer: the destructive reset is UNREACHABLE by anyone
+    # but a legitimate superseder. ────────────────────────────────────────────
+    #
+    # The rule, stated once: *you may supersede a run you own, and no other.*
+    # "Own" is `cc:runactor:{thread_id}`, stamped when the run began.
+    #
+    # Fails OPEN in exactly the two cases ``get_run_actor`` documents — no
+    # recorded owner (a legacy run, a Redis hiccup) or an anonymous caller
+    # (cron, service-to-service) — because a false refusal blocks legitimate
+    # work while a false allow merely restores the behaviour we already had.
+    # Everything else is refused, and the caller routes to steer instead.
+    if actor:
+        try:
+            _owner = await get_run_actor(thread_id)
+            _live = await is_active(thread_id)
+        except Exception:  # noqa: BLE001 — never block a run on a check failing
+            _owner, _live = None, False
+        if _live and _owner and _owner != actor:
+            _log.warning(
+                "stream_relay.supersede_refused",
+                thread_id=thread_id[:12],
+                owner=_owner[:20], actor=actor[:20],
+            )
+            raise SupersedeRefused(thread_id, _owner, actor)
+
     # One run per thread: cancel any stale run still attached to this thread.
     prev = _DETACHED_TASKS.get(thread_id)
     if prev is not None and not prev.done():
@@ -751,10 +904,20 @@ async def run_detached(
             pass
 
     # Fresh run boundary: clear previous events so replay-from-0 is exact.
-    # NOTE this DELETES the previous run's event log — which is why reaching
-    # here at all is gated upstream (§3.3): only the run's own owner may
-    # supersede it.
-    await mark_active(thread_id, reset=True, actor=actor)
+    # NOTE this DELETES the previous run's event log — reaching this line means
+    # the guard above has confirmed the caller owns what it is about to erase.
+    await mark_active(
+        thread_id, reset=True, actor=actor, source=source, floor=floor,
+    )
+
+    # A note buffered for a run that never got to a tool boundary must not leak
+    # into the next one; the durable store (cc:steer:) is what carries anything
+    # still owed forward, and the route replays it into the run's input.
+    try:
+        from orchestrator.steer import clear_guidance  # noqa: PLC0415
+        clear_guidance(thread_id)
+    except Exception:  # noqa: BLE001
+        pass
 
     async def _drain() -> None:
         try:
@@ -824,6 +987,48 @@ async def run_detached(
         return True
 
     register_control_command(thread_id, "cancel", _cancel_apply)
+
+    # ── The steer applier (§4.6 step 2) ──────────────────────────────────────
+    # "A new applier, not new infrastructure": the bus already relays a command
+    # from any worker to the one that owns the run and confirms it applied. All
+    # steer adds is what to DO on arrival — buffer the note for the run's next
+    # tool boundary, and tell everyone watching that the run was redirected and
+    # by whom.
+    #
+    # Returning True is the applied-ack, and it is honest here: the note is in
+    # the owning worker's buffer. If the run then dies before a tool boundary,
+    # the durable signal (cc:steer:) is what carries the sentence into the next
+    # run — the applier never claims the model has *acted* on it, only that the
+    # right worker has it.
+    def _steer_apply(command: dict[str, Any]) -> bool:
+        text = str(command.get("text") or "").strip()
+        if not text:
+            return False
+        author = str(command.get("author") or "someone")
+        try:
+            from orchestrator.steer import (  # noqa: PLC0415
+                buffer_guidance, discard_signal,
+            )
+            buffer_guidance(thread_id, author, text)
+        except Exception:  # noqa: BLE001
+            return False
+        # NOTE the visible half of this — the ``STEER_INJECTED`` event everyone
+        # in the room sees — is published by the SENDER onto ``cc:room:``, not
+        # here onto ``cc:stream:``. Two reasons, both deliberate:
+        #   * layering: ``cc:room:`` belongs to the gateway (room_stream.py) and
+        #     the orchestrator must not reach up into it;
+        #   * parity: ``cc:stream:`` events are folded into the transcript by
+        #     BOTH ``gateway/chat_fold.py`` and ``lib/chatStream.ts``, so a new
+        #     run-event type is a two-sided change. A steer is a room fact, not
+        #     a turn fact — §4.4 puts ``STEER_INJECTED`` on the room stream for
+        #     exactly this reason.
+        sid = str(command.get("signal_id") or "")
+        if sid:
+            with contextlib.suppress(Exception):
+                asyncio.create_task(discard_signal(thread_id, sid))
+        return True
+
+    register_control_command(thread_id, "steer", _steer_apply)
     _start_control_listener(thread_id)
 
     # Serve events from Redis — the SAME path a reconnecting client uses.

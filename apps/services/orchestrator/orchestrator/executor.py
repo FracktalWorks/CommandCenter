@@ -3701,6 +3701,15 @@ async def run_agent_stream(
                         })
                         raise
                     else:
+                        # Mid-run steer (§4.6): a tool boundary is where guidance
+                        # that arrived during the turn enters the model's
+                        # context. No pending steer => `result` is returned
+                        # unchanged, so this path is a dict lookup for every
+                        # ordinary call.
+                        from orchestrator.steer import (  # noqa: PLC0415
+                            decorate_tool_result,
+                        )
+                        result = decorate_tool_result(result, thread_id)
                         result_str = str(result) if result is not None else ""
                         await queue.put({
                             "type": "TOOL_CALL_RESULT",

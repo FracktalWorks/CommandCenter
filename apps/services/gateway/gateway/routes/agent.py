@@ -37,7 +37,7 @@ from acb_auth import (
 from acb_common import get_logger, get_settings
 from fastapi import (APIRouter, BackgroundTasks, Depends, Header,
                      HTTPException, Request, status)
-from fastapi.responses import StreamingResponse
+from fastapi.responses import JSONResponse, Response, StreamingResponse
 from gateway.room_stream import publish_room_event
 from pydantic import BaseModel
 
@@ -121,8 +121,12 @@ async def _refuse_if_another_run_is_active(thread_id: str, actor: str) -> None:
     blocks legitimate work, while a false allow merely restores today's
     behaviour.
 
-    When floor control lands (§5.1) the condition becomes "does not hold the
-    floor" and this same 409 grows the steer/queue/request-floor options.
+    Superseded as the DEFAULT path by steer (§QM-1): a second person's message
+    now folds into the live run instead of being refused, so this raises only
+    for the cases steer cannot take — see :func:`_route_incoming_turn`. The
+    refusal is kept because the destructive path must stay closed even when
+    steering is unavailable (Redis down, an unreachable owner, a caller that
+    never routes).
     """
     if not actor:
         return
@@ -153,6 +157,211 @@ async def _refuse_if_another_run_is_active(thread_id: str, actor: str) -> None:
             ),
             "threadId": thread_id,
             "holder": owner,
+        },
+    )
+
+
+async def _route_incoming_turn(
+    thread_id: str, actor: str, text: str,
+) -> "TurnDecision":
+    """Decide what an arriving message does to *thread_id*: the impure half.
+
+    Every judgement lives in :func:`orchestrator.steer.route_turn`, which is
+    pure and therefore testable without a Redis. This function only gathers the
+    three facts that function needs and hands them over, so "what is the rule"
+    and "what is the world" never get tangled.
+
+    Fails to ``ENGAGE`` when the world cannot be read at all: an unreadable
+    Redis must not silently convert someone's message into a steer that nothing
+    will ever apply. ``run_detached``'s own guard still stands behind that, so
+    engaging on a bad read cannot destroy a transcript — it raises instead.
+    """
+    from orchestrator.steer import Route, TurnDecision, route_turn
+
+    if not thread_id:
+        return TurnDecision(Route.ENGAGE, "no_thread")
+    try:
+        from orchestrator.stream_relay import get_run_source, is_active
+
+        active = await is_active(thread_id)
+        source = await get_run_source(thread_id) if active else ""
+    except Exception:  # noqa: BLE001
+        _log.warning("agent.turn_route_probe_failed", thread_id=thread_id[:12])
+        return TurnDecision(Route.ENGAGE, "probe_failed")
+
+    return route_turn(
+        author_kind="human" if actor else "agent",
+        text=text,
+        run_active=active,
+        target_run_kind=_run_kind_for_source(source),
+    )
+
+
+#: Sources whose runs nobody is standing in. A person's message arriving during
+#: one of these starts its own run rather than steering into it (§QM-1's one
+#: carve-out) — the executor already stamps every run with one of these strings
+#: as its correlation ``source``, so this needs no new concept, only a reading
+#: of an existing one. ``workflows/service.py`` calls the same set unattended.
+_AUTOMATION_SOURCES: frozenset[str] = frozenset({
+    "schedule", "webhook", "event", "workflow", "cron", "reconciler",
+})
+
+
+def _run_kind_for_source(source: str) -> str:
+    """``"automation"`` for an unattended run, ``"human"`` for everything else.
+
+    Unknown and empty both resolve to ``"human"``: mistaking a conversation for
+    a cron would spawn a second concurrent run on a thread someone is actively
+    using, which is the exact failure steer exists to remove.
+    """
+    return (
+        "automation"
+        if (source or "").strip().lower() in _AUTOMATION_SOURCES
+        else "human"
+    )
+
+
+async def _apply_turn_decision(
+    decision: "TurnDecision",
+    req: AgentRunRequest,
+    agent_name: str,
+    actor: str,
+    room: Any,
+) -> Response | None:
+    """Carry out a routing decision. ``None`` means "start the run".
+
+    The three non-engaging outcomes all answer **202 Accepted with a JSON body
+    and no stream**, which is the mechanism behind "the second caller stands
+    down". A caller that gets a stream believes it owns the answer and renders
+    it; qm's Slack handler carries the comment that delivering from both sides
+    "is how one answer got posted twice". A 202 is unambiguous: your words
+    landed, and somebody else's turn is going to speak them.
+
+    ``ENGAGE`` additionally drains the durable steer store into this run's
+    message. That is the replay half of §QM-1's durability requirement: a steer
+    whose target run terminated mid-send is still on disk, and this is where it
+    is spoken instead of lost.
+    """
+    from orchestrator.steer import (
+        Route, format_replayed, is_inside_run_floor, send_steer,
+        take_pending_steers,
+    )
+
+    thread_id = req.thread_id or ""
+
+    if decision.route is Route.ENGAGE:
+        if thread_id:
+            pending = await take_pending_steers(thread_id)
+            replayed = format_replayed(pending)
+            if replayed:
+                _log.info(
+                    "agent.steer_replayed",
+                    thread_id=thread_id[:12], count=len(pending),
+                )
+                # Prepended, not appended: what somebody said while the last
+                # run was dying came BEFORE this message in wall-clock order,
+                # and a transcript that reorders people is a transcript that
+                # misattributes intent.
+                existing = str(req.payload.get("message") or "")
+                req.payload["message"] = (
+                    f"{replayed}\n\n{existing}" if existing else replayed
+                )
+        return None
+
+    if decision.route is Route.DROP:
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "steered": False, "dropped": True,
+                "reason": decision.reason, "threadId": thread_id,
+            },
+        )
+
+    if decision.route is Route.ABORT:
+        # A bare "stop" is the one message that should reach the run as a verb
+        # rather than as words. Cancel is already attributed and already
+        # cross-worker; this only routes to it.
+        from orchestrator.stream_relay import cancel_run
+
+        stopped = await cancel_run(thread_id)
+        _log.info(
+            "agent.turn_aborted_run",
+            thread_id=thread_id[:12], actor=actor[:20], confirmed=stopped,
+        )
+        return JSONResponse(
+            status_code=status.HTTP_202_ACCEPTED,
+            content={
+                "steered": False, "aborted": True, "confirmed": stopped,
+                "reason": decision.reason, "threadId": thread_id,
+            },
+        )
+
+    # ── STEER ────────────────────────────────────────────────────────────────
+    # Authority first (groups_sessions_authority.md §3). The run is executing
+    # under an access intersection folded at run start; admitting a principal
+    # who was not in that fold would move the floor under a turn already using
+    # it. We refuse rather than narrow mid-run, and we say why — a silent
+    # downgrade is the failure mode §3 names ("the agent could do this
+    # yesterday").
+    from orchestrator.stream_relay import get_run_floor
+
+    floor = await get_run_floor(thread_id)
+    if not is_inside_run_floor(
+        actor, floor,
+        room_admits=bool(room is not None and getattr(room, "can_send", False)),
+    ):
+        _log.info(
+            "agent.steer_refused_outside_floor",
+            thread_id=thread_id[:12], actor=actor[:20],
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail={
+                "error": "steer_outside_run_floor",
+                "message": (
+                    "This run started before you joined the room, so it is "
+                    "acting with an access level that was agreed without you. "
+                    "Adding your words to it now would change what it is "
+                    "allowed to do mid-task. Send again once the current turn "
+                    "finishes and the next run will include you."
+                ),
+                "threadId": thread_id,
+            },
+        )
+
+    text = str(req.payload.get("message") or req.payload.get("user_query") or "")
+    signal = await send_steer(thread_id, actor, text, run_id=req.run_id)
+
+    # The room sees WHO redirected the run and when. Deliberately on
+    # `cc:room:` and not on the run stream: run events are folded into the
+    # transcript by both gateway/chat_fold.py and lib/chatStream.ts, so a new
+    # run-event type is a two-sided change; a steer is a room fact (§4.4).
+    if room is not None and getattr(room, "is_shared", False):
+        await publish_room_event(thread_id, {
+            "type": "STEER_INJECTED",
+            "author": actor,
+            "agentName": agent_name,
+            "text": text[:500],
+            "appliedAt": "tool_boundary",
+            "delivered": bool(signal.get("delivered")),
+        })
+
+    _log.info(
+        "agent.turn_steered",
+        thread_id=thread_id[:12], actor=actor[:20],
+        delivered=bool(signal.get("delivered")),
+    )
+    return JSONResponse(
+        status_code=status.HTTP_202_ACCEPTED,
+        content={
+            # THE marker the second surface keys off. Anything that receives it
+            # must not render an assistant turn of its own.
+            "steered": True,
+            "delivered": bool(signal.get("delivered")),
+            "pendingReplay": not bool(signal.get("delivered")),
+            "reason": decision.reason,
+            "threadId": thread_id,
+            "signalId": signal.get("id"),
         },
     )
 
@@ -1474,7 +1683,7 @@ async def run_agent_stream_endpoint(
     _request: Request,
     user: UserContext = Depends(get_current_user),
     background_tasks: BackgroundTasks = BackgroundTasks(),
-) -> StreamingResponse:
+) -> Response:
     """Stream a named-agent run as AG-UI Server-Sent Events.
 
     Returns an ``text/event-stream`` response emitting AG-UI protocol events:
@@ -1517,6 +1726,22 @@ async def run_agent_stream_endpoint(
             "agentName": agent_name,
             "content": _room_preview(req),
         })
+
+    # ── Steer instead of 409 (§4.6, §QM-1) ────────────────────────────────────
+    # Before anything expensive — before memory assembly, before the executor —
+    # decide what this message DOES. Four outcomes; only one of them starts a
+    # run. See _route_incoming_turn / orchestrator.steer.route_turn.
+    _incoming_text = str(
+        req.payload.get("message") or req.payload.get("user_query") or ""
+    )
+    _decision = await _route_incoming_turn(
+        req.thread_id or "", actor_email, _incoming_text,
+    )
+    _steered = await _apply_turn_decision(
+        _decision, req, agent_name, actor_email, room,
+    )
+    if _steered is not None:
+        return _steered
 
     run_id = req.run_id or str(uuid.uuid4())
     user_id: str = getattr(user, "email", "") or "anonymous"
@@ -1697,7 +1922,9 @@ async def run_agent_stream_endpoint(
     # response is merely a Redis subscriber: if the client disconnects,
     # uvicorn cancels the subscriber but the agent keeps running.  A
     # reconnecting client replays from its cursor via GET .../reconnect.
-    from orchestrator.stream_relay import run_detached  # noqa: PLC0415
+    from orchestrator.stream_relay import (  # noqa: PLC0415
+        SupersedeRefused, run_detached,
+    )
 
     from gateway.chat_fold import \
         persist_final_assistant_message  # noqa: PLC0415
@@ -1794,14 +2021,43 @@ async def run_agent_stream_endpoint(
         think_mode=_think_mode,
     )
 
+    # The roster this run's authority intersection is folded over, recorded so a
+    # mid-run steer can be checked against the floor the turn is actually
+    # executing under (groups_sessions_authority.md §3). A solo thread records
+    # nothing, so nothing about single-player behaviour changes.
+    _floor = list(room.members) if (room is not None and room.is_shared) else None
+
     async def _serve():
         try:
             async for evt in run_detached(
                 thread_id, agent_gen, tee=False,
                 on_complete=_persist_on_complete,
                 actor=_actor or None,
+                source=str(req.payload.get("source") or "chat"),
+                floor=_floor,
             ):
                 yield f"data: {json.dumps(evt)}\n\n"
+        except SupersedeRefused:
+            # The inner §5.2 invariant fired: between routing this turn and
+            # starting it, somebody else's run took the thread. Do NOT fall
+            # through to the degraded direct-stream path below — that would run
+            # the agent anyway, which is the destruction this guard exists to
+            # prevent. Report it in-band; the client re-sends and routes to
+            # steer on the second attempt.
+            _log.warning(
+                "agent.stream_supersede_refused",
+                agent=agent_name, thread_id=thread_id[:12],
+            )
+            yield "data: " + json.dumps({
+                "type": "RUN_ERROR",
+                "message": (
+                    "Another participant's run started on this conversation "
+                    "while yours was starting. Nothing was discarded — send "
+                    "again to add to it."
+                ),
+                "code": "run_in_progress",
+            }) + "\n\n"
+            return
         except Exception:  # noqa: BLE001
             from orchestrator.stream_relay import \
                 get_detached_task  # noqa: PLC0415

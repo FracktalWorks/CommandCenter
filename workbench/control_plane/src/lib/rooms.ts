@@ -106,6 +106,20 @@ export type RoomEvent =
   | { type: "AGENT_REMOVED"; agentName: string; removedBy: string; ts: number }
   | { type: "ROOM_SETTINGS_CHANGED"; changedBy: string; settings: Record<string, string>; ts: number }
   | { type: "USER_MESSAGE"; author: string; agentName: string; content: string; ts: number }
+  // Somebody redirected the run that was already going instead of superseding
+  // it (docs/multiplayer/README.md §4.6). Deliberately a ROOM event, not a run
+  // event: run events are folded into the transcript by both
+  // gateway/chat_fold.py and lib/chatStream.ts, and a steer belongs to the room
+  // rather than to the assistant message the turn produces.
+  | {
+      type: "STEER_INJECTED";
+      author: string;
+      agentName: string;
+      text: string;
+      appliedAt: string;
+      delivered: boolean;
+      ts: number;
+    }
   | { type: "ROOM_REPLAY_DONE" }
   | { type: "ROOM_PING" };
 

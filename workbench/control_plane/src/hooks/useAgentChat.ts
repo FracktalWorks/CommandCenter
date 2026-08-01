@@ -264,6 +264,29 @@ export function useAgentChat({
           }),
         });
 
+        // ── Stand down: this message was folded into a run already going ──
+        // docs/multiplayer/README.md §4.6. A 202 means the gateway steered our
+        // words into somebody else's in-flight turn rather than starting a
+        // second run. That turn owns the answer, and it will arrive here over
+        // the room's live stream like any other participant's. If we also
+        // rendered an assistant bubble we would show the reply twice — the
+        // exact bug qm hit and warned about.
+        //
+        // Note 202 IS `res.ok`, so this check has to come first.
+        if (res.status === 202) {
+          const outcome = (await res.json().catch(() => ({}))) as {
+            steered?: boolean;
+          };
+          if (outcome.steered) {
+            // Drop our own placeholder; the user's message stays, attributed.
+            setSessionState(threadId, (prev) => ({
+              ...prev,
+              messages: prev.messages.filter((m) => m.id !== assistantId),
+            }));
+          }
+          return;
+        }
+
         if (!res.ok || !res.body) {
           const text = await res.text().catch(() => `status ${res.status}`);
           throw new Error(text);
@@ -570,6 +593,10 @@ export function useAgentChat({
           }),
         });
 
+        // A reconnect that got steered (someone else's run took the thread
+        // while we were away) has nothing to replay into — the running turn
+        // owns the answer and polling will pick it up. §4.6.
+        if (res.status === 202) { return; }
         if (!res.ok || !res.body) { return; }  // Fall back to polling.
 
         // Take exclusive ownership of the replay target before resetting it.

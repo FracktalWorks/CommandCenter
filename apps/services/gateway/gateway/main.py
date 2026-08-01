@@ -775,12 +775,32 @@ if _HAS_MAF:
                     get_detached_task,
                     run_detached,
                 )
+                from orchestrator.stream_relay import SupersedeRefused
                 try:
+                    # `actor` is not decoration: run_detached's reset DELETES the
+                    # thread's event log, and without a recorded owner this
+                    # endpoint was the one door left open on the §5.2 fix — a
+                    # second person on /copilot/chat could still erase a
+                    # transcript they did not own. Stamping the actor is what
+                    # makes the guard able to refuse.
                     async for evt in run_detached(
                         _thread_id, event_generator(), tee=True,
                         on_complete=_obs_on_complete,
+                        actor=(user_id if user_id != "anonymous" else None),
+                        source="chat",
                     ):
                         yield f"data: {_json.dumps(evt)}\n\n"
+                except SupersedeRefused:
+                    _log.warning("copilot_chat.supersede_refused")
+                    yield "data: " + _json.dumps({
+                        "type": "RUN_ERROR",
+                        "code": "run_in_progress",
+                        "message": (
+                            "Another participant has a run in progress on this "
+                            "conversation. Nothing was discarded."
+                        ),
+                    }) + "\n\n"
+                    return
                 except Exception:
                     if get_detached_task(_thread_id) is not None:
                         _log.warning("copilot_chat.stream_subscribe_lost")

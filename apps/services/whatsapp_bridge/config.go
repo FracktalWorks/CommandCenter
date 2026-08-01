@@ -34,6 +34,10 @@ type Config struct {
 	// CallReapAfter is how long an ended call stays queryable before it's
 	// dropped from the in-memory registry.
 	CallReapAfter time.Duration
+	// CallRetentionDays bounds how long recorded call audio stays on disk.
+	// Recording runs at ~115 MB per hour of call, so an unbounded directory
+	// fills a VPS quietly; 0 keeps recordings forever (opt in deliberately).
+	CallRetentionDays uint32
 }
 
 func envBool(key string, def bool) bool {
@@ -74,5 +78,7 @@ func LoadConfig() Config {
 		FullHistoryDays: envUint("WHATSAPP_BRIDGE_FULL_HISTORY_DAYS", 365),
 		CallRecordDir:   env("WHATSAPP_BRIDGE_CALL_RECORD_DIR", "./call-recordings"),
 		CallReapAfter:   time.Duration(envUint("WHATSAPP_BRIDGE_CALL_REAP_MINS", 60)) * time.Minute,
+
+		CallRetentionDays: envUint("WHATSAPP_BRIDGE_CALL_RETENTION_DAYS", 7),
 	}
 }

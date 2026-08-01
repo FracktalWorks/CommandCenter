@@ -131,24 +131,28 @@ func (lc *liveCall) setPhase(phase string) {
 	lc.mu.Unlock()
 }
 
-// finish records the terminal state and closes the recorder exactly once —
-// OnEnd can race a Hangup, and a WAV whose header is never finalized is
-// unreadable.
+// finish records the terminal state and closes the recorder exactly once.
+//
+// Idempotent by necessity: meowcaller's OnEnd routinely races an explicit
+// Hangup, so this runs twice for most calls. The FIRST reason and timestamp
+// win — a later overwrite would push endedAt forward and stretch the call's
+// apparent duration — and the recorder closes once, because finalizing a WAV
+// header twice leaves the file unreadable.
 func (lc *liveCall) finish(reason string) {
 	lc.mu.Lock()
-	lc.phase = callEnded
-	lc.endedAt = time.Now()
-	if reason != "" {
+	if lc.endedAt.IsZero() {
+		lc.endedAt = time.Now()
 		lc.endReason = reason
 	}
+	lc.phase = callEnded
 	sink := lc.sink
 	lc.mu.Unlock()
 
 	lc.closeOnce.Do(func() {
 		if sink != nil {
-			if err := sink.Close(); err != nil {
-				_ = err // a failed flush must not mask the call's own end reason
-			}
+			// Best effort: a failed WAV flush costs us the recording, but it
+			// must not stop the call from being marked ended.
+			_ = sink.Close()
 		}
 	})
 }
@@ -225,6 +229,46 @@ func (cm *CallManager) reap(ttl time.Duration) int {
 		}
 	}
 	return n
+}
+
+// sweepRecordings deletes recorded audio older than retentionDays. Recording
+// runs at roughly 115 MB per hour of call, so on a VPS an unbounded directory
+// is a slow outage rather than a tidiness problem. Zero days disables it.
+// Returns the number of files removed.
+func (cm *CallManager) sweepRecordings(retentionDays uint32) int {
+	if cm.recordDir == "" || retentionDays == 0 {
+		return 0
+	}
+	cutoff := time.Now().AddDate(0, 0, -int(retentionDays))
+	entries, err := os.ReadDir(cm.recordDir)
+	if err != nil {
+		if !os.IsNotExist(err) { // not yet created is normal, not worth logging
+			cm.log.Warnf("sweep recordings: %v", err)
+		}
+		return 0
+	}
+
+	// Only ever delete files this service writes (<call-id>.wav) — the
+	// directory is operator-configurable and could point somewhere shared.
+	removed := 0
+	for _, e := range entries {
+		if e.IsDir() || filepath.Ext(e.Name()) != ".wav" {
+			continue
+		}
+		info, err := e.Info()
+		if err != nil || !info.ModTime().Before(cutoff) {
+			continue
+		}
+		if err := os.Remove(filepath.Join(cm.recordDir, e.Name())); err != nil {
+			cm.log.Warnf("remove old recording %s: %v", e.Name(), err)
+			continue
+		}
+		removed++
+	}
+	if removed > 0 {
+		cm.log.Infof("swept %d call recording(s) older than %d days", removed, retentionDays)
+	}
+	return removed
 }
 
 // recordingPath allocates the WAV path for a call, creating the directory. An

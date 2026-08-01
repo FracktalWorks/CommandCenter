@@ -76,7 +76,10 @@ func main() {
 	gw := NewGatewayClient(cfg.GatewayURL, cfg.Secret)
 	mgr := NewSessionManager(container, meta, gw, logger, cfg.CallRecordDir)
 	mgr.RestoreSessions(ctx)
-	go reapCalls(mgr, cfg.CallReapAfter)
+	// Sweep once at boot so a restart reclaims disk even if the process never
+	// stayed up long enough for the periodic pass to fire.
+	mgr.calls.sweepRecordings(cfg.CallRetentionDays)
+	go reapCalls(mgr, cfg.CallReapAfter, cfg.CallRetentionDays)
 
 	srv := &Server{cfg: cfg, mgr: mgr, log: logger}
 	httpSrv := &http.Server{Addr: cfg.Addr, Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
@@ -344,9 +347,10 @@ func boolPtr(b bool) *bool       { return &b }
 func uint32Ptr(n uint32) *uint32 { return &n }
 
 // reapCalls periodically drops long-ended calls from the in-memory registry so
-// a bridge that runs for weeks doesn't retain every call it ever placed. A
-// non-positive interval disables reaping.
-func reapCalls(mgr *SessionManager, ttl time.Duration) {
+// a bridge that runs for weeks doesn't retain every call it ever placed, and
+// sweeps recorded audio past its retention. A non-positive interval disables
+// both.
+func reapCalls(mgr *SessionManager, ttl time.Duration, retentionDays uint32) {
 	if ttl <= 0 {
 		return
 	}
@@ -354,5 +358,6 @@ func reapCalls(mgr *SessionManager, ttl time.Duration) {
 	defer ticker.Stop()
 	for range ticker.C {
 		mgr.calls.reap(ttl)
+		mgr.calls.sweepRecordings(retentionDays)
 	}
 }

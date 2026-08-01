@@ -39,7 +39,7 @@ router = APIRouter(
         "/whatsapp/bridge/labels",
         "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
-        "/whatsapp/bridge/avatars",
+        "/whatsapp/bridge/call-event",
     ])],
 )
 
@@ -59,6 +59,9 @@ class WhatsAppAccountModel(BaseModel):
     quality_rating: str | None = None
     last_synced_at: str | None = None
     is_default: bool = False
+    # 'cloud' (Meta Cloud API) or 'whatsmeow' (the QR-paired personal bridge).
+    # The dialer needs it: voice calling only exists on the bridge transport.
+    provider: str = "cloud"
 
 
 class WhatsAppChatModel(BaseModel):

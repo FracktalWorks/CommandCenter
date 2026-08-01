@@ -24,6 +24,29 @@ export type WaAccount = {
   quality_rating: string | null;
   last_synced_at: string | null;
   is_default: boolean;
+  /** 'cloud' (Meta Cloud API) or 'whatsmeow' (QR-paired personal bridge).
+   *  Voice calling exists only on the bridge transport. */
+  provider?: string;
+};
+
+/** One voice call as the bridge reports it. Mirrors callInfo in calls.go. */
+export type WaCall = {
+  call_id: string;
+  account_id: string;
+  peer: string;
+  direction: "outgoing" | "incoming" | "";
+  kind: "direct" | "group" | "";
+  phase: string;
+  targets?: string[];
+  started_at?: string;
+  ended_at?: string;
+  end_reason?: string;
+  recording?: string;
+};
+
+export type WaCallList = {
+  calls: WaCall[];
+  bridge_reachable: boolean;
 };
 
 // Connect wizard (W11) + Embedded Signup (W12).

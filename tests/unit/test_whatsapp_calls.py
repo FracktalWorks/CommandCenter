@@ -1,0 +1,263 @@
+"""Unit tests for WhatsApp voice calls (transport/calls.py).
+
+Covers the parts that hold real risk: account ownership (the bridge only checks
+a shared secret, so the gateway is the only thing stopping one user driving
+another's paired phone), the bridge-unreachable path, and the shared-secret gate
+on the inbound call-event seam.
+"""
+
+from __future__ import annotations
+
+import pytest
+from fastapi import HTTPException
+
+import gateway.routes.whatsapp.transport.calls as calls
+
+
+# ── fakes ─────────────────────────────────────────────────────────────────────
+
+class _Row:
+    def __init__(self, sync_status: str):
+        self.sync_status = sync_status
+
+
+class _Result:
+    def __init__(self, row):
+        self._row = row
+
+    def fetchone(self):
+        return self._row
+
+
+class _FakeDB:
+    """Minimal async DB stub: every execute returns the same canned row."""
+
+    def __init__(self, row):
+        self._row = row
+        self.closed = False
+
+    async def execute(self, *_a, **_kw):
+        return _Result(self._row)
+
+    async def close(self):
+        self.closed = True
+
+
+class _User:
+    def __init__(self, email: str = "someone@example.com"):
+        self.email = email
+
+
+def _patch_db(monkeypatch, row) -> _FakeDB:
+    db = _FakeDB(row)
+
+    async def _get_db():
+        return db
+
+    monkeypatch.setattr(calls, "_get_db", _get_db)
+    return db
+
+
+def _patch_bridge(monkeypatch, status: int, body):
+    """Replace the bridge transport, recording what it was called with."""
+    seen: dict = {}
+
+    async def _bridge(method, path, **kw):
+        seen["method"], seen["path"] = method, path
+        seen.update(kw)
+        return status, body
+
+    monkeypatch.setattr(calls, "_bridge", _bridge)
+    return seen
+
+
+# ── ownership guard ───────────────────────────────────────────────────────────
+
+async def test_unknown_account_is_404(monkeypatch) -> None:
+    _patch_db(monkeypatch, None)
+    with pytest.raises(HTTPException) as exc:
+        await calls._assert_owns_account("someone-elses-id", _User())
+    assert exc.value.status_code == 404
+
+
+async def test_account_still_pairing_is_409(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("pairing"))
+    with pytest.raises(HTTPException) as exc:
+        await calls._assert_owns_account("acct", _User())
+    assert exc.value.status_code == 409
+    assert "pairing" in exc.value.detail.lower()
+
+
+async def test_live_account_passes_and_closes_db(monkeypatch) -> None:
+    db = _patch_db(monkeypatch, _Row("live"))
+    await calls._assert_owns_account("acct", _User())
+    assert db.closed is True
+
+
+async def test_missing_account_id_is_400(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    with pytest.raises(HTTPException) as exc:
+        await calls._assert_owns_account("", _User())
+    assert exc.value.status_code == 400
+
+
+# ── placing a call ────────────────────────────────────────────────────────────
+
+async def test_place_direct_call_forwards_to_bridge(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    seen = _patch_bridge(monkeypatch, 200, {
+        "call_id": "ABC123", "account_id": "acct", "peer": "+919876543210",
+        "direction": "outgoing", "kind": "direct", "phase": "calling",
+    })
+    out = await calls.place_call(
+        calls.PlaceCallRequest(account_id="acct", to="+919876543210"), _User())
+
+    assert (seen["method"], seen["path"]) == ("POST", "/call")
+    assert seen["json"]["session"] == "acct"
+    assert seen["json"]["to"] == "+919876543210"
+    assert out.call_id == "ABC123"
+    assert out.phase == "calling"
+
+
+async def test_place_group_call_by_group_id(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    seen = _patch_bridge(monkeypatch, 200, {"call_id": "G1", "kind": "group"})
+    out = await calls.place_call(
+        calls.PlaceCallRequest(account_id="acct", group_id="12036300@g.us"), _User())
+
+    assert seen["json"]["group_id"] == "12036300@g.us"
+    assert out.kind == "group"
+
+
+async def test_place_call_with_no_target_is_400(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {})
+    with pytest.raises(HTTPException) as exc:
+        await calls.place_call(calls.PlaceCallRequest(account_id="acct"), _User())
+    assert exc.value.status_code == 400
+
+
+async def test_single_target_is_not_a_group_call(monkeypatch) -> None:
+    """One target can't form a group call — reject rather than silently
+    turning it into a 1:1 to whoever happens to be first."""
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {})
+    with pytest.raises(HTTPException) as exc:
+        await calls.place_call(
+            calls.PlaceCallRequest(account_id="acct", targets=["+911111111111"]), _User())
+    assert exc.value.status_code == 400
+
+
+async def test_unreachable_bridge_is_503_not_500(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 0, {"detail": "The WhatsApp bridge isn't reachable."})
+    with pytest.raises(HTTPException) as exc:
+        await calls.place_call(
+            calls.PlaceCallRequest(account_id="acct", to="+91999"), _User())
+    assert exc.value.status_code == 503
+
+
+async def test_bridge_error_status_is_propagated(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 409, {"detail": "account not connected"})
+    with pytest.raises(HTTPException) as exc:
+        await calls.place_call(
+            calls.PlaceCallRequest(account_id="acct", to="+91999"), _User())
+    assert exc.value.status_code == 409
+    assert "not connected" in exc.value.detail
+
+
+# ── call actions ──────────────────────────────────────────────────────────────
+
+@pytest.mark.parametrize(
+    ("fn", "action"),
+    [(calls.hangup_call, "hangup"),
+     (calls.answer_call, "answer"),
+     (calls.reject_call, "reject")],
+)
+async def test_actions_hit_their_bridge_path(monkeypatch, fn, action) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    seen = _patch_bridge(monkeypatch, 200, {"call_id": "X", "phase": "ended"})
+    out = await fn(calls.CallActionRequest(account_id="acct", call_id="X"), _User())
+
+    assert seen["path"] == f"/call/{action}"
+    assert seen["json"]["call_id"] == "X"
+    assert out.phase == "ended"
+
+
+async def test_action_on_unknown_call_is_404(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 404, {"detail": "call not found"})
+    with pytest.raises(HTTPException) as exc:
+        await calls.hangup_call(
+            calls.CallActionRequest(account_id="acct", call_id="nope"), _User())
+    assert exc.value.status_code == 404
+
+
+# ── listing ───────────────────────────────────────────────────────────────────
+
+async def test_list_calls_maps_bridge_rows(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {"calls": [
+        {"call_id": "A", "phase": "active", "kind": "direct"},
+        {"call_id": "B", "phase": "ended", "kind": "group"},
+    ]})
+    out = await calls.list_calls("acct", _User())
+    assert [c.call_id for c in out.calls] == ["A", "B"]
+    assert out.bridge_reachable is True
+
+
+async def test_list_calls_survives_a_down_bridge(monkeypatch) -> None:
+    """A dead bridge must render as an empty dialer, not a 500."""
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 0, {})
+    out = await calls.list_calls("acct", _User())
+    assert out.calls == []
+    assert out.bridge_reachable is False
+
+
+async def test_list_calls_ignores_malformed_rows(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {"calls": [{"call_id": "A"}, "junk", None]})
+    out = await calls.list_calls("acct", _User())
+    assert [c.call_id for c in out.calls] == ["A"]
+
+
+# ── inbound call-event seam ───────────────────────────────────────────────────
+
+class _Req:
+    def __init__(self, payload, secret="s3cret"):
+        self._payload = payload
+        self.headers = {"X-Bridge-Secret": secret} if secret else {}
+
+    async def json(self):
+        if isinstance(self._payload, Exception):
+            raise self._payload
+        return self._payload
+
+
+async def test_call_event_rejects_a_bad_secret(monkeypatch) -> None:
+    monkeypatch.setattr(calls, "bridge_secret_ok", lambda _h: False)
+    resp = await calls.bridge_call_event(_Req({"call_id": "A"}, secret="wrong"))
+    assert resp.status_code == 403
+
+
+async def test_call_event_accepts_a_good_secret(monkeypatch) -> None:
+    monkeypatch.setattr(calls, "bridge_secret_ok", lambda _h: True)
+    resp = await calls.bridge_call_event(_Req({
+        "call_id": "A", "account_id": "acct", "phase": "active",
+        "direction": "outgoing", "kind": "direct", "recording": "/x/A.wav",
+    }))
+    assert resp.status_code == 200
+
+
+async def test_call_event_rejects_invalid_json(monkeypatch) -> None:
+    monkeypatch.setattr(calls, "bridge_secret_ok", lambda _h: True)
+    resp = await calls.bridge_call_event(_Req(ValueError("not json")))
+    assert resp.status_code == 400
+
+
+async def test_call_event_rejects_a_non_object_payload(monkeypatch) -> None:
+    monkeypatch.setattr(calls, "bridge_secret_ok", lambda _h: True)
+    resp = await calls.bridge_call_event(_Req(["not", "an", "object"]))
+    assert resp.status_code == 400

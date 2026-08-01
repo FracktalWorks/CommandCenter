@@ -148,6 +148,13 @@ best practice:
   typed sub-agent messaging) and OpenClaw (durable job queue, hub-and-spoke
   channels; and its CVEs as the cautionary case). Consult it for "what good looks
   like" when hardening security, plumbing, or multi-agent coordination.
+- Multiplayer prior art: ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md
+  (QM-0..7, sourced from github.com/yc-software/qm) — a shipped multiplayer agent
+  harness that independently reproduced our least-cleared-viewer rule. Consult it
+  before building room concurrency (it folds a second turn into the live run as a
+  steer rather than rejecting it), shared-room credentials (nothing ambient; every
+  credential needs a grant to that room), or skill/prompt-budget work (index in the
+  prompt, bodies read on demand). Reference-only: it owns no work item.
 - Standing rules derived from it:
   1. New platform/agent tools declare risk annotations
      (acb_skills.tool_annotations: read_only/destructive/idempotent/open_world).

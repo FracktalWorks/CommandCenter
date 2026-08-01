@@ -115,3 +115,39 @@ instrument now exists and says the floor itself costs ≈15.4k tokens — ≈10.
 of it the 19 core tools' schemas. Getting under 2k is a *core-floor diet*
 (fewer/leaner schemas, progressive disclosure), a different workstream than
 toggling optional families, which at best saves ≈3.8k (19.3k → 15.4k).
+
+## 6. Prior art for the core-floor diet — `qm`'s progressive disclosure
+
+§5's closing phrase — *"progressive disclosure"* — names a mechanism that
+[`yc-software/qm`](https://github.com/yc-software/qm) has already implemented, read
+2026-08-01. Recorded here so whoever picks up the diet knows what "good" looks
+like; full write-up in
+[`multiplayer_prior_art_qm_2026-08.md` §QM-2](multiplayer_prior_art_qm_2026-08.md).
+
+Four parts, each independently adoptable:
+
+1. **Index, not body.** The prompt carries one line per skill — name,
+   one-line description, and the path to read for the rest
+   (`- **name** — description → read skills/<name>/SKILL.md`). Bodies never
+   enter the prompt at all.
+2. **Bodies live where the agent can read them.** `SKILL.md` is materialized
+   into the scope's sandbox once; full trees (assets, bundles) are laid down
+   **lazily**, triggered when a tool call actually touches the skill's
+   directory. Both layers are content-hash idempotent with marker files, so
+   re-materialization is free.
+3. **Connector gating.** A skill for a provider the org has not configured is
+   filtered out of the index entirely rather than listed and then failing —
+   the same instinct as our S2 intersection, applied to relevance instead of
+   permission.
+4. **Cache placement.** The index is appended *before* the prompt-cache
+   boundary so it stays in the stable prefix — matching our
+   [`llm_caching_memory.md`](llm_caching_memory.md) choke-point discipline.
+
+**What it does and does not buy us.** This attacks the **addendum** half of
+the floor (≈5.4k of 15.4k) and proves the pattern end to end. It does *not*
+touch the **schema** half (≈10.3k across 19 core tools), which is the larger
+number and needs its own answer — fewer tools, leaner schemas, or
+tool-search-style deferred loading. It is also not a config flip for us: it
+assumes the agent can read a body from somewhere, which here means the
+`agent-data/` blob store or the workspace path rather than a sandbox
+filesystem. Sequence it as the successor to S3, not as part of it.

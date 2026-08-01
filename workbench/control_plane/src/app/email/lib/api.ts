@@ -1118,12 +1118,16 @@ export async function listSenders(
   accountId?: string,
   folder?: string,
   limit = 200,
-  offset = 0
+  offset = 0,
+  /** Also count mail already archived. Off by default: the cleaner is about
+   *  what still needs handling, so an archived sender leaves the list. */
+  includeArchived = false
 ): Promise<{ senders: SenderStat[]; total: number }> {
   const sp = new URLSearchParams({ limit: String(limit) });
   if (offset) sp.set("offset", String(offset));
   if (accountId) sp.set("account_id", accountId);
   if (folder) sp.set("folder", folder);
+  if (includeArchived) sp.set("include_archived", "true");
   const res = await gatewayFetch<{ senders: SenderStat[]; total?: number }>(
     `/email/senders?${sp}`
   );

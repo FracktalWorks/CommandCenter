@@ -578,7 +578,8 @@ class GmailProvider(BaseEmailProvider):
     }
 
     async def bulk_apply(
-        self, provider_message_ids: list[str], action: str
+        self, provider_message_ids: list[str], action: str,
+        failed_out: list[str] | None = None,
     ) -> dict[str, str]:
         """Collapse a bulk label action into batchModify calls of 1000.
 
@@ -587,11 +588,15 @@ class GmailProvider(BaseEmailProvider):
         the same label mutation to 1000 messages in a single request, so
         archiving a 40k-message newsletter backlog costs 40 calls, not 40,000.
 
+        ``failed_out`` collects ids the per-message fallback could not apply, so
+        the caller can retry them (see the base contract).
+
         Gmail never re-keys a message id, so the return is always empty.
         """
         ops = self._BULK_LABEL_OPS.get(action)
         if ops is None:
-            return await super().bulk_apply(provider_message_ids, action)
+            return await super().bulk_apply(
+                provider_message_ids, action, failed_out)
         add, remove = ops
         client = await self._get_client()
         for i in range(0, len(provider_message_ids), self._BATCH_MODIFY_MAX):
@@ -612,7 +617,7 @@ class GmailProvider(BaseEmailProvider):
                     "gmail.batch_modify_failed action=%s size=%d error=%s",
                     action, len(chunk), str(exc)[:160],
                 )
-                await super().bulk_apply(chunk, action)
+                await super().bulk_apply(chunk, action, failed_out)
         return {}
 
     async def move_to_folder(self, provider_message_id: str, folder: str) -> None:

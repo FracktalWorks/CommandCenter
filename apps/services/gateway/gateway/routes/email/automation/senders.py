@@ -8,6 +8,7 @@ auto-archive, sender categorization, and cold-email blocking.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import ipaddress
 import json
 import socket
@@ -47,6 +48,8 @@ _NOT_DISPOSED = f"LOWER(COALESCE(em.folder,'')) NOT IN {DISPOSED_FOLDERS}"
 async def list_senders(
     account_id: str | None = Query(None),
     folder: str | None = Query(None),
+    include_archived: bool = Query(
+        False, description="Also count mail you've already archived"),
     limit: int = Query(200, ge=1, le=1000),
     offset: int = Query(0, ge=0),
     user: UserContext = Depends(get_current_user),
@@ -56,16 +59,25 @@ async def list_senders(
     Powers the Email Cleaner: volume per sender, read-rate, unsubscribe link and
     approve/unsubscribe disposition.
 
-    Scope is the WHOLE MAILBOX by default, not the inbox. Cleaning up is a
-    per-sender decision — "do I still want mail from this company at all?" — and
-    that question doesn't stop at the inbox. Scoping to the inbox also made the
-    tool structurally unable to show its own categories: the Marketing and Cold
-    Email preset rules label AND archive on Gmail, so the mail was gone from the
-    inbox by the time the cleaner looked, and those chips were permanently empty.
+    Scope is the mailbox MINUS what has already been dealt with. Trash / junk /
+    drafts are excluded (disposed of, or never received) and so is ARCHIVED mail:
+    the cleaner exists to reduce what still needs handling, so a sender you just
+    archived has to leave the list. Counting archived mail made "Archive all"
+    read as a no-op — the row stayed with an unchanged total — which is the one
+    thing a cleanup tool must never do.
 
-    Trash / junk / drafts are excluded — that mail is already disposed of (or was
-    never received), so counting it would inflate every sender with noise the
-    user has already dealt with. Pass ``folder`` to narrow to one folder.
+    ``include_archived=true`` restores the whole-mailbox view. It exists because
+    the preset Marketing / Cold Email rules label AND archive in the same pass,
+    so their mail is archived the moment it is classified; without this the
+    category chips for those two would read 0 even on a mailbox full of them.
+    That is a "show me everything" question, not the default cleanup one.
+
+    Senders carrying a saved disposition (unsubscribed / auto-archived /
+    approved) are ALWAYS listed, whatever the scope — their mail is archived by
+    definition, and hiding them would empty the Unsubscribed and Auto-archive
+    tabs, leaving the user unable to review or undo their own decisions.
+
+    Pass ``folder`` to narrow to one folder.
 
     ``limit``/``offset`` page the list (ordered by volume, loudest first). The
     per-request cap is a payload bound, not a scope bound: ``total`` reports how
@@ -79,6 +91,18 @@ async def list_senders(
         scope = _account_scope(account_id, params)
         # Already-disposed mail never counts toward "how noisy is this sender".
         folder_sql = f" AND {_NOT_DISPOSED}"
+        if not include_archived:
+            # Archived mail is handled mail. Kept for senders the user has taken
+            # a decision on, so their status tabs stay reviewable (see docstring).
+            disp_sub = (
+                "SELECT LOWER(email) FROM email_newsletters WHERE account_id IN "
+                "(SELECT id FROM email_accounts WHERE user_id = :uid"
+                + (" AND id = :aid" if account_id else "") + ")"
+            )
+            folder_sql += (
+                " AND (LOWER(COALESCE(em.folder, '')) <> 'archive'"
+                f" OR LOWER(em.from_address->>'email') IN ({disp_sub}))"
+            )
         if folder:
             # Narrowing to one folder still must NEVER hide a sender we've acted
             # on: unsubscribing / auto-archiving moves their mail out of the
@@ -297,6 +321,20 @@ _BULK_DB_UPDATE = {
     "unstar": "is_starred = false",
 }
 
+# Rows an action would not actually change are excluded from the UPDATE, so
+# ``affected`` means "messages this changed" rather than "messages matched".
+# Without it, "Archive all" on a sender whose mail was archived last week
+# reported "Archived 320 emails" having moved none — which reads as the action
+# silently doing nothing (and re-pushed 320 no-op calls at the provider).
+_BULK_ALREADY_APPLIED = {
+    "archive": "LOWER(COALESCE(em.folder, '')) = 'archive'",
+    "trash": "LOWER(COALESCE(em.folder, '')) = 'trash'",
+    "read": "em.is_read = true",
+    "unread": "em.is_read = false",
+    "star": "em.is_starred = true",
+    "unstar": "em.is_starred = false",
+}
+
 
 @router.post("/messages/bulk")
 async def bulk_action(
@@ -353,6 +391,16 @@ async def bulk_action(
             params["odays"] = req.older_than_days
         if req.only_read:
             clauses.append("em.is_read = true")
+        # Never re-apply an action to mail that is already in that state — see
+        # _BULK_ALREADY_APPLIED. Keeps `affected` honest and the provider quiet.
+        clauses.append(f"NOT ({_BULK_ALREADY_APPLIED[req.action]})")
+        # ARCHIVING must not reach into the bin. A sender-wide "Archive all"
+        # carries no folder filter, so without this it pulled the sender's
+        # TRASHED and junked mail back out into the archive — silently
+        # un-deleting mail the user had already thrown away. Trashing keeps its
+        # reach (archived mail is still live mail you may want to bin).
+        if req.action == "archive":
+            clauses.append(_NOT_DISPOSED)
         where_sql = " AND ".join(clauses)
 
         # One set-based UPDATE, RETURNING the provider ids we need to reconcile.
@@ -381,15 +429,34 @@ async def bulk_action(
         await db.close()
 
 
+# How hard to push a bulk action at the provider before giving up. The dominant
+# failure is transient (Gmail 429 / Graph 503 under a large sweep), so a couple
+# of backed-off retries recover almost all of it; a permanent failure (deleted
+# message, revoked scope) is not going to improve and is reported instead.
+_RECONCILE_ATTEMPTS = 3
+_RECONCILE_BACKOFF_S = (2, 8)
+
+
 async def _bulk_reconcile_provider(
     account_id: str, provider_msg_ids: list[str], action: str
 ) -> None:
-    """Best-effort: push a bulk action to the provider (runs in background).
+    """Push a bulk action to the provider (runs in background), retrying what
+    fails and never leaving the local mirror claiming work that didn't happen.
 
     Unbounded by design — this is where an uncapped bulk action gets paid for,
     off the request path. The per-provider ``bulk_apply`` decides how: Gmail
     collapses it into batchModify calls of 1000, everything else walks the
-    per-message API and swallows individual failures.
+    per-message API.
+
+    Failures used to be swallowed whole: ``bulk_apply`` logged each one and
+    returned, so a run where every call 429'd looked identical to a clean one.
+    The local row already said 'archive', so the UI showed the mail as filed
+    while the provider still had it in the inbox — and the next sync, which
+    takes the provider as authoritative for ``folder``, pulled it straight back.
+    That is the "I archived it and it came back" report. Now the failures are
+    collected, retried with backoff, and what still won't apply has its local
+    folder reverted so the mirror matches the mailbox instead of lying until the
+    next sync corrects it.
     """
     db = await _get_db()
     try:
@@ -399,24 +466,66 @@ async def _bulk_reconcile_provider(
             db, None, account_id=account_id, require_auth=False,
         ) as sess:
             if not sess.authed:
+                await _revert_unreconciled(db, account_id, provider_msg_ids, action)
+                await db.commit()
+                _log.error("email.bulk_reconcile_unauthed",
+                           account_id=account_id, action=action,
+                           count=len(provider_msg_ids))
                 return
-            rekeys = await sess.provider.bulk_apply(provider_msg_ids, action)
-            # Outlook's /move mints a NEW message id and invalidates the old
-            # one. Dropping these (as this job used to) leaves every
-            # bulk-archived Outlook message pointing at a dead id, so the next
-            # action on it 404s until a full re-sync happens to notice.
-            for old_id, new_id in rekeys.items():
-                await db.execute(text(
-                    "UPDATE email_messages SET provider_message_id = :new, "
-                    "updated_at = now() "
-                    "WHERE account_id = :aid AND provider_message_id = :old"
-                ), {"aid": account_id, "old": old_id, "new": new_id})
+            pending = list(provider_msg_ids)
+            for attempt in range(_RECONCILE_ATTEMPTS):
+                failed: list[str] = []
+                rekeys = await sess.provider.bulk_apply(pending, action, failed)
+                # Outlook's /move mints a NEW message id and invalidates the old
+                # one. Dropping these (as this job used to) leaves every
+                # bulk-archived Outlook message pointing at a dead id, so the next
+                # action on it 404s until a full re-sync happens to notice.
+                for old_id, new_id in rekeys.items():
+                    await db.execute(text(
+                        "UPDATE email_messages SET provider_message_id = :new, "
+                        "updated_at = now() "
+                        "WHERE account_id = :aid AND provider_message_id = :old"
+                    ), {"aid": account_id, "old": old_id, "new": new_id})
+                pending = failed
+                if not pending or attempt == _RECONCILE_ATTEMPTS - 1:
+                    break
+                await asyncio.sleep(_RECONCILE_BACKOFF_S[attempt])
+            if pending:
+                # Permanently un-appliable: make the mirror honest rather than
+                # let the next sync spring it on the user.
+                await _revert_unreconciled(db, account_id, pending, action)
+                _log.error("email.bulk_reconcile_incomplete",
+                           account_id=account_id, action=action,
+                           failed=len(pending), total=len(provider_msg_ids))
+            else:
+                _log.info("email.bulk_reconcile_ok", account_id=account_id,
+                          action=action, count=len(provider_msg_ids))
         await db.commit()
     except Exception as exc:  # noqa: BLE001
         _log.warning("email.bulk_reconcile_failed", account_id=account_id,
                      error=str(exc)[:200])
     finally:
         await db.close()
+
+
+async def _revert_unreconciled(
+    db: Any, account_id: str, provider_msg_ids: list[str], action: str
+) -> None:
+    """Undo the local folder move for messages the provider never applied.
+
+    Only the FOLDER actions are reverted: a mirror that says 'archive' while the
+    message sits in the inbox upstream is an outright lie, and the next sync
+    would flip it back anyway (confusingly, minutes later). Flag actions
+    (read/star) are cosmetic and self-heal on the next sync, so they are left
+    alone rather than fighting a user who has since changed them by hand."""
+    if action not in ("archive", "trash") or not provider_msg_ids:
+        return
+    with contextlib.suppress(Exception):
+        await db.execute(text(
+            "UPDATE email_messages SET folder = 'inbox', updated_at = now() "
+            "WHERE account_id = :aid AND provider_message_id = ANY(:pmids) "
+            f"AND LOWER(COALESCE(folder, '')) = '{action}'"
+        ), {"aid": account_id, "pmids": provider_msg_ids})
 
 
 async def _maybe_auto_archive(account_id: str) -> None:

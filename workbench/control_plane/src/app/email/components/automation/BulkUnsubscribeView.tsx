@@ -173,6 +173,12 @@ export function BulkUnsubscribeView({
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
+  // Archived mail is OUT of the cleaner's scope by default (server-side), so
+  // archiving a sender makes its row leave the list — the whole point of the
+  // tool. This brings the whole-mailbox view back for the one case that needs
+  // it: the preset Marketing / Cold Email rules archive as they label, so their
+  // category chips only fill in when archived mail is counted.
+  const [includeArchived, setIncludeArchived] = useState(false);
   // Which sender row is expanded to show its individual messages (drill-down).
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -183,18 +189,19 @@ export function BulkUnsubscribeView({
     }
     setLoading(true);
     setError(null);
-    // The WHOLE mailbox, not just the inbox. Deciding you're done with a sender
-    // isn't an inbox-scoped question, and the inbox scope also made the category
-    // chips structurally unfillable: the Marketing / Cold Email rules archive as
-    // they label, so that mail had already left the inbox by the time we looked.
-    listSenders(accountId, undefined, SENDER_PAGE)
+    // Everything except what's already handled: trash/junk/drafts AND archived
+    // mail are out of scope server-side, so a sender you archive leaves the
+    // list. "Include archived" brings the whole mailbox back — the preset
+    // Marketing / Cold Email rules archive as they label, so those two category
+    // chips only fill in when archived mail is counted.
+    listSenders(accountId, undefined, SENDER_PAGE, 0, includeArchived)
       .then(({ senders: s, total }) => {
         setSenders(s);
         setTotalSenders(total);
       })
       .catch((e) => setError(e.message || "Failed to load senders"))
       .finally(() => setLoading(false));
-  }, [accountId]);
+  }, [accountId, includeArchived]);
 
   useEffect(load, [load]);
 
@@ -204,7 +211,8 @@ export function BulkUnsubscribeView({
   const loadMore = useCallback(() => {
     if (!accountId) return;
     setLoadingMore(true);
-    listSenders(accountId, undefined, SENDER_PAGE, senders.length)
+    listSenders(accountId, undefined, SENDER_PAGE, senders.length,
+                includeArchived)
       .then(({ senders: s, total }) => {
         // De-dupe on email: rows can shift between pages if mail arrives
         // mid-scroll, and a duplicate key would break the list.
@@ -216,7 +224,7 @@ export function BulkUnsubscribeView({
       })
       .catch((e) => setError(e.message || "Failed to load more senders"))
       .finally(() => setLoadingMore(false));
-  }, [accountId, senders.length]);
+  }, [accountId, senders.length, includeArchived]);
 
   // Auto-dismiss the transient result banner.
   useEffect(() => {
@@ -478,13 +486,12 @@ export function BulkUnsubscribeView({
       const { affected } = await bulkAction({
         action, accountId, senderEmail: s.email,
       });
-      // Now that the list spans the whole mailbox, archiving and trashing differ.
-      // Trashed mail leaves the scope entirely (trash is excluded), so the row
-      // goes. ARCHIVED mail is still theirs — dropping the row would hide a
-      // sender the user may still want to unsubscribe from, so just zero out the
-      // inbox count in place.
+      // Both actions take the mail out of the cleaner's scope (archived and
+      // trashed mail are equally "handled"), so the row goes — unless the user
+      // is explicitly viewing archived mail, where it stays and just moves to
+      // its cleaned state.
       if (affected > 0) {
-        if (action === "trash") {
+        if (action === "trash" || !includeArchived) {
           setSenders((prev) => prev.filter((x) => x.email !== s.email));
           setSelected((prev) => {
             const n = new Set(prev);
@@ -494,14 +501,20 @@ export function BulkUnsubscribeView({
         } else {
           setSenders((prev) =>
             prev.map((x) =>
-              x.email === s.email ? { ...x, in_folder: 0 } : x
+              x.email === s.email
+                ? { ...x, in_folder: 0, archived: x.archived + affected }
+                : x
             )
           );
         }
       }
       setNotice(
-        `${action === "archive" ? "Archived" : "Trashed"} ${affected} ` +
-          `email${affected === 1 ? "" : "s"} from ${s.name || s.email}.`
+        affected === 0
+          ? `Nothing to ${action === "archive" ? "archive" : "delete"} — ` +
+              `${s.name || s.email} has no mail left outside the bin.`
+          : `${action === "archive" ? "Archived" : "Deleted"} ${affected} ` +
+              `email${affected === 1 ? "" : "s"} from ${s.name || s.email}.` +
+              (action === "archive" ? " Nothing left in the inbox." : "")
       );
       // Keep the main inbox pane in sync with what we just removed.
       onArchived?.();
@@ -523,7 +536,8 @@ export function BulkUnsubscribeView({
     }
     setBusy("__bulk__");
     let total = 0;
-    const done: string[] = [];
+    let failed = 0;
+    const done = new Map<string, number>();
     try {
       for (const s of targets) {
         try {
@@ -531,28 +545,41 @@ export function BulkUnsubscribeView({
             action, accountId, senderEmail: s.email,
           });
           total += affected;
-          if (affected > 0) done.push(s.email);
+          if (affected > 0) done.set(s.email, affected);
         } catch {
-          /* skip a failed sender, keep going */
+          failed += 1; // skip a failed sender, keep going — reported below
         }
       }
-      // Same split as the single-sender action: trashed mail leaves the scope
-      // so the rows go; archived mail is still theirs, so keep the rows and just
-      // zero their inbox counts.
-      if (done.length) {
-        const touched = new Set(done);
+      // Same rule as the single-sender action: handled mail leaves the scope,
+      // so the rows go (unless archived mail is explicitly being shown).
+      if (done.size) {
         setSenders((prev) =>
-          action === "trash"
-            ? prev.filter((x) => !touched.has(x.email))
+          action === "trash" || !includeArchived
+            ? prev.filter((x) => !done.has(x.email))
             : prev.map((x) =>
-                touched.has(x.email) ? { ...x, in_folder: 0 } : x
+                done.has(x.email)
+                  ? {
+                      ...x,
+                      in_folder: 0,
+                      archived: x.archived + (done.get(x.email) ?? 0),
+                    }
+                  : x
               )
         );
       }
       clearSelection();
+      // Say what actually changed. "Archived 0 emails" used to read as a broken
+      // button; it means the selection had nothing left outside the bin.
+      const verb = action === "archive" ? "Archived" : "Deleted";
       setNotice(
-        `${action === "archive" ? "Archived" : "Trashed"} ${total} ` +
-          `email(s) from ${targets.length} sender(s).`
+        (total === 0
+          ? `Nothing to ${action === "archive" ? "archive" : "delete"} — the ` +
+            `selected sender${targets.length === 1 ? " has" : "s have"} no mail ` +
+            `left outside the bin.`
+          : `${verb} ${total} email${total === 1 ? "" : "s"} from ` +
+            `${done.size} sender${done.size === 1 ? "" : "s"}.` +
+            (action === "archive" ? " Nothing left in the inbox." : "")) +
+          (failed ? ` ${failed} sender(s) failed — try again.` : "")
       );
       onArchived?.();
     } finally {
@@ -807,6 +834,26 @@ export function BulkUnsubscribeView({
             </button>
           ))}
         </div>
+        {/* Archived mail is out of scope by default, so archiving clears a row
+            off the list. This brings the whole mailbox back for the one case
+            that needs it — the Marketing / Cold Email rules archive as they
+            label, so those chips only fill in with archived mail counted. */}
+        <button
+          onClick={() => setIncludeArchived((v) => !v)}
+          title={
+            includeArchived
+              ? "Counting archived mail too — senders you've already cleaned up are listed"
+              : "Also count mail you've already archived (fills the Marketing / Cold Email chips)"
+          }
+          aria-pressed={includeArchived}
+          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] whitespace-nowrap transition-colors ${
+            includeArchived
+              ? "bg-primary/15 text-primary"
+              : "bg-secondary text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Archive size={12} /> Include archived
+        </button>
         {categorizing && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground ml-auto whitespace-nowrap">
             <Loader2 className="animate-spin" size={13} /> Categorizing…
@@ -1303,12 +1350,22 @@ export function BulkUnsubscribeView({
                       <div className="text-xs font-semibold text-foreground tabular-nums">
                         {inCategory ?? s.count}
                       </div>
-                      <div className="text-[8px] text-muted-foreground mt-0.5">
+                      {/* Nothing left in the inbox is the point of the tool —
+                          say so explicitly. It used to read "emails", identical
+                          in weight to every other row, so archiving a sender
+                          looked like it had done nothing at all. */}
+                      <div
+                        className={`text-[8px] mt-0.5 ${
+                          inCategory === null && inInbox === 0
+                            ? "text-emerald-500"
+                            : "text-muted-foreground"
+                        }`}
+                      >
                         {inCategory !== null
                           ? `of ${s.count}`
                           : inInbox > 0
                             ? `${inInbox} in inbox`
-                            : "emails"}
+                            : "inbox clear"}
                       </div>
                     </div>
                     <ReadRing value={s.read_rate} />

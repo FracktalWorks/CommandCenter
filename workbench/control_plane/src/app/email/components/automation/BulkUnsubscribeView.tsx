@@ -173,6 +173,13 @@ export function BulkUnsubscribeView({
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
+  // "Still in my inbox" — the working view for a cleanup session. The list is
+  // deliberately whole-mailbox (archiving is how the preset rules file mail, so
+  // an inbox-only scope would empty the category chips), but that also means an
+  // archived sender keeps its row. With this on, a sender leaves the list the
+  // moment its inbox mail is archived, which is what "clean it up" should feel
+  // like. Off by default so the full mailbox stays the default question.
+  const [inboxOnly, setInboxOnly] = useState(false);
   // Which sender row is expanded to show its individual messages (drill-down).
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -277,6 +284,9 @@ export function BulkUnsubscribeView({
       senders
         .filter(matchesCategory)
         .filter((s) => statusTab === "all" || s.status === statusTab)
+        // Older payloads carry no in_folder — treat them as "has inbox mail"
+        // rather than hiding a populated row behind a field the server didn't send.
+        .filter((s) => !inboxOnly || (s.in_folder ?? s.count) > 0)
         .filter(
           (s) =>
             !filter ||
@@ -288,7 +298,7 @@ export function BulkUnsubscribeView({
           // surfaces the senders most worth unsubscribing from).
           sortBy === "read" ? a.read_rate - b.read_rate : b.count - a.count
         ),
-    [senders, matchesCategory, statusTab, filter, sortBy]
+    [senders, matchesCategory, statusTab, inboxOnly, filter, sortBy]
   );
 
   // Status-tab badges: count within the active category (not status).
@@ -481,8 +491,9 @@ export function BulkUnsubscribeView({
       // Now that the list spans the whole mailbox, archiving and trashing differ.
       // Trashed mail leaves the scope entirely (trash is excluded), so the row
       // goes. ARCHIVED mail is still theirs — dropping the row would hide a
-      // sender the user may still want to unsubscribe from, so just zero out the
-      // inbox count in place.
+      // sender the user may still want to unsubscribe from, so the row stays and
+      // moves to its cleaned state (nothing left in the inbox), which the row
+      // badges and the "In inbox" filter both key off.
       if (affected > 0) {
         if (action === "trash") {
           setSenders((prev) => prev.filter((x) => x.email !== s.email));
@@ -494,14 +505,20 @@ export function BulkUnsubscribeView({
         } else {
           setSenders((prev) =>
             prev.map((x) =>
-              x.email === s.email ? { ...x, in_folder: 0 } : x
+              x.email === s.email
+                ? { ...x, in_folder: 0, archived: x.archived + affected }
+                : x
             )
           );
         }
       }
       setNotice(
-        `${action === "archive" ? "Archived" : "Trashed"} ${affected} ` +
-          `email${affected === 1 ? "" : "s"} from ${s.name || s.email}.`
+        affected === 0
+          ? `Nothing to ${action === "archive" ? "archive" : "delete"} — ` +
+              `${s.name || s.email} has no mail left outside the bin.`
+          : `${action === "archive" ? "Archived" : "Deleted"} ${affected} ` +
+              `email${affected === 1 ? "" : "s"} from ${s.name || s.email}.` +
+              (action === "archive" ? " Nothing left in the inbox." : "")
       );
       // Keep the main inbox pane in sync with what we just removed.
       onArchived?.();
@@ -523,7 +540,8 @@ export function BulkUnsubscribeView({
     }
     setBusy("__bulk__");
     let total = 0;
-    const done: string[] = [];
+    let failed = 0;
+    const done = new Map<string, number>();
     try {
       for (const s of targets) {
         try {
@@ -531,28 +549,42 @@ export function BulkUnsubscribeView({
             action, accountId, senderEmail: s.email,
           });
           total += affected;
-          if (affected > 0) done.push(s.email);
+          if (affected > 0) done.set(s.email, affected);
         } catch {
-          /* skip a failed sender, keep going */
+          failed += 1; // skip a failed sender, keep going — reported below
         }
       }
       // Same split as the single-sender action: trashed mail leaves the scope
-      // so the rows go; archived mail is still theirs, so keep the rows and just
-      // zero their inbox counts.
-      if (done.length) {
-        const touched = new Set(done);
+      // so the rows go; archived mail is still theirs, so the rows stay and move
+      // to their cleaned state (nothing left in the inbox).
+      if (done.size) {
         setSenders((prev) =>
           action === "trash"
-            ? prev.filter((x) => !touched.has(x.email))
+            ? prev.filter((x) => !done.has(x.email))
             : prev.map((x) =>
-                touched.has(x.email) ? { ...x, in_folder: 0 } : x
+                done.has(x.email)
+                  ? {
+                      ...x,
+                      in_folder: 0,
+                      archived: x.archived + (done.get(x.email) ?? 0),
+                    }
+                  : x
               )
         );
       }
       clearSelection();
+      // Say what actually changed. "Archived 0 emails" used to read as a broken
+      // button; it means the selection had nothing left outside the bin.
+      const verb = action === "archive" ? "Archived" : "Deleted";
       setNotice(
-        `${action === "archive" ? "Archived" : "Trashed"} ${total} ` +
-          `email(s) from ${targets.length} sender(s).`
+        (total === 0
+          ? `Nothing to ${action === "archive" ? "archive" : "delete"} — the ` +
+            `selected sender${targets.length === 1 ? " has" : "s have"} no mail ` +
+            `left outside the bin.`
+          : `${verb} ${total} email${total === 1 ? "" : "s"} from ` +
+            `${done.size} sender${done.size === 1 ? "" : "s"}.` +
+            (action === "archive" ? " Nothing left in the inbox." : "")) +
+          (failed ? ` ${failed} sender(s) failed — try again.` : "")
       );
       onArchived?.();
     } finally {
@@ -807,6 +839,26 @@ export function BulkUnsubscribeView({
             </button>
           ))}
         </div>
+        {/* The cleanup working view: hides senders whose inbox is already clear,
+            so a row LEAVES the list once you've archived it. The list is
+            whole-mailbox by default (that's what keeps the category chips
+            fillable), which is why this is a toggle rather than the scope. */}
+        <button
+          onClick={() => setInboxOnly((v) => !v)}
+          title={
+            inboxOnly
+              ? "Showing only senders with mail still in the inbox"
+              : "Show only senders with mail still in the inbox — archived-away senders drop out"
+          }
+          aria-pressed={inboxOnly}
+          className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] whitespace-nowrap transition-colors ${
+            inboxOnly
+              ? "bg-primary/15 text-primary"
+              : "bg-secondary text-muted-foreground hover:text-foreground"
+          }`}
+        >
+          <Mail size={12} /> In inbox
+        </button>
         {categorizing && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground ml-auto whitespace-nowrap">
             <Loader2 className="animate-spin" size={13} /> Categorizing…
@@ -1303,12 +1355,22 @@ export function BulkUnsubscribeView({
                       <div className="text-xs font-semibold text-foreground tabular-nums">
                         {inCategory ?? s.count}
                       </div>
-                      <div className="text-[8px] text-muted-foreground mt-0.5">
+                      {/* Nothing left in the inbox is the point of the tool —
+                          say so explicitly. It used to read "emails", identical
+                          in weight to every other row, so archiving a sender
+                          looked like it had done nothing at all. */}
+                      <div
+                        className={`text-[8px] mt-0.5 ${
+                          inCategory === null && inInbox === 0
+                            ? "text-emerald-500"
+                            : "text-muted-foreground"
+                        }`}
+                      >
                         {inCategory !== null
                           ? `of ${s.count}`
                           : inInbox > 0
                             ? `${inInbox} in inbox`
-                            : "emails"}
+                            : "inbox clear"}
                       </div>
                     </div>
                     <ReadRing value={s.read_rate} />

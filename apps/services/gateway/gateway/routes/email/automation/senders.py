@@ -297,6 +297,20 @@ _BULK_DB_UPDATE = {
     "unstar": "is_starred = false",
 }
 
+# Rows an action would not actually change are excluded from the UPDATE, so
+# ``affected`` means "messages this changed" rather than "messages matched".
+# Without it, "Archive all" on a sender whose mail was archived last week
+# reported "Archived 320 emails" having moved none — which reads as the action
+# silently doing nothing (and re-pushed 320 no-op calls at the provider).
+_BULK_ALREADY_APPLIED = {
+    "archive": "LOWER(COALESCE(em.folder, '')) = 'archive'",
+    "trash": "LOWER(COALESCE(em.folder, '')) = 'trash'",
+    "read": "em.is_read = true",
+    "unread": "em.is_read = false",
+    "star": "em.is_starred = true",
+    "unstar": "em.is_starred = false",
+}
+
 
 @router.post("/messages/bulk")
 async def bulk_action(
@@ -353,6 +367,16 @@ async def bulk_action(
             params["odays"] = req.older_than_days
         if req.only_read:
             clauses.append("em.is_read = true")
+        # Never re-apply an action to mail that is already in that state — see
+        # _BULK_ALREADY_APPLIED. Keeps `affected` honest and the provider quiet.
+        clauses.append(f"NOT ({_BULK_ALREADY_APPLIED[req.action]})")
+        # ARCHIVING must not reach into the bin. A sender-wide "Archive all"
+        # carries no folder filter, so without this it pulled the sender's
+        # TRASHED and junked mail back out into the archive — silently
+        # un-deleting mail the user had already thrown away. Trashing keeps its
+        # reach (archived mail is still live mail you may want to bin).
+        if req.action == "archive":
+            clauses.append(_NOT_DISPOSED)
         where_sql = " AND ".join(clauses)
 
         # One set-based UPDATE, RETURNING the provider ids we need to reconcile.

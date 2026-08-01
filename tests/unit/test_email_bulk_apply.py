@@ -204,3 +204,80 @@ async def test_any_filter_is_enough_to_proceed(kwargs) -> None:
     with patch.object(s, "_get_db", AsyncMock(return_value=_DB())):
         res = await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
     assert res == {"affected": 0}
+
+
+# ── The route: an action only touches mail it would actually change ──────────
+
+
+def _capture_db(captured: dict):
+    """A DB that records the UPDATE's SQL and returns no rows."""
+    class _DB:
+        async def execute(self, clause, params=None):
+            captured["sql"] = str(clause)
+            captured["params"] = params
+            return MagicMock(fetchall=MagicMock(return_value=[]))
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    return _DB()
+
+
+async def test_archiving_a_sender_never_reaches_into_the_bin() -> None:
+    """A sender-wide "Archive all" carries no folder filter, so without an
+    explicit guard the UPDATE swept the sender's TRASHED mail back out into the
+    archive — silently un-deleting mail the user had already thrown away."""
+    from gateway.routes.email.automation import senders as s
+
+    captured: dict = {}
+    req = s.BulkActionRequest(
+        action="archive", account_id="acc-1", sender_email="news@site.com")
+    with patch.object(s, "_get_db", AsyncMock(return_value=_capture_db(captured))):
+        await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
+
+    # Disposed mail (trash/junk/spam/drafts) is out of reach for an archive.
+    assert "'trash'" in captured["sql"] and "'junk'" in captured["sql"]
+
+
+async def test_trashing_still_reaches_archived_mail() -> None:
+    """The bin guard is archive-only: archived mail is still live mail the user
+    may want to delete, so "Delete all" must not skip it."""
+    from gateway.routes.email.automation import senders as s
+
+    captured: dict = {}
+    req = s.BulkActionRequest(
+        action="trash", account_id="acc-1", sender_email="news@site.com")
+    with patch.object(s, "_get_db", AsyncMock(return_value=_capture_db(captured))):
+        await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
+
+    # Only already-trashed mail is skipped; the disposed-folder guard (which
+    # would also exclude archived mail from reach) is archive-only.
+    assert "NOT (LOWER(COALESCE(em.folder, '')) = 'trash')" in captured["sql"]
+    assert "NOT IN ('trash'" not in captured["sql"]
+
+
+@pytest.mark.parametrize(
+    ("action", "already"),
+    [
+        ("archive", "LOWER(COALESCE(em.folder, '')) = 'archive'"),
+        ("trash", "LOWER(COALESCE(em.folder, '')) = 'trash'"),
+        ("read", "em.is_read = true"),
+        ("unread", "em.is_read = false"),
+        ("star", "em.is_starred = true"),
+        ("unstar", "em.is_starred = false"),
+    ],
+)
+async def test_affected_counts_only_what_changed(action, already) -> None:
+    """`affected` is reported back to the user ("Archived 320 emails"). Matching
+    rows that are ALREADY in the target state made it claim work it hadn't done
+    — the cleaner's "nothing happened" complaint — and re-pushed the same no-op
+    calls at the provider."""
+    from gateway.routes.email.automation import senders as s
+
+    captured: dict = {}
+    req = s.BulkActionRequest(
+        action=action, account_id="acc-1", sender_email="news@site.com")
+    with patch.object(s, "_get_db", AsyncMock(return_value=_capture_db(captured))):
+        await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
+
+    assert f"NOT ({already})" in captured["sql"]

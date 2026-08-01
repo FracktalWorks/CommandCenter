@@ -145,6 +145,55 @@ func TestFinishIsIdempotent(t *testing.T) {
 	}
 }
 
+// The dialer's own placeholder taught "+91 98765 43210", and an un-normalised
+// target with spaces produces a JID WhatsApp silently never acks — an offer
+// timeout with no error to explain it. These are the shapes that must survive.
+func TestNormalizeCallTargetAcceptsHumanFormatting(t *testing.T) {
+	for _, tc := range []struct{ in, want string }{
+		{"+91 98765 43210", "919876543210"},
+		{"+91-98765-43210", "919876543210"},
+		{"(+91) 98765 43210", "919876543210"},
+		{"  919876543210  ", "919876543210"},
+		{"919876543210", "919876543210"},
+	} {
+		got, err := normalizeCallTarget(tc.in)
+		if err != nil {
+			t.Errorf("normalize(%q) errored: %v", tc.in, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("normalize(%q) = %q, want %q", tc.in, got, tc.want)
+		}
+	}
+}
+
+// JIDs are already canonical — rewriting one would corrupt it. This is what
+// makes dialling from a chat more reliable than typing a number.
+func TestNormalizeCallTargetPassesJIDsThrough(t *testing.T) {
+	for _, jid := range []string{
+		"919876543210@s.whatsapp.net",
+		"12036300@g.us",
+		"84739273@lid",
+	} {
+		got, err := normalizeCallTarget(jid)
+		if err != nil {
+			t.Errorf("normalize(%q) errored: %v", jid, err)
+			continue
+		}
+		if got != jid {
+			t.Errorf("normalize(%q) = %q, want it unchanged", jid, got)
+		}
+	}
+}
+
+func TestNormalizeCallTargetRejectsNonNumbers(t *testing.T) {
+	for _, bad := range []string{"", "   ", "abc", "12345", "+1 23"} {
+		if got, err := normalizeCallTarget(bad); err == nil {
+			t.Errorf("normalize(%q) = %q, want an error", bad, got)
+		}
+	}
+}
+
 // sinkFunc is a meowcaller.AudioSink whose Close is observable.
 type sinkFunc func() error
 

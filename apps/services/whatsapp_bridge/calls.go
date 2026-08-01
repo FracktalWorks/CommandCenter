@@ -23,6 +23,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"time"
 
@@ -34,6 +35,43 @@ import (
 // as a real error there instead of tripping the workbench proxy's abort, which
 // would tell the user only "gateway unreachable".
 const placeTimeout = 12 * time.Second
+
+// normalizeCallTarget canonicalises a dial target for meowcaller.
+//
+// It accepts what humans and our own UI actually produce — "+91 98765 43210",
+// "+91-98765-43210", "(+91) 98765 43210" — and reduces it to bare digits.
+// This matters more than it looks: meowcaller builds the call offer's JID from
+// this string, and a target with spaces in it yields a JID WhatsApp never acks,
+// which surfaces only as an offer timeout with no error to explain it.
+//
+// JIDs and LIDs (anything containing '@') pass through untouched — they're
+// already canonical, which is why dialling from a chat is more reliable than
+// typing a number.
+func normalizeCallTarget(target string) (string, error) {
+	target = strings.TrimSpace(target)
+	if target == "" {
+		return "", fmt.Errorf("no number to call")
+	}
+	if strings.Contains(target, "@") {
+		return target, nil
+	}
+
+	var digits strings.Builder
+	for _, r := range target {
+		if r >= '0' && r <= '9' {
+			digits.WriteRune(r)
+		}
+	}
+	out := digits.String()
+	// Shorter than the shortest national number in E.164 — almost certainly a
+	// typo, and worth rejecting here rather than as a silent offer timeout.
+	if len(out) < 7 {
+		return "", fmt.Errorf(
+			"%q doesn't look like a phone number — use the full number "+
+				"including country code", target)
+	}
+	return out, nil
+}
 
 // ErrCallNotFound is returned for an unknown (or already reaped) call id.
 var ErrCallNotFound = errors.New("call not found")
@@ -318,12 +356,26 @@ func (cm *CallManager) track(lc *liveCall) {
 		}
 	}
 
+	// Phase transitions with elapsed time are the call's whole story: where it
+	// stalled says which side went quiet. "calling" with nothing after it means
+	// the peer never rang; "ringing" with nothing after means they never picked
+	// up; reaching "active" without OnReady means signalling worked and media
+	// didn't.
 	c.OnStateChange(func(p meowcaller.CallPhase) {
+		cm.log.Infof("call %s: %s -> %s (+%s)",
+			lc.callID, lc.snapshot().Phase, phaseName(p),
+			time.Since(lc.startedAt).Round(time.Millisecond))
 		lc.setPhase(phaseName(p))
 		cm.push(lc)
 	})
+	c.OnPeerAccept(func() {
+		cm.log.Infof("call %s: peer accepted (+%s)",
+			lc.callID, time.Since(lc.startedAt).Round(time.Millisecond))
+		cm.push(lc)
+	})
 	c.OnReady(func() {
-		cm.log.Infof("call %s: media active", lc.callID)
+		cm.log.Infof("call %s: media active (+%s) — recording=%q",
+			lc.callID, time.Since(lc.startedAt).Round(time.Millisecond), lc.recording)
 		cm.push(lc)
 	})
 	c.OnEnd(func(reason string) {
@@ -376,21 +428,33 @@ func (m *SessionManager) PlaceCall(ctx context.Context, accountID, target string
 	if s.caller == nil {
 		return callInfo{}, ErrNoCaller
 	}
-	if target == "" {
-		return callInfo{}, fmt.Errorf("target required")
+	dial, err := normalizeCallTarget(target)
+	if err != nil {
+		return callInfo{}, err
 	}
+	// Log both forms: when an offer times out, the first question is always
+	// "what did we actually dial?", and the answer is usually the difference
+	// between what was typed and what went on the wire.
+	m.log.Infof("call: placing 1:1 from %s to %q (typed %q) as %s",
+		accountID, dial, target, s.client.Store.ID)
 
 	ctx, cancel := context.WithTimeout(ctx, placeTimeout)
 	defer cancel()
-	c, err := s.caller.Call(ctx, target)
+	started := time.Now()
+	c, err := s.caller.Call(ctx, dial)
 	if err != nil {
+		m.log.Warnf("call: offer to %q failed after %s: %v",
+			dial, time.Since(started).Round(time.Millisecond), err)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return callInfo{}, ErrPlaceTimeout
 		}
 		return callInfo{}, fmt.Errorf("place call: %w", err)
 	}
+	m.log.Infof("call %s: offer on the wire in %s (peer %s)",
+		c.ID(), time.Since(started).Round(time.Millisecond), c.Peer())
+
 	lc := &liveCall{
-		call: c, accountID: accountID, peer: target,
+		call: c, accountID: accountID, peer: dial,
 		direction: "outgoing", kind: "direct",
 	}
 	m.calls.track(lc)
@@ -414,26 +478,42 @@ func (m *SessionManager) PlaceGroupCall(
 		c   *meowcaller.Call
 		err error
 	)
+	dialTargets := make([]string, 0, len(targets))
+	for _, t := range targets {
+		d, nerr := normalizeCallTarget(t)
+		if nerr != nil {
+			return callInfo{}, nerr
+		}
+		dialTargets = append(dialTargets, d)
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, placeTimeout)
 	defer cancel()
+	started := time.Now()
 	switch {
 	case groupID != "":
+		m.log.Infof("call: placing group call from %s to group %q", accountID, groupID)
 		c, err = s.caller.GroupCallByID(ctx, groupID)
-	case len(targets) >= 2:
-		c, err = s.caller.GroupCall(ctx, targets...)
+	case len(dialTargets) >= 2:
+		m.log.Infof("call: placing ad-hoc group call from %s to %v", accountID, dialTargets)
+		c, err = s.caller.GroupCall(ctx, dialTargets...)
 	default:
 		return callInfo{}, fmt.Errorf("group_id, or at least two targets, required")
 	}
 	if err != nil {
+		m.log.Warnf("call: group offer failed after %s: %v",
+			time.Since(started).Round(time.Millisecond), err)
 		if errors.Is(err, context.DeadlineExceeded) {
 			return callInfo{}, ErrPlaceTimeout
 		}
 		return callInfo{}, fmt.Errorf("place group call: %w", err)
 	}
+	m.log.Infof("call %s: group offer on the wire in %s",
+		c.ID(), time.Since(started).Round(time.Millisecond))
 
 	lc := &liveCall{
 		call: c, accountID: accountID, peer: groupID,
-		direction: "outgoing", kind: "group", targets: targets,
+		direction: "outgoing", kind: "group", targets: dialTargets,
 	}
 	m.calls.track(lc)
 	return lc.snapshot(), nil
@@ -482,6 +562,64 @@ func (m *SessionManager) Reject(accountID, callID string) (callInfo, error) {
 // ListCalls returns every tracked call for an account (all accounts if empty).
 func (m *SessionManager) ListCalls(accountID string) []callInfo {
 	return m.calls.list(accountID)
+}
+
+// callDiagnostics is a snapshot of everything that has to be true before a call
+// can be placed. When an offer times out there is no error to inspect, so the
+// useful question becomes "which precondition isn't met?" — this answers it
+// without needing shell access to the box.
+type callDiagnostics struct {
+	AccountID     string `json:"account_id"`
+	SessionExists bool   `json:"session_exists"`
+	LoggedIn      bool   `json:"logged_in"`
+	Connected     bool   `json:"connected"`
+	CallerReady   bool   `json:"caller_ready"`
+	OwnJID        string `json:"own_jid,omitempty"`
+	PushName      string `json:"push_name,omitempty"`
+	ActiveCalls   int    `json:"active_calls"`
+	RecordingDir  string `json:"recording_dir,omitempty"`
+	Verdict       string `json:"verdict"`
+}
+
+// CallDiagnostics reports whether an account can currently place a call.
+func (m *SessionManager) CallDiagnostics(accountID string) callDiagnostics {
+	d := callDiagnostics{AccountID: accountID, RecordingDir: m.calls.recordDir}
+	s, ok := m.get(accountID)
+	if !ok {
+		d.Verdict = "No session for this account — pair the number by QR first."
+		return d
+	}
+	d.SessionExists = true
+	d.CallerReady = s.caller != nil
+	if s.client != nil {
+		d.LoggedIn = s.client.IsLoggedIn()
+		d.Connected = s.client.IsConnected()
+		if s.client.Store != nil {
+			d.PushName = s.client.Store.PushName
+			if s.client.Store.ID != nil {
+				d.OwnJID = s.client.Store.ID.String()
+			}
+		}
+	}
+	for _, c := range m.calls.list(accountID) {
+		if c.Phase != callEnded {
+			d.ActiveCalls++
+		}
+	}
+
+	switch {
+	case !d.Connected:
+		d.Verdict = "The session isn't connected to WhatsApp — it may be " +
+			"reconnecting, or the pairing was revoked from the phone."
+	case !d.LoggedIn:
+		d.Verdict = "Connected but not logged in — re-pair the number by QR."
+	case !d.CallerReady:
+		d.Verdict = "The calling stack isn't attached to this session. Restart " +
+			"the bridge so it re-attaches on connect."
+	default:
+		d.Verdict = "Ready to place calls."
+	}
+	return d
 }
 
 // registerCallHandlers attaches the inbound listener for one session. Inbound

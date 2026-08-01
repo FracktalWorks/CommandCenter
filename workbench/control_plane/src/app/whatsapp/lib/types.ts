@@ -49,6 +49,21 @@ export type WaCallList = {
   bridge_reachable: boolean;
 };
 
+/** Whether a paired number can place a call, and if not, what's missing. */
+export type WaCallDiagnostics = {
+  account_id: string;
+  session_exists: boolean;
+  logged_in: boolean;
+  connected: boolean;
+  caller_ready: boolean;
+  own_jid?: string;
+  push_name?: string;
+  active_calls: number;
+  recording_dir?: string;
+  verdict: string;
+  bridge_reachable: boolean;
+};
+
 // Connect wizard (W11) + Embedded Signup (W12).
 export type WaConnectionInfo = {
   webhook_url: string;

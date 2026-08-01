@@ -248,6 +248,43 @@ async def list_calls(
     )
 
 
+class CallDiagnosticsModel(BaseModel):
+    """Whether this account can place a call, and if not, what's missing.
+
+    An offer that times out produces no error to inspect, so the useful question
+    becomes which precondition failed. Mirrors callDiagnostics in calls.go."""
+
+    account_id: str = ""
+    session_exists: bool = False
+    logged_in: bool = False
+    connected: bool = False
+    caller_ready: bool = False
+    own_jid: str = ""
+    push_name: str = ""
+    active_calls: int = 0
+    recording_dir: str = ""
+    verdict: str = ""
+    bridge_reachable: bool = True
+
+
+@router.get("/calls/diagnostics", response_model=CallDiagnosticsModel)
+async def call_diagnostics(
+    account_id: str, user: UserContext = Depends(get_current_user),
+) -> CallDiagnosticsModel:
+    """Report the account's calling readiness straight from the bridge."""
+    await _assert_owns_account(account_id, user)
+    status, data = await _bridge(
+        "GET", "/calls/diagnostics", _READ_TIMEOUT_SECS,
+        params={"session": account_id})
+    if status <= 0 or status >= 300:
+        return CallDiagnosticsModel(
+            account_id=account_id, bridge_reachable=False,
+            verdict=_detail(data, "The WhatsApp bridge didn't answer."))
+    if not isinstance(data, dict):
+        return CallDiagnosticsModel(account_id=account_id, verdict="Unreadable reply.")
+    return CallDiagnosticsModel(**data, bridge_reachable=True)
+
+
 @router.post("/bridge/call-event")
 async def bridge_call_event(request: Request) -> Response:
     """The bridge reports a call's state transition (ringing → active → ended).

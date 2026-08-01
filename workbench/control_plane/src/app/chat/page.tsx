@@ -599,14 +599,21 @@ function ChatPageInner() {
       .catch(() => {});
     return () => { cancelled = true; };
   }, [activeAgentName]);
-  // Lock the email-assistant chat to the account's configured chat_model — the
-  // SAME single source of truth the email app uses (Assistant → Settings →
-  // Models) — so the agent runs on the SAME model regardless of which surface
-  // launched it.  The chat app has no account selector, so this only applies
-  // when the user has exactly one account (mirrors the emailContext account
-  // resolution in the AgentChat render below).
-  const emailChatAccountId =
-    emailAccounts.length === 1 ? emailAccounts[0].id : null;
+  // Which mailbox the email assistant is working on. The chat app has no inbox
+  // sidebar, so this used to resolve only when the user had exactly ONE account
+  // — with several, the assistant ran unconfigured and had to ask. The
+  // composer's mailbox picker supplies the choice instead; we default to the
+  // first account so a multi-account user still starts somewhere concrete.
+  const [emailMailboxId, setEmailMailboxId] = useState<string | null>(null);
+  const emailChatAccountId = emailMailboxId ?? emailAccounts[0]?.id ?? null;
+  const emailMailboxOptions = useMemo(
+    () =>
+      emailAccounts.map((a) => ({
+        id: a.id,
+        label: a.email_address || a.label || a.id,
+      })),
+    [emailAccounts],
+  );
   // Default to the documented email-chat default (tier-powerful) so a send during
   // the brief settings-fetch window uses a sensible model instead of "auto"
   // (which the backend would coerce to a different tier). Refined to the
@@ -1080,12 +1087,16 @@ function ChatPageInner() {
                 }
                 emailContext={
                   activeSession.agentName === "email-assistant"
-                    ? {
-                        accountId:
-                          emailAccounts.length === 1 ? emailAccounts[0].id : null,
-                      }
+                    ? { accountId: emailChatAccountId }
                     : undefined
                 }
+                mailboxes={
+                  activeSession.agentName === "email-assistant"
+                    ? emailMailboxOptions
+                    : undefined
+                }
+                activeMailboxId={emailChatAccountId}
+                onMailboxChange={setEmailMailboxId}
                 // Email-assistant locks to the account chat_model (parity with
                 // the email app); all other agents keep the generic picker.
                 model={

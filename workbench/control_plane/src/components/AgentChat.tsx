@@ -11,7 +11,7 @@
 import { useState, useRef, useEffect, useCallback, useMemo, useSyncExternalStore } from "react";
 import React from "react";
 import Link from "next/link";
-import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle, LoaderCircle } from "lucide-react";
+import { ArrowUp, Square, ListOrdered, CornerDownRight, ChevronDown, CheckCircle, LoaderCircle, Mail } from "lucide-react";
 import { useAgentChat } from "@/hooks/useAgentChat";
 import type { ArtifactEntry, ChatMessage } from "@/hooks/useAgentChat";
 import type { IntegrationStatus } from "@/app/api/integrations/status/route";
@@ -172,6 +172,22 @@ interface AgentChatProps {
    */
   emailContext?: { accountId?: string | null; emailId?: string | null };
   /**
+   * Mailboxes the email assistant can act on, for the composer's mailbox
+   * picker. Only meaningful for the email assistant — every other agent omits
+   * it and the control doesn't render.
+   *
+   * A chat thread is not per-account (sessions are keyed by agent), so the same
+   * conversation can span mailboxes. Making the active one an explicit control
+   * — rather than something inherited silently from whatever the inbox happened
+   * to be showing — is what stops "which inbox is it talking about?" from being
+   * unanswerable, and the switch is marked in the transcript when it happens.
+   */
+  mailboxes?: { id: string; label: string }[];
+  /** The mailbox currently in force. Controlled by the parent. */
+  activeMailboxId?: string | null;
+  /** Raised when the user picks a different mailbox in the composer. */
+  onMailboxChange?: (id: string) => void;
+  /**
    * Force the model this chat runs on (e.g. the email app's assistant
    * `chat_model` setting). When set it overrides the per-agent localStorage
    * default and stays in sync as the value changes — so the surface conforms to
@@ -212,6 +228,9 @@ export default function AgentChat({
   onArtifact,
   expectedMessageCount,
   emailContext,
+  mailboxes,
+  activeMailboxId,
+  onMailboxChange,
   model: forcedModel,
   lockModel,
   compact,
@@ -228,6 +247,15 @@ export default function AgentChat({
   useEffect(() => {
     if (forcedModel) setCurrentModel(forcedModel);
   }, [forcedModel]);
+  // ── Mailbox switches, marked in the transcript ─────────────────────
+  // A thread is keyed by agent, not by account, so one conversation can span
+  // mailboxes. Without a marker the assistant's standing instructions swap
+  // silently mid-thread and neither the reader nor the model can tell where the
+  // boundary is. Each switch is anchored to the message it followed.
+  const [showMailboxMenu, setShowMailboxMenu] = useState(false);
+  const [mailboxMarks, setMailboxMarks] =
+    useState<{ afterId: string; label: string }[]>([]);
+  const activeMailbox = mailboxes?.find((m) => m.id === activeMailboxId);
   // ── Thinking mode ──────────────────────────────────────────────────
   type ThinkMode = "auto" | "thinking" | "max";
   const [thinkMode, setThinkMode] = useState<ThinkMode>("auto");
@@ -1661,6 +1689,20 @@ export default function AgentChat({
                   viewerEmail={viewerEmail}
                   participants={isRoom ? roomPeople : undefined}
                   onRetryMessage={prevUserMsg ? handleRetryMessage : undefined} />
+                {/* Mailbox switch — everything below this line is about a
+                    different inbox, and the assistant's per-account
+                    instructions changed with it. */}
+                {mailboxMarks
+                  .filter((mk) => mk.afterId === msg.id)
+                  .map((mk, k) => (
+                    <div key={`mbx-${msg.id}-${k}`} className="flex items-center gap-2 my-3">
+                      <div className="flex-1 h-px bg-primary/25" />
+                      <span className="flex items-center gap-1 text-[10px] text-primary/80 font-medium shrink-0">
+                        <Mail size={10} /> Now working on {mk.label}
+                      </span>
+                      <div className="flex-1 h-px bg-primary/25" />
+                    </div>
+                  ))}
                 {/* Inline HITL card — anchored to the asking assistant turn. */}
                 {msg.id === hitlAnchorId && renderHitlCards()}
               </div>
@@ -1902,6 +1944,82 @@ export default function AgentChat({
               )}
 
               {isOrchestrator && <span className="w-px h-3.5 bg-border shrink-0" />}
+
+              {/* Mailbox picker — the email assistant only. Which inbox the
+                  assistant acts on is a per-conversation choice, so it belongs
+                  next to the model, not buried in whatever the inbox list
+                  happens to be showing. Switching mid-thread drops a marker in
+                  the transcript (see mailboxMarks). */}
+              {(mailboxes?.length ?? 0) > 0 && (
+                <>
+                  <div className="relative">
+                    <button
+                      type="button"
+                      onClick={() => setShowMailboxMenu((v) => !v)}
+                      title={
+                        activeMailbox
+                          ? `The assistant is working on ${activeMailbox.label}`
+                          : "Choose which mailbox the assistant works on"
+                      }
+                      aria-haspopup="listbox"
+                      aria-expanded={showMailboxMenu}
+                      className="flex items-center gap-1 px-2 py-1 rounded-md hover:bg-secondary hover:text-foreground tech-transition truncate max-w-[120px] sm:max-w-[170px]"
+                    >
+                      <Mail size={11} className="shrink-0 text-muted-foreground/70" />
+                      <span className="truncate">
+                        {activeMailbox?.label ?? "Pick mailbox"}
+                      </span>
+                      <span className="text-muted-foreground/50 shrink-0">▾</span>
+                    </button>
+                    {showMailboxMenu && (
+                      <div
+                        role="listbox"
+                        className="absolute bottom-full left-0 mb-1.5 w-64 rounded-lg border border-border bg-popover shadow-2xl z-50 overflow-hidden tech-glass-subtle"
+                      >
+                        <div className="px-3 pt-2 pb-1 text-[9px] text-muted-foreground/60 uppercase tracking-wider font-semibold">
+                          Mailbox
+                        </div>
+                        <div className="max-h-60 overflow-y-auto py-1 scrollbar-thin">
+                          {mailboxes!.map((mb) => (
+                            <button
+                              key={mb.id}
+                              role="option"
+                              aria-selected={mb.id === activeMailboxId}
+                              onClick={() => {
+                                setShowMailboxMenu(false);
+                                if (mb.id === activeMailboxId) return;
+                                // Anchor the marker to the last message so the
+                                // switch reads in the right place; a switch
+                                // before the first message needs no marker.
+                                const last =
+                                  visibleMessages[visibleMessages.length - 1];
+                                if (last) {
+                                  setMailboxMarks((prev) => [
+                                    ...prev,
+                                    { afterId: last.id, label: mb.label },
+                                  ]);
+                                }
+                                onMailboxChange?.(mb.id);
+                              }}
+                              className={`w-full text-left px-3 py-1.5 text-xs tech-transition flex items-center justify-between gap-2 ${
+                                mb.id === activeMailboxId
+                                  ? "text-foreground bg-secondary/60"
+                                  : "text-muted-foreground hover:bg-secondary"
+                              }`}
+                            >
+                              <span className="truncate">{mb.label}</span>
+                              {mb.id === activeMailboxId && (
+                                <span className="text-emerald-400 text-[10px] shrink-0">✓</span>
+                              )}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                  <span className="w-px h-3.5 bg-secondary/60 shrink-0" />
+                </>
+              )}
 
               {/* Model selector — hidden when the model is governed externally
                   (e.g. the email Assistant's chat_model setting). */}

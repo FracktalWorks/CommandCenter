@@ -65,28 +65,56 @@ export function EmailAssistantChat({
   const [showSessions, setShowSessions] = useState(false);
   const [pendingInput, setPendingInput] = useState<string | undefined>();
 
-  // The email chat runs on the model configured in the account's Assistant
-  // settings (`chat_model`) — not AgentChat's generic per-agent picker — so the
-  // single source of truth is Assistant → Settings → Models. Fetched per account.
-  // Default to the documented email-chat default (tier-powerful) so a send
-  // during the brief settings-fetch window uses a sensible model instead of
-  // "auto". Refined to the account's saved chat_model once the fetch resolves.
-  // The ACTIVE account's assistant settings. Two things ride on this, both
-  // per-account: which chat model to run, and the standing configuration
-  // (about / instructions / writing style) the persona hands the agent — so
-  // switching mailboxes switches how the assistant behaves, not just which
-  // account_id it passes to tools.
+  // Which mailbox the CONVERSATION is about. Defaults to whatever the inbox is
+  // showing, but the composer's mailbox picker can point the assistant at a
+  // different one without making the user leave the thread (or change what
+  // they're reading). Cleared when the inbox selection moves, so the two only
+  // diverge while the user deliberately holds them apart.
+  // Held as {against, id} rather than reset by an effect: the override is valid
+  // only while the inbox selection it was made against still stands, so moving
+  // the inbox drops it derivationally — no cascading render, no stale window
+  // where the two disagree.
+  const [chatAccountOverride, setChatAccountOverride] = useState<
+    { against: string | null; id: string } | null
+  >(null);
+  const chatAccountId =
+    (chatAccountOverride?.against === (selectedAccountId ?? null)
+      ? chatAccountOverride.id
+      : null) ??
+    selectedAccountId ??
+    null;
+  const pickChatAccount = useCallback(
+    (id: string) =>
+      setChatAccountOverride({ against: selectedAccountId ?? null, id }),
+    [selectedAccountId],
+  );
+  const mailboxOptions = useMemo(
+    () =>
+      accounts.map((a) => ({
+        id: a.id,
+        label: a.emailAddress || a.id,
+      })),
+    [accounts],
+  );
+
+  // The CHAT mailbox's assistant settings. Two things ride on this, both
+  // per-account: which chat model to run (the single source of truth is
+  // Assistant → Settings → Models, not AgentChat's generic per-agent picker),
+  // and the standing configuration (about / instructions / writing style) the
+  // persona hands the agent — so switching mailboxes switches how the assistant
+  // behaves, not just which account_id it passes to tools. Defaults to
+  // tier-powerful so a send during the fetch window uses a sensible model.
   const [chatModel, setChatModel] = useState<string | undefined>("tier-powerful");
   const [acctSettings, setAcctSettings] =
     useState<PersonaAccountSettings | null>(null);
   useEffect(() => {
-    if (!selectedAccountId) {
+    if (!chatAccountId) {
       setChatModel("tier-powerful");
       setAcctSettings(null);
       return;
     }
     let cancelled = false;
-    getAssistantSettings(selectedAccountId)
+    getAssistantSettings(chatAccountId)
       .then((s) => {
         if (cancelled) return;
         setChatModel(s.chat_model || "tier-powerful");
@@ -104,7 +132,7 @@ export function EmailAssistantChat({
     return () => {
       cancelled = true;
     };
-  }, [selectedAccountId]);
+  }, [chatAccountId]);
 
   // Inject Mem0 memories so the assistant has the SAME cross-conversation
   // continuity here as in the chat app (parity) — shared fetch + 30s poll via
@@ -203,11 +231,11 @@ export function EmailAssistantChat({
     () =>
       buildEmailAssistantPersona({
         accounts,
-        selectedAccountId,
+        selectedAccountId: chatAccountId,
         openEmail: emails.find((e) => e.id === selectedEmailId) ?? null,
         settings: acctSettings,
       }),
-    [accounts, emails, selectedAccountId, selectedEmailId, acctSettings],
+    [accounts, emails, chatAccountId, selectedEmailId, acctSettings],
   );
 
   const activeSession = emailSessions.find((s) => s.id === activeId);
@@ -328,7 +356,10 @@ export function EmailAssistantChat({
             model={chatModel}
             lockModel
             persona={emailContextStr}
-            emailContext={{ accountId: selectedAccountId, emailId: selectedEmailId }}
+            emailContext={{ accountId: chatAccountId, emailId: selectedEmailId }}
+            mailboxes={mailboxOptions}
+            activeMailboxId={chatAccountId}
+            onMailboxChange={pickChatAccount}
             memories={memories}
             memoryUserId={userId}
             expectedMessageCount={activeSession.messageCount}

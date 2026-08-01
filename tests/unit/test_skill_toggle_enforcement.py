@@ -268,9 +268,10 @@ def test_scoped_agent_with_disable_keeps_core_and_declared(
     assert ti._CORE_STANDARD_TOOL_NAMES <= names
 
 
-# ── Addendum: disabled-family sections vanish (current builder branches
-#    per tool, so the narrowed effective scope already governs the prose;
-#    the fully GENERATED addendum + stored-run-context assertion is S3) ─────
+# ── Addendum: disabled-family sections vanish (S3 shipped: prose is now
+#    GENERATED from acb_skills.addendum's family-tagged section registries;
+#    the end-to-end system-message assertion lives in
+#    test_generated_addendum.py) ──────────────────────────────────────────
 
 def test_addendum_drops_disabled_family_section() -> None:
     resolved = ti._resolve_injected_scope(

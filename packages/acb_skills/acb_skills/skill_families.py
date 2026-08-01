@@ -159,6 +159,50 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
 
 
 # ---------------------------------------------------------------------------
+# The named default profile (WS-23 S3 — prepared, NOT active)
+# ---------------------------------------------------------------------------
+# The GENERAL skill set an agent without a ``config.json: tool_scope`` receives
+# WHEN the owner-gated fail-closed flip is ON (``SKILLS_FAIL_CLOSED`` in
+# ``orchestrator._tool_injection`` — ships OFF; flipping it is an OWNER
+# decision, work_plan.md §6). Membership is evidence-based, from the WS-23
+# scope-out (specs/skills_scope_out.md):
+#
+# * ``core``      — the guaranteed floor; automatic, listed for completeness.
+# * ``memory``    — the one toggleable family that is genuinely general: 5 of
+#   the 6 registered agents declare memory tools in their tool_scope, and the
+#   orchestrator/email-assistant prompts instruct calling them; cross-session
+#   personalisation is platform-wide behaviour, not a specialty.
+# * ``workflows`` — injected scope-independently by design (spec §2 decision
+#   note: org-governed automations offered to every agent); listed so the
+#   profile documents the real default surface.
+# * ``apps``      — dynamic, governed by app_grants (its own surface), never
+#   by profiles; listed so "what does a default agent get" reads complete.
+#
+# Deliberately EXCLUDED (specialised — per-agent tool_scope/toggle only):
+# ``history`` (only the orchestrator declares query_history) and ``coding``
+# extras (only apis-config declares install_dependency; nobody declares the
+# GitHub search pair).
+
+DEFAULT_PROFILE: tuple[str, ...] = ("core", "memory", "workflows", "apps")
+
+
+def default_profile_tools() -> frozenset[str]:
+    """Static tool names of the DEFAULT_PROFILE families.
+
+    What the fail-closed resolve unions with the core floor for an unscoped
+    agent. Dynamic families (``apps``) contribute nothing here — grants are
+    appended at their own site; the ``workflows`` trio is likewise appended
+    per-agent after scope filtering, so listing it here is documentation, not
+    the mechanism that injects it.
+    """
+    return frozenset(
+        name
+        for slug in DEFAULT_PROFILE
+        for name in SKILL_FAMILIES[slug]["tools"]
+    )
+
+
+# ---------------------------------------------------------------------------
 # Pure lookups
 # ---------------------------------------------------------------------------
 

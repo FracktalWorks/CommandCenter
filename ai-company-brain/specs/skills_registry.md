@@ -1,6 +1,6 @@
 # Skills Registry + per-agent skill toggles (WS-23)
 
-**Status:** S1 + S2 shipped pending review 2026-08-01 (catalog + toggles + enforcement); S3 proposed · **Owner:** vjvarada · verified against code 2026-08-01
+**Status:** S1 + S2 shipped pending review 2026-08-01 (catalog + toggles + enforcement); S3 generation half + scope-out + prepared default profile shipped pending review 2026-08-01 — **the fail-closed flip itself remains OWNER-GATED and OFF** · **Owner:** vjvarada · verified against code 2026-08-01
 **Owning workstream:** `work_plan.md` WS-23 (sequenced with WS-12 context discipline)
 
 ## 0. Thesis
@@ -156,6 +156,47 @@ panel: family checklist with a live context-cost meter ("enabled: 5 families ·
   *Done when:* addendum prose for a scoped agent contains no disabled-family
   sections; email-assistant under its Phase-7 target scope measures ≤2k tool
   tokens (`llm_caching_memory.md` Phase 7 gets its instrument).
+  **Generation half SHIPPED pending review 2026-08-01; flip PREPARED, OFF,
+  owner-gated.** The addendum prose moved verbatim into
+  `packages/acb_skills/acb_skills/addendum.py` as ordered, **family-tagged
+  section registries** (`FULL_SECTIONS` / `COMPACT_SECTIONS` /
+  `MANDATORY_LINES`) rendered by one
+  `render_injected_tools_addendum()`; `_build_injected_tools_addendum` in
+  `_tool_injection.py` is now a thin cached wrapper around it, and the S1
+  catalog measures through that same wrapper — measured cost = real cost by
+  construction. Gating stays PER TOOL (injection is per-tool; family tags are
+  the drift-checked provenance), so a disabled family's sections drop with
+  its tools — asserted end-to-end on the injected system message in
+  `tests/unit/test_generated_addendum.py`, which is also the drift gate
+  (every section's gate tools must belong to its declared family).
+  *Byte-identity note (deliberate):* the S2 "no rows ⇒ byte-identical"
+  guarantee is unchanged for the injected TOOL SET; the addendum TEXT is
+  generated and byte-identical to the S2 prose **except one fix** — the old
+  f-string rendered "`export default function App()Ellipsis`" (a literal
+  `{...}` evaluated as Python `Ellipsis`); the generated text says
+  `App(){...}` as always intended. Content was otherwise not rewritten.
+  *Known gap kept:* the `workflows` trio has never had addendum prose (tools
+  carry their own docstrings) — S3 preserved that; adding a section is a
+  content decision, pinned by the drift test until made.
+  **Scope-out + default profile:** the evidence-based general-vs-specialised
+  classification lives in [`skills_scope_out.md`](skills_scope_out.md)
+  (per-agent table, GENERAL = core/memory/workflows/apps, SPECIALISED =
+  history→orchestrator, coding→apis-config). Prepared mechanism:
+  `DEFAULT_PROFILE` + `default_profile_tools()` in `skill_families.py`, and
+  the `SKILLS_FAIL_CLOSED` env switch in `_tool_injection.py` — **ships OFF**
+  (no behaviour change while OFF: the S2 no-rows regression still passes);
+  when ON, unscoped agents resolve to core ∪ DEFAULT_PROFILE instead of
+  everything. The flip = owner action (work_plan.md §6), with the checklist
+  in `skills_scope_out.md` §4 (review dynamic agents first; revisit the
+  catalog's `all_families` flag at flip time).
+  **Measured (chars/4 tokenizer):** all families 19,259 tokens
+  (addendum 5,697 + schemas 13,562) · DEFAULT_PROFILE 17,757 ·
+  email-assistant today (declared scope resolved) 16,520 · core floor alone
+  15,446. **The ≤2k email-assistant target is NOT met and cannot be met by
+  family toggles**: the non-toggleable core floor alone is ≈15.4k (≈10.3k of
+  it the 19 core tools' schemas). The instrument now exists; hitting ≤2k is a
+  core-floor diet (leaner schemas / progressive disclosure), tracked as its
+  own follow-up, not a toggle matter.
 
 **Verification:** `pytest tests/unit/test_tool_injection*.py tests/unit/test_skills_registry.py`
 (new) · trajectory evals stay green (`evals/trajectories/`) ·

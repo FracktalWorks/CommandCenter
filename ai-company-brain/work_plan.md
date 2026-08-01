@@ -73,7 +73,7 @@ gap; calendar P3 was found already shipped (with revised roll-over semantics).
 | WS-3 | **Isolation ladder** (BO-7 / HH-6 / B6 Tier 1→2, `tool_scope` deny, T2 for non-first-party agents) | `permissions_sandbox_b6.md` + `agent_platform_hardening_2026-07.md` Part 1 | 🟢 Tier 1 | Tier 1 container flags partially landed 2026-07-27 (competitive log) — reconcile B6 first. T2 is its own sub-project; required before Agent Workshop opens to non-engineers. **OWNER-GATE:** `AGENT_PERMISSION_MODE=enforce` flip. |
 | WS-4 | **Event-bus consumer + durable queue** (BO-20) | checklist §BO-20 | 🟢 | `ingestion.worker` confirmed absent. Prereq for WS-11 Slice 4 and multi-channel triggers. |
 | WS-5 | **CI gates real** (BO-17/BO-18) | checklist §F | 🟢 | Un-gate evals, blocking gitleaks, coverage floor. AGENT-SAFE. |
-| WS-6 | **Observability wiring + attribution** (BO-5 + decision D1) | `observability_e2.md` §6.7 | 🟢 | OTel exporter (absent from uv.lock), Langfuse wiring, durable cost table, and the (run, member, agent, instance) attribution stamp — prereq for WS-16. |
+| WS-6 | **Observability wiring + attribution** (BO-5 + decision D1) | `observability_e2.md` §6.7 | 🟡 Docs | OTel exporter (absent from uv.lock), Langfuse wiring, durable cost table, and the (run, member, agent, instance) attribution stamp — prereq for WS-16. **Audited 2026-08-01 → NO-GO on the doc contract, not the work.** The cited "§6.7" is an unnumbered recommendation memo with **zero acceptance criteria**, stale pre-restructure paths (`apps/gateway/…`), no gate labels, and D1's attribution stamp **appears in no spec at all**. Verified drift: `agent_run.{prompt,completion,total}_tokens` are read by `/debug/runs` + `/observability/runs` but **never written** (`run_trace.py::_persist_row` is the only INSERT) — the spec claims they carry cost attribution; they are always NULL. Cost today lives only in Redis day-hashes (45-day TTL) plus opt-in `audit_event`; the durable precedent to generalise is `app_audit` (mig 114), already used for a monthly budget in `routes/apps/runtime.py`. Only 2 of D1's 4 fields reach the choke point (`v1_compat` reads `x-cc-agent`/`x-cc-source`; run_id + member are dropped) and `instance` exists nowhere — reuse `_resolve_agent_instance()` (`executor.py:917`), do not invent a second key. **To unblock:** add a numbered `## 7. WS-6 — open work` to `observability_e2.md` with per-item "done when" + AGENT-SAFE/OWNER-GATE labels, fix the 5 stale paths, correct the token-column claim. Then the dispatchable slice is the **D1 stamp + a durable `llm_call` table** (agent-safe); Langfuse/OTel/`LLM_USAGE_AUDIT` are OWNER-GATE (§6). |
 | WS-7 | **Memory activation + search** (BO-21 → BO-22) | checklist §C + `llm_caching_memory.md` | 🔴 | **OWNER-GATE:** flipping `MEM0_ENABLED`/`GRAPHITI_ENABLED` in prod (cost + latent findings in `agent_platform_hardening` Part 5). `acb_search` (BO-22) after. |
 
 ### Platform
@@ -250,6 +250,10 @@ enforce`, `MEM0_ENABLED`, `GRAPHITI_ENABLED`, `WHATSAPP_ENRICHMENT`,
 the WS-23-successor skills-index flip: every agent's prompt becomes a
 one-line-per-family index with bodies read on demand; see
 `skills_scope_out.md` §7) ·
+**WS-6 observability activation** (Langfuse keys + bringing up
+`--profile obs` in prod, `OTEL_EXPORTER_OTLP_ENDPOINT` in the deploy env,
+`LLM_USAGE_AUDIT=1`, and re-enabling the MAF telemetry kill switch at
+`executor.py:114` — it hides a known ContextVar-reset bug) ·
 creating the bot Google account + real-meeting joins · Meta app review ·
 real-account email sends / live-DB one-offs (`merge_ghost_messages --apply`) ·
 `test_owner_bootstrap.py` against prod (never) · any deploy that changes auth

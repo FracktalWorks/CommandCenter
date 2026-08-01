@@ -22,6 +22,7 @@ import {
   Background,
   BackgroundVariant,
   Controls,
+  MarkerType,
   ReactFlow,
   ReactFlowProvider,
   addEdge,
@@ -57,6 +58,7 @@ import NodeInspector from "../components/NodeInspector";
 import NodePalette, { type PaletteDrop } from "../components/NodePalette";
 import RunConsole from "../components/RunConsole";
 import TriggerPanel from "../components/TriggerPanel";
+import WorkflowEdge from "../components/WorkflowEdge";
 import WorkflowNode, { type CCNodeData } from "../components/WorkflowNode";
 import {
   ApiError,
@@ -83,6 +85,7 @@ import type {
 } from "../lib/types";
 
 const nodeTypes = { ccNode: WorkflowNode };
+const edgeTypes = { ccEdge: WorkflowEdge };
 
 const TRIGGER_KIND_HINTS = [
   { kind: "manual" as const, hint: "Run button / POST /workflows/{id}/run" },
@@ -107,15 +110,16 @@ function flowFromGraph(
         label: n.data?.label ?? n.id,
         nodeType: n.type,
         config: n.data?.config ?? {},
-        summary: summarize(n.type, n.data?.config ?? {}, catalog),
+        ...describeNode(n.type, n.data?.config ?? {}, catalog),
       },
     })),
+    // Branch labels and colour are derived at render time (displayEdges), so
+    // nothing about presentation is baked into the persisted graph.
     edges: graphEdges.map((e) => ({
       id: e.id ?? `e_${e.source}_${e.sourceHandle ?? "out"}_${e.target}`,
       source: e.source,
       target: e.target,
       sourceHandle: e.sourceHandle ?? undefined,
-      label: e.sourceHandle ?? undefined,
     })),
   };
 }
@@ -138,21 +142,133 @@ function humanDuration(seconds: number): string {
   return `${seconds}s`;
 }
 
-function summarize(type: NodeType, config: Record<string, unknown>, catalog: Catalog | null): string {
-  if (type === "agent") return String(config.agent ?? "");
-  if (type === "tool") return String(config.action ?? "");
+/** Single-line clip for card text — the card clamps, this stops giant strings. */
+function clip(value: unknown, max = 160): string {
+  const s = String(value ?? "").replace(/\s+/g, " ").trim();
+  return s.length > max ? `${s.slice(0, max - 1)}…` : s;
+}
+
+/**
+ * What a card says about itself (RFC §5: "legible at a glance"). Every node
+ * type answers the same three questions from its own config:
+ *
+ *   summary — what this step will do, in words
+ *   detail  — the capability it is bound to (agent, action, expression)
+ *   badges  — flags worth seeing before you select it, e.g. a destructive write
+ *
+ * Unconfigured nodes say so rather than rendering blank: a card that reads
+ * "no agent selected yet" is the same signal the validator will give at publish.
+ */
+function describeNode(
+  type: NodeType,
+  config: Record<string, unknown>,
+  catalog: Catalog | null,
+): { summary: string; detail: string; badges: string[] } {
+  const none = { summary: "", detail: "", badges: [] as string[] };
+
+  if (type === "trigger") {
+    return {
+      summary: "Entry point — the payload arrives downstream as {{trigger.*}}.",
+      detail: "",
+      badges: [],
+    };
+  }
+
+  if (type === "agent") {
+    const agent = String(config.agent ?? "");
+    const known = catalog?.agents.find((a) => a.name === agent);
+    const message = clip(config.message);
+    const model = String(config.model ?? "");
+    return {
+      summary:
+        message ||
+        clip(known?.description) ||
+        (agent ? "Runs this agent with no instruction yet." : "No agent selected yet."),
+      detail: agent,
+      badges: model ? [model] : [],
+    };
+  }
+
+  if (type === "tool") {
+    const action = String(config.action ?? "");
+    const tool = catalog?.tools.find((t) => t.action === action);
+    const badges: string[] = [];
+    if (tool?.integration) badges.push(tool.integration);
+    if (tool?.destructive) badges.push("write");
+    else if (tool?.read_only) badges.push("read-only");
+    return {
+      summary:
+        clip(tool?.description) ||
+        (action ? "Calls this action." : "No action selected yet."),
+      detail: action,
+      badges,
+    };
+  }
+
   if (type === "module") {
     const mod = catalog?.modules.find((m) => m.id === config.module_id);
-    return mod?.name ?? "";
+    return {
+      summary:
+        clip(mod?.description) ||
+        (mod ? "Runs this code module." : "No module selected yet."),
+      detail: mod?.name ?? "",
+      badges: mod ? ["code"] : [],
+    };
   }
-  if (type === "condition")
-    return `${config.left ?? ""} ${config.op ?? ""} ${config.right ?? ""}`.trim();
-  if (type === "set")
-    return Object.keys((config.assignments as object) ?? {}).join(", ");
-  if (type === "approval") return String(config.message ?? "pause for approval");
-  if (type === "wait") return humanDuration(Number(config.seconds));
-  if (type === "output") return String(config.value ?? "");
-  return "";
+
+  if (type === "condition") {
+    const expr = `${config.left ?? ""} ${config.op ?? ""} ${config.right ?? ""}`
+      .replace(/\s+/g, " ")
+      .trim();
+    return {
+      summary: expr
+        ? "Takes the yes branch when this holds, the no branch otherwise."
+        : "No test configured yet.",
+      detail: expr,
+      badges: [],
+    };
+  }
+
+  if (type === "set") {
+    const keys = Object.keys((config.assignments as object) ?? {});
+    return {
+      summary: keys.length
+        ? `Assigns ${keys.length} variable${keys.length === 1 ? "" : "s"} into {{vars.*}}.`
+        : "No assignments yet.",
+      detail: keys.join(", "),
+      badges: [],
+    };
+  }
+
+  if (type === "approval") {
+    return {
+      summary:
+        clip(config.message) ||
+        "Pauses the run and waits in the Approvals inbox.",
+      detail: "",
+      badges: ["pauses run"],
+    };
+  }
+
+  if (type === "wait") {
+    const seconds = Number(config.seconds);
+    const human = humanDuration(seconds);
+    return {
+      summary: human ? `Pauses for ${human}, then continues.` : "No duration set yet.",
+      detail: human,
+      badges: seconds > 60 ? ["parks the run"] : [],
+    };
+  }
+
+  if (type === "output") {
+    return {
+      summary: "Yields the run's result and ends this path.",
+      detail: clip(config.value, 60),
+      badges: [],
+    };
+  }
+
+  return none;
 }
 
 function EditorInner({ id }: { id: string }) {
@@ -186,6 +302,13 @@ function EditorInner({ id }: { id: string }) {
   const [notice, setNotice] = useState<string | null>(null);
   const [leftTab, setLeftTab] = useState<"palette" | "copilot">("palette");
   const [undoGraph, setUndoGraph] = useState<WorkflowGraph | null>(null);
+  /** Edge armed by its "+": the next block picked is spliced into it. */
+  const [insertEdgeId, setInsertEdgeId] = useState<string | null>(null);
+  /** Text handed from the canvas prompt bar to the Copilot, once. */
+  const [copilotSeed, setCopilotSeed] = useState<{ text: string; n: number } | null>(
+    null,
+  );
+  const [describe, setDescribe] = useState("");
   const counter = useRef(1);
   const esRef = useRef<EventSource | null>(null);
 
@@ -215,6 +338,7 @@ function EditorInner({ id }: { id: string }) {
                 label: "Trigger",
                 nodeType: "trigger",
                 config: { kind: "manual" },
+                ...describeNode("trigger", { kind: "manual" }, cat),
               } satisfies CCNodeData & { config: Record<string, unknown> },
             },
           ]);
@@ -294,7 +418,6 @@ function EditorInner({ id }: { id: string }) {
         {
           ...conn,
           id: `e_${conn.source}_${conn.sourceHandle ?? "out"}_${conn.target}`,
-          label: conn.sourceHandle ?? undefined,
         },
         es,
       ),
@@ -302,33 +425,63 @@ function EditorInner({ id }: { id: string }) {
     setDirty(true);
   }, []);
 
+  /**
+   * Add a block. Three ways in, one implementation: dropped at a point, armed
+   * on an edge (spliced between its two ends, the old edge replaced), or
+   * appended below the graph when neither applies.
+   */
   const addNode = useCallback(
     (drop: PaletteDrop, position?: { x: number; y: number }) => {
       const nid = `${drop.nodeType}_${counter.current++}${Date.now().toString(36).slice(-3)}`;
-      setNodes((ns) => {
-        const maxY = ns.reduce(
-          (acc, n) => Math.max(acc, n.position.y),
-          0,
-        );
-        return [
-          ...ns,
-          {
-            id: nid,
-            type: "ccNode",
-            position: position ?? { x: 140, y: maxY + 120 },
-            data: {
-              label: drop.label,
-              nodeType: drop.nodeType,
-              config: drop.config,
-              summary: summarize(drop.nodeType, drop.config, catalog),
-            },
+      const splice = insertEdgeId
+        ? (edges.find((e) => e.id === insertEdgeId) ?? null)
+        : null;
+      const source = splice ? nodes.find((n) => n.id === splice.source) : null;
+      const target = splice ? nodes.find((n) => n.id === splice.target) : null;
+
+      let where = position;
+      if (!where && source && target) {
+        where = {
+          x: Math.round((source.position.x + target.position.x) / 2),
+          y: Math.round((source.position.y + target.position.y) / 2),
+        };
+      }
+      if (!where) {
+        const maxY = nodes.reduce((acc, n) => Math.max(acc, n.position.y), 0);
+        where = { x: 140, y: maxY + 160 };
+      }
+
+      setNodes((ns) => [
+        ...ns,
+        {
+          id: nid,
+          type: "ccNode",
+          position: where,
+          data: {
+            label: drop.label,
+            nodeType: drop.nodeType,
+            config: drop.config,
+            ...describeNode(drop.nodeType, drop.config, catalog),
           },
-        ];
-      });
+        },
+      ]);
+      if (splice) {
+        setEdges((es) => [
+          ...es.filter((e) => e.id !== splice.id),
+          {
+            id: `e_${splice.source}_${splice.sourceHandle ?? "out"}_${nid}`,
+            source: splice.source,
+            target: nid,
+            sourceHandle: (splice.sourceHandle as string) ?? undefined,
+          },
+          { id: `e_${nid}_out_${splice.target}`, source: nid, target: splice.target },
+        ]);
+        setInsertEdgeId(null);
+      }
       setSelectedId(nid);
       setDirty(true);
     },
-    [catalog],
+    [catalog, edges, nodes, insertEdgeId],
   );
 
   const onDrop = useCallback(
@@ -376,6 +529,98 @@ function EditorInner({ id }: { id: string }) {
     return [...seen];
   }, [edges, selectedId]);
 
+  /**
+   * The trigger card reads from the Triggers panel, not from its own config —
+   * "Schedule · 0 9 * * 1-5" on the card is the thing makers keep re-opening
+   * the panel to check. Derived at render so editing a trigger updates it.
+   */
+  const triggerFacts = useMemo(() => {
+    const live = triggers.filter((t) => t.enabled);
+    const detail = live.length
+      ? live
+          .map((t) =>
+            t.kind === "schedule" && t.config?.cron
+              ? `${t.kind} · ${String(t.config.cron)}`
+              : t.kind,
+          )
+          .join("  ·  ")
+      : "manual";
+    return {
+      detail,
+      badges: live.length === 0 ? ["run manually"] : [],
+    };
+  }, [triggers]);
+
+  const displayNodes = useMemo(
+    () =>
+      nodes.map((n) =>
+        (n.data as CCNodeData).nodeType === "trigger"
+          ? { ...n, data: { ...n.data, ...triggerFacts } }
+          : n,
+      ),
+    [nodes, triggerFacts],
+  );
+
+  const armInsert = useCallback(
+    (edgeId: string) =>
+      setInsertEdgeId((cur) => {
+        if (cur !== edgeId) setLeftTab("palette");
+        return cur === edgeId ? null : edgeId;
+      }),
+    [],
+  );
+
+  /**
+   * Edge presentation (mockup §.edge-path): the branch a condition took is
+   * labelled and coloured, and the wire the run is flowing through lights up —
+   * during a Test run you should be able to follow the path without reading the
+   * console. None of this is persisted; `edges` stays the edit-model.
+   */
+  const displayEdges = useMemo(() => {
+    const statusOf = new Map(
+      nodes.map((n) => [n.id, (n.data as CCNodeData).runStatus]),
+    );
+    return edges.map((e) => {
+      const branch =
+        e.sourceHandle === "true" || e.sourceHandle === "false"
+          ? (e.sourceHandle as "true" | "false")
+          : null;
+      const from = statusOf.get(e.source);
+      const to = statusOf.get(e.target);
+      const hot =
+        from === "ok" &&
+        (to === "running" || to === "waiting" || to === "ok" || to === "error");
+      const stroke = hot
+        ? "var(--primary)"
+        : branch === "true"
+          ? "var(--success)"
+          : "var(--muted-foreground)";
+      return {
+        ...e,
+        type: "ccEdge",
+        animated: hot && to !== "ok",
+        style: {
+          stroke,
+          strokeWidth: hot ? 2.2 : 1.6,
+          strokeOpacity: hot ? 1 : branch === "true" ? 0.75 : 0.5,
+          strokeDasharray: branch === "false" ? "5 4" : undefined,
+        },
+        markerEnd: {
+          type: MarkerType.ArrowClosed,
+          width: 14,
+          height: 14,
+          color: stroke,
+        },
+        data: {
+          branch,
+          hot,
+          onInsert: armInsert,
+          insertArmed: insertEdgeId === e.id,
+        },
+      } as Edge;
+    });
+  }, [edges, nodes, armInsert, insertEdgeId]);
+
   const patchSelected = useCallback(
     (patch: Record<string, unknown>) => {
       if (!selectedId) return;
@@ -386,11 +631,7 @@ function EditorInner({ id }: { id: string }) {
           const config = { ...d.config, ...patch };
           return {
             ...n,
-            data: {
-              ...d,
-              config,
-              summary: summarize(d.nodeType, config, catalog),
-            },
+            data: { ...d, config, ...describeNode(d.nodeType, config, catalog) },
           };
         }),
       );
@@ -482,10 +723,30 @@ function EditorInner({ id }: { id: string }) {
   }, [id, save, applyIssues]);
 
   const setNodeRunStatus = useCallback(
-    (nodeId: string, status: CCNodeData["runStatus"]) => {
+    (
+      nodeId: string,
+      status: CCNodeData["runStatus"],
+      durationMs?: number,
+    ) => {
       setNodes((ns) =>
         ns.map((n) =>
-          n.id === nodeId ? { ...n, data: { ...n.data, runStatus: status } } : n,
+          n.id === nodeId
+            ? {
+                ...n,
+                data: {
+                  ...n.data,
+                  runStatus: status,
+                  // The card keeps the last known duration while the node is
+                  // running again; a finished event overwrites it.
+                  durationMs:
+                    typeof durationMs === "number"
+                      ? durationMs
+                      : status === "running"
+                        ? undefined
+                        : (n.data as CCNodeData).durationMs,
+                },
+              }
+            : n,
         ),
       );
     },
@@ -504,6 +765,7 @@ function EditorInner({ id }: { id: string }) {
             runStatus: results
               ? (results[n.id]?.status as CCNodeData["runStatus"])
               : undefined,
+            durationMs: results ? results[n.id]?.duration_ms : undefined,
           },
         })),
       );
@@ -517,7 +779,10 @@ function EditorInner({ id }: { id: string }) {
     setRunEvents([]);
     setConsoleCollapsed(false);
     setNodes((ns) =>
-      ns.map((n) => ({ ...n, data: { ...n.data, runStatus: undefined } })),
+      ns.map((n) => ({
+        ...n,
+        data: { ...n.data, runStatus: undefined, durationMs: undefined },
+      })),
     );
     try {
       if (!(await save())) return;
@@ -540,6 +805,7 @@ function EditorInner({ id }: { id: string }) {
             setNodeRunStatus(
               event.node_id,
               event.status as CCNodeData["runStatus"],
+              event.duration_ms,
             );
           }
           if (event.event === "run" && event.status !== "running") {
@@ -796,13 +1062,18 @@ function EditorInner({ id }: { id: string }) {
             </div>
           )}
         </div>
+        {/* What fires this workflow, said in words — the mockup's trigger chip */}
         <button
           onClick={() => setShowTriggers((s) => !s)}
-          className="flex items-center gap-1 text-[11px] px-2 py-1 rounded-lg border border-border text-muted-foreground hover:text-foreground hover:bg-secondary tech-transition shrink-0"
+          title="Configure triggers"
+          className="flex items-center gap-1.5 text-[11px] px-2.5 py-1 rounded-full border border-amber-500/30 bg-amber-500/10 text-amber-500 hover:bg-amber-500/15 tech-transition shrink-0 max-w-56"
         >
-          <Zap className="w-3 h-3 text-amber-500" />
-          {triggers.filter((t) => t.enabled).length + 1} trigger
-          {triggers.filter((t) => t.enabled).length === 0 ? "" : "s"}
+          <Zap className="w-3 h-3 shrink-0" />
+          <span className="truncate">
+            {triggerFacts.detail === "manual"
+              ? "Trigger: run manually"
+              : `Trigger: ${triggerFacts.detail}`}
+          </span>
         </button>
 
         <div className="ml-auto flex items-center gap-1.5 shrink-0">
@@ -962,12 +1233,26 @@ function EditorInner({ id }: { id: string }) {
               <Sparkles className="w-3 h-3" /> Copilot
             </button>
           </div>
+          {insertEdgeId && leftTab === "palette" && (
+            <div className="flex items-center gap-1.5 px-2 py-1.5 border-b border-primary/30 bg-primary/10 text-[10px] text-primary">
+              <span className="min-w-0 truncate">
+                Inserting into a connection — pick a block
+              </span>
+              <button
+                onClick={() => setInsertEdgeId(null)}
+                className="ml-auto shrink-0 underline hover:no-underline"
+              >
+                cancel
+              </button>
+            </div>
+          )}
           <div className="flex-1 min-h-0 flex">
             {leftTab === "palette" ? (
               <NodePalette catalog={catalog} onAdd={(drop) => addNode(drop)} />
             ) : (
               <CopilotPanel
                 workflowId={id}
+                seed={copilotSeed}
                 onApplyGraph={applyCopilotGraph}
                 onUndo={undoCopilot}
                 canUndo={undoGraph !== null}
@@ -985,9 +1270,10 @@ function EditorInner({ id }: { id: string }) {
           onDrop={onDrop}
         >
           <ReactFlow
-            nodes={nodes}
-            edges={edges}
+            nodes={displayNodes}
+            edges={displayEdges}
             nodeTypes={nodeTypes}
+            edgeTypes={edgeTypes}
             onNodesChange={onNodesChange}
             onEdgesChange={onEdgesChange}
             onConnect={onConnect}
@@ -997,11 +1283,46 @@ function EditorInner({ id }: { id: string }) {
             colorMode={resolvedTheme === "light" ? "light" : "dark"}
             fitView
             proOptions={{ hideAttribution: true }}
-            defaultEdgeOptions={{ type: "smoothstep" }}
+            defaultEdgeOptions={{ type: "ccEdge" }}
           >
-            <Background variant={BackgroundVariant.Dots} gap={18} size={1} />
+            <Background variant={BackgroundVariant.Dots} gap={22} size={1.2} />
             <Controls showInteractive={false} />
           </ReactFlow>
+
+          <div className="absolute right-3 top-3 z-10 pointer-events-none rounded-lg border border-border bg-background/80 backdrop-blur-sm px-2 py-1 text-[10px] text-muted-foreground">
+            Drag to move · scroll to zoom · <span className="text-foreground">+</span> on a
+            wire inserts a block
+          </div>
+
+          {/* Describe → generate → refine (RFC §5.4), on the canvas where the
+              blank-canvas problem actually is. Hands off to the Copilot pane so
+              there is one place graphs get applied, undone and explained. */}
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              const text = describe.trim();
+              if (!text) return;
+              setLeftTab("copilot");
+              setCopilotSeed((s) => ({ text, n: (s?.n ?? 0) + 1 }));
+              setDescribe("");
+            }}
+            className="absolute left-1/2 -translate-x-1/2 bottom-4 z-10 w-[min(560px,84%)] flex items-center gap-2 rounded-xl border border-border bg-card/95 backdrop-blur-sm shadow-lg pl-3 pr-2 py-2"
+          >
+            <Sparkles className="w-4 h-4 text-primary shrink-0" />
+            <input
+              value={describe}
+              onChange={(e) => setDescribe(e.target.value)}
+              placeholder="Describe an automation to generate… e.g. “When a lead emails, log it to Zoho and draft a reply”"
+              className="flex-1 min-w-0 bg-transparent text-xs text-foreground placeholder:text-muted-foreground focus:outline-none"
+            />
+            <button
+              type="submit"
+              disabled={!describe.trim()}
+              className="shrink-0 rounded-lg bg-primary px-2.5 py-1.5 text-xs font-medium text-primary-foreground hover:opacity-90 tech-transition disabled:opacity-40"
+            >
+              Generate
+            </button>
+          </form>
         </div>
         <NodeInspector
           node={selected}

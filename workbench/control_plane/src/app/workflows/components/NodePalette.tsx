@@ -20,12 +20,14 @@ import {
   ChevronRight,
   GitBranch,
   LogOut,
+  Plus,
   Search,
   Wrench,
   X,
   Zap,
 } from "lucide-react";
 import { searchCatalog } from "../lib/api";
+import { FALLBACK_ICON, NODE_ICON } from "../lib/nodeVisuals";
 import { NODE_CATEGORY_STYLE } from "../lib/types";
 import type { Catalog, NodeType, SearchResult } from "../lib/types";
 
@@ -113,6 +115,10 @@ export default function NodePalette({
     e.dataTransfer.effectAllowed = "move";
   };
 
+  /**
+   * A palette row carries the same icon plate the canvas card will, so a block
+   * is recognisable before and after it is dropped (mockup §.pal-item).
+   */
   const item = (
     key: string,
     drop: PaletteDrop | null,
@@ -120,9 +126,11 @@ export default function NodePalette({
     subtitle: string,
     category: string,
     disabled = false,
+    nodeType?: NodeType,
   ) => {
     const style = NODE_CATEGORY_STYLE[category] ?? NODE_CATEGORY_STYLE.logic;
     const dead = disabled || !drop;
+    const Icon = NODE_ICON[nodeType ?? drop?.nodeType ?? "tool"] ?? FALLBACK_ICON;
     return (
       <button
         key={key}
@@ -131,17 +139,32 @@ export default function NodePalette({
         onClick={() => !dead && drop && onAdd(drop)}
         disabled={dead}
         title={dead ? "Not available — configure the integration first" : subtitle}
-        className={`w-full text-left rounded-lg border border-border px-2.5 py-1.5 tech-transition ${
+        className={`w-full text-left rounded-lg border border-transparent px-2 py-1.5 tech-transition group ${
           dead
             ? "opacity-40 cursor-not-allowed"
-            : "hover:border-primary/40 hover:bg-secondary cursor-grab active:cursor-grabbing"
+            : "hover:border-border hover:bg-secondary cursor-grab active:cursor-grabbing"
         }`}
       >
-        <div className="flex items-center gap-1.5">
-          <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${style.dot}`} />
-          <span className="text-[11px] font-medium text-foreground truncate">{title}</span>
+        <div className="flex items-center gap-2">
+          <span
+            className={`w-6 h-6 shrink-0 rounded-lg border grid place-items-center ${style.tile}`}
+          >
+            <Icon className="w-3.5 h-3.5" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[11px] font-medium text-foreground truncate">
+              {title}
+            </span>
+            <span className="block font-mono text-[9px] text-muted-foreground truncate">
+              {subtitle}
+            </span>
+          </span>
+          {!dead && (
+            <span className="shrink-0 text-muted-foreground opacity-0 group-hover:opacity-100 tech-transition">
+              <Plus className="w-3 h-3" />
+            </span>
+          )}
         </div>
-        <p className="text-[9px] text-muted-foreground truncate ml-3">{subtitle}</p>
       </button>
     );
   };
@@ -149,20 +172,25 @@ export default function NodePalette({
   const section = (
     id: string, label: string, Icon: SectionIcon, count: number,
     children: React.ReactNode,
-  ) => (
-    <div key={id}>
-      <button
-        onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}
-        className="w-full flex items-center gap-1.5 px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wide text-muted-foreground hover:text-foreground tech-transition"
-      >
-        {open[id] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
-        <Icon className="w-3 h-3" />
-        {label}
-        <span className="ml-auto font-normal normal-case tracking-normal">{count}</span>
-      </button>
-      {open[id] && <div className="space-y-1 mb-2">{children}</div>}
-    </div>
-  );
+    category = id,
+  ) => {
+    const style = NODE_CATEGORY_STYLE[category] ?? NODE_CATEGORY_STYLE.logic;
+    return (
+      <div key={id}>
+        <button
+          onClick={() => setOpen((o) => ({ ...o, [id]: !o[id] }))}
+          className="w-full flex items-center gap-1.5 px-1 py-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground hover:text-foreground tech-transition"
+        >
+          {open[id] ? <ChevronDown className="w-3 h-3" /> : <ChevronRight className="w-3 h-3" />}
+          <span className={`w-1.5 h-1.5 rounded-sm shrink-0 ${style.dot}`} />
+          <Icon className="w-3 h-3" />
+          {label}
+          <span className="ml-auto font-normal normal-case tracking-normal">{count}</span>
+        </button>
+        {open[id] && <div className="space-y-0.5 mb-2">{children}</div>}
+      </div>
+    );
+  };
 
   const readyModules = (catalog?.modules ?? []).filter((m) => m.status === "ready");
   const platformTools = (catalog?.tools ?? []).filter((t) => !t.integration);

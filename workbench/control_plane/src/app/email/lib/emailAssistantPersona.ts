@@ -28,6 +28,28 @@ export interface PersonaOpenEmail {
   from?: { name?: string | null; email?: string | null } | null;
 }
 
+/**
+ * The ACTIVE account's own assistant configuration (email_assistant_settings).
+ *
+ * Every one of these is stored per account, and the drafting pipeline already
+ * loads them by account_id — so a draft written for the work mailbox already
+ * differs from one written for the personal mailbox. The CHAT assistant was the
+ * one surface that didn't see them: it knew which account_id to pass to tools,
+ * but nothing about how the user wants that mailbox handled, so it conversed
+ * identically on every account. Carrying them here is what makes switching
+ * accounts in the UI actually change the assistant's behaviour.
+ */
+export interface PersonaAccountSettings {
+  /** Who the user is, in this mailbox's context. */
+  about?: string | null;
+  /** Standing rules the user always wants followed on this account. */
+  personal_instructions?: string | null;
+  /** How replies from this account should read. */
+  writing_style?: string | null;
+  /** Auto-derived from how the user edits drafts on this account. */
+  learned_writing_style?: string | null;
+}
+
 function addr(a: PersonaAccount): string {
   return a.emailAddress || a.email_address || "";
 }
@@ -36,6 +58,9 @@ export function buildEmailAssistantPersona(opts: {
   accounts?: PersonaAccount[];
   selectedAccountId?: string | null;
   openEmail?: PersonaOpenEmail | null;
+  /** The ACTIVE account's assistant settings. Omit where they aren't loaded —
+   *  the persona degrades to account-awareness without the standing orders. */
+  settings?: PersonaAccountSettings | null;
 }): string {
   const accounts = opts.accounts ?? [];
   const parts: string[] = [
@@ -81,6 +106,44 @@ export function buildEmailAssistantPersona(opts: {
       "No accounts are loaded here — call list_accounts before any " +
         "account-scoped action.",
     );
+  }
+
+  // How the ACTIVE account wants to be handled. Scoped to that account, so
+  // switching mailboxes in the UI switches the assistant's standing orders with
+  // it. Trimmed and bounded — this rides in the system context on every turn.
+  const cfg = opts.settings;
+  if (cfg) {
+    const clip = (s: string, n: number) =>
+      s.length > n ? `${s.slice(0, n)}…` : s;
+    const block = (label: string, v?: string | null, n = 1200) => {
+      const t = (v || "").trim();
+      return t ? `${label}\n${clip(t, n)}` : "";
+    };
+    const cfgParts = [
+      block("### About the user (this account)", cfg.about),
+      // Standing instructions outrank the assistant's defaults — say so, or the
+      // model treats them as background colour.
+      block(
+        "### Standing instructions for this account (follow these)",
+        cfg.personal_instructions,
+      ),
+      block("### How the user writes from this account", cfg.writing_style),
+      // Advisory: derived from edits, not stated by the user, so an explicit
+      // writing_style must win where the two disagree.
+      block(
+        "### Observed writing style (auto-derived, advisory)",
+        cfg.learned_writing_style,
+        600,
+      ),
+    ].filter(Boolean);
+    if (cfgParts.length) {
+      parts.push(
+        "## This account's assistant configuration\n" +
+          "These are configured for the ACTIVE account only — if the user " +
+          "switches accounts, they no longer apply.\n\n" +
+          cfgParts.join("\n\n"),
+      );
+    }
   }
 
   const email = opts.openEmail;

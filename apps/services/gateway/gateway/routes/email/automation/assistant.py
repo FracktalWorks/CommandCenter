@@ -253,6 +253,7 @@ async def get_assistant_settings(
             """SELECT about, signature, auto_run, cold_email_blocker,
                       rule_model, draft_model, compose_model, chat_model,
                       digest_frequency, personal_instructions, writing_style,
+                      learned_writing_style,
                       draft_replies, follow_up_days, draft_confidence,
                       follow_up_awaiting_days, follow_up_needs_reply_days,
                       follow_up_auto_draft, digest_categories, digest_day_of_week,
@@ -305,6 +306,13 @@ async def get_assistant_settings(
             ) or "",
             "writing_style": (
                 getattr(row, "writing_style", None) if row else ""
+            ) or "",
+            # Auto-derived from how the user edits this account's drafts.
+            # Read-only and advisory (an explicit writing_style outranks it) —
+            # surfaced so the chat assistant can match the same voice the
+            # drafter already does, per account.
+            "learned_writing_style": (
+                getattr(row, "learned_writing_style", None) if row else ""
             ) or "",
             # This fallback IS the default for every account that has never
             # opened AI Settings, so it must agree with

@@ -25,7 +25,10 @@ import os
 import re
 import uuid
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:  # import-cycle-free: the runtime import is function-local
+    from orchestrator.steer import TurnDecision
 
 from acb_auth import (
     UserContext,

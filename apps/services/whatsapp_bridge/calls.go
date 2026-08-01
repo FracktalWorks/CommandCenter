@@ -29,8 +29,19 @@ import (
 	"github.com/purpshell/meowcaller"
 )
 
+// placeTimeout bounds how long we wait for WhatsApp to accept a call offer.
+// It must stay under the gateway's own budget (20s) so a wedged offer surfaces
+// as a real error there instead of tripping the workbench proxy's abort, which
+// would tell the user only "gateway unreachable".
+const placeTimeout = 12 * time.Second
+
 // ErrCallNotFound is returned for an unknown (or already reaped) call id.
 var ErrCallNotFound = errors.New("call not found")
+
+// ErrPlaceTimeout means WhatsApp never acknowledged the call offer in time.
+var ErrPlaceTimeout = errors.New(
+	"WhatsApp did not accept the call offer in time — the session may be " +
+		"connected but unhealthy; check the bridge log and re-pair if it persists")
 
 // ErrNoCaller means the account has no calling stack — the session predates
 // pairing, or meowcaller failed to attach.
@@ -368,8 +379,14 @@ func (m *SessionManager) PlaceCall(ctx context.Context, accountID, target string
 	if target == "" {
 		return callInfo{}, fmt.Errorf("target required")
 	}
+
+	ctx, cancel := context.WithTimeout(ctx, placeTimeout)
+	defer cancel()
 	c, err := s.caller.Call(ctx, target)
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return callInfo{}, ErrPlaceTimeout
+		}
 		return callInfo{}, fmt.Errorf("place call: %w", err)
 	}
 	lc := &liveCall{
@@ -397,6 +414,8 @@ func (m *SessionManager) PlaceGroupCall(
 		c   *meowcaller.Call
 		err error
 	)
+	ctx, cancel := context.WithTimeout(ctx, placeTimeout)
+	defer cancel()
 	switch {
 	case groupID != "":
 		c, err = s.caller.GroupCallByID(ctx, groupID)
@@ -406,6 +425,9 @@ func (m *SessionManager) PlaceGroupCall(
 		return callInfo{}, fmt.Errorf("group_id, or at least two targets, required")
 	}
 	if err != nil {
+		if errors.Is(err, context.DeadlineExceeded) {
+			return callInfo{}, ErrPlaceTimeout
+		}
 		return callInfo{}, fmt.Errorf("place group call: %w", err)
 	}
 

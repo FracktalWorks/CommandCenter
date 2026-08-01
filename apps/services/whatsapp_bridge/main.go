@@ -209,6 +209,8 @@ func statusForCall(err error) int {
 		return http.StatusNotFound
 	case errors.Is(err, ErrNotConnected), errors.Is(err, ErrNoCaller):
 		return http.StatusConflict
+	case errors.Is(err, ErrPlaceTimeout):
+		return http.StatusGatewayTimeout
 	default:
 		return http.StatusBadGateway
 	}

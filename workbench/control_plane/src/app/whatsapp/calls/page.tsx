@@ -61,6 +61,31 @@ function phaseTone(phase: string): string {
 
 /** Elapsed mm:ss. `now` is passed in (not read from the clock here) so the
  *  value is a pure function of state — no server/client hydration mismatch. */
+/** Turn the plumbing's generic failures into something you can act on.
+ *
+ *  "gateway unreachable" comes from the Next proxy when its fetch to the
+ *  FastAPI gateway throws or hits the 30s abort — it says nothing about which
+ *  service is actually broken, and it's the message users hit first. */
+function explainError(raw: string): string {
+  const e = raw.toLowerCase();
+  if (e.includes("gateway unreachable")) {
+    return (
+      "Couldn't reach the CommandCenter gateway (the request timed out or was " +
+      "refused). The call may not have been placed. Check the gateway is up — " +
+      "`systemctl status acb-gateway` — and watch `journalctl -u acb-gateway -f` " +
+      "while retrying."
+    );
+  }
+  if (e.includes("bridge isn't reachable") || e.includes("bridge unreachable")) {
+    return (
+      "The gateway is up but can't reach the WhatsApp bridge. Check " +
+      "`systemctl status acb-whatsapp-bridge` and that WHATSAPP_BRIDGE_URL " +
+      "points at it."
+    );
+  }
+  return raw;
+}
+
 function clockFrom(iso: string | undefined, now: number): string {
   if (!iso || !now) return "";
   const started = new Date(iso).getTime();
@@ -145,7 +170,7 @@ export default function WhatsAppCallsPage() {
 
     setBusy(false);
     if (!res.ok) {
-      setError(res.error ?? "The call couldn't be placed.");
+      setError(explainError(res.error ?? "The call couldn't be placed."));
       return;
     }
     setTarget("");
@@ -155,7 +180,7 @@ export default function WhatsAppCallsPage() {
   async function act(action: "hangup" | "answer" | "reject", call: WaCall) {
     setError(null);
     const res = await callAction(action, accountId, call.call_id);
-    if (!res.ok) setError(res.error ?? `Couldn't ${action} that call.`);
+    if (!res.ok) setError(explainError(res.error ?? `Couldn't ${action} that call.`));
     void refresh();
   }
 

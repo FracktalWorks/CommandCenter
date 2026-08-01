@@ -38,10 +38,14 @@ from sqlalchemy import text
 
 _log = get_logger("gateway.whatsapp.calls")
 
-# Bridge calls are user-visible and interactive: a short timeout keeps a wedged
-# bridge from hanging the dialer, but placing a call does wait on WhatsApp's
-# signalling round-trip, so it isn't as tight as a read.
-_TIMEOUT_SECS = 30.0
+# Our budget must stay strictly UNDER the Next proxy's 30s abort
+# (workbench api/whatsapp/[...path]/route.ts). If they match, a slow bridge
+# trips the proxy at the same moment we time out, and the user sees the
+# proxy's generic "gateway unreachable" instead of what actually went wrong.
+# Placing a call waits on WhatsApp's signalling round-trip, so it gets more
+# room than a read; both stay well clear of 30s.
+_PLACE_TIMEOUT_SECS = 20.0
+_READ_TIMEOUT_SECS = 8.0
 
 
 class PlaceCallRequest(BaseModel):
@@ -104,14 +108,24 @@ async def _assert_owns_account(account_id: str, user: UserContext) -> None:
             detail="That number isn't paired yet — finish QR pairing first.")
 
 
-async def _bridge(method: str, path: str, **kw: Any) -> tuple[int, Any]:
-    """One request to the bridge. Returns ``(status, parsed_body)``; status 0
-    means the bridge was unreachable, which callers report as 503 rather than
-    letting an httpx error escape as a 500."""
+#: Sentinel statuses for the two ways the bridge hop fails without an HTTP
+#: reply. Kept distinct because they mean different things to the operator:
+#: unreachable = the service is down or the URL is wrong; timeout = it accepted
+#: the connection and then never answered (a wedged call, usually).
+_BRIDGE_DOWN = 0
+_BRIDGE_TIMEOUT = -1
+
+
+async def _bridge(method: str, path: str, timeout: float, **kw: Any) -> tuple[int, Any]:
+    """One request to the bridge. Returns ``(status, parsed_body)``.
+
+    Never lets an httpx error escape as a 500 — the dialer needs to tell the
+    user which half is broken, and an opaque 500 (or a proxy-level abort) tells
+    them nothing."""
     import httpx
 
     try:
-        async with httpx.AsyncClient(timeout=httpx.Timeout(_TIMEOUT_SECS)) as client:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(timeout)) as client:
             resp = await client.request(
                 method, f"{_bridge_url()}{path}", headers=_bridge_headers(), **kw)
         try:
@@ -119,9 +133,32 @@ async def _bridge(method: str, path: str, **kw: Any) -> tuple[int, Any]:
         except ValueError:
             body = {"detail": resp.text[:300]}
         return resp.status_code, body
+    except httpx.TimeoutException:
+        _log.warning("whatsapp.calls.bridge_timeout", path=path, timeout=timeout)
+        return _BRIDGE_TIMEOUT, {
+            "detail": (
+                f"The WhatsApp bridge accepted the request but didn't answer "
+                f"within {timeout:g}s. Check it with "
+                f"`journalctl -u acb-whatsapp-bridge -f` while you retry."
+            )}
     except Exception as exc:
         _log.warning("whatsapp.calls.bridge_unreachable", error=str(exc)[:200])
-        return 0, {"detail": "The WhatsApp bridge isn't reachable."}
+        return _BRIDGE_DOWN, {
+            "detail": (
+                "The WhatsApp bridge isn't reachable. Check that the "
+                "whatsapp_bridge service is running and WHATSAPP_BRIDGE_URL "
+                "points at it."
+            )}
+
+
+def _raise_for_bridge(status: int, body: Any, action: str) -> None:
+    """Translate a bridge failure into an HTTP error the dialer can show."""
+    if status == _BRIDGE_DOWN:
+        raise HTTPException(status_code=503, detail=_detail(body, "bridge unreachable"))
+    if status == _BRIDGE_TIMEOUT:
+        raise HTTPException(status_code=504, detail=_detail(body, "bridge timed out"))
+    if status >= 300:
+        raise HTTPException(status_code=status, detail=_detail(body, f"{action} failed"))
 
 
 def _detail(body: Any, fallback: str) -> str:
@@ -146,14 +183,11 @@ async def place_call(
             status_code=400,
             detail="Give a number to call, a group id, or at least two targets.")
 
-    status, data = await _bridge("POST", "/call", json={
+    status, data = await _bridge("POST", "/call", _PLACE_TIMEOUT_SECS, json={
         "session": body.account_id, "to": body.to,
         "group_id": body.group_id, "targets": body.targets,
     })
-    if status == 0:
-        raise HTTPException(status_code=503, detail=_detail(data, "bridge unreachable"))
-    if status >= 300:
-        raise HTTPException(status_code=status, detail=_detail(data, "call failed"))
+    _raise_for_bridge(status, data, "call")
     _log.info("whatsapp.calls.placed", account_id=body.account_id,
               kind="group" if (body.group_id or body.targets) else "direct")
     return _as_call(data)
@@ -161,13 +195,10 @@ async def place_call(
 
 async def _call_action(action: str, body: CallActionRequest, user: UserContext) -> CallModel:
     await _assert_owns_account(body.account_id, user)
-    status, data = await _bridge("POST", f"/call/{action}", json={
+    status, data = await _bridge("POST", f"/call/{action}", _READ_TIMEOUT_SECS, json={
         "session": body.account_id, "call_id": body.call_id,
     })
-    if status == 0:
-        raise HTTPException(status_code=503, detail=_detail(data, "bridge unreachable"))
-    if status >= 300:
-        raise HTTPException(status_code=status, detail=_detail(data, f"{action} failed"))
+    _raise_for_bridge(status, data, action)
     return _as_call(data)
 
 
@@ -203,9 +234,13 @@ async def list_calls(
     ended. An unreachable bridge is reported as an empty list plus a flag, not
     an error — the dialer should render its "bridge is down" state, not a crash."""
     await _assert_owns_account(account_id, user)
-    status, data = await _bridge("GET", "/calls", params={"session": account_id})
-    if status == 0 or status >= 300:
-        return CallListModel(calls=[], bridge_reachable=status != 0)
+    status, data = await _bridge(
+        "GET", "/calls", _READ_TIMEOUT_SECS, params={"session": account_id})
+    if status <= 0 or status >= 300:
+        # A timeout still means the bridge is answering the socket but wedged —
+        # report it as unreachable so the dialer shows its offline state rather
+        # than pretending there are simply no calls.
+        return CallListModel(calls=[], bridge_reachable=status > 0)
     raw = data.get("calls") if isinstance(data, dict) else None
     return CallListModel(
         calls=[_as_call(c) for c in (raw or []) if isinstance(c, dict)],

@@ -640,6 +640,9 @@ export interface SearchEmailsParams {
    *  semantic search is enabled + embeddings exist; otherwise it returns pure
    *  lexical results and `hybrid: false`. */
   hybrid?: boolean;
+  /** Skip message bodies. For list rows that only render subject + snippet —
+   *  a page of HTML-heavy mail is megabytes otherwise. */
+  light?: boolean;
   page?: number;
   pageSize?: number;
 }
@@ -678,6 +681,7 @@ export async function searchEmails(
   if (params.receivedBefore) sp.set("received_before", params.receivedBefore);
   if (params.importance) sp.set("importance", params.importance);
   if (params.hybrid) sp.set("hybrid", "true");
+  if (params.light) sp.set("light", "true");
   if (params.page) sp.set("page", String(params.page));
   if (params.pageSize) sp.set("page_size", String(params.pageSize));
 

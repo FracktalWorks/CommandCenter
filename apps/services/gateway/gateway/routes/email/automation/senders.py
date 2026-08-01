@@ -43,6 +43,19 @@ from sqlalchemy import text
 DISPOSED_FOLDERS = "('trash', 'junk', 'spam', 'drafts', 'draft')"
 _NOT_DISPOSED = f"LOWER(COALESCE(em.folder,'')) NOT IN {DISPOSED_FOLDERS}"
 
+# Conversation-state labels the Reply Zero rules write onto messages, shown as
+# chips alongside the cleanup categories. Lowercased key → the display name, so
+# a legacy "reply"/"to reply"/"actioned" row renders under its modern name
+# instead of spawning a second chip for the same thing.
+_CONVERSATION_DISPLAY: dict[str, str] = {
+    "needs reply": "Needs Reply", "reply": "Needs Reply",
+    "to reply": "Needs Reply",
+    "awaiting reply": "Awaiting Reply",
+    "fyi": "FYI",
+    "done": "Done", "actioned": "Done",
+    "follow-up": "Follow-up",
+}
+
 
 @router.get("/senders")
 async def list_senders(
@@ -182,21 +195,15 @@ async def list_senders(
             r.email for r in nl_rows if r.auto_archive_filter_id
         }
 
-        # Merge assigned categories (same account scope as newsletters). We keep
-        # ONLY trustworthy sources — 'rule' (projected from the rule engine) and
-        # 'user' (manual). Provisional 'inferred' cold-start guesses are dropped
-        # entirely: they came from a thin LLM signal, never self-corrected, and
-        # misled the cleaner. Categorization is now driven off the rule-labelled
-        # per-message categories below, which is the same categorization the rest
-        # of the app shows.
-        cat_rows = (await db.execute(text(
-            f"SELECT LOWER(email) AS email, category, category_source "
-            f"FROM email_senders WHERE {nl_scope}"
-        ), nl_params)).fetchall()
-        sender_cat_by_email = {
-            r.email: r.category for r in cat_rows
-            if r.category and getattr(r, "category_source", None) in ("rule", "user")
-        }
+        # NOTE: the sender-level ``email_senders.category`` is deliberately NOT
+        # read here any more. Every chip this endpoint returns is now a label a
+        # RULE actually wrote onto the sender's messages, so each one is
+        # traceable to a rule in AI settings and correctable there. The
+        # sender-level category still exists and still earns its keep — it is
+        # what ranks a human correspondent above bulk mail in "important
+        # emails" — but as a chip its inferred values (notably "Conversation")
+        # named a category the user had never configured and matched no filter
+        # tab, while masking the labels their rules had genuinely applied.
 
         # Per-sender cleanup categories DERIVED from the rule-labelled per-message
         # categories (email_messages.categories). This is the reliable signal the
@@ -220,15 +227,36 @@ async def list_senders(
             label_counts.setdefault(r.email, {})[r.label] = int(r.n or 0)
 
         def _categories_for(email: str) -> list[str]:
-            """Distinct cleanup categories on this sender's mail (chip + tabs)."""
-            derived = _cleanup_categories_ranked(label_counts.get(email, {}))
-            # Fall back to a trustworthy sender-level (rule/user) category when the
-            # messages themselves carry no cleanup label yet.
-            if not derived and sender_cat_by_email.get(email):
-                sc = sender_cat_by_email[email]
-                if sc and sc != "Unknown":
-                    derived = [sc]
-            return derived
+            """The rule labels actually on this sender's mail, most-used first.
+
+            Cleanup categories lead (they drive the filter tabs), then the
+            conversation labels the Reply Zero rules write — Needs Reply,
+            Awaiting Reply, FYI, Done, Follow-up. Both are REAL labels the user
+            can see in AI settings and trace back to a rule.
+
+            What is deliberately NOT here is the synthesized "Conversation"
+            sender category. It is inferred, not written by any rule, so as a
+            chip it named a category the user had never configured, matched no
+            filter tab, and could not be corrected — while hiding the labels
+            their rules had genuinely applied. It still exists as a SENDER-level
+            classification (it is what ranks a real correspondent above bulk
+            mail in "important emails"); it just isn't presented as a rule
+            label, because it isn't one.
+            """
+            counts = label_counts.get(email, {})
+            out = list(_cleanup_categories_ranked(counts))
+            conv = sorted(
+                ((low, n) for low, n in counts.items()
+                 if n and low in _CONVERSATION_DISPLAY),
+                key=lambda kv: kv[1], reverse=True,
+            )
+            for low, _n in conv:
+                # Legacy and modern spellings collapse onto one display name
+                # ("reply" and "needs reply" are the same chip, not two).
+                name = _CONVERSATION_DISPLAY[low]
+                if name not in out:
+                    out.append(name)
+            return out
 
         def _category_counts_for(email: str) -> dict[str, int]:
             """How many of this sender's messages carry each cleanup category.

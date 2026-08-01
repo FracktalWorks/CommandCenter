@@ -318,6 +318,8 @@ Three WhatsApp-specific additions:
 ## 9. Open questions (verify before building)
 
 1. **Is calling enabled on our WABA?** Hard gate on Phase A. **Run `python3 scripts/check_whatsapp_calling.py`** on a box that has the real credentials — it reads `GET /{phone_number_id}/settings` and reports `calling.status`. A 401/403 means Meta hasn't switched it on for our number (rollout is per-number and not something we can engineer around). *Unverified as of 2026-08-01 — the study was written in an environment with no credentials.*
+
+   **Zero-credential shortcut:** WhatsApp clients render the call icon in a business conversation and on the business chat profile *only* when calling is enabled, and hide it when disabled. So opening a chat with our business number on any phone answers the gate question in seconds. (Tapping it won't connect until the `calls` webhook field and a media endpoint exist — the icon reports provisioning, not readiness.)
 2. ~~**Does meowcaller expose per-participant PCM in a group call, or a mixed downlink?**~~ **RESOLVED 2026-08-01 — see §10.** Per-participant PCM exists, keyed by participant JID. Remaining sub-question is only whether we upstream a hook or fork.
 3. **Does the Cloud API SDP offer let us pick a codec/sample rate**, or must we transcode OPUS → 16 kHz for `acb_stt`?
 4. **Can a Cloud API call be recorded under Meta's policy** as long as the caller is told? (BSPs do it, which suggests yes — confirm in writing.)

@@ -173,13 +173,12 @@ export function BulkUnsubscribeView({
   );
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sortBy, setSortBy] = useState<"count" | "read">("count");
-  // "Still in my inbox" — the working view for a cleanup session. The list is
-  // deliberately whole-mailbox (archiving is how the preset rules file mail, so
-  // an inbox-only scope would empty the category chips), but that also means an
-  // archived sender keeps its row. With this on, a sender leaves the list the
-  // moment its inbox mail is archived, which is what "clean it up" should feel
-  // like. Off by default so the full mailbox stays the default question.
-  const [inboxOnly, setInboxOnly] = useState(false);
+  // Archived mail is OUT of the cleaner's scope by default (server-side), so
+  // archiving a sender makes its row leave the list — the whole point of the
+  // tool. This brings the whole-mailbox view back for the one case that needs
+  // it: the preset Marketing / Cold Email rules archive as they label, so their
+  // category chips only fill in when archived mail is counted.
+  const [includeArchived, setIncludeArchived] = useState(false);
   // Which sender row is expanded to show its individual messages (drill-down).
   const [expanded, setExpanded] = useState<string | null>(null);
 
@@ -190,18 +189,19 @@ export function BulkUnsubscribeView({
     }
     setLoading(true);
     setError(null);
-    // The WHOLE mailbox, not just the inbox. Deciding you're done with a sender
-    // isn't an inbox-scoped question, and the inbox scope also made the category
-    // chips structurally unfillable: the Marketing / Cold Email rules archive as
-    // they label, so that mail had already left the inbox by the time we looked.
-    listSenders(accountId, undefined, SENDER_PAGE)
+    // Everything except what's already handled: trash/junk/drafts AND archived
+    // mail are out of scope server-side, so a sender you archive leaves the
+    // list. "Include archived" brings the whole mailbox back — the preset
+    // Marketing / Cold Email rules archive as they label, so those two category
+    // chips only fill in when archived mail is counted.
+    listSenders(accountId, undefined, SENDER_PAGE, 0, includeArchived)
       .then(({ senders: s, total }) => {
         setSenders(s);
         setTotalSenders(total);
       })
       .catch((e) => setError(e.message || "Failed to load senders"))
       .finally(() => setLoading(false));
-  }, [accountId]);
+  }, [accountId, includeArchived]);
 
   useEffect(load, [load]);
 
@@ -211,7 +211,8 @@ export function BulkUnsubscribeView({
   const loadMore = useCallback(() => {
     if (!accountId) return;
     setLoadingMore(true);
-    listSenders(accountId, undefined, SENDER_PAGE, senders.length)
+    listSenders(accountId, undefined, SENDER_PAGE, senders.length,
+                includeArchived)
       .then(({ senders: s, total }) => {
         // De-dupe on email: rows can shift between pages if mail arrives
         // mid-scroll, and a duplicate key would break the list.
@@ -223,7 +224,7 @@ export function BulkUnsubscribeView({
       })
       .catch((e) => setError(e.message || "Failed to load more senders"))
       .finally(() => setLoadingMore(false));
-  }, [accountId, senders.length]);
+  }, [accountId, senders.length, includeArchived]);
 
   // Auto-dismiss the transient result banner.
   useEffect(() => {
@@ -284,9 +285,6 @@ export function BulkUnsubscribeView({
       senders
         .filter(matchesCategory)
         .filter((s) => statusTab === "all" || s.status === statusTab)
-        // Older payloads carry no in_folder — treat them as "has inbox mail"
-        // rather than hiding a populated row behind a field the server didn't send.
-        .filter((s) => !inboxOnly || (s.in_folder ?? s.count) > 0)
         .filter(
           (s) =>
             !filter ||
@@ -298,7 +296,7 @@ export function BulkUnsubscribeView({
           // surfaces the senders most worth unsubscribing from).
           sortBy === "read" ? a.read_rate - b.read_rate : b.count - a.count
         ),
-    [senders, matchesCategory, statusTab, inboxOnly, filter, sortBy]
+    [senders, matchesCategory, statusTab, filter, sortBy]
   );
 
   // Status-tab badges: count within the active category (not status).
@@ -488,14 +486,12 @@ export function BulkUnsubscribeView({
       const { affected } = await bulkAction({
         action, accountId, senderEmail: s.email,
       });
-      // Now that the list spans the whole mailbox, archiving and trashing differ.
-      // Trashed mail leaves the scope entirely (trash is excluded), so the row
-      // goes. ARCHIVED mail is still theirs — dropping the row would hide a
-      // sender the user may still want to unsubscribe from, so the row stays and
-      // moves to its cleaned state (nothing left in the inbox), which the row
-      // badges and the "In inbox" filter both key off.
+      // Both actions take the mail out of the cleaner's scope (archived and
+      // trashed mail are equally "handled"), so the row goes — unless the user
+      // is explicitly viewing archived mail, where it stays and just moves to
+      // its cleaned state.
       if (affected > 0) {
-        if (action === "trash") {
+        if (action === "trash" || !includeArchived) {
           setSenders((prev) => prev.filter((x) => x.email !== s.email));
           setSelected((prev) => {
             const n = new Set(prev);
@@ -554,12 +550,11 @@ export function BulkUnsubscribeView({
           failed += 1; // skip a failed sender, keep going — reported below
         }
       }
-      // Same split as the single-sender action: trashed mail leaves the scope
-      // so the rows go; archived mail is still theirs, so the rows stay and move
-      // to their cleaned state (nothing left in the inbox).
+      // Same rule as the single-sender action: handled mail leaves the scope,
+      // so the rows go (unless archived mail is explicitly being shown).
       if (done.size) {
         setSenders((prev) =>
-          action === "trash"
+          action === "trash" || !includeArchived
             ? prev.filter((x) => !done.has(x.email))
             : prev.map((x) =>
                 done.has(x.email)
@@ -839,25 +834,25 @@ export function BulkUnsubscribeView({
             </button>
           ))}
         </div>
-        {/* The cleanup working view: hides senders whose inbox is already clear,
-            so a row LEAVES the list once you've archived it. The list is
-            whole-mailbox by default (that's what keeps the category chips
-            fillable), which is why this is a toggle rather than the scope. */}
+        {/* Archived mail is out of scope by default, so archiving clears a row
+            off the list. This brings the whole mailbox back for the one case
+            that needs it — the Marketing / Cold Email rules archive as they
+            label, so those chips only fill in with archived mail counted. */}
         <button
-          onClick={() => setInboxOnly((v) => !v)}
+          onClick={() => setIncludeArchived((v) => !v)}
           title={
-            inboxOnly
-              ? "Showing only senders with mail still in the inbox"
-              : "Show only senders with mail still in the inbox — archived-away senders drop out"
+            includeArchived
+              ? "Counting archived mail too — senders you've already cleaned up are listed"
+              : "Also count mail you've already archived (fills the Marketing / Cold Email chips)"
           }
-          aria-pressed={inboxOnly}
+          aria-pressed={includeArchived}
           className={`flex items-center gap-1 px-2 py-1 rounded-md text-[11px] whitespace-nowrap transition-colors ${
-            inboxOnly
+            includeArchived
               ? "bg-primary/15 text-primary"
               : "bg-secondary text-muted-foreground hover:text-foreground"
           }`}
         >
-          <Mail size={12} /> In inbox
+          <Archive size={12} /> Include archived
         </button>
         {categorizing && (
           <div className="flex items-center gap-1.5 text-[11px] text-muted-foreground ml-auto whitespace-nowrap">

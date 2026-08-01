@@ -337,7 +337,8 @@ class BaseEmailProvider(ABC):
     BULK_ACTIONS = ("archive", "trash", "read", "unread", "star", "unstar")
 
     async def bulk_apply(
-        self, provider_message_ids: list[str], action: str
+        self, provider_message_ids: list[str], action: str,
+        failed_out: list[str] | None = None,
     ) -> dict[str, str]:
         """Apply one of :attr:`BULK_ACTIONS` to many messages.
 
@@ -345,11 +346,17 @@ class BaseEmailProvider(ABC):
         re-keyed (Outlook ``/move`` mints a fresh id); callers MUST persist those
         or every follow-up action on the message 404s until the next full sync.
 
+        ``failed_out``, when given, collects the ids this could NOT apply. One
+        failed message never aborts the rest — at 10,000 messages a single 404 on
+        a since-deleted mail would otherwise strand the other 9,999 half-applied
+        — but swallowing the failure entirely was its own bug: the local mirror
+        had already been written, so the caller believed a message was archived
+        that the provider still had in the inbox, and the next sync silently
+        pulled it back. Callers that care pass a list and retry what's in it.
+
         The default walks the per-message API one call at a time — correct
         everywhere, slow at volume. Providers with a native batch endpoint
-        override this (see :class:`GmailProvider`). One failed message never
-        aborts the rest: at 10,000 messages a single 404 on a since-deleted mail
-        would otherwise strand the other 9,999 half-applied.
+        override this (see :class:`GmailProvider`).
         """
         rekeys: dict[str, str] = {}
         for pmid in provider_message_ids:
@@ -368,6 +375,8 @@ class BaseEmailProvider(ABC):
                 if new_id and new_id != pmid:
                     rekeys[pmid] = new_id
             except Exception as exc:  # noqa: BLE001
+                if failed_out is not None:
+                    failed_out.append(pmid)
                 logger.warning(
                     "provider.bulk_apply_item_failed provider=%s action=%s "
                     "pmid=%s error=%s",

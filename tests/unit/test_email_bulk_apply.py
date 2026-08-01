@@ -281,3 +281,157 @@ async def test_affected_counts_only_what_changed(action, already) -> None:
         await s.bulk_action(req, MagicMock(), MagicMock(email="u@x.io"))
 
     assert f"NOT ({already})" in captured["sql"]
+
+
+# ── The reconciler: a swallowed provider failure is a lie in the mirror ──────
+
+
+async def test_failed_ids_are_reported_not_swallowed() -> None:
+    """bulk_apply used to log each failure and return nothing, so a run where
+    every call 429'd looked identical to a clean one — while the local mirror
+    already said 'archive'. Callers can now collect what didn't apply."""
+    from email_ingestion.providers.base import BaseEmailProvider
+
+    async def fake_move(pmid, folder):
+        if pmid == "bad":
+            raise RuntimeError("429 rate limited")
+        return None
+
+    p = MagicMock(spec=BaseEmailProvider)
+    p.move_to_folder = fake_move
+    failed: list[str] = []
+    await BaseEmailProvider.bulk_apply(p, ["ok1", "bad", "ok2"], "archive", failed)
+
+    assert failed == ["bad"]
+
+
+async def test_reconcile_retries_then_reverts_what_never_applied() -> None:
+    """A provider archive that never lands must not leave the row claiming it
+    did: the next sync takes the provider as authoritative for `folder` and
+    would pull the mail back minutes later ("I archived it and it came back")."""
+    from gateway.routes.email.automation import senders as s
+
+    calls: list[list[str]] = []
+
+    class _Provider:
+        async def bulk_apply(self, pmids, action, failed_out=None):
+            calls.append(list(pmids))
+            if failed_out is not None:
+                failed_out.extend(pmids)  # never succeeds
+            return {}
+
+    statements: list[str] = []
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            statements.append(str(clause))
+            return MagicMock()
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    class _Sess:
+        authed = True
+        provider = _Provider()
+
+    class _Ctx:
+        async def __aenter__(self): return _Sess()
+        async def __aexit__(self, *a): return False
+
+    with patch.object(s, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(s, "provider_session", lambda *a, **k: _Ctx()), \
+            patch.object(s.asyncio, "sleep", AsyncMock()):
+        await s._bulk_reconcile_provider("acc-1", ["m1"], "archive")
+
+    # Retried rather than given up on after the first transient failure…
+    assert len(calls) == s._RECONCILE_ATTEMPTS
+    # …and the local mirror was put back so it matches the real mailbox.
+    revert = [q for q in statements if "SET folder = 'inbox'" in q]
+    assert revert, "the un-applied archive was left claiming success"
+
+
+async def test_reconcile_leaves_the_mirror_alone_when_it_succeeds() -> None:
+    """The happy path must not touch folders — only failures are reverted."""
+    from gateway.routes.email.automation import senders as s
+
+    class _Provider:
+        async def bulk_apply(self, pmids, action, failed_out=None):
+            return {}  # everything applied
+
+    statements: list[str] = []
+
+    class _DB:
+        async def execute(self, clause, params=None):
+            statements.append(str(clause))
+            return MagicMock()
+
+        async def commit(self): ...
+        async def close(self): ...
+
+    class _Sess:
+        authed = True
+        provider = _Provider()
+
+    class _Ctx:
+        async def __aenter__(self): return _Sess()
+        async def __aexit__(self, *a): return False
+
+    with patch.object(s, "_get_db", AsyncMock(return_value=_DB())), \
+            patch.object(s, "provider_session", lambda *a, **k: _Ctx()):
+        await s._bulk_reconcile_provider("acc-1", ["m1"], "archive")
+
+    assert not [q for q in statements if "SET folder = 'inbox'" in q]
+
+
+# ── The cleaner's scope: archived mail is handled mail ──────────────────────
+
+
+def _senders_db(captured: dict):
+    class _DB:
+        async def execute(self, clause, params=None):
+            sql = str(clause)
+            # The first query is the per-sender aggregate; keep that one.
+            if "GROUP BY LOWER(from_address" in sql:
+                captured["sql"] = sql
+            return MagicMock(
+                fetchall=MagicMock(return_value=[]),
+                fetchone=MagicMock(return_value=MagicMock(c=0)),
+            )
+
+        async def close(self): ...
+
+    return _DB()
+
+
+async def test_cleaner_excludes_archived_mail_by_default() -> None:
+    """Archiving from the cleaner has to make the row leave the list. While
+    archived mail counted, "Archive all" left the row with an unchanged total —
+    a cleanup tool reading as a no-op."""
+    from gateway.routes.email.automation import senders as s
+
+    captured: dict = {}
+    with patch.object(s, "_get_db", AsyncMock(return_value=_senders_db(captured))):
+        await s.list_senders(
+            account_id="acc-1", folder=None, include_archived=False,
+            limit=200, offset=0, user=MagicMock(email="u@x.io"))
+
+    assert "<> 'archive'" in captured["sql"]
+    # …but a sender you've taken a decision on stays listed, or the
+    # Unsubscribed / Auto-archive tabs empty out and can't be undone.
+    assert "email_newsletters" in captured["sql"]
+
+
+async def test_cleaner_can_still_show_the_whole_mailbox() -> None:
+    """The preset Marketing / Cold Email rules archive as they label, so their
+    category chips only fill in when archived mail is counted."""
+    from gateway.routes.email.automation import senders as s
+
+    captured: dict = {}
+    with patch.object(s, "_get_db", AsyncMock(return_value=_senders_db(captured))):
+        await s.list_senders(
+            account_id="acc-1", folder=None, include_archived=True,
+            limit=200, offset=0, user=MagicMock(email="u@x.io"))
+
+    assert "<> 'archive'" not in captured["sql"]
+    # Disposed mail is still out of scope in both modes.
+    assert "'trash'" in captured["sql"]

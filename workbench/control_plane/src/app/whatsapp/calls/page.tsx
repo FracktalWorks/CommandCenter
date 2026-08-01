@@ -33,6 +33,7 @@ import {
   fetchCalls,
   placeCall,
 } from "../lib/api";
+import { callRecordingUrl } from "../lib/types";
 import type { WaAccount, WaCall, WaCallDiagnostics } from "../lib/types";
 
 /** Phases where the call is still going — drives polling and the hangup button. */
@@ -258,6 +259,18 @@ export default function WhatsAppCallsPage() {
 
       {/* The ToS posture is the first thing on the page, not a footnote: an
           automated client placing calls is the fastest way to lose a number. */}
+      {/* The single most confusing thing about this feature, said before the
+          first call rather than after it. */}
+      <div className="mb-3 flex items-start gap-2 rounded-xl bg-secondary px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
+        <Mic className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <span>
+          <b className="text-foreground">Calls are listen-only.</b> There&apos;s
+          no microphone path yet, so the person you call hears silence — and
+          their audio is recorded on the server rather than played to you here.
+          When the call ends, play it back from <b>Recent</b> below.
+        </span>
+      </div>
+
       <div className="mb-4 flex items-start gap-2 rounded-xl bg-warning/10 px-3 py-2.5 text-[11px] leading-relaxed text-warning">
         <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
@@ -478,7 +491,10 @@ export default function WhatsAppCallsPage() {
                     )}
                     {c.recording && (
                       <span className="inline-flex items-center gap-1">
-                        <Mic className="h-3 w-3" /> recording
+                        <Mic className="h-3 w-3" />
+                        {c.audio_seconds
+                          ? `${c.audio_seconds.toFixed(0)}s captured`
+                          : "recording"}
                       </span>
                     )}
                   </p>
@@ -521,27 +537,43 @@ export default function WhatsAppCallsPage() {
           </h2>
           <div className="divide-y divide-border rounded-xl border border-border bg-card">
             {recent.map((c) => (
-              <div key={c.call_id} className="flex items-center gap-3 p-3">
-                <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground">
-                  <PhoneOff className="h-3.5 w-3.5" />
-                </span>
-                <div className="min-w-0 flex-1">
-                  <p className="truncate text-xs text-foreground">
-                    {c.peer || c.targets?.join(", ") || "Unknown"}
-                  </p>
-                  <p className="text-[10px] text-muted-foreground">
-                    {c.direction === "incoming" ? "Incoming" : "Outgoing"}
-                    {c.kind === "group" ? " group call" : ""}
-                    {c.end_reason ? ` · ${c.end_reason}` : ""}
-                  </p>
-                </div>
-                {c.recording && (
-                  <span
-                    className="inline-flex items-center gap-1 text-[10px] text-muted-foreground"
-                    title={c.recording}
-                  >
-                    <Mic className="h-3 w-3" /> saved
+              <div key={c.call_id} className="p-3">
+                <div className="flex items-center gap-3">
+                  <span className="grid h-7 w-7 shrink-0 place-items-center rounded-full bg-secondary text-muted-foreground">
+                    <PhoneOff className="h-3.5 w-3.5" />
                   </span>
+                  <div className="min-w-0 flex-1">
+                    <p className="truncate text-xs text-foreground">
+                      {c.peer || c.targets?.join(", ") || "Unknown"}
+                    </p>
+                    <p className="text-[10px] text-muted-foreground">
+                      {c.direction === "incoming" ? "Incoming" : "Outgoing"}
+                      {c.kind === "group" ? " group call" : ""}
+                      {c.end_reason ? ` · ${c.end_reason}` : ""}
+                      {c.audio_seconds
+                        ? ` · ${c.audio_seconds.toFixed(0)}s of audio`
+                        : ""}
+                    </p>
+                  </div>
+                </div>
+
+                {/* A connected call that captured nothing is the failure that
+                    looks like success — call it out instead of offering an
+                    empty file to play. */}
+                {c.recording && !c.audio_seconds && (
+                  <p className="mt-1.5 rounded-md bg-warning/10 px-2 py-1 text-[10px] leading-relaxed text-warning">
+                    Connected, but no audio arrived — signalling worked and
+                    media didn&apos;t. The recording is empty.
+                  </p>
+                )}
+
+                {c.recording && !!c.audio_seconds && (
+                  <audio
+                    controls
+                    preload="none"
+                    src={callRecordingUrl(accountId, c.call_id)}
+                    className="mt-1.5 h-8 w-full"
+                  />
                 )}
               </div>
             ))}

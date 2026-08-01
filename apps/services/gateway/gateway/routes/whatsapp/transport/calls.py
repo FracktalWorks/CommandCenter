@@ -74,6 +74,10 @@ class CallModel(BaseModel):
     ended_at: str = ""
     end_reason: str = ""
     recording: str = ""
+    # How much peer audio actually arrived. Zero on a call that reached
+    # "active" means signalling worked but media never flowed — the failure
+    # that otherwise looks exactly like success.
+    audio_seconds: float = 0.0
 
 
 class CallListModel(BaseModel):
@@ -245,6 +249,45 @@ async def list_calls(
     return CallListModel(
         calls=[_as_call(c) for c in (raw or []) if isinstance(c, dict)],
         bridge_reachable=True,
+    )
+
+
+@router.get("/calls/{call_id}/recording")
+async def call_recording(
+    call_id: str, account_id: str, user: UserContext = Depends(get_current_user),
+) -> Response:
+    """Stream a call's recorded audio so it can be played in the browser.
+
+    Proxied rather than served from a path: the gateway has no access to the
+    bridge's disk, and the bridge resolves the file through its own call
+    registry, so no request-supplied path is ever opened."""
+    import httpx
+
+    await _assert_owns_account(account_id, user)
+    try:
+        async with httpx.AsyncClient(timeout=httpx.Timeout(_PLACE_TIMEOUT_SECS)) as client:
+            resp = await client.get(
+                f"{_bridge_url()}/calls/recording",
+                headers=_bridge_headers(),
+                params={"session": account_id, "call_id": call_id})
+    except Exception as exc:
+        _log.warning("whatsapp.calls.recording_failed", error=str(exc)[:200])
+        raise HTTPException(
+            status_code=503, detail="Couldn't reach the bridge for the recording.",
+        ) from exc
+
+    if resp.status_code == 404:
+        raise HTTPException(
+            status_code=404,
+            detail="No recording for that call — it may have been swept, or "
+                   "recording was switched off when the call was placed.")
+    if resp.status_code >= 300:
+        raise HTTPException(status_code=resp.status_code, detail="Recording unavailable.")
+
+    return Response(
+        content=resp.content,
+        media_type="audio/wav",
+        headers={"Content-Disposition": f'inline; filename="{call_id}.wav"'},
     )
 
 

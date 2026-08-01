@@ -251,6 +251,30 @@ async def test_list_calls_ignores_malformed_rows(monkeypatch) -> None:
     assert [c.call_id for c in out.calls] == ["A"]
 
 
+# ── recordings ────────────────────────────────────────────────────────────────
+
+async def test_audio_seconds_flows_through(monkeypatch) -> None:
+    """A connected call that captured zero audio is the failure that looks like
+    success, so the count has to survive the hop to the UI."""
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {"calls": [
+        {"call_id": "A", "phase": "ended", "recording": "/x/A.wav", "audio_seconds": 12.5},
+        {"call_id": "B", "phase": "ended", "recording": "/x/B.wav", "audio_seconds": 0.0},
+    ]})
+    out = await calls.list_calls("acct", _User())
+    assert out.calls[0].audio_seconds == 12.5
+    assert out.calls[1].audio_seconds == 0.0
+
+
+async def test_recording_enforces_account_ownership(monkeypatch) -> None:
+    """The bridge only checks a shared secret, so audio of someone else's call
+    must be refused here or not at all."""
+    _patch_db(monkeypatch, None)
+    with pytest.raises(HTTPException) as exc:
+        await calls.call_recording("SOMECALL", "someone-elses", _User())
+    assert exc.value.status_code == 404
+
+
 # ── diagnostics ───────────────────────────────────────────────────────────────
 
 async def test_diagnostics_reports_bridge_verdict(monkeypatch) -> None:

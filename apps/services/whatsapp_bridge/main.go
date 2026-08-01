@@ -129,7 +129,21 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /call/reject", s.auth(s.handleCallAction))
 	mux.HandleFunc("GET /calls", s.auth(s.handleCallList))
 	mux.HandleFunc("GET /calls/diagnostics", s.auth(s.handleCallDiagnostics))
+	mux.HandleFunc("GET /calls/recording", s.auth(s.handleCallRecording))
 	return mux
+}
+
+// handleCallRecording streams a call's recorded audio. The path comes from the
+// registry, never from the request, so this can't be walked into a file read.
+func (s *Server) handleCallRecording(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	path, err := s.mgr.RecordingFor(q.Get("session"), q.Get("call_id"))
+	if err != nil {
+		http.Error(w, err.Error(), statusForMedia(err))
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	http.ServeFile(w, r, path)
 }
 
 // handleCallDiagnostics reports whether an account can place a call, and if

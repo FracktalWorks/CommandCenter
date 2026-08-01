@@ -131,6 +131,10 @@ type callInfo struct {
 	EndedAt   string   `json:"ended_at,omitempty"`
 	EndReason string   `json:"end_reason,omitempty"`
 	Recording string   `json:"recording,omitempty"` // server-side WAV path
+	// AudioSeconds is how much peer audio actually arrived. Zero on a call that
+	// reached "active" means media never flowed — the one failure that otherwise
+	// looks identical to success.
+	AudioSeconds float64 `json:"audio_seconds"`
 }
 
 // liveCall is one call plus the bookkeeping the HTTP surface reports on. The
@@ -154,6 +158,7 @@ type liveCall struct {
 
 	recording string
 	sink      meowcaller.AudioSink
+	counter   *countingSink
 	closeOnce sync.Once
 }
 
@@ -164,6 +169,9 @@ func (lc *liveCall) snapshot() callInfo {
 		CallID: lc.callID, AccountID: lc.accountID, Peer: lc.peer,
 		Direction: lc.direction, Kind: lc.kind, Phase: lc.phase,
 		Targets: lc.targets, EndReason: lc.endReason, Recording: lc.recording,
+	}
+	if lc.counter != nil {
+		info.AudioSeconds = lc.counter.seconds()
 	}
 	if !lc.startedAt.IsZero() {
 		info.StartedAt = lc.startedAt.UTC().Format(time.RFC3339)
@@ -204,6 +212,43 @@ func (lc *liveCall) finish(reason string) {
 			_ = sink.Close()
 		}
 	})
+}
+
+// countingSink wraps the WAV recorder and counts what actually arrived.
+//
+// Without this, a call that connects but carries no media is indistinguishable
+// from one that worked: both end with a "recording" path and no error. The
+// frame count is the difference between "signalling succeeded" and "we heard
+// them", which is the only question that matters for a note taker.
+type countingSink struct {
+	inner  meowcaller.AudioSink
+	mu     sync.Mutex
+	frames int64
+}
+
+func (s *countingSink) WriteFrame(frame []float32) error {
+	s.mu.Lock()
+	s.frames++
+	s.mu.Unlock()
+	if s.inner == nil {
+		return nil
+	}
+	return s.inner.WriteFrame(frame)
+}
+
+func (s *countingSink) Close() error {
+	if s.inner == nil {
+		return nil
+	}
+	return s.inner.Close()
+}
+
+// seconds converts the frame count to wall-clock audio. meowcaller delivers
+// FrameSamples (960) at SampleRate (16 kHz) — 60 ms per frame.
+func (s *countingSink) seconds() float64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return float64(s.frames) * float64(meowcaller.FrameSamples) / float64(meowcaller.SampleRate)
 }
 
 // CallManager owns every live call across accounts and reports transitions to
@@ -345,16 +390,21 @@ func (cm *CallManager) track(lc *liveCall) {
 	lc.phase = phaseName(c.State())
 	lc.startedAt = time.Now()
 
+	// Count frames even when recording is switched off — "did we hear them?"
+	// is worth answering regardless of whether we kept the audio.
+	counter := &countingSink{}
 	if path := cm.recordingPath(lc.callID); path != "" {
-		sink, err := meowcaller.WAVRecorder(path)
+		rec, err := meowcaller.WAVRecorder(path)
 		if err != nil {
 			cm.log.Warnf("call %s: recorder: %v", lc.callID, err)
 		} else {
-			lc.sink = sink
+			counter.inner = rec
 			lc.recording = path
-			c.Receive(sink)
 		}
 	}
+	lc.counter = counter
+	lc.sink = counter
+	c.Receive(counter)
 
 	// Phase transitions with elapsed time are the call's whole story: where it
 	// stalled says which side went quiet. "calling" with nothing after it means
@@ -379,8 +429,20 @@ func (cm *CallManager) track(lc *liveCall) {
 		cm.push(lc)
 	})
 	c.OnEnd(func(reason string) {
-		cm.log.Infof("call %s: ended (%s)", lc.callID, reason)
 		lc.finish(reason)
+		secs := counter.seconds()
+		if secs == 0 {
+			// The failure that looks like success: signalling worked, media
+			// didn't. Say so loudly — the recording will be an empty WAV.
+			cm.log.Warnf(
+				"call %s: ended (%s) after %s with NO audio received — "+
+					"signalling connected but no media arrived",
+				lc.callID, reason,
+				time.Since(lc.startedAt).Round(time.Millisecond))
+		} else {
+			cm.log.Infof("call %s: ended (%s) — captured %.1fs of audio to %q",
+				lc.callID, reason, secs, lc.recording)
+		}
 		cm.push(lc)
 	})
 	if lc.kind == "group" {
@@ -579,6 +641,29 @@ type callDiagnostics struct {
 	ActiveCalls   int    `json:"active_calls"`
 	RecordingDir  string `json:"recording_dir,omitempty"`
 	Verdict       string `json:"verdict"`
+}
+
+// RecordingFor returns the on-disk path of a call's audio, scoped to the
+// account that placed it.
+//
+// Resolves through the registry rather than accepting a path, so this can never
+// be walked into an arbitrary file read — the only readable paths are ones we
+// allocated ourselves.
+func (m *SessionManager) RecordingFor(accountID, callID string) (string, error) {
+	lc, ok := m.calls.get(callID)
+	if !ok || (accountID != "" && lc.accountID != accountID) {
+		return "", ErrCallNotFound
+	}
+	lc.mu.RLock()
+	path := lc.recording
+	lc.mu.RUnlock()
+	if path == "" {
+		return "", ErrMediaNotFound
+	}
+	if _, err := os.Stat(path); err != nil {
+		return "", ErrMediaNotFound
+	}
+	return path, nil
 }
 
 // CallDiagnostics reports whether an account can currently place a call.

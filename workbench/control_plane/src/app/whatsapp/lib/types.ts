@@ -42,7 +42,17 @@ export type WaCall = {
   ended_at?: string;
   end_reason?: string;
   recording?: string;
+  /** Peer audio actually received. Zero on a connected call means signalling
+   *  worked but media never flowed. */
+  audio_seconds?: number;
 };
+
+/** Playable URL for a call's recording, via the binary-safe proxy route. */
+export function callRecordingUrl(accountId: string, callId: string): string {
+  return `/api/whatsapp/calls/${encodeURIComponent(
+    callId
+  )}/recording?account_id=${encodeURIComponent(accountId)}`;
+}
 
 export type WaCallList = {
   calls: WaCall[];

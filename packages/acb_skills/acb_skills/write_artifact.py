@@ -165,11 +165,7 @@ async def write_artifact(
     ``inputs/`` (user-provided files) or ``agent-data/`` (reference data).
 
     After calling this, **embed the returned ``download_url`` in your text
-    response** so the operator can click to download.  Example::
-
-        result = await write_artifact("q2_report.md", report_markdown)
-        # In your response text, include:
-        # [📄 Download Q2 Report]({result["download_url"]})
+    response** so the operator can click to download.
 
     Args:
         path:     Relative file path, e.g. ``"summary.md"`` or
@@ -618,15 +614,8 @@ async def emit_generative_ui(ui: str) -> dict:
        calculators, live-editable dashboards, small tools. Shape:
        ``{"type":"react","props":{"code":"<your component source>"}}``.
 
-       Write ordinary modern React and DEFAULT-EXPORT the component::
-
-           import { useState, useMemo } from "react";
-
-           export default function Dashboard() {
-             const [region, setRegion] = useState("all");
-             const rows = useMemo(() => DATA.filter(...), [region]);
-             return <div className="cc-report">…</div>;
-           }
+       Write ordinary modern React and DEFAULT-EXPORT the component
+       (``export default function Dashboard() { … }``).
 
        • Hooks all work (useState/useEffect/useMemo/useReducer/useRef/context).
        • JSX and TypeScript syntax are both fine — it is compiled for you.
@@ -668,18 +657,10 @@ async def emit_generative_ui(ui: str) -> dict:
 
        REPORT DESIGN KIT — for a substantial DOCUMENT (analysis, plan, comparison,
        briefing) prefer writing it to an ``.html`` file with ``write_artifact`` so
-       it opens full-page in the side panel. Wrap it in ``<div class="cc-report">``
-       and compose these pre-styled blocks (no custom CSS needed): ``cc-eyebrow``
-       (kicker), ``cc-sec-num`` (section number before an h2), ``cc-lede`` (intro),
-       ``cc-callout`` / ``cc-callout-key`` (tinted highlight with a ``cc-tag`` +
-       ``<p>``), ``cc-chips``/``cc-chip``, ``cc-grid`` of ``cc-card``,
-       ``cc-compare`` around a ``<table>`` (cells ``cc-yes``/``cc-no``/
-       ``cc-partial``, ``cc-pill``), ``cc-diagram`` around a ``<pre>`` (``<b>`` for
-       nodes, ``.cc-hl`` for accents), ``cc-steps``/``cc-step`` (a ``cc-n`` number +
-       h4/p, only when order matters), ``cc-phase`` (a ``cc-badge`` + content). The
-       full block reference is in the injected Command Center DESIGN.md. These match
-       the app's palette, spacing, and both themes automatically — use them instead
-       of hand-rolling report styling.
+       it opens full-page in the side panel, wrapped in ``<div class="cc-report">``.
+       Call ``load_design_system("blocks")`` for the pre-styled block reference
+       (callouts, grids, comparison tables, step lists, …) instead of hand-rolling
+       report styling.
 
        INTERACTIVITY — two channels back to the agent:
          • ``data-cc-action="<message>"`` on a clickable element (or
@@ -696,46 +677,11 @@ async def emit_generative_ui(ui: str) -> dict:
     Returns ``{"ok": true}`` on emit. Additive — also say in prose what you're
     showing. Keep template/tree/html discriminated by the top-level ``type``.
 
-    Examples::
+    Example (template — the preferred mode)::
 
-        # Template (preferred)
-        await emit_generative_ui('{"type":"template","props":{"name":"weatherCard",'
-          '"data":{"location":"Lisbon","tempC":24,"condition":"sunny","highC":26,'
-          '"lowC":18,"humidity":40,"forecast":[{"day":"Mon","condition":"sunny",'
-          '"high":25,"low":17},{"day":"Tue","condition":"rain","high":21,"low":15}]}}}')
-
-        # Component tree
-        await emit_generative_ui('{"type":"card","props":{"title":"Deploy"},'
-          '"children":[{"type":"keyValue","props":{"pairs":['
-          '{"key":"Status","value":"green"},{"key":"Version","value":"1.4.2"}]}},'
-          '{"type":"row","children":[{"type":"button","props":'
-          '{"label":"Roll back","action":"roll back the deploy","tone":"danger"}}]}]}')
-
-        # Custom HTML with an interactive slider that submits the chosen value
-        await emit_generative_ui('{"type":"html","props":{"code":'
-          '"<div class=\\'cc-card\\' data-cc-form><label>Target temp: '
-          '<output id=o>22</output>degC</label>'
-          '<input type=range name=temp min=16 max=28 value=22 '
-          'oninput=\\'o.textContent=this.value\\'>'
-          '<button class=cc-primary data-cc-submit=\\'Set temperature\\'>Apply</button>'
-          '</div>"}}')
-
-        # Full-page report — write to an .html file (opens in the side panel).
-        # Compose the report kit; no custom CSS needed.
-        await write_artifact("outputs/reports/q3-review.html",
-          '<div class="cc-report">'
-          '<p class="cc-eyebrow">Quarterly Review</p>'
-          '<h1>Q3 in one page</h1>'
-          '<p class="cc-lede">Revenue up, churn flat, one risk to watch.</p>'
-          '<span class="cc-sec-num">01 - Metrics</span><h2>The numbers</h2>'
-          '<div class="cc-grid">'
-          '<div class="cc-card"><h4><span class="cc-dot"></span>Revenue</h4>'
-          '<p>Up 18% QoQ.</p></div>'
-          '<div class="cc-card"><h4><span class="cc-dot"></span>Churn</h4>'
-          '<p>Flat at 2.1%.</p></div></div>'
-          '<div class="cc-callout-key cc-callout"><span class="cc-tag">Watch</span>'
-          '<p>One enterprise account is 40% of new revenue.</p></div>'
-          '</div>')
+        await emit_generative_ui('{"type":"template","props":{"name":'
+          '"statDashboard","data":{"title":"Q3","stats":[{"label":"Revenue",'
+          '"value":18,"unit":"%","delta":12}]}}}')
     """
     import json
 

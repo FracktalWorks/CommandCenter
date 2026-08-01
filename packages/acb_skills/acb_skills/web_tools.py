@@ -43,10 +43,6 @@ async def web_search(query: str, max_results: int = 5) -> str:
     Returns:
         A plain-text block with one result per section, or an error message
         if the search could not be completed.
-
-    Examples:
-        info = await web_search("Fracktal Works 3D printing latest products")
-        news = await web_search("GeM portal tender updates June 2025", max_results=3)
     """
     max_results = max(1, min(10, int(max_results)))
 
@@ -173,10 +169,6 @@ async def fetch_page(url: str, max_chars: int = 8000) -> str:
     Returns:
         The page content as plain text / markdown, truncated to *max_chars*.
         Returns an error message if the page could not be fetched.
-
-    Examples:
-        content = await fetch_page("https://fracktal.in/about")
-        tender  = await fetch_page("https://gem.gov.in/tender/12345", max_chars=4000)
     """
     try:
         import httpx

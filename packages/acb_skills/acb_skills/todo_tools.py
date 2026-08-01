@@ -87,7 +87,11 @@ async def manage_todo_list(todoList: str) -> str:
     5. Move to next todo and repeat
 
     Args:
-        todoList: JSON string with the following shape:
+        todoList: JSON string. ``todoList`` must be the COMPLETE list (all
+            items, existing and new); ``id`` is sequential from 1, ``title``
+            is 3-7 words, ``status`` is ``"not-started"`` /
+            ``"in-progress"`` / ``"completed"``. ``operation`` is ``"write"``
+            (default) or ``"read"`` (returns the list unmodified). Shape:
             {
               "todoList": [
                 {"id": 1, "title": "Do X", "status": "in-progress"},
@@ -95,16 +99,6 @@ async def manage_todo_list(todoList: str) -> str:
               ],
               "operation": "write"
             }
-            - ``todoList`` (array, required for write): The COMPLETE list.
-              Must include ALL items — both existing and new.
-              Each item has:
-                - ``id`` (number): Unique identifier. Sequential from 1.
-                - ``title`` (string): Concise label, 3-7 words.
-                - ``status`` (string): ``"not-started"``,
-                  ``"in-progress"``, or ``"completed"``.
-            - ``operation`` (string, optional): ``"write"`` (default) or
-              ``"read"``.  ``"read"`` returns the current list without
-              modifying it.
 
     Returns:
         A confirmation message with count summary and any warnings, e.g.

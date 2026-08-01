@@ -93,13 +93,9 @@ async def call_agent(agent_name: str, message: str) -> str:
     tool results are forwarded to the parent stream as SUB_AGENT_* events so
     the UI shows the sub-agent working in real time.
 
-    Available agents are registered in CommandCenter via the /agents UI page.
-    Common agents: "task-manager", "agent-sales-assistant", "agent-triage",
-    "agent-reconciler", "agent-delivery", or any custom agent you have added.
-
     Args:
-        agent_name: Exact registered name of the target agent.
-                    Examples: "task-manager", "agent-sales-assistant"
+        agent_name: Exact registered name of the target agent — use one from
+                    the registered-agents list in your system prompt.
         message:    The full request to send to the agent, written as a
                     self-contained task. Include all context needed — the
                     sub-agent does not share your conversation history.
@@ -108,16 +104,6 @@ async def call_agent(agent_name: str, message: str) -> str:
         The agent's response text.
         Returns an error description (not raises) if the agent fails, so
         you can handle partial failures gracefully.
-
-    Example:
-        tasks = await call_agent(
-            "task-manager",
-            "List all overdue tasks assigned to the engineering team this sprint"
-        )
-        deals = await call_agent(
-            "agent-sales-assistant",
-            "Find all deals in the Awaiting PO stage and summarise the blockers"
-        )
     """
     run_id = str(_uuid.uuid4())
 
@@ -221,25 +207,14 @@ async def call_agents_parallel(tasks: str) -> str:
     multiple sub-agent panels updating in parallel.
 
     Use this when you need results from several independent agents before you can
-    synthesise a final answer. For example:
-      - Fetch deal pipeline from sales agent + overdue tasks from task agent at the same time
-      - Gather customer health, reconciliation status, and billing simultaneously
+    synthesise a final answer.
 
     Args:
-        tasks: JSON array of objects, each with "agent" and "message" keys.
-               Example:
-               [
-                 {"agent": "agent-sales-assistant", "message": "Find all deals in Awaiting PO"},
-                 {"agent": "task-manager", "message": "List overdue tasks this sprint"}
-               ]
+        tasks: JSON array of objects, each with "agent" and "message" keys, e.g.
+               [{"agent": "<name>", "message": "<self-contained task>"}]
 
     Returns:
-        A combined result block with each agent's name and response:
-            [agent-sales-assistant]
-            <response>
-
-            [task-manager]
-            <response>
+        A combined result block, one ``[agent-name]`` + response per task.
 
     Notes:
         - Each agent runs in its own async task; they don't share state.
@@ -373,11 +348,6 @@ async def call_agent_background(agent_name: str, message: str) -> str:
         Confirmation message with the background run_id so you can reference
         the run later (e.g. in the /inbox HITL queue).
 
-    Example:
-        await call_agent_background(
-            "agent-reconciler",
-            "Run the nightly diff for the engineering team and escalate any blockers"
-        )
     """
     run_id = str(_uuid.uuid4())
 

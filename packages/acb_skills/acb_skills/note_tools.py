@@ -61,11 +61,6 @@ async def save_note(path: str, fact: str) -> str:
 
     Returns:
         ``"Saved to agent-data/NOTES.md"`` or similar confirmation.
-
-    Example::
-
-        await save_note("NOTES.md", "Vijay prefers summaries on Monday mornings")
-        await save_note("deals.md", "ABC Corp: closed at ₹50L, Q2 2026")
     """
     root = Path(_get_agent_dir())
 

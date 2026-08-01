@@ -117,6 +117,69 @@ def _skills_fail_closed() -> bool:
     )
 
 
+def _skills_index_only() -> bool:
+    """The OWNER-GATED skills-index switch (WS-23 successor / QM-2) — OFF.
+
+    When ``SKILLS_INDEX_ONLY`` is truthy the system-prompt addendum becomes a
+    one-line-per-family INDEX and the full guidance is materialized into the
+    agent's workspace (``agent-data/skills/<family>.md``) to be read on demand
+    with the core-floor ``recall_notes`` tool. Same shape and same discipline
+    as :func:`_skills_fail_closed`: read per call, ships OFF, flipping it is an
+    OWNER action (work_plan.md §6) because it changes what EVERY agent sees.
+
+    The canonical reader is ``acb_skills.skill_index.skills_index_only`` (the
+    renderer branches there); this is the injection-seam alias so both switches
+    are discoverable in one place.
+    """
+    try:
+        from acb_skills.skill_index import skills_index_only  # noqa: PLC0415
+        return skills_index_only()
+    except ImportError:
+        return False
+
+
+def materialize_skill_bodies_for_agent(
+    agent_name: str | None,
+    workspace_root: str | None,
+    *,
+    tool_scope: list[str] | None = None,
+) -> dict[str, str]:
+    """Lay down this agent's on-demand skill bodies (QM-2) — no-op when OFF.
+
+    Called by the executor once per run, AFTER the workspace has been
+    rehydrated from the blob store, so a fresh body is never overwritten by a
+    stale restore. Resolves the SAME effective scope injection used (declared
+    ``tool_scope`` ∪ core floor, ∩ enabled families) so a body describes
+    exactly the tools the agent actually received.
+
+    Returns ``{family: "written"|"unchanged"}``; ``{}`` when the switch is off
+    (the default) or on any failure — a missing body file degrades to "the
+    agent cannot read that guide", never to a failed run.
+    """
+    if not workspace_root or not _skills_index_only():
+        return {}
+    try:
+        from acb_skills.skill_index import (  # noqa: PLC0415
+            materialize_skill_bodies,
+        )
+        scope = _resolve_injected_scope(
+            tool_scope,
+            disabled_families=_load_disabled_skill_families(agent_name),
+        )
+        return materialize_skill_bodies(
+            workspace_root,
+            effective_scope=(
+                frozenset(scope) if scope is not None else None
+            ),
+            registry_block=_build_registry_block(),
+        )
+    except Exception:  # noqa: BLE001 — never block a run over a body file
+        _log.warning(
+            "executor.skill_bodies_materialize_failed", agent=agent_name,
+        )
+        return {}
+
+
 def _resolve_injected_scope(
     tool_scope: list[str] | None,
     *,

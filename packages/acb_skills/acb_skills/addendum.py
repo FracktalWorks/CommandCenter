@@ -433,6 +433,47 @@ def _mandatory_block(effective_scope: frozenset[str] | None) -> str | None:
     )
 
 
+def rendered_parts(
+    *,
+    is_sub_agent: bool = False,
+    effective_scope: frozenset[str] | None = None,
+    registry_block: str = "",
+    risk_block: str | None = None,
+) -> list[tuple[str, str]]:
+    """The addendum's rendered pieces, each paired with its owning family.
+
+    THE one place section text is produced. :func:`render_injected_tools_addendum`
+    joins these with ``"\\n"`` (so the classic addendum is exactly
+    ``"\\n".join(text for _, text in rendered_parts(...))``), and
+    ``acb_skills.skill_index`` regroups the SAME pieces by family to build the
+    on-demand body files — byte-preservation of the guidance is therefore a
+    property of the code path, not of a copy someone keeps in sync.
+
+    The ``__MANDATORY__`` block is emitted under the ``core`` family: its lines
+    carry their own family tags (``MANDATORY_LINES``) and are gated
+    individually, but the assembled block is one indivisible piece of prose.
+    """
+    ctx = RenderContext(
+        registry_block=registry_block,
+        risk_block=risk_block if risk_block is not None else _default_risk_block(),
+    )
+    sections = COMPACT_SECTIONS if is_sub_agent else FULL_SECTIONS
+    parts: list[tuple[str, str]] = []
+    for section in sections:
+        if not _wants(section.gate, effective_scope):
+            continue
+        if section.text == "__MANDATORY__":
+            rendered = _mandatory_block(effective_scope)
+            if rendered is not None:
+                parts.append((section.family, rendered))
+            continue
+        text = section.text
+        parts.append(
+            (section.family, text(ctx) if callable(text) else text)
+        )
+    return parts
+
+
 def render_injected_tools_addendum(
     *,
     is_sub_agent: bool = False,
@@ -454,21 +495,35 @@ def render_injected_tools_addendum(
     ``(is_sub_agent, effective_scope)`` — ``_build_injected_tools_addendum``
     keeps its lru_cache — so system-prompt prefixes stay byte-stable (KV
     cache).
+
+    **QM-2 index mode (``SKILLS_INDEX_ONLY``, ships OFF).** When the switch is
+    ON this returns the one-line-per-family INDEX from
+    ``acb_skills.skill_index`` instead of the bodies; the bodies are
+    materialized into the agent workspace and read on demand. Branching HERE
+    (rather than at the injection seam) keeps the single-source rule: the S1
+    catalog measures through this same renderer, so the measured cost is the
+    real cost in either position. OFF ⇒ byte-identical to today.
     """
-    ctx = RenderContext(
-        registry_block=registry_block,
-        risk_block=risk_block if risk_block is not None else _default_risk_block(),
+    if _index_only():
+        from acb_skills.skill_index import render_skill_index  # noqa: PLC0415
+        return render_skill_index(
+            is_sub_agent=is_sub_agent,
+            effective_scope=effective_scope,
+        )
+    return "\n".join(
+        text for _, text in rendered_parts(
+            is_sub_agent=is_sub_agent,
+            effective_scope=effective_scope,
+            registry_block=registry_block,
+            risk_block=risk_block,
+        )
     )
-    sections = COMPACT_SECTIONS if is_sub_agent else FULL_SECTIONS
-    parts: list[str] = []
-    for section in sections:
-        if not _wants(section.gate, effective_scope):
-            continue
-        if section.text == "__MANDATORY__":
-            rendered = _mandatory_block(effective_scope)
-            if rendered is not None:
-                parts.append(rendered)
-            continue
-        text = section.text
-        parts.append(text(ctx) if callable(text) else text)
-    return "\n".join(parts)
+
+
+def _index_only() -> bool:
+    """Read the QM-2 switch without importing skill_index at module scope."""
+    try:
+        from acb_skills.skill_index import skills_index_only  # noqa: PLC0415
+        return skills_index_only()
+    except ImportError:  # pragma: no cover — module always ships together
+        return False

@@ -91,6 +91,56 @@ def test_ui_directive_gated_on_the_tool_being_present():
     assert "Rich UI by default" not in text
 
 
+def test_index_mode_keeps_the_coverage_guarantee(monkeypatch):
+    """WS-23 successor (QM-2): with SKILLS_INDEX_ONLY on, the addendum is an
+    INDEX and the guidance moves to on-demand bodies. The drift guarantee must
+    survive the move — every injected tool is still documented, just in the
+    body the index points at rather than in the prompt. Prompt + bodies is the
+    surface the model can reach, so that is what this checks."""
+    from acb_skills import skill_index as sx
+
+    monkeypatch.setenv(sx.SKILLS_INDEX_ONLY_ENV, "1")
+    _build_injected_tools_addendum.cache_clear()
+    try:
+        for is_sub in (False, True):
+            index = _build_injected_tools_addendum(is_sub_agent=is_sub)
+            reachable = index + "\n" + "\n".join(sx.family_bodies().values())
+            missing = sorted(
+                t for t in INJECTED_PLATFORM_TOOLS if t not in reachable
+            )
+            assert not missing, (
+                f"injected but undocumented in index+bodies (sub={is_sub}): "
+                f"{missing}"
+            )
+            # The index itself must stay an index — it may not smuggle the
+            # bodies back in (that would be the 5.4k regression).
+            assert len(index) < 4000, (
+                f"index grew to {len(index)} chars (sub={is_sub}) — it is "
+                f"meant to be one line per family"
+            )
+    finally:
+        monkeypatch.delenv(sx.SKILLS_INDEX_ONLY_ENV, raising=False)
+        _build_injected_tools_addendum.cache_clear()
+
+
+def test_index_mode_body_pointer_is_a_callable_core_floor_tool(monkeypatch):
+    """The pointer must be a tool call the agent can actually make — a bare
+    path would be a dead end. ``recall_notes`` is in the guaranteed floor."""
+    from orchestrator._tool_injection import _CORE_STANDARD_TOOL_NAMES
+
+    from acb_skills import skill_index as sx
+
+    monkeypatch.setenv(sx.SKILLS_INDEX_ONLY_ENV, "1")
+    _build_injected_tools_addendum.cache_clear()
+    try:
+        index = _build_injected_tools_addendum(is_sub_agent=False)
+        assert 'recall_notes("skills/core.md")' in index
+        assert "recall_notes" in _CORE_STANDARD_TOOL_NAMES
+    finally:
+        monkeypatch.delenv(sx.SKILLS_INDEX_ONLY_ENV, raising=False)
+        _build_injected_tools_addendum.cache_clear()
+
+
 def test_design_system_is_on_demand_not_inlined():
     """generative_ui_2 §7: the ~16KB design.md is NOT pasted into the prompt;
     the addendum only POINTS at the load_design_system() tool. Guard against a

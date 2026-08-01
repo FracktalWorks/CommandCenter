@@ -37,19 +37,12 @@ def _find_workspace_root() -> str:
 async def get_errors(filePaths: str = "[]") -> str:
     """Check Python files for syntax, type, and lint errors.
 
-    Call this after writing or editing files to verify correctness before
-    claiming a task is done.  Works with any Python file in the workspace.
-
-    **Use this tool when:**
-    - You have just edited or created Python files
-    - You are about to commit changes
-    - A previous run failed and you need to diagnose syntax errors
-    - You want to verify your work before reporting success
+    Identical to ``run_diagnostics`` (both names are injected; see that tool
+    for when to call it).
 
     Args:
-        filePaths: JSON array of file paths to check, relative to the
-            workspace root.  Example: ``'["executor.py", "tools.py"]'``.
-            Pass an empty array ``'[]'`` to auto-discover recently changed
+        filePaths: JSON array of workspace-relative paths, e.g.
+            ``'["executor.py"]'``; ``'[]'`` auto-discovers recently changed
             ``.py`` files.
 
     Returns:
@@ -161,11 +154,8 @@ async def get_errors(filePaths: str = "[]") -> str:
 async def run_diagnostics(filePaths: str = "[]") -> str:
     """Run code diagnostics on the workspace (syntax + lint check).
 
-    Alias of :func:`get_errors` under a clearer, action-oriented name — some
-    agents/models reach for "run_diagnostics" rather than "get_errors". Both are
-    injected into every agent (Copilot SDK + native MAF) and do the same thing:
-    run ``py_compile`` (syntax) and ``ruff`` (lint) over the target files and
-    return a structured report.
+    Runs ``py_compile`` (syntax) and ``ruff`` (lint) over the target files.
+    ``get_errors`` is the same tool under its other name.
 
     **Use this tool when:**
     - You have just edited or created Python files

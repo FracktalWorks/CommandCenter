@@ -51,6 +51,16 @@ from typing import Any, Callable, Mapping
 SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     "core": {
         "label": "Core floor",
+        # ``summary`` — ONE sentence, the line the QM-2 skill INDEX carries in
+        # the prompt when ``SKILLS_INDEX_ONLY`` is on (acb_skills.skill_index).
+        # It must be enough to decide "do I need this family right now?"; the
+        # full guidance is the on-demand body. ``description`` stays the
+        # longer admin-facing catalog text.
+        "summary": (
+            "Web access, file writing and rich generative UI, todo tracking, "
+            "asking the user a question, diagnostics, working notes, the "
+            "coding skill, and delegation to other agents."
+        ),
         "description": (
             "The guaranteed baseline every agent receives regardless of "
             "tool_scope: web access, file writing & generative UI, task "
@@ -85,6 +95,11 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     },
     "memory": {
         "label": "Memory & knowledge graph",
+        "summary": (
+            "Read and write durable memory in three scopes (this user, this "
+            "agent, the whole organisation) plus timeline recall and episode "
+            "capture."
+        ),
         "description": (
             "Episodic + bi-temporal memory across the three Mem0 scopes: "
             "this user's private memory, the agent's shared memory, and "
@@ -107,6 +122,10 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     },
     "history": {
         "label": "Conversation history",
+        "summary": (
+            "Recall what was discussed in earlier sessions with a SELECT-only "
+            "SQL query over the chat history database."
+        ),
         "description": (
             "SELECT-only SQL over the chat history database — recall what "
             "was discussed in prior sessions."
@@ -118,6 +137,10 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     },
     "coding": {
         "label": "Coding extras",
+        "summary": (
+            "Install a Python package into the agent runtime mid-task, and "
+            "search public GitHub repositories for code."
+        ),
         "description": (
             "Additions beyond the core coding floor (code_task/run_script "
             "are core): runtime Python package install and GitHub code "
@@ -130,6 +153,10 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     },
     "workflows": {
         "label": "Workflows",
+        "summary": (
+            "List the organisation's published workflows, start a run, and "
+            "check a run's status."
+        ),
         "description": (
             "Run governed automations from the Workflows app: list published "
             "workflows, start a run, check a run's status. Injected for "
@@ -143,6 +170,10 @@ SKILL_FAMILIES: dict[str, dict[str, Any]] = {
     },
     "apps": {
         "label": "Custom Apps",
+        "summary": (
+            "Actions of the Custom Apps granted to you, one tool per declared "
+            "manifest action (app_<slug>_<action>)."
+        ),
         "description": (
             "Actions of Custom Apps granted to an agent (app_grants), "
             "injected as one tool per declared manifest action "

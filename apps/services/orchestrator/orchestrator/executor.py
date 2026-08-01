@@ -86,6 +86,7 @@ from orchestrator._tool_injection import (
     _inject_agent_tools,
     _inject_mcp_servers,
     _tool_name,
+    materialize_skill_bodies_for_agent,
 )
 def _missing_module_name(exc: BaseException) -> str | None:
     """Best-effort top-level module name from an ImportError/ModuleNotFoundError.
@@ -680,6 +681,13 @@ async def _run_sub_agent_streaming(
                 # resolve correctly in the parent chat window.
             except Exception:
                 pass
+
+            # Skills-as-an-index bodies (QM-2). A sub-agent gets the COMPACT
+            # index but the same full bodies — a body costs nothing until it
+            # is read. No-op while SKILLS_INDEX_ONLY is off.
+            materialize_skill_bodies_for_agent(
+                agent_name, _sub_agent_dir, tool_scope=_sub_tool_scope,
+            )
 
             text_parts: list[str] = []
 
@@ -1830,6 +1838,17 @@ async def run_agent(
             except Exception:
                 pass
 
+            # Skills-as-an-index (WS-23 successor / QM-2): when
+            # SKILLS_INDEX_ONLY is on, the addendum is a one-line-per-family
+            # index and the full guidance lands in agent-data/skills/*.md for
+            # recall_notes to fetch on demand. Written AFTER the rehydrate so
+            # a restore can never overwrite a freshly rendered body.
+            # No-op (and no filesystem touch at all) while the switch is off.
+            materialize_skill_bodies_for_agent(
+                agent_name, _effective_agent_dir,
+                tool_scope=loaded.config.get("tool_scope") or None,
+            )
+
             # ── Set working directory for Copilot SDK agents ────────────
             # The Copilot SDK CLI defaults to the gateway CWD unless
             # working_directory is explicitly set.  Point it at the agent's
@@ -2363,6 +2382,15 @@ async def run_agent_stream(
                 )
             except Exception:
                 pass
+
+            # Skills-as-an-index bodies (QM-2) — see the MAF path above for
+            # why this sits after the rehydrate. No-op while the switch is off.
+            materialize_skill_bodies_for_agent(
+                agent_name, _effective_ws,
+                tool_scope=_merged_tool_scope(
+                    loaded.config.get("tool_scope") or None, _agent_md_spec,
+                ),
+            )
 
             if not agents:
                 raise ValueError(f"Agent {agent_name!r}: build_agents() returned empty list.")

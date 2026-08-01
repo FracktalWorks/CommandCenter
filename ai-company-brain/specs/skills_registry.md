@@ -1,6 +1,6 @@
 # Skills Registry + per-agent skill toggles (WS-23)
 
-**Status:** S1 + S2 shipped pending review 2026-08-01 (catalog + toggles + enforcement); S3 generation half + scope-out + prepared default profile shipped pending review 2026-08-01 — **the fail-closed flip itself remains OWNER-GATED and OFF** · **Owner:** vjvarada · verified against code 2026-08-01
+**Status:** S1 + S2 shipped pending review 2026-08-01 (catalog + toggles + enforcement); S3 generation half + scope-out + prepared default profile shipped pending review 2026-08-01 — **the fail-closed flip itself remains OWNER-GATED and OFF**; **S4 core-floor diet built 2026-08-01** (schema trim live; skills-index mode shipped OFF behind `SKILLS_INDEX_ONLY`, OWNER-GATED) · **Owner:** vjvarada · verified against code 2026-08-01
 **Owning workstream:** `work_plan.md` WS-23 (sequenced with WS-12 context discipline)
 
 ## 0. Thesis
@@ -197,6 +197,52 @@ panel: family checklist with a live context-cost meter ("enabled: 5 families ·
   it the 19 core tools' schemas). The instrument now exists; hitting ≤2k is a
   core-floor diet (leaner schemas / progressive disclosure), tracked as its
   own follow-up, not a toggle matter.
+- **S4 — the core-floor diet (WS-23 successor / QM-2). BUILT 2026-08-01;
+  index mode SHIPPED OFF, trim live.** Full write-up + numbers +
+  the progressive-disclosure design in
+  [`skills_scope_out.md` §7](skills_scope_out.md).
+  *Half A — skills as an index, bodies on demand.*
+  `packages/acb_skills/acb_skills/skill_index.py`: the addendum becomes ONE
+  LINE PER FAMILY (label + a new one-sentence `summary` in `SKILL_FAMILIES`
+  + the literal call `recall_notes("skills/<family>.md")`), and each family's
+  full guidance is materialized to `agent-data/skills/<family>.md` —
+  content-hash idempotent, written once per run in the executor **after** the
+  blob-store rehydrate. The read path needs **no new tool**: `recall_notes`
+  is already in the non-toggleable core floor and already resolves
+  `agent-data/`. Byte preservation is structural — a new
+  `addendum.rendered_parts()` returns each rendered piece with its family
+  tag, the addendum is those pieces joined and a body is the same pieces
+  filtered, so guidance CONTENT is unchanged and only its DELIVERY defers.
+  The switch is read inside `render_injected_tools_addendum`, so the index
+  lands where the addendum did — appended before the executor's
+  `CACHE_BREAK`, i.e. **inside the prompt-cache-stable prefix** — and the
+  S1 catalog measures through the same seam, so measured cost stays real
+  cost in either position. The MANDATORY block deliberately stays inline.
+  **`SKILLS_INDEX_ONLY` ships OFF** (same shape as `SKILLS_FAIL_CLOSED`);
+  OFF is byte-identical to S3 and touches no workspace —
+  regression-tested in `tests/unit/test_skill_index.py`. Flipping it is an
+  **OWNER-GATE** (`work_plan.md` §6).
+  *Half B — schema trim (live, unconditional).* Worked examples, prose
+  restating the JSON shape above it, a duplicated alias description, a stale
+  hard-coded agent list and a design-block reference the docstring itself
+  points at a tool for. **No parameter removed, renamed, retyped or made
+  (non-)required** — `tests/unit/test_tool_schema_diet.py` pins the full call
+  contract of all 34 injectable tools and ratchets each core tool's cost.
+  **Measured:** addendum 5,697 → **570** (core-floor addendum 5,124 → 400;
+  compact sub-agent 1,614 → 478) · core-floor schemas 9,998 → **8,510**
+  (−14.9%) · full unscoped 19,259 → 17,771 (trim) → **12,644** (index ON) ·
+  DEFAULT_PROFILE and email-assistant-recommended 17,757 → 16,269 →
+  **11,337** · core floor alone 15,446 → 13,958 → **9,234**.
+  **The ≤2k target is still NOT met and cannot be met by trimming**: the 22
+  core-floor schemas cost 1,252 tokens with *every description deleted*, so
+  the only remaining lever is fewer tools in the array. Progressive tool
+  disclosure (`load_skill_tools(family)`) + an `emit_generative_ui` schema
+  that defers its mode shapes is **designed and costed in
+  `skills_scope_out.md` §7.5 and deliberately NOT built** — it changes what
+  the model can call directly and needs owner sign-off plus its own eval
+  pass. The drift gate was strengthened, not weakened: the trajectory eval
+  now also asserts that with index mode ON every injected tool is documented
+  in *index + bodies*.
 
 **Verification:** `pytest tests/unit/test_tool_injection*.py tests/unit/test_skills_registry.py`
 (new) · trajectory evals stay green (`evals/trajectories/`) ·
@@ -205,8 +251,11 @@ panel: family checklist with a live context-cost meter ("enabled: 5 families ·
 
 ## 5. Gates
 
-AGENT-SAFE: S1, S2, S3's generation half. **OWNER-GATE:** the S3 fail-closed
-default flip (behavior change for every agent without a `tool_scope`).
+AGENT-SAFE: S1, S2, S3's generation half, S4's schema trim (no call-contract
+change). **OWNER-GATE:** the S3 fail-closed default flip (behavior change for
+every agent without a `tool_scope`); the S4 `SKILLS_INDEX_ONLY` flip (behavior
+change for EVERY agent's system prompt); building progressive tool disclosure
+(`skills_scope_out.md` §7.5 — it changes what the model can call directly).
 
 ## 6. Later (explicitly deferred)
 

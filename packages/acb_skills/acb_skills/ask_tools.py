@@ -85,7 +85,10 @@ async def ask_questions(questions: str) -> str:
     arrive as the next message in the conversation.
 
     Args:
-        questions: JSON string with the shape:
+        questions: JSON string. ``header`` and ``question`` are required;
+            ``options`` is optional (each needs ``label``);
+            ``allowFreeformInput`` defaults to true only when there are no
+            options. Shape:
             {
               "questions": [
                 {
@@ -101,15 +104,6 @@ async def ask_questions(questions: str) -> str:
                 }
               ]
             }
-            - ``header`` (string, required): Short identifier, max 50 chars.
-            - ``question`` (string, required): The question, max 200 chars.
-            - ``multiSelect`` (bool, optional): Allow multiple selections.
-            - ``allowFreeformInput`` (bool, optional): Allow freeform text
-              in addition to options.  Default true when no options, false
-              when options provided.
-            - ``options`` (array, optional): List of selectable choices.
-              Each option has a ``label`` (required) and optional
-              ``description`` and ``recommended`` fields.
 
     Returns:
         ``"Questions displayed to the user. Waiting for response."``

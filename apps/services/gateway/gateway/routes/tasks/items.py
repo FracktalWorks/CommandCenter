@@ -1460,10 +1460,21 @@ async def delegate_item(
              "status": req.status, "due": due},
         )
         # A delegated task is one we're waiting on — open a waiting-for record.
+        # When the caller supplies no expected-by (the in-app Delegate dialog
+        # doesn't ask for one), default it to the item's OWN due date: the
+        # honest reading of the act is "I asked them for it by my deadline",
+        # and a NULL here makes the row unflaggable forever (`expected_by` IS
+        # the overdue line — spec §6 line 540). The UPDATE above has already
+        # coalesced due_at, so this subquery reads the post-delegation value.
+        # The two dates stay DIFFERENT facts (see tasks/lib/waiting.ts) — this
+        # picks the default at the moment of delegation, it does not merge them.
         await db.execute(
             text("""INSERT INTO gtd_waiting
                     (item_id, waiting_on, delegated_at, expected_by)
-                    VALUES (:iid, :who, now(), :expected)"""),
+                    VALUES (:iid, :who, now(),
+                            coalesce(:expected,
+                                     (SELECT due_at FROM gtd_items
+                                       WHERE id = :iid)))"""),
             {"iid": item_id, "who": json.dumps(req.assignee.model_dump()),
              "expected": due},
         )

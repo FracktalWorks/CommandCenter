@@ -324,8 +324,9 @@ export function CalendarView() {
   // roll-over into today's open slots (the "fell behind → stale plan" failure).
   // The list itself feeds the startup ritual's carry-forward step.
   const overdueItems = useMemo(() => {
-    // Real wall-clock is intentional here (the calendar is a live surface,
-    // unlike the demo cards that use a frozen MOCK_NOW).
+    // Real wall-clock is intentional here — the calendar is a live surface.
+    // (Every task surface reads the real clock now; the frozen demo constant
+    // this comment used to contrast against is gone.)
     // eslint-disable-next-line react-hooks/purity
     const nowMs = Date.now();
     return items.filter(

@@ -59,7 +59,11 @@ import { WeightToggles, PriorityBadge, SuggestionBadge } from "./PriorityControl
 import { isUntagged } from "../lib/priority";
 import { useCardActions } from "../lib/useCardActions";
 
-const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
+// Ages/overdue on this panel are read against the REAL clock — `isOverdue` and
+// `relativeTime` both default their `nowMs` to Date.now(). They used to be
+// passed a frozen `MOCK_NOW = Date.UTC(2026, 5, 30, …)` demo constant, so every
+// label here — including a delegated item's "since" — drifted one more day off
+// the truth every day.
 
 const ENERGY_DOT: Record<Energy, string> = {
   low: "bg-success",
@@ -179,7 +183,7 @@ export function TaskDetail({
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
     : undefined;
-  const overdue = isOverdue(item, MOCK_NOW);
+  const overdue = isOverdue(item);
   const isSynced = item.source === "SYNCED";
   const account = item.accountId
     ? accounts.find((a) => a.id === item.accountId)
@@ -384,7 +388,7 @@ export function TaskDetail({
               display={item.dueAt
                 ? <span className={`inline-flex items-center gap-1 ${overdue ? "font-medium text-destructive" : ""}`}>
                     {overdue ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
-                    {relativeTime(item.dueAt, MOCK_NOW)}
+                    {relativeTime(item.dueAt)}
                   </span>
                 : null}
             >
@@ -599,7 +603,7 @@ export function TaskDetail({
               {item.waitingOn.name}
               {item.delegatedAt && (
                 <span className="text-xs text-muted-foreground">
-                  · since {relativeTime(item.delegatedAt, MOCK_NOW)}
+                  · since {relativeTime(item.delegatedAt)}
                 </span>
               )}
             </span>
@@ -686,8 +690,8 @@ export function TaskDetail({
         )}
 
         <p className="mt-1 text-[11px] text-muted-foreground">
-          Updated {relativeTime(item.updatedAt, MOCK_NOW)}
-          {item.completedAt ? ` · completed ${relativeTime(item.completedAt, MOCK_NOW)}` : ""}
+          Updated {relativeTime(item.updatedAt)}
+          {item.completedAt ? ` · completed ${relativeTime(item.completedAt)}` : ""}
         </p>
       </div>
 

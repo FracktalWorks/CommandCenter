@@ -132,7 +132,13 @@ export const MOCK_PROJECTS: GtdProject[] = [
   },
 ];
 
-const now = Date.UTC(2026, 5, 30, 9, 0, 0); // 2026-06-30T09:00:00Z (deterministic)
+// Mock timestamps are RELATIVE TO PAGE LOAD, not to a fixed calendar date: the
+// fixtures below encode thresholds (4d delegated is just under the 5-day stale
+// line; +1d is not yet overdue), and those only keep meaning if the data clock
+// and the render clock are the same one. Every task surface reads the real
+// wall-clock, so this anchor must too — a frozen anchor made w1 read "37d
+// overdue" instead of the deliberately-clean contrast against w2.
+const now = Date.now();
 const iso = (offsetHours: number) => new Date(now + offsetHours * 3600_000).toISOString();
 
 export const MOCK_ITEMS: GtdItem[] = [
@@ -239,6 +245,9 @@ export const MOCK_ITEMS: GtdItem[] = [
     disposition: "WAITING", projectId: "p1", isMine: false,
     waitingOn: { name: "Sai Kumar", email: "sai@fracktal.in", accent: "primary" },
     delegatedAt: iso(-96),
+    // The date it was promised BY — what the Waiting-For view flags on. Every
+    // server write site (items/capture_email/sync) seeds it from the due date.
+    expectedBy: iso(24),
     dueAt: iso(24),
     createdAt: iso(-96), updatedAt: iso(-50),
   },
@@ -248,6 +257,7 @@ export const MOCK_ITEMS: GtdItem[] = [
     disposition: "WAITING", projectId: "p2", isMine: false,
     waitingOn: { name: "BuildRight Co.", accent: "accent" },
     delegatedAt: iso(-168),
+    expectedBy: iso(-24),
     dueAt: iso(-24), // overdue → flagged in the UI
     createdAt: iso(-168), updatedAt: iso(-168),
   },

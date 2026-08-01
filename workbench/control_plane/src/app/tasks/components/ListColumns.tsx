@@ -15,7 +15,9 @@ import type { ColumnDef } from "../lib/columns";
 // column instead of wrapping under the title. Mobile never uses these (it keeps
 // the stacked TaskCard row); see TaskListGrouped's sm: breakpoint.
 
-const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
+// Due/overdue here read the REAL clock (isOverdue and relativeTime both default
+// nowMs to Date.now()). They used to be passed a frozen `MOCK_NOW` demo
+// constant, which made every due column progressively wrong.
 
 const ENERGY_DOT: Record<string, string> = {
   low: "bg-success",
@@ -165,17 +167,17 @@ function CellBody({
         <span
           className={[
             "inline-flex items-center gap-1 text-[10px]",
-            isOverdue(item, MOCK_NOW)
+            isOverdue(item)
               ? "font-medium text-destructive"
               : "text-muted-foreground",
           ].join(" ")}
         >
-          {isOverdue(item, MOCK_NOW) ? (
+          {isOverdue(item) ? (
             <AlertTriangle className="h-3 w-3" />
           ) : (
             <Clock className="h-3 w-3" />
           )}
-          {relativeTime(item.dueAt, MOCK_NOW)}
+          {relativeTime(item.dueAt)}
         </span>
       ) : null;
     case "attachments":

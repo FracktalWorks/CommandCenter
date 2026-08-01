@@ -1969,3 +1969,96 @@ def test_capture_accepts_attachments_and_item_model_carries_them():
 
     assert "attachments" in CaptureRequest.model_fields
     assert "attachments" in GtdItemModel.model_fields
+
+
+# ---------------------------------------------------------------------------
+# Waiting-For surfacing (spec §6 / §12) — the gtd_waiting columns that five
+# INSERT sites wrote and nothing ever read back.
+# ---------------------------------------------------------------------------
+
+
+def test_item_select_reads_the_waiting_record_columns():
+    """`expected_by` is the deterministic overdue line (spec §6 line 540) and
+    `last_nudged_at` says whether a follow-up already went out. Both are
+    mig-48 columns on gtd_waiting; if ITEM_SELECT does not project them the
+    Waiting-For view cannot flag anything."""
+    from gateway.routes.tasks.core import ITEM_SELECT
+
+    assert "w.expected_by" in ITEM_SELECT
+    assert "w.last_nudged_at" in ITEM_SELECT
+    # Still the OPEN record only — a resolved waiting-for must not resurface.
+    assert "w.resolved = false" in ITEM_SELECT
+
+
+def test_expected_by_round_trips_from_row_to_item_model():
+    """§12: 'delegate a task to a teammate, see it on Waiting For, get an
+    overdue flag'. The flag is client-side over `expected_by`, so the column
+    has to survive the row→model hop as an ISO string."""
+    from datetime import UTC, datetime
+
+    from gateway.routes.tasks.core import GtdItemModel, _row_to_item
+
+    assert "expected_by" in GtdItemModel.model_fields
+    assert "last_nudged_at" in GtdItemModel.model_fields
+
+    delegated = datetime(2026, 7, 20, 9, 0, tzinfo=UTC)
+    expected = datetime(2026, 7, 27, 9, 0, tzinfo=UTC)
+    row = SimpleNamespace(
+        id="11111111-1111-1111-1111-111111111111",
+        source="LOCAL", account_id=None, provider_task_id=None,
+        provider_url=None, title="Vendor quote", description=None,
+        disposition="WAITING", next_action=None, context=None, energy=None,
+        time_estimate_mins=None, is_two_minute=False, project_id=None,
+        defer_until=None, sync_state="local", provider_status=None,
+        assignee=None, is_mine=False,
+        waiting_on={"name": "Sai Kumar", "email": "sai@fracktal.in"},
+        delegated_at=delegated, expected_by=expected, last_nudged_at=None,
+        due_at=None, is_hard_date=False, completed_at=None, clarified_at=None,
+        created_at=delegated, updated_at=delegated,
+    )
+    item = _row_to_item(row)
+    # who / what / since-when (§1 line 46) + the overdue line (§6 line 540).
+    assert item.waiting_on is not None and item.waiting_on.name == "Sai Kumar"
+    assert item.title == "Vendor quote"
+    assert item.delegated_at == delegated.isoformat()
+    assert item.expected_by == expected.isoformat()
+    # Never nudged yet — the nudge path is not built (owner-gated).
+    assert item.last_nudged_at is None
+
+
+def test_stale_waiting_rule_is_five_days_since_delegation():
+    """The client's isStaleWaiting (tasks/lib/waiting.ts) and this SQL are the
+    same rule stated twice; if one moves the view and /tasks/insights disagree
+    about the same list. Pin the SQL side here."""
+    import inspect
+
+    from gateway.routes.tasks import ai as tasks_ai_mod
+
+    src = inspect.getsource(tasks_ai_mod.inbox_insights)
+    assert "w.delegated_at < now() - interval '5 days'" in src
+
+
+def test_delegate_defaults_expected_by_to_the_items_own_due_date():
+    """§12's headline journey — "delegate a task to a teammate, see it on
+    Waiting For, get an overdue flag" — is dead if `expected_by` lands NULL:
+    nothing was promised, so nothing can ever be late (lib/waiting.ts
+    ::isWaitingOverdue). The in-app Delegate dialog sends no `due_at`, so the
+    INSERT must default the promised-by date from the item's own due date —
+    "I asked them for it by my deadline" — rather than storing nothing.
+
+    The two dates remain DIFFERENT facts; this pins the DEFAULT chosen at the
+    moment of delegation, not a merge of the concepts."""
+    import inspect
+
+    from gateway.routes.tasks import items as items_mod
+
+    src = inspect.getsource(items_mod.delegate_item)
+    insert_at = src.index("INSERT INTO gtd_waiting")
+    insert = src[insert_at:]
+    # An explicit expected-by still wins; absent one, the row's own due_at is
+    # written into expected_by instead of NULL.
+    assert "coalesce(:expected," in insert
+    assert "SELECT due_at FROM gtd_items" in insert
+    # The UPDATE that may SET that due_at runs FIRST, so the subquery reads the
+    # post-delegation value rather than a stale one.
+    assert src.index("due_at = coalesce(:due, due_at)") < insert_at

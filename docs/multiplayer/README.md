@@ -68,6 +68,13 @@ Interactive mockups live alongside this doc:
   one-per-person (coach, email) and which are one-brain-for-a-team (sales assistant).
   Read this first: instancing decides what a memory compartment even is, and whether an
   agent's sessions may become rooms at all.
+- [`../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md`](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md)
+  — **prior art: `yc-software/qm`, read 2026-08-01.** An outside team reached this document's
+  intersection rule independently and applied it to three resources. Three of its findings change
+  what is written below rather than confirming it: **steer should be built before floor control**
+  (§4.6 / §5.1 — QM-1), a shared room should have **no ambient credentials at all** rather than one
+  `acting_identity` (§6.4 — QM-3), and participant **tenure windows should narrow the model's
+  context**, not only each viewer's replay (§6.5 — QM-5).
 - [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned across sessions
   *and* across people, and how the agent decides which parts it may use on a given call.
   Supersedes §6.3 below.
@@ -449,6 +456,24 @@ actor, so "who told it to do that" is answerable after the fact.
 **Recommended default `driver`**, because of §3.3: a baton is the smallest mechanism that
 makes the destructive race impossible rather than merely unlikely.
 
+> **⚠️ Challenged by prior art (2026-08-01) — build §4.6 steer first, then re-decide this.**
+>
+> `qm` ships multiplayer rooms with **no floor control at all**. A second person's message during a
+> live run is folded into that run as a mid-turn steer, the second surface stands down so the reply
+> isn't posted twice, and steer signals are durable so one whose target run died is replayed into a
+> fresh run. The baton was never needed because the destructive race never happens: there is no
+> second run to supersede the first.
+>
+> That inverts this document's Phase 2 ordering (§8 sequences *floor control, then steer*). The
+> evidence says **steer, then measure whether five modes are still load-bearing** — and §4.6 already
+> notes steer is "a new applier, not new infrastructure" on the existing control bus.
+>
+> Two things survive regardless: §5.2's correctness fix (a party who isn't legitimately superseding
+> must not be able to reach `mark_active(reset=True)` and delete a transcript they don't own), and
+> the carve-out that a human message arriving during an *automation* turn should start its own run
+> rather than steer into a cron. Detail:
+> [`multiplayer_prior_art_qm_2026-08.md` §QM-1](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+
 ### 5.2 The Phase 0 correctness fix that unlocks all of this
 
 `POST /agent/run/stream` must stop silently superseding an in-flight run for the same thread:
@@ -633,6 +658,26 @@ Rules:
 - Changing `acting_identity` requires owner + the consent of the identity's owner, and emits
   a `ROOM_SETTINGS_CHANGED` event so nobody's mailbox is quietly enrolled.
 
+> **⚠️ Superseded in direction by prior art (2026-08-01) — the answer is "none of the three".**
+>
+> `qm` makes **nothing ambient in a shared scope** — not even the speaker's own credentials. Only
+> grants bound to *this exact room* materialize; connector OAuth tokens are DM-only; org service
+> credentials require an all-internal audience. A grant carries
+> `(credentialId, audienceScopeId, once|standing, purpose)` and is re-checked on every use (wrong
+> scope → 403; revoked / already-used / expired → 410), with a consent protocol whose load-bearing
+> rule is worth copying verbatim: **"only the owner's own reply is approval — a relayed 'they said
+> it's fine' is not"**, verified against the speaker of the turn. Grants cannot be minted on a
+> triggered turn; a secret-drop link means a fresh key is never pasted into chat; and broker
+> delivery lets the agent call a target by proxy without the secret ever entering the sandbox.
+>
+> That is the fail-closed form of this section. A single room-level `acting_identity` answers
+> "whose mailbox" once for the whole room; per-credential grants answer it per credential, with
+> consent, revocation and an audit record — and compose with the Action Broker (WS-1) and secrets
+> (WS-2) instead of sitting beside them. Their documented residual applies to us too: a credential
+> materialized into a sandbox is plaintext to any process there, and a stated *purpose* is an audit
+> field, not enforced authorization. Detail:
+> [`multiplayer_prior_art_qm_2026-08.md` §QM-3](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+
 ### 6.5 Private lanes inside a shared room
 
 Total transparency is not the goal; *shared context with private edges* is.
@@ -647,6 +692,14 @@ Total transparency is not the goal; *shared context with private edges* is.
   `join_stream_id` / `join_message_ts` on the membership row at join time and feed them into
   the *existing* `?since=` replay cursor (`agent.py:1544`) and the `before`/`limit` window in
   `_get_messages` (`chat.py:191`). Both mechanisms already exist for pagination and reconnect.
+
+  > **Prior art (2026-08-01) — the cursor should narrow the *model*, not only the viewer.** `qm`
+  > stores a tenure window per participant (`valid_from_seq` / `valid_to_seq`) and composes the
+  > turn's replay as the **intersection of every current participant's window**, so a late joiner
+  > narrows what the agent itself may re-read, not just what that person sees. That is the same
+  > outcome [`memory-clearance.md`](memory-clearance.md) §5.4 reaches by queueing joins to run
+  > boundaries, by a simpler mechanism — worth comparing before building either.
+  > [`multiplayer_prior_art_qm_2026-08.md` §QM-5](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
 
 ### 6.6 Never shared, regardless of role
 

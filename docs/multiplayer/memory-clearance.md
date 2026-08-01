@@ -222,6 +222,17 @@ Falcon" in a system prompt is a request. Not passing the scope key is a boundary
 > and what the run may *do*. One rule, two enforcement points — credentials via
 > `executor._integration_authorizer`, compartments via the scope keys passed to `search()`.
 
+> **Independently reproduced outside the building (2026-08-01).** `yc-software/qm` — a multiplayer
+> agent harness released 2026-07-29 — reached the same rule with no contact with this design, and
+> applied it to **three** resources: transcript replay into the model (an entry is replayed only if
+> *every* audience member is entitled to its origin label), shared file handles, and **network
+> egress** (allowed hosts = the intersection across the audience, denied hosts = the union). All
+> three fail closed on an empty audience. Two things follow. First, the rule is not an
+> over-engineering of ours — it is what the problem forces. Second, egress is a third enforcement
+> point we do not use: we intersect what a run may *read* and what it may *do*, not where it may
+> *connect*. Noted against WS-1/WS-3 in
+> [`multiplayer_prior_art_qm_2026-08.md` §QM-0](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+
 ### 3.4 The write rule
 
 > **A fact may be written only to a compartment whose audience is no wider than the session
@@ -477,6 +488,15 @@ share, and that facts from Thread A never appear in any compartment readable by 
 > recorded and asserted to be exactly `room:` / `prefs:` / `agent:` / `org:` — no bare-email
 > compartment is ever passed to `search()`. The *subject* half of this acceptance waits on
 > `subject:` compartments, which are not built.
+>
+> **A second mechanism of the same class, not yet a live risk (checked 2026-08-01).** `qm` labels
+> every compacted summary conservatively and refuses to label one that spans two personal scopes —
+> because a summarizer is otherwise a laundering path: it reads at one clearance and writes an
+> artifact stored at another. **We do not have that exposure today**, because
+> `packages/acb_llm/acb_llm/context.py::fit_messages_to_context` *truncates* the longest message
+> rather than summarizing it. If WS-9 introduces summarizing compaction, the summary needs a
+> clearance label chosen by the same conservative rule — and the safe answer when the inputs span
+> two private compartments is *no label*, i.e. don't persist it.
 >
 > One thing this exercise surfaced that the design did not: **the session memory cache would
 > have undone the rule.** The assembled block is cached per thread for 10 minutes, so a thread

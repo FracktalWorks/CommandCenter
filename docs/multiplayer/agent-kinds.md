@@ -312,6 +312,15 @@ layer, not by reading the answers.
    at month 3" is real value, and it is exactly the thing that must not be built by pooling raw
    memory. Probably a separate, explicitly-derived aggregate compartment with no verbatim
    facts — worth designing before someone asks for it and reaches for the shared bucket.
+
+   > **Prior art has a second answer worth weighing (2026-08-01).** `qm` offers an explicit
+   > **environment attachment**: two scopes may be attached to one environment, at which point they
+   > share one memory notebook, one disk and one sandbox. It is owner-mediated — a non-owner asking
+   > to attach gets a refusal that names the owner to ask, the same shape as a credential grant.
+   > That covers "these two instances really are one brain" deliberately and reversibly, without an
+   > aggregate-derivation pipeline. It does **not** answer the cross-instance *learning* case above
+   > (it merges, it does not generalise), so the two are complementary rather than alternatives.
+   > [`multiplayer_prior_art_qm_2026-08.md` §QM-7](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
 2. **Team membership source.** ~~`team_ref` needs a real team object; the org research doc's
    `module` is the natural home, but it isn't built yet.~~ **Answered** —
    [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §1:

@@ -5,11 +5,13 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/purpshell/meowcaller"
+	"github.com/rs/zerolog"
 	qrcode "github.com/skip2/go-qrcode"
 	"go.mau.fi/whatsmeow"
 	"go.mau.fi/whatsmeow/proto/waE2E"
@@ -166,9 +168,34 @@ func (m *SessionManager) newClient(accountID string, device *store.Device) *Sess
 	// The calling stack intercepts low-level <call>/<ack> stanzas, so it has to
 	// be installed BEFORE Connect starts the receive loop — every caller of
 	// newClient connects afterwards, which is what makes this safe here.
-	s.caller = meowcaller.NewClient(client)
+	//
+	// WithLogger is not optional in practice. meowcaller defaults to
+	// zerolog.Nop(), so without it the entire media path is silent — including
+	// the four lines that actually diagnose a call with no audio ("first RTP
+	// sent to relay", "relay silent after allocate", "first authenticated peer
+	// SRTCP received", "peer SRTCP failed authentication"). A connected call
+	// that you can't hear is unfixable without them.
+	s.caller = meowcaller.NewClient(client, meowcaller.WithLogger(m.callLog(accountID)))
 	m.registerCallHandlers(s)
 	return s
+}
+
+// callLog builds the zerolog logger meowcaller writes its media diagnostics to,
+// tagged so one account's call is greppable out of a busy bridge. Writes to
+// stdout, which is what journalctl captures for the service.
+func (m *SessionManager) callLog(accountID string) zerolog.Logger {
+	level, err := zerolog.ParseLevel(strings.ToLower(strings.TrimSpace(
+		env("WHATSAPP_BRIDGE_CALL_LOG_LEVEL", "info"))))
+	if err != nil {
+		level = zerolog.InfoLevel
+	}
+	return zerolog.New(os.Stdout).
+		Level(level).
+		With().
+		Timestamp().
+		Str("component", "meowcaller").
+		Str("account", accountID).
+		Logger()
 }
 
 // StartSession begins (or resumes) pairing for an account. If the device is

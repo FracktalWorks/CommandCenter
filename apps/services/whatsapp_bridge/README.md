@@ -67,6 +67,11 @@ Copy `.env.example` → `.env`. Key vars:
   `./call-recordings`). Empty disables recording; calls still connect.
 - `WHATSAPP_BRIDGE_CALL_REAP_MINS` — how long an ended call stays queryable
   before it's dropped from memory (default `60`).
+- `WHATSAPP_BRIDGE_CALL_LOG_LEVEL` — verbosity of meowcaller's own media
+  diagnostics (`info` default; `debug` for the full RTP/SRTP trace). This is
+  where a connected-but-silent call is diagnosed: look for `first RTP sent to
+  relay`, `relay silent after allocate`, `first authenticated peer SRTCP
+  received`, and `peer SRTCP failed authentication`.
 - `WHATSAPP_BRIDGE_CALL_RETENTION_DAYS` — days of recorded audio to keep
   (default `7`; `0` keeps forever). Recording runs at roughly **115 MB per hour
   of call**, so the sweep is what stops a busy line filling the disk.

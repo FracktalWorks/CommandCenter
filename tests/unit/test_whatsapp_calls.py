@@ -62,8 +62,8 @@ def _patch_bridge(monkeypatch, status: int, body):
     """Replace the bridge transport, recording what it was called with."""
     seen: dict = {}
 
-    async def _bridge(method, path, **kw):
-        seen["method"], seen["path"] = method, path
+    async def _bridge(method, path, timeout, **kw):
+        seen["method"], seen["path"], seen["timeout"] = method, path, timeout
         seen.update(kw)
         return status, body
 
@@ -150,11 +150,37 @@ async def test_single_target_is_not_a_group_call(monkeypatch) -> None:
 
 async def test_unreachable_bridge_is_503_not_500(monkeypatch) -> None:
     _patch_db(monkeypatch, _Row("live"))
-    _patch_bridge(monkeypatch, 0, {"detail": "The WhatsApp bridge isn't reachable."})
+    _patch_bridge(monkeypatch, calls._BRIDGE_DOWN, {"detail": "not reachable"})
     with pytest.raises(HTTPException) as exc:
         await calls.place_call(
             calls.PlaceCallRequest(account_id="acct", to="+91999"), _User())
     assert exc.value.status_code == 503
+
+
+async def test_bridge_timeout_is_504_not_a_proxy_abort(monkeypatch) -> None:
+    """A wedged bridge must produce our own 504 with a diagnosis. If we let it
+    run to the workbench proxy's 30s abort instead, the user only ever sees
+    'gateway unreachable', which points at the wrong service entirely."""
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, calls._BRIDGE_TIMEOUT, {"detail": "didn't answer within 20s"})
+    with pytest.raises(HTTPException) as exc:
+        await calls.place_call(
+            calls.PlaceCallRequest(account_id="acct", to="+91999"), _User())
+    assert exc.value.status_code == 504
+    assert "answer" in exc.value.detail
+
+
+async def test_place_budget_stays_under_the_proxy_abort(monkeypatch) -> None:
+    """The whole point of the budget: every bridge hop must finish before the
+    workbench proxy gives up at 30s, or its generic error masks ours."""
+    assert calls._PLACE_TIMEOUT_SECS < 30.0
+    assert calls._READ_TIMEOUT_SECS < calls._PLACE_TIMEOUT_SECS
+
+    _patch_db(monkeypatch, _Row("live"))
+    seen = _patch_bridge(monkeypatch, 200, {"call_id": "A"})
+    await calls.place_call(
+        calls.PlaceCallRequest(account_id="acct", to="+91999"), _User())
+    assert seen["timeout"] == calls._PLACE_TIMEOUT_SECS
 
 
 async def test_bridge_error_status_is_propagated(monkeypatch) -> None:
@@ -207,10 +233,12 @@ async def test_list_calls_maps_bridge_rows(monkeypatch) -> None:
     assert out.bridge_reachable is True
 
 
-async def test_list_calls_survives_a_down_bridge(monkeypatch) -> None:
-    """A dead bridge must render as an empty dialer, not a 500."""
+@pytest.mark.parametrize("status", [calls._BRIDGE_DOWN, calls._BRIDGE_TIMEOUT])
+async def test_list_calls_survives_a_broken_bridge(monkeypatch, status) -> None:
+    """A dead or wedged bridge must render as the dialer's offline state, not a
+    500 and not an innocent-looking empty list."""
     _patch_db(monkeypatch, _Row("live"))
-    _patch_bridge(monkeypatch, 0, {})
+    _patch_bridge(monkeypatch, status, {})
     out = await calls.list_calls("acct", _User())
     assert out.calls == []
     assert out.bridge_reachable is False

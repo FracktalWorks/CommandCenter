@@ -1,7 +1,7 @@
 # WhatsApp Calls → Note Taker — feasibility study & UX design
 
 > **Product:** CommandCenter · **Feature:** extend the AI Note Taker (`/notes`) to WhatsApp voice calls, including group calls
-> **Created:** 2026-08-01 · **Status:** 🔬 feasibility study · 🔄 **Surface C dialer BUILT 2026-08-01** — see §12. Placing/answering 1:1 + group calls from `/whatsapp/calls` works end to end and records each call to WAV; transcription is not wired yet. §0–§11 remain the design record.
+> **Created:** 2026-08-01 · **Updated:** 2026-08-02 · **Status:** 🔬 feasibility study (§0–§11, the design record) · ✅ **Surface C SHIPPED + DEPLOYED** — see §12. Place and answer 1:1 and group WhatsApp calls from `/whatsapp/calls` or a chat's Call button, **speak and listen** through the browser, and every call is recorded server-side. **Transcription is not wired yet** (§12.5) — the recording is produced but nothing consumes it.
 > **Siblings:** [`note_taker_app.md`](note_taker_app.md) (the note taker we're extending) · [`meeting_bot_platform_plan.md`](meeting_bot_platform_plan.md) (the bot-joins-a-call pattern) · [`whatsapp_message_manager.md`](whatsapp_message_manager.md) (the WhatsApp vertical we'd hang this off)
 > **Touches:** `apps/services/meeting_bot/` · `apps/services/whatsapp_bridge/` (Go + whatsmeow) · `gateway/routes/notes/meeting_bot.py` · `gateway/routes/whatsapp/`
 
@@ -401,45 +401,118 @@ type decodedParticipantAudio struct {
 
 ---
 
-## 12. Build log — the dialer (2026-08-01)
 
-Surface C is no longer theoretical. The bridge can place and answer calls, and
-`/whatsapp/calls` drives it.
+## 12. Build log — calling, end to end (2026-08-01 → 08-02)
 
-**What shipped**
+Surface C is built and deployed. A paired personal number places and answers
+1:1 and group calls from `/whatsapp/calls`, you can **speak and listen** through
+the browser, and every call is recorded server-side for the note taker.
+
+### 12.1 What shipped
 
 | Layer | Change |
 |---|---|
-| `apps/services/whatsapp_bridge/calls.go` | New. meowcaller on the existing whatsmeow session: place 1:1 (`Client.Call`), group by WhatsApp group id (`GroupCallByID`) or ad-hoc (`GroupCall`), answer/reject/hangup, a phase-tracking registry, per-call WAV recording, and a reaper for ended calls. |
-| `session.go` | `meowcaller.NewClient` attached in `newClient` — **before** `Connect`, which the library requires so its `<call>` interception precedes the receive loop. |
-| `main.go` | `POST /call`, `/call/{hangup,answer,reject}`, `GET /calls`. |
-| `gateway.go` | `CallEvent` → `/whatsapp/bridge/call-event`. |
-| `routes/whatsapp/transport/calls.py` | Authenticated proxy + the inbound event seam. Enforces account ownership, which the bridge cannot: it only knows a shared secret. |
-| `core.py` | `provider` exposed on the account model (the dialer must show only bridge numbers); `/bridge/call-event` added to the feature-gate exemptions. |
-| `whatsapp/calls/page.tsx` | The dialer: 1:1/group toggle, live call cards with phase + timer + recording flag, answer/decline for inbound, recent list. |
-| `tests/unit/test_whatsapp_calls.py` | 21 tests — ownership, bridge-down, error propagation, the secret gate. |
+| `whatsapp_bridge/calls.go` | meowcaller on the existing whatsmeow session: place 1:1 / group (by group id or ad-hoc), answer, reject, hangup; phase registry; per-call WAV recording with a frame counter and retention sweep; readiness diagnostics. |
+| `whatsapp_bridge/audio_ws.go` | Duplex audio WebSocket — `wsSource` (browser mic → `Player`) and a non-blocking fan-out off the recording sink (peer audio → browser). |
+| `whatsapp_bridge/session.go` | `meowcaller.NewClient(..., WithLogger(...))` attached in `newClient`, **before** `Connect`. |
+| `whatsapp_bridge/main.go` | `POST /call`, `/call/{hangup,answer,reject}`, `GET /calls`, `/calls/diagnostics`, `/calls/recording`, `GET /call/audio` (WS). |
+| `routes/whatsapp/transport/calls.py` | Authenticated proxy, ownership enforcement, recording passthrough, the bridge event seam. |
+| `routes/whatsapp/transport/calls_audio.py` | Call-scoped HMAC token + the browser↔bridge audio WebSocket proxy. |
+| `routes/whatsapp/core.py` | `provider` on the account model; **`ws_router`** (see §12.3). |
+| `whatsapp/calls/page.tsx` + `lib/callAudio.ts` + `public/call-audio-worklets.js` | Dialer, Talk/mute/leave, jitter-buffered playback, readiness panel, recording player. |
+| `whatsapp/page.tsx` | **Call** button in every chat header. |
 
-**Deliberate choices**
+### 12.2 The audio path
 
-- **Inbound calls are never auto-answered.** A number that picks up strangers is
-  both a consent problem and a ban signal. They surface as ringing; a human
-  decides.
-- **Recording is on by default** because it's the note taker's whole point, but
-  it's one env var to disable and the UI says when a call is being recorded.
-- **Only bridge numbers appear in the dialer.** A Cloud API number would fail at
-  the gateway; better never to offer it.
+```
+mic  ──► AudioWorklet ──► WSS ──► gateway ──► WS ──► bridge ──► Player ──► MLow/SRTP ──► peer
+spkr ◄── AudioWorklet ◄── WSS ◄── gateway ◄── WS ◄── bridge ◄── callSink ◄── decoded frames
+                                                          └──► WAV (note taker)
+```
 
-**Not done yet** — the seam is in place, the pipeline isn't attached:
+Wire format is **little-endian int16 mono, 16 kHz, one 960-sample (60 ms) frame
+per binary message** — meowcaller's native framing, so nothing resamples or
+reframes in the middle. The browser's `AudioContext` is opened at 16 kHz so the
+resample happens once, in native code.
 
-1. **Transcription.** `/bridge/call-event` logs the recording path; nothing feeds
-   it to `acb_stt` or creates a `meeting` row. That's the next slice.
-2. **Per-participant attribution (§10.2).** We record the *mixed* sink, so group
-   calls currently need ordinary diarization. Unlocking the real prize needs the
-   upstream per-participant hook.
-3. **Outbound audio.** No microphone path — the call sends silence, so it
-   listens but can't speak. Fine for note-taking; the consent announcement of
-   §7.5 needs a `Player` fed by TTS.
-4. **Consent announcement and the chat-thread notice** are designed (§7.5), not
-   built.
+Load-bearing details, each of which was a bug or nearly one:
 
----
+- **Uplink starves to silence, never `io.EOF`.** A `Player` that hits EOF stops,
+  and a stopped Player is permanent silence for the rest of the call.
+- **Not subscribing a Player is fine when nobody is listening.** meowcaller's
+  send loop is *"frame-paced from connect, NOT gated on the Player"* — it sends
+  silence so the relay learns our SSRC, and **the relay won't bridge the peer's
+  media until it sees our stream**. Attaching a browser is therefore optional.
+- **Downlink fan-out must not block.** It runs on meowcaller's media path; a
+  slow socket drops frames rather than stalling the recorder too.
+- **Playback needs a jitter buffer** (~180 ms, re-primes on underrun). Network
+  frames don't arrive on the audio clock.
+- **Echo cancellation is best-effort.** Browser AEC references what the browser
+  renders, and this plays through WebAudio rather than a WebRTC peer connection.
+  Headphones are the reliable fix; the UI says so.
+
+### 12.3 Four bugs worth remembering
+
+Each cost a production round-trip, and each is the kind that hides.
+
+1. **A WebSocket cannot live on a feature-gated router.**
+   `require_feature_router`'s check takes an HTTP `Request`, which FastAPI never
+   populates for a WebSocket — so the dependency raises
+   `TypeError: _check() missing 1 required positional argument: 'request'`
+   *during the handshake*, before any handler and before any close code. Both
+   audio directions failed with nothing logged. **Exempting the path does not
+   help** (the dependency still runs to read the path). Hence `core.ws_router`,
+   ungated, whose members authenticate themselves.
+
+2. **Un-normalised phone numbers produce a JID WhatsApp silently never acks.**
+   The dialer's own placeholder taught `+91 98765 43210`; meowcaller builds the
+   offer's JID from that string verbatim. Surfaces only as an offer timeout with
+   no error. Targets are now reduced to digits; JIDs pass through untouched,
+   which is why dialling from a chat is the most reliable path.
+
+3. **Timeout budgets must shorten at every hop.** The gateway waited 30 s on the
+   bridge while the workbench proxy aborts at exactly 30 s, so a slow call
+   surfaced as the proxy's generic *"gateway unreachable"* — naming the wrong
+   service. Now 12 s (bridge→WhatsApp) < 20 s (gateway→bridge) < 30 s (proxy).
+
+4. **The library is silent unless you ask.** meowcaller resolves to
+   `zerolog.Nop()`, so without `WithLogger` every media diagnostic is discarded —
+   including the four lines that diagnose a connected-but-silent call. We had
+   been debugging against a log we had muted ourselves.
+
+### 12.4 Operating it
+
+Env (all seeded by the deploy):
+
+| Variable | Purpose |
+|---|---|
+| `WHATSAPP_BRIDGE_SECRET` | Bridge auth **and** the audio-token signing key. |
+| `GATEWAY_PUBLIC_URL` | Origin the browser opens the audio socket against — Next cannot proxy a WS upgrade, so audio goes straight to the gateway. |
+| `WHATSAPP_BRIDGE_CALL_RECORD_DIR` | WAV output; blank disables recording. |
+| `WHATSAPP_BRIDGE_CALL_RETENTION_DAYS` | Sweep age (default 7). Recording runs **~115 MB per call-hour**. |
+| `WHATSAPP_BRIDGE_CALL_LOG_LEVEL` | `info` for the media diagnostics; `debug` for the per-packet trace. |
+
+Debugging a call, in order:
+
+1. **Calling readiness** panel in the UI (`GET /whatsapp/calls/diagnostics`) —
+   session exists / connected / logged in / calling stack attached.
+2. `journalctl -u acb-whatsapp-bridge -f` — what was dialled vs typed, phase
+   transitions with elapsed time, `browser audio attached`, and meowcaller's own
+   `first RTP sent to relay` / `relay silent after allocate` /
+   `first authenticated peer SRTCP received` / `peer SRTCP failed authentication`.
+3. **Recent** in the UI — `Ns captured`. Zero seconds on a call that connected
+   means signalling worked and media didn't.
+
+### 12.5 Still open
+
+1. **Transcription is not wired.** `/bridge/call-event` logs the recording path;
+   nothing feeds it to `acb_stt` or creates a `meeting` row. This is the next
+   slice and the reason the feature exists.
+2. **Per-participant attribution (§10.2).** We record the mixed sink, so group
+   calls need ordinary diarization until the upstream per-participant hook
+   lands.
+3. **Consent announcement + chat-thread notice** are designed (§7.5), not built.
+   With two-way audio in place the announcement is now trivial: a `Player` fed
+   by TTS at call start.
+4. **Unproven at scale.** One-to-one calling is exercised; group calling is
+   experimental upstream and untested here.

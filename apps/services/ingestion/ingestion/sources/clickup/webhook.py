@@ -97,6 +97,14 @@ async def receive(
 
     _log.info("clickup.webhook.received", clickup_event=event_type, task_id=task_id)
 
+    # §BO-20 Q1 cutover: with INGESTION_CONSUMER on, the consumer drains the
+    # stream and is the dispatch path, so this receiver must NOT also emit
+    # inline — one event, one fan-out, never both. Read per request (the flag is
+    # an env read, not cached Settings).
+    from ingestion.consumer import consumer_enabled
+
+    consumer_on = consumer_enabled()
+
     # Always enqueue to Redis Streams for audit trail and replay capability.
     try:
         enqueue(STREAM_CLICKUP, event_type, payload)
@@ -104,6 +112,16 @@ async def receive(
         # Redis unavailable — log and continue; do NOT return 5xx to ClickUp
         # (that triggers retries which would make the backlog worse).
         _log.warning("clickup.queue.unavailable", error=str(exc))
+        if consumer_on:
+            # After the cutover the queue is the ONLY path, so a failed enqueue
+            # is a dropped event — the accepted §BO-20 Q1 regression. Log it on
+            # its own key so it is loud rather than silent; do NOT re-emit
+            # inline (that reintroduces double dispatch).
+            _log.warning(
+                "clickup.queue.dropped",
+                clickup_event=event_type,
+                error=str(exc)[:160],
+            )
 
     # For task mutation events, also trigger inline normalisation.
     if event_type in _TASK_EVENTS and task_id:
@@ -111,8 +129,9 @@ async def receive(
 
     # Fan out to registered event sinks (workflow event triggers) — a no-op
     # unless the gateway wired a sink in at startup (event_hooks.py).
-    from ingestion.event_hooks import emit_event
+    if not consumer_on:
+        from ingestion.event_hooks import emit_event
 
-    background_tasks.add_task(emit_event, "clickup", event_type, payload)
+        background_tasks.add_task(emit_event, "clickup", event_type, payload)
 
     return {"status": "accepted"}

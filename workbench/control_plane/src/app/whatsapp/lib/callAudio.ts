@@ -180,6 +180,8 @@ export async function prepareCallAudio({
     };
     cleanups.push(() => ringback(false));
 
+    let stopping = false;
+
     const attach = async (callId: string): Promise<void> => {
       onState("connecting");
       const wsUrl = await mintAudioSocket(accountId, callId);
@@ -223,7 +225,11 @@ export async function prepareCallAudio({
         playback.port.postMessage(f, [f.buffer]);
       };
 
-      sock.onclose = () => onState("idle", "Audio disconnected.");
+      // Only report a close we didn't ask for. Hanging up closes this socket
+      // by design, and surfacing that as an error made every normal call end
+      // with a red banner.
+      sock.onclose = () =>
+        stopping ? onState("idle") : onState("idle", "Audio disconnected.");
       onState("live");
     };
 
@@ -232,6 +238,7 @@ export async function prepareCallAudio({
       ringback,
       setMuted: (muted: boolean) => capture.port.postMessage({ muted }),
       stop: () => {
+        stopping = true;
         teardown();
         onState("idle");
       },

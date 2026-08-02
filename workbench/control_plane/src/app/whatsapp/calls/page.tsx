@@ -549,12 +549,34 @@ export default function WhatsAppCallsPage() {
                           : "recording"}
                       </span>
                     )}
+                    {c.media_ready && (
+                      <span className="text-success">media up</span>
+                    )}
+                    {audioCallId === c.call_id && (
+                      <span
+                        className={
+                          audioState === "live"
+                            ? "font-medium text-success"
+                            : "text-warning"
+                        }
+                      >
+                        {audioState === "live"
+                          ? muted
+                            ? "mic muted"
+                            : "mic + speakers live"
+                          : `audio ${audioState}`}
+                      </span>
+                    )}
                   </p>
                 </div>
-                {/* Speaker/mic. Only once media is up: joining before the peer
-                    answers would open the microphone into nothing. */}
-                {c.phase === "active" &&
-                  (audioCallId === c.call_id ? (
+                {/* Speaker/mic, offered for ANY live call.
+                    This was gated on phase === "active" and the button simply
+                    never appeared: the phase string is advisory and a call can
+                    carry media without ever being reported active. Attaching
+                    early is harmless — the call sends silence until the mic
+                    arrives — whereas hiding the button is unrecoverable. */}
+                {c.direction === "outgoing" || c.phase !== "ringing" ? (
+                  audioCallId === c.call_id ? (
                     <div className="flex shrink-0 gap-1.5">
                       <button
                         onClick={toggleMute}
@@ -596,7 +618,8 @@ export default function WhatsAppCallsPage() {
                           ? "Joining…"
                           : "Talk"}
                     </button>
-                  ))}
+                  )
+                ) : null}
 
                 {c.direction === "incoming" && c.phase === "ringing" ? (
                   <div className="flex gap-1.5">

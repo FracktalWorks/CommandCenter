@@ -78,6 +78,9 @@ class CallModel(BaseModel):
     # "active" means signalling worked but media never flowed — the failure
     # that otherwise looks exactly like success.
     audio_seconds: float = 0.0
+    # Relay bound and frames moving. The authoritative signal for "audio can
+    # attach" — the phase string is advisory and may never read "active".
+    media_ready: bool = False
 
 
 class CallListModel(BaseModel):

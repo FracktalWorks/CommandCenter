@@ -47,7 +47,7 @@ def _db_ready() -> bool:
 
 _needs_db = pytest.mark.skipif(
     not _db_ready(),
-    reason="no reachable Postgres with migrations 134+135 — room tests skipped",
+    reason="no reachable Postgres with migrations 138+139 — room tests skipped",
 )
 
 _PREFIX = "pytest-rooms"

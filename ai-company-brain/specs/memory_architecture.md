@@ -382,7 +382,7 @@ Interleaves with the multiplayer plan; the numbering matches
 | Phase | Work |
 |---|---|
 | **0** | ✅ done 2026-07-30 — Authorize `routes/memory.py` (§5.1) · scope Graphiti reads or disable the timeline call until scoped (§5.2) |
-| **3a′** | Landed as migration 136 (blob instance-keying + run-path wiring ✅ per `groups_sessions_authority.md` §6 step 2); remaining 3a′ scope: compartment registry + `subject:` compartments + `prefs`/`user` backfill. Instance-keying the blob store (§6.1) landed alongside the memory-compartment work, as required — splitting them would have left the more dangerous tier unpartitioned. |
+| **3a′** | ✅ **This doc's half is done.** Blob instance-keying + run-path wiring landed as migration **136** (`groups_sessions_authority.md` §6 step 2), alongside the memory-compartment work as required — splitting them would have left the more dangerous tier unpartitioned. **The compartment remainder is not this spec's.** It is owned by [`docs/multiplayer/memory-clearance.md` §7](../../docs/multiplayer/memory-clearance.md) (compartment registry · `subject:` compartments · the `prefs`/`user` backfill), dispatched as **WS-10**, with its surface design in §7.1 and its gate labels in §7. Do not restate it here; link to it. |
 | **3b** | Deterministic budgeted file-tier injection (§6.2) · provenance markers (§6.3) · extraction gate (§6.4) |
 | **3c** | The memory chip and in-place correction (§6.7) · run-block capture for replay (§6.6) |
 | **4** | Compaction and decay (§6.4) · supersession — decide Graphiti-on vs interim field (§6.5) |

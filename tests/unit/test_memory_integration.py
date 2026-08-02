@@ -238,7 +238,13 @@ def test_copilot_chat_endpoint_registered() -> None:
     """The /copilot/chat POST endpoint must be registered on the FastAPI app."""
     from gateway.main import app
 
-    routes = {r.path: r.methods for r in app.routes if hasattr(r, "path")}
+    # WebSocket routes have a path but no `methods` — skip them rather than
+    # assuming every route is HTTP.
+    routes = {
+        r.path: r.methods
+        for r in app.routes
+        if hasattr(r, "path") and hasattr(r, "methods")
+    }
     assert "/copilot/chat" in routes, f"Expected /copilot/chat, found: {list(routes)}"
     assert "POST" in routes["/copilot/chat"]
 

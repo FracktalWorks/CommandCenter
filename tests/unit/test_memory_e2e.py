@@ -332,7 +332,13 @@ def test_agent_run_stream_endpoint_registered() -> None:
     """POST /agent/run/stream must be registered on the FastAPI app."""
     from gateway.main import app
 
-    routes = {r.path: r.methods for r in app.routes if hasattr(r, "path")}
+    # WebSocket routes have a path but no `methods` — skip them rather than
+    # assuming every route is HTTP.
+    routes = {
+        r.path: r.methods
+        for r in app.routes
+        if hasattr(r, "path") and hasattr(r, "methods")
+    }
     assert "/agent/run/stream" in routes, (
         f"Expected /agent/run/stream, got: {sorted(routes)}"
     )
@@ -846,7 +852,13 @@ def test_pull_endpoint_registered() -> None:
     """POST /pull must be registered."""
     from gateway.main import app
 
-    routes = {r.path: r.methods for r in app.routes if hasattr(r, "path")}
+    # WebSocket routes have a path but no `methods` — skip them rather than
+    # assuming every route is HTTP.
+    routes = {
+        r.path: r.methods
+        for r in app.routes
+        if hasattr(r, "path") and hasattr(r, "methods")
+    }
     assert "/pull" in routes, f"Expected /pull, got: {sorted(routes)}"
     assert "POST" in routes["/pull"]
 
@@ -931,7 +943,13 @@ def test_gateway_imports_memory_for_copilot_chat() -> None:
     # endpoint body at runtime.  Verify the endpoint exists.
     from gateway.main import app
 
-    routes = {r.path: r.methods for r in app.routes if hasattr(r, "path")}
+    # WebSocket routes have a path but no `methods` — skip them rather than
+    # assuming every route is HTTP.
+    routes = {
+        r.path: r.methods
+        for r in app.routes
+        if hasattr(r, "path") and hasattr(r, "methods")
+    }
     assert (
         "/copilot/chat" in routes
     ), "copilot_chat endpoint must be registered"

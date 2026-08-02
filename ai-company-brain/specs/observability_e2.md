@@ -1,8 +1,13 @@
 # E2 — Observability & Debugging (interaction logging + run traces)
 
 > **Status:** Phases 1–4 **shipped** (2026-07-03). Phase 5 (live activity feed)
-> **shipped** (2026-07-09). Phase 6 (cross-app cost + agent office) + 6.8 (real
-> Pixel Lab sprites + Avatar Studio) **shipped** (2026-07-09/10). E2 C+ → A.
+> **shipped** (2026-07-09). Phase 6 + 6.1–6.6 (cross-app cost, per-agent
+> correlation, access fix + durable history, office UX) and 6.8 (real Pixel Lab
+> sprites + Avatar Studio) **shipped** (2026-07-09/10). E2 C+ → A.
+> **Open: §7 (WS-6) — attribution stamp + durable cost table + the dormant
+> Langfuse/OTel half.** Deep tracing is still absent (BO-5).
+> **Verified against code on 2026-08-01** (paths, `agent_run` token columns,
+> `bind_run_context` key set, uv.lock telemetry deps).
 > **Module:** E2 (core_module_map.md).
 > **Goal (user request):** log every agent/model interaction so an engineer can
 > debug "error X happened with agent Y" after the fact (Phases 1–4); AND give
@@ -57,7 +62,7 @@ reachability.
 
 ## What shipped — Phases 1+2
 
-### Phase 1 — Correlated, JSON-able logs (`packages/acb_common/_log.py`)
+### Phase 1 — Correlated, JSON-able logs (`packages/acb_common/acb_common/_log.py`)
 - `bind_run_context(run_id, thread_id, agent, user)` / `clear_run_context()` /
   `get_run_context()` bind the run fields into structlog contextvars. The
   executor binds them at the run boundary in `run_agent_stream` (and clears in
@@ -82,7 +87,7 @@ reachability.
   tool_count, tool_summary(JSONB), error_message/error_type/error_traceback,
   trace(JSONB), flagged`. Indexed for the diagnostics queries (by agent, by
   status, by thread, by time; partial index on `status='error'`).
-- `apps/gateway/gateway/run_trace.py`: `build_run_trace_row(...)` (pure,
+- `apps/services/gateway/gateway/run_trace.py`: `build_run_trace_row(...)` (pure,
   unit-tested) derives status from the events (RUN_ERROR → error, cancelled
   RUN_FINISHED → cancelled, else completed) and a lightweight
   `[{name,status}]` tool summary. **Retention policy (user choice): metadata +
@@ -106,10 +111,17 @@ reachability.
   `docker exec acb-postgres psql -c "SELECT * FROM agent_run WHERE agent_name='Y'
   AND status='error' ORDER BY started_at DESC LIMIT 20"` for the durable record
   + full trace of each failure.
-- **Cost / token attribution** → `agent_run` token columns + the correlated
-  `acb_llm.usage` lines (per agent).
+- **Cost / token attribution** → today this is the correlated `acb_llm.usage`
+  log lines (per agent) plus the Redis day-rollup behind `/observability/cost`
+  (Phase 6) — **not** the `agent_run` token columns.
+  ⚠️ **Corrected 2026-08-01:** `agent_run.{prompt,completion,total}_tokens`
+  exist in the migration and are SELECTed and served by
+  `routes/debug.py` (list + detail) and `routes/observability.py` (`/runs`),
+  but `run_trace.py::_persist_row` never lists them in its INSERT — so they are
+  **always NULL**. The API reports a token count it has never written. Writing
+  them is §7 item **WS-6e**.
 
-## Phase 3 — Diagnostics API (`apps/gateway/gateway/routes/debug.py`)
+## Phase 3 — Diagnostics API (`apps/services/gateway/gateway/routes/debug.py`)
 Read-only, EXECUTIVE/AGENT-gated (a trace can hold message content):
 - `GET /debug/runs?agent=&status=&user=&thread_id=&since_hours=&limit=` — list
   recent runs newest-first, all filters AND-combined, `limit` clamped [1,500].
@@ -176,7 +188,7 @@ agent or model is activated," across chat AND every app (email, tasks, …).
   - **Source attribution** — `bind_run_context(..., source=)` adds `source` to
     the run-context contextvars (chat / email / tasks / webhook); model calls
     inside a run inherit it, so the feed shows which app triggered each call.
-- **Live API** (`apps/gateway/gateway/routes/observability.py`, EXECUTIVE/AGENT-
+- **Live API** (`apps/services/gateway/gateway/routes/observability.py`, EXECUTIVE/AGENT-
   gated like `/debug`): `GET /observability/activity/recent` (backfill),
   `GET /observability/activity/stream` (SSE tail with heartbeats),
   `GET /observability/active` (runs in flight now).
@@ -402,14 +414,32 @@ was unblocked and shipped:
   busts, not mix-and-match layers, so recolour/animation-strip/room-tileset (the
   §4 ASSET SPEC) remain the future upgrade; the seam is ready for them.
 
-### Observability plumbing — landscape review (Phase 6.7 recommendation)
+### §6.7 — Observability plumbing: landscape review (recommendation, NOT built)
+> This is a **recommendation memo**, not a ticket list. The dispatchable
+> tickets derived from it — plus the D1 attribution stamp and the durable cost
+> table — live in **[§7 below](#7-ws-6--open-work-dispatchable)**. `work_plan.md`
+> cites "§6.7" for WS-6; read §7 for what to actually build.
+
 Where our bespoke layer (activity bus + `agent_run` + cost rollup + the office
 UI) is a **live operator** surface no off-the-shelf tool provides, DEEP tracing
 (nested spans: run → tool → LLM call, token/cost per span, replay, evals) is
 where standard tools win. Key finding: **Langfuse is already provisioned in
-`infra/docker-compose.yml` (with `.env` keys) but WIRED TO NOTHING**, and the
-LiteLLM OTel callback is gated off (`OTEL_EXPORTER_OTLP_ENDPOINT` unset). Highest-
-leverage, low-effort wins (not yet done):
+`infra/docker-compose.yml` (with `.env` key *slots*) but WIRED TO NOTHING**, and
+the LiteLLM OTel callback is gated off (`OTEL_EXPORTER_OTLP_ENDPOINT` unset).
+
+**Dependency reality (re-verified 2026-08-01 — read this before estimating):**
+`opentelemetry-api` / `-sdk` / `-semantic-conventions` ARE in `uv.lock`, but
+`opentelemetry-exporter-otlp` and `langfuse` are **absent from `uv.lock`
+entirely**, and no `langfuse` import exists anywhere in Python.
+`acb_llm/client.py::_init_telemetry` appends litellm's `"otel"` callback only
+when `OTEL_EXPORTER_OTLP_ENDPOINT` is set — so setting that env var **today buys
+nothing**: the exporter it needs isn't installed. Both items below therefore
+start with a dependency add, and both are OWNER-GATE (see §7).
+Container: `infra/docker-compose.yml:97-112` (`langfuse/langfuse:2`,
+`profiles: ["obs"]`, dormant). Keys: `.env.example:63-65` — `LANGFUSE_HOST` set,
+`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` **empty placeholders**.
+
+Highest-leverage, low-effort wins (not yet done):
 1. **Wire the dormant Langfuse** — LiteLLM has a native `langfuse` callback; set
    `litellm.callbacks=["langfuse"]` gated on `LANGFUSE_*` keys (mirror
    `_init_telemetry`). Every model call → a nested trace, free, with token/cost
@@ -436,6 +466,499 @@ choke point every agent runtime POSTs through". The name ("compat") undersells i
 optional cleanups: (a) the shadowed duplicate `/v1/chat/completions` in `main.py`
 (Mem0) could be removed, (b) a clearer name like `llm_gateway.py` — both cosmetic.
 
+## 7. WS-6 — open work (dispatchable)
+
+> Added 2026-08-01. This is the ticket list `work_plan.md` WS-6 dispatches
+> against ("Observability wiring + attribution — BO-5 + decision D1"). §6.7 above
+> is the recommendation memo it derives from; the durable cost table used to be
+> a one-clause aside in the Status changelog; **decision D1's attribution stamp
+> appeared in no spec at all before this section.** Every item — AGENT-SAFE and
+> OWNER-GATE alike — states a done-when and a gate label. An agent must refuse
+> OWNER-GATE items and say so.
+>
+> **Read [Open questions](#open-questions--decide-before-or-while-building-do-not-decide-silently) before starting.** Four things this
+> section deliberately does not settle bear on WS-6b/6d; two of them change what
+> a correct implementation looks like.
+>
+> Ticket IDs are **lettered** (`WS-6a`…`WS-6i`) deliberately: this doc already
+> has *phases* 6.1–6.8, and numbering the tickets would reuse those IDs for two
+> different things in one file (R2).
+>
+> **Decision D1 (`work_plan.md` §3), the thing this section exists to
+> implement — quoted in full, parentheticals included:**
+> *"Stamp every LLM call at the gateway choke points with (run_id, member_email,
+> agent, instance). Per-room (multiplayer §5.3), per-instance (agent-kinds §9.4),
+> per-member and per-Center views are all rollups of that one record.
+> Owner: WS-6."*
+>
+> **This slice produces RECORDS ONLY.** Budget *enforcement* (per-member caps,
+> 429s, degrade-to-read-only) is **WS-16** per D2/D8 — do not build it here even
+> though `routes/apps/runtime.py` shows how. WS-16 is gated on this slice.
+
+### Where we actually are (re-verified against the tree 2026-08-01)
+
+| D1 field | State today | Anchor |
+|---|---|---|
+| `run_id` | Bound in the run context; **dropped** before v1_compat | `packages/acb_common/acb_common/_log.py:68` `_RUN_CONTEXT_KEYS` |
+| `member_email` | Bound as `user` in the run context; **dropped** before v1_compat | same |
+| `agent` | ✅ carried, via `X-CC-Agent` | `routes/v1_compat.py:425` |
+| `instance` | ❌ **does not exist anywhere** in the observability path | `grep -rn instance_id apps/ packages/` → no hits |
+
+`_RUN_CONTEXT_KEYS` is `("run_id", "thread_id", "agent", "user", "source")` — no
+`instance`. v1_compat reads only `x-cc-agent` and `x-cc-source`
+(`routes/v1_compat.py:425-426`) and forwards them into `_emit_usage`
+(`:573` streaming, `:594` non-streaming); run_id and member are lost because
+v1_compat is a bare HTTP request with no inherited context.
+
+**Do not invent a second instance key.** The vocabulary already exists and is
+authoritative: `_resolve_agent_instance()`
+(`apps/services/orchestrator/orchestrator/executor.py:917`) returns
+`''` (shared) | `u:<email>` | `t:<team>`, per migration `136_agent_blob_instance.sql`.
+Reuse it verbatim.
+
+**Durable cost today:** none for agents. Cost lives in Redis day-hashes only
+(`acb_common/activity.py::_record_cost`, `cc:cost:{YYYY-MM-DD}`, ~45-day TTL,
+gone on a Redis flush) plus the opt-in `audit_event` row behind
+`LLM_USAGE_AUDIT=1` (`acb_llm/client.py:559`). **The precedent to generalise is
+`app_audit`** (`infra/postgres/114_custom_apps.sql:80-93` — `tokens_in` (:89) /
+`tokens_out` (:90) / `cost_usd NUMERIC(12,6)` (:91) / `model` (:92) / `at`
+(:93)), already read by
+`routes/apps/runtime.py::_month_ai_usage` (:107). Model the new table on it.
+
+### Slice IN — one agent-safe PR
+
+All five items below are **AGENT-SAFE** and belong in one PR: **a–c** build the
+stamp, **d** is where it lands durably, **e** closes the lie the API already
+tells. None of them needs a decision this spec doesn't record.
+
+---
+
+**WS-6a — Bind `instance` into the run context.** AGENT-SAFE
+Extend `_RUN_CONTEXT_KEYS` and `bind_run_context(...)` with an `instance` field
+(same "only non-empty values are bound" rule; `clear_run_context` stays
+symmetric because it unbinds the key tuple). Bind it from
+`_resolve_agent_instance()`'s value for the run.
+- ⚠️ **Ordering trap — this is the whole difficulty of the item.** In
+  `run_agent_stream`, `bind_run_context` fires at `executor.py:2169`, but
+  `_agent_instance` is not resolved until `executor.py:2322` because
+  `_resolve_agent_instance` needs `loaded.config`. A single bind at :2169 can
+  never carry the instance. Either move the bind after the load, or issue a
+  second `bind_run_context(instance=…)` once resolved. The second bind is the
+  smaller blast radius (the first bind must stay early so failures *during*
+  load are still correlated).
+- The other resolve site (`executor.py:1728`) needs the same treatment.
+- **Done when:** `get_run_context()` inside a run of an instanced agent returns
+  `instance` equal to `_resolve_agent_instance(config, name, actor)` for that
+  run, and `''` for a shared agent (absent key, not the string `"''"`);
+  `clear_run_context()` leaves no `instance` behind (extend the existing
+  no-leak assertion in `tests/unit/test_observability.py`).
+- **Files:** `packages/acb_common/acb_common/_log.py`,
+  `apps/services/orchestrator/orchestrator/executor.py`.
+
+**WS-6b — Carry the four-tuple to the v1_compat choke point.** AGENT-SAFE
+Propagate `(run_id, member_email, agent, instance)` to
+`/v1/chat/completions` as `X-CC-Run` / `X-CC-User` / `X-CC-Instance` alongside
+today's `X-CC-Agent` / `X-CC-Source`; read them fail-soft in
+`_handle_chat_completions` next to the existing `:425-426` reads —
+**subject to the identity constraint below, which changes where `member_email`
+may come from.**
+- ⚠️ **Header trap — static `default_headers` cannot work here.**
+  `_make_openai_client` (`apps/services/orchestrator/orchestrator/agents.py:392-418`)
+  sets `default_headers` at client **construction** time. That is fine for
+  `agent` (constant per client) but wrong for `run_id`/`member`/`instance`,
+  which vary per request. It also misses two clients built independently in-repo:
+  `apps/agents/agent-email-assistant/agents.py:1957` and
+  `apps/agents/agent-whatsapp-assistant/agents.py:483`. **A per-request httpx
+  event hook that reads the run contextvar at send time covers all three
+  construction sites at once; static headers cover none of the varying fields.**
+  This is an engineering call, not an owner call — but record the choice in the
+  PR. (The orchestrator client is rebuilt per request — `main.py` calls
+  `build_orchestrator_agent(with_history=False)` at **four** sites,
+  `apps/services/gateway/gateway/main.py:366`, `:589`, `:1341`, `:1392` — so a
+  construction-time stamp *would* accidentally work on the orchestrator path and
+  nowhere else. Do not be misled by that, and do not stamp only one of the four.)
+- 🔐 **Identity trap — `X-CC-User` is unauthenticated, and WS-16 inherits it.**
+  A client-supplied `X-CC-User` read fail-soft is a **caller-asserted identity**,
+  not an authenticated one. `/v1/chat/completions` is guarded by
+  `require_llm_api_auth` (`packages/acb_auth/acb_auth/deps.py:303-327`, wired at
+  `routes/v1_compat.py:655` as `_auth = [Depends(require_llm_api_auth)]`), which
+  validates a **shared** token and establishes **no per-user identity** — it
+  accepts either `LITELLM_MASTER_KEY` or the service token and returns nothing
+  (`-> None`; it hands back no `UserContext`, unlike `get_current_user`).
+  That key is handed out on purpose: `deps.py:66-73` says of it *"This one is
+  handed OUT — every agent's BYOK client presents it… Treat it as semi-public
+  within the deployment: anything it authenticates, an agent can do,"* and its
+  shipped default is the shared dev string `.env.example:35`
+  (`LITELLM_MASTER_KEY=sk-local-dev-change-me`).
+  This repo has already paid for trusting a bare user header once: the sibling
+  guard's docstring (`deps.py:281-284`) records that SSO `X-User-*` headers are
+  deliberately **NOT** accepted there because *"they are spoofable without the
+  Next.js proxy"*, and `deps.py:239-254` records that trusting a bare
+  `X-User-Email` *"was a full cross-account auth bypass."*
+  **The consequence, stated plainly:** WS-6b + WS-6d build the durable
+  per-member cost record, and that record is exactly what **WS-16**'s per-member
+  budget caps are gated on (`work_plan.md` §2 WS-16 "🟡 WS-6", and D2 "per-member
+  monthly caps ship first"). Sourcing `member_email` from a forgeable header
+  bakes a budget-evasion vector into the schema WS-16 inherits — any holder of
+  the `/v1` key (i.e. every agent BYOK client) could spend against **another**
+  member's cap, or attribute its spend to a member who does not exist and so
+  consume no cap at all.
+  **Therefore, binding on this slice:**
+  1. `member_email` **must be established server-side** — derived from the run
+     context the gateway already owns, or correlated after the fact via
+     `run_id` (which `agent_run` already binds to a `user_id`). A server-side
+     join on `run_id` is the cheap correct answer and needs no new trust.
+  2. If a header path is used at all (e.g. as a fast path before the join), the
+     value is persisted as **untrusted / self-asserted** — distinguish it in the
+     row (a nullable `member_email_asserted`, or a `member_source` discriminator
+     of `context` vs `header`) — and it **must never** be the basis for budget
+     enforcement. WS-16 reads only server-established members.
+  3. Do not widen `require_llm_api_auth` to fix this. It is documented as
+     deliberately weaker than `require_internal_auth` (`deps.py:312-316`);
+     changing it is an auth-behaviour change and therefore OWNER-GATE.
+- **Done when:** a chat run through the MAF orchestrator produces an
+  `_emit_usage` call carrying non-empty `run_id`, `member_email`, `agent`, and
+  an `instance` equal to `_resolve_agent_instance()`'s value for that run
+  (`''` for a shared agent). Note the coverage hole in **Q2** below: this
+  criterion is satisfiable while `task-manager` and `apis-config` are still
+  entirely unstamped — passing it is not evidence of full coverage.
+- **Done when (identity, non-negotiable):** a bare `/v1/chat/completions` caller
+  holding only the `/v1` key and sending a forged
+  `X-CC-User: someone-else@example.com` **must not** produce a durable row
+  attributed to that member as an enforceable subject — either the value is
+  ignored in favour of the server-established member, or it is stored flagged
+  self-asserted and excluded from any per-member cost rollup a budget could read.
+  Pin it as a test alongside the fail-soft pin below.
+- **Done when (fail-soft, non-negotiable):** with **every** `X-CC-*` header
+  stripped, `/v1/chat/completions` returns a byte-identical response and still
+  emits an event with `source='chat'` and null agent/run/member — no regression.
+  Mirror the existing pin `test_v1_compat_without_header_falls_back_to_chat`
+  in `tests/unit/test_v1_compat_telemetry.py`.
+- **Files:** `apps/services/gateway/gateway/routes/v1_compat.py`,
+  `apps/services/orchestrator/orchestrator/agents.py`,
+  `apps/agents/agent-email-assistant/agents.py`,
+  `apps/agents/agent-whatsapp-assistant/agents.py`.
+
+**WS-6c — Widen `_emit_usage` to accept and forward the stamp.** AGENT-SAFE
+`_emit_usage(model, tier, response, source=, agent=)` gains `run_id=`,
+`member=`, `instance=`, defaulting to `get_run_context()` so in-run callers
+(`acompletion_with_fallback`, agent runs) need no call-site change and only
+v1_compat passes them explicitly.
+- **Done when:** an in-run model call is attributed with the full four-tuple
+  with **zero** changes at its call site; the existing activity-event shape
+  gains fields but breaks no consumer (`/observability/activity/*` and the
+  office UI keep rendering).
+- **Preserve the null-cost contract:** `_compute_cost`
+  (`acb_llm/client.py:480`) returns `None` for an unpriced/stub-registered
+  model and the UI shows "—". **Never coerce that to `0`** — a misleading $0 is
+  worse than an unknown. Pin it.
+- **Files:** `packages/acb_llm/acb_llm/client.py`.
+
+**WS-6d — Durable `llm_call` cost table (the deferred durable cost table).** AGENT-SAFE
+One durable row per completion, modelled on `app_audit`. **R1: find the next
+free migration number by listing `infra/postgres/` at build time — do not write
+a literal number into this spec or into a filename you guessed.** The file must
+be idempotent (`CREATE TABLE IF NOT EXISTS`, `CREATE INDEX IF NOT EXISTS`):
+deploy re-applies every migration file on every deploy.
+- Columns: `run_id`, `member_email`, `agent`, `instance`, `source`, `model`,
+  `tier`, `tokens_in`, `tokens_out`, `cost_usd NUMERIC(12,6) **NULL**`, `at`.
+  `NULL`, not `app_audit`'s `DEFAULT 0` — see the null-cost contract in WS-6c.
+- 🔐 **`member_email` carries WS-6b's identity constraint into the schema.**
+  Whatever WS-6b decides, this table must make "server-established member" vs
+  "caller-asserted member" *readable from the row* (see WS-6b's identity
+  trap) — WS-16 will build per-member caps on these
+  rows, and a rollup that cannot tell the two apart is a budget-evasion vector.
+  This is a schema decision, so getting it wrong here is expensive to undo.
+- Index for the rollups the D1 decision names: at least `(at)`,
+  `(member_email, at)`, `(agent, at)`.
+- The Redis day-rollup stays as-is (it is the *live* surface); this is the
+  durable record behind it. Do not replace one with the other.
+- **Done when:** `SUM(cost_usd) GROUP BY member_email` over `llm_call` for a UTC
+  day reconciles to within rounding of `cost_summary()`'s `totals.cost` for the
+  same day.
+- **Done when:** the migration re-runs clean against an already-migrated DB
+  (idempotency, not optional).
+- **Done when:** an unpriced model writes `cost_usd IS NULL`, never `0`.
+- **Files:** `infra/postgres/<next free>_llm_call.sql`,
+  `packages/acb_llm/acb_llm/client.py` (write site).
+
+**WS-6e — Write `agent_run.{prompt,completion,total}_tokens`.** AGENT-SAFE
+Closes the correction recorded above under *Debugging workflow this enables*:
+the columns exist in `50_agent_run_trace.sql`, `routes/debug.py` (:139-151) and
+`routes/observability.py` (:288, :308) SELECT and serve them, and
+`run_trace.py::_persist_row` (the INSERT at :169-217) never lists them — so the
+API has always reported a token count that was never written. Backfill them at
+the run boundary from the run's own completions.
+- **Done when:** after a completed run, `GET /debug/runs/{run_id}` returns a
+  non-null `total_tokens` (today: always null).
+- **Done when:** the upsert's `ON CONFLICT … DO UPDATE` handles tokens the same
+  way it handles the other late-arriving fields — a second write must not null
+  out a value the first write recorded.
+- **Files:** `apps/services/gateway/gateway/run_trace.py`
+  (`build_run_trace_row` + `_persist_row`), caller in `chat_fold`.
+
+### Slice OUT — OWNER-GATE, do not build in this slice
+
+⚠️ **Citation, honestly:** `work_plan.md` §6 enumerates force-push/history
+rewrite, credential rotation, the enforcement flips (`ACTION_BROKER_ENFORCE`,
+`AGENT_PERMISSION_MODE`, `MEM0_ENABLED`, `GRAPHITI_ENABLED`,
+`WHATSAPP_ENRICHMENT`, `SKILLS_FAIL_CLOSED`, `SKILLS_INDEX_ONLY`), the
+bot-account/Meta items, live-DB one-offs, and any deploy that changes auth
+behaviour — **it does not name the observability flags below.** They are gated
+by the same principle (a prod credential/env action with a cost, privacy, or
+auth consequence), and §6 should gain them when the board is next updated; that
+edit belongs to `work_plan.md`'s owner, not to a WS-6 PR. Until then the gate
+labels *in this section* are the binding instruction: an agent must **refuse**
+these four and report which gate.
+
+**WS-6f — Wire the dormant Langfuse.** 🔒 **OWNER-GATE**
+Gate: requires generating Langfuse project credentials and populating the empty
+`LANGFUSE_PUBLIC_KEY` / `LANGFUSE_SECRET_KEY` slots in prod `.env`, plus
+bringing up the `--profile obs` container. Both are credential + prod-env
+actions. Also requires adding `langfuse` to `uv.lock` (absent today).
+- Shape when cleared: gate `litellm.callbacks=["langfuse"]` on the keys being
+  present, mirroring `_init_telemetry`'s env gate.
+- **Done when (post-clearance):** with `LANGFUSE_PUBLIC_KEY`/`SECRET_KEY` set
+  and the `--profile obs` container up, one chat run produces a Langfuse trace
+  containing that run's model call(s) with token counts; with the keys **unset**
+  the callback list is unchanged and no import of `langfuse` is attempted (the
+  keys-absent path must not regress a default deployment).
+
+**WS-6g — OTel GenAI export.** 🔒 **OWNER-GATE**
+Gate: setting `OTEL_EXPORTER_OTLP_ENDPOINT` in prod. Note this env var is
+currently **inert** — `opentelemetry-exporter-otlp` is not in `uv.lock`, so the
+callback registered by `_init_telemetry` (`acb_llm/client.py:376-388`) has
+nothing to export through. Adding the dependency is agent-safe prep; flipping
+the env var is not.
+- **Done when (agent-safe prep half):** `opentelemetry-exporter-otlp` resolves
+  in `uv.lock` and `uv run python -c "import opentelemetry.exporter.otlp"`
+  succeeds, with `OTEL_EXPORTER_OTLP_ENDPOINT` still unset and
+  `_init_telemetry` still registering nothing — the dependency add alone changes
+  no runtime behaviour.
+- **Done when (post-clearance):** with the endpoint set against a collector, one
+  model call emits a span carrying `gen_ai.*` attributes and a `trace_id` that
+  can be joined to our `run_id`.
+
+**WS-6h — `LLM_USAGE_AUDIT=1`.** 🔒 **OWNER-GATE**
+Gate: prod env flip with a per-call Postgres write cost. WS-6d is designed to
+make this flag unnecessary for cost attribution; do not flip it as a shortcut.
+- **Done when:** *nothing* — this item's correct terminal state is that it is
+  never flipped. It closes when WS-6d has shipped and a WS-6 PR records that
+  `llm_call` supersedes the flag for cost attribution, leaving the flag as the
+  debug-only path it was. If you find yourself wanting to flip it, the durable
+  table is missing or wrong; fix that instead.
+
+**WS-6i — Re-enabling the MAF telemetry kill switch.** 🔒 **OWNER-GATE / DO NOT TOUCH**
+`executor.py:114` disables `agent_framework`'s OpenTelemetry instrumentation
+because its streaming cleanup resets a ContextVar in a different async context
+("Token was created in a different Context" at the end of every streamed run).
+It is guarded by `tests/unit/test_executor_telemetry_killswitch.py`. Re-enabling
+it is not a config change — it needs the upstream bug fixed first.
+- **Done when:** *not in this workstream.* The only acceptance is an upstream
+  `agent_framework` release whose streaming cleanup no longer resets the
+  ContextVar in a foreign context, demonstrated by
+  `tests/unit/test_executor_telemetry_killswitch.py` being **rewritten** to
+  assert the opposite and a full streamed run completing without the
+  "Token was created in a different Context" error. Until then, an agent that
+  touches `executor.py:114` has failed the ticket, not completed it.
+
+**Budget ENFORCEMENT is not in WS-6 at all** — see D2/D8, owner **WS-16**.
+
+### Open questions — decide before (or while) building; do not decide silently
+
+Four things this section does not settle. Q1 and Q2 change what a correct
+WS-6b/WS-6d implementation looks like; Q3 and Q4 are open by design and are
+recorded here so nobody invents an answer in a PR description. Each states the
+options and, where this spec can legitimately recommend one, the recommendation.
+An implementer who disagrees with a recommendation should say so in the PR and
+amend this section — that is a cheap edit; a silent divergence is not.
+
+**Q1 — How does an `llm_call` row get written without putting a Postgres INSERT
+in the LLM request path?** (bears on **WS-6d**)
+`_emit_usage` is a plain synchronous `def` (`packages/acb_llm/acb_llm/client.py:515-518`)
+called on **every** completion, and v1_compat is — this doc's own words —
+"THE choke point every agent runtime POSTs through". A naive per-completion
+synchronous INSERT there adds a DB round-trip to every model call on the
+platform's hottest path, and couples completion latency (and completion
+*success*) to Postgres availability. WS-6d says *what* to store and says nothing
+about *how* it is written; that gap is big enough to produce two very different
+PRs.
+- **Options:** (a) synchronous INSERT inline in `_emit_usage`; (b) fire-and-
+  forget onto the **thread-pool** executor (`loop.run_in_executor`, not
+  `orchestrator/executor.py`), exactly like the existing audit path;
+  (c) batch/buffer
+  in memory and flush periodically; (d) write from a consumer off the `cc:activity`
+  Redis stream (fully decoupled, but adds a consumer we do not have — cf. WS-4).
+- **Precedent already in this file — copy it.** The `LLM_USAGE_AUDIT` audit row
+  solved this exact problem in this exact function: `acb_llm/client.py:561-582`
+  builds a `_persist()` closure (`:566-573`), and rather than calling it inline
+  dispatches it with `loop.run_in_executor(None, _persist)` (`:575-582`) —
+  because, in the code's own comment, *"record() opens a sync DB session — keep
+  it off the event loop"* — with `task.add_done_callback(lambda t: t.exception())`
+  to consume the failure, and a synchronous fallback only when no loop is running
+  (`:576-578`). The whole block is wrapped in a bare `except Exception: pass`.
+- **Recommendation: (b).** Reuse that pattern verbatim. It is proven in-place,
+  needs no new infrastructure, and matches the activity bus's stated contract
+  ("best-effort + non-blocking + never raises", Phase 5).
+- **Failure semantics, non-negotiable whichever option wins:** a dropped or
+  failed `llm_call` write **must never fail, delay, or alter the completion**.
+  The completion is the product; the cost row is bookkeeping. Concretely: no
+  exception may escape the write path, and the response bytes must be identical
+  whether the write succeeded, failed, or was never attempted. Pin that.
+- **Consequence to accept honestly:** best-effort writes mean `llm_call` can
+  under-count. That is why WS-6d's reconciliation done-when is "within rounding
+  of `cost_summary()`", and it is why WS-16 must treat a cap as a **floor on
+  observed spend**, not a proof of total spend.
+
+**Q2 — What fraction of model calls will the D1 stamp actually cover, and is a
+missing-attribution row a bug or the known hole?** (bears on **WS-6b**)
+This is documented **above at `observability_e2.md:282-288`** ("Still app-level
+(by design)") but §7 never referenced it, so an implementer can read the whole
+ticket list without meeting it. Restating it here because it is load-bearing:
+agents running on `GitHubCopilotAgent` — **`task-manager` and `apis-config`** —
+reach the model through the Copilot SDK's BYOK provider, which exposes **no
+client-header hook we control**. Copilot-SDK mutation traffic is in the same
+position.
+- **Consequence:** those agents' `llm_call` rows will carry **null
+  `run_id`/`member_email`/`instance`** (they get `source="chat"` and no agent),
+  and WS-6d's `SUM(cost_usd) GROUP BY member_email` reconciliation **may not hold
+  for them**. An implementer must **not** treat that as a defect in their own
+  work and must not go hunting for it in their diff — and must not "fix" it by
+  synthesising a member.
+- **The hole is unquantified.** Nobody has measured what share of daily spend
+  those two agents represent. Cheap first measurement, using what already ships:
+  `GET /observability/cost` returns `by_agent`; the residual between
+  `totals.cost` and the sum of attributed agents is an upper bound on the hole.
+- **Open:** does WS-6b's done-when ("a chat run through the MAF orchestrator…")
+  need a second criterion asserting the SDK agents are *knowably* unattributed
+  (e.g. a distinguishable `attribution='unavailable'` marker) rather than merely
+  null — so the reconciliation query can exclude them explicitly instead of
+  silently mis-summing? **Recommendation: yes**, if it costs one column; the
+  alternative is a cost report that is quietly wrong forever. Closing the hole
+  itself needs an SDK-level header pass-through upstream and stays deferred.
+
+**Q3 — What is the retention and PII policy for `llm_call`?** (bears on
+**WS-6d**) — **genuinely open; do not invent an answer.**
+Every other durable surface in this doc carries an explicit policy and `llm_call`
+carries none, while growing **one row per completion, forever**:
+- `agent_run` has a deliberate, user-chosen policy (`:39-43` runbook summary,
+  `:93-96` the Phase-2 statement): metadata + tool summary for ALL runs, the full
+  `trace` only for errored/cancelled/flagged runs, explicitly *"to bound storage
+  + sensitive-data exposure"*.
+- The Redis cost rollup self-expires (~45-day TTL) and the activity stream is
+  ~2000 events; both forget by construction.
+- `llm_call` as specified has no TTL, no prune job, and no stated policy.
+- **The questions:** (i) how long are rows kept — indefinite, or pruned at
+  N days like the Redis rollup? (ii) is a prune/partition mechanism part of
+  WS-6d or a follow-up? (iii) is `member_email` on every row a PII position we
+  are willing to hold indefinitely, given the same doc bounded `agent_run`'s
+  exposure for exactly this reason? Note `llm_call` stores **no message
+  content** — only counts, cost, and identifiers — which makes it far less
+  sensitive than a `trace`, but "who spent what, when, forever" is still a
+  personal-data record.
+- **No recommendation.** This is a retention/privacy call for the owner, and
+  it interacts with whatever WS-16 needs to look back over. An implementer must
+  not pick a number in a migration. If the answer is not available at build
+  time, ship WS-6d **without** a prune and record the open question in the PR —
+  adding retention later is a follow-up migration, whereas a wrong TTL destroys
+  data.
+
+**Q4 — What is the read path for `llm_call`?** (bears on **WS-6d**)
+As specified, WS-6d ships a table that **nothing exposes**. Its only done-when
+is a hand-run SQL reconciliation, so on merge day the durable record is
+invisible to the UI, to the API, and to WS-16.
+- **Options:** (a) nothing in this slice — SQL only, and WS-16 brings its own
+  reader (smallest slice; the durable record still accrues from day one, which
+  is the point); (b) `GET /observability/cost` gains a durable mode
+  (`?source=durable`, or falls back to `llm_call` beyond the Redis window) so
+  the existing Cost tab silently gains history past ~45 days; (c) a new endpoint
+  (`GET /observability/cost/durable`, or per-member `GET /observability/cost/members`)
+  serving the D1 rollups directly.
+- **Recommendation: (a) for this slice, with (b) as the intended successor.**
+  Data accrual is what WS-16 is gated on and it starts the moment the table
+  exists; the read surface can follow without a migration. (b) is preferred over
+  (c) because D1's whole claim is that the views are *rollups of one record* —
+  a second cost endpoint invites a second cost number, which is the failure mode
+  this workstream exists to end.
+- **If (b) is chosen, note the trap:** the Redis rollup and `llm_call` will not
+  agree exactly (see Q1's best-effort semantics and Q2's coverage hole). Two
+  numbers labelled "cost" that differ is worse than one number labelled
+  honestly — whichever is served must say which source it came from.
+
+### Verification (Windows; run these, quote the output)
+
+⚠️ **Never run the full `uv run pytest` suite on this machine — it hangs against
+the live DB.** For the same reason, keep `tests/unit/test_debug_routes.py` OUT
+of the inner loop: it drives TestClient against a live DB.
+
+```
+uv run pytest tests/unit/test_observability.py tests/unit/test_activity_bus.py \
+  tests/unit/test_llm_usage_telemetry.py tests/unit/test_v1_compat_telemetry.py -q
+```
+Baseline confirmed 2026-08-01 on a clean tree: **55 passed in 15.14s**. Any WS-6
+PR must keep this green and add to it.
+
+```
+uv run pytest tests/unit/test_observability_access.py \
+  tests/unit/test_executor_telemetry_killswitch.py \
+  tests/unit/test_app_runtime_activity.py -q
+```
+Baseline confirmed 2026-08-01: **11 passed in 86.9s** (slow — MAF import).
+
+```
+uv run ruff check --select F821,F601,F602,F502,F7,B006 \
+  apps/services/gateway/gateway/routes/v1_compat.py \
+  apps/services/gateway/gateway/run_trace.py \
+  packages/acb_common/acb_common packages/acb_llm/acb_llm
+```
+Baseline confirmed 2026-08-01: **All checks passed!** This is a fast **local
+proxy** for CI, narrowed to the paths this slice touches — it is **not** the CI
+command. ⚠️ Do **not** use a bare `uv run ruff check <paths>` as a gate: it
+reports **39 pre-existing findings** on exactly these paths (1,968 repo-wide)
+and is deliberately non-blocking in CI (`pr-check.yml:60`, "style backlog …
+non-blocking — see ratchet plan").
+
+**What CI actually blocks on** (`.github/workflows/pr-check.yml:51`) is the same
+select-list over the **whole repo**, no path narrowing:
+
+```
+uv run ruff check . --select F821,F601,F602,F502,F7,B006
+```
+
+⚠️ **This command is currently RED on `main`, and not because of WS-6.** Verified
+2026-08-01 on a clean tree:
+
+```
+F821 Undefined name `TurnDecision`  apps\services\gateway\gateway\routes\agent.py:166:7
+F821 Undefined name `TurnDecision`  apps\services\gateway\gateway\routes\agent.py:225:16
+Found 2 errors.
+```
+
+Both are string annotations (`-> "TurnDecision"` at `:166`, `decision:
+"TurnDecision"` at `:225`) whose type is imported **function-locally** at
+`agent.py:179` (`from orchestrator.steer import Route, TurnDecision, route_turn`).
+They are safe at runtime — a string annotation is never evaluated — but ruff
+resolves names lexically and cannot see a name imported inside a different
+function body. **This is pre-existing, is not caused by WS-6, and is being fixed
+separately.** A WS-6 implementer who sees pr-check's lint job red must confirm
+the failure is exactly these two lines and then stop — do not go hunting through
+your own diff, and do not "fix" it by widening the import in a WS-6 PR (that is
+someone else's ticket and would collide). WS-6's obligation is that the repo-wide
+count does not **grow** beyond these two.
+
+Frontend is untouched by this slice; no `next build` gate applies unless the
+office/cost views change.
+
+### R4 — what to update when this ships
+
+Any WS-6 PR updates this spec's `## Status` header + changelog in the same PR,
+and flips the row in `ai-company-brain/AGENTS.md`'s spec index (which currently
+reads "distributed/OTel tracing **dead** → **BO-5**") plus
+`FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-5. Sequencing/ownership lives in
+`work_plan.md` — that board wins over this spec.
+
+---
+
 ## Status
 - 2026-07-03 — Phases 1+2 shipped. E2 C+ → B+.
 - 2026-07-03 — Phases 3+4 shipped. E2 B+ → A−. `/debug/runs` diagnostics API
@@ -453,10 +976,67 @@ optional cleanups: (a) the shadowed duplicate `/v1/chat/completions` in `main.py
   (`/observability/cost`), agent roster (`/observability/roster`), and a redesigned
   3-view `/observability` page (8-bit office · live feed · cost) with per-agent
   run/error drill-down. +9 tests (807 total); `next build` + `tsc` + eslint clean.
-  Deferred: durable Postgres cost table (Redis rollup is ~45-day, non-durable
-  across a Redis flush); sprite art polish.
+  (The durable Postgres cost table deferred here is now **§7 WS-6d** — it was
+  a one-clause aside in this changelog, which is why nobody could dispatch it.)
 - 2026-07-09 — Phase 6.1 (review + fixes). Traced the full agent→model path:
   chat-agent completions + cost were bypassing instrumentation via v1_compat, and
   the orchestrator wasn't shown as an agent. Instrumented v1_compat (stream +
   non-stream) + copilot_chat lifecycle + roster orchestrator/sub-agent inclusion.
   +4 tests incl. an end-to-end v1_compat drive (811 total green).
+- 2026-07-09 — Phase 6.2 shipped. Per-agent model correlation via v1_compat
+  headers: `X-CC-Agent` / `X-CC-Source` set as `default_headers` at client
+  construction (`orchestrator/agents.py::_make_openai_client`, and in-repo in
+  `agent-email-assistant` / `agent-whatsapp-assistant`), read fail-soft by
+  `routes/v1_compat.py::_handle_chat_completions`. Copilot-SDK agents stay
+  app-level by design. Shadowed duplicate `/v1/chat/completions` in `main.py`
+  removed.
+- 2026-07-09 — Phase 6.3 shipped. Access fix (live observability views open to
+  any AUTHENTICATED caller; full message-content trace stays EXECUTIVE-gated at
+  `/debug/runs/{id}`) + durable history `GET /observability/runs` over
+  `agent_run` + a History tab. +4 tests (817 total).
+- 2026-07-09/10 — Phases 6.4/6.5/6.6 shipped (UI only, no backend contract
+  change): procedural pixel-art office → layered configurable scenes → office
+  polish (war room, `cost_summary.by_agent` in the agent drawer, Lucide icons).
+- 2026-07-10 — §6.7 landscape review recorded. **Recommendation only — no code
+  shipped.** Langfuse + OTel remain wired to nothing; see §7.
+- 2026-07-10 — Phase 6.8 shipped. Real Pixel Lab sprites + Avatar Studio,
+  `agent_avatars` table (migration 64), avatar endpoints on the observability
+  router, server-side `PIXELLAB_API_KEY`. +4 unit tests.
+- 2026-08-01 — **Doc remediation (no code).** Re-verified this spec against the
+  tree: corrected the false "cost/token attribution → `agent_run` token columns"
+  claim (those columns are never written — `_persist_row` omits them), fixed
+  post-restructure paths (`apps/gateway/…` → `apps/services/gateway/…`;
+  `packages/acb_common/_log.py` → `packages/acb_common/acb_common/_log.py`),
+  numbered the §6.7 heading `work_plan.md` cites, and added **§7 — the
+  dispatchable WS-6 ticket list** (attribution stamp per decision D1, durable
+  cost table, `agent_run` token backfill, and the owner-gated Langfuse/OTel
+  half), each with a done-when, a gate label, and file anchors. E2 status
+  unchanged: the Redis feed is live, deep tracing is still absent (BO-5).
+- 2026-08-01 — **§7 repair round (no code).** Verification pass on the above
+  returned three decisive findings, now closed. (1) Added **§7 Open questions**
+  (Q1 `llm_call` write mechanism — recommend the fire-and-forget pattern already
+  proven at `acb_llm/client.py:561-582`, with "a dropped row must never fail the
+  completion" as the binding semantics; Q2 the unquantified Copilot-SDK coverage
+  hole at `:282-288`, which WS-6b's done-when could otherwise pass right over;
+  Q3 `llm_call` has no retention/PII policy while `agent_run` has an explicit
+  one — recorded, deliberately unanswered; Q4 nothing exposes `llm_call`).
+  (2) **Security:** the proposed `X-CC-User` header is unauthenticated —
+  `/v1/chat/completions` is guarded by `require_llm_api_auth`
+  (`acb_auth/deps.py:303-327`), a **shared**-token check with no per-user
+  identity, and trusting a bare user header was previously a full cross-account
+  bypass (`deps.py:239-254`); left as-is it would build WS-16's per-member
+  budget caps on a forgeable value. **WS-6b amended**: `member_email` must be
+  server-established, any header value is persisted as self-asserted and is
+  never a basis for enforcement, plus a done-when pinning a forged header;
+  WS-6d's schema carries the same constraint. (3) Corrected the ruff claim —
+  `pr-check.yml:51` runs the select-list over the **whole repo**, not the
+  narrowed paths, and it is **currently red on `main`** with 2 pre-existing
+  `F821 TurnDecision` errors (`routes/agent.py:166`, `:225`) that WS-6 neither
+  caused nor owns. Also: done-whens written for the owner-gated WS-6f/g/h/i so
+  the preamble's claim is true of itself; softened the unsupported
+  "`work_plan.md` §6 enumerates these flags" citation (it does not — that edit
+  belongs to the board's owner); `114_custom_apps.sql:80-91` → `:80-93`;
+  restored the elided parentheticals in the D1 quote; and replaced the single
+  `main.py:1341` anchor with all four `build_orchestrator_agent(with_history=
+  False)` sites (`:366`, `:589`, `:1341`, `:1392`). §7 slice WS-6a–e remains
+  AGENT-SAFE and dispatchable; E2 status otherwise unchanged.

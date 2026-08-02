@@ -84,6 +84,19 @@ def test_ws_url_falls_back_to_same_origin(monkeypatch) -> None:
     assert audio._public_ws_url("tok") == "/whatsapp/calls/audio?token=tok"
 
 
+# ── dependencies ──────────────────────────────────────────────────────────────
+
+def test_websocket_client_is_available() -> None:
+    """The audio proxy imports `websockets` lazily, inside the socket handler.
+
+    That means a missing dependency wouldn't fail at startup or in any other
+    test — it would fail the first time someone pressed Talk. This is the guard
+    that catches it in CI instead."""
+    import websockets  # noqa: F401
+
+    assert hasattr(websockets, "connect")
+
+
 # ── bridge URL ────────────────────────────────────────────────────────────────
 
 def test_bridge_ws_url_carries_session_and_call(monkeypatch) -> None:

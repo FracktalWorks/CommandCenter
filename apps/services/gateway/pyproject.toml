@@ -9,6 +9,11 @@ dependencies = [
     "authlib>=1.3",
     "itsdangerous>=2.2",
     "httpx>=0.27",
+    # WebSocket CLIENT for the WhatsApp call-audio proxy (transport/calls_audio.py).
+    # uvicorn[standard] already pulls this in for the SERVER side, but relying on
+    # that would make duplex call audio break on a transitive-dependency change,
+    # and only at the moment someone tries to speak.
+    "websockets>=12",
     # AG-UI streaming endpoint (replaces copilot_chat.py SSE path — WBS 0.7)
     "agent-framework-ag-ui",
     "acb-common",

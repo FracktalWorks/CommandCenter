@@ -48,6 +48,7 @@ def _account_model(row: Any) -> WhatsAppAccountModel:
         quality_rating=row.quality_rating,
         last_synced_at=row.last_synced_at.isoformat() if row.last_synced_at else None,
         is_default=bool(row.is_default),
+        provider=getattr(row, "provider", None) or "cloud",
     )
 
 
@@ -60,7 +61,7 @@ async def list_accounts(user: UserContext = Depends(get_current_user)):
             text("""SELECT id, phone_number, phone_number_id, waba_id,
                            display_name, avatar_color, sync_status, sync_error,
                            history_import_phase, quality_rating, last_synced_at,
-                           is_default
+                           is_default, provider
                     FROM wa_accounts WHERE user_id = :uid
                     ORDER BY is_default DESC, created_at"""),
             {"uid": user.email or "anonymous"},

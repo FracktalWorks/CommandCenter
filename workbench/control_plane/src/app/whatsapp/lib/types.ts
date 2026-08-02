@@ -24,6 +24,54 @@ export type WaAccount = {
   quality_rating: string | null;
   last_synced_at: string | null;
   is_default: boolean;
+  /** 'cloud' (Meta Cloud API) or 'whatsmeow' (QR-paired personal bridge).
+   *  Voice calling exists only on the bridge transport. */
+  provider?: string;
+};
+
+/** One voice call as the bridge reports it. Mirrors callInfo in calls.go. */
+export type WaCall = {
+  call_id: string;
+  account_id: string;
+  peer: string;
+  direction: "outgoing" | "incoming" | "";
+  kind: "direct" | "group" | "";
+  phase: string;
+  targets?: string[];
+  started_at?: string;
+  ended_at?: string;
+  end_reason?: string;
+  recording?: string;
+  /** Peer audio actually received. Zero on a connected call means signalling
+   *  worked but media never flowed. */
+  audio_seconds?: number;
+};
+
+/** Playable URL for a call's recording, via the binary-safe proxy route. */
+export function callRecordingUrl(accountId: string, callId: string): string {
+  return `/api/whatsapp/calls/${encodeURIComponent(
+    callId
+  )}/recording?account_id=${encodeURIComponent(accountId)}`;
+}
+
+export type WaCallList = {
+  calls: WaCall[];
+  bridge_reachable: boolean;
+};
+
+/** Whether a paired number can place a call, and if not, what's missing. */
+export type WaCallDiagnostics = {
+  account_id: string;
+  session_exists: boolean;
+  logged_in: boolean;
+  connected: boolean;
+  caller_ready: boolean;
+  own_jid?: string;
+  push_name?: string;
+  active_calls: number;
+  recording_dir?: string;
+  verdict: string;
+  bridge_reachable: boolean;
 };
 
 // Connect wizard (W11) + Embedded Signup (W12).

@@ -11,6 +11,11 @@
 //	POST /send             {session,to,body,reply_to}       -> {id}
 //	POST /media            {session,media_id}               -> raw bytes
 //	POST /read             {session,message_id,chat,sender} -> {ok}
+//	POST /call             {session,to|group_id|targets}    -> callInfo
+//	POST /call/hangup      {session,call_id}                -> callInfo
+//	POST /call/answer      {session,call_id}                -> callInfo
+//	POST /call/reject      {session,call_id}                -> callInfo
+//	GET  /calls?session=                                    -> {calls}
 //	GET  /health                                            -> {ok}
 //
 // It holds NO gateway credentials and never talks to Meta's Graph API. NOTE:
@@ -69,8 +74,12 @@ func main() {
 	defer meta.Close()
 
 	gw := NewGatewayClient(cfg.GatewayURL, cfg.Secret)
-	mgr := NewSessionManager(container, meta, gw, logger)
+	mgr := NewSessionManager(container, meta, gw, logger, cfg.CallRecordDir)
 	mgr.RestoreSessions(ctx)
+	// Sweep once at boot so a restart reclaims disk even if the process never
+	// stayed up long enough for the periodic pass to fire.
+	mgr.calls.sweepRecordings(cfg.CallRetentionDays)
+	go reapCalls(mgr, cfg.CallReapAfter, cfg.CallRetentionDays)
 
 	srv := &Server{cfg: cfg, mgr: mgr, log: logger}
 	httpSrv := &http.Server{Addr: cfg.Addr, Handler: srv.routes(), ReadHeaderTimeout: 10 * time.Second}
@@ -114,7 +123,123 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("POST /send", s.auth(s.handleSend))
 	mux.HandleFunc("POST /media", s.auth(s.handleMedia))
 	mux.HandleFunc("POST /read", s.auth(s.handleRead))
+	mux.HandleFunc("POST /call", s.auth(s.handleCall))
+	mux.HandleFunc("POST /call/hangup", s.auth(s.handleCallAction))
+	mux.HandleFunc("POST /call/answer", s.auth(s.handleCallAction))
+	mux.HandleFunc("POST /call/reject", s.auth(s.handleCallAction))
+	mux.HandleFunc("GET /calls", s.auth(s.handleCallList))
+	mux.HandleFunc("GET /calls/diagnostics", s.auth(s.handleCallDiagnostics))
+	mux.HandleFunc("GET /calls/recording", s.auth(s.handleCallRecording))
 	return mux
+}
+
+// handleCallRecording streams a call's recorded audio. The path comes from the
+// registry, never from the request, so this can't be walked into a file read.
+func (s *Server) handleCallRecording(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	path, err := s.mgr.RecordingFor(q.Get("session"), q.Get("call_id"))
+	if err != nil {
+		http.Error(w, err.Error(), statusForMedia(err))
+		return
+	}
+	w.Header().Set("Content-Type", "audio/wav")
+	http.ServeFile(w, r, path)
+}
+
+// handleCallDiagnostics reports whether an account can place a call, and if
+// not, which precondition is missing.
+func (s *Server) handleCallDiagnostics(w http.ResponseWriter, r *http.Request) {
+	session := r.URL.Query().Get("session")
+	if session == "" {
+		http.Error(w, "session required", http.StatusBadRequest)
+		return
+	}
+	writeJSON(w, http.StatusOK, s.mgr.CallDiagnostics(session))
+}
+
+// handleCall places an outbound call. A `to` places a 1:1 call; a `group_id` or
+// two-plus `targets` places a group call.
+func (s *Server) handleCall(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Session string   `json:"session"`
+		To      string   `json:"to"`
+		GroupID string   `json:"group_id"`
+		Targets []string `json:"targets"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil {
+		http.Error(w, "invalid json", http.StatusBadRequest)
+		return
+	}
+	if body.Session == "" {
+		http.Error(w, "session required", http.StatusBadRequest)
+		return
+	}
+
+	var (
+		info callInfo
+		err  error
+	)
+	if body.GroupID != "" || len(body.Targets) > 0 {
+		info, err = s.mgr.PlaceGroupCall(r.Context(), body.Session, body.GroupID, body.Targets)
+	} else {
+		info, err = s.mgr.PlaceCall(r.Context(), body.Session, body.To)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), statusForCall(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// handleCallAction serves hangup/answer/reject — same body, different verb,
+// picked off the request path so the three stay in step.
+func (s *Server) handleCallAction(w http.ResponseWriter, r *http.Request) {
+	var body struct {
+		Session string `json:"session"`
+		CallID  string `json:"call_id"`
+	}
+	if err := json.NewDecoder(r.Body).Decode(&body); err != nil || body.CallID == "" {
+		http.Error(w, "call_id required", http.StatusBadRequest)
+		return
+	}
+	var (
+		info callInfo
+		err  error
+	)
+	switch r.URL.Path {
+	case "/call/answer":
+		info, err = s.mgr.Answer(body.Session, body.CallID)
+	case "/call/reject":
+		info, err = s.mgr.Reject(body.Session, body.CallID)
+	default:
+		info, err = s.mgr.Hangup(body.Session, body.CallID)
+	}
+	if err != nil {
+		http.Error(w, err.Error(), statusForCall(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, info)
+}
+
+// handleCallList returns tracked calls, optionally filtered to one session.
+func (s *Server) handleCallList(w http.ResponseWriter, r *http.Request) {
+	calls := s.mgr.ListCalls(r.URL.Query().Get("session"))
+	writeJSON(w, http.StatusOK, map[string]any{"calls": calls})
+}
+
+// statusForCall maps a call error: unknown call → 404, no session/stack → 409
+// (a state precondition the caller can fix by pairing), otherwise 502.
+func statusForCall(err error) int {
+	switch {
+	case errors.Is(err, ErrCallNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, ErrNotConnected), errors.Is(err, ErrNoCaller):
+		return http.StatusConflict
+	case errors.Is(err, ErrPlaceTimeout):
+		return http.StatusGatewayTimeout
+	default:
+		return http.StatusBadGateway
+	}
 }
 
 // auth wraps a handler with the constant-time shared-secret check. An unset
@@ -248,3 +373,19 @@ func writeJSON(w http.ResponseWriter, status int, v any) {
 func strPtr(s string) *string    { return &s }
 func boolPtr(b bool) *bool       { return &b }
 func uint32Ptr(n uint32) *uint32 { return &n }
+
+// reapCalls periodically drops long-ended calls from the in-memory registry so
+// a bridge that runs for weeks doesn't retain every call it ever placed, and
+// sweeps recorded audio past its retention. A non-positive interval disables
+// both.
+func reapCalls(mgr *SessionManager, ttl time.Duration, retentionDays uint32) {
+	if ttl <= 0 {
+		return
+	}
+	ticker := time.NewTicker(ttl)
+	defer ticker.Stop()
+	for range ticker.C {
+		mgr.calls.reap(ttl)
+		mgr.calls.sweepRecordings(retentionDays)
+	}
+}

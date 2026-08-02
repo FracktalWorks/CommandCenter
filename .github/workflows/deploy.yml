@@ -278,6 +278,11 @@ jobs:
             grep -qE '^WHATSAPP_BRIDGE_GATEWAY_URL=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_GATEWAY_URL=http://localhost:8080" >> "$ENV_FILE"
             grep -qE '^WHATSAPP_BRIDGE_ADDR='        "$ENV_FILE" || echo "WHATSAPP_BRIDGE_ADDR=127.0.0.1:8790" >> "$ENV_FILE"
             grep -qE '^WHATSAPP_BRIDGE_STORE='       "$ENV_FILE" || echo "WHATSAPP_BRIDGE_STORE=/opt/acb/data/whatsapp_bridge/bridge-store.db" >> "$ENV_FILE"
+            # Voice calls: recorded audio lands beside the session store and is
+            # swept after RETENTION_DAYS (recording runs ~115 MB per call-hour,
+            # so unbounded would fill the VPS). Blank RECORD_DIR = no recording.
+            grep -qE '^WHATSAPP_BRIDGE_CALL_RECORD_DIR='    "$ENV_FILE" || echo "WHATSAPP_BRIDGE_CALL_RECORD_DIR=/opt/acb/data/whatsapp_bridge/call-recordings" >> "$ENV_FILE"
+            grep -qE '^WHATSAPP_BRIDGE_CALL_RETENTION_DAYS=' "$ENV_FILE" || echo "WHATSAPP_BRIDGE_CALL_RETENTION_DAYS=7" >> "$ENV_FILE"
             # Generate a strong shared secret once (used by BOTH gateway + bridge).
             if ! grep -qE '^WHATSAPP_BRIDGE_SECRET=.+' "$ENV_FILE"; then
               _wbsecret="$(openssl rand -hex 32 2>/dev/null || head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"

@@ -5,6 +5,9 @@
 import type {
   WaAccount,
   WaBridgeSession,
+  WaCall,
+  WaCallDiagnostics,
+  WaCallList,
   WaCategory,
   WaChat,
   WaChatContext,
@@ -320,6 +323,57 @@ export function createSavedReply(input: {
 
 export function deleteSavedReply(id: string) {
   return deleteJSON(`saved-replies/${id}`);
+}
+
+// ── voice calls (personal/bridge numbers only) ───────────────────────────────
+
+export function fetchCalls(accountId: string): Promise<WaCallList> {
+  return getJSON<WaCallList>(
+    `calls?account_id=${encodeURIComponent(accountId)}`,
+    { calls: [], bridge_reachable: false }
+  );
+}
+
+export function fetchCallDiagnostics(accountId: string): Promise<WaCallDiagnostics> {
+  return getJSON<WaCallDiagnostics>(
+    `calls/diagnostics?account_id=${encodeURIComponent(accountId)}`,
+    {
+      account_id: accountId,
+      session_exists: false,
+      logged_in: false,
+      connected: false,
+      caller_ready: false,
+      active_calls: 0,
+      verdict: "Couldn't reach the gateway to check calling readiness.",
+      bridge_reachable: false,
+    }
+  );
+}
+
+/** Place a 1:1 call (`to`) or a group call (`groupId`, or 2+ `targets`). */
+export function placeCall(input: {
+  accountId: string;
+  to?: string;
+  groupId?: string;
+  targets?: string[];
+}) {
+  return sendJSON<WaCall>("calls", "POST", {
+    account_id: input.accountId,
+    to: input.to ?? "",
+    group_id: input.groupId ?? "",
+    targets: input.targets ?? [],
+  });
+}
+
+export function callAction(
+  action: "hangup" | "answer" | "reject",
+  accountId: string,
+  callId: string
+) {
+  return sendJSON<WaCall>(`calls/${action}`, "POST", {
+    account_id: accountId,
+    call_id: callId,
+  });
 }
 
 export function fetchPulse(accountId: string, days = 7): Promise<WaPulse> {

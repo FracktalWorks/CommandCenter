@@ -65,6 +65,76 @@ def test_unparseable_config_means_shared() -> None:
     ) in ("", )
 
 
+def test_the_run_context_carries_the_key_the_executor_resolved() -> None:
+    """WS-6a: the same key that partitions disk + store also stamps telemetry.
+
+    ``_bind_run_instance`` is the executor's top-up bind, issued right after
+    ``_resolve_agent_instance`` (which needs ``loaded.config``, so it cannot
+    run at the run boundary where the other correlation fields are bound).
+    """
+    from acb_common import clear_run_context, get_run_context
+    from orchestrator.executor import (
+        _bind_run_instance,
+        _resolve_agent_instance,
+    )
+
+    key = _resolve_agent_instance(
+        PERSONAL_CFG, "email-assistant", "alice@fracktal.in",
+    )
+    _bind_run_instance(key)
+    try:
+        assert key == "u:alice@fracktal.in"
+        assert get_run_context()["instance"] == key
+    finally:
+        clear_run_context()
+    assert "instance" not in get_run_context()
+
+
+def test_the_late_bind_also_patches_the_live_presence_key(monkeypatch) -> None:
+    """WS-6a: `phase="start"` is published before the load, so the presence key
+    it writes has no instance. `_bind_run_instance` patches that snapshot —
+    otherwise /observability/active and the office roster could never show a
+    partition for ANY run. A shared run patches nothing."""
+    import acb_common
+    from acb_common import clear_run_context
+    from orchestrator.executor import _bind_run_instance
+
+    patched: list[tuple] = []
+    # The executor imports the name inside the call, so patching the package
+    # attribute is what intercepts it.
+    monkeypatch.setattr(
+        acb_common, "refresh_run_presence",
+        lambda run_id, **f: patched.append((run_id, f)),
+    )
+
+    try:
+        _bind_run_instance("u:alice@fracktal.in", "run-77")
+        assert patched == [("run-77", {"instance": "u:alice@fracktal.in"})]
+        _bind_run_instance("", "run-78")            # shared → nothing to patch
+        _bind_run_instance("u:alice@fracktal.in")   # no run_id → no presence key
+        assert len(patched) == 1
+    finally:
+        clear_run_context()
+
+
+def test_a_shared_run_stamps_no_partition() -> None:
+    """The shared key is '' — bound as an ABSENT field, not an empty one, so a
+    shared agent's telemetry is byte-identical to its pre-WS-6 shape."""
+    from acb_common import clear_run_context, get_run_context
+    from orchestrator.executor import (
+        _bind_run_instance,
+        _resolve_agent_instance,
+    )
+
+    _bind_run_instance(
+        _resolve_agent_instance(SHARED_CFG, "task-manager", "alice@fracktal.in")
+    )
+    try:
+        assert "instance" not in get_run_context()
+    finally:
+        clear_run_context()
+
+
 def test_directory_precedence_is_exact(tmp_path: Path, monkeypatch) -> None:
     """session override > instance > workspace_root > clone dir."""
     from orchestrator.executor import _resolve_effective_agent_dir

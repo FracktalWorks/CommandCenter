@@ -9,6 +9,7 @@ monkeypatched / exercised only on the no-loop swallow path).
 from __future__ import annotations
 
 import asyncio
+import json
 
 from acb_common import bind_run_context, clear_run_context, publish_activity
 from acb_common.activity import _build_event
@@ -31,6 +32,32 @@ def test_build_event_inherits_run_context():
     assert evt["source"] == "email"
     assert evt["run_id"] == "r1"
     assert "ts" in evt  # always stamped
+
+
+def test_build_event_inherits_the_run_instance():
+    # WS-6c: `instance` inherits through the SAME _INHERIT mechanism as
+    # agent/user/run_id, which is what makes a model call inside a personal
+    # agent's run attributable to that tenant partition with no change at the
+    # emitting call site.
+    bind_run_context(run_id="r-i", agent="email-assistant",
+                     user="alice@fracktal.in", instance="u:alice@fracktal.in")
+    try:
+        evt = _build_event({"kind": "model", "model": "gpt-x"})
+    finally:
+        clear_run_context()
+    assert evt["instance"] == "u:alice@fracktal.in"
+
+
+def test_build_event_for_a_shared_run_carries_no_instance():
+    # A shared agent binds no instance, so the event simply has no such field —
+    # the pre-WS-6 shape, byte for byte. Consumers that never heard of
+    # `instance` see exactly what they saw before.
+    bind_run_context(run_id="r-s", agent="task-manager", source="chat")
+    try:
+        evt = _build_event({"kind": "model", "model": "gpt-x"})
+    finally:
+        clear_run_context()
+    assert "instance" not in evt
 
 
 def test_build_event_explicit_fields_win_over_context():
@@ -158,11 +185,25 @@ class _FakePresenceRedis:
     async def xadd(self, stream, fields, **_kw):
         self.xadded.append(fields)
 
-    async def set(self, key, value, ex=None):
+    async def set(self, key, value, ex=None, xx=False):
+        # `xx=True` means "only if it already exists" — the guard that stops a
+        # presence patch from resurrecting a run whose end already landed.
+        if xx and key not in self.store:
+            return None
         self.store[key] = value
+        return True
+
+    async def get(self, key):
+        return self.store.get(key)
 
     async def delete(self, key):
         self.store.pop(key, None)
+
+    async def scan(self, cursor, match=None, count=None):
+        return 0, list(self.store)
+
+    async def mget(self, keys):
+        return [self.store.get(k) for k in keys]
 
 
 def test_app_start_creates_a_presence_key_like_an_agent_run(monkeypatch):
@@ -195,6 +236,87 @@ def test_app_end_clears_the_presence_key(monkeypatch):
         "kind": "app", "phase": "end", "run_id": "app-run-2",
     }))
     assert activity._live_key("app-run-2") not in r.store
+
+
+def test_presence_carries_the_instance_after_the_late_bind(monkeypatch):
+    # WS-6a: the presence key is written from the phase="start" event, which is
+    # published BEFORE load_agent and therefore before `instance` exists. Without
+    # refresh_run_presence the snapshot — and so /observability/active and the
+    # office roster, which read it verbatim — could never carry a partition for
+    # ANY run. Patching the snapshot is preferred over re-publishing `start`,
+    # which every stream consumer would read as a second activation.
+    from acb_common import activity
+
+    r = _FakePresenceRedis()
+    monkeypatch.setattr(activity, "_get_client", lambda: r)
+
+    async def _run():
+        await activity._axadd({
+            "kind": "agent", "phase": "start", "run_id": "run-inst",
+            "agent": "email-assistant", "user": "alice@fracktal.in",
+            "source": "email", "ts": "2026-08-02T00:00:00+00:00",
+        })
+        # The pre-fix state, asserted so the regression is visible if the
+        # refresh is ever removed.
+        before = json.loads(r.store[activity._live_key("run-inst")])
+        assert "instance" not in before
+
+        activity.refresh_run_presence("run-inst", instance="u:alice@fracktal.in")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+        # …and the office view's own reader sees it.
+        return await activity.active_runs()
+
+    live = asyncio.run(_run())
+    snap = json.loads(r.store[activity._live_key("run-inst")])
+    assert snap["instance"] == "u:alice@fracktal.in"
+    # Nothing else in the snapshot was disturbed — it is a patch, not a rewrite.
+    assert snap["agent"] == "email-assistant"
+    assert snap["user"] == "alice@fracktal.in"
+    assert snap["phase"] == "start"
+    assert len(r.xadded) == 1, "the refresh must not add a stream entry"
+    assert [e["instance"] for e in live] == ["u:alice@fracktal.in"]
+
+
+def test_presence_refresh_never_resurrects_a_finished_run(monkeypatch):
+    # A patch that lands after the end event (or for a run that never started)
+    # must be a no-op — a resurrected presence key would show a finished agent
+    # as working for LIVE_TTL_SECONDS.
+    from acb_common import activity
+
+    r = _FakePresenceRedis()
+    monkeypatch.setattr(activity, "_get_client", lambda: r)
+
+    async def _run():
+        await activity._axadd({
+            "kind": "agent", "phase": "start", "run_id": "run-gone",
+        })
+        await activity._axadd({
+            "kind": "agent", "phase": "end", "run_id": "run-gone",
+        })
+        activity.refresh_run_presence("run-gone", instance="u:a@b.com")
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    assert r.store == {}
+
+
+def test_presence_refresh_ignores_empty_and_missing_input(monkeypatch):
+    # A shared run's instance is '' — nothing to patch, and no Redis touched
+    # (not even the no-running-loop one-shot path, which would open a client).
+    from acb_common import activity
+
+    calls: list[tuple] = []
+
+    async def _spy(r, run_id, patch):
+        calls.append((run_id, patch))
+
+    monkeypatch.setattr(activity, "_apply_presence_patch", _spy)
+    activity.refresh_run_presence("run-x", instance="")
+    activity.refresh_run_presence("run-x", instance=None)
+    activity.refresh_run_presence("", instance="u:a@b.com")
+    assert calls == []
 
 
 def test_model_events_never_create_a_presence_key(monkeypatch):
@@ -245,6 +367,8 @@ def test_cost_summary_aggregates_daily_rollups(monkeypatch):
                     "agent|orchestrator|cost": "0.35",
                     "agent|orchestrator|calls": "2",
                     "agent|email-assistant|cost": "0.15",
+                    "instance|u:alice@fracktal.in|cost": "0.15",
+                    "instance|u:alice@fracktal.in|calls": "1",
                 }
             return {}
 
@@ -264,6 +388,67 @@ def test_cost_summary_aggregates_daily_rollups(monkeypatch):
     assert out["by_agent"]["orchestrator"]["cost"] == 0.35
     assert out["by_agent"]["orchestrator"]["calls"] == 2
     assert out["by_agent"]["email-assistant"]["cost"] == 0.15
+    # WS-6a interim: "what did alice's personal agents cost today" is a rollup
+    # dimension, not a scan of the (2000-entry-bounded) raw stream.
+    assert out["by_instance"]["u:alice@fracktal.in"]["cost"] == 0.15
+    assert out["by_instance"]["u:alice@fracktal.in"]["calls"] == 1
+
+
+def test_cost_rollup_folds_the_tenant_partition(monkeypatch):
+    # The write side of the same dimension: a priced model event carrying an
+    # instance increments instance|<key>|cost, and a shared run (no instance)
+    # writes no such field at all — byte-identical to the pre-WS-6 rollup.
+    from acb_common import activity
+
+    class _FakePipe:
+        def __init__(self):
+            self.ops: list[tuple] = []
+
+        def hincrbyfloat(self, key, field, val):
+            self.ops.append((field, val))
+
+        def hincrby(self, key, field, val):
+            self.ops.append((field, val))
+
+        def expire(self, key, ttl):
+            pass
+
+        async def execute(self):
+            return []
+
+    class _FakeRedis:
+        def __init__(self):
+            self.pipe = _FakePipe()
+
+        def pipeline(self, transaction=False):
+            return self.pipe
+
+    r = _FakeRedis()
+    asyncio.run(activity._record_cost(r, {
+        "kind": "model", "model": "gpt-4o-mini", "cost_usd": 0.25,
+        "tokens": 100, "source": "email", "agent": "email-assistant",
+        "instance": "u:alice@fracktal.in",
+    }))
+    fields = dict(r.pipe.ops)
+    assert fields["instance|u:alice@fracktal.in|cost"] == 0.25
+    assert fields["instance|u:alice@fracktal.in|calls"] == 1
+
+    shared = _FakeRedis()
+    asyncio.run(activity._record_cost(shared, {
+        "kind": "model", "model": "gpt-4o-mini", "cost_usd": 0.25,
+        "tokens": 100, "source": "chat", "agent": "task-manager",
+    }))
+    assert not [f for f, _ in shared.pipe.ops if f.startswith("instance|")]
+
+
+def test_split_field_parses_an_instance_key():
+    # Partition keys contain ':' and '@' but never '|', so the dim|name|metric
+    # parse is unambiguous.
+    from acb_common.activity import _split_field
+    assert _split_field("instance|u:alice@fracktal.in|cost") == (
+        "instance", "u:alice@fracktal.in", "cost")
+    assert _split_field("instance|t:growth|calls") == (
+        "instance", "t:growth", "calls")
 
 
 def test_cost_summary_empty_history_is_all_zero(monkeypatch):

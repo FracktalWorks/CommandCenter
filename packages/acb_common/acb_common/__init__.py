@@ -12,6 +12,7 @@ from acb_common.activity import (
     publish_activity,
     read_activity_since,
     recent_activity,
+    refresh_run_presence,
 )
 from acb_common.settings import Settings, get_settings
 
@@ -28,4 +29,5 @@ __all__ = [
     "publish_activity",
     "read_activity_since",
     "recent_activity",
+    "refresh_run_presence",
 ]

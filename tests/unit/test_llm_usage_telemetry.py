@@ -132,6 +132,133 @@ def test_emit_usage_never_raises_on_bad_response():
     llm_client._emit_usage("gpt-4o-mini", "", {"usage": None}, source="memory")
 
 
+# ── WS-6c: the D1 attribution four-tuple (run_id, member, agent, instance) ──
+# These assert on the event as it reaches the STREAM (_axadd), not on the
+# publish_activity kwargs — the whole point is that the run context, not the
+# call site, supplies the stamp, and that merge happens inside _build_event.
+
+_USAGE = {"usage": {"prompt_tokens": 1000, "completion_tokens": 500,
+                    "total_tokens": 1500}}
+
+
+def _emit_and_capture(monkeypatch, *, bind: dict | None = None, **emit_kw):
+    """Run _emit_usage on a loop with _axadd stubbed; return the events."""
+    import asyncio
+
+    from acb_common import activity, bind_run_context, clear_run_context
+
+    recorded: list[dict] = []
+
+    async def _fake_axadd(evt):
+        recorded.append(evt)
+
+    monkeypatch.setattr(activity, "_axadd", _fake_axadd)
+
+    async def _run():
+        if bind:
+            bind_run_context(**bind)
+        try:
+            llm_client._emit_usage("gpt-4o-mini", "tier-fast", _USAGE, **emit_kw)
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+        finally:
+            clear_run_context()
+
+    asyncio.run(_run())
+    return recorded
+
+
+def test_in_run_call_is_attributed_with_no_call_site_change(monkeypatch):
+    # THE acceptance criterion: _emit_usage is called exactly as it always was
+    # — no attribution kwargs at all — and the activation still carries all
+    # four D1 fields, because they ride the run context.
+    events = _emit_and_capture(monkeypatch, bind={
+        "run_id": "run-42", "thread_id": "t-1", "agent": "email-assistant",
+        "user": "alice@fracktal.in", "source": "email",
+        "instance": "u:alice@fracktal.in",
+    })
+    assert len(events) == 1
+    ev = events[0]
+    assert ev["run_id"] == "run-42"
+    assert ev["user"] == "alice@fracktal.in"        # the member
+    assert ev["agent"] == "email-assistant"
+    assert ev["instance"] == "u:alice@fracktal.in"  # the tenant partition
+    # …without losing anything the feed already showed.
+    assert ev["kind"] == "model"
+    assert ev["model"] == "gpt-4o-mini"
+    assert ev["source"] == "email"
+    assert ev["tokens"] == 1500
+
+
+def test_shared_agent_run_emits_no_instance_field(monkeypatch):
+    # '' (shared) is absent, never the string "''" — the event shape a
+    # pre-WS-6 consumer already handles.
+    events = _emit_and_capture(monkeypatch, bind={
+        "run_id": "run-43", "agent": "task-manager", "source": "chat",
+        "instance": "",
+    })
+    assert "instance" not in events[0]
+
+
+def test_out_of_run_caller_may_pass_the_stamp_explicitly(monkeypatch):
+    # The v1_compat-shaped case (WS-6b's future call site): a bare HTTP request
+    # inherits no contextvars, so it supplies the tuple itself. `member` lands
+    # on the feed's `user` field so both paths roll up identically.
+    events = _emit_and_capture(
+        monkeypatch,
+        source="chat", agent="orchestrator",
+        run_id="run-44", member="bob@fracktal.in", instance="t:growth",
+    )
+    ev = events[0]
+    assert ev["run_id"] == "run-44"
+    assert ev["user"] == "bob@fracktal.in"
+    assert ev["agent"] == "orchestrator"
+    assert ev["instance"] == "t:growth"
+
+
+def test_existing_source_and_agent_kwargs_are_untouched(monkeypatch):
+    # No-regression: today's only explicit caller (v1_compat) passes exactly
+    # these two and must keep behaving identically.
+    events = _emit_and_capture(monkeypatch, source="chat", agent="apis-config")
+    ev = events[0]
+    assert ev["source"] == "chat"
+    assert ev["agent"] == "apis-config"
+    assert "run_id" not in ev and "instance" not in ev
+
+
+def test_unpriced_model_publishes_unknown_cost_never_zero(monkeypatch):
+    # The null-cost contract, end to end through the emitter: _compute_cost
+    # returns None for a stub-priced model and NOTHING may coerce that to 0 —
+    # a confident $0.00 is worse than an honest "—", and a 0 would also fold
+    # into the daily rollup as real spend.
+    from acb_llm.client import ensure_model_registered
+
+    model = "deepseek/deepseek-v98-unpriced-emit-test"
+    ensure_model_registered(model)
+
+    import asyncio
+
+    from acb_common import activity
+
+    recorded: list[dict] = []
+
+    async def _fake_axadd(evt):
+        recorded.append(evt)
+
+    monkeypatch.setattr(activity, "_axadd", _fake_axadd)
+
+    async def _run():
+        llm_client._emit_usage(model, "tier-fast", _USAGE)
+        await asyncio.sleep(0)
+        await asyncio.sleep(0)
+
+    asyncio.run(_run())
+    ev = recorded[0]
+    assert ev.get("cost_usd") is None
+    assert ev.get("cost_usd") != 0
+    assert "cost_usd" not in ev  # dropped, so the rollup skips it entirely
+
+
 # ── App-source inference (zero-touch cross-app attribution) ──────────────────
 
 def test_infer_app_source_reads_the_originating_app_module():

@@ -17,7 +17,11 @@ low-volume stream instead of one per conversation):
   ``event`` field (same convention as ``stream_relay.push_event``).
 * **Presence keys** (``cc:activity:live:{run_id}``) track in-flight agent runs
   (and, identically, in-flight Custom App AI calls — ``kind="app"``) with a
-  TTL so the "running now" panel survives a crash without leaking.
+  TTL so the "running now" panel survives a crash without leaking. The key's
+  body is the ``phase="start"`` event, so a field the run only learns about
+  *after* start (``instance``) reaches ``active_runs()`` — and therefore
+  ``/observability/active`` and ``/observability/roster`` — only via
+  :func:`refresh_run_presence`.
 
 This is the live signal only — the durable record stays in ``agent_run``
 (migration 50) and the correlated logs. Retention here is bounded by
@@ -47,7 +51,12 @@ COST_TTL_SECONDS = 60 * 60 * 24 * 45   # keep ~45 days of daily cost rollups
 
 # Fields copied from the run-correlation context when the caller omits them, so
 # a model call inside an agent run inherits that run's agent/user/thread/source.
-_INHERIT = ("agent", "user", "thread_id", "run_id", "source")
+# ``instance`` (WS-6a/6c) rides the same mechanism: because it is bound into
+# the run context, a model activation is attributed to the run's tenant
+# partition with no change at the emitting call site — completing decision D1's
+# (run_id, member, agent, instance) stamp on the live feed. A shared run binds
+# no instance, so the field is simply absent, exactly as before.
+_INHERIT = ("agent", "user", "thread_id", "run_id", "source", "instance")
 
 
 # ── Shared async client (created lazily on the running loop) ─────────────────
@@ -83,12 +92,20 @@ async def _record_cost(r: aioredis.Redis, evt: dict[str, Any]) -> None:
     """Fold one priced model call into today's rollup hash. Best-effort.
 
     One hash per UTC day (``cc:cost:{date}``) with additive fields so a daily
-    cost breakdown by model / app / agent is a single HGETALL — no migration,
-    no per-call Postgres write (the deliberate default; LLM_USAGE_AUDIT stays
-    the opt-in durable path). Fields:
+    cost breakdown by model / app / agent / tenant partition is a single
+    HGETALL — no migration, no per-call Postgres write (the deliberate default;
+    LLM_USAGE_AUDIT stays the opt-in durable path). Fields:
         total|cost|tokens|calls
         model|<m>|cost|tokens|calls
-        source|<s>|cost   ·   agent|<a>|cost
+        source|<s>|cost   ·   agent|<a>|cost   ·   instance|<i>|cost
+
+    The ``instance`` dimension (WS-6a) is what makes "what did alice's personal
+    agents cost today" answerable at all: ``instance`` otherwise exists only on
+    raw stream entries, which are bounded by ``STREAM_MAXLEN``. It is the LIVE
+    rollup only — bounded by ``COST_TTL_SECONDS`` and lost on a Redis flush;
+    the durable per-call record is still WS-6d. A shared run carries no
+    ``instance``, so it folds into the totals and no dimension row, exactly as
+    before.
     """
     cost = evt.get("cost_usd")
     if not isinstance(cost, (int, float)):
@@ -97,6 +114,7 @@ async def _record_cost(r: aioredis.Redis, evt: dict[str, Any]) -> None:
     model = str(evt.get("model") or "unknown")
     source = str(evt.get("source") or "unattributed")
     agent = str(evt.get("agent") or "")
+    instance = str(evt.get("instance") or "")
     key = _cost_key(_today())
     pipe = r.pipeline(transaction=False)
     pipe.hincrbyfloat(key, "total|cost", float(cost))
@@ -110,6 +128,9 @@ async def _record_cost(r: aioredis.Redis, evt: dict[str, Any]) -> None:
     if agent:
         pipe.hincrbyfloat(key, f"agent|{agent}|cost", float(cost))
         pipe.hincrby(key, f"agent|{agent}|calls", 1)
+    if instance:
+        pipe.hincrbyfloat(key, f"instance|{instance}|cost", float(cost))
+        pipe.hincrby(key, f"instance|{instance}|calls", 1)
     pipe.expire(key, COST_TTL_SECONDS)
     await pipe.execute()
 
@@ -174,8 +195,8 @@ def publish_activity(**fields: Any) -> None:
       ``phase``    — "start" | "end"   (agents + apps; models are single events)
       ``model``, ``tier``              — model activations
       ``status``, ``duration_ms``      — agent "end" events
-      ``agent``, ``user``, ``thread_id``, ``run_id``, ``source`` — inherited
-      from the current run context when omitted.
+      ``agent``, ``user``, ``thread_id``, ``run_id``, ``source``, ``instance``
+      — inherited from the current run context when omitted.
 
     Never raises and never blocks the caller: the Redis write is scheduled onto
     the running event loop (or a throwaway loop if none is running). A drop is
@@ -216,6 +237,93 @@ def publish_activity(**fields: Any) -> None:
             asyncio.run(_one_shot())
         except Exception:  # noqa: BLE001
             pass
+
+
+async def _apply_presence_patch(
+    r: aioredis.Redis, run_id: str, patch: dict[str, Any],
+) -> None:
+    """Merge *patch* into an EXISTING presence snapshot and refresh its TTL.
+
+    A miss is a deliberate no-op: the key is absent when the run has already
+    ended (or its start event was dropped), and re-creating it there would
+    resurrect a finished run in the "running now" panel. ``xx=True`` closes
+    the same race on the write side, so the worst case is that the patch is
+    lost — never that presence outlives the run.
+    """
+    key = _live_key(run_id)
+    raw = await r.get(key)
+    if not raw:
+        return
+    try:
+        snap = json.loads(raw)
+    except (json.JSONDecodeError, TypeError):
+        return
+    if not isinstance(snap, dict):
+        return
+    snap.update(patch)
+    await r.set(
+        key, json.dumps(snap, default=str),
+        ex=LIVE_TTL_SECONDS, xx=True,
+    )
+
+
+async def _axpresence(run_id: str, patch: dict[str, Any]) -> None:
+    await _apply_presence_patch(_get_client(), run_id, patch)
+
+
+def refresh_run_presence(run_id: str, **fields: Any) -> None:
+    """Patch the live presence snapshot of an in-flight run. Best-effort.
+
+    The presence key is written once, from the ``phase="start"`` event body.
+    A run that only learns a correlation field *after* it starts — the
+    executor resolves ``instance`` from ``loaded.config``, which is not
+    available at the run boundary (WS-6a) — would otherwise leave that field
+    permanently absent from ``active_runs()``, ``/observability/active`` and
+    the office roster, for **every** run.
+
+    This patches the snapshot in place instead of re-publishing the start
+    event: a duplicate ``start`` entry is visible to every stream consumer
+    (the SSE feed, the office view) and would be read as a second activation.
+    Presence is a snapshot, so overwriting it is invisible and idempotent.
+
+    Same contract as :func:`publish_activity` — never raises, never blocks,
+    a drop is acceptable. ``None``/empty values are skipped so a caller can
+    pass a field unconditionally without writing an empty one.
+
+    Both writes are loop tasks, so a patch issued before its own start event
+    has been flushed finds no key and is dropped. In practice the agent load
+    sits between them (many awaits); if it ever loses that race the result is
+    the pre-fix behaviour — a presence entry without the field — never a
+    corrupt or resurrected one.
+    """
+    patch = {k: v for k, v in fields.items() if v}
+    if not run_id or not patch:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        loop = None
+    if loop is not None:
+        try:
+            task = loop.create_task(_axpresence(run_id, patch))
+            task.add_done_callback(
+                lambda t: None if t.cancelled() else t.exception()
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return
+
+    async def _one_shot() -> None:
+        r = aioredis.from_url(get_settings().redis_url, decode_responses=True)
+        try:
+            await _apply_presence_patch(r, run_id, patch)
+        finally:
+            await r.aclose()
+
+    try:
+        asyncio.run(_one_shot())
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def _parse_entry(eid: str, fields: dict[str, str]) -> dict[str, Any] | None:
@@ -271,7 +379,9 @@ async def active_runs() -> list[dict[str, Any]]:
     """Return the agent runs currently in flight (presence keys not yet expired).
 
     Newest-first by start time. Self-healing: a run whose "end" was lost simply
-    ages out after ``LIVE_TTL_SECONDS``.
+    ages out after ``LIVE_TTL_SECONDS``. Each entry is the run's start event as
+    last patched by :func:`refresh_run_presence` — which is how a late-resolved
+    field like ``instance`` gets here at all.
     """
     r = _get_client()
     out: list[dict[str, Any]] = []
@@ -313,9 +423,11 @@ def _split_field(field: str) -> tuple[str, str, str]:
 async def cost_summary(days: int = 7) -> dict[str, Any]:
     """Aggregate the last *days* daily cost rollups for the /observability cost view.
 
-    Returns per-day totals (chronological), plus by-model and by-source rollups
-    and grand totals. Costs are in USD (best-effort litellm pricing). Never
-    raises — missing/short history just yields zeroes.
+    Returns per-day totals (chronological), plus by-model, by-source, by-agent
+    and by-instance rollups and grand totals. ``by_instance`` is keyed by the
+    tenant partition (``u:<email>`` / ``t:<team>``); shared runs carry no
+    partition and appear only in the totals. Costs are in USD (best-effort
+    litellm pricing). Never raises — missing/short history just yields zeroes.
     """
     days = max(1, min(days, 90))
     r = _get_client()
@@ -324,6 +436,12 @@ async def cost_summary(days: int = 7) -> dict[str, Any]:
     by_model: dict[str, dict[str, float]] = {}
     by_source: dict[str, dict[str, float]] = {}
     by_agent: dict[str, dict[str, float]] = {}
+    by_instance: dict[str, dict[str, float]] = {}
+    # Dimensions whose rollup is just cost+calls keyed by name (unlike `model`,
+    # which also carries tokens and a per-day breakdown).
+    flat_dims = {
+        "source": by_source, "agent": by_agent, "instance": by_instance,
+    }
     totals = {"cost": 0.0, "tokens": 0, "calls": 0}
 
     for i in range(days):
@@ -364,18 +482,15 @@ async def cost_summary(days: int = 7) -> dict[str, Any]:
                 elif metric == "calls":
                     m["calls"] += int(v)
                     dm["calls"] = int(v)
-            elif dim == "source" and name:
-                s = by_source.setdefault(name, {"cost": 0.0, "calls": 0})
+            elif name and dim in flat_dims:
+                # source / agent / instance accumulate identically — one branch
+                # instead of three keeps this loop from growing a copy-pasted
+                # arm per dimension (it is already a C901 hotspot).
+                e = flat_dims[dim].setdefault(name, {"cost": 0.0, "calls": 0})
                 if metric == "cost":
-                    s["cost"] += v
+                    e["cost"] += v
                 elif metric == "calls":
-                    s["calls"] += int(v)
-            elif dim == "agent" and name:
-                a = by_agent.setdefault(name, {"cost": 0.0, "calls": 0})
-                if metric == "cost":
-                    a["cost"] += v
-                elif metric == "calls":
-                    a["calls"] += int(v)
+                    e["calls"] += int(v)
         out_days.append(day_rec)
 
     out_days.reverse()  # oldest → newest for a left-to-right chart
@@ -383,14 +498,16 @@ async def cost_summary(days: int = 7) -> dict[str, Any]:
         m["cost"] = round(m["cost"], 6)
     for s in by_source.values():
         s["cost"] = round(s["cost"], 6)
-    for a in by_agent.values():
-        a["cost"] = round(a["cost"], 6)
+    for bucket in flat_dims.values():
+        for e in bucket.values():
+            e["cost"] = round(e["cost"], 6)
     totals["cost"] = round(totals["cost"], 6)
     return {
         "days": out_days,
         "by_model": by_model,
         "by_source": by_source,
         "by_agent": by_agent,
+        "by_instance": by_instance,
         "totals": totals,
         "window_days": days,
     }

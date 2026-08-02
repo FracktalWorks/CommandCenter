@@ -45,6 +45,9 @@ export type WaCall = {
   /** Peer audio actually received. Zero on a connected call means signalling
    *  worked but media never flowed. */
   audio_seconds?: number;
+  /** Relay bound and frames moving. The authoritative "audio can attach now"
+   *  signal — the phase string is advisory and may never read "active". */
+  media_ready?: boolean;
 };
 
 /** Playable URL for a call's recording, via the binary-safe proxy route. */

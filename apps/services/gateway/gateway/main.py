@@ -1011,8 +1011,12 @@ except Exception:  # pragma: no cover
 
 try:
     from gateway.routes.whatsapp import router as _whatsapp_router
+    from gateway.routes.whatsapp import ws_router as _whatsapp_ws_router
 
     app.include_router(_whatsapp_router)
+    # Separate router: the feature gate's dependency needs an HTTP Request,
+    # which FastAPI never supplies to a WebSocket route. See core.ws_router.
+    app.include_router(_whatsapp_ws_router)
 except Exception:  # pragma: no cover
     pass
 

@@ -125,10 +125,6 @@ GATED_ROUTERS: dict[str, set[str]] = {
         # it arrives from the Go service with no user session, so gating it
         # would drop call events rather than restrict anyone.
         "/whatsapp/bridge/call-event",
-        # The browser's call-audio WebSocket. It can't carry the internal
-        # bearer, so it authenticates with a short-lived signed token instead;
-        # gating it would drop audio rather than restrict anyone.
-        "/whatsapp/calls/audio",
     },
     "gateway.routes.email": {
         "/email/oauth/{provider}/callback",

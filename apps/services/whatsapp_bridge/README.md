@@ -46,6 +46,8 @@ number reuses the entire vertical unchanged (`provider = 'whatsmeow'`).
 | `POST /read`             | `{session,message_id,chat,sender}`   | `{ok}`             |
 | `GET  /health`           | —                                    | `{ok}`             |
 
+Voice calling adds `/call*` and `/calls*` — see [Voice calls](#voice-calls).
+
 `session` is the `wa_accounts.id` (UUID) the gateway assigns when the user starts
 pairing. `qr` is a ready-to-render `data:image/png;base64,…` of the current
 pairing code — the frontend shows it with a plain `<img>`, and the phone scans it
@@ -124,6 +126,9 @@ POST /call/hangup  {session, call_id}
 POST /call/answer  {session, call_id}                # inbound is never auto-answered
 POST /call/reject  {session, call_id}
 GET  /calls?session=<id>
+GET  /calls/diagnostics?session=<id>        # can this number place a call, and if not why
+GET  /calls/recording?session=&call_id=     # the call's WAV, resolved via the registry
+GET  /call/audio?session=&call_id=          # WebSocket: duplex mic/speaker (below)
 ```
 
 Each call's decoded peer audio is recorded to

@@ -1,7 +1,7 @@
 # Foundation Build‑Out Checklist — CommandCenter
 
 **Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13 · **Competitive refs added:** 2026-07-13
-**§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0). **That decision was answered on 2026-08-02 — `BO‑20 = Option A (in‑process)`** — so nothing in §BO‑20 is blocked on a decision any more. **BO‑20f and BO‑20a are BUILT (both 2026-08-02), moving §BO‑20 ☐ → ◑; BO‑20b–e are open and dispatchable.** Two claims in the stamp above were made false by BO‑20a and are corrected in place below: `xreadgroup`/`xgroup`/`xack` now exist (in `ingestion/consumer.py` only), and the lifespan's supervised loops are **six** wired / **all six** stopped on shutdown (how many actually *start* is data‑dependent — see §BO‑20 "What is true today" §7, which counts it honestly; the new ingestion consumer joins WhatsApp enrichment as flag‑gated **off**, so it starts nowhere today). `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
+**§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0). **That decision was answered on 2026-08-02 — `BO‑20 = Option A (in‑process)`** — so nothing in §BO‑20 is blocked on a decision any more. **BO‑20f and BO‑20a are BUILT (both 2026-08-02) and BO‑20b slice 1 (`emit_event` strict mode) 2026-08-03, moving §BO‑20 ☐ → ◑; BO‑20b slice 2 and BO‑20c–e are open and dispatchable.** ⚠️ **Slice 1 is necessary but NOT sufficient** (adversarial review 2026-08-03): the only sink production registers, `workflows.triggers.dispatch_event`, swallows every exception, so `raise_on_error=True` is a no‑op on the real registry — **slice 2's scope grew** to include a matching strict path in `dispatch_event`, and the §BO‑20 non‑goal "Not a change to `dispatch_event`" is struck and qualified. Two claims in the stamp above were made false by BO‑20a and are corrected in place below: `xreadgroup`/`xgroup`/`xack` now exist (in `ingestion/consumer.py` only), and the lifespan's supervised loops are **six** wired / **all six** stopped on shutdown (how many actually *start* is data‑dependent — see §BO‑20 "What is true today" §7, which counts it honestly; the new ingestion consumer joins WhatsApp enrichment as flag‑gated **off**, so it starts nowhere today). `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
 **Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block) · competitive learnings (proven reference implementations from Hermes Agent & OpenClaw) in `ai-company-brain/specs/competitive_hardening_2026-07.md` (`CH-*`) and `COMPETITIVE_COMPARISON.md`.
 
 > **🚀 Deploy status:** read live deploy state from `gh run list` and `git log origin/main` — not from this doc. Next recommended P0: **BO‑8** (secret rotation + history purge — owner‑gated); BO‑1's approval loop has since shipped (see §BO‑1).
@@ -151,9 +151,13 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 > Nothing below is blocked on a decision any more. BO‑20f needed no consumer,
 > no flag and no decision and shipped first; **BO‑20a is BUILT** (2026-08-02,
 > pending review) with the consumer shipped **OFF** behind `INGESTION_CONSUMER`.
-> **BO‑20b–e remain open and are now dispatchable as written.** The item is
-> ◑ as of **2026-08-02**: two of six sub‑items built, the flag unflipped in
-> every environment. The *reason* the row existed has changed twice now, so
+> **BO‑20b slice 1 (the `emit_event` strict mode) is BUILT 2026-08-03; its
+> slice 2 and BO‑20c–e remain open.** ⚠️ **Slice 1 is *necessary but not
+> sufficient*** — the only registered sink swallows everything, so slice 2 also
+> owns a strict path in `workflows.triggers.dispatch_event` (scope grew
+> 2026-08-03; see §BO‑20b's Blocker bullet). The item is
+> ◑ as of **2026-08-03**: two and a half of six sub‑items built, the flag
+> unflipped in every environment. The *reason* the row existed has changed twice now, so
 > read "What is true today" before anything else.
 > (`work_plan.md`'s WS‑4 State cell mirrors this split.)
 >
@@ -161,8 +165,11 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 > BO‑20f's code landed later the same day): BO‑20f no
 > longer claims to unblock WS‑11 Slice 4 (it unblocks multi‑channel event
 > triggers; Slice 4 needs BO‑20a–e + BO‑7); Option B's undefined dispatch step is
-> stated; BO‑20b/d/e now prescribe their constants as literals so a "retry with
-> backoff" ticket cannot close green with `MAX_ATTEMPTS = 1`.
+> stated; BO‑20b/d/e now prescribe their constants as literals so a "retry"
+> ticket cannot close green with `MAX_ATTEMPTS = 1`. *(BO‑20b's prescribed
+> `_backoff` was struck 2026-08-03: it contradicted that same section's
+> `_RECLAIM_MIN_IDLE_MS`, and a prescribed literal does not help when nothing
+> pins the **call site** — see the DECISION in §BO‑20b.)*
 
 #### What is true today (each claim re‑verified against the tree 2026-08-02)
 
@@ -281,7 +288,7 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
     it is now belt‑and‑braces rather than the load‑bearing conditionality it
     was.
 
-**Why the item still matters:** retry/backoff (BO‑20b), a drainable dead‑letter
+**Why the item still matters:** retry via PEL reclaim (BO‑20b), a drainable dead‑letter
 path (BO‑20c), per‑source rate limiting (BO‑20d), and bounded concurrency
 (BO‑20e). Two of the six reasons are **closed**: **coverage** — "only one of
 three receivers emits anything at all" — by BO‑20f, and **durability/replay** —
@@ -311,8 +318,27 @@ in every environment the streams are still trimmed unread today.
   (durable queued runs = consumer + retry + DLQ), so BO‑20f alone does not
   release it — see the Tickets sequence below.
 - **Not a new inbound channel.** Slack/Telegram ingress is WBS 3.3 / CH‑4.
-- **Not a change to `dispatch_event`.** The trigger matcher, `start_run`, and the
-  agent‑routing half of `/agent/webhook/{source}` are untouched.
+- ~~**Not a change to `dispatch_event`.**~~ — **QUALIFIED 2026‑08‑03. BO‑20b
+  slice 2 now owns a narrow, additive change to it.**
+  **DECISION (agent‑proposed 2026‑08‑03, owner may overrule):** `dispatch_event`
+  gains a keyword‑only strict path, because without one a strict `emit_event`
+  has nothing that can fail — `dispatch_event` is the **only** sink production
+  registers (`main.py:1074`) and it swallows everything (`triggers.py:98‑104`),
+  so `raise_on_error=True` is a no‑op on the real registry. The failure boundary
+  is prescribed in §BO‑20b's Blocker bullet below (propagate the `_get_db`/query
+  failure and `RunRejected`; **never** the per‑run execution failures, which are
+  fire‑and‑forget by design at `service.py:226`).
+  *Alternative rejected:* leave `dispatch_event` untouched and accept that the
+  consumer cannot distinguish "dispatched" from "swallowed". That is not a
+  smaller version of BO‑20b — it is BO‑20b delivering nothing: the retry/DLQ
+  machinery would be dead code against the only sink that exists, with every
+  test green, which is exactly the silent drop this item exists to abolish.
+  **Still non‑goals, unchanged:** the trigger matcher (`event_trigger_matches`),
+  `start_run` and the concurrency caps, and the agent‑routing half of
+  `/agent/webhook/{source}` — which calls `dispatch_event` **directly**
+  (`routes/agent.py:3476‑3478`) and must keep receiving today's best‑effort
+  default (an HTTP receiver must never 5xx because a workflow sink failed). The
+  strict path is opt‑in per call site, never the default.
 - **Not BO‑9.** See the dependency resolution below.
 
 #### BO‑20.0 — OWNER DECISION: the process model — ✅ **ANSWERED 2026-08-02**
@@ -480,8 +506,15 @@ provider‑webhook path into the sink registry** — precisely, the only caller 
 **Sequence: f → a → b → c → (d, e).** BO‑20f needed no consumer, no owner
 decision and no flag; it is what **multi‑channel event triggers** actually need,
 and it **shipped 2026-08-02**. **BO‑20a shipped the same day**, once §BO‑20.0
-was answered `Option A`. **BO‑20b is next and is dispatchable now** — nothing in
-b–e waits on a decision any more; each waits only on its predecessor.
+was answered `Option A`. **BO‑20b is next; its slice 1 (`emit_event` strict
+mode) shipped 2026-08-03 and its slice 2 (the loop change) is dispatchable** —
+nothing in b–e waits on an *owner* decision any more; each waits only on its
+predecessor. Slice 2 does carry **three** agent‑proposed engineering decisions
+recorded in §BO‑20b (the retry mechanism; whether a timeout is a failure; and —
+added 2026-08-03 — giving `dispatch_event` a matching strict path, which struck
+a §BO‑20 non‑goal and **grew slice 2's scope**, because without it slice 1's
+`raise_on_error=True` is a no‑op against the only sink production registers);
+an owner may overrule any, but none blocks dispatch.
 
 ⚠️ **Neither BO‑20f nor BO‑20a unblocks WS‑11 Slice 4.**
 `specs/workflows_app.md:217` defines Slice 4 as *"(post‑BO‑20/BO‑7): durable
@@ -626,7 +659,10 @@ the provider retries and makes the backlog worse.
 > now does one extra function‑body import of `ingestion.consumer` plus one
 > `os.environ` read per request. Nothing observable changes; the wording is
 > corrected because a claim that strong is either exact or it is decoration.)*
-> **BO‑20b is the next ticket and needs no new decision.**
+> **BO‑20b is the next ticket and needs no new *owner* decision** — its slice 1
+> shipped 2026-08-03 and its slice 2 carries three agent‑proposed decisions
+> (retry mechanism; timeout‑is‑a‑failure; a strict path in `dispatch_event`,
+> which grew slice 2's scope) recorded in §BO‑20b.
 
 `apps/services/ingestion/ingestion/consumer.py`: `XGROUP CREATE <stream>
 cc-ingest $ MKSTREAM` per stream (idempotent — swallow `BUSYGROUP` **only**;
@@ -693,9 +729,13 @@ same shape as their `emit_event` import. (`settings.py` was on this ticket's
 Files list until 2026-08-02; it was wrong and is struck.)
 
 **Ack semantics are interim by design:** BO‑20a acks after dispatch **regardless
-of outcome**. Honest `XACK` + retry + DLQ is BO‑20b, which also adds the
-`emit_event(..., raise_on_error=True)` strict mode this loop would need to
-*observe* a failure at all. Do not pre‑build it. One deliberate exception: an
+of outcome**. Honest `XACK` + retry + DLQ is BO‑20b. Its slice 1 shipped the
+`emit_event(..., raise_on_error=True)` strict mode this loop needs to *observe*
+a failure at all (2026-08-03) — `consumer.py` is unchanged by it and still acks
+regardless of outcome; slice 2 is what changes that. ⚠️ Slice 1 alone is **not
+enough** for the loop to observe anything: `workflows.triggers.dispatch_event`,
+the only sink the gateway registers, swallows every exception, so slice 2 must
+also give *it* a strict path. Do not pre‑build slice 2. One deliberate exception: an
 entry whose `data` does not decode to a JSON **object** is logged
 (`consumer.entry_undecodable`) and acked **without** dispatch — there is nothing
 a sink could act on, and re‑delivering it forever would wedge the group.
@@ -720,7 +760,13 @@ pass (`XAUTOCLAIM` / `XPENDING` + `XCLAIM`) reclaims **any** consumer name in th
 group, including a dead pid's — **but the window is finite**: `queue._MAXLEN`
 (`queue.py:46`) trims each stream at 10 000 entries, and a trimmed entry is
 beyond the PEL's reach for good. That is why BO‑20b's done‑when below requires
-the reclaim pass to run **at startup**, not only on a periodic cadence.
+the reclaim pass to run **at startup**, not only on a periodic cadence — and,
+since 2026-08-03, why it *also* requires the **periodic** pass to exist as a
+prescribed cadence constant: state 1 above strands entries with **no restart**
+at all, so a startup‑only reclaim never reaches them. A reclaim over a trimmed
+entry surfaces as `XAUTOCLAIM`'s **third** reply element (deleted ids), which
+BO‑20b must log rather than unpack away — that is the only report those events
+ever get.
 
 - **Done when (A — delivery + ack):** ✅ `tests/unit/test_ingestion_consumer.py`
   asserts, with the consumer's Redis client faked at `consumer._get_client` per
@@ -845,36 +891,277 @@ the reclaim pass to run **at startup**, not only on a periodic cadence.
 
 ---
 
-**BO‑20b — Retry with backoff + honest `XACK` semantics + DLQ hand‑off.** ✅ **AGENT‑SAFE** · *after BO‑20a*
+**BO‑20b — Retry via PEL reclaim + honest `XACK` semantics + DLQ hand‑off.** 🔄 **slice 1 shipped, slice 2 open (scope grew 2026‑08‑03)** · ✅ **AGENT‑SAFE** · *after BO‑20a*
 A failed dispatch **must not** be `XACK`'d — the entry stays in the group's PEL
-and a reclaim pass (`XAUTOCLAIM`, or `XPENDING` + `XCLAIM` with a `min-idle-time`)
-re‑delivers it after a backoff. After `MAX_ATTEMPTS` deliveries the entry is
-written to `ingestion:dlq` via the existing `queue.enqueue_dlq` (`:79`) and
-`XACK`'d exactly once, so it leaves the PEL and never re‑delivers.
+and a reclaim pass (`XPENDING` for the counter, then `XAUTOCLAIM` with a
+`min-idle-time`) re‑delivers it. After `MAX_ATTEMPTS` **deliveries** the entry is
+written to `ingestion:dlq` with the four fields `queue.enqueue_dlq` writes
+(`:79`) plus `times_delivered`, and `XACK`'d exactly once, so it leaves the PEL
+and never re‑delivers. **"A failed dispatch" is the load‑bearing phrase:** the
+consumer can only see one if *both* `emit_event` (slice 1, done) and the sink the
+gateway registers (`dispatch_event`, slice 2) have a strict path — see the
+Blocker bullet.
+
+**Slice status (2026‑08‑03).** **Slice 1 — the `emit_event` half of the blocker
+— is BUILT** (`raise_on_error`, keyword‑only, default `False`; pinned by three
+tests in `tests/unit/test_ingestion_consumer.py` §J). `consumer.py` is
+**untouched** by that slice and still acks regardless of outcome — BO‑20a's
+interim semantics. **Slice 2 is everything else below** and is the open half.
+⚠️ **Slice 2's scope GREW on 2026‑08‑03** (adversarial review): slice 1 is
+*necessary but not sufficient* — the only sink production registers,
+`workflows.dispatch_event`, swallows every exception, so `raise_on_error=True`
+is a **no‑op on the real registry**. Slice 2 therefore also owns a matching
+strict path in `dispatch_event`, with a prescribed failure boundary; see the
+Blocker bullet below and the qualified non‑goal in §"Scope and non‑goals".
+- **DECISION (agent‑proposed 2026‑08‑03, owner may overrule) — the retry
+  mechanism is (b) PEL‑and‑reclaim, NOT an in‑loop sleep.** The two constants
+  this ticket used to prescribe were mutually incoherent: a reclaim's
+  `min-idle-time` of 60 s is the floor on the interval between two deliveries of
+  the same entry and it **dominates every value** in the old `1, 2, 4, 8, 16 s`
+  schedule, so under the reclaim model `_backoff` could not govern anything. The
+  only model in which that schedule was reachable was
+  `await asyncio.sleep(_backoff(n))` inside `_dispatch_entry` — which
+  reintroduces exactly what BO‑20a added `_DISPATCH_TIMEOUT_SECS` to prevent:
+  one serial loop drains all three streams, so five attempts against one poison
+  entry would block **every** source for up to 5 × 30 s + 15 s ≈ **165
+  contiguous seconds**. Under (b) the head‑of‑line cost of a poison entry stays
+  exactly BO‑20a's — one `_DISPATCH_TIMEOUT_SECS` per delivery — and unrelated
+  entries drain between attempts. One property falls out for free and one only
+  looks like it does — together they are why this is not a close call, but read
+  both qualifications before relying on either:
+  - **The attempt counter is Redis's, so it survives a *consumer* restart.**
+    `XPENDING`'s `times_delivered` is the counter. An in‑process
+    `dict[entry_id, int]` resets on every restart, so a poison entry would loop
+    forever and **never reach the DLQ** — this ticket's headline guarantee,
+    defeated with every test green. (`XREADGROUP >` reports no delivery count
+    and neither does `XAUTOCLAIM`; only `XPENDING` carries it. Budget one
+    `XPENDING` per reclaim pass, read **before** the `XAUTOCLAIM` — see the
+    done‑when that pins the sequence.)
+    - ⚠️ **Qualified:** it survives a **gateway** restart, not a **Redis** one.
+      `_ensure_groups` re‑runs whenever a cycle fails (`consumer.py:295‑297,
+      304`) and `xgroup_create(..., id="$")` after a Redis flush or restart
+      re‑creates the group **at the tail** — PEL, pending entries and every
+      `times_delivered` gone, silently. `infra/docker-compose.yml:51` runs
+      `redis:7-alpine` with a `/data` volume and **no `appendonly`** anywhere in
+      `infra/`, so durability is default RDB save points only. Redis losing its
+      state is an event‑loss window this ticket does not close and does not
+      claim to.
+    - ⛔ **`JUSTID` is FORBIDDEN in the reclaim call.** Redis's contract is that
+      `XAUTOCLAIM … JUSTID` does **not** increment the delivery counter — which
+      under this design *is* the entire retry mechanism: `times_delivered`
+      freezes at 1, `MAX_ATTEMPTS` is never reached, no entry ever reaches the
+      DLQ, **and every criterion below still passes**. It is also not
+      self‑announcing: `redis-py` 7.1.1 maps `justid=True` → `parse_justid=True`
+      → `parse_xautoclaim` returns `response[1]`, a *bare list of ids*, and with
+      exactly three pending ids `cursor, entries, deleted = <bare id list>`
+      **unpacks successfully** and silently mis‑binds — so the three‑element
+      unpack done‑when is not a reliable tripwire for it. Never pass
+      `justid=True`.
+  - **`_RECLAIM_MIN_IDLE_MS = 60_000` is a necessary per‑ENTRY bound, and it is
+    not what makes a reclaim safe today.** It exceeds `_DISPATCH_TIMEOUT_SECS`
+    (30 s), the ceiling on how long **one** entry can legitimately be in flight,
+    so a reclaim cannot steal the entry currently being dispatched. What
+    actually makes the batch safe today is that **the loop is serial**:
+    `_consumer_loop` is a single task (`consumer.py:317‑320`), `_drain_once`
+    dispatches entries one at a time in reply order (`:282‑284`), and the
+    reclaim pass is prescribed to run *at the top of a `_consumer_loop`
+    iteration* — so while a batch is in flight **no reclaim runs in this process
+    at all**, whatever the idle times are. (`deploy/hostinger/acb-gateway.service:13`
+    starts uvicorn with no `--workers`, so there is one process.) The safety is
+    therefore **accidental, and the arithmetic alone does not carry it**: the
+    bound holds per entry, not per batch. Entry *k* of a `_READ_COUNT` batch has
+    already been idle up to (k−1) × 30 s while queued behind its predecessors,
+    so with 8 entries the last one can be idle ~210 s — well past 60 s — the
+    moment anything else is able to reclaim concurrently. Two things would make
+    that reachable, and both are planned: a **second gateway worker** (the group
+    is explicitly "shared by every gateway worker", `consumer.py:93‑95`) and
+    **BO‑20e**'s `INGESTION_MAX_CONCURRENCY`. Either one turns this into "same
+    event, two runs". See the constraint added to BO‑20e.
+  **Accepted costs** (all four; the first was the only one recorded before
+  2026‑08‑03):
+  1. **Retry latency is quantised by the reclaim cadence** — an entry that fails
+     four times and succeeds on the fifth takes ~5 minutes, not ~15 seconds, and
+     a permanently‑failing entry reaches the DLQ in ~6 minutes. The happy path
+     is unaffected.
+  2. **Per‑stream ordering is given up.** BO‑20a preserves it — `_drain_once`
+     iterates the reply serially (`consumer.py:277‑284`). Under PEL‑and‑reclaim
+     a failed `taskUpdated` for task T is re‑delivered 60–90 s later while the
+     *next* `taskUpdated` for the same T dispatches immediately, so a **stale
+     payload can start a workflow run after a fresher one**. For a trigger
+     payload carrying mutable provider state that is a wrong outcome, not merely
+     added latency. The rejected in‑loop‑sleep model preserved order; BO‑20e
+     breaks it too. Accepted: provider payloads are already re‑fetchable by id,
+     and the alternative costs a bus‑wide stall.
+  3. **`times_delivered` counts DELIVERIES, not FAILURES** — so restarts burn
+     retry budget on a healthy event. §BO‑20a state 2 strands a batch remainder
+     in the PEL after a SIGTERM, and those entries were already counted at
+     `XREADGROUP` time; a crash‑loop or a run of deploys consumes attempts with
+     no sink ever rejecting anything, and the event lands in the DLQ during
+     exactly the incident where you least want silent loss. Mitigation (not a
+     fix): record `times_delivered` on the DLQ row so an operator can tell a
+     poison entry from a churned one — see the DLQ done‑when.
+  4. A third mechanism — retrying *off* the drain path — was considered and
+     rejected as out of scope here: concurrent dispatch is BO‑20e
+     (`INGESTION_MAX_CONCURRENCY`), and a private in‑process delay queue would
+     duplicate the PEL while losing its restart durability.
 - **The constants are prescribed here, not chosen in the PR** (same reason the
   event‑type vocabulary is prescribed in BO‑20f: without literals this ticket's
-  done‑when is satisfiable with `MAX_ATTEMPTS = 1` and
-  `_backoff = lambda a: 0.0`, i.e. a ticket titled "Retry with backoff" closing
-  green with neither retry nor backoff):
-  - `MAX_ATTEMPTS = 5` — module‑level in `consumer.py`.
-  - `_backoff(attempt) = min(2.0 ** attempt, 60.0)` → `1, 2, 4, 8, 16` seconds
-    across the five attempts; ceiling is the literal **60.0**.
-  - Reclaim `min-idle-time = 60_000` ms (module‑level `_RECLAIM_MIN_IDLE_MS`).
-    It must be **> 0**: a reclaim pass with `min-idle-time=0` re‑claims entries
-    the loop is still working on and hot‑loops.
-  A deliberate change to any of these three is a doc change here, not a PR
-  detail.
-- 🚩 **Blocker this ticket must fix first, or its retry logic is dead code:**
-  `event_hooks.emit_event` (`event_hooks.py:37‑49`) **swallows every sink
-  exception** by design ("a sink error never propagates back into a provider
-  webhook response"). A consumer calling it can therefore never observe a
-  failure. Add a strict mode — `emit_event(..., raise_on_error: bool = False)` —
-  so receivers keep today's best‑effort default (unchanged, a webhook must never
-  5xx) and the consumer opts into propagation. Do **not** make the default
-  strict; that would change provider‑facing behaviour.
-- **Done when:** `MAX_ATTEMPTS == 5` and `_RECLAIM_MIN_IDLE_MS == 60_000` are
-  asserted against those literals, and the reclaim call is asserted to pass
-  `_RECLAIM_MIN_IDLE_MS` (not `0`) as `min-idle-time`.
+  done‑when is satisfiable with `MAX_ATTEMPTS = 1`, i.e. a ticket titled "retry"
+  closing green with no retry):
+  - `MAX_ATTEMPTS = 5` — module‑level in `consumer.py`. Read from `XPENDING`'s
+    `times_delivered`, **never** from process‑local state.
+  - `_RECLAIM_MIN_IDLE_MS = 60_000` ms — module‑level. Must be **> 0** (a
+    reclaim with `min-idle-time=0` re‑claims entries the loop is still working
+    on and hot‑loops) and **> `_DISPATCH_TIMEOUT_SECS × 1000`**, per the
+    decision above.
+  - `_RECLAIM_EVERY_SECS = 30.0` — module‑level. The periodic cadence: the loop
+    runs a reclaim pass when this much wall time has elapsed since the last one,
+    checked at the top of a `_consumer_loop` iteration (an iteration is
+    ≤ `_BLOCK_MS` = 5 s even when idle, so no second task is needed). With the
+    60 s min‑idle an entry becomes eligible for re‑delivery 60–90 s after its
+    last one.
+  - ~~`_backoff(attempt) = min(2.0 ** attempt, 60.0)`~~ — **struck, do not
+    build.** Under (b) the inter‑delivery interval is set by
+    `_RECLAIM_MIN_IDLE_MS` + `_RECLAIM_EVERY_SECS`; a backoff function would
+    govern nothing, and a *defined but never called* one closed the old
+    done‑when green. If a per‑entry delay is ever reintroduced, name it
+    `_ENTRY_RETRY_*` — never `_backoff`, which reads as a sibling of the
+    unrelated `_ERROR_BACKOFF_SECS` (`consumer.py:108`, which paces failed
+    *cycles*, not failed entries).
+  A deliberate change to any of these is a doc change here, not a PR detail.
+- 🚩 **Blocker — half closed. Slice 1's `emit_event` change is NECESSARY BUT NOT
+  SUFFICIENT; do not rebuild it, and do not read it as "the blocker is gone".**
+  `event_hooks.emit_event` swallowed every sink exception by design ("a sink
+  error never propagates back into a provider webhook response"), so a consumer
+  calling it could never observe a failure. It now takes a **keyword‑only**
+  `raise_on_error: bool = False`: the default is today's best‑effort behaviour
+  unchanged (log `event_hooks.sink_failed`, run the next sink — a webhook must
+  never 5xx), and `raise_on_error=True` propagates the **first** sink exception
+  without logging and does not invoke the remaining sinks. Keyword‑only so the
+  three receivers' three‑positional‑arg
+  `add_task(emit_event, source, event_type, payload)` can never reach it. Slice
+  2 calls it with `raise_on_error=True` from `_dispatch_entry`. Do **not** make
+  the default strict; that would change provider‑facing behaviour.
+  - ⛔ **The blocker moved one layer down — it did not close.** `emit_event` can
+    now propagate a sink exception, but **the only sink production registers
+    cannot raise one.** Traced end to end 2026‑08‑03:
+    - `main.py:1074` registers exactly one sink, `dispatch_event` (imported as
+      `_wf_dispatch`). Repo‑wide `register_event_sink` call sites: that line, the
+      definition, and tests. Nothing else.
+    - `triggers.py:45‑46` — docstring: *"Best‑effort and **never raises** — event
+      delivery must not break the webhook receivers that call it."* The entire
+      body sits inside `try:` / `except Exception as exc: _log.warning(
+      "workflows.event_dispatch_failed", …)` (`:49`, `:98‑104`); `RunRejected` is
+      separately swallowed per row at `:90‑95`. Only the trailing
+      `if started: _log.info(...)` is outside the `try`.
+    - The return value carries no signal either: `started` is `[]` both when no
+      workflow matched and when the DB threw (`:48`, `:98`) — and `emit_event`
+      discards it regardless (it returns `None`).
+    **Consequence if slice 2 ships without the change below:** flag on, Postgres
+    unreachable (or `MAX_CONCURRENT_RUNS = 8` saturated), `emit_event(...,
+    raise_on_error=True)` **returns normally**, the loop reads that as success
+    and `XACK`s — no retry, no PEL entry, no DLQ row. The event is gone, and the
+    whole retry/DLQ suite is green, because the tests register a *raising* fake
+    sink (as the `two_sinks` fixture does — `tests/unit/test_ingestion_consumer.py:720‑731`,
+    §J) — a sink shape that does not exist in production.
+- **Done when (slice 2) — `dispatch_event` gains a matching strict path**, per
+  the qualified non‑goal in §"Scope and non‑goals" above. Keyword‑only
+  `raise_on_error: bool = False`, same shape and same reasoning as
+  `emit_event`'s: the default stays best‑effort for
+  `/agent/webhook/{source}` (`routes/agent.py:3476‑3478`), and only the consumer
+  opts in. **The failure boundary is prescribed here, not chosen in the PR** —
+  an over‑broad strict path makes one failing workflow run poison the whole
+  event, which is worse than the drop it replaces:
+  - **PROPAGATE** — `await _get_db()` failing, the trigger `SELECT` /
+    `.fetchall()` failing, and `load_version_serialized` raising. In all three
+    the event was never matched against the triggers: nothing ran, so
+    re‑delivery is exactly right.
+  - **PROPAGATE** — `RunRejected` from `start_run`. It is raised at
+    `service.py:193‑196` **before** the `workflow_runs` INSERT and before the
+    `create_task`, so the run definitively did not start; its own message says
+    *"retry shortly"*, which is precisely what the PEL gives it. Any other
+    exception out of `start_run` (the INSERT or `commit` failing, `:201‑219`)
+    propagates for the same reason — no row, no task.
+  - **DO NOT PROPAGATE** — anything that happens inside `_execute_run`. It is
+    launched fire‑and‑forget by `asyncio.get_running_loop().create_task(...)` at
+    `service.py:226`, after the row is committed; `start_run` returns the
+    `run_id` as soon as the task is scheduled, so these failures cannot reach
+    `dispatch_event` and **must not** be made to. A node failing is a *run*
+    outcome, recorded on the `workflow_runs` row; re‑delivering the event would
+    start a **second** run of the same workflow on the same payload.
+  - **DO NOT PROPAGATE** — `load_version_serialized` returning `None`
+    (`triggers.py:72‑73`) or a trigger not matching. Those are legitimate
+    non‑matches, not failures.
+  - **DO NOT PROPAGATE** — `await db.close()` in the `finally` (`:96‑97`)
+    failing after runs have started. The dispatch succeeded; log it, do not
+    convert it into a re‑delivery.
+  - **Partial dispatch:** raise **after** the row loop finishes, not at the
+    first failing row, so the remaining matched workflows still get their
+    chance; the raised error must name the workflows that already started
+    (today's `started` list) so the log line — and the DLQ row, if it gets that
+    far — records that the retry is knowingly duplicative. Per‑workflow
+    idempotency is now part of the event‑trigger contract; see the sink‑contract
+    note below.
+- **Done when (slice 2) — the retry path is proved through the REAL sink, not a
+  fake.** At least one test must register `gateway.routes.workflows.triggers
+  .dispatch_event` itself via `register_event_sink`, make its `_get_db` fail
+  (and, separately, make `start_run` raise `RunRejected`), and assert the entry
+  is **not** acked. A suite that only ever registers a raising fake sink proves
+  nothing about production, since production's sink cannot raise. Keep the fake
+  sinks too — they pin `emit_event`'s own contract — but they are not sufficient
+  evidence for this ticket.
+- **Done when (slice 2) — "nobody listened" is distinguishable from "dispatched
+  successfully".** With `_SINKS == []` a strict `emit_event` returns `None`,
+  byte‑identical to a successful fan‑out. That state is reachable today, not
+  hypothetical: the registration at `main.py:1070‑1076` is wrapped in
+  `except Exception: pass` ("ingestion optional in some deploys"), so an import
+  error inside the workflows package leaves the registry empty and the consumer
+  acking events nobody consumed. Assert that with no sinks registered the
+  consumer logs `consumer.no_sinks` (warning) and does **not** record the entry
+  as dispatched.
+  - ⚠️ **Open sub‑question for slice 2 to answer and record here (do not
+    guess):** whether an empty registry **withholds** the `XACK` (→ re‑delivery,
+    then DLQ after `MAX_ATTEMPTS`: loud and recoverable through BO‑20c's replay,
+    during exactly the misconfiguration that caused it) or **acks with a
+    warning** (→ the event is gone, but a gateway legitimately running without
+    the workflows router does not fill the DLQ). Recommendation: **withhold** —
+    an ack is unrecoverable, a DLQ row is not.
+  - *Mechanism:* prefer an additive read‑only accessor in `event_hooks.py`
+    (e.g. `sink_count() -> int`) over changing `emit_event`'s return type;
+    `emit_event`'s signature and its `False` default are pinned by
+    `test_raise_on_error_defaults_to_false_and_is_keyword_only` and must not
+    move.
+- **Sink contract (new, one line, applies from slice 2 on):** because
+  `raise_on_error=True` stops at the **first** failing sink, a retry re‑runs
+  every sink that already succeeded and still never reaches the ones after the
+  failure. **Every sink must therefore be idempotent per `(source, event_type,
+  payload)`** — that is now part of the registry's contract, not an
+  implementation detail. It is free today (one sink), and it is the thing that
+  breaks silently the day a second one is registered.
+- **Done when:** `MAX_ATTEMPTS == 5`, `_RECLAIM_MIN_IDLE_MS == 60_000` and
+  `_RECLAIM_EVERY_SECS == 30.0` are asserted against those literals, and the
+  reclaim call is asserted to pass `_RECLAIM_MIN_IDLE_MS` (not `0`) and
+  `justid=False`/omitted as its arguments. `_RECLAIM_MIN_IDLE_MS >
+  _DISPATCH_TIMEOUT_SECS * 1000` is asserted too — that inequality is a
+  **necessary** per‑entry condition, **not** what makes the batch safe (the
+  serial loop is; see the decision above). Do not sell it as the latter in a
+  comment.
+- **Done when — the read sequence of a reclaim pass is pinned, in this order.**
+  Per pass, per stream: **(1)** one
+  `xpending_range(stream, _GROUP, min="-", max="+", count=<n>, idle=_RECLAIM_MIN_IDLE_MS)`
+  → entries as dicts with `message_id` / `consumer` / `time_since_delivered` /
+  `times_delivered` (`redis-py` `parse_xpending_range`); **(2)** then the
+  `XAUTOCLAIM`. The order is load‑bearing and is why it is prescribed rather
+  than left to the PR: `XPENDING` **before** the claim reports the
+  *pre‑increment* count, after it reports the *post‑increment* one, and the
+  observable DLQ threshold is **6 deliveries in one reading and 5 in the
+  other** — a fake‑backed test passes either way, so nothing else pins it.
+  With the prescribed order, the rule is: **an entry is DLQ'd when its dispatch
+  fails and `times_delivered + 1 >= MAX_ATTEMPTS`** (the `+ 1` is the delivery
+  the claim is about to make). `MAX_ATTEMPTS == 5` therefore means five
+  deliveries total, and the test that asserts the literal must also assert the
+  observed delivery count, or the literal and the behaviour it names drift by
+  one.
 - **Done when — the reclaim pass runs at STARTUP, before the first `">"` read**,
   not only on the periodic cadence, and a test asserts that ordering. *Reason
   (recorded from the BO‑20a review, §BO‑20a "Three enqueued but never dispatched
@@ -886,31 +1173,136 @@ written to `ingestion:dlq` via the existing `queue.enqueue_dlq` (`:79`) and
   - ⚠️ **Open sub‑question for this ticket to answer (do not guess):** at
     startup, entries stranded by a *fast* restart have been idle for less than
     `_RECLAIM_MIN_IDLE_MS`, so the min‑idle filter excludes exactly the case the
-    startup pass exists for. Decide and record one of: (a) the startup pass uses
-    a lower idle bound **restricted to consumer names that are not this process**
-    (a dead pid cannot have work in flight), or (b) it uses the same 60 s bound
-    and accepts one periodic tick of latency. `_RECLAIM_MIN_IDLE_MS > 0` remains
-    binding for the periodic pass either way.
+    startup pass exists for. Decide and record one of: **(i)** the startup pass
+    uses a lower idle bound **restricted to consumer names that are not this
+    process** (a dead pid cannot have work in flight), or **(ii)** it uses the
+    same 60 s bound and accepts one periodic tick of latency.
+    `_RECLAIM_MIN_IDLE_MS > 0` remains binding for the periodic pass either way.
+    *(Relabelled (a)/(b) → (i)/(ii) on 2026-08-03 so it cannot be confused with
+    the mechanism decision above, which owns the letters (a)/(b).)*
+- **Done when — the PERIODIC pass exists and is driven by the loop**, not only
+  the startup one. *Reason:* BO‑20a's "ack failure mid‑batch" state (§BO‑20a,
+  state 1) strands entries **without a restart** — `_dispatch_entry`'s unguarded
+  `xack` raises into `_consumer_loop`'s `except`, the loop continues under its
+  own live consumer name, and it only ever reads `">"`. A startup‑only reclaim
+  never fires for it, so those entries sit in the PEL until `queue._MAXLEN`
+  trims them away. Assert it against a monotonic clock the test controls (never
+  a real sleep): with `_RECLAIM_EVERY_SECS` monkeypatched small, a loop left to
+  spin issues **more than one** reclaim call, each carrying
+  `_RECLAIM_MIN_IDLE_MS`; with the clock frozen it issues no second one.
 - **Done when:** with a faked Redis and a sink that raises on the first **4**
   deliveries and succeeds on the **5th**, the entry is `xack`'d **exactly once**
   and **never** written to `ingestion:dlq` — i.e. the retry path is exercised
-  four times, not zero.
+  four times, not zero. Deliveries 2–5 arrive from the **reclaim pass**, not
+  from an in‑loop retry: that is the mechanism decision above, and a test that
+  loops inside `_dispatch_entry` would pin the rejected design. **The fake must
+  surface the rising count through `xpending_range`, not `xautoclaim`** — an
+  `XAUTOCLAIM` reply entry is `(id, fields)` and carries no counter at all, so a
+  fake that attaches one there invents a Redis that does not exist and lets the
+  implementation read the count from the wrong call.
 - **Done when:** with a sink that always raises, after exactly **5**
   (`MAX_ATTEMPTS`) deliveries there is **exactly one** `xadd` to `ingestion:dlq`
   carrying `origin_stream="ingestion:clickup"` and the error string, followed by
-  **exactly one** `xack` — and no further re‑delivery.
-- **Done when:** backoff is a pure function `_backoff(attempt) -> float`
-  asserted directly against the prescribed literals — `_backoff(0) > 0`
-  (never zero), monotonic non‑decreasing over `range(0, 12)`, and
-  `_backoff(10) == 60.0` (the stated ceiling, not a self‑referential "some
-  ceiling") — so **the test never sleeps**.
-- **Done when:** `emit_event(..., raise_on_error=True)` propagates the first sink
-  exception while the default call remains swallow‑and‑log — pinned by a test,
-  and `test_clickup_ingestor.py` still **10 passed**.
-- **Verify:** `uv run pytest tests/unit/test_ingestion_consumer.py tests/unit/test_clickup_ingestor.py -q`
-- **Files:** `apps/services/ingestion/ingestion/consumer.py`,
-  `apps/services/ingestion/ingestion/event_hooks.py`,
+  **exactly one** `xack` — and no further re‑delivery. The row should also carry
+  `times_delivered` as a **fifth** field (accepted cost 3 above: the counter
+  counts deliveries, not failures, so a crash‑loop can DLQ a healthy event —
+  an operator needs to tell a poison entry from a churned one). The four fields
+  `enqueue_dlq` writes stay **required**; BO‑20c's reader must tolerate extra
+  fields rather than assume exactly four.
+  - ⚠️ **The DLQ write must not call the sync `queue.enqueue_dlq` from the async
+    loop.** It builds a fresh **synchronous** `redis.Redis` per call
+    (`queue.py:49`, called at `:81`), which blocks the event loop and is
+    invisible to the `consumer._get_client` fake every test in this file uses —
+    so the assertion above would be untestable and the drain would stall on a
+    network round trip. Use an `await client.xadd(STREAM_DLQ, …)` on the
+    consumer's own async client replicating `enqueue_dlq`'s four fields
+    (`origin_stream`, `event_type`, `data`, `error[:500]`) with
+    `maxlen=queue._MAXLEN, approximate=True`, or `asyncio.to_thread`. `queue.py`
+    stays off this ticket's Files list either way (its per‑call sync client is
+    BO‑9's to consolidate).
+- **Done when — a dispatch `TimeoutError` counts as a FAILED dispatch**, i.e. it
+  is not `XACK`'d, it is re‑delivered, and it reaches the DLQ after
+  `MAX_ATTEMPTS` like any other failure. **DECISION (agent‑proposed 2026‑08‑03,
+  owner may overrule):** BO‑20a acks a timed‑out entry (`consumer.py:233‑240`
+  then `:257`) only because it had no retry path to hand it to; from the event's
+  point of view a timeout and an exception are the same fact — the workflow did
+  not run — so acking it is a silent drop, which is the thing this ticket
+  exists to abolish. Consequence to budget for: **BO‑20a's
+  `test_a_hung_sink_times_out_and_the_bus_keeps_draining`
+  (`tests/unit/test_ingestion_consumer.py:601`) must be rewritten by this
+  ticket** — its `xack_calls` assertion inverts to "neither entry is acked" —
+  while its other half, that the *next* stream still drains, is preserved
+  unchanged and is the property that must not regress.
+- **Done when — `XAUTOCLAIM`'s third reply element is logged, not dropped.** On
+  `redis:7-alpine` (`infra/docker-compose.yml:51`) the reply is
+  `[next-cursor, entries, deleted-ids]`; the third element is the ids whose
+  stream entry was **trimmed away by `_MAXLEN`** while pending — the PEL record
+  is deleted and those events are gone with no dispatch and no DLQ row. Unpack
+  all three and log a count on its own key (e.g. `consumer.reclaim_trimmed`)
+  so the loss is at least as loud as the accepted Q1 drop
+  (`<source>.queue.dropped`). Note the failure mode of getting this wrong is
+  **not** silence: `redis-py` 7.1.1 returns the raw 3‑element reply
+  (`_parsers/helpers.py::parse_xautoclaim`), so the common two‑element idiom
+  `cursor, entries = await client.xautoclaim(...)` raises
+  `ValueError: too many values to unpack`, which `_consumer_loop` catches as
+  `consumer.cycle_failed` — loud, but it wedges the **entire drain loop**, not
+  merely the reclaim pass: the `try` at `consumer.py:294‑298` spans both
+  `_ensure_groups` and `_drain_once`, so a `ValueError` raised by a
+  top‑of‑iteration reclaim aborts the iteration **before `_drain_once` runs**,
+  then sleeps `_ERROR_BACKOFF_SECS` and repeats — the bus stops draining
+  entirely, at ~1 Hz, forever. Assert the three‑element unpack against a fake
+  that returns a non‑empty third element.
+  - **Done when — the reclaim pass is wrapped so its failure degrades to "no
+    reclaim this cycle", not "no drain this cycle".** Its own
+    `try/except Exception` (logging e.g. `consumer.reclaim_failed`, re‑raising
+    `CancelledError`) inside the loop iteration, asserted by a test where the
+    reclaim call raises and `_drain_once` still handles the batch. A reclaim is
+    a recovery mechanism; it must never be able to take the primary path down
+    with it.
+  - ⛔ **Reminder, because this is the second place it bites:** do **not** pass
+    `justid=True` to work around the three‑element reply. `redis-py` returns
+    `response[1]` — a bare list of ids — which with exactly three pending ids
+    unpacks into `cursor, entries, deleted` **without raising**, and `JUSTID`
+    suppresses the delivery‑counter increment that the whole retry design rests
+    on. See the mechanism decision above.
+- ~~**Done when:** backoff is a pure function `_backoff(attempt) -> float`…~~ —
+  **struck** with `_backoff` itself (see the decision above). The hole it left
+  is closed by the periodic‑pass done‑when: that one pins a **call site**, which
+  the old criterion never did — `_backoff` could be defined, satisfy all four
+  asserted properties, never be called from the loop, and close green.
+- ✅ **Done (slice 1):** `emit_event(..., raise_on_error=True)` propagates the
+  first sink exception and skips the remaining sinks, while the default call
+  remains swallow‑and‑log and returns `None`; the default is pinned as the
+  literal `False` via `inspect.signature`. →
+  `test_strict_emit_propagates_the_first_sink_error_and_skips_the_rest`,
+  `test_default_emit_still_swallows_logs_and_continues`,
+  `test_raise_on_error_defaults_to_false_and_is_keyword_only`. Regression fence
+  held: `test_clickup_ingestor.py` **10 passed**,
+  `test_ingestion_receiver_parity.py` **22 passed**,
+  `test_clickup_normalise_dlq.py` **4 passed**, all unmodified.
+- **Constraint (kept):** no log call in the touched files may pass `event=` —
+  `tests/unit/test_clickup_normalise_dlq.py` carries an AST guard over `apps/` +
+  `packages/` (`_SCANNED` at `:119`). Use `source=` / `event_type=` style keys.
+- **Verify:** `uv run pytest tests/unit/test_ingestion_consumer.py tests/unit/test_clickup_ingestor.py tests/unit/test_ingestion_receiver_parity.py tests/unit/test_clickup_normalise_dlq.py -q`
+  → **80 passed** after slice 1 (44 + 10 + 22 + 4). The two‑file form this
+  ticket used to carry is insufficient for the same reason it was in BO‑20a:
+  `event_hooks.py` is imported by all three receivers, and the parity file is
+  what catches a non‑additive signature change (it asserts the `BackgroundTasks`
+  entries as `(emit_event, args)` tuples).
+  **Slice 2 must append `tests/unit/test_workflows_slice2.py` to that command**
+  (→ **90 passed** expected, 80 + 10) — it now edits `triggers.py`, and that
+  file is the only unit coverage of the trigger matcher it must not disturb.
+  Plus `uv run ruff check --select F821,F601,F602,F502,F7,B006 apps/services/ingestion/ingestion`
+  → `All checks passed!`
+- **Files:** `apps/services/ingestion/ingestion/consumer.py` (slice 2),
+  `apps/services/ingestion/ingestion/event_hooks.py` (slice 1 done; slice 2 may
+  add the read‑only `sink_count()` accessor — nothing else),
+  `apps/services/gateway/gateway/routes/workflows/triggers.py` (slice 2, the
+  strict path — **added 2026‑08‑03** with the qualified non‑goal),
   `tests/unit/test_ingestion_consumer.py`.
+  Slice 2's regression fence gains `tests/unit/test_workflows_slice2.py`
+  (**10 passed** today; it pins `event_trigger_matches`, which is still a
+  non‑goal and must not move).
 
 ---
 
@@ -926,9 +1318,13 @@ the DLQ entry — one hop, no silent duplication). Expose read + replay behind a
 admin route reusing the **existing** permission `admin:access:manage`
 (`packages/acb_auth/acb_auth/permissions.py:99`) — do not mint a new permission.
 - **Done when:** `read_dlq` against a faked Redis returns entries with
-  `origin_stream`, `event_type`, decoded `data`, and `error` — the exact four
-  fields `enqueue_dlq` writes (`queue.py:82‑92`) — and an empty stream returns
-  `[]`, not an error.
+  `origin_stream`, `event_type`, decoded `data`, and `error` — the four fields
+  `enqueue_dlq` writes (`queue.py:82‑92`) — and an empty stream returns `[]`,
+  not an error. Those four are **required**, not exhaustive: the reader must
+  **tolerate and surface extra fields** rather than assume exactly four, because
+  BO‑20b's consumer‑side DLQ write adds `times_delivered` (see BO‑20b accepted
+  cost 3). Assert an entry carrying a fifth field is returned, not dropped or
+  rejected.
 - **Done when:** `replay_dlq(entry_id)` issues exactly one `xadd` to the entry's
   `origin_stream` with the original `event_type` and payload, and exactly one
   `xdel` on `ingestion:dlq` for that id; a non‑existent id returns `None` and
@@ -984,6 +1380,22 @@ drains in‑flight work before returning.
   `max_connections=16` precedent (`acb_common/activity.py:54‑66`). It must be
   **≥ 2** — a value of 1 makes the "peak equals the bound" assertion below true
   trivially and turns the ticket into a no‑op.
+- 🚩 **Constraint inherited from BO‑20b (added 2026‑08‑03) — per‑entry idle time
+  must be bounded before concurrency is enabled.** BO‑20b's
+  `_RECLAIM_MIN_IDLE_MS = 60_000` is safe today only because the drain loop is
+  serial: while a batch is in flight, no reclaim runs in this process
+  (`consumer.py:282‑284, 317‑320`). It is a **per‑entry** bound, not a per‑batch
+  one — entry *k* of a `_READ_COUNT` batch has already been idle up to
+  (k−1) × `_DISPATCH_TIMEOUT_SECS` while queued, so with 8 entries the last can
+  be ~210 s idle. The moment dispatches overlap (here) or a second gateway
+  worker exists (the group is shared by design, `consumer.py:93‑95`), a reclaim
+  can take an entry that is still being worked: **same event, two runs.** This
+  ticket must close it before raising concurrency above 1 — either bound the
+  in‑flight window (a smaller `_READ_COUNT`, so no entry can wait past
+  `_RECLAIM_MIN_IDLE_MS`) or re‑`XCLAIM`/touch each entry immediately before its
+  dispatch so its idle clock restarts. **Done when:** a test drives a batch of
+  `_READ_COUNT` entries with `INGESTION_MAX_CONCURRENCY > 1` and a concurrent
+  reclaim pass, and asserts **no entry is dispatched twice**.
 - **Done when:** the default is asserted against the literal `8`.
 - **Done when:** with a sink that blocks on an `asyncio.Event`, the observed peak
   of concurrently in‑flight sinks equals `INGESTION_MAX_CONCURRENCY` and never
@@ -1019,9 +1431,11 @@ receivers and the consumer:
 uv run pytest tests/unit/test_ingestion_consumer.py tests/unit/test_clickup_ingestor.py \
   tests/unit/test_ingestion_receiver_parity.py tests/unit/test_clickup_normalise_dlq.py -q
 ```
-Measured after BO‑20a (2026-08-02): **75 passed in 2.35s** — 39 + 10 + 22 + 4,
-with the last three **unmodified**. BO‑20b–e must keep that shape: their own new
-file grows, the other three do not move.
+Measured after BO‑20b slice 1 (2026-08-03): **80 passed** — 44 + 10 + 22 + 4,
+with the last three **unmodified**. (BO‑20a closed at **77** — 41 + 10 + 22 + 4;
+an earlier "75 / 39" here predated that ticket's own review repairs and was
+stale.) BO‑20b–e must keep that shape: their own new file grows, the other three
+do not move.
 
 ```
 uv run ruff check --select F821,F601,F602,F502,F7,B006 \

@@ -29,6 +29,7 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import inspect
 import json
 import re
 from pathlib import Path
@@ -704,3 +705,84 @@ def test_gateway_lifespan_starts_the_consumer_and_stops_it_after_yield():
         "stop_ingestion_consumer must be called unconditionally, like "
         "stop_whatsapp_enrichment — not behind an INGESTION_CONSUMER check"
     )
+
+
+# ---------------------------------------------------------------------------
+# J. `emit_event` strict mode — BO-20b's blocker, landed ahead of the loop
+#
+# BO-20b's retry/DLQ logic is dead code without this: `emit_event` swallows
+# every sink exception by design, so a drain loop calling it can never observe
+# a failed dispatch and can never honestly withhold an `XACK`. This slice adds
+# only the option; `consumer.py` is untouched and still acks regardless of
+# outcome (BO-20a interim semantics).
+# ---------------------------------------------------------------------------
+
+@pytest.fixture
+def two_sinks():
+    """A raising sink followed by a recording one, through the REAL registry.
+
+    Registered with `register_event_sink`, never by monkeypatching `emit_event`
+    — patching the function would make "the second sink was/wasn't called"
+    vacuous, and it is the *ordering* through the real `_SINKS` list that both
+    modes differ on. Teardown restores the snapshot, like `sink_calls`.
+    """
+    saved = list(event_hooks._SINKS)
+    clear_event_sinks()
+    boom = RuntimeError("sink one exploded")
+    second_calls: list[tuple[str, str, dict[str, Any]]] = []
+
+    async def _first(source: str, event_type: str, payload: dict[str, Any]) -> None:
+        raise boom
+
+    async def _second(source: str, event_type: str, payload: dict[str, Any]) -> None:
+        second_calls.append((source, event_type, payload))
+
+    register_event_sink(_first)
+    register_event_sink(_second)
+    try:
+        yield boom, second_calls
+    finally:
+        clear_event_sinks()
+        event_hooks._SINKS.extend(saved)
+
+
+async def test_strict_emit_propagates_the_first_sink_error_and_skips_the_rest(two_sinks):
+    """`raise_on_error=True`: the FIRST exception reaches the caller and the
+    fan-out stops there — the consumer needs the exception, not a best-effort
+    summary, to decide against acking."""
+    boom, second_calls = two_sinks
+
+    with pytest.raises(RuntimeError) as excinfo:
+        await event_hooks.emit_event(
+            "clickup", "taskUpdated", CLICKUP_PAYLOAD, raise_on_error=True
+        )
+
+    assert excinfo.value is boom, "the sink's own exception, not a wrapper"
+    assert second_calls == [], "sinks after the raising one must not be invoked"
+
+
+async def test_default_emit_still_swallows_logs_and_continues(two_sinks, monkeypatch):
+    """The default is byte-for-byte today's behaviour: swallow, log
+    `event_hooks.sink_failed`, run the next sink, return None. Every receiver
+    depends on it — a webhook must never 5xx because a workflow sink failed."""
+    _boom, second_calls = two_sinks
+    log = MagicMock()
+    monkeypatch.setattr(event_hooks, "_log", log)
+
+    result = await event_hooks.emit_event("clickup", "taskUpdated", CLICKUP_PAYLOAD)
+
+    assert result is None
+    assert second_calls == [("clickup", "taskUpdated", CLICKUP_PAYLOAD)]
+    keys = [call.args[0] for call in log.warning.call_args_list]
+    assert keys == ["event_hooks.sink_failed"], keys
+
+
+def test_raise_on_error_defaults_to_false_and_is_keyword_only():
+    """Pinned against the literal `False`, so a later PR cannot flip
+    provider-facing behaviour silently; keyword-only so the three receivers'
+    three-positional-arg `add_task(emit_event, source, event_type, payload)`
+    can never reach it, whatever a future fourth positional argument is."""
+    param = inspect.signature(event_hooks.emit_event).parameters["raise_on_error"]
+
+    assert param.default is False
+    assert param.kind is inspect.Parameter.KEYWORD_ONLY

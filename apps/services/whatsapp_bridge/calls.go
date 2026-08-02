@@ -135,6 +135,11 @@ type callInfo struct {
 	// reached "active" means media never flowed — the one failure that otherwise
 	// looks identical to success.
 	AudioSeconds float64 `json:"audio_seconds"`
+	// MediaReady is set from the library's OnReady — relay bound, frames moving.
+	// This, NOT the phase string, is the authoritative "you can attach audio
+	// now" signal: the phase is advisory and a call can carry media without
+	// ever being reported as "active".
+	MediaReady bool `json:"media_ready"`
 }
 
 // liveCall is one call plus the bookkeeping the HTTP surface reports on. The
@@ -156,10 +161,11 @@ type liveCall struct {
 	endedAt   time.Time
 	endReason string
 
-	recording string
-	sink      meowcaller.AudioSink
-	counter   *callSink
-	closeOnce sync.Once
+	recording  string
+	sink       meowcaller.AudioSink
+	counter    *callSink
+	mediaReady bool
+	closeOnce  sync.Once
 }
 
 func (lc *liveCall) snapshot() callInfo {
@@ -170,8 +176,13 @@ func (lc *liveCall) snapshot() callInfo {
 		Direction: lc.direction, Kind: lc.kind, Phase: lc.phase,
 		Targets: lc.targets, EndReason: lc.endReason, Recording: lc.recording,
 	}
+	info.MediaReady = lc.mediaReady
 	if lc.counter != nil {
 		info.AudioSeconds = lc.counter.seconds()
+		// Frames arriving is proof media is up, even if OnReady never fired.
+		if info.AudioSeconds > 0 {
+			info.MediaReady = true
+		}
 	}
 	if !lc.startedAt.IsZero() {
 		info.StartedAt = lc.startedAt.UTC().Format(time.RFC3339)
@@ -471,6 +482,9 @@ func (cm *CallManager) track(lc *liveCall) {
 		cm.push(lc)
 	})
 	c.OnReady(func() {
+		lc.mu.Lock()
+		lc.mediaReady = true
+		lc.mu.Unlock()
 		cm.log.Infof("call %s: media active (+%s) — recording=%q",
 			lc.callID, time.Since(lc.startedAt).Round(time.Millisecond), lc.recording)
 		cm.push(lc)

@@ -4,10 +4,23 @@
 > **shipped** (2026-07-09). Phase 6 + 6.1–6.6 (cross-app cost, per-agent
 > correlation, access fix + durable history, office UX) and 6.8 (real Pixel Lab
 > sprites + Avatar Studio) **shipped** (2026-07-09/10). E2 C+ → A.
-> **Open: §7 (WS-6) — attribution stamp + durable cost table + the dormant
-> Langfuse/OTel half.** Deep tracing is still absent (BO-5).
+> **§7 (WS-6): WS-6a + WS-6c shipped 2026-08-02** (incl. repair round 1) —
+> decision D1's attribution stamp now exists as a substrate: `instance`
+> completes the run context's four-tuple and `_emit_usage` forwards it, so every
+> in-run model activation is attributed by (run_id, member, agent, instance)
+> with no call-site changes. It reaches two readers: the live presence key
+> (`/observability/active` + `/roster`, via `activity.refresh_run_presence`)
+> and the daily cost rollup (`cost_summary().by_instance`). Two asymmetries are
+> recorded, not hidden: the `phase="start"` **stream** event predates the
+> partition, and a **delegated sub-run inherits its caller's** partition.
+> **Still open: WS-6b** (carry the tuple to the v1_compat choke point),
+> **WS-6d** (durable `llm_call` cost table), **WS-6e** (`agent_run` token
+> columns), and the owner-gated Langfuse/OTel half (WS-6f–i). Nothing durable is
+> written yet — the stamp lands on logs, the Redis feed and the Redis day-hash
+> only.
+> Deep tracing is still absent (BO-5).
 > **Verified against code on 2026-08-01** (paths, `agent_run` token columns,
-> `bind_run_context` key set, uv.lock telemetry deps).
+> uv.lock telemetry deps); `bind_run_context` key set re-verified 2026-08-02.
 > **Module:** E2 (core_module_map.md).
 > **Goal (user request):** log every agent/model interaction so an engineer can
 > debug "error X happened with agent Y" after the fact (Phases 1–4); AND give
@@ -63,12 +76,15 @@ reachability.
 ## What shipped — Phases 1+2
 
 ### Phase 1 — Correlated, JSON-able logs (`packages/acb_common/acb_common/_log.py`)
-- `bind_run_context(run_id, thread_id, agent, user)` / `clear_run_context()` /
-  `get_run_context()` bind the run fields into structlog contextvars. The
-  executor binds them at the run boundary in `run_agent_stream` (and clears in
-  the `finally`), so **every log line the run emits — across all tiers and
-  injected tools on that context — automatically carries them**. Verified:
-  `agent.step` and `acb_llm.usage` (which passes no ids) both come out tagged.
+- `bind_run_context(run_id, thread_id, agent, user, source, instance)` /
+  `clear_run_context()` / `get_run_context()` bind the run fields into structlog
+  contextvars. The executor binds them at the run boundary in `run_agent_stream`
+  (and clears in the `finally`), so **every log line the run emits — across all
+  tiers and injected tools on that context — automatically carries them**.
+  Verified: `agent.step` and `acb_llm.usage` (which passes no ids) both come out
+  tagged. `instance` (§7 WS-6a) is bound by a second, additive call once the
+  agent config is loaded — see `executor._bind_run_instance`; binds are additive
+  by design, so a later call never disturbs an earlier one.
 - `configure_logging(level, json_logs=?)` + `LOG_FORMAT` env: `LOG_FORMAT=json`
   → `JSONRenderer` (one JSON object per line, greppable / aggregator-ready);
   default stays the colored console renderer for local dev. **Prod turns this
@@ -495,20 +511,23 @@ optional cleanups: (a) the shadowed duplicate `/v1/chat/completions` in `main.py
 > 429s, degrade-to-read-only) is **WS-16** per D2/D8 — do not build it here even
 > though `routes/apps/runtime.py` shows how. WS-16 is gated on this slice.
 
-### Where we actually are (re-verified against the tree 2026-08-01)
+### Where we actually are (table re-verified 2026-08-02, after WS-6a/6c)
 
 | D1 field | State today | Anchor |
 |---|---|---|
-| `run_id` | Bound in the run context; **dropped** before v1_compat | `packages/acb_common/acb_common/_log.py:68` `_RUN_CONTEXT_KEYS` |
-| `member_email` | Bound as `user` in the run context; **dropped** before v1_compat | same |
-| `agent` | ✅ carried, via `X-CC-Agent` | `routes/v1_compat.py:425` |
-| `instance` | ❌ **does not exist anywhere** in the observability path | `grep -rn instance_id apps/ packages/` → no hits |
+| `run_id` | Bound in the run context, inherited by model events; **still dropped** before v1_compat | `packages/acb_common/acb_common/_log.py` `_RUN_CONTEXT_KEYS` |
+| `member_email` | Bound as `user` in the run context, inherited; **still dropped** before v1_compat | same |
+| `agent` | ✅ carried, via `X-CC-Agent`, and inherited in-run | `routes/v1_compat.py:425` |
+| `instance` | ✅ **bound in the run context (WS-6a)**, inherited onto model activations (WS-6c), patched onto the live presence key (so `/observability/active` + `/roster` carry it) and folded into the daily cost rollup as `by_instance`; **not** carried to v1_compat | `_log.py` `_RUN_CONTEXT_KEYS`, `executor._bind_run_instance`, `activity.refresh_run_presence`, `activity._record_cost` |
 
-`_RUN_CONTEXT_KEYS` is `("run_id", "thread_id", "agent", "user", "source")` — no
-`instance`. v1_compat reads only `x-cc-agent` and `x-cc-source`
-(`routes/v1_compat.py:425-426`) and forwards them into `_emit_usage`
-(`:573` streaming, `:594` non-streaming); run_id and member are lost because
-v1_compat is a bare HTTP request with no inherited context.
+`_RUN_CONTEXT_KEYS` is now
+`("run_id", "thread_id", "agent", "user", "source", "instance")`.
+**The remaining hole is v1_compat, and it is WS-6b's** — it reads only
+`x-cc-agent` and `x-cc-source` (`routes/v1_compat.py:425-426`) and forwards
+them into `_emit_usage` (`:573` streaming, `:594` non-streaming); run_id,
+member and instance are lost because v1_compat is a bare HTTP request with no
+inherited context. `_emit_usage` now *accepts* all three (WS-6c) — nothing
+passes them yet.
 
 **Do not invent a second instance key.** The vocabulary already exists and is
 authoritative: `_resolve_agent_instance()`
@@ -525,34 +544,138 @@ gone on a Redis flush) plus the opt-in `audit_event` row behind
 (:93)), already read by
 `routes/apps/runtime.py::_month_ai_usage` (:107). Model the new table on it.
 
-### Slice IN — one agent-safe PR
+### Slice IN — the agent-safe items
 
-All five items below are **AGENT-SAFE** and belong in one PR: **a–c** build the
-stamp, **d** is where it lands durably, **e** closes the lie the API already
-tells. None of them needs a decision this spec doesn't record.
+The five items below are **AGENT-SAFE**: **a–c** build the stamp, **d** is
+where it lands durably, **e** closes the lie the API already tells.
+
+**Shipped 2026-08-02 (one PR): WS-6a + WS-6c — the substrate.** They were split
+out and dispatched alone because they change no wire protocol, no schema and no
+auth surface: the run context gains a key and the emitter gains three optional
+parameters that nothing passes yet. **WS-6b, WS-6d and WS-6e remain open** —
+they are the consumers, and each still needs a decision recorded before it is
+dispatchable (6b: where `member_email` may come from, per the identity trap;
+6d: how that distinction is spelled in the schema; 6e: the upsert's
+token-column semantics).
 
 ---
 
-**WS-6a — Bind `instance` into the run context.** AGENT-SAFE
-Extend `_RUN_CONTEXT_KEYS` and `bind_run_context(...)` with an `instance` field
+**WS-6a — Bind `instance` into the run context.** ✅ **SHIPPED 2026-08-02**
+`_RUN_CONTEXT_KEYS` and `bind_run_context(...)` gained an `instance` field
 (same "only non-empty values are bound" rule; `clear_run_context` stays
-symmetric because it unbinds the key tuple). Bind it from
+symmetric because it unbinds the key tuple), bound from
 `_resolve_agent_instance()`'s value for the run.
-- ⚠️ **Ordering trap — this is the whole difficulty of the item.** In
-  `run_agent_stream`, `bind_run_context` fires at `executor.py:2169`, but
-  `_agent_instance` is not resolved until `executor.py:2322` because
-  `_resolve_agent_instance` needs `loaded.config`. A single bind at :2169 can
-  never carry the instance. Either move the bind after the load, or issue a
-  second `bind_run_context(instance=…)` once resolved. The second bind is the
-  smaller blast radius (the first bind must stay early so failures *during*
-  load are still correlated).
-- The other resolve site (`executor.py:1728`) needs the same treatment.
+- ⚠️ **Ordering trap — this was the whole difficulty of the item.** In
+  `run_agent_stream` the `bind_run_context` call sits near the top, but
+  `_agent_instance` is not resolved until well after `load_agent` returns,
+  because `_resolve_agent_instance` needs `loaded.config`. One bind can never
+  carry the instance.
+  **Resolved as: a second, additive bind** — `executor._bind_run_instance()`,
+  issued at the resolve site. The first bind stays early so failures *during*
+  load are still correlated, and only one key moves. (`bind_run_context` is
+  additive by contract, documented in its docstring — that property is now
+  load-bearing, so don't "optimise" it into a replace.)
+- **Known asymmetry #1 — start vs end (deliberate, and its presence-key
+  consequence is FIXED).** The agent `phase="start"` activity event is
+  published before the load, so it carries no `instance`; the `phase="end"`
+  event (still emitted before `clear_run_context()` in the `finally`) inherits
+  it. That is honest — at start time the partition genuinely is not yet known —
+  but anything joining *stream* events by run must not assume both ends carry
+  it.
+  ⚠️ That asymmetry was not merely cosmetic: `_axadd` writes the presence key
+  `cc:activity:live:{run_id}` **from the start event's body**
+  (`activity.py`, the `phase == "start"` branch), so `active_runs()` — and
+  therefore `GET /observability/active` and `GET /observability/roster`, the
+  office view — could never carry `instance` for **any** run.
+  **Fixed by patching the presence snapshot**, not by re-publishing the start
+  event: `acb_common.activity.refresh_run_presence(run_id, **fields)` merges
+  fields into the existing key (`SET … XX`, TTL refreshed) and
+  `executor._bind_run_instance(instance, run_id)` calls it right after the
+  bind. Rationale: presence is a *snapshot*, so overwriting it is invisible
+  and idempotent, whereas a second `start` **stream** entry is visible to
+  every consumer (SSE feed, office) and reads as a second activation. A miss
+  is a no-op by design — a patch that arrives after the end event must not
+  resurrect a finished run. Pinned by
+  `tests/unit/test_activity_bus.py::test_presence_carries_the_instance_after_
+  the_late_bind` (asserts through `active_runs()` and that no stream entry is
+  added), `::test_presence_refresh_never_resurrects_a_finished_run`, and
+  `tests/unit/test_instance_wiring.py::test_the_late_bind_also_patches_the_
+  live_presence_key`.
+- **Known asymmetry #2 — delegation inherits the caller's partition.**
+  `_run_sub_agent_streaming` (`executor.py:500`) neither resolves nor binds an
+  instance, and it cannot unbind the caller's: `bind_context` is additive, so
+  clearing would need `unbind_contextvars("instance")` + restore around the
+  sub-run. Consequence: when a **personal** agent delegates to a **shared**
+  one, the sub-run's `phase=start/end` events and every `_emit_usage` inside it
+  carry `instance=u:<caller>` — while that same sub-run's `agent_blob` rows
+  carry `instance=''`, because the sub-run uses `loaded.agent_dir` directly
+  (`:644`) with no `_resolve_effective_agent_dir` call.
+  **So the stamp identifies the partition of the run that RESOLVED it, not
+  necessarily the partition that run's artefacts live in.** Stated where it
+  can mislead: `_log.py`'s `_RUN_CONTEXT_KEYS` comment,
+  `_bind_run_instance`'s docstring, `packages/AGENTS.md` and
+  `apps/services/orchestrator/AGENTS.md` §9.
+  **Consequence for WS-6d:** the durable `llm_call` row's `instance` is the
+  *billing/caller* partition, which is the right subject for a per-member cap
+  but is **not** a foreign key onto `agent_blob.instance` — do not model it as
+  a join and do not reconcile the two tables on that column. Giving delegation
+  its own partition is a separate ticket (it needs the unbind/restore, and a
+  decision about whether a delegated shared agent should even be attributed to
+  the caller's tenant); it is **not** in WS-6d.
+- 🚧 **Scope line (deliberate, do not "finish" it casually).** WS-6a covers
+  `run_agent_stream` **only**. The 2026-08-01 draft said "the other resolve
+  site (`executor.py:1728`) needs the same treatment" — it does not.
+  Before this PR `bind_run_context` had exactly ONE call site in the whole
+  repo, in `run_agent_stream`; **`run_agent` binds no run context at all**, so
+  stamping it would mean *adding* correlation to a path that never had it — a
+  behaviour change (new fields on every log line that path emits, and a new
+  clear obligation in its `finally`) outside this ticket. It is a real gap:
+  batch runs are unattributed today, and they were unattributed before WS-6.
+  It belongs to whoever gives `run_agent` a run boundary.
 - **Done when:** `get_run_context()` inside a run of an instanced agent returns
   `instance` equal to `_resolve_agent_instance(config, name, actor)` for that
   run, and `''` for a shared agent (absent key, not the string `"''"`);
   `clear_run_context()` leaves no `instance` behind (extend the existing
   no-leak assertion in `tests/unit/test_observability.py`).
+  ✅ Met: `tests/unit/test_instance_wiring.py::test_the_run_context_carries_
+  the_key_the_executor_resolved` + `::test_a_shared_run_stamps_no_partition`
+  (executor composition), `tests/unit/test_observability.py::test_instance_is_
+  bound_and_readable_like_every_other_run_field`, `::test_shared_agent_binds_
+  no_instance_key_at_all`, `::test_a_second_bind_tops_up_instance_without_
+  disturbing_the_first`, and the extended `::test_clear_removes_context_no_leak`.
+- 🔒 **Twin-tuple drift gate.** `_log._RUN_CONTEXT_KEYS` (what a run *binds*)
+  and `activity._INHERIT` (what an event *copies* when its emitter omits it)
+  must be extended together or a new key half-lands — bound onto every log
+  line but absent from every activity/cost event, or the reverse. Both
+  AGENTS.md files said so in prose; it is now enforced by
+  `tests/unit/test_observability.py::test_inherit_and_run_context_keys_match`,
+  whose failure message names the offending keys and what to do (same style as
+  `tests/unit/test_skills_registry.py`'s drift gates).
+- 📊 **Interim aggregate — `instance` is a cost-rollup dimension.** Before
+  this, `instance` existed only on raw stream entries, which `STREAM_MAXLEN`
+  bounds to ~2000 events: "what did alice's personal agents cost today" was
+  unanswerable until WS-6d. `_record_cost` now folds an
+  `instance|<key>|cost`/`|calls` field into the same `cc:cost:{day}` hash it
+  already writes for `model`/`source`/`agent`, and `cost_summary()` surfaces
+  it as `by_instance` — additive, same route (`GET /observability/cost`), same
+  response shape as the existing `by_agent`. Pinned by
+  `test_activity_bus.py::test_cost_rollup_folds_the_tenant_partition` (write
+  side, incl. "a shared run writes no `instance|…` field at all") and the
+  extended `::test_cost_summary_aggregates_daily_rollups` (read side).
+  **This does not close WS-6d.** It is the *live* surface only: bounded by
+  `COST_TTL_SECONDS` (~45 days), lost on a Redis flush, no per-call row, and
+  it inherits delegation asymmetry #2 above. The durable per-completion record
+  remains WS-6d's.
+  ↳ *Exposure, stated:* a `u:<email>` partition key is a member identifier, and
+  `GET /observability/cost` is open to any AUTHENTICATED caller (Phase 6.3).
+  That is not a new class of exposure — the same route's sibling feed already
+  carries `user` (the member email) on every event, and `by_agent` is already
+  served there — but Q3's "no retention/PII policy" gap now covers this
+  dimension too, at a 45-day TTL.
 - **Files:** `packages/acb_common/acb_common/_log.py`,
+  `packages/acb_common/acb_common/activity.py`
+  (`refresh_run_presence`, `_record_cost`, `cost_summary`),
+  `packages/acb_common/acb_common/__init__.py`,
   `apps/services/orchestrator/orchestrator/executor.py`.
 
 **WS-6b — Carry the four-tuple to the v1_compat choke point.** AGENT-SAFE
@@ -639,20 +762,49 @@ may come from.**
   `apps/agents/agent-email-assistant/agents.py`,
   `apps/agents/agent-whatsapp-assistant/agents.py`.
 
-**WS-6c — Widen `_emit_usage` to accept and forward the stamp.** AGENT-SAFE
-`_emit_usage(model, tier, response, source=, agent=)` gains `run_id=`,
-`member=`, `instance=`, defaulting to `get_run_context()` so in-run callers
+**WS-6c — Widen `_emit_usage` to accept and forward the stamp.**
+✅ **SHIPPED 2026-08-02**
+`_emit_usage(model, tier, response, source=, agent=)` gained `run_id=`,
+`member=`, `instance=`, deferring to `get_run_context()` so in-run callers
 (`acompletion_with_fallback`, agent runs) need no call-site change and only
-v1_compat passes them explicitly.
+an out-of-run choke point passes them explicitly.
+- ⚠️ **This ticket was half-shipped before it was written — extend, don't
+  rebuild.** `acb_common/activity.py`'s `_INHERIT` tuple already copied
+  `agent`/`user`/`thread_id`/`run_id`/`source` from the run context onto any
+  event whose caller omitted them, so "zero changes at the call site" was
+  **already true for four of the five fields**. The genuine work was therefore
+  small: add `instance` to `_INHERIT` (which needs WS-6a to have something to
+  inherit) and widen the signature so a caller with no run context of its own
+  can supply the tuple. `member` maps onto the feed's existing `user` field —
+  no second vocabulary.
 - **Done when:** an in-run model call is attributed with the full four-tuple
   with **zero** changes at its call site; the existing activity-event shape
   gains fields but breaks no consumer (`/observability/activity/*` and the
   office UI keep rendering).
+  ✅ Met: `tests/unit/test_llm_usage_telemetry.py::test_in_run_call_is_
+  attributed_with_no_call_site_change` asserts all four fields on the event as
+  it reaches `_axadd` after a call with **no** attribution kwargs;
+  `::test_existing_source_and_agent_kwargs_are_untouched` pins the pre-existing
+  caller shape; `::test_shared_agent_run_emits_no_instance_field` and
+  `test_activity_bus.py::test_build_event_for_a_shared_run_carries_no_instance`
+  pin that a shared run's event is byte-identical to its pre-WS-6 shape.
+  Consumers: the gateway serves these events as raw dicts (no response model)
+  and `workbench/control_plane/src/app/observability/page.tsx:39` types them
+  with a structural TS `interface` + a `JSON.parse(...) as ActivityEvent` cast,
+  so an added optional field is inert at runtime.
 - **Preserve the null-cost contract:** `_compute_cost`
   (`acb_llm/client.py:480`) returns `None` for an unpriced/stub-registered
   model and the UI shows "—". **Never coerce that to `0`** — a misleading $0 is
   worse than an unknown. Pin it.
-- **Files:** `packages/acb_llm/acb_llm/client.py`.
+  ✅ Met and pinned end-to-end: `::test_unpriced_model_publishes_unknown_cost_
+  never_zero` — the published event carries no `cost_usd` at all (`None` is
+  dropped by `_build_event`), so `_record_cost` skips it rather than folding a
+  fake $0 into the daily rollup.
+- **Not done here:** having v1_compat actually *pass* the stamp is **WS-6b**
+  (header propagation + the identity constraint), which is held. This ticket
+  builds the socket, not the plug.
+- **Files:** `packages/acb_llm/acb_llm/client.py`,
+  `packages/acb_common/acb_common/activity.py` (`_INHERIT`).
 
 **WS-6d — Durable `llm_call` cost table (the deferred durable cost table).** AGENT-SAFE
 One durable row per completion, modelled on `app_audit`. **R1: find the next
@@ -669,6 +821,12 @@ deploy re-applies every migration file on every deploy.
   trap) — WS-16 will build per-member caps on these
   rows, and a rollup that cannot tell the two apart is a budget-evasion vector.
   This is a schema decision, so getting it wrong here is expensive to undo.
+- ⚠️ **`instance` is the CALLER's partition, not the artefact's.** Read
+  delegation asymmetry #2 under WS-6a before designing the column: a delegated
+  sub-run stamps the caller's `instance` while writing `agent_blob` rows under
+  `''`. So model this column on `agent_blob`'s *vocabulary*, but do not treat
+  it as a foreign key onto `agent_blob.instance` and do not build a
+  reconciliation that joins the two on it.
 - Index for the rollups the D1 decision names: at least `(at)`,
   `(member_email, at)`, `(agent, at)`.
 - The Redis day-rollup stays as-is (it is the *live* surface); this is the
@@ -896,7 +1054,26 @@ uv run pytest tests/unit/test_observability.py tests/unit/test_activity_bus.py \
   tests/unit/test_llm_usage_telemetry.py tests/unit/test_v1_compat_telemetry.py -q
 ```
 Baseline confirmed 2026-08-01 on a clean tree: **55 passed in 15.14s**. Any WS-6
-PR must keep this green and add to it.
+PR must keep this green and add to it. **After WS-6a/6c (2026-08-02) the
+baseline is 65 passed in 18.04s** — the +10 are the attribution pins listed in
+those tickets' done-whens. **After WS-6a repair round 1 (same day) it is
+71 passed in 23.44s** — the +6 are the presence-refresh, twin-tuple drift and
+cost-dimension pins.
+
+The executor half of WS-6a is pinned separately, because `_bind_run_instance`
+lives next to `_resolve_agent_instance`:
+
+```
+uv run pytest tests/unit/test_instance_wiring.py -q
+```
+Baseline confirmed 2026-08-02: **18 passed in 15.96s** (15 before WS-6a; 17
+after WS-6a, +1 for the presence-key patch in repair round 1).
+
+⚠️ `tests/unit/test_run_agent_stream_e2e.py` — the one file that drives the real
+`run_agent_stream` — **hangs on this Windows box** (>5 min, no output), like the
+full suite. It is therefore NOT the place to pin run-boundary behaviour from
+here; test the composition (`_resolve_agent_instance` → `_bind_run_instance` →
+`get_run_context`) instead, as WS-6a does.
 
 ```
 uv run pytest tests/unit/test_observability_access.py \
@@ -925,26 +1102,15 @@ select-list over the **whole repo**, no path narrowing:
 uv run ruff check . --select F821,F601,F602,F502,F7,B006
 ```
 
-⚠️ **This command is currently RED on `main`, and not because of WS-6.** Verified
-2026-08-01 on a clean tree:
+✅ **This command is GREEN on `main`** — re-verified 2026-08-02 on a clean tree:
+`All checks passed!`
 
-```
-F821 Undefined name `TurnDecision`  apps\services\gateway\gateway\routes\agent.py:166:7
-F821 Undefined name `TurnDecision`  apps\services\gateway\gateway\routes\agent.py:225:16
-Found 2 errors.
-```
-
-Both are string annotations (`-> "TurnDecision"` at `:166`, `decision:
-"TurnDecision"` at `:225`) whose type is imported **function-locally** at
-`agent.py:179` (`from orchestrator.steer import Route, TurnDecision, route_turn`).
-They are safe at runtime — a string annotation is never evaluated — but ruff
-resolves names lexically and cannot see a name imported inside a different
-function body. **This is pre-existing, is not caused by WS-6, and is being fixed
-separately.** A WS-6 implementer who sees pr-check's lint job red must confirm
-the failure is exactly these two lines and then stop — do not go hunting through
-your own diff, and do not "fix" it by widening the import in a WS-6 PR (that is
-someone else's ticket and would collide). WS-6's obligation is that the repo-wide
-count does not **grow** beyond these two.
+*(Corrected 2026-08-02, WS-6a/6c PR. The 2026-08-01 audit recorded this gate as
+RED with two pre-existing `F821 Undefined name TurnDecision` errors at
+`routes/agent.py:166` / `:225` — string annotations whose type was imported
+function-locally. That was fixed separately and the claim is now stale, so it is
+removed rather than explained: the gate is green, and **any failure a WS-6
+implementer sees is theirs.**)*
 
 Frontend is untouched by this slice; no `next build` gate applies unless the
 office/cost views change.
@@ -1030,9 +1196,10 @@ reads "distributed/OTel tracing **dead** → **BO-5**") plus
   never a basis for enforcement, plus a done-when pinning a forged header;
   WS-6d's schema carries the same constraint. (3) Corrected the ruff claim —
   `pr-check.yml:51` runs the select-list over the **whole repo**, not the
-  narrowed paths, and it is **currently red on `main`** with 2 pre-existing
-  `F821 TurnDecision` errors (`routes/agent.py:166`, `:225`) that WS-6 neither
-  caused nor owns. Also: done-whens written for the owner-gated WS-6f/g/h/i so
+  narrowed paths. *(Its "red on `main` with 2 pre-existing `F821 TurnDecision`
+  errors" reading was true on 2026-08-01 and is no longer: the gate is green as
+  of 2026-08-02 — see Verification.)* Also: done-whens written for the
+  owner-gated WS-6f/g/h/i so
   the preamble's claim is true of itself; softened the unsupported
   "`work_plan.md` §6 enumerates these flags" citation (it does not — that edit
   belongs to the board's owner); `114_custom_apps.sql:80-91` → `:80-93`;
@@ -1040,3 +1207,51 @@ reads "distributed/OTel tracing **dead** → **BO-5**") plus
   `main.py:1341` anchor with all four `build_orchestrator_agent(with_history=
   False)` sites (`:366`, `:589`, `:1341`, `:1392`). §7 slice WS-6a–e remains
   AGENT-SAFE and dispatchable; E2 status otherwise unchanged.
+- 2026-08-02 — **§7 WS-6a + WS-6c shipped (code).** The D1 attribution stamp
+  now exists as a substrate. `_RUN_CONTEXT_KEYS`/`bind_run_context` gained
+  `instance` (`''` shared binds nothing, so a shared agent's telemetry is
+  unchanged); `executor._bind_run_instance` tops the run context up right after
+  `_resolve_agent_instance`, resolving the ordering trap with a **second,
+  additive bind** rather than moving the early one; `activity._INHERIT` gained
+  `instance`; `_emit_usage` gained `run_id=`/`member=`/`instance=`, deferring to
+  the run context. +10 tests (65 in the §7 verification set) plus 2 in
+  `test_instance_wiring.py`. **Three corrections to the 2026-08-01 audit:**
+  (1) WS-6c was **half-shipped** — `_INHERIT` already carried four of the five
+  fields, so "zero call-site changes" was largely pre-existing behaviour, not
+  new work; (2) WS-6a's "the other resolve site (`:1728`) needs the same
+  treatment" was **wrong** — `run_agent` binds no run context at all, so that
+  would add correlation where none existed; recorded as a scope line instead;
+  (3) the "ruff gate is RED on `main`" note was stale — it is green, and the
+  claim is removed. **No migration, no schema, no wire-protocol change**:
+  nothing durable is written and no caller passes the new parameters yet, which
+  is exactly the WS-6b/6d boundary.
+- 2026-08-02 — **§7 WS-6a repair round 1 (code, same PR).** Review of the above
+  found the stamp reached no *reader*. Four fixes, all inside WS-6a's scope —
+  still no migration, no schema, no wire-protocol change, nothing durable:
+  (1) **The presence key could never carry `instance`.** `_axadd` writes
+  `cc:activity:live:{run_id}` from the `phase="start"` body, which predates the
+  agent load, so `active_runs()` → `/observability/active` → `/roster` (the
+  office view) carried no partition for **any** run. New
+  `acb_common.activity.refresh_run_presence(run_id, **fields)` patches the
+  existing snapshot (`SET … XX`, TTL refreshed, a miss is a no-op so a
+  finished run is never resurrected); `_bind_run_instance(instance, run_id)`
+  calls it. Chosen over re-publishing the start event because a duplicate
+  `start` **stream** entry is visible to every consumer, while a presence
+  snapshot overwrite is invisible and idempotent.
+  (2) **The delegation asymmetry is recorded, not papered over.**
+  `_run_sub_agent_streaming` resolves no instance and cannot unbind the
+  caller's, so a delegated sub-run's events carry the caller's partition while
+  its blobs carry `''`. The three places that asserted the stamp is "the SAME
+  key the manifest/blob store/state dir use" now say it identifies the
+  partition of the run that *resolved* it; WS-6a gained asymmetry #2 and WS-6d
+  gained a "not a foreign key onto `agent_blob`" warning. Fixing delegation
+  needs `unbind_contextvars` + restore — a separate ticket, deliberately not
+  done here.
+  (3) **The twin-tuple invariant is enforced, not prose.**
+  `test_observability.py::test_inherit_and_run_context_keys_match`.
+  (4) **The stamp reaches an aggregate.** `_record_cost` folds
+  `instance|<key>|cost`/`|calls` into the existing `cc:cost:{day}` hash and
+  `cost_summary()` returns `by_instance` — additive, no route change, same
+  shape as `by_agent`. This is the *live* rollup only (45-day TTL, no per-call
+  row): **WS-6d is unchanged and still open.**
+  +8 tests (89 in the §7 verification set incl. `test_instance_wiring.py`).

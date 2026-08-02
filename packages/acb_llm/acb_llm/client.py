@@ -515,6 +515,8 @@ def _compute_cost(model: str, response: Any, stats: dict[str, int]) -> float | N
 def _emit_usage(
     model: str, tier: str, response: Any, *,
     source: str | None = None, agent: str | None = None,
+    run_id: str | None = None, member: str | None = None,
+    instance: str | None = None,
 ) -> None:
     """Log per-call token/cache usage + USD cost; optionally persist to audit.
 
@@ -525,6 +527,18 @@ def _emit_usage(
     header) when the caller knows them; otherwise the run context supplies them.
     Set ``LLM_USAGE_AUDIT=1`` to also append an ``audit_event`` row per call.
     Never raises.
+
+    Attribution — decision D1's four-tuple (WS-6c, specs/observability_e2.md
+    §7). ``run_id``/``member``/``instance`` complete ``agent`` so a completion
+    can be rolled up per run, per member, per agent and per tenant partition.
+    **An in-run caller passes none of them**: the run context supplies all four
+    (``bind_run_context`` binds them; ``activity._INHERIT`` copies them onto the
+    event), which is why widening this signature costs the ~dozen in-run call
+    sites zero changes. Only a choke point OUTSIDE a run — the gateway's
+    ``/v1/chat/completions``, a bare HTTP request that inherits no contextvars —
+    has anything to pass explicitly. ``member`` is the activity feed's ``user``.
+    An empty explicit value means "unknown / shared" and defers to the context,
+    so a shared run stays *absent* rather than gaining an empty field.
     """
     stats = _usage_stats(response)
     if not stats:
@@ -537,12 +551,26 @@ def _emit_usage(
         _run_ctx = get_run_context()
     except Exception:
         _run_ctx = {}
-    _log.info("acb_llm.usage", model=model, tier=tier, cost_usd=cost, **stats)
+    # Explicitly-passed attribution, for a caller with no run context of its
+    # own. Empty values fall through to the run context / are simply omitted —
+    # never emitted as "". Keyed with the activity feed's own vocabulary
+    # (member → user) so the log line, the event and the audit row agree.
+    _stamp = {
+        k: v for k, v in
+        (("run_id", run_id), ("user", member), ("instance", instance))
+        if v
+    }
+    _log.info(
+        "acb_llm.usage", model=model, tier=tier, cost_usd=cost,
+        **stats, **_stamp,
+    )
     # Live activity feed (E2): surface every model call on the global bus so the
     # /observability view shows model activations + cost in real time, across
-    # every app. Best-effort + non-blocking (never raises); run/agent/user are
-    # inherited from the run context when this call is inside an agent run, and
-    # `source` is inherited too unless the caller passes it explicitly.
+    # every app. Best-effort + non-blocking (never raises); run/agent/user/
+    # instance are inherited from the run context when this call is inside an
+    # agent run, and `source` is inherited too unless the caller passes it
+    # explicitly. Passing None for the stamp fields is what ARMS that
+    # inheritance (`activity._INHERIT`) — an explicit value only overrides it.
     try:
         from acb_common import publish_activity
         publish_activity(
@@ -553,6 +581,9 @@ def _emit_usage(
             cost_usd=cost,
             source=source,
             agent=agent,
+            run_id=_stamp.get("run_id"),
+            user=_stamp.get("user"),
+            instance=_stamp.get("instance"),
         )
     except Exception:
         pass
@@ -569,7 +600,13 @@ def _emit_usage(
                 else "system:acb_llm",
                 action="llm_completion",
                 target=f"model:{model}",
-                payload={"tier": tier, "cost_usd": cost, **stats, **_run_ctx},
+                # _stamp last: an explicitly-passed attribution outranks the
+                # ambient run context (they agree for an in-run call, and only
+                # an out-of-run caller passes anything at all).
+                payload={
+                    "tier": tier, "cost_usd": cost,
+                    **stats, **_run_ctx, **_stamp,
+                },
             ))
 
         try:

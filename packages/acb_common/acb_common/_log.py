@@ -7,9 +7,10 @@ Two output modes (``LOG_FORMAT`` env, or the ``json_logs`` arg):
                           grepped/filtered by field and shipped to an aggregator.
 
 Correlation: :func:`bind_run_context` binds ``run_id``/``thread_id``/``agent``/
-``user`` into structlog's contextvars so EVERY log line emitted during a run
-carries them automatically — the thing that makes "show me all logs for run X"
-possible (E2 observability). Bind at the run boundary, clear in ``finally``.
+``user``/``instance`` into structlog's contextvars so EVERY log line emitted
+during a run carries them automatically — the thing that makes "show me all logs
+for run X" possible (E2 observability). Bind at the run boundary, clear in
+``finally``.
 """
 from __future__ import annotations
 
@@ -65,7 +66,21 @@ def get_logger(name: str | None = None) -> structlog.stdlib.BoundLogger:
 # run gains the same joinable fields (and so bind/clear stay symmetric).
 # ``source`` is the originating app (chat / email / tasks / …) so the live
 # activity feed can attribute an activation to the surface that triggered it.
-_RUN_CONTEXT_KEYS = ("run_id", "thread_id", "agent", "user", "source")
+# ``instance`` is the run's tenant partition, drawn from the SAME vocabulary
+# the manifest, the blob store (migration 136) and the state directory use
+# (``AgentManifest.instance_key``: ``''`` shared · ``u:<email>`` personal ·
+# ``t:<team>`` team). It completes decision D1's attribution four-tuple
+# (run_id, member, agent, instance) — WS-6a, specs/observability_e2.md §7.
+# The value identifies the partition of the run THAT RESOLVED IT; because the
+# context is inherited, a delegated sub-run that resolves none carries the
+# caller's key while writing blobs under the shared partition (the delegation
+# asymmetry recorded in §7 WS-6a). Do not treat the stamp as a join key onto
+# ``agent_blob`` without checking which run emitted it.
+# ⚠️ Twin tuple: ``activity._INHERIT`` must stay in sync — pinned by
+# tests/unit/test_observability.py::test_inherit_and_run_context_keys_match.
+_RUN_CONTEXT_KEYS = (
+    "run_id", "thread_id", "agent", "user", "source", "instance",
+)
 
 
 def bind_run_context(
@@ -75,6 +90,7 @@ def bind_run_context(
     agent: str | None = None,
     user: str | None = None,
     source: str | None = None,
+    instance: str | None = None,
 ) -> None:
     """Bind run-correlation fields into structlog contextvars.
 
@@ -82,6 +98,16 @@ def bind_run_context(
     thread context automatically includes the given fields — so you can filter
     all log lines for one agent run. Only non-empty values are bound. Pair with
     :func:`clear_run_context` in a ``finally`` at the run boundary.
+
+    Additive by design: each call binds only the fields it is given, leaving
+    already-bound ones alone. That is what lets the run boundary bind early
+    (so failures *during* agent load are still correlated) and top up
+    ``instance`` once the loaded config makes it resolvable — see
+    ``orchestrator.executor._bind_run_instance``.
+
+    The shared partition is ``''``, which is falsy, so a shared agent binds no
+    ``instance`` key at all rather than an empty/quoted value — "absent" is the
+    wire representation of shared, matching ``agent_blob.instance``.
     """
     fields = {
         k: v
@@ -91,6 +117,7 @@ def bind_run_context(
             ("agent", agent),
             ("user", user),
             ("source", source),
+            ("instance", instance),
         )
         if v
     }

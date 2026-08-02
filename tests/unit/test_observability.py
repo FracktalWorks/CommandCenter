@@ -51,11 +51,87 @@ def test_bound_context_visible_to_any_emitter_on_the_task():
 
 
 def test_clear_removes_context_no_leak():
-    bind_run_context(run_id="r1", agent="a")
+    bind_run_context(run_id="r1", agent="a", instance="u:a@b.com")
     clear_run_context()
     merged = structlog.contextvars.get_contextvars()
     assert "run_id" not in merged
     assert "agent" not in merged
+    # WS-6a: the tenant partition must not survive into the next run either —
+    # a leaked instance would attribute one member's spend to another's.
+    assert "instance" not in merged
+
+
+# ── WS-6a: the tenant partition is part of the run stamp ────────────────────
+# `instance` completes decision D1's (run_id, member, agent, instance) tuple.
+# Its vocabulary is the manifest's (AgentManifest.instance_key): '' shared,
+# u:<email> personal, t:<team> team — the same key agent_blob carries.
+
+def test_instance_is_bound_and_readable_like_every_other_run_field():
+    bind_run_context(
+        run_id="r-i", agent="email-assistant", user="alice@fracktal.in",
+        instance="u:alice@fracktal.in",
+    )
+    try:
+        assert get_run_context()["instance"] == "u:alice@fracktal.in"
+        # And it reaches the log line the same way the others do.
+        assert structlog.contextvars.get_contextvars()["instance"] == (
+            "u:alice@fracktal.in"
+        )
+    finally:
+        clear_run_context()
+
+
+def test_shared_agent_binds_no_instance_key_at_all():
+    # '' is how the manifest/store spell "shared". It must land as an ABSENT
+    # key — never the empty string, and never the literal "''" (a quoted empty
+    # value in the feed would read as a real, unreachable partition).
+    bind_run_context(run_id="r-s", agent="task-manager", instance="")
+    try:
+        ctx = get_run_context()
+        assert ctx == {"run_id": "r-s", "agent": "task-manager"}
+        assert "instance" not in ctx
+    finally:
+        clear_run_context()
+
+
+def test_inherit_and_run_context_keys_match():
+    """Drift gate: the twin tuples must be extended together.
+
+    ``_log._RUN_CONTEXT_KEYS`` decides what a run BINDS; ``activity._INHERIT``
+    decides what an event whose emitter omitted a field COPIES from that bind.
+    A key in one and not the other half-lands: bound onto every log line but
+    missing from every activity/cost event, or the reverse. Both AGENTS.md
+    files that document the stamp say "extend those two tuples together" —
+    this is the assertion behind that sentence.
+    """
+    from acb_common import _log, activity
+
+    bound = set(_log._RUN_CONTEXT_KEYS)
+    inherited = set(activity._INHERIT)
+    assert inherited == bound, (
+        "acb_common.activity._INHERIT and acb_common._log._RUN_CONTEXT_KEYS "
+        f"have drifted: bound-but-not-inherited={sorted(bound - inherited)}, "
+        f"inherited-but-not-bound={sorted(inherited - bound)}. Add the key to "
+        "BOTH tuples (and to bind_run_context's signature + its field list), "
+        "or attribution half-lands — see packages/AGENTS.md and "
+        "specs/observability_e2.md §7."
+    )
+
+
+def test_a_second_bind_tops_up_instance_without_disturbing_the_first():
+    # The ordering fix WS-6a ships: the run boundary binds early (so a failure
+    # during agent load is still correlated), then _bind_run_instance tops up
+    # `instance` once loaded.config makes it resolvable.
+    bind_run_context(run_id="r-2b", thread_id="t", agent="a", user="u@x",
+                     source="chat")
+    try:
+        bind_run_context(instance="t:growth")
+        assert get_run_context() == {
+            "run_id": "r-2b", "thread_id": "t", "agent": "a", "user": "u@x",
+            "source": "chat", "instance": "t:growth",
+        }
+    finally:
+        clear_run_context()
 
 
 def test_get_run_context_reflects_bound_fields():

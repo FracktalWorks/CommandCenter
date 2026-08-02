@@ -937,6 +937,49 @@ def _resolve_agent_instance(
         return ""
 
 
+def _bind_run_instance(instance: str, run_id: str = "") -> None:
+    """Top up this run's correlation context with its tenant partition (WS-6a).
+
+    A SECOND, additive :func:`acb_common.bind_run_context` call rather than a
+    moved one — deliberately. The run boundary binds run_id/thread_id/agent/
+    user/source *before* ``load_agent`` so a failure DURING load is still
+    correlated, but :func:`_resolve_agent_instance` cannot run until the config
+    is loaded. Binding only ``instance`` here leaves every earlier field in
+    place and keeps the blast radius to one key.
+
+    ``''`` (the shared partition) binds nothing — bind_run_context only takes
+    non-empty values — so a shared agent's context has no ``instance`` key,
+    which is exactly how the store spells "shared" (migration 136). Never
+    raises: attribution must not be able to fail a run.
+
+    The live presence key is patched too, given *run_id*. It was written from
+    the ``phase="start"`` event body, published before the load and therefore
+    without an instance — so without this refresh ``active_runs()``,
+    ``/observability/active`` and the office roster could never show a
+    partition for ANY run. Patching the snapshot beats re-publishing a start
+    event, which every stream consumer would read as a second activation.
+
+    **Scope — this is the partition of the run that RESOLVED it.** A delegated
+    sub-run (``_run_sub_agent_streaming``) resolves none and cannot unbind the
+    caller's, so its events inherit the caller's ``instance`` while its blobs
+    are written under the shared partition. Known asymmetry, recorded in
+    ``specs/observability_e2.md`` §7 WS-6a; do not read the stamp as proof
+    that a given event's blobs live in that partition.
+    """
+    try:
+        from acb_common import bind_run_context
+        bind_run_context(instance=instance)
+    except Exception:
+        pass
+    if not instance or not run_id:
+        return
+    try:
+        from acb_common import refresh_run_presence
+        refresh_run_presence(run_id, instance=instance)
+    except Exception:
+        pass
+
+
 def _resolve_effective_agent_dir(
     agent_dir: Path,
     agent_config: dict[str, Any],
@@ -2153,7 +2196,10 @@ async def run_agent_stream(
     # Bind run_id/thread_id/agent/user into structlog contextvars so EVERY log
     # line this run emits (across all tiers + injected tools on this context)
     # carries them — the thing that makes "show me all logs for run X / agent Y"
-    # possible. Cleared in the finally below.
+    # possible. Cleared in the finally below. The fifth field of decision D1's
+    # stamp, `instance`, cannot be resolved yet (it needs loaded.config) and is
+    # topped up by _bind_run_instance right after the load — this bind stays
+    # here so a failure DURING the load is still correlated.
     _corr_source = "chat"
     _corr_user = ""
     try:
@@ -2322,6 +2368,11 @@ async def run_agent_stream(
             _agent_instance = _resolve_agent_instance(
                 loaded.config, agent_name, _corr_user,
             )
+            # Attribution (WS-6a): every log line and every model activation
+            # from here on carries the partition this run is executing in, and
+            # the presence snapshot published at start (which predates the
+            # load, so it has no instance) is patched to match.
+            _bind_run_instance(_agent_instance, run_id)
             _effective_ws = _resolve_effective_agent_dir(
                 loaded.agent_dir, loaded.config,
                 session_override=_session_ws,

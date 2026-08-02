@@ -130,6 +130,7 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /calls", s.auth(s.handleCallList))
 	mux.HandleFunc("GET /calls/diagnostics", s.auth(s.handleCallDiagnostics))
 	mux.HandleFunc("GET /calls/recording", s.auth(s.handleCallRecording))
+	mux.HandleFunc("GET /call/audio", s.auth(s.handleCallAudio))
 	return mux
 }
 

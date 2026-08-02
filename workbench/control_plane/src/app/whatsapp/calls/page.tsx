@@ -13,17 +13,20 @@
  * See ai-company-brain/specs/whatsapp_calls_note_taker.md.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CheckCircle2,
+  Headphones,
   Loader2,
   Mic,
+  MicOff,
   Phone,
   PhoneIncoming,
   PhoneOff,
   Stethoscope,
   Users,
+  Volume2,
   XCircle,
 } from "lucide-react";
 import {
@@ -35,6 +38,8 @@ import {
 } from "../lib/api";
 import { callRecordingUrl } from "../lib/types";
 import type { WaAccount, WaCall, WaCallDiagnostics } from "../lib/types";
+import { startCallAudio } from "../lib/callAudio";
+import type { CallAudioHandle, CallAudioState } from "../lib/callAudio";
 
 /** Phases where the call is still going — drives polling and the hangup button. */
 const LIVE_PHASES = new Set([
@@ -113,6 +118,10 @@ export default function WhatsAppCallsPage() {
   const [diag, setDiag] = useState<WaCallDiagnostics | null>(null);
   const [showDiag, setShowDiag] = useState(false);
   const [prefillName, setPrefillName] = useState("");
+  const [audioState, setAudioState] = useState<CallAudioState>("idle");
+  const [audioCallId, setAudioCallId] = useState<string | null>(null);
+  const [muted, setMuted] = useState(false);
+  const audioRef = useRef<CallAudioHandle | null>(null);
   // Starts at 0 so the first server render has no clock to mismatch on; the
   // poll below fills it in once mounted.
   const [now, setNow] = useState(0);
@@ -197,6 +206,50 @@ export default function WhatsAppCallsPage() {
     void refresh();
   }
 
+  const stopAudio = useCallback(() => {
+    audioRef.current?.stop();
+    audioRef.current = null;
+    setAudioCallId(null);
+    setAudioState("idle");
+    setMuted(false);
+  }, []);
+
+  async function joinAudio(call: WaCall) {
+    setError(null);
+    stopAudio();
+    try {
+      const handle = await startCallAudio({
+        accountId,
+        callId: call.call_id,
+        onState: (s, detail) => {
+          setAudioState(s);
+          if (s === "idle" && detail) setError(detail);
+        },
+      });
+      audioRef.current = handle;
+      setAudioCallId(call.call_id);
+    } catch (e) {
+      setAudioState("failed");
+      setError(explainError(e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  function toggleMute() {
+    const next = !muted;
+    setMuted(next);
+    audioRef.current?.setMuted(next);
+  }
+
+  // A call that ended (or was hung up elsewhere) must not leave the mic open.
+  useEffect(() => {
+    if (!audioCallId) return;
+    const still = calls.find((c) => c.call_id === audioCallId);
+    if (!still || !isLive(still)) stopAudio();
+  }, [calls, audioCallId, stopAudio]);
+
+  // Leaving the page mid-call is the other way to strand an open microphone.
+  useEffect(() => () => audioRef.current?.stop(), []);
+
   async function runDiagnostics() {
     if (!accountId) return;
     setShowDiag(true);
@@ -259,15 +312,14 @@ export default function WhatsAppCallsPage() {
 
       {/* The ToS posture is the first thing on the page, not a footnote: an
           automated client placing calls is the fastest way to lose a number. */}
-      {/* The single most confusing thing about this feature, said before the
-          first call rather than after it. */}
       <div className="mb-3 flex items-start gap-2 rounded-xl bg-secondary px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
-        <Mic className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+        <Headphones className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          <b className="text-foreground">Calls are listen-only.</b> There&apos;s
-          no microphone path yet, so the person you call hears silence — and
-          their audio is recorded on the server rather than played to you here.
-          When the call ends, play it back from <b>Recent</b> below.
+          Once a call connects, press <b className="text-foreground">Talk</b> to
+          join with your mic and speakers. <b className="text-foreground">Use
+          headphones</b> — echo cancellation is best-effort on this path, and
+          without them the other person hears themselves. Every call is also
+          recorded server-side and playable from <b>Recent</b>.
         </span>
       </div>
 
@@ -499,6 +551,53 @@ export default function WhatsAppCallsPage() {
                     )}
                   </p>
                 </div>
+                {/* Speaker/mic. Only once media is up: joining before the peer
+                    answers would open the microphone into nothing. */}
+                {c.phase === "active" &&
+                  (audioCallId === c.call_id ? (
+                    <div className="flex shrink-0 gap-1.5">
+                      <button
+                        onClick={toggleMute}
+                        title={muted ? "Unmute" : "Mute"}
+                        className={`rounded-lg border px-2.5 py-1.5 text-xs tech-transition ${
+                          muted
+                            ? "border-destructive/40 bg-destructive/10 text-destructive"
+                            : "border-border text-muted-foreground hover:text-foreground"
+                        }`}
+                      >
+                        {muted ? (
+                          <MicOff className="h-3.5 w-3.5" />
+                        ) : (
+                          <Mic className="h-3.5 w-3.5" />
+                        )}
+                      </button>
+                      <button
+                        onClick={stopAudio}
+                        title="Leave the call's audio (the call stays up)"
+                        className="rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground tech-transition"
+                      >
+                        <Headphones className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  ) : (
+                    <button
+                      onClick={() => void joinAudio(c)}
+                      disabled={audioState === "requesting-mic" || audioState === "connecting"}
+                      className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-success px-3 py-1.5 text-xs font-medium text-white hover:opacity-90 tech-transition disabled:opacity-50"
+                    >
+                      {audioState === "requesting-mic" || audioState === "connecting" ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Volume2 className="h-3.5 w-3.5" />
+                      )}
+                      {audioState === "requesting-mic"
+                        ? "Mic…"
+                        : audioState === "connecting"
+                          ? "Joining…"
+                          : "Talk"}
+                    </button>
+                  ))}
+
                 {c.direction === "incoming" && c.phase === "ringing" ? (
                   <div className="flex gap-1.5">
                     <button

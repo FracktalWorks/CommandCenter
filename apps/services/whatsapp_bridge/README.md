@@ -134,6 +134,25 @@ note taker. State transitions are pushed to the gateway at
 
 In the app: **WhatsApp → Calls**.
 
+### Two-way audio
+
+`GET /call/audio?session=&call_id=` upgrades to a WebSocket carrying duplex
+audio, so a browser can be the call's microphone and speakers:
+
+```
+browser mic  ──► WS ──► wsSource ──► Player ──► MLow ──► SRTP ──► peer
+browser spkr ◄── WS ◄── callSink listener ◄── decoded peer frames
+```
+
+The wire format is raw little-endian **int16 mono at 16 kHz, one 960-sample
+(60 ms) frame per binary message** — meowcaller's native framing, so neither end
+resamples or reframes. The gateway proxies this socket (the bridge stays
+localhost-only) and the browser authenticates with a short-lived signed token,
+since a WebSocket can't carry the internal bearer.
+
+Attaching a browser is optional: with none attached the call sends silence,
+which is what holds the relay bridge open. Recording is unaffected either way.
+
 > [!WARNING]
 > Placing calls from an unofficial client carries the same ban risk as the rest
 > of this service, and arguably more — automated calling is conspicuous. Group

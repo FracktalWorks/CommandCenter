@@ -158,7 +158,7 @@ type liveCall struct {
 
 	recording string
 	sink      meowcaller.AudioSink
-	counter   *countingSink
+	counter   *callSink
 	closeOnce sync.Once
 }
 
@@ -214,38 +214,84 @@ func (lc *liveCall) finish(reason string) {
 	})
 }
 
-// countingSink wraps the WAV recorder and counts what actually arrived.
+// callSink is the peer's audio, fanned out to everyone who wants it: the WAV
+// recorder, a frame counter, and any live listeners (a browser holding the
+// call open on its speakers).
 //
-// Without this, a call that connects but carries no media is indistinguishable
-// from one that worked: both end with a "recording" path and no error. The
-// frame count is the difference between "signalling succeeded" and "we heard
-// them", which is the only question that matters for a note taker.
-type countingSink struct {
-	inner  meowcaller.AudioSink
-	mu     sync.Mutex
-	frames int64
+// The counter matters on its own — a call that connects but carries no media is
+// otherwise indistinguishable from one that worked, since both end with a
+// recording path and no error.
+type callSink struct {
+	inner meowcaller.AudioSink // WAV recorder, may be nil
+
+	mu        sync.Mutex
+	frames    int64
+	listeners map[chan []float32]struct{}
 }
 
-func (s *countingSink) WriteFrame(frame []float32) error {
+func newCallSink(inner meowcaller.AudioSink) *callSink {
+	return &callSink{inner: inner, listeners: map[chan []float32]struct{}{}}
+}
+
+// WriteFrame is on meowcaller's media path, so it must never block. A listener
+// that can't keep up loses frames rather than stalling the call for everyone.
+func (s *callSink) WriteFrame(frame []float32) error {
 	s.mu.Lock()
 	s.frames++
+	for ch := range s.listeners {
+		// Copy: the caller owns `frame` and reuses it after we return.
+		buf := make([]float32, len(frame))
+		copy(buf, frame)
+		select {
+		case ch <- buf:
+		default: // listener is behind — drop, don't block the media loop
+		}
+	}
 	s.mu.Unlock()
+
 	if s.inner == nil {
 		return nil
 	}
 	return s.inner.WriteFrame(frame)
 }
 
-func (s *countingSink) Close() error {
+func (s *callSink) Close() error {
+	s.mu.Lock()
+	for ch := range s.listeners {
+		delete(s.listeners, ch)
+		close(ch)
+	}
+	s.mu.Unlock()
 	if s.inner == nil {
 		return nil
 	}
 	return s.inner.Close()
 }
 
+// listen returns a channel of the peer's frames plus a detach func. The buffer
+// is ~600 ms so a brief scheduling hiccup doesn't cost audio.
+func (s *callSink) listen() (<-chan []float32, func()) {
+	ch := make(chan []float32, 10)
+	s.mu.Lock()
+	s.listeners[ch] = struct{}{}
+	s.mu.Unlock()
+
+	var once sync.Once
+	return ch, func() {
+		once.Do(func() {
+			s.mu.Lock()
+			if _, ok := s.listeners[ch]; ok {
+				delete(s.listeners, ch)
+				close(ch)
+			}
+			s.mu.Unlock()
+		})
+	}
+}
+
 // seconds converts the frame count to wall-clock audio. meowcaller delivers
 // FrameSamples (960) at SampleRate (16 kHz) — 60 ms per frame.
-func (s *countingSink) seconds() float64 {
+func (s *callSink) seconds() float64 {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return float64(s.frames) * float64(meowcaller.FrameSamples) / float64(meowcaller.SampleRate)
@@ -392,16 +438,17 @@ func (cm *CallManager) track(lc *liveCall) {
 
 	// Count frames even when recording is switched off — "did we hear them?"
 	// is worth answering regardless of whether we kept the audio.
-	counter := &countingSink{}
+	var rec meowcaller.AudioSink
 	if path := cm.recordingPath(lc.callID); path != "" {
-		rec, err := meowcaller.WAVRecorder(path)
+		w, err := meowcaller.WAVRecorder(path)
 		if err != nil {
 			cm.log.Warnf("call %s: recorder: %v", lc.callID, err)
 		} else {
-			counter.inner = rec
+			rec = w
 			lc.recording = path
 		}
 	}
+	counter := newCallSink(rec)
 	lc.counter = counter
 	lc.sink = counter
 	c.Receive(counter)

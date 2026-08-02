@@ -40,6 +40,10 @@ router = APIRouter(
         "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
         "/whatsapp/bridge/call-event",
+        #   /whatsapp/calls/audio — a browser WebSocket, which cannot send the
+        #     internal bearer or X-User-Email; it authenticates with a
+        #     short-lived HMAC token minted by the (gated) audio-token route.
+        "/whatsapp/calls/audio",
     ])],
 )
 

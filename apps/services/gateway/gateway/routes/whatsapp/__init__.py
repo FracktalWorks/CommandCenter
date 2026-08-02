@@ -17,4 +17,4 @@ from gateway.routes.whatsapp import (  # noqa: F401
     pulse,
     transport,
 )
-from gateway.routes.whatsapp.core import router  # noqa: F401
+from gateway.routes.whatsapp.core import router, ws_router  # noqa: F401

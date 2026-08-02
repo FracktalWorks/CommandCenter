@@ -57,6 +57,7 @@ import { AiTaskActions } from "./AiTaskActions";
 import { DelegateDialog } from "./DelegateDialog";
 import { WeightToggles, PriorityBadge, SuggestionBadge } from "./PriorityControls";
 import { isUntagged } from "../lib/priority";
+import { isWaitingOverdue } from "../lib/waiting";
 import { useCardActions } from "../lib/useCardActions";
 
 // Ages/overdue on this panel are read against the REAL clock — `isOverdue` and
@@ -216,6 +217,12 @@ export function TaskDetail({
     taskStages && taskStages.length ? taskStages : stageOptions;
 
   const dueValue = item.dueAt ? item.dueAt.slice(0, 10) : "";
+  // The promised-by date on the waiting-for record (null = no promise made).
+  // `promiseLate` highlights only an EXPLICIT promise that has passed — when
+  // there is none the Due field above already carries the overdue styling, so
+  // the panel never says the same thing twice in two places.
+  const promisedValue = item.expectedBy ? item.expectedBy.slice(0, 10) : "";
+  const promiseLate = !!item.expectedBy && isWaitingOverdue(item);
 
   return (
     <div className="flex h-full flex-col overflow-y-auto bg-background">
@@ -607,6 +614,49 @@ export function TaskDetail({
                 </span>
               )}
             </span>
+            {/* The one place a real promise is stated. Empty is the normal
+                state — nobody promised anything, and the Waiting-For overdue
+                line reads this task's own due date live (lib/waiting.ts). Set
+                it only when they actually committed to a date; clearing it
+                takes the promise back rather than writing a second deadline. */}
+            <div className="mt-2 max-w-xs">
+              <MetaEdit label="Promised by" icon={CalendarClock}
+                display={item.expectedBy
+                  ? <span className={`inline-flex items-center gap-1 ${promiseLate ? "font-medium text-destructive" : ""}`}>
+                      {promiseLate ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
+                      {relativeTime(item.expectedBy)}
+                    </span>
+                  : <span className="text-[13px] text-muted-foreground/70">
+                      {item.dueAt
+                        ? `not promised — judged on due ${relativeTime(item.dueAt)}`
+                        : "not promised"}
+                    </span>}
+              >
+                {(close) => (
+                  <div className="flex items-center gap-1.5">
+                    <input
+                      type="date"
+                      defaultValue={promisedValue}
+                      autoFocus
+                      onChange={(e) => {
+                        updateItem(item.id, {
+                          expectedBy: e.target.value
+                            ? new Date(e.target.value).toISOString() : "",
+                        });
+                        close();
+                      }}
+                      className="rounded-md border border-border bg-background px-2 py-1 text-[13px] text-foreground focus:border-primary/50 focus:outline-none"
+                    />
+                    {item.expectedBy && (
+                      <button type="button" onClick={() => { updateItem(item.id, { expectedBy: "" }); close(); }}
+                        className="tech-transition rounded p-1 text-muted-foreground hover:text-destructive" title="Clear the promise">
+                        <X className="h-3.5 w-3.5" />
+                      </button>
+                    )}
+                  </div>
+                )}
+              </MetaEdit>
+            </div>
           </section>
         )}
 

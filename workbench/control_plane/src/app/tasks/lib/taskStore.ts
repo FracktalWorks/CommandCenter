@@ -184,6 +184,11 @@ export interface ItemMetaPatch {
   deepWork?: boolean;
   /** dismiss the delegate/schedule suggestion ("this one's mine") */
   keptMine?: boolean;
+  /** the date the person we're waiting on actually PROMISED — ISO; "" clears
+   *  it back to null ("no promise was made", and the Waiting-For overdue line
+   *  then reads dueAt live). Lands on the item's open gtd_waiting record, not
+   *  on gtd_items; local only, never back-synced. See lib/waiting.ts. */
+  expectedBy?: string;
 }
 
 /** Resolve a storage target into item source/provider/syncState fields.
@@ -1634,6 +1639,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
               ? patch.timeEstimateMins || undefined
               : i.timeEstimateMins,
           dueAt: patch.dueAt !== undefined ? patch.dueAt || undefined : i.dueAt,
+          expectedBy:
+            patch.expectedBy !== undefined
+              ? patch.expectedBy || undefined
+              : i.expectedBy,
           scheduledStart:
             patch.scheduledStart !== undefined
               ? patch.scheduledStart || undefined
@@ -1711,6 +1720,7 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       if (patch.timeEstimateMins !== undefined)
         body.time_estimate_mins = patch.timeEstimateMins;
       if (patch.dueAt !== undefined) body.due_at = patch.dueAt;
+      if (patch.expectedBy !== undefined) body.expected_by = patch.expectedBy;
       if (patch.scheduledStart !== undefined)
         body.scheduled_start = patch.scheduledStart;
       if (patch.scheduledEnd !== undefined)

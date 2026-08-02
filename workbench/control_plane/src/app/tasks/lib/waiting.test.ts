@@ -6,6 +6,7 @@ import {
   groupByWaitingOn,
   isStaleWaiting,
   isWaitingOverdue,
+  waitingLine,
 } from "./waiting";
 
 // Minimal GtdItem factory — only the waiting fields matter to this math.
@@ -51,13 +52,31 @@ describe("isWaitingOverdue — 'flags rows past expected_by' (§6 line 540)", ()
       .toBe(false);
   });
 
-  it("is false when nothing was promised — no expectedBy, nothing to be late for", () => {
-    expect(isWaitingOverdue(item({}), NOW)).toBe(false);
-    expect(isWaitingOverdue(item({ expectedBy: undefined }), NOW)).toBe(false);
+  it("falls back to dueAt when nobody promised a date", () => {
+    // No expectedBy ⇒ no promise was made, so the honest line is the item's
+    // own deadline — read LIVE, so it can never be a stale copy.
+    expect(isWaitingOverdue(item({ dueAt: ago(10 * DAY) }), NOW)).toBe(true);
+    expect(isWaitingOverdue(item({ dueAt: ahead(DAY) }), NOW)).toBe(false);
+    expect(isWaitingOverdue(item({ expectedBy: undefined, dueAt: ago(1) }), NOW))
+      .toBe(true);
   });
 
-  it("ignores dueAt — my deadline is not the date I asked them for", () => {
-    expect(isWaitingOverdue(item({ dueAt: ago(10 * DAY) }), NOW)).toBe(false);
+  it("lets an explicit promise win over dueAt in BOTH directions", () => {
+    // Promised for next week even though my own deadline has passed → they are
+    // not late, and the badge must not say they are.
+    expect(
+      isWaitingOverdue(item({ expectedBy: ahead(7 * DAY), dueAt: ago(2 * DAY) }), NOW),
+    ).toBe(false);
+    // Promised for yesterday even though my deadline is still ahead → late.
+    expect(
+      isWaitingOverdue(item({ expectedBy: ago(DAY), dueAt: ahead(7 * DAY) }), NOW),
+    ).toBe(true);
+  });
+
+  it("is false when there is no date at all — nothing to be late against", () => {
+    expect(isWaitingOverdue(item({}), NOW)).toBe(false);
+    expect(isWaitingOverdue(item({ expectedBy: undefined, dueAt: undefined }), NOW))
+      .toBe(false);
   });
 
   it("does not read the wall clock when a nowMs is injected", () => {
@@ -65,6 +84,23 @@ describe("isWaitingOverdue — 'flags rows past expected_by' (§6 line 540)", ()
     // Same item, a "now" from before the promise date → not overdue.
     expect(isWaitingOverdue(stale, NOW - 5 * DAY)).toBe(false);
     expect(isWaitingOverdue(stale, NOW)).toBe(true);
+  });
+});
+
+describe("waitingLine — which fact the row is judged on", () => {
+  it("names the explicit promise when there is one", () => {
+    const line = waitingLine(item({ expectedBy: ahead(DAY), dueAt: ago(DAY) }));
+    expect(line).toEqual({ iso: ahead(DAY), kind: "promised" });
+  });
+
+  it("names the item's own deadline when nobody promised", () => {
+    const line = waitingLine(item({ dueAt: ago(DAY) }));
+    expect(line).toEqual({ iso: ago(DAY), kind: "due" });
+  });
+
+  it("is null when there is no line, and agrees with isWaitingOverdue", () => {
+    expect(waitingLine(item({}))).toBeNull();
+    expect(isWaitingOverdue(item({}), NOW)).toBe(false);
   });
 });
 

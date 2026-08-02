@@ -134,6 +134,15 @@ class ItemPatch(BaseModel):
     # Needs an unbroken flow state (deep/creative/builder work) — local overlay.
     deep_work: bool | None = None
     kept_mine: bool | None = None          # dismiss the delegate/schedule hint
+    # The promised-by date on the item's OPEN gtd_waiting record — ISO; ""
+    # clears it back to NULL. NOT a gtd_items column: this is the one field on
+    # the patch that lands on another table, because renegotiating a promise is
+    # an edit to the same task from the user's point of view. NULL means "no
+    # explicit promise was made" and the Waiting-For overdue line then reads
+    # `due_at` live; a value here is a real promise and stands on its own,
+    # deliberately independent of `due_at`. Local only — no provider field
+    # corresponds to it, so it is never back-synced.
+    expected_by: str | None = None
 
 
 class OrganizeRequest(BaseModel):
@@ -624,7 +633,11 @@ def _build_item_update(
     if patch.attachments is not None:
         sets.append("attachments = :atts")
         params["atts"] = json.dumps(patch.attachments) or None
-    if not sets:
+    # `expected_by` writes to gtd_waiting, not gtd_items (patch_item applies it),
+    # so it contributes no SET clause — but a patch carrying only it is still a
+    # real edit to this task, not an empty one. The bare `updated_at = now()`
+    # below is then the whole UPDATE, which is also what the client re-reads.
+    if not sets and patch.expected_by is None:
         raise HTTPException(status_code=400, detail="No fields to update")
     sets.append("updated_at = now()")
     return sets, params
@@ -666,6 +679,26 @@ async def patch_item(
         )).fetchone()
         if not res:
             raise HTTPException(status_code=404, detail="Item not found")
+        # Renegotiating the promise: the ONE write in this patch that lands on
+        # gtd_waiting rather than gtd_items. Ownership was just proven by the
+        # UPDATE above (it is scoped by user_id and 404s otherwise), and the
+        # EXISTS re-states it so this statement is safe to read alone. "" →
+        # NULL via _parse_ts, which is how you take a promise back: the overdue
+        # line then falls back to the item's live due_at. Only the OPEN record
+        # is touched; a resolved waiting-for is history. No open record (the
+        # task was never delegated) → 0 rows, silently: the UI only offers the
+        # control on a waiting item, and inventing one here would be a second
+        # way to delegate.
+        if patch.expected_by is not None:
+            await db.execute(
+                text("""UPDATE gtd_waiting w SET expected_by = :exp
+                         WHERE w.item_id = :id AND w.resolved = false
+                           AND EXISTS (SELECT 1 FROM gtd_items i
+                                        WHERE i.id = w.item_id
+                                          AND i.user_id = :uid)"""),
+                {"id": item_id, "uid": _uid(user),
+                 "exp": _parse_ts(patch.expected_by)},
+            )
         # A task captured from an email commitment closing → mark its thread Done
         # (fires only on the OPEN→DONE transition, and the helper no-ops if the
         # thread is already Done, so there's no ping-pong with the reverse path).
@@ -1150,13 +1183,16 @@ async def organize_item(
             },
         )
         if delegated:
+            # No `expected_by`: `due` is the item's own deadline (the UPDATE
+            # above just wrote it to gtd_items.due_at), so storing it here too
+            # would be a derived copy that freezes. NULL ⇒ no explicit promise
+            # was made and the overdue line reads `due_at` live.
             await db.execute(
                 text("""INSERT INTO gtd_waiting
-                        (item_id, waiting_on, delegated_at, expected_by)
-                        VALUES (:iid, :who, now(), :expected)"""),
+                        (item_id, waiting_on, delegated_at)
+                        VALUES (:iid, :who, now())"""),
                 {"iid": item_id,
-                 "who": json.dumps(req.assignee.model_dump()),
-                 "expected": due},
+                 "who": json.dumps(req.assignee.model_dump())},
             )
         # Subtasks: clarify a single task INTO concrete child steps. Each becomes
         # a NEXT child gtd_item inheriting the parent's project/home; a SYNCED
@@ -1460,23 +1496,19 @@ async def delegate_item(
              "status": req.status, "due": due},
         )
         # A delegated task is one we're waiting on — open a waiting-for record.
-        # When the caller supplies no expected-by (the in-app Delegate dialog
-        # doesn't ask for one), default it to the item's OWN due date: the
-        # honest reading of the act is "I asked them for it by my deadline",
-        # and a NULL here makes the row unflaggable forever (`expected_by` IS
-        # the overdue line — spec §6 line 540). The UPDATE above has already
-        # coalesced due_at, so this subquery reads the post-delegation value.
-        # The two dates stay DIFFERENT facts (see tasks/lib/waiting.ts) — this
-        # picks the default at the moment of delegation, it does not merge them.
+        # `expected_by` is left NULL: nobody promised a date here (the in-app
+        # Delegate dialog never asks for one), and `req.due_at` is already the
+        # item's OWN due date — copying it into gtd_waiting would manufacture a
+        # second, frozen copy of a value that then goes stale the moment the
+        # deadline moves. NULL is the honest record, and the overdue line falls
+        # back to the item's live `due_at` (tasks/lib/waiting.ts
+        # ::isWaitingOverdue). A real promise is stated explicitly, later, via
+        # PATCH /tasks/items/{id} {expected_by} — see the spec's §9.1 slice 5.
         await db.execute(
             text("""INSERT INTO gtd_waiting
-                    (item_id, waiting_on, delegated_at, expected_by)
-                    VALUES (:iid, :who, now(),
-                            coalesce(:expected,
-                                     (SELECT due_at FROM gtd_items
-                                       WHERE id = :iid)))"""),
-            {"iid": item_id, "who": json.dumps(req.assignee.model_dump()),
-             "expected": due},
+                    (item_id, waiting_on, delegated_at)
+                    VALUES (:iid, :who, now())"""),
+            {"iid": item_id, "who": json.dumps(req.assignee.model_dump())},
         )
         await db.commit()
         # Now create it in ClickUp assigned to the teammate.

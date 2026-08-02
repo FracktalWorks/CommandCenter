@@ -325,18 +325,22 @@ async def _sync_account(db: Any, account: Any, *, full: bool) -> AccountSyncResu
         elif row.disposition == "WAITING" and mapped["waiting_on"]:
             # Monitored task (assigned to someone else): keep exactly one
             # open waiting-for record pointing at the current assignee.
+            # `expected_by` stays NULL — the provider's due date is the TASK's
+            # deadline (already upserted into gtd_items.due_at above), not a
+            # promise the assignee made us, and a copy of it here would never
+            # move again when the date is rescheduled upstream. The overdue
+            # line falls back to the live `due_at` instead.
             await db.execute(
                 text("""INSERT INTO gtd_waiting
-                            (item_id, waiting_on, delegated_at, expected_by)
-                        SELECT :iid, :who, :delegated, :expected
+                            (item_id, waiting_on, delegated_at)
+                        SELECT :iid, :who, :delegated
                         WHERE NOT EXISTS (SELECT 1 FROM gtd_waiting
                                           WHERE item_id = :iid
                                             AND resolved = false)"""),
                 {"iid": str(row.id),
                  "who": json.dumps(mapped["waiting_on"]),
                  "delegated": _dt(task.get("created_at_ms"))
-                 or datetime.now(tz=UTC),
-                 "expected": _dt(task.get("due_at_ms"))},
+                 or datetime.now(tz=UTC)},
             )
 
     # Active vs passive (dormant) provider projects. A synced project with no

@@ -5,9 +5,18 @@
 // lib/ordering.ts and lib/scheduling.ts.
 //
 // Two DIFFERENT clocks live here and must not be confused:
-//   overdue = past `expectedBy`      — the date the thing was promised for
+//   overdue = past the line the item is judged on (see isWaitingOverdue)
 //   stale   = long since `delegatedAt` — nobody has heard anything in a while
 // An item can be either, both, or neither.
+//
+// `expectedBy` is an EXPLICIT PROMISE, and only that. NULL is not "no
+// deadline", it is "nobody promised a date" — in which case the honest line to
+// judge against is the item's own `dueAt`, read live. The server therefore
+// stores NULL at every delegate/capture/sync site and never derives a copy of
+// `dueAt` into it; a value in `expectedBy` means a human stated it (via
+// PATCH /tasks/items/{id}) and it stands on its own, deliberately independent
+// of `dueAt`. That is what keeps the badge from going stale: the common case
+// has nothing to go stale, and the uncommon case is a fact somebody asserted.
 
 import { GtdItem } from "./types";
 
@@ -44,18 +53,37 @@ export function daysWaiting(
   return Math.max(0, Math.floor(ms / DAY_MS));
 }
 
-/** True iff the promised-by date has passed (spec §6 line 540: "flags
- *  `gtd_waiting` rows past `expected_by`"). No `expectedBy` ⇒ false: nothing
- *  was promised, so nothing can be late. This is deliberately NOT `dueAt` —
- *  a delegated item's deadline for ME and the date I asked THEM for are
- *  different facts, even when today's write sites happen to set them alike. */
+/** True iff the date this waiting-for is judged on has passed (spec §6 line
+ *  540: "flags `gtd_waiting` rows past `expected_by`").
+ *
+ *  The line is `expectedBy ?? dueAt`, and the two are different facts:
+ *    • `expectedBy` set — someone actually promised this date. It wins, in
+ *      BOTH directions: a promise for next week keeps an item that is already
+ *      past my own deadline off the overdue list, and a promise for yesterday
+ *      flags an item whose deadline is still ahead.
+ *    • `expectedBy` null — nobody promised anything, so the only honest line
+ *      is my own deadline for the work, read live off `dueAt`. Nothing is
+ *      copied, so nothing can go stale when that deadline moves.
+ *  Neither present ⇒ false: there is no date to be late against. */
 export function isWaitingOverdue(
-  item: Pick<GtdItem, "expectedBy">,
+  item: Pick<GtdItem, "expectedBy" | "dueAt">,
   nowMs: number = Date.now(),
 ): boolean {
-  if (!item.expectedBy) return false;
-  const due = new Date(item.expectedBy).getTime();
+  const line = item.expectedBy || item.dueAt;
+  if (!line) return false;
+  const due = new Date(line).getTime();
   return !Number.isNaN(due) && due < nowMs;
+}
+
+/** Which fact `isWaitingOverdue` judged against — so the view can SAY which
+ *  one it is ("promised by …" reads differently from "due …") instead of
+ *  showing a bare date that means two things. Null when there is no line. */
+export function waitingLine(
+  item: Pick<GtdItem, "expectedBy" | "dueAt">,
+): { iso: string; kind: "promised" | "due" } | null {
+  if (item.expectedBy) return { iso: item.expectedBy, kind: "promised" };
+  if (item.dueAt) return { iso: item.dueAt, kind: "due" };
+  return null;
 }
 
 /** True iff more than STALE_WAITING_DAYS have passed since delegation — the

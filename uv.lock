@@ -1275,6 +1275,7 @@ dependencies = [
     { name = "pymupdf" },
     { name = "python-docx" },
     { name = "uvicorn", extra = ["standard"] },
+    { name = "websockets" },
     { name = "whatsapp-ingestion" },
 ]
 
@@ -1296,6 +1297,7 @@ requires-dist = [
     { name = "pymupdf", specifier = ">=1.24" },
     { name = "python-docx", specifier = ">=1.1" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.32" },
+    { name = "websockets", specifier = ">=12" },
     { name = "whatsapp-ingestion", editable = "apps/services/whatsapp_ingestion" },
 ]
 

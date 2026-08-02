@@ -63,7 +63,14 @@ async def _normalise_task(task_id: str, event_type: str, payload: dict[str, Any]
                 payload={"event_type": event_type, "counts": counts},
             )
         )
-        _log.info("clickup.task.normalised", task_id=task_id, event=event_type, **counts)
+        # NB: the key must NOT be `event=` — that is structlog's own message
+        # parameter, so passing it raised TypeError *after* the task had already
+        # been committed, and the `except` below then logged a normalise failure
+        # and dead-lettered a task that had persisted correctly. `receive`
+        # below already uses `clickup_event=`; this is the same convention.
+        # Pinned by tests/unit/test_clickup_normalise_dlq.py (incl. a repo-wide
+        # guard against the bug class).
+        _log.info("clickup.task.normalised", task_id=task_id, clickup_event=event_type, **counts)
     except Exception as exc:  # noqa: BLE001
         _log.exception("clickup.task.normalise_failed", task_id=task_id)
         enqueue_dlq(STREAM_CLICKUP, event_type, payload, error=f"normalise failed: {exc}")

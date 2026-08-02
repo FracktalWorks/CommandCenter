@@ -11,6 +11,7 @@ import {
   groupByWaitingOn,
   isStaleWaiting,
   isWaitingOverdue,
+  waitingLine,
 } from "../lib/waiting";
 
 // The GTD "Waiting For" list (spec: task_manager_app.md §1 line 46, §6).
@@ -21,7 +22,10 @@ import {
 // he has of mine. Each row carries the three facts §1 pins — who / what /
 // since-when — plus the two flags §6 asks for:
 //
-//   overdue — past `expectedBy` (the date it was promised for)
+//   overdue — past the date the row is judged on: an explicit `expectedBy`
+//             (someone promised it) when there is one, else the item's own
+//             `dueAt`. The row SAYS which of the two it is, because "promised
+//             by Friday" and "due Friday" are different claims about the world
 //   stale   — nothing heard for STALE_WAITING_DAYS since `delegatedAt`
 //
 // The predicates live in lib/waiting.ts (pure, unit-tested, and the same
@@ -114,6 +118,10 @@ function WaitingRow({
   const days = daysWaiting(item, nowMs);
   const overdue = isWaitingOverdue(item, nowMs);
   const stale = isStaleWaiting(item, nowMs);
+  // The date this row is judged on, and WHICH fact it is. Always rendered when
+  // there is one (it used to appear only for an explicit expectedBy, which hid
+  // the line the Overdue badge was actually reading).
+  const line = waitingLine(item);
   return (
     <div className="flex min-w-0 items-start gap-2 px-3 py-2">
       <div className="min-w-0 flex-1">
@@ -140,9 +148,13 @@ function WaitingRow({
               {days}d waiting
             </span>
           )}
-          {item.expectedBy && (
+          {line && (
             <span
-              title={`Expected by ${new Date(item.expectedBy).toLocaleString()}`}
+              title={
+                line.kind === "promised"
+                  ? `Promised by ${new Date(line.iso).toLocaleString()}`
+                  : `No promised-by date — judged on this task's own due date, ${new Date(line.iso).toLocaleString()}`
+              }
               className={[
                 "inline-flex items-center gap-1 text-[10px]",
                 overdue ? "font-medium text-destructive" : "text-muted-foreground",
@@ -153,7 +165,10 @@ function WaitingRow({
               ) : (
                 <Clock className="h-3 w-3" />
               )}
-              {relativeTime(item.expectedBy, nowMs)}
+              {/* WHICH fact — an explicit promise reads differently from the
+                  task's own deadline, and the row must not blur them. */}
+              {line.kind === "promised" ? "promised by " : "due "}
+              {relativeTime(line.iso, nowMs)}
             </span>
           )}
           {item.origin?.kind === "email" && (

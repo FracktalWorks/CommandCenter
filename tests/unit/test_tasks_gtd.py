@@ -2038,27 +2038,57 @@ def test_stale_waiting_rule_is_five_days_since_delegation():
     assert "w.delegated_at < now() - interval '5 days'" in src
 
 
-def test_delegate_defaults_expected_by_to_the_items_own_due_date():
-    """§12's headline journey — "delegate a task to a teammate, see it on
-    Waiting For, get an overdue flag" — is dead if `expected_by` lands NULL:
-    nothing was promised, so nothing can ever be late (lib/waiting.ts
-    ::isWaitingOverdue). The in-app Delegate dialog sends no `due_at`, so the
-    INSERT must default the promised-by date from the item's own due date —
-    "I asked them for it by my deadline" — rather than storing nothing.
+def test_no_insert_site_derives_expected_by_from_a_due_date():
+    """`expected_by` means ONE thing: someone actually promised this date.
 
-    The two dates remain DIFFERENT facts; this pins the DEFAULT chosen at the
-    moment of delegation, not a merge of the concepts."""
+    Every INSERT site used to snapshot the item's own due date into it under
+    another name, which is the worst shape — nobody promised anything, and the
+    copy froze the instant the deadline moved, so the Overdue badge lied in
+    both directions. The rule now: these sites write NO `expected_by` at all
+    (NULL = no promise), and the overdue line falls back to the item's live
+    `due_at` client-side (tasks/lib/waiting.ts::isWaitingOverdue). A promise is
+    stated explicitly through PATCH /tasks/items/{id}.
+
+    Pinned by source inspection because the write is raw SQL in a route that
+    needs a live DB to exercise."""
     import inspect
 
+    from gateway.routes.tasks import capture_email as capture_mod
     from gateway.routes.tasks import items as items_mod
+    from gateway.routes.tasks import sync as sync_mod
 
-    src = inspect.getsource(items_mod.delegate_item)
-    insert_at = src.index("INSERT INTO gtd_waiting")
-    insert = src[insert_at:]
-    # An explicit expected-by still wins; absent one, the row's own due_at is
-    # written into expected_by instead of NULL.
-    assert "coalesce(:expected," in insert
-    assert "SELECT due_at FROM gtd_items" in insert
-    # The UPDATE that may SET that due_at runs FIRST, so the subquery reads the
-    # post-delegation value rather than a stale one.
-    assert src.index("due_at = coalesce(:due, due_at)") < insert_at
+    sites = [
+        items_mod.delegate_item,          # POST /items/{id}/delegate
+        items_mod.organize_item,          # clarify → delegate
+        capture_mod.capture_from_email,   # one-click email capture
+        capture_mod._route_and_persist,   # clarify-popup email capture
+        sync_mod._sync_account,           # provider pull (monitored task)
+    ]
+    for fn in sites:
+        src = inspect.getsource(fn)
+        insert_at = src.index("INSERT INTO gtd_waiting")
+        insert = src[insert_at:insert_at + 400]
+        assert "expected_by" not in insert, (
+            f"{fn.__name__} writes expected_by at insert time — if the value is "
+            "the item's own due date, leave it NULL and let the read-time "
+            "fallback judge it live")
+
+
+def test_patch_item_can_state_and_clear_an_explicit_promised_by_date():
+    """The other half of the rule: a promise nobody can record is not a fact
+    the system holds. `PATCH /tasks/items/{id}` carries `expected_by` onto the
+    item's OPEN gtd_waiting row (same auth, same shape as the due-date edit),
+    and "" clears it back to NULL — taking the promise back, not writing a
+    second deadline."""
+    import inspect
+
+    from gateway.routes.tasks.items import ItemPatch, patch_item
+
+    assert "expected_by" in ItemPatch.model_fields
+
+    src = inspect.getsource(patch_item)
+    assert "UPDATE gtd_waiting" in src
+    # The OPEN record only — a resolved waiting-for is history.
+    assert "resolved = false" in src
+    # Ownership: the patch is scoped to the caller's own item.
+    assert "user_id = :uid" in src

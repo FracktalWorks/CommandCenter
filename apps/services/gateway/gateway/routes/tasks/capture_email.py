@@ -615,12 +615,16 @@ async def _route_and_persist(
         waiting_on = assignee or {
             "name": from_name or "the sender", "email": from_email_ or None,
             "provider_user_id": None}
+        # `expected_by` stays NULL. The drafter's `due_at` is already this
+        # item's own deadline (written to gtd_items.due_at above) — nobody
+        # stated a promised-by date, so copying it here would only freeze a
+        # value that the overdue line can read live from `due_at` instead.
         await db.execute(text(
             """INSERT INTO gtd_waiting
-                   (item_id, waiting_on, delegated_at, expected_by)
-               VALUES (:iid, :who, :now, :expected)"""),
+                   (item_id, waiting_on, delegated_at)
+               VALUES (:iid, :who, :now)"""),
             {"iid": item_id, "who": json.dumps(waiting_on),
-             "now": datetime.now(tz=UTC), "expected": due_at},
+             "now": datetime.now(tz=UTC)},
         )
     assignee_name = assignee.get("name") if assignee else None
     return item_id, disposition, assignee_name
@@ -722,8 +726,10 @@ async def capture_from_email(
         due_at = _parse_dt(draft.get("due_at", ""))
         defer_until = _parse_dt(draft.get("defer_until", ""))
         # A due date the owner must hit (NEXT/CALENDAR) is a HARD date — it
-        # belongs on the Calendar / deadline view. A WAITING due is the
-        # follow-up's expected-by (tracked in gtd_waiting), not my hard date.
+        # belongs on the Calendar / deadline view. A WAITING item's due date is
+        # someone else's deadline, so it is not MY hard date; it stays on the
+        # item (and is what the Waiting-For overdue line reads when no explicit
+        # promised-by date was ever stated).
         is_hard = bool(due_at) and disposition in ("NEXT", "CALENDAR")
         clarified = disposition != "INBOX"
         # When the router places this OUTSIDE the inbox (NEXT/CALENDAR), it also
@@ -776,17 +782,20 @@ async def capture_from_email(
             await _create_subtasks(
                 db, uid, item_id, subtasks, source, account_id, None, sync_state)
         # A monitored follow-up/delegation gets an open waiting-for record so it
-        # shows in Waiting and the nudge/stale logic tracks it.
+        # shows in Waiting and the nudge/stale logic tracks it. `expected_by`
+        # stays NULL — same reason as the popup path above: `due_at` is the
+        # item's own deadline, already stored on gtd_items, and a second frozen
+        # copy of it is exactly what made the Overdue badge lie.
         if disposition == "WAITING":
             waiting_on = assignee or {
                 "name": from_name or "the sender", "email": from_email_ or None,
                 "provider_user_id": None}
             await db.execute(text(
                 """INSERT INTO gtd_waiting
-                       (item_id, waiting_on, delegated_at, expected_by)
-                   VALUES (:iid, :who, :now, :expected)"""),
+                       (item_id, waiting_on, delegated_at)
+                   VALUES (:iid, :who, :now)"""),
                 {"iid": item_id, "who": json.dumps(waiting_on),
-                 "now": datetime.now(tz=UTC), "expected": due_at},
+                 "now": datetime.now(tz=UTC)},
             )
         await db.commit()
         row = (await db.execute(

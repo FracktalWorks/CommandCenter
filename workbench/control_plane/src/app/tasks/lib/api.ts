@@ -486,6 +486,9 @@ export async function apiPatchItem(
     leveraged?: boolean;
     deep_work?: boolean;
     kept_mine?: boolean;
+    /** the promised-by date on the item's OPEN waiting-for record; "" clears
+     *  it (no promise ⇒ the overdue line reads due_at live). */
+    expected_by?: string;
   }
 ): Promise<GtdItem> {
   return mapItem(

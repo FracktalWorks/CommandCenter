@@ -1,7 +1,7 @@
 # Foundation Build‑Out Checklist — CommandCenter
 
 **Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13 · **Competitive refs added:** 2026-07-13
-**§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0), which blocks BO‑20a–e only — **BO‑20f is dispatchable today**, and `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
+**§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0), which blocks BO‑20a–e only — **BO‑20f was dispatchable immediately and is now BUILT (2026-08-02), moving §BO‑20 ☐ → ◑**, and `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
 **Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block) · competitive learnings (proven reference implementations from Hermes Agent & OpenClaw) in `ai-company-brain/specs/competitive_hardening_2026-07.md` (`CH-*`) and `COMPETITIVE_COMPARISON.md`.
 
 > **🚀 Deploy status:** read live deploy state from `gh run list` and `git log origin/main` — not from this doc. Next recommended P0: **BO‑8** (secret rotation + history purge — owner‑gated); BO‑1's approval loop has since shipped (see §BO‑1).
@@ -136,7 +136,7 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 - **Approach for the residual:** annotate the genuinely destructive platform tools (`install_dependency`, outward‑write tools) as `destructive`, pass full call context (not just the name) to `decide`, and make `enforce` mode block destructive/out‑of‑policy calls with a real confirmation card.
 - **Competitive ref (CH‑1):** Hermes ships an always‑on **hardline blocklist** (`rm -rf /`, fork bombs, `mkfs`, disk‑zeroing `dd`) that no mode can override, plus **fail‑closed timeout→deny** on the approval prompt — both worth adopting as the floor. NVIDIA **NemoClaw**'s key idea for OpenClaw is **out‑of‑process policy enforcement**: evaluate the gate *outside* the agent's own tool surface so a prompt‑injected agent can't route around it. See `specs/competitive_hardening_2026-07.md`.
 
-### BO‑20 — Event‑bus consumer + durable job queue *(P1)* ☐ *(competitive‑informed, CH‑3)*
+### BO‑20 — Event‑bus consumer + durable job queue *(P1)* ◑ *(competitive‑informed, CH‑3)*
 
 > **Verified against code on 2026-08-02.** This section was rewritten after the
 > WS‑4 dispatch audit returned **NO‑GO**: the previous body had no acceptance
@@ -146,17 +146,19 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 > handed the old row would have built a second, parallel dispatch path for work
 > that already has one.
 >
-> **⚠️ One owner decision (§BO‑20.0) blocks BO‑20a–e — but not BO‑20f**, which
-> needs no consumer, no flag and no decision and is dispatchable today. Everything
+> **⚠️ One owner decision (§BO‑20.0) blocks BO‑20a–e — but it never blocked
+> BO‑20f**, which needed no consumer, no flag and no decision. Everything
 > else below is written so that a single "Option A" answer makes BO‑20a–e
 > dispatchable as written — **and only "Option A"; see §BO‑20.0 for why answering
-> "Option B" buys a design round rather than a dispatch.** This item is still
-> ☐ — none of BO‑20a–f is built — but
-> the *reason* the row existed has changed, so read "What is true today" before
-> anything else. (`work_plan.md`'s WS‑4 State cell mirrors this split as
-> `🟢 BO‑20f · 🔴 a–e`.)
+> "Option B" buys a design round rather than a dispatch.** The item moved
+> ☐ → ◑ on **2026-08-02**: **BO‑20f is BUILT** (Gmail + Zoho receivers now
+> enqueue + emit; `tests/unit/test_ingestion_receiver_parity.py`), **BO‑20a–e
+> are not** and still wait on §BO‑20.0. The *reason* the row existed has
+> changed, so read "What is true today" before anything else.
+> (`work_plan.md`'s WS‑4 State cell mirrors this split.)
 >
-> **Hardened 2026-08-02 after adversarial review** (still ☐, no code): BO‑20f no
+> **Hardened 2026-08-02 after adversarial review** (that pass shipped no code;
+> BO‑20f's code landed later the same day): BO‑20f no
 > longer claims to unblock WS‑11 Slice 4 (it unblocks multi‑channel event
 > triggers; Slice 4 needs BO‑20a–e + BO‑7); Option B's undefined dispatch step is
 > stated; BO‑20b/d/e now prescribe their constants as literals so a "retry with
@@ -166,10 +168,10 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 
 1. **Webhook → run is ALREADY wired for ClickUp, and it does not go through
    Redis.** `apps/services/ingestion/ingestion/sources/clickup/webhook.py::receive`
-   verifies the HMAC (`:84`), best‑effort `enqueue`s to `ingestion:clickup`
-   (`:95`, warn‑and‑continue if Redis is down, `:96‑99`), schedules inline
-   normalisation for task events (`:103`), and schedules
-   `emit_event("clickup", event_type, payload)` (`:107‑109`). The gateway
+   verifies the HMAC (`:91`), best‑effort `enqueue`s to `ingestion:clickup`
+   (`:102`, warn‑and‑continue if Redis is down, `:103‑106`), schedules inline
+   normalisation for task events (`:110`), and schedules
+   `emit_event("clickup", event_type, payload)` (`:114‑116`). The gateway
    registers `workflows.triggers.dispatch_event` into that sink registry at
    import time (`apps/services/gateway/gateway/main.py:1043‑1049`), and
    `dispatch_event` (`apps/services/gateway/gateway/routes/workflows/triggers.py:40`)
@@ -182,12 +184,25 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
    MAF agent *and* calls `dispatch_event` (`:3476‑3478`) — the two fan out
    independently from the same event. **BO‑20 must not add a third dispatch
    path**; it changes how events *reach* `dispatch_event`, nothing downstream.
-3. **Gmail and Zoho are stubs.** `sources/gmail/webhook.py:66` and
-   `sources/zoho/webhook.py:59` both carry a `TODO`; both only audit‑log and
-   return `{"status": "accepted"}`. Neither enqueues, neither emits. So
-   "multi‑channel triggers" is blocked on **these two receivers** at least as
-   much as on any consumer — that is BO‑20f, and it is the most nearly
-   agent‑safe item here.
+3. ~~**Gmail and Zoho are stubs.**~~ **Closed 2026-08-02 by BO‑20f.** It was
+   true as written: both receivers carried a `TODO`, only audit‑logged, and
+   neither enqueued nor emitted — so "multi‑channel triggers" was blocked on
+   these two receivers at least as much as on any consumer, while
+   `TriggerPanel.tsx:266‑269` had been offering `gmail` and `zoho` in the
+   event‑trigger source dropdown all along (a dead switch in the UI). Both now
+   `enqueue` to `ingestion:{gmail,zoho}` and schedule
+   `emit_event(source, event_type, payload)` on `BackgroundTasks`, in ClickUp's
+   shape. **All three receivers now emit inline**, which is what makes BO‑20a's
+   Q1 cutover a three‑receiver change (see BO‑20a). ⚠️ **Closed in code, not in
+   any environment:** `zoho_webhook_secret` and `gmail_pubsub_token` are both
+   `""` everywhere today, so both receivers 401 every push and the switch stays
+   dark until an owner provisions the secrets **and** points the provider at the
+   route — see the OWNER‑GATE on the BO‑20f ticket. Bonus findings recorded so
+   they are not re‑discovered: the Zoho receiver had been returning **500 on
+   every authenticated push** (structlog `event=` kwarg collision) until BO‑20f's
+   first `TestClient` drive‑through exposed it, and the same collision in
+   `clickup/webhook.py::_normalise_task` had been **dead‑lettering every
+   successfully‑normalised task**.
 4. **The `ingestion:*` streams are write‑only.** `xadd` is the only stream verb
    in the ingestion package. `xreadgroup` / `xgroup` / `xack` appear **nowhere in
    the repo**; the only `xread` callers are unrelated transports
@@ -256,8 +271,9 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 
 **Why the item still matters:** durability and replay (the buffer is written and
 never read), retry/backoff, a drainable dead‑letter path, per‑source rate
-limiting, bounded concurrency, and **coverage** — only one of three receivers
-emits anything at all.
+limiting, and bounded concurrency. (**Coverage** — "only one of three receivers
+emits anything at all" — was the sixth reason and is **closed**: BO‑20f shipped
+2026-08-02.)
 
 #### Scope and non‑goals
 
@@ -413,9 +429,9 @@ dispatch path.
 
 #### Tickets
 
-**Sequence: f → a → b → c → (d, e).** BO‑20f needs no consumer, no owner
+**Sequence: f → a → b → c → (d, e).** BO‑20f needed no consumer, no owner
 decision and no flag; it is what **multi‑channel event triggers** actually need,
-and it can dispatch **today**. BO‑20a–e wait on §BO‑20.0.
+and it **shipped 2026-08-02**. BO‑20a–e wait on §BO‑20.0.
 
 ⚠️ **BO‑20f does NOT unblock WS‑11 Slice 4.** `specs/workflows_app.md:217`
 defines Slice 4 as *"(post‑BO‑20/BO‑7): durable queued runs; sandboxed module
@@ -426,12 +442,79 @@ non‑goal above; if these two ever disagree, the non‑goal is right.)
 
 ---
 
-**BO‑20f — Gmail + Zoho receivers reach ClickUp parity (enqueue + emit).** ✅ **AGENT‑SAFE** · *no owner decision, no flag, dispatchable now*
+**BO‑20f — Gmail + Zoho receivers reach ClickUp parity (enqueue + emit).** ✅ **BUILT 2026-08-02** *(code‑side; **inert in prod** — see the gate below)* · *no owner decision, no flag, no migration*
+> **Shipped.** Both receivers now `enqueue` to their own stream and schedule
+> `emit_event` on `BackgroundTasks`, mirroring `clickup/webhook.py` including
+> warn‑and‑continue. `tests/unit/test_ingestion_receiver_parity.py` (22 tests)
+> and `tests/unit/test_clickup_normalise_dlq.py` (4 tests) are green, and
+> `test_clickup_ingestor.py` is untouched at 10 passed.
+>
+> ⚠️ **OWNER‑GATE — this closes the *code‑side* dead switch only; the feature
+> fires in NO environment today.** `zoho_webhook_secret` and
+> `gmail_pubsub_token` both default to `""`, and `_verify` / `_verify_bearer`
+> return `False` on unset, so **every push 401s** — `xadd` never runs and
+> `emit_event` is never scheduled. Neither key is in `.env.example` (writes to
+> it are OWNER‑GATE under WS‑2 and are blocked by the plan‑guard hook) nor on
+> the VPS, and no Zoho webhook / Pub/Sub subscription points at these routes.
+> **Two owner actions, neither of which an agent can perform:**
+> 1. Provision `ZOHO_WEBHOOK_SECRET=` and `GMAIL_PUBSUB_TOKEN=` (they map to
+>    `acb_common/settings.py:100,106`) in `.env.example` and in the VPS env.
+> 2. Point the Zoho webhook at `POST /webhooks/zoho?token=<secret>` and the
+>    Pub/Sub push subscription at `POST /webhooks/gmail` with that bearer.
+>
+> Until both are done, a user who binds a workflow to `source=gmail` sees
+> nothing, forever, with **no signal inside CommandCenter** — the failure is
+> visible only in Google's / Zoho's own delivery dashboard. The fail‑closed
+> posture (refuse everything when the secret is unset) is deliberate and must
+> not be "fixed".
+>
+> Decisions the ticket left open, plus the latent defects the drive‑through
+> exposed — all settled and pinned by tests:
+> 1. **Empty / non‑object Gmail decode** (`_decode_envelope` → `{}` on a
+>    dataless, malformed, or valid‑JSON‑but‑not‑an‑object push): **ack 200,
+>    enqueue nothing, emit nothing.** Such a decode carries neither mailbox nor
+>    `historyId`, so enqueueing it replays nothing and emitting it would fire
+>    user‑visible workflow triggers with a payload no run can act on; a non‑2xx
+>    would only make Pub/Sub retry a push that can never decode. `[1,2]`,
+>    `null` and `"hi"` previously raised `AttributeError` → 500 for the same
+>    reason the guard exists, so `_decode_envelope` now genuinely honours its
+>    `-> dict[str, Any]` annotation (the `# type: ignore` is gone).
+> 2. **A latent 500 in the Zoho receiver, found by the first test that drove it
+>    through `TestClient` and fixed here** because acceptance is otherwise
+>    unreachable: `_log.info("zoho.webhook", event=event, …)` collided with
+>    structlog's own `event` message parameter, so **every authenticated Zoho
+>    push raised `TypeError` and returned 500** — before this ticket added a
+>    line. Now `zoho_event=`, the key `clickup/webhook.py` already uses.
+> 3. **The same bug class, last instance in the repo, folded in:**
+>    `clickup/webhook.py::_normalise_task` logged `event=event_type` *after* the
+>    graph session had committed and the `task_normalised` audit row was
+>    written, so the `TypeError` was caught by the enclosing `except` and **every
+>    successfully‑normalised ClickUp task was logged as a failure and
+>    dead‑lettered.** `test_clickup_ingestor.py` masks it (it stubs
+>    `_normalise_task` wholesale), so `tests/unit/test_clickup_normalise_dlq.py`
+>    drives the real function and asserts `enqueue_dlq.call_count == 0` on the
+>    success path, with the failure paths pinned so it cannot pass by neutering
+>    the DLQ. That file also carries an **AST guard over `apps/` + `packages/`**
+>    asserting no logger call passes `event=` — empirically the only structlog
+>    kwarg that raises.
+> 4. **Zoho's `event` is coerced with `str(...)`.** It is a wire token (the
+>    Redis Streams field and the `event_type` triggers match on); a push
+>    carrying `{"event": {…}}` made the real `xadd` raise
+>    `DataError: Invalid input of type: 'dict'`, which the receiver logged as
+>    `zoho.queue.unavailable` — blaming Redis for a payload‑shape problem —
+>    while the fan‑out still started a run.
+> 5. **Both credential checks compare bytes.** `hmac.compare_digest` raises
+>    `TypeError` on a non‑ASCII `str`, so `?token=%C3%A9` (and a non‑ASCII
+>    bearer) returned **500 instead of 401** on a `PUBLIC_ROUTES` endpoint. It
+>    failed closed, so this was noise, not a bypass.
+>
+> Original ticket text follows.
+
 Give both stub receivers the two lines ClickUp already has: a best‑effort
 `enqueue(...)` to their own stream constant, and a `BackgroundTasks`‑scheduled
 `emit_event(source, event_type, payload)`. Mirror
-`clickup/webhook.py:93‑109` exactly, including the warn‑and‑continue on a Redis
-failure (`:96‑99`) — a provider webhook must never 5xx because Redis is down, or
+`clickup/webhook.py:100‑116` exactly, including the warn‑and‑continue on a Redis
+failure (`:103‑106`) — a provider webhook must never 5xx because Redis is down, or
 the provider retries and makes the backlog worse.
 - **Event‑type vocabulary is prescribed here, not invented in the PR** (it is
   user‑visible: workflow event triggers match on this string,
@@ -452,7 +535,7 @@ the provider retries and makes the backlog worse.
   recording sink registered via `register_event_sink`, torn down with
   `clear_event_sinks()` (`event_hooks.py:32`); **do not monkeypatch
   `emit_event`** — faking it would make the sink assertion vacuous, and the
-  receiver imports it inside the function body (`clickup/webhook.py:107`) so
+  receiver imports it inside the function body (`clickup/webhook.py:114`) so
   patching the receiver module's attribute would not take effect anyway. Assert
   for **both** Gmail and Zoho: (i) exactly one `mock_redis.xadd`, to
   `STREAM_GMAIL` / `STREAM_ZOHO`, carrying the prescribed event type; (ii) the
@@ -465,12 +548,16 @@ the provider retries and makes the backlog worse.
 - **Done when:** an invalid credential still returns **401** for both receivers —
   the existing auth behaviour is unchanged (`gmail/webhook.py:51`,
   `zoho/webhook.py:41`).
-- **Verify:** `uv run pytest tests/unit/test_ingestion_receiver_parity.py tests/unit/test_clickup_ingestor.py -q`
-  → the new file green **and** `test_clickup_ingestor.py` still exactly **10
-  passed** (this ticket must not touch the ClickUp path).
+- **Verify:** `uv run pytest tests/unit/test_ingestion_receiver_parity.py tests/unit/test_clickup_normalise_dlq.py tests/unit/test_clickup_ingestor.py -q`
+  → the new files green **and** `test_clickup_ingestor.py` still exactly **10
+  passed**, byte‑identical (the fence around the ClickUp path is behavioural:
+  the `clickup_event=` fix in item 3 above is invisible to every assertion in
+  that file).
 - **Files:** `apps/services/ingestion/ingestion/sources/gmail/webhook.py`,
   `apps/services/ingestion/ingestion/sources/zoho/webhook.py`,
-  `tests/unit/test_ingestion_receiver_parity.py`.
+  `apps/services/ingestion/ingestion/sources/clickup/webhook.py` (item 3 only),
+  `tests/unit/test_ingestion_receiver_parity.py`,
+  `tests/unit/test_clickup_normalise_dlq.py`.
 
 ---
 
@@ -507,10 +594,15 @@ when its loop never started. Gated on `INGESTION_CONSUMER` (default **off**).
   reports one task, not two).
 - **Done when (no double dispatch, per Q1):** with `INGESTION_CONSUMER` unset,
   `start_ingestion_consumer()` creates no task, `consumer_status()["running"] is
-  False`, and the ClickUp receiver still emits inline — asserted by
-  `test_clickup_ingestor.py` remaining **10 passed, unmodified**. With the flag
-  set, the receiver does **not** call `emit_event` and the consumer does — assert
-  the sink is invoked exactly once per event in each mode, never twice.
+  False`, and the receivers still emit inline — asserted by
+  `test_clickup_ingestor.py` remaining **10 passed, unmodified** *and* by
+  `tests/unit/test_ingestion_receiver_parity.py` (BO‑20f, **22 passed**)
+  remaining green, which is what pins the Gmail and Zoho halves of the same
+  guarantee. With the flag set, **none of the three receivers** calls
+  `emit_event` and the consumer does — assert the sink is invoked exactly once
+  per event in each mode, never twice. **The cutover is now three receivers
+  wide, not one**: BO‑20f gave Gmail and Zoho the same inline emit, so a
+  flag‑gated cutover that only covers ClickUp double‑dispatches the other two.
 - **Done when (supervision):** a sink that raises does not kill the loop (the
   next cycle still runs) and `asyncio.CancelledError` propagates so
   `stop_ingestion_consumer()` returns — the same two guarantees
@@ -584,8 +676,10 @@ written to `ingestion:dlq` via the existing `queue.enqueue_dlq` (`:79`) and
 
 **BO‑20c — Make the dead‑letter queue drainable and visible.** ✅ **AGENT‑SAFE** · *after BO‑20b*
 `ingestion:dlq` is written by two live call sites today
-(`clickup/webhook.py:48`, `:69`) and read by nothing, so a normalisation failure
-is invisible and is eventually trimmed. Add, in `ingestion/queue.py`:
+(`clickup/webhook.py:48`, `:76`) and read by nothing, so a normalisation failure
+is invisible and is eventually trimmed. (Both are genuine failure paths again as
+of BO‑20f's repair round — until then the `:76` site also fired on **every
+success**; see BO‑20f item 3.) Add, in `ingestion/queue.py`:
 `read_dlq(limit, start) -> list[dict]` (decoded entries, newest‑first) and
 `replay_dlq(entry_id) -> str | None` (re‑`xadd` to `origin_stream`, then `XDEL`
 the DLQ entry — one hop, no silent duplication). Expose read + replay behind an

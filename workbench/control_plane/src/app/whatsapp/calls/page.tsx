@@ -122,6 +122,9 @@ export default function WhatsAppCallsPage() {
   const [audioCallId, setAudioCallId] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
   const audioRef = useRef<PreparedCallAudio | null>(null);
+  /** Whether the attached call has appeared in a poll yet — see the teardown
+   *  effect. Without this, attaching races the poll and always loses. */
+  const seenAudioCallRef = useRef(false);
   // Starts at 0 so the first server render has no clock to mismatch on; the
   // poll below fills it in once mounted.
   const [now, setNow] = useState(0);
@@ -227,6 +230,7 @@ export default function WhatsAppCallsPage() {
   const stopAudio = useCallback(() => {
     audioRef.current?.stop();
     audioRef.current = null;
+    seenAudioCallRef.current = false;
     setAudioCallId(null);
     setAudioState("idle");
     setMuted(false);
@@ -255,6 +259,7 @@ export default function WhatsAppCallsPage() {
   async function attachAudio(prepared: PreparedCallAudio, call: WaCall) {
     try {
       await prepared.attach(call.call_id);
+      seenAudioCallRef.current = false;
       setAudioCallId(call.call_id);
     } catch (e) {
       prepared.ringback(false);
@@ -277,11 +282,33 @@ export default function WhatsAppCallsPage() {
   }
 
   // A call that ended (or was hung up elsewhere) must not leave the mic open.
+  //
+  // Only act once the call has actually been SEEN in a poll. We attach the
+  // moment the call is placed, which is before the next poll lands — so
+  // treating "not in the list" as "ended" would tear the audio down
+  // milliseconds after connecting, every single time.
   useEffect(() => {
     if (!audioCallId) return;
     const still = calls.find((c) => c.call_id === audioCallId);
-    if (!still || !isLive(still)) stopAudio();
+    if (still) {
+      seenAudioCallRef.current = true;
+      if (!isLive(still)) stopAudio();
+      return;
+    }
+    // Vanished after we'd seen it — reaped or hung up elsewhere.
+    if (seenAudioCallRef.current) stopAudio();
   }, [calls, audioCallId, stopAudio]);
+
+  // Once the call is observably up, the local ringback has done its job. It
+  // also stops on the first real audio frame; whichever happens first wins,
+  // so a call that connects without media doesn't ring forever.
+  useEffect(() => {
+    if (!audioCallId) return;
+    const call = calls.find((c) => c.call_id === audioCallId);
+    if (call?.media_ready || call?.phase === "active") {
+      audioRef.current?.ringback(false);
+    }
+  }, [calls, audioCallId]);
 
   // Leaving the page mid-call is the other way to strand an open microphone.
   useEffect(() => () => audioRef.current?.stop(), []);

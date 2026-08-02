@@ -35,15 +35,11 @@ const uplinkBuffer = 10
 // the send loop falls back to silence permanently. A starved source returns
 // silence for that frame instead, so a momentary gap is a momentary gap.
 type wsSource struct {
-	frames  chan []float32
-	silence []float32
+	frames chan []float32
 }
 
 func newWSSource() *wsSource {
-	return &wsSource{
-		frames:  make(chan []float32, uplinkBuffer),
-		silence: make([]float32, meowcaller.FrameSamples),
-	}
+	return &wsSource{frames: make(chan []float32, uplinkBuffer)}
 }
 
 func (s *wsSource) ReadFrame() ([]float32, error) {
@@ -51,7 +47,11 @@ func (s *wsSource) ReadFrame() ([]float32, error) {
 	case f := <-s.frames:
 		return f, nil
 	default:
-		return s.silence, nil
+		// A fresh buffer, not a shared one. Handing the encoder the same slice
+		// every time would be corrupted for the rest of the call if it ever
+		// mutated the frame in place — 16 small allocations a second is a
+		// cheap price for not depending on that.
+		return make([]float32, meowcaller.FrameSamples), nil
 	}
 }
 

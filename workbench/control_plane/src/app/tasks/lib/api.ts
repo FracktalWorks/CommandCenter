@@ -88,6 +88,8 @@ function mapItem(raw: Raw): GtdItem {
     isMine: Boolean(raw.is_mine ?? true),
     waitingOn: asPerson(raw.waiting_on),
     delegatedAt: raw.delegated_at ? String(raw.delegated_at) : undefined,
+    expectedBy: raw.expected_by ? String(raw.expected_by) : undefined,
+    lastNudgedAt: raw.last_nudged_at ? String(raw.last_nudged_at) : undefined,
     assignee: asPerson(raw.assignee),
     // Full owner set; fall back to the single assignee (mock rows / not-yet-
     // migrated data) so there's always at least the primary owner.

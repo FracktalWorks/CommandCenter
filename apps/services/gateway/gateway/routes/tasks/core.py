@@ -95,8 +95,14 @@ class GtdItemModel(BaseModel):
     parent_item_id: str | None = None   # set → this item is a subtask of another
     subtask_count: int = 0              # number of child subtasks (roll-up badge)
     archived_at: str | None = None      # set → archived (hidden from active views)
+    # Waiting-For record (gtd_waiting, mig 48) — the OPEN one for this item.
+    # `expected_by` is the deterministic overdue line (spec §6: "flags rows past
+    # expected_by"); `last_nudged_at` is when a follow-up last went out (written
+    # by the nudge path, which is not built yet — it reads NULL today).
     waiting_on: PersonModel | None = None
     delegated_at: str | None = None
+    expected_by: str | None = None
+    last_nudged_at: str | None = None
     due_at: str | None = None
     is_hard_date: bool = False
     # Timeboxing (calendar_timeboxing.md §3): the block when the task is actually
@@ -275,6 +281,8 @@ def _row_to_item(row: Any) -> GtdItemModel:
         archived_at=_iso(getattr(row, "archived_at", None)),
         waiting_on=_person(getattr(row, "waiting_on", None)),
         delegated_at=_iso(getattr(row, "delegated_at", None)),
+        expected_by=_iso(getattr(row, "expected_by", None)),
+        last_nudged_at=_iso(getattr(row, "last_nudged_at", None)),
         due_at=_iso(row.due_at),
         is_hard_date=bool(row.is_hard_date),
         scheduled_start=_iso(getattr(row, "scheduled_start", None)),
@@ -312,9 +320,13 @@ def _row_to_project(row: Any) -> GtdProjectModel:
 
 
 # The SELECT used by every item read: joins the open waiting-for record (for
-# waiting_on/delegated_at) and the account's provider name (for the badge).
+# waiting_on/delegated_at/expected_by/last_nudged_at) and the account's provider
+# name (for the badge). The waiting columns are what the Waiting-For view reads:
+# `expected_by` IS the overdue line (spec §6) and `last_nudged_at` says whether
+# a follow-up already went out — both were written-only until this read landed.
 ITEM_SELECT = """
-    SELECT i.*, w.waiting_on, w.delegated_at, a.provider AS account_provider,
+    SELECT i.*, w.waiting_on, w.delegated_at, w.expected_by, w.last_nudged_at,
+           a.provider AS account_provider,
            (SELECT count(*) FROM gtd_items c
              WHERE c.parent_item_id = i.id) AS subtask_count
       FROM gtd_items i

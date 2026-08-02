@@ -40,6 +40,8 @@ import { contextAccent } from "../lib/contextColors";
 // as removable chips inline, so the state is always visible without opening the
 // popover. This scales to more facets without stacking pill rows (no cognitive
 // overload — one control, progressive disclosure).
+// Per-view exceptions: Assignee is hidden on My Next Actions (all mine), and
+// Sort is hidden on Waiting For (that view derives its own order).
 
 const SORT_LABEL: Record<SortField, string> = {
   manual: "Manual",
@@ -87,6 +89,12 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
   // My Next Actions is only ever tasks assigned to me, so an assignee facet
   // there is meaningless. It's offered on the other views (e.g. Waiting For).
   const showAssignee = view !== "next";
+  // Waiting For orders itself: WaitingForView re-derives the whole order
+  // (rows by days-waiting, groups by overdue count), so a Sort choice cannot
+  // reach it. Hide the control there rather than leave a live-looking one that
+  // silently does nothing. Search + filters still apply, so the rest of the
+  // toolbar stays. Same per-view shape as showAssignee above.
+  const showSort = view !== "waiting";
 
   // Facet option lists come from the items actually in view, so a facet never
   // offers a value that would return nothing. Each carries a live count.
@@ -235,45 +243,47 @@ export function TaskToolbar({ items }: { items: GtdItem[] }) {
           ))}
         </select>
       </div>
-      <div className="flex items-center gap-1">
-        <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
-        <select
-          value={sort.field}
-          onChange={(e) => setSort({ field: e.target.value as SortField })}
-          aria-label="Sort by"
-          className="tech-transition h-7 rounded-md border border-border bg-background pl-2 pr-6 text-xs text-foreground focus:border-primary focus:outline-none"
-        >
-          {SORT_FIELDS.map((f) => (
-            <option key={f} value={f}>
-              {SORT_LABEL[f]}
-            </option>
-          ))}
-        </select>
-        <button
-          type="button"
-          onClick={() => setSort({ dir: sort.dir === "asc" ? "desc" : "asc" })}
-          disabled={sort.field === "manual"}
-          title={
-            sort.field === "manual"
-              ? "Manual order (drag cards to reorder)"
-              : sort.dir === "asc"
-                ? "Ascending — click for descending"
-                : "Descending — click for ascending"
-          }
-          className={[
-            "tech-transition inline-flex h-7 w-7 items-center justify-center rounded-md border border-border",
-            sort.field === "manual"
-              ? "cursor-not-allowed text-muted-foreground/40"
-              : "text-muted-foreground hover:bg-secondary hover:text-foreground",
-          ].join(" ")}
-        >
-          {sort.dir === "asc" ? (
-            <ArrowUpNarrowWide className="h-3.5 w-3.5" />
-          ) : (
-            <ArrowDownWideNarrow className="h-3.5 w-3.5" />
-          )}
-        </button>
-      </div>
+      {showSort && (
+        <div className="flex items-center gap-1">
+          <ListFilter className="h-3.5 w-3.5 text-muted-foreground" />
+          <select
+            value={sort.field}
+            onChange={(e) => setSort({ field: e.target.value as SortField })}
+            aria-label="Sort by"
+            className="tech-transition h-7 rounded-md border border-border bg-background pl-2 pr-6 text-xs text-foreground focus:border-primary focus:outline-none"
+          >
+            {SORT_FIELDS.map((f) => (
+              <option key={f} value={f}>
+                {SORT_LABEL[f]}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            onClick={() => setSort({ dir: sort.dir === "asc" ? "desc" : "asc" })}
+            disabled={sort.field === "manual"}
+            title={
+              sort.field === "manual"
+                ? "Manual order (drag cards to reorder)"
+                : sort.dir === "asc"
+                  ? "Ascending — click for descending"
+                  : "Descending — click for ascending"
+            }
+            className={[
+              "tech-transition inline-flex h-7 w-7 items-center justify-center rounded-md border border-border",
+              sort.field === "manual"
+                ? "cursor-not-allowed text-muted-foreground/40"
+                : "text-muted-foreground hover:bg-secondary hover:text-foreground",
+            ].join(" ")}
+          >
+            {sort.dir === "asc" ? (
+              <ArrowUpNarrowWide className="h-3.5 w-3.5" />
+            ) : (
+              <ArrowDownWideNarrow className="h-3.5 w-3.5" />
+            )}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

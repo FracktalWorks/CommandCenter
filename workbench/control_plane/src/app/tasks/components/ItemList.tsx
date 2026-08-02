@@ -26,13 +26,14 @@ import {
 import { useTaskStore, itemsForView } from "../lib/taskStore";
 import { isUntagged } from "../lib/priority";
 import { ViewKey } from "../lib/types";
-import { isOverdue } from "../lib/utils";
+import { isWaitingOverdue } from "../lib/waiting";
 import { applyFilters, applySort, type GroupBy } from "../lib/ordering";
 import { ProjectsList } from "./ProjectsList";
 import { TaskCard } from "./TaskCard";
 import { TaskBoard } from "./TaskBoard";
 import { TaskListGrouped } from "./TaskListGrouped";
 import { TaskToolbar } from "./TaskToolbar";
+import { WaitingForView } from "./WaitingForView";
 
 // View mode (list vs kanban board) for the processed-task views, sticky per
 // browser via useSyncExternalStore (SSR-safe, same recipe as the inbox density
@@ -74,9 +75,6 @@ const VIEW_META: Record<
   done: { title: "Done", icon: CheckCircle2, hint: "Completed tasks. They stay here until you archive them." },
   archive: { title: "Archive", icon: Archive, hint: "Archived tasks — hidden from active views. Restore anytime." },
 };
-
-// Fixed "now" for deterministic mock rendering (matches mockData's clock).
-const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
 
 export function ItemList() {
   const items = useTaskStore((s) => s.items);
@@ -124,6 +122,17 @@ export function ItemList() {
     () => (view === "next" ? inView.filter((i) => !i.context).length : 0),
     [view, inView],
   );
+  // Waiting-For overdue = rows past `expectedBy` (spec §6) — the count behind
+  // the "needs a nudge" badge. Real wall-clock is intentional (same reason the
+  // calendar reads it live): this was `isOverdue(i, MOCK_NOW)` against a demo
+  // constant frozen at 2026-06-30, so the badge drifted one more day off the
+  // truth every day. Memoised so the render itself stays idempotent.
+  const overdueCount = useMemo(() => {
+    if (view !== "waiting") return 0;
+    // eslint-disable-next-line react-hooks/purity
+    const nowMs = Date.now();
+    return visible.filter((i) => isWaitingOverdue(i, nowMs)).length;
+  }, [view, visible]);
 
   if (view === "projects") {
     return <ProjectsList />;
@@ -131,7 +140,6 @@ export function ItemList() {
 
   const meta = VIEW_META[view] ?? VIEW_META.inbox;
   const Icon = meta.icon;
-  const overdueCount = visible.filter((i) => isOverdue(i, MOCK_NOW)).length;
   // Overload guard: on the Priority view, how many tasks the matrix is only
   // *guessing* about (neither flag set) — so the user can tell judged tasks
   // from defaulted ones and triage them.
@@ -159,6 +167,23 @@ export function ItemList() {
   const isBoard = boardable && mode === "board";
   const bulkSelectable = view !== "calendar";
   const isArchiveView = view === "archive";
+  // Waiting For gets its own body (grouped by WHO, with the overdue/stale
+  // flags §6 asks for) instead of the flat card stack. This file's header,
+  // toolbar, filters and bulk-select chrome still wrap it — but the swap is a
+  // TRADE, not a free addition, and the rows pay for it:
+  //   - a WaitingRow is not a TaskCard, so it has no ContextMenu — the
+  //     per-row task actions (Schedule / Change stage / Mark as Done /
+  //     Eliminate, wired via useCardActions in TaskCard) are gone here;
+  //   - so are the card's chips: stage pill, project, due date, attachments,
+  //     subtask count, energy.
+  // What it buys is the who / what / since-when grouping this view exists for
+  // (§1 line 46) — the axis is a PERSON, and per-task controls are noise on a
+  // "chase Sai about all of it" list. Clicking a row still opens the focus
+  // pane over the same editable TaskDetail. What a waiting row should afford
+  // INLINE is an open design question, deliberately not answered here.
+  // Sort is suppressed on this view for the same reason the rows differ:
+  // WaitingForView re-derives the order (see TaskToolbar's showSort).
+  const isWaitingView = view === "waiting";
 
   return (
     <div className="flex h-full flex-col">
@@ -300,6 +325,10 @@ export function ItemList() {
         ) : (
           <EmptyState view={view} />
         )
+      ) : isWaitingView ? (
+        // "Who owes me what, since when" — the one view whose organising axis
+        // is a PERSON rather than a stage (spec §1 line 46, §6).
+        <WaitingForView items={visible} />
       ) : isBoard ? (
         // The Kanban board (drag-to-refile). Multi-select works on the board
         // itself now: in select mode the cards become checkboxes and drag is

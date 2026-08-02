@@ -25,7 +25,9 @@ import { PriorityBadge, SuggestionBadge } from "./PriorityControls";
 import { StatusPill } from "./StatusPill";
 import { ContextMenu, type CtxItem } from "./ContextMenu";
 
-const MOCK_NOW = Date.UTC(2026, 5, 30, 9, 0, 0);
+// Due/overdue read the REAL clock (isOverdue and relativeTime both default
+// nowMs to Date.now()). A frozen `MOCK_NOW` demo constant used to be passed
+// here, so every card's due label drifted further from the truth each day.
 
 const ENERGY_DOT: Record<string, string> = {
   low: "bg-success",
@@ -75,7 +77,7 @@ export function TaskCard({
   const project = item.projectId
     ? projects.find((p) => p.id === item.projectId)
     : undefined;
-  const overdue = isOverdue(item, MOCK_NOW);
+  const overdue = isOverdue(item);
   const atts = item.attachments?.length ?? 0;
   // Owners beyond the primary (shown as a "+N" on the avatar).
   const extraAssignees = Math.max(0, (item.assignees?.length ?? 0) - 1);
@@ -173,7 +175,7 @@ export function TaskCard({
           ].join(" ")}
         >
           {overdue ? <AlertTriangle className="h-3 w-3" /> : <Clock className="h-3 w-3" />}
-          {relativeTime(item.dueAt, MOCK_NOW)}
+          {relativeTime(item.dueAt)}
         </span>
       )}
       {atts > 0 && (

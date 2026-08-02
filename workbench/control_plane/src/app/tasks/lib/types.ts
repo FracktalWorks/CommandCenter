@@ -148,7 +148,14 @@ export interface GtdItem {
   isMine: boolean;
   /** who I'm waiting on (WAITING disposition) */
   waitingOn?: Person;
+  /** ISO — when it left my hands (the "since-when" of §1's who/what/since-when) */
   delegatedAt?: string;
+  /** ISO — the date it was promised BY. Past it ⇒ overdue (spec §6). Distinct
+   *  from dueAt: my deadline and the date I asked THEM for are two facts. */
+  expectedBy?: string;
+  /** ISO — when a follow-up nudge last went out. Unset until the nudge path
+   *  ships (owner-gated); reading it is what stops a double-chase. */
+  lastNudgedAt?: string;
   /** primary/display assignee (= assignees[0]); kept for single-owner readers */
   assignee?: Person;
   /** the full owner set — a task can have several assignees (e.g. in ClickUp) */

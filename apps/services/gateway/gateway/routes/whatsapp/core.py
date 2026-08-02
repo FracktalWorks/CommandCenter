@@ -40,12 +40,21 @@ router = APIRouter(
         "/whatsapp/bridge/avatars",
         "/whatsapp/bridge/paired",
         "/whatsapp/bridge/call-event",
-        #   /whatsapp/calls/audio — a browser WebSocket, which cannot send the
-        #     internal bearer or X-User-Email; it authenticates with a
-        #     short-lived HMAC token minted by the (gated) audio-token route.
-        "/whatsapp/calls/audio",
     ])],
 )
+
+#: WebSocket routes live here, NOT on `router`.
+#:
+#: The feature gate's check takes an HTTP ``Request``, and FastAPI never
+#: populates that parameter for a WebSocket route — the dependency raises before
+#: the handler runs, so the socket dies at the handshake with nothing useful
+#: logged. Exempting the path doesn't help: the dependency still executes in
+#: order to read the path. A separate ungated router is the only correct shape.
+#:
+#: Anything added here MUST authenticate itself. Today that is
+#: /whatsapp/calls/audio, which requires a short-lived HMAC token minted by the
+#: gated audio-token route.
+ws_router = APIRouter(prefix="/whatsapp", tags=["whatsapp"])
 
 
 # ── Pydantic models (the wire shape the Next.js app consumes) ─────────────────

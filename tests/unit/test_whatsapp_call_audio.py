@@ -84,6 +84,93 @@ def test_ws_url_falls_back_to_same_origin(monkeypatch) -> None:
     assert audio._public_ws_url("tok") == "/whatsapp/calls/audio?token=tok"
 
 
+# ── the handshake itself ──────────────────────────────────────────────────────
+
+def _ws_app():
+    """A minimal app carrying only the WebSocket router."""
+    from fastapi import FastAPI
+
+    from gateway.routes.whatsapp import ws_router
+
+    app = FastAPI()
+    app.include_router(ws_router)
+    return app
+
+
+def test_socket_rejects_a_bad_token_cleanly() -> None:
+    """The regression this exists for.
+
+    The audio socket first shipped on the feature-gated router, whose check
+    takes an HTTP ``Request`` — a parameter FastAPI never populates for a
+    WebSocket. The dependency raised before the handler ran, so the socket died
+    at the handshake and BOTH audio directions failed with nothing in the log.
+    Every unit test still passed, because none of them opened a socket.
+
+    A bad token must therefore produce a clean policy close (1008), which only
+    happens if our handler actually runs."""
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    client = TestClient(_ws_app())
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/whatsapp/calls/audio?token=nonsense") as ws:
+            ws.receive_bytes()
+    assert exc.value.code == 1008
+
+
+def test_socket_rejects_a_missing_token_cleanly() -> None:
+    from starlette.testclient import TestClient
+    from starlette.websockets import WebSocketDisconnect
+
+    client = TestClient(_ws_app())
+    with pytest.raises(WebSocketDisconnect) as exc:
+        with client.websocket_connect("/whatsapp/calls/audio") as ws:
+            ws.receive_bytes()
+    assert exc.value.code == 1008
+
+
+def test_a_gated_router_cannot_serve_a_websocket() -> None:
+    """Pins the reason the separate router exists.
+
+    ``require_feature_router``'s check takes an HTTP ``Request``. FastAPI only
+    populates that for HTTP routes, so on a WebSocket the dependency is called
+    without it and dies with a TypeError — before any handler, and before any
+    close code the client could interpret. Exempting the path does not help,
+    since the dependency must still run to read the path.
+
+    If a future change makes gated routers websocket-safe, this test fails and
+    the workaround can go."""
+    from fastapi import APIRouter, FastAPI, WebSocket
+    from starlette.testclient import TestClient
+
+    from acb_auth import require_feature_router
+
+    gated = APIRouter(
+        prefix="/x",
+        dependencies=[require_feature_router("whatsapp", exempt=["/x/ws"])],
+    )
+
+    @gated.websocket("/ws")
+    async def _ep(websocket: WebSocket) -> None:  # pragma: no cover - never runs
+        await websocket.accept()
+
+    app = FastAPI()
+    app.include_router(gated)
+
+    with pytest.raises(TypeError, match="request"):
+        with TestClient(app).websocket_connect("/x/ws"):
+            pass
+
+
+def test_audio_socket_is_not_on_the_feature_gated_router() -> None:
+    """Belt and braces: if someone moves it back onto `router`, the handshake
+    breaks again in a way that's invisible until a human tries to talk."""
+    from gateway.routes.whatsapp import router
+
+    paths = {getattr(r, "path", None) for r in router.routes}
+    assert "/whatsapp/calls/audio" not in paths
+
+
 # ── dependencies ──────────────────────────────────────────────────────────────
 
 def test_websocket_client_is_available() -> None:

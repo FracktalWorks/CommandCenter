@@ -31,7 +31,7 @@ import time
 from acb_auth import UserContext, get_current_user
 from acb_common import get_logger
 from fastapi import Depends, HTTPException, WebSocket, WebSocketDisconnect
-from gateway.routes.whatsapp.core import router
+from gateway.routes.whatsapp.core import router, ws_router
 from gateway.routes.whatsapp.transport.bridge import _bridge_url
 from gateway.routes.whatsapp.transport.calls import _assert_owns_account
 from pydantic import BaseModel
@@ -136,7 +136,7 @@ def _bridge_ws_url(account_id: str, call_id: str) -> str:
     return f"{ws}/call/audio?session={account_id}&call_id={call_id}"
 
 
-@router.websocket("/calls/audio")
+@ws_router.websocket("/calls/audio")
 async def call_audio(ws: WebSocket) -> None:
     """Pump audio frames between the browser and the bridge, both ways.
 

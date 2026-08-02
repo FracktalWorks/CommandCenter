@@ -1,31 +1,62 @@
 # Multiplayer Agents — Analysis & Implementation Plan
 
-**Status:** Phases 0-1 built, 2-4 designed · **Date:** 2026-07-26 · **Last built:** 2026-07-31 (merged to main) · **Owner:** vjvarada
+**Status:** Phases 0-1 built · Phase 2 built as *steer* (floor baton deferred to an owner re-decision) · Phase 3 partly built · **Date:** 2026-07-26 · **Verified against code on 2026-08-02, re-verified, then adversarially reviewed and repaired twice the same day** · **Owner:** vjvarada
 
-> **What is real as of 2026-07-30.** Membership, shared history, presence, live
-> spectate, message authorship, the clearance filter, several agents per room,
-> and the whole room UX (header + cap banner, share sheet, presence rail,
-> attributed turns) are built and tested — §8's Phase 0 and Phase 1, plus the
-> parts of Phase 3 that could not wait (the authority rule, and personal memory
-> being excluded from shared rooms in both directions).
+> **What the review passes caught in *this* file** — recorded because the corrections are the
+> reason to trust what is left, not decoration.
+> **Pass 2:** the document overstated its own supersede guard (it claimed `mark_active` raises
+> `SupersedeRefused`; it does not — see §5.2, §8 Phase 0, and the anchor grep in §12.3).
+> **Pass 3:** §2's anchor table was **7 wrong out of 8**, three of them resolving to real but
+> unrelated code, under a "verified" header with no caveat (fixed, with the caveat, above the
+> table); and §5.2's update cited a test as demonstrating the `mark_active` bypass when that
+> test cannot distinguish the two states (§5.2 now says plainly that no test demonstrates it,
+> and describes the one that would).
+> **Line numbers move; re-verify at dispatch** — `work_plan.md` §1 contract item 4.
+
+> **What is real as of 2026-08-02** (each claim re-checked against the tree on
+> that date; **§12 lists the exact verification commands and their real
+> output**).
 >
-> **Floor control, steer, the turn queue, the observer lane, and per-participant
-> cost attribution are designed here and NOT
-> built.** `chat_session.floor_mode` exists and defaults to `'open'`, which is
-> today's behaviour; the concurrent-run 409 is still the only thing standing
-> between two people and one thread. Read §5 and §8 as a plan, not a
-> description. The authoritative build state is
-> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §6.
+> **Built.** Membership, shared history, presence, live spectate, message
+> authorship, the clearance filter, several agents per room, and the whole room
+> UX (header + cap banner, share sheet, presence rail, attributed turns) — §8's
+> Phase 0 and Phase 1, plus the parts of Phase 3 that could not wait (the
+> authority rule, and personal memory being excluded from shared rooms in both
+> directions). **Also built, and this is the change most of this document
+> predates: mid-run steer and the two-layer supersede guard** (§5.2, §8 Phase 2,
+> shipped in `15c8933f`). A second person's message now folds into the live run
+> — `orchestrator/steer.py::route_turn` returns DROP / ENGAGE / ABORT / STEER,
+> the steered caller answers `202 {"steered": true}` and stands down, signals
+> are durable on `cc:steer:` and replayable into the next run, and a principal
+> outside the run's floor is refused `409 steer_outside_run_floor` and told why
+> (`routes/agent.py:274-369`). Underneath it, **`run_detached`
+> (`stream_relay.py:883-895`) raises `SupersedeRefused`** for a caller who does
+> not own the run — *before* it reaches the `mark_active(reset=True)` at `:909`
+> that DELETEs the transcript — so §3.3's destruction path is closed for **every
+> caller of `run_detached`**, not only at the route. Be exact about the residual:
+> `mark_active` itself (`:343-405`) issues its `DELETE` at `:377` with **no
+> ownership check of its own**, so the invariant holds over `run_detached`'s
+> callers, not over the destructive statement. A future path that calls
+> `mark_active(reset=True)` directly would bypass it.
 >
-> **Update 2026-08-01 (doc-truth pass):** the workstream merged to main on
-> 2026-07-31. Room memory compartments are no longer on the not-built list —
-> they shipped 2026-07-30 ([`memory-clearance.md`](memory-clearance.md) §7,
-> `groups_sessions_authority.md` §6). The migrations landed as **136**
-> (`agent_blob` instance key), **137** (quarantine of commingled agent data),
-> **138** (`org_group`, `org_group_member`, `chat_session.visibility`,
-> `chat_session_participant`), and **139** (`chat_message`
-> author_email/author_kind, clearance tags, replay filter,
-> `chat_session_agent`).
+> **Not built, and read §5.1 / §5.3 as a plan rather than a description:** the
+> five `floor_mode`s and the floor baton, the turn queue, the observer lane,
+> handoff-with-a-note, HITL floor-holder routing, per-participant cost
+> attribution, `subject:` memory compartments, and the `prefs`/`user` backfill.
+> `chat_session.floor_mode` exists and defaults to `'open'`; nothing enforces
+> `'driver'`. Whether the baton still earns its place *on top of steer* is an
+> **owner re-decision** (§8 Phase 2), not queued work. The authoritative build
+> state for the access primitives is
+> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md) §6;
+> the dispatch state for what remains is
+> [`work_plan.md`](../../ai-company-brain/work_plan.md) §2, WS-10.
+>
+> **Shipped migrations:** **136** (`agent_blob` instance key), **137**
+> (quarantine of commingled agent data), **138** (`org_group`,
+> `org_group_member`, `chat_session.visibility`, `chat_session_participant`),
+> **139** (`chat_message` author_email/author_kind, clearance tags, replay
+> filter, `chat_session_agent`). Room memory compartments shipped 2026-07-30
+> ([`memory-clearance.md`](memory-clearance.md) §7).
 
 Turn CommandCenter agent sessions from a thousand private threads into **rooms** — shared,
 live, durable places where several people and one agent work the same problem together.
@@ -72,9 +103,12 @@ Interactive mockups live alongside this doc:
   — **prior art: `yc-software/qm`, read 2026-08-01.** An outside team reached this document's
   intersection rule independently and applied it to three resources. Three of its findings change
   what is written below rather than confirming it: **steer should be built before floor control**
-  (§4.6 / §5.1 — QM-1), a shared room should have **no ambient credentials at all** rather than one
-  `acting_identity` (§6.4 — QM-3), and participant **tenure windows should narrow the model's
-  context**, not only each viewer's replay (§6.5 — QM-5).
+  (§4.6 / §5.1 — QM-1, **built**), a shared room should have **no ambient credentials at all**
+  (§6.4 — QM-3; note the correction there — `acting_identity` was a *proposal*, never a column,
+  and QM-3 belongs to **WS-2 / WS-1**, not to this workstream), and participant **tenure windows
+  should narrow the model's context**, not only each viewer's replay (§6.5 — QM-5, an undone
+  design comparison). **Reference-only**: it owns no work item and no status
+  ([`work_plan.md`](../../ai-company-brain/work_plan.md) §4).
 - [`memory-clearance.md`](memory-clearance.md) — how memory is partitioned across sessions
   *and* across people, and how the agent decides which parts it may use on a given call.
   Supersedes §6.3 below.
@@ -127,14 +161,23 @@ Four phases, roughly six weeks, each independently shippable:
 
 This is the plumbing referred to in the framing. It is genuinely most of the problem.
 
+> **Anchors re-verified against the tree on 2026-08-02 (third pass).** Seven of the eight rows
+> below were stale — they carried pre-`15c8933f` line numbers, and **three of them resolved to
+> real but unrelated code**, which is worse than a dangling number because it reads as
+> confirmation (`:659` is `publish_control`, not `run_detached`). The earlier "verified" claim
+> in this file's header covered the *narrative* and not this table. **Line numbers move;
+> re-verify at dispatch**, per `work_plan.md` §1 contract item 4 — the same caveat
+> [`memory-clearance.md`](memory-clearance.md) §3.5 carries. Re-derive with:
+> `git grep -nE "^async def |^def |^STREAM_PREFIX|^CONTROL_PREFIX" -- apps/services/orchestrator/orchestrator/stream_relay.py`
+
 | Capability | Where | Why it matters for multiplayer |
 |---|---|---|
 | **Durable ordered event log per thread** | `apps/services/orchestrator/orchestrator/stream_relay.py:53` — `cc:stream:{thread_id}`, Redis Stream, `MAXLEN ~50 000`, 1h TTL | Redis `XREAD` is inherently fan-out: N independent readers can each hold their own cursor on the same stream. **Multiple simultaneous subscribers already work today** — nothing in the transport assumes one reader. |
-| **Runs detached from the HTTP response** | `stream_relay.run_detached` (`:659`) | The agent keeps running when the browser that started it disappears. This is the "agents run for hours, days, weeks" premise, already satisfied. |
-| **Join-and-catch-up** | `replay_events` (`:129`), `subscribe_events` (`:196`), `GET /agent/run/{thread_id}/reconnect?since=` (`apps/services/gateway/gateway/routes/agent.py:1544`) | Exactly the primitive a late joiner needs: replay everything since a cursor, then go live with no gap. Built for browser refresh; works unchanged for a second person. |
-| **Cross-worker control bus** | `cc:control:{thread_id}` pub/sub + applied-ack (`stream_relay.py:393-546`) | A command issued by *any* participant on *any* worker reaches the worker that owns the run, and is confirmed applied. Already carries `cancel` and `respond_input`. Adding `steer` is a new applier, not new infrastructure. |
-| **Liveness / seed presence** | `cc:active:{thread_id}`; `GET /chat/active-sessions` (`routes/chat.py:438`) | Already scans `cc:active:*` to show which sessions are running. |
-| **Authoritative run-end persistence** | `gateway/chat_fold.py:374` `persist_final_assistant_message` | The transcript is folded and written server-side at the run boundary, independent of any browser. A room's history does not depend on a participant staying connected. |
+| **Runs detached from the HTTP response** | `stream_relay.run_detached` (`:823`) | The agent keeps running when the browser that started it disappears. This is the "agents run for hours, days, weeks" premise, already satisfied. |
+| **Join-and-catch-up** | `replay_events` (`:189`), `subscribe_events` (`:256`), `GET /agent/run/{thread_id}/reconnect?since=` (`apps/services/gateway/gateway/routes/agent.py:2139`) | Exactly the primitive a late joiner needs: replay everything since a cursor, then go live with no gap. Built for browser refresh; works unchanged for a second person. |
+| **Cross-worker control bus** | `cc:control:{thread_id}` pub/sub + applied-ack (`stream_relay.py:557-780` — `CONTROL_PREFIX` at `:557` through `_stop_control_listener_wait` at `:770`) | A command issued by *any* participant on *any* worker reaches the worker that owns the run, and is confirmed applied. Already carries `cancel` and `respond_input`. `steer` shipped as a new applier on it, not as new infrastructure. |
+| **Liveness / seed presence** | `cc:active:{thread_id}`; `GET /chat/active-sessions` (`routes/chat.py:677`, `list_active_sessions` `:680`) | Already scans `cc:active:*` to show which sessions are running. |
+| **Authoritative run-end persistence** | `gateway/chat_fold.py:410` `persist_final_assistant_message` | The transcript is folded and written server-side at the run boundary, independent of any browser. A room's history does not depend on a participant staying connected. |
 | **Identity at the edge** | `packages/acb_auth/acb_auth/deps.py` — `UserContext(email, role)`, internal-bearer-verified SSO headers | Every request already carries a verified actor. Membership checks have something to check against. |
 | **Cost & activity feed** | `packages/acb_common` Redis activity/cost feed; live token tracking (Custom Apps) | Per-participant cost attribution in a room is a re-key, not a new system. |
 | **Org/RBAC design already researched** | `ai-company-brain/specs/multi_user_organization_research.md` | Orgs, memberships, permission vocabulary, agent visibility, memory scoping. **This RFC is the session-level layer on top of it**, and deliberately does not re-litigate the org model. |
@@ -154,6 +197,10 @@ non-obvious ones and they are the reason this needs a design rather than a patch
 ### 3.1 Reads are single-owner
 
 `routes/chat.py` gates every read and write on the owner's email:
+
+*(The line numbers in this list are the **pre-membership** ones and no longer resolve — the
+code they describe was replaced, as the update below records. They are left as written because
+they cite a version of the file, not the current one.)*
 
 - `_get_sessions` (`:62`) — `WHERE user_id = :uid`
 - `_get_messages` (`:191`) — returns `[]` unless `SELECT 1 FROM chat_session WHERE id=:id AND user_id=:uid`
@@ -178,7 +225,9 @@ ephemeral threads and on DB error), but it encodes "one email owns one thread".
 
 ### 3.3 A second person's message destroys the first person's run — silently
 
-This is the sharp edge. In `run_detached` (`stream_relay.py:691-701`):
+This is the sharp edge. In `run_detached` (today `stream_relay.py:897-911`; the
+`mark_active` call has since grown `actor`/`source`/`floor` arguments and the guard
+described in §5.2 now sits immediately above it at `:883-895`):
 
 ```python
 # One run per thread: cancel any stale run still attached to this thread.
@@ -195,8 +244,9 @@ supersede my own run, and keep replay-from-0 exact). In a room they mean:
 
 > Alice's agent is 40 minutes into a task. Bob types "also check the invoice" — Alice's run
 > is cancelled mid-flight and the Redis transcript of those 40 minutes is deleted. The
-> cancellation is deliberately silent (`stream_relay.py:711-722` suppresses `RUN_ERROR` on
-> this path, because for single-player it is a supersede, not a failure).
+> cancellation is deliberately silent (`stream_relay.py:930-942` suppresses `RUN_ERROR` on
+> this path, because for single-player it is a supersede, not a failure — the suppression is
+> the `except asyncio.CancelledError` arm **inside `run_detached`**, not a separate handler).
 
 So: **floor control is a correctness requirement, not a UX preference.** Phase 0 turns this
 silent destruction into an explicit 409 + product decision (§8).
@@ -324,7 +374,8 @@ org permissions.
 Add `cc:room:{thread_id}`, a Redis Stream alongside `cc:stream:{thread_id}`.
 
 **Why not reuse `cc:stream:`:** because `mark_active(thread_id, reset=True)` deletes it at
-every run boundary (`stream_relay.py:701`), by design, so that replay-from-0 exactly covers
+every run boundary (the `r.delete(_stream_key(...))` at `stream_relay.py:377`, reached from
+`run_detached`'s call at `:909-911`), by design, so that replay-from-0 exactly covers
 the current run. Room events — who joined, who holds the floor, who said what between runs —
 must survive run boundaries. Two streams with different lifecycles is the honest model:
 
@@ -382,7 +433,19 @@ PATCH  /chat/sessions/{id}/room                 visibility, floor_mode, context_
 > settings), `POST/PATCH /sessions/{id}/participants[...]`,
 > `POST/DELETE /sessions/{id}/agents[...]`, `POST /sessions/{id}/presence`,
 > `GET /sessions/{id}/room-stream`, and `GET /directory` (share directory).
-> The floor/steer/handoff endpoints are still unbuilt.
+> **Steer shipped, but not as `POST /agent/run/{tid}/steer`:** an ordinary turn
+> to a thread with a live run is *routed* to a steer by
+> `orchestrator/steer.py::route_turn` inside `POST /agent/run/stream`, which is
+> why the second caller gets `202 {"steered": true}` instead of a stream
+> (§5.2). The floor and handoff endpoints are still unbuilt and are pending the
+> owner re-decision in §8 Phase 2.
+>
+> **The `/members` half of this section is not this workstream's to build.**
+> Group membership — the `group:<slug>` subjects a room shares to — is owned by
+> **WS-13 / Centers B** ([`work_plan.md`](../../ai-company-brain/work_plan.md)
+> §4): `routes/admin/groups.py` + `/settings/groups`, shipped 2026-08-01.
+> Rooms consume groups (`gateway/rooms.py` expands `group:<slug>` at read
+> time); they do not administer them.
 
 One helper replaces `_thread_owner_ok` everywhere:
 
@@ -496,13 +559,50 @@ worth shipping on its own even if multiplayer stops here.
 > - **The supersede rule, stated once: *you may supersede a run you own, and no
 >   other.*** "Own" is `cc:runactor:{thread_id}`, stamped at run start. It is
 >   enforced at **two** layers, not one. The route still answers `409`
->   (`_refuse_if_another_run_is_active`), but the destructive statement itself —
->   `mark_active(reset=True)`, which DELETEs `cc:stream:{thread_id}` — now raises
->   `stream_relay.SupersedeRefused` before running. A guard at the route is a
->   policy a new caller can forget; a guard at the destructive site is an
->   invariant. That mattered immediately: `/copilot/chat` reached `run_detached`
->   with **no actor at all**, so it was still a door onto this bug after the
->   route-level 409 shipped. It now stamps its actor.
+>   (`_refuse_if_another_run_is_active`); underneath it, **`run_detached`
+>   (`stream_relay.py:883-895`) raises `stream_relay.SupersedeRefused`** — and it
+>   raises *before* the destructive statement it guards, the
+>   `mark_active(reset=True)` at `:909` that DELETEs `cc:stream:{thread_id}`. A
+>   guard at the route is a policy each new *route* can forget; a guard in
+>   `run_detached` is one that every caller of `run_detached` inherits whether or
+>   not it remembers. That mattered immediately: `/copilot/chat` reached
+>   `run_detached` with **no actor at all**, so it was still a door onto this bug
+>   after the route-level 409 shipped. It now stamps its actor.
+> - **What the inner layer does not buy — stated so nobody has to rediscover it.**
+>   `mark_active` (`stream_relay.py:343-405`) performs its
+>   `r.delete(_stream_key(thread_id))` at `:377` with **no ownership check of any
+>   kind**. The only `raise SupersedeRefused` in the tree is at `:895`, inside
+>   `run_detached`. So the property is *"unreachable by a non-owner through
+>   `run_detached`"*, **not** *"unreachable at the destructive site"*: a future
+>   code path that calls `mark_active(reset=True)` directly bypasses the guard
+>   entirely. Today `stream_relay.py:909-911` is the **only** production call
+>   passing `reset=True` (every other hit of `git grep -n "reset=True" -- apps/
+>   packages/` is a comment about it), so the gap is latent rather than open —
+>   but it is a gap in the *shape* of the guarantee. Pushing the check down into
+>   `mark_active` would make it an invariant over the statement; that is a
+>   follow-up, and this update did not do it.
+>
+>   > **No test in the tree demonstrates this bypass, and an earlier version of
+>   > this note wrongly claimed one did.** It cited
+>   > `tests/unit/test_concurrent_run_guard.py:118-125`
+>   > (`test_reset_wipes_the_event_log`). That test **cannot distinguish the two
+>   > states**: it seeds only `fake_redis.store[_stream_key("t1")]`, never
+>   > `cc:runactor:t1` or `cc:active:t1`, and `_FakeRedis` is fresh per test
+>   > (`:54-62`) — so `get_run_actor("t1")` is `None` and `is_active("t1")` is
+>   > `False`, which is precisely the state `run_detached` (`:883-895`) **allows
+>   > by documented design** (*"Fails OPEN … no recorded owner"*). No refusal is
+>   > owed there, so none being raised proves nothing about ownership. Its own
+>   > docstring says what it is for — *"Asserting it here so the destructiveness
+>   > stays visible"* — which is true and useful, and is not this claim.
+>   >
+>   > **The test that would demonstrate it** (not written, deliberately — writing
+>   > it belongs with the fix, not with the doc): seed `cc:runactor:t1` with
+>   > `alice@` **and** `cc:active:t1`, then call
+>   > `await stream_relay.mark_active("t1", reset=True, actor="bob@")` **directly**
+>   > and assert the transcript is gone and no `SupersedeRefused` was raised —
+>   > while the same `(owner, actor)` pair through `run_detached` raises. Two
+>   > assertions over one pair of inputs is what makes the asymmetry visible; one
+>   > assertion over an unowned thread is not evidence of anything.
 > - **Fail-open is unchanged and deliberate**, in exactly the two cases
 >   `get_run_actor` documents: an unattributable run (legacy, Redis hiccup) and
 >   an anonymous caller (cron, service-to-service). A false refusal blocks real
@@ -573,6 +673,19 @@ Per-participant cost attribution rides the existing activity/cost feed: stamp
 `participant_email` alongside `thread_id` on each run's token record, and the room header can
 show "1.2M tokens · Vijay 61% · Sanjay 39%".
 
+> **Not this workstream's to build** ([`work_plan.md`](../../ai-company-brain/work_plan.md)
+> §4 single-owner registry):
+>
+> - **Cost attribution** — the `(run_id, member_email, agent, instance)` stamp at the
+>   gateway choke points is **WS-6** (decision D1). The per-room view here is a rollup of
+>   that one record, not a second system. Do not stamp a room-only key.
+> - **`token_budget` per room / degrade-to-read-only** — **WS-16** (decision D2):
+>   per-member monthly caps ship first and per-room budgets build on the same records.
+>   §4.3's `token_budget` column and §8 Phase 4's budget bullet are both WS-16's.
+>
+> This section stays as the room-shaped requirement those workstreams must satisfy; it
+> owns neither.
+
 ### 5.4 The permission matrix
 
 > **Update 2026-08-01 (doc-truth pass):** the shipped role vocabulary is
@@ -609,7 +722,7 @@ show "1.2M tokens · Vijay 61% · Sanjay 39%".
 
 Being honest about the scaling shape, because it determines when Phase 4 is needed.
 
-Today each subscriber is its own `XREAD ... BLOCK 30000` loop (`subscribe_events`, `:196`).
+Today each subscriber is its own `XREAD ... BLOCK 30000` loop (`subscribe_events`, `:256`).
 A 20-person room watching one run is 20 blocked Redis connections *per worker* plus 20 SSE
 connections. Redis handles that trivially; the constraint is uvicorn workers and file
 descriptors, and it is linear in viewers.
@@ -643,7 +756,7 @@ impossible to un-share it.
 | Reasoning / chain-of-thought | `chat_message.reasoning` | Owner-only | **Room-shared, but per-room toggle.** Some rooms (customer-facing, exec review) should not expose raw CoT. Default on for internal rooms. |
 | Generative-UI cards | `chat_message.custom_events` | Owner-only | **Room-shared.** Note: interactive cards need one authoritative responder — route interaction through the floor holder. |
 | Agent workspace files | `chat_session.workspace_path` → `routes/workspace.py` | Per-session | **Room-shared.** Files are the deliverable; sharing the room without the artifacts is pointless. Writes remain agent-only. |
-| **Personal episodic memory** | Mem0 via `get_memory_context(user_id, …)` (`agent.py:1297`) | Per-user | **PRIVATE — excluded from shared rooms by default.** See §6.3. |
+| **Personal episodic memory** | Mem0 via `get_memory_context(user_id, …)` (`agent.py:1822`) | Per-user | **PRIVATE — excluded from shared rooms by default.** See §6.3. |
 | Agent memory | `AGENT_SCOPE_PREFIX` (`acb_memory`) | Cross-user already | **Room-shared.** Unchanged. |
 | Org memory | `ORG_SCOPE_KEY` | Global | **Org-shared.** Unchanged. |
 | **Room memory** *(new)* | `scope_key("room", thread_id)` | — | **Room-shared.** The new scope facts learned in a room are written to. §6.3. |
@@ -678,7 +791,8 @@ Two rules make this coherent:
 > record. There is no `personal → room` automatic path at all.
 
 Concretely, this is a branch at two call sites in `routes/agent.py`: the memory-block builder
-(~`:1291`) selects scopes by policy, and `add_memories_background` (`:1448`) selects its
+(`get_memory_context`, `:1822`) selects scopes by policy, and `add_memories_background`
+(`:2006`) selects its
 write scope by policy. `acb_memory` gains a `room` scope alongside the existing
 `AGENT_SCOPE_PREFIX` / `ORG_SCOPE_KEY`, which is a key-prefix addition, not a new store.
 
@@ -723,7 +837,19 @@ Rules:
 - Changing `acting_identity` requires owner + the consent of the identity's owner, and emits
   a `ROOM_SETTINGS_CHANGED` event so nobody's mailbox is quietly enrolled.
 
-> **⚠️ Superseded in direction by prior art (2026-08-01) — the answer is "none of the three".**
+> **⚠️ Superseded twice. Do not build anything in this section.**
+>
+> **First, the factual correction (verified 2026-08-02): `acting_identity` never existed in
+> code, and the table above is a *rejected* design, not a description.**
+> `infra/postgres/138_groups_and_session_participants.sql:26` says so in the migration
+> itself — *"There is NO acting_identity column, deliberately: a shared run acts at the
+> INTERSECTION of all participants' access (spec §3), never as one member."* §4.3 was
+> superseded on 2026-07-29 by
+> [`groups_sessions_authority.md`](../../ai-company-brain/specs/groups_sessions_authority.md).
+> Any doc (including the prior-art map and the work-plan board) that reads *"rather than one
+> `acting_identity`"* is describing a road not taken.
+>
+> **Second, the direction (2026-08-01 prior art) — the answer is "none of the three".**
 >
 > `qm` makes **nothing ambient in a shared scope** — not even the speaker's own credentials. Only
 > grants bound to *this exact room* materialize; connector OAuth tokens are DM-only; org service
@@ -742,6 +868,11 @@ Rules:
 > materialized into a sandbox is plaintext to any process there, and a stated *purpose* is an audit
 > field, not enforced authorization. Detail:
 > [`multiplayer_prior_art_qm_2026-08.md` §QM-3](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+>
+> **Gate: not this workstream's.** Per-credential room grants are net-new work with no
+> acceptance criteria in any doc, and the prior-art map routes QM-3 to **WS-2** (OWNER-GATE
+> end to end — rotation, force-push) and **WS-1** (Action Broker). WS-10 must not pick it
+> up; it appears here so this section is not mistaken for buildable scope.
 
 ### 6.5 Private lanes inside a shared room
 
@@ -755,8 +886,8 @@ Total transparency is not the goal; *shared context with private edges* is.
 - **Private notes.** Annotations on any message, author-only. Never enter the agent's context.
 - **Since-join history.** `history_visibility='since_join'` is nearly free: store
   `join_stream_id` / `join_message_ts` on the membership row at join time and feed them into
-  the *existing* `?since=` replay cursor (`agent.py:1544`) and the `before`/`limit` window in
-  `_get_messages` (`chat.py:191`). Both mechanisms already exist for pagination and reconnect.
+  the *existing* `?since=` replay cursor (`agent.py:2139`) and the `before`/`limit` window in
+  `_get_messages` (`chat.py:260`). Both mechanisms already exist for pagination and reconnect.
 
   > **Prior art (2026-08-01) — the cursor should narrow the *model*, not only the viewer.** `qm`
   > stores a tenure window per participant (`valid_from_seq` / `valid_to_seq`) and composes the
@@ -765,6 +896,18 @@ Total transparency is not the goal; *shared context with private edges* is.
   > outcome [`memory-clearance.md`](memory-clearance.md) §5.4 reaches by queueing joins to run
   > boundaries, by a simpler mechanism — worth comparing before building either.
   > [`multiplayer_prior_art_qm_2026-08.md` §QM-5](../../ai-company-brain/specs/multiplayer_prior_art_qm_2026-08.md).
+  >
+  > **The gap is real; the design is not done. NOT DISPATCHABLE.** Verified 2026-08-02:
+  > the viewer half is built and correct (mig 138 `:97-98` → `gateway/rooms.py:277-282`,
+  > `:291-292` → the `timestamp_ms >= :waterline` predicate at `routes/chat.py:314-316`).
+  > The **model** half is not: a run's history comes from
+  > `_get_messages(thread_id, _hist_uid, limit=50)` (`routes/agent.py:1947-1956`), narrowed
+  > by the *acting caller's* window only — so an owner with full history, asking in a room
+  > with a late joiner, puts pre-waterline content through the model and into an answer that
+  > joiner reads. The sentence above ("worth comparing before building either") is an
+  > **undone design comparison, not acceptance**: an implementer would have to choose
+  > between qm's per-participant `valid_from_seq` intersection and §5.4's run-boundary join
+  > queue with no recorded decision. Write that decision before this becomes a slice.
 
 ### 6.6 Never shared, regardless of role
 
@@ -823,13 +966,27 @@ confidential-deal case safe, and it is detailed in
 
 ## 8. Phased plan
 
-### Phase 0 — Make the races explicit (~3 days)
+> **Gate labels** (`work_plan.md` §1 contract item 7, §6 registry). Every
+> unbuilt item below carries one:
+>
+> - **AGENT-SAFE** — an independent agent may build it end to end once its
+>   done-when is testable.
+> - **OWNER-GATE** — an agent must **refuse** it and say which gate. Two items
+>   in this document are owner gates and are registered by name in
+>   [`work_plan.md`](../../ai-company-brain/work_plan.md) §6: the **floor-control
+>   re-decision** (Phase 2) and the **`prefs`/`user` backfill *apply*** (Phase 3,
+>   [`memory-clearance.md`](memory-clearance.md) §8 Q1).
+> - **✅ built** — no label needed; the item is history.
+
+### Phase 0 — Make the races explicit (~3 days) — ✅ built
 
 *Ships value even if multiplayer stops here: it is a real data-loss bug.*
 
 - `POST /agent/run/stream` returns **409** when the thread is active and the caller isn't
   legitimately superseding (§5.2). Existing single-player supersede path unchanged.
-- `mark_active(reset=True)` is only reachable from a legitimate supersede.
+- `mark_active(reset=True)` is not reachable **through `run_detached`** except from a
+  legitimate supersede. Read that scope literally: the refusal lives in `run_detached`
+  (`stream_relay.py:883-895`), not inside `mark_active` — see the update below.
 - `chat_message.author_email` / `author_kind` added and populated on every write path
   (`chat_fold`, `save_messages`, the Next translator's checkpoints).
 - ✅ **Authorize `routes/memory.py`** (done 2026-07-30) — the path parameter is a *scope key*
@@ -852,14 +1009,17 @@ confidential-deal case safe, and it is detailed in
   run; every stored message resolves to an author; a caller cannot read a memory scope they
   don't own.
 
-> **Update 2026-08-01 (built).** The two bullets above are now enforced at the
-> destructive site (`run_detached` raises `SupersedeRefused`), not only at the
-> route, and `/copilot/chat` — which reached that site with no actor and was
-> therefore still an open door — now stamps one. See §5.2's update for the
+> **Update 2026-08-01 (built).** The two bullets above are now enforced inside
+> `run_detached` (`stream_relay.py:883-895` raises `SupersedeRefused` before the
+> `mark_active(reset=True)` at `:909`), not only at the route, and
+> `/copilot/chat` — which reached `run_detached` with no actor and was therefore
+> still an open door — now stamps one. The guarantee covers `run_detached`'s
+> callers, **not** `mark_active` itself, which still deletes without an ownership
+> check of its own; §5.2's update states that residual. See §5.2 for the
 > supersede rule as implemented. Regression cover:
 > `tests/unit/test_supersede_guard.py`.
 
-### Phase 1 — Read-only multiplayer (~1 week)
+### Phase 1 — Read-only multiplayer (~1 week) — ✅ built
 
 - Membership + room columns — **landed as migration 138** (drafted here as 117) + backfill.
 - `resolve_room_access` replaces `_thread_owner_ok` at both call sites; membership predicate
@@ -874,15 +1034,24 @@ confidential-deal case safe, and it is detailed in
 - **Acceptance:** Sanjay opens Vijay's running session, sees the last hour replay and then
   live tool calls, and cannot send, steer, or cancel.
 
-### Phase 2 — Contribution (~1.5 weeks)
+### Phase 2 — Contribution (~1.5 weeks) — steer ✅ built · floor 🔴 owner re-decision
 
-- Floor baton (`cc:floor:`), all five `floor_mode`s, `FLOOR_*` events, audit.
-- `POST /steer` + executor `steer` applier draining at tool boundaries.
-- Turn queue for `queue` mode; observer lane for `moderated`.
-- HITL routing: floor holder first, any contributor after 60s; the answer is attributed.
-- Handoff with a note.
-- **Acceptance:** Sanjay requests the floor, Vijay grants it, Sanjay redirects the run
-  mid-flight without cancelling it, and the transcript shows exactly who did what when.
+| Item | State | Gate |
+|---|---|---|
+| `steer` applier on `cc:control:`, draining at tool boundaries | ✅ built | — |
+| Durable replayable signals (`cc:steer:`) + `202 {"steered": true}` stand-down | ✅ built | — |
+| Automation carve-out; run-floor authority check; §5.2 supersede fix | ✅ built | — |
+| Floor baton (`cc:floor:`), all five `floor_mode`s, `FLOOR_*` events, audit | not built | **OWNER-GATE** — *floor-control re-decision* |
+| Turn queue (`queue`), observer lane (`moderated`) | not built | **OWNER-GATE** — same decision (both are `floor_mode` behaviours) |
+| Handoff with a note; HITL floor-holder routing | not built | **OWNER-GATE** — same decision (both presuppose a floor holder) |
+
+- **Acceptance (steer half, met):** a second participant redirects a run mid-flight without
+  cancelling it, the room sees who did it and when, and no second assistant turn is posted.
+  Asserted in `tests/unit/test_steer_routing.py` + `tests/unit/test_supersede_guard.py`.
+- **Acceptance (floor half, not met and deliberately unwritten):** the floor request/grant
+  criterion is *not* restated here, because writing a done-when for a mechanism whose
+  existence is still in question would make an owner decision look like queued work.
+  If the owner decides the baton earns its place, the acceptance is written *then*.
 
 > **Update 2026-08-01 (re-scoped and partly built).** The order of this phase is
 > inverted per
@@ -906,34 +1075,42 @@ confidential-deal case safe, and it is detailed in
 > mid-flight without cancelling it, and the room sees who did what when"* is met;
 > the floor request/grant half is not, and is pending the owner's re-decision.
 
-### Phase 3 — The privacy boundary (~3 weeks)
+### Phase 3 — The privacy boundary (~3 weeks) — partly built
 
-Expanded by [`memory-clearance.md`](memory-clearance.md) §7, which splits it into 3a/3b/3c.
+**Owned by [`memory-clearance.md`](memory-clearance.md) §7**, which splits it into 3a/3b/3c
+and holds the acceptance. This list is the room-side index; where the two disagree,
+memory-clearance wins.
 
-- **3a** — compartment registry (migration: next free number at build time — the registry
-  is still unbuilt; 118 was drafted before 136-139 landed), `scope_key()` kinds, the `prefs`/`user`
-  split, clearance resolution at run start, read/write rules at both `routes/agent.py` memory
-  call sites, `_set_memory_write_scope`.
-- **3b** — subject binding (bound rooms, inline declaration), entity-linked inference that may
-  only narrow, the per-viewer private hint, extraction classification.
-- **3c** — share sheet with the memory disclosure, history waterline, memory inspector.
-- Room integration bindings + `acting_identity` fixed at run start, stamped into audit.
-- Private lanes: whisper child threads, private notes, promote-to-room.
-- `history_visibility='since_join'` via the join cursors.
-- The permanent data banner.
-- **Acceptance:** the load-bearing test is at the query layer, not the answer layer — in a
-  room whose viewers aren't all cleared for a restricted subject, assert that `search()` is
-  **never called** with that scope key, rather than asserting the answer avoids mentioning
-  it. Plus: facts learned in a room land only in room/subject scope; a late joiner with
-  `since_join` cannot read a message from before they joined.
+| Item | State | Gate |
+|---|---|---|
+| **3a** — `scope_key()` kinds, `prefs`/`user` vocabulary, clearance resolution at run start, read/write rules at both `routes/agent.py` memory call sites, the memory tools' write scope, clearance-keyed session cache | ✅ built 2026-07-30 | — |
+| **3a remainder** — the compartment registry (migration: next free number at build time) and **`subject:` compartments** | not built | **AGENT-SAFE** — the dispatchable slice, once [`memory-clearance.md`](memory-clearance.md) §7.1's surface spec is accepted. This is WS-10's one green item. |
+| **3a remainder** — the `prefs`/`user` **backfill classifier**, dry-run report only | not built | **AGENT-SAFE** |
+| **3a remainder** — *applying* that backfill to live memories | not built | **OWNER-GATE** — mutates live Mem0 data (`work_plan.md` §6, "live-DB one-offs"); [`memory-clearance.md`](memory-clearance.md) §8 Q1 ends *"it should be a deliberate, communicated choice."* |
+| **3b** — subject binding (bound rooms, inline declaration), entity-linked inference that may only narrow, the per-viewer private hint, extraction classification | not built | **AGENT-SAFE** after the 3a remainder; §8 Q2 (auto-create on binding) is an open product call inside it |
+| **3c** — share sheet with the memory disclosure, history waterline, memory inspector | not built | **AGENT-SAFE** |
+| Room integration bindings + `acting_identity` fixed at run start | **superseded, do not build** | §6.4's update: `acting_identity` never existed in code (migration 138 line 26 rejects it explicitly) and the direction is now per-credential grants — **WS-2 / WS-1**, not this row |
+| Private lanes: whisper child threads, private notes, promote-to-room | not built | **AGENT-SAFE** |
+| `history_visibility='since_join'` via the join cursors | ✅ viewer half built (mig 138 `:97-98` `join_stream_id`/`join_message_ts` → `gateway/rooms.py:277-282` read, `:291-292` applied → `routes/chat.py:314-316` SQL predicate) | model half **not built** — see §6.5's QM-5 note; it is an **undone design comparison**, not acceptance |
+| The permanent data banner | not built | **AGENT-SAFE** |
 
-### Phase 4 — Scale & limits (~1 week)
+- **Acceptance:** held verbatim by [`memory-clearance.md`](memory-clearance.md) §7 ("Acceptance
+  for 3a"), not restated here — the load-bearing test is at the query layer, not the answer
+  layer: in a room whose viewers aren't all cleared for a restricted subject, assert that
+  `search()` is **never called** with that scope key. The **room** half is met
+  (`tests/unit/test_memory_compartments.py`); the **subject** half waits on the slice above.
 
-- Per-process fan-out multiplexer in `stream_relay`.
-- Capacity dials (§5.3) + room token budget + degrade-to-read-only.
-- Per-participant cost attribution in the header and the observability view.
-- **Acceptance:** a 25-viewer room holds one `XREAD` per worker; exceeding the budget makes
-  the room read-only with a clear owner-facing prompt.
+### Phase 4 — Scale & limits (~1 week) — not built
+
+| Item | State | Gate |
+|---|---|---|
+| Per-process fan-out multiplexer in `stream_relay` | not built | **AGENT-SAFE** |
+| Capacity dials (§5.3) | not built | **AGENT-SAFE** |
+| Room `token_budget` + degrade-to-read-only | not built | **not this row's** — **WS-16** (D2) |
+| Per-participant cost attribution in the header and the observability view | not built | **not this row's** — **WS-6** (D1) |
+
+- **Acceptance:** a 25-viewer room holds one `XREAD` per worker. (The budget half of the
+  original acceptance line moved with the work to WS-16.)
 
 ---
 
@@ -984,8 +1161,103 @@ CommandCenter the gap between here and multiplayer is smaller than it looks, bec
 substrate — a durable per-thread event log, detached runs, cross-worker control, replay from
 a cursor — was already built for reconnection and is user-agnostic.
 
-Three things stand between us and it: **membership** (a predicate change), **floor control**
-(a Redis baton, plus fixing a real data-loss race we have today), and **a privacy boundary on
-the run context** (a new memory scope and an explicit acting identity). The first two are
-weeks. The third is the one that determines whether people trust the room enough to use it,
+Three things stood between us and it: **membership** (a predicate change), **the destructive
+race** (fixed — see §5.2: steer, plus a supersede guard inside `run_detached`), and **a
+privacy boundary on the run context** (memory compartments; the room half is built, the
+`subject:` half is the one dispatchable slice left). Membership and the race took weeks. The
+privacy boundary is the one that determines whether people trust the room enough to use it,
 and it is the one to get right rather than fast.
+
+*(The original text here named "floor control (a Redis baton)" as the second thing. Steer
+replaced it — see §5.2 and §8 Phase 2. Whether a baton is still wanted on top is an owner
+re-decision, not a remaining blocker.)*
+
+---
+
+## 12. Verification
+
+Every claim in this document's status header and §8 is checkable by one of the commands
+below. Run them from the repo root. Real output as of **2026-08-02**, on Windows with the
+tree at `b5a218bd` + this doc pass.
+
+### 12.1 Tests
+
+```bash
+uv run python -m pytest tests/unit/test_steer_routing.py tests/unit/test_supersede_guard.py \
+                        tests/unit/test_memory_compartments.py tests/unit/test_rooms.py -q
+# → 61 passed, 14 skipped in 21.39s
+```
+
+> **⚠️ The skip is the trap, and it is silent.** All 14 skips are the whole of
+> `tests/unit/test_rooms.py`, which needs a reachable Postgres carrying **migrations 138 +
+> 139** (`_db_ready()` probes `chat_session_participant.subject`, `chat_session_agent`,
+> `chat_message.author_kind`). Without a database the room membership suite does not fail —
+> it **disappears**, and a green run proves nothing about `resolve_room_access`. A change to
+> `gateway/rooms.py` is not verified until that file reports **14 passed**, not 14 skipped.
+> The other three files are pure-function suites and run anywhere.
+
+> **⚠️ Never run `tests/unit/` as a directory on a developer box with a live `.env`.** It
+> hangs against the live database (`test_memory_integration.py` measured exit 124), and
+> `test_owner_bootstrap.py` must never reach prod (`work_plan.md` §6). Name test files.
+
+### 12.2 Lint
+
+```bash
+# The BLOCKING gate — this is what pr-check.yml:51 runs and what must be green.
+uv run ruff check . --select F821,F601,F602,F502,F7,B006
+# → All checks passed!
+
+# The full check is a REPORT, not a gate: 1,970 pre-existing style findings on main
+# as of 2026-08-02 (pr-check.yml:53-60 and deploy.yml:58 both swallow its exit code).
+uv run ruff check .
+# → Found 1970 errors.   ← identical on main; do NOT read a green here as the bar
+```
+
+### 12.3 Anchors — is this document still true?
+
+```bash
+# Steer shipped, and is an ancestor of main
+git merge-base --is-ancestor 15c8933f main && echo "steer is on main"
+# → steer is on main
+
+# The four routing outcomes and the durable-signal knobs exist
+git grep -nE "class Route|STEER_TTL_SECONDS|MAX_PENDING_STEERS" -- \
+    apps/services/orchestrator/orchestrator/steer.py
+# → :60 STEER_TTL_SECONDS = 1800 · :65 MAX_PENDING_STEERS = 20 · :72 class Route(str, Enum)
+
+# The 202 stand-down and the run-floor 409, in the route
+git grep -nE "steered|steer_outside_run_floor" -- \
+    apps/services/gateway/gateway/routes/agent.py
+# → the STEER / DROP / ABORT responses at :274-369
+
+# The supersede guard's REAL location (§5.2, §8 Phase 0). The raise is inside
+# run_detached and comes BEFORE the destructive call; mark_active itself has no
+# ownership check, so read the line ordering, not just the presence of a raise:
+git grep -nE "raise SupersedeRefused|^async def run_detached|^async def mark_active|await mark_active" \
+    -- apps/services/orchestrator/orchestrator/stream_relay.py
+# → :32  await mark_active(thread_id)        (the module docstring's usage sketch)
+#   :343 async def mark_active   ·   :823 async def run_detached
+#   :895 raise SupersedeRefused  ·   :909 await mark_active(   ← guard precedes it
+#   The ONLY raise is at :895, inside run_detached (:823) — not inside mark_active
+#   (:343-405), whose body deletes the stream at :377 with no ownership check.
+#   That asymmetry IS the documented residual; a green grep here is not a
+#   claim that the destructive statement itself is guarded.
+
+# There is still no acting_identity COLUMN anywhere (§6.4) — and the claim is about
+# the whole tree, so the grep has to be about the whole tree. The one hit is the
+# migration comment that says so; a single matching comment is the CORRECT result:
+git grep -n "acting_identity" -- apps/ packages/ infra/ workbench/ tests/
+# → 138_groups_and_session_participants.sql:26: "There is NO acting_identity column,
+#   deliberately"    (exactly one hit, a comment; zero DDL, zero code)
+
+# `subject:` is genuinely absent — the scope kind, the registry, the session column
+git grep -n "subject" -- packages/acb_memory/acb_memory/compartments.py
+# → exactly one hit, line 23, in the module docstring saying subject compartments
+#   "are not built". Zero occurrences in scope_key(), scope_kind(), resolve_clearance().
+git grep -nE "memory_compartment|subject_ref" -- infra/postgres/ \
+    || echo "registry unbuilt — expected"
+# → registry unbuilt — expected
+```
+
+(`git grep` rather than `rg`: ripgrep is not on every box's PATH, and `git grep` respects
+the index so it never wanders into `node_modules/` or a stale worktree.)

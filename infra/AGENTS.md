@@ -18,6 +18,13 @@ Docker Compose, Postgres schema, LiteLLM tier config. LLM routing is via the gat
 - Langfuse container is defined but **opt-in behind `--profile obs`** and dormant (no OTLP export wired by default; the `langfuse` Python package is not installed). Distributed tracing is tracked as BO-5.
 - Compose profiles: `core` (postgres+redis), `memory` (neo4j, for Graphiti), `obs` (langfuse + postgres/redis), `sandbox`
 
+## Backups (BO-23)
+- **The Postgres data volume `acb-postgres-data` is not the only copy any more** — `scripts/backup_db.sh` dumps every non-template database (`acb`, `litellm_proxy`, …) plus cluster globals to `/opt/acb/backups`, **outside `/opt/acb/app`** because the deploy runs `git reset --hard`
+- `scripts/apply_migrations.sh` now takes that dump **before** replaying the ladder and **fails closed** if it cannot. Escape hatch: `SKIP_PRE_MIGRATION_BACKUP=1`, which you should have a reason for
+- Restore is `scripts/restore_db.sh` — **defaults to a scratch database**; live needs `--target acb --force`
+- ⚠️ Nothing is scheduled yet and no restore has been exercised. Runbook + the owner steps: `ai-company-brain/specs/backup_and_restore.md`
+- Redis still has **no** `appendonly` — its persistence gap is real and separate (see BO-20b's retry counter, which does not survive a Redis restart)
+
 ## Verification
 - docker compose up must start all services
 - LiteLLM must route to configured providers

@@ -33,7 +33,7 @@ added**:
 | # | Exception | Item | The one‑line reason |
 |---|---|---|---|
 | 1 | **`main` has no branch protection** | §BO‑17 / `work_plan.md` WS‑5 | Verified live 2026‑08‑03: branch protection → **404**, rulesets → **`[]`**. Every "blocking" gate in the workflow YAMLs is therefore decorative, and every app shipped from here inherits that. **OWNER‑GATE** — a GitHub settings change no agent can make. |
-| 2 | **No backup / restore path** | **§BO‑23** (new, below) | Schema‑only dump, no data dump, no restore, no PITR — while 140 migrations replay forward‑only on every deploy under `ON_ERROR_STOP=1` with no down‑migrations. Largest uncovered risk; scales with app count. Scripts + runbook are AGENT‑SAFE, **execution is OWNER‑GATE**. |
+| 2 | **No *scheduled* backup; no restore ever exercised** | **§BO‑23** (below) | ◐ 2026‑08‑03: `backup_db.sh` + `restore_db.sh` + runbook shipped, and `apply_migrations.sh` now fails closed without a pre‑migration dump. **But nothing schedules it** (the systemd units need a `deploy/` write) and **no restore has been run**. Measured recovery position meanwhile: Hostinger VM images only, weekly, **2 retained, newest 5 days old**, ~58 min restore, whole‑machine granularity. **OWNER‑GATE** — install the timer, then run one restore. |
 | 3 | **DB engine sprawl** | §BO‑10 | **12 `create_async_engine` call sites across 10 modules** (+ one sync engine), 8 of them undisposed process‑lifetime singletons. One arrived per app. **This is the only item whose cost compounds per app** — fix the seam before the next app, not after. |
 
 Nothing else on this list needs to be closed first. Items 1 and 2 are risk
@@ -216,9 +216,35 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 - **Note:** until this lands, new apps needing search should copy the Workflows stance — deterministic keyword ranking, no private embedding stacks.
 
 
-### BO‑23 — Backup, restore, and point‑in‑time recovery *(P0)* ☐ *(new — 2026‑08‑03, WS‑0 truth pass; verified against the tree)*
+### BO‑23 — Backup, restore, and point‑in‑time recovery *(P0)* ◐ *(new — 2026‑08‑03, WS‑0 truth pass; tooling SHIPPED 2026‑08‑03, execution still owner‑gated)*
 
 > **This is the largest uncovered risk on the platform, and it scales with app count.** Every app that ships adds tables whose only copy is one Postgres volume on one VPS. It is filed P0 rather than P2 because unlike every other item here, the failure mode is *unrecoverable* — there is nothing to fix afterwards.
+
+**Update 2026‑08‑03 — tooling shipped, nothing is scheduled yet.** Runbook and
+full rationale: `ai-company-brain/specs/backup_and_restore.md`.
+
+Done‑when 1 ✅ (`scripts/backup_db.sh`), 2 ✅ (`scripts/restore_db.sh`),
+3 ✅ *(runbook is at `ai-company-brain/specs/backup_and_restore.md`, **not**
+`deploy/hostinger/RESTORE.md` — `plan-guard` blocks agent writes under
+`deploy/`; the clause's intent, a verification step rather than only commands,
+is met)*, 4 ✅ (`apply_migrations.sh` now takes a dump before replaying the
+ladder and **fails closed** if it cannot), 5 ☐ and 6 ☐ *(both require writes
+under `deploy/` — owner)*.
+
+**Still ☐, and the reason the box is not ticked:**
+
+- **Nothing runs automatically.** The `acb-backup.service`/`.timer` units are
+  written out verbatim in §5 of the spec but could not be created — `deploy/`
+  is gated. Until they are installed, backups only happen when the deploy
+  triggers one or a human runs the script.
+- **No restore has been executed.** Per this item's own rule — *a backup nobody
+  has restored is not a backup* — the tooling does not close the ticket.
+- **The gate note in the old §BO‑23 was right and worth keeping:** the
+  prediction that `plan-guard` might block the intended paths was correct in
+  the opposite direction from the one anticipated. Authoring `scripts/*_db.sh`
+  was permitted; writing the systemd units under `deploy/` was not, and the
+  live Caddy/VPS changes were refused a *second* time by the runtime
+  classifier, independently of the hook.
 
 **What is true today (each claim measured 2026‑08‑03, not inherited):**
 

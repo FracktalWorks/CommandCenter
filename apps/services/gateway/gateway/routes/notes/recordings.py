@@ -17,6 +17,7 @@ from fastapi.responses import FileResponse
 from gateway.routes.notes.core import (
     _get_db,
     _log,
+    load_owned_meeting,
     media_dir,
     router,
 )
@@ -65,7 +66,7 @@ async def upload_recording(
     meeting_id: str,
     file: UploadFile = File(...),
     channel: str = Form("upload"),
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Attach an audio file to a meeting and start transcription.
 
@@ -138,7 +139,9 @@ async def upload_recording(
         "notes.recording_uploaded",
         meeting_id=meeting_id, recording_id=recording_id, bytes=len(content), mime=mime,
     )
-    _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
+    _spawn_pipeline(
+        run_transcription(meeting_id, recording_id, run_id, user.email or "")
+    )
     return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
 
 
@@ -266,7 +269,7 @@ async def complete_recording(
     meeting_id: str,
     recording_id: str,
     body: CompleteRecordingRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Finalize a live recording and start transcription."""
     path = await _recording_path(recording_id, meeting_id)
@@ -309,19 +312,29 @@ async def complete_recording(
         "notes.recording_completed",
         meeting_id=meeting_id, recording_id=recording_id, bytes=size,
     )
-    _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
+    _spawn_pipeline(
+        run_transcription(meeting_id, recording_id, run_id, user.email or "")
+    )
     return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
 
 
 @router.post("/meetings/{meeting_id}/retranscribe", status_code=202)
 async def retranscribe(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Re-run transcription on the meeting's existing recording with the CURRENT
     STT model — e.g. after switching the STT tier to Deepgram in Settings to get
-    named speakers. Replaces this recording's segments and re-chains notes."""
+    named speakers. Replaces this recording's segments and re-chains notes.
+
+    Owner only. "Re-chains notes" is the whole reason: this re-runs generation,
+    which deletes the meeting's un-promoted draft action items and then feeds
+    the new ones to ``auto_dispatch``, which can send mail from the owner's
+    mailbox. Unscoped, it was a way for any member holding ``feature:notes`` to
+    reach both of those on a colleague's meeting.
+    """
     async with await _get_db() as db:
+        await load_owned_meeting(db, meeting_id, user.email, columns="m.id")
         rows = (
             await db.execute(
                 text(
@@ -355,7 +368,9 @@ async def retranscribe(
 
     run_id = str(run_row.id)
     _log.info("notes.retranscribe", meeting_id=meeting_id, recording_id=recording_id)
-    _spawn_pipeline(run_transcription(meeting_id, recording_id, run_id))
+    _spawn_pipeline(
+        run_transcription(meeting_id, recording_id, run_id, user.email or "")
+    )
     return {"recording_id": recording_id, "run_id": run_id, "status": "processing"}
 
 

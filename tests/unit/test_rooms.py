@@ -9,7 +9,8 @@ The properties, asserted against a live database:
    single-owner predicate did, and a session that does not exist at all still
    resolves permissively — the contract ``_thread_owner_ok`` established and
    ``resolve_room_access`` inherited, because a solo operator must never be
-   locked out of a brand-new thread.
+   locked out of a brand-new thread. A lookup that FAILS is the other half of
+   that pair and resolves the opposite way: see §0.
 2. **A viewer reads and cannot send.** That is the whole of read-only
    multiplayer, and it is the one capability split the room roles exist for.
 3. **Membership beats ownership.** Someone with a participant row sees a
@@ -115,6 +116,69 @@ def clean():
     _seed_user(_CAROL)
     yield
     _purge()
+
+
+# ---------------------------------------------------------------------------
+# 0. The two "we don't know" cases resolve in OPPOSITE directions
+#
+# These need no database: they pin what happens when the lookup itself cannot
+# answer, which is precisely when a live database is not available.
+# ---------------------------------------------------------------------------
+
+def test_a_failed_lookup_grants_nothing(monkeypatch) -> None:
+    """A database error used to resolve to full OWNER access on any session.
+
+    That handed the caller read, send and cancel on a room that may well be
+    somebody else's, at the one moment we are least able to say whose it is.
+    """
+    from gateway import rooms
+
+    def _boom(session_id: str, email: str):
+        raise RuntimeError("connection pool exhausted")
+
+    monkeypatch.setattr(rooms, "_load_room", _boom)
+
+    access = rooms.resolve_room_access("some-real-session", _BOB)
+    assert not access.can_read
+    assert not access.can_send
+    assert not access.can_cancel
+    assert not access.can_manage
+    assert access.role is None
+    assert access.resolve_failed
+
+
+def test_a_failed_lookup_says_retry_rather_than_not_a_participant(
+    monkeypatch,
+) -> None:
+    """The refusal must not blame the person for an outage."""
+    from gateway import rooms
+
+    def _boom(session_id: str, email: str):
+        raise RuntimeError("connection pool exhausted")
+
+    monkeypatch.setattr(rooms, "_load_room", _boom)
+
+    message = rooms.resolve_room_access("some-real-session", _BOB).denied("send")
+    assert "try again" in message.lower()
+    assert "not a participant" not in message.lower()
+
+
+def test_a_session_with_no_row_is_still_the_callers_own(monkeypatch) -> None:
+    """The case that must NOT be swept up by the fail-closed change.
+
+    A brand-new thread has no ``chat_session`` row until its first turn
+    persists; a missing row belongs to nobody, so it belongs to whoever is
+    asking. Failing this closed would break every new conversation.
+    """
+    from gateway import rooms
+
+    monkeypatch.setattr(rooms, "_load_room", lambda session_id, email: None)
+
+    access = rooms.resolve_room_access("brand-new-thread", _ALICE)
+    assert access.can_read and access.can_send and access.can_cancel
+    assert access.role == "owner"
+    assert access.unknown_session
+    assert not access.resolve_failed
 
 
 # ---------------------------------------------------------------------------

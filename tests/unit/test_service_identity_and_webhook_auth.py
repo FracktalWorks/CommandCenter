@@ -63,6 +63,120 @@ def test_no_secrets_at_all_disables_bearer_auth(monkeypatch) -> None:
     assert _get_internal_token() == ""
 
 
+# ── The fallback, made visible and refusable ────────────────────────────────
+#
+# While the fallback is in effect the identity token IS the LLM key, so the
+# gateway cannot tell the Next.js BFF from any agent — and an agent (or anyone
+# who obtained that semi-public key) can assert a colleague's X-User-Email.
+# `GATEWAY_REFUSE_LLM_KEY_IDENTITY` is the opt-in refusal. It defaults OFF:
+# the BFF mirrors the same fallback, so refusing by default would 401 every
+# signed-in member on a deployment that has not provisioned the token yet.
+
+VICTIM = "someone-else@fracktal.in"
+
+
+@pytest.fixture
+def llm_key_only(monkeypatch):
+    """An un-migrated deployment: identity has fallen back to the LLM key."""
+    monkeypatch.delenv("GATEWAY_INTERNAL_TOKEN", raising=False)
+    monkeypatch.setenv("LITELLM_MASTER_KEY", LLM_KEY)
+
+    async def _passthrough(user):
+        return user
+
+    monkeypatch.setattr("acb_auth.deps._with_resolved_access", _passthrough)
+    return LLM_KEY
+
+
+def test_the_fallback_reports_itself(llm_key_only) -> None:
+    from acb_auth.deps import _internal_token_is_llm_fallback
+
+    assert _internal_token_is_llm_fallback() is True
+
+
+def test_a_provisioned_token_is_not_a_fallback(split_tokens) -> None:
+    from acb_auth.deps import _internal_token_is_llm_fallback
+
+    assert _internal_token_is_llm_fallback() is False
+
+
+async def test_by_default_the_llm_key_may_still_assert_an_identity(
+    llm_key_only, monkeypatch
+) -> None:
+    """The hole, pinned as the DEFAULT so the fix cannot silently change it.
+
+    This is the lockout guard: an un-migrated deployment keeps working exactly
+    as it did, and the hardening is something the owner turns on.
+    """
+    from acb_auth.deps import get_current_user
+
+    monkeypatch.delenv("GATEWAY_REFUSE_LLM_KEY_IDENTITY", raising=False)
+    user = await get_current_user(
+        x_user_email=VICTIM, x_user_role=None,
+        authorization=f"Bearer {LLM_KEY}",
+    )
+    assert user.email == VICTIM
+
+
+async def test_the_flag_refuses_an_identity_asserted_on_the_llm_key(
+    llm_key_only, monkeypatch
+) -> None:
+    from acb_auth.deps import get_current_user
+
+    monkeypatch.setenv("GATEWAY_REFUSE_LLM_KEY_IDENTITY", "1")
+    user = await get_current_user(
+        x_user_email=VICTIM, x_user_role=None,
+        authorization=f"Bearer {LLM_KEY}",
+    )
+    assert user.email is None
+    assert not user.has_permission("*")
+
+
+async def test_the_flag_also_refuses_service_access_on_the_llm_key(
+    llm_key_only, monkeypatch
+) -> None:
+    """A bare Bearer resolves to SERVICE_ACCESS (branch 1b) — everything.
+
+    Refusing the assertion but leaving that open would be a fix in name only:
+    the same key would still be the platform, just anonymously.
+    """
+    from acb_auth.deps import get_current_user
+
+    monkeypatch.setenv("GATEWAY_REFUSE_LLM_KEY_IDENTITY", "1")
+    user = await get_current_user(
+        x_user_email=None, x_user_role=None,
+        authorization=f"Bearer {LLM_KEY}",
+    )
+    assert user.email != "system:internal"
+    assert not user.has_permission("*")
+
+
+async def test_the_flag_is_inert_once_a_distinct_token_is_provisioned(
+    split_tokens, monkeypatch
+) -> None:
+    """Which is why flipping it is safe in that order and only that order."""
+    from acb_auth.deps import get_current_user
+
+    async def _passthrough(user):
+        return user
+
+    monkeypatch.setattr("acb_auth.deps._with_resolved_access", _passthrough)
+    monkeypatch.setenv("GATEWAY_REFUSE_LLM_KEY_IDENTITY", "1")
+
+    proxied = await get_current_user(
+        x_user_email=VICTIM, x_user_role=None,
+        authorization=f"Bearer {IDENTITY}",
+    )
+    assert proxied.email == VICTIM
+
+    # ...and the LLM key no longer matches the internal token at all.
+    agent = await get_current_user(
+        x_user_email=VICTIM, x_user_role=None,
+        authorization=f"Bearer {LLM_KEY}",
+    )
+    assert agent.email is None
+
+
 # ── The guards ──────────────────────────────────────────────────────────────
 
 def _client() -> TestClient:

@@ -24,6 +24,16 @@ Headers (set by Next.js SSO proxy):
     X-User-Role    -- one of: executive | employee | agent
                      Falls back to "employee" if missing/unrecognised.
 
+Both are INTERNAL-ONLY headers and nothing in this module can tell a forwarded
+one from a forged one — the Bearer token beside them is the whole of the proof,
+and that token falls back to the widely-held ``LITELLM_MASTER_KEY`` (below).
+The boundary therefore has to be the reverse proxy: the public vhost must
+delete ``X-User-Email`` and ``X-User-Role`` from every inbound request, so they
+can only ever be set by a caller already on the box. As of 2026-08-03
+``deploy/hostinger/caddy/Caddyfile`` does NOT do that — the required patch is
+in the WS-0 live-access-defects write-up and applying it is an owner action
+(``work_plan.md`` §6). Everything in this module is defence in depth behind it.
+
 Two secrets, deliberately distinct (BO-2 residual #4):
 
     GATEWAY_INTERNAL_TOKEN  -- SERVICE IDENTITY. Proves the caller *is* the
@@ -80,6 +90,33 @@ def _get_llm_api_token() -> str:
     return tok
 
 
+def _resolve_internal_token() -> tuple[str, bool]:
+    """``(token, is_llm_fallback)`` — the service-identity ladder, once.
+
+    THE ladder. :func:`_get_internal_token` and
+    :func:`_internal_token_is_llm_fallback` are both thin readers of this
+    tuple, deliberately: the second used to re-implement the precedence, and a
+    later change to one copy would have left the flag answering about a
+    resolution that no longer happens. The consequence of that drift is not
+    academic — ``get_current_user`` uses the flag to REFUSE identity, so a
+    stale copy would start refusing a legitimately provisioned token, which on
+    a flagged box is every member locked out.
+
+    Silent by design: the warning belongs to the caller that actually resolves
+    a token for use, not to every predicate that asks about it.
+    """
+    tok = os.getenv("GATEWAY_INTERNAL_TOKEN", "").strip()
+    if not tok:
+        try:
+            from acb_common import get_settings  # noqa: PLC0415
+            tok = (get_settings().gateway_internal_token or "").strip()
+        except Exception:  # noqa: BLE001
+            pass
+    if tok:
+        return tok, False
+    return _get_llm_api_token(), True
+
+
 def _get_internal_token() -> str:
     """The SERVICE IDENTITY token: proof that a caller *is* the platform.
 
@@ -100,18 +137,8 @@ def _get_internal_token() -> str:
     and the separation does not exist, so it warns on every resolution — a
     silent fallback here would be the vulnerability wearing a fix's clothes.
     """
-    tok = os.getenv("GATEWAY_INTERNAL_TOKEN", "").strip()
-    if not tok:
-        try:
-            from acb_common import get_settings  # noqa: PLC0415
-            tok = (get_settings().gateway_internal_token or "").strip()
-        except Exception:  # noqa: BLE001
-            pass
-    if tok:
-        return tok
-
-    llm_key = _get_llm_api_token()
-    if llm_key:
+    tok, is_fallback = _resolve_internal_token()
+    if is_fallback and tok:
         _log.warning(
             "gateway_internal_token_unset",
             detail=(
@@ -121,7 +148,57 @@ def _get_internal_token() -> str:
                 "distinct secret."
             ),
         )
-    return llm_key
+    return tok
+
+
+def _internal_token_is_llm_fallback() -> bool:
+    """True when service identity is currently BORROWING the ``/v1`` API key.
+
+    i.e. ``GATEWAY_INTERNAL_TOKEN`` is unprovisioned and
+    :func:`_get_internal_token` is therefore returning ``LITELLM_MASTER_KEY``.
+    While that holds, the two secrets are one value and "proves it is the
+    platform" means no more than "holds the key every agent holds".
+
+    DERIVED from :func:`_resolve_internal_token`, never re-derived: this
+    predicate and the token it describes have to be two readings of one
+    resolution, or they can disagree.
+    """
+    tok, is_fallback = _resolve_internal_token()
+    return is_fallback and bool(tok)
+
+
+def _refuse_llm_key_identity() -> bool:
+    """Opt-in hardening: the ``/v1`` API key may not stand in for identity.
+
+    ``_get_internal_token``'s fallback to ``LITELLM_MASTER_KEY`` keeps an
+    un-migrated deployment working, but while it is in effect that key — which
+    every agent's BYOK client holds, and which is therefore semi-public within
+    the deployment — authenticates a caller as the platform. Such a caller can
+    then either assert any colleague's ``X-User-Email`` (branch 1a) or act as
+    the platform itself with ``SERVICE_ACCESS`` (branch 1b).
+
+    Setting ``GATEWAY_REFUSE_LLM_KEY_IDENTITY=1`` makes that fallback refusable
+    for *identity* purposes: a Bearer that only matches because the fallback is
+    in effect no longer establishes any identity at all, and the caller resolves
+    exactly as an unauthenticated one would.
+
+    **Default is FALSE — today's behaviour.** Flipping it is an OWNER-GATE
+    action (``work_plan.md`` §6: "any deploy that changes auth behaviour"), and
+    it is only safe once ``GATEWAY_INTERNAL_TOKEN`` is provisioned in BOTH
+    ``/opt/acb/app/.env`` and the workbench's ``.env.local`` — the Next.js BFF
+    mirrors the same fallback (``workbench/control_plane/src/lib/gateway.ts``),
+    so flipping this while the token is unset would 401 every signed-in member.
+    Once the token IS provisioned the flag is inert, because the fallback is
+    then never in effect.
+
+    ``require_internal_auth`` and ``require_llm_api_auth`` are deliberately NOT
+    covered: they answer "may this call happen", and a mis-provisioned box
+    should degrade to "nobody is anybody" rather than to "the Bearer check is
+    disabled", which is what an empty expected token would mean.
+    """
+    return os.getenv(
+        "GATEWAY_REFUSE_LLM_KEY_IDENTITY", ""
+    ).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def _trust_unverified_sso_headers() -> bool:
@@ -206,6 +283,26 @@ async def get_current_user(
         if expected and secrets.compare_digest(submitted, expected):
             bearer_ok = True
 
+    # 1'. Opt-in: a Bearer that only matched because service identity fell back
+    #     to LITELLM_MASTER_KEY establishes NOTHING. Dropping bearer_ok here
+    #     rather than in each branch means the caller then resolves exactly as
+    #     an unauthenticated one — branch 2 refuses their X-User-Email because
+    #     an internal token IS configured (the fallback), and a bare Bearer
+    #     resolves anonymous instead of to SERVICE_ACCESS. Default off, so this
+    #     is one os.getenv on bearer-matched calls and nothing else.
+    if bearer_ok and _refuse_llm_key_identity() and _internal_token_is_llm_fallback():
+        _log.warning(
+            "auth.llm_key_identity_refused",
+            asserted_email=(x_user_email or "")[:64],
+            detail=(
+                "GATEWAY_REFUSE_LLM_KEY_IDENTITY is set and "
+                "GATEWAY_INTERNAL_TOKEN is not, so the Bearer presented is the "
+                "LLM API key every agent holds. Refusing to treat it as "
+                "service identity. Provision GATEWAY_INTERNAL_TOKEN."
+            ),
+        )
+        bearer_ok = False
+
     # 1a. Bearer-matched call WITH user identity headers → real user context.
     #     This is the normal browser flow: Next.js proxy authenticates the
     #     session (NextAuth Google SSO) and forwards the verified email + role
@@ -215,6 +312,16 @@ async def get_current_user(
         allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
         email = x_user_email
         if not email.lower().endswith("@" + allowed_domain):
+            # NOT a rejection, deliberately: the token holder is trusted to say
+            # who it is acting as, and refusing here would lock out any member
+            # whose sign-in address is off-domain. The mismatch is only ever
+            # LOGGED — the `or x_user_email` below is what makes that explicit,
+            # since the assignment above otherwise reads as a check it is not.
+            _log.warning(
+                "auth.identity_domain_mismatch",
+                asserted_email=email[:64],
+                allowed_domain=allowed_domain,
+            )
             email = None
         return await _with_resolved_access(
             UserContext(

@@ -16,7 +16,7 @@ from typing import Any
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
 from gateway.routes.notes.templates import (
     build_system_prompt,
     get_template,
@@ -207,8 +207,16 @@ def _collect_refs(data: dict) -> set[int]:
     return refs
 
 
-async def generate_notes(meeting_id: str, run_id: str) -> None:
-    """Background job: transcript → notes. Never raises."""
+async def generate_notes(meeting_id: str, run_id: str, triggered_by: str) -> None:
+    """Background job: transcript → notes. Never raises.
+
+    ``triggered_by`` is the member whose request started this run. It is
+    carried, not derived: this job DELETES the meeting's un-promoted draft
+    action items and then hands the regenerated ones to ``auto_dispatch``,
+    which can send mail from the owner's mailbox — so the dispatcher has to
+    know who asked, and the answer must come from the request rather than from
+    the row it is about.
+    """
     try:
         async with await _get_db() as db:
             m = (
@@ -367,7 +375,7 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
         try:
             from gateway.routes.notes import dispatch as notes_dispatch
 
-            await notes_dispatch.auto_dispatch(meeting_id)
+            await notes_dispatch.auto_dispatch(meeting_id, triggered_by)
         except Exception as exc:
             _log.warning(
                 "notes.auto_dispatch_failed",
@@ -389,8 +397,14 @@ async def generate_notes(meeting_id: str, run_id: str) -> None:
             _log.error("notes.summary_failure_unrecorded", error=str(exc2))
 
 
-async def enqueue_summary(meeting_id: str) -> str:
-    """Create a queued summary run and spawn generation. Returns the run id."""
+async def enqueue_summary(meeting_id: str, triggered_by: str) -> str:
+    """Create a queued summary run and spawn generation. Returns the run id.
+
+    ``triggered_by`` is the member who asked for this (directly via
+    ``/summarize``, or indirectly by uploading / finishing / re-transcribing a
+    recording). It has no default so that a new caller has to answer the
+    question rather than inherit somebody else's authority.
+    """
     async with await _get_db() as db:
         row = (
             await db.execute(
@@ -403,7 +417,7 @@ async def enqueue_summary(meeting_id: str) -> str:
         ).fetchone()
         await db.commit()
     run_id = str(row.id)
-    _spawn(generate_notes(meeting_id, run_id))
+    _spawn(generate_notes(meeting_id, run_id, triggered_by))
     return run_id
 
 
@@ -449,22 +463,28 @@ async def get_templates(_user: UserContext = Depends(get_current_user)) -> list[
 @router.post("/meetings/{meeting_id}/summarize", status_code=202)
 async def summarize(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
+    """Regenerate this meeting's notes. Owner only.
+
+    Owner-scoped for two independent reasons, either of which is sufficient:
+    generation DELETES the meeting's un-promoted draft action items
+    (``generate_notes``) before re-extracting them, so an unscoped endpoint let
+    any member destroy a colleague's triage queue; and it chains into
+    ``auto_dispatch``, which sends mail from the owner's mailbox. The second is
+    also refused at the dispatch seam — this is the endpoint half of the same
+    fix, not a substitute for it.
+    """
     async with await _get_db() as db:
-        m = (
-            await db.execute(
-                text("SELECT status FROM meeting WHERE id=:id"), {"id": meeting_id}
-            )
-        ).fetchone()
-    if m is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
+        m = await load_owned_meeting(
+            db, meeting_id, user.email, columns="m.status"
+        )
     if m.status not in ("ready", "processing", "failed"):
         raise HTTPException(
             status_code=409,
             detail=f"meeting is '{m.status}'; transcript not ready to summarize",
         )
-    run_id = await enqueue_summary(meeting_id)
+    run_id = await enqueue_summary(meeting_id, user.email or "")
     return {"run_id": run_id, "status": "queued"}
 
 

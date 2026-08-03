@@ -17,8 +17,9 @@ from pathlib import Path
 from typing import Any
 
 from acb_common import get_logger, get_settings
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
+from sqlalchemy import text
 from acb_auth import require_feature_router
 
 _log = get_logger("gateway.notes")
@@ -169,6 +170,51 @@ def _get_session_factory():
 async def _get_db():
     """Return a new async session from the shared, pooled engine."""
     return _get_session_factory()()
+
+
+# ── Ownership — one predicate, one loader ────────────────────────────────────
+
+#: The owner scope, as SQL, written ONCE. Every by-id endpoint that must not
+#: reach a colleague's meeting binds this rather than spelling the comparison
+#: out, so the two halves of the rule cannot drift apart:
+#:
+#: * ``lower(...) = lower(...)`` because ``owner_email`` is stamped verbatim
+#:   from ``X-User-Email`` and an IdP may return the same UPN with different
+#:   casing between sessions (Entra ID does). Byte equality would fail closed —
+#:   a member's own library would silently empty — which is the "locked out of
+#:   my own work" shape, not a leak, but it is still a defect.
+#: * ``IS NULL`` stays visible to everyone: those are pre-migration-95 legacy
+#:   rows (the column arrived nullable). Both insert paths stamp an owner, so
+#:   the set cannot grow, and excluding them would hide a member's own old
+#:   meetings rather than protect anybody.
+#:
+#: Requires the ``meeting`` table to be aliased ``m`` and binds ``:owner``.
+OWNED_MEETING_PREDICATE = (
+    "(lower(m.owner_email) = lower(:owner) OR m.owner_email IS NULL)"
+)
+
+
+async def load_owned_meeting(
+    db, meeting_id: str, owner_email: str | None, *, columns: str = "m.*"
+):
+    """The meeting — if it belongs to ``owner_email``. Raises 404 otherwise.
+
+    404 and not 403, deliberately: "that one exists but is not yours" confirms
+    a meeting id to somebody who guessed it, and the two answers have to be
+    indistinguishable in one place rather than consistently in a dozen.
+    """
+    row = (
+        await db.execute(
+            text(
+                f"SELECT {columns} FROM meeting m "
+                f"WHERE m.id = :id AND {OWNED_MEETING_PREDICATE}"
+            ),
+            {"id": meeting_id, "owner": owner_email or ""},
+        )
+    ).fetchone()
+    if row is None:
+        raise HTTPException(status_code=404, detail="meeting not found")
+    return row
 
 
 # ── Media storage (same recipe as tasks/attachments.py) ──────────────────────

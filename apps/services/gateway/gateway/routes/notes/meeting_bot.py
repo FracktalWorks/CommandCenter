@@ -457,9 +457,21 @@ async def _set_bot(db, bot_id: str, **fields) -> None:
     )
 
 
-async def _ingest_recording(meeting_id: str, audio: bytes, ctype: str) -> None:
+async def _ingest_recording(
+    meeting_id: str, audio: bytes, ctype: str, requested_by: str
+) -> None:
     """Save the bot's audio as a `meeting_recording` and run the pipeline —
-    identical to an upload, so diarization/speaker-naming/summary all apply."""
+    identical to an upload, so diarization/speaker-naming/summary all apply.
+
+    ``requested_by`` is ``meeting_bot.requested_by`` — the member who sent the
+    notetaker. Nobody clicks this ingest (the poller finds the recording
+    ready), but it still has a person behind it, and the pipeline chains into
+    notes generation and then ``auto_dispatch``, which can send mail from the
+    meeting owner's mailbox. So the requester is what travels down, not the
+    meeting's owner: ``bot_join`` will attach a bot to a meeting the caller
+    does not own (see the gateway AGENTS.md list), and passing the owner there
+    would launder one member's request into another member's authority.
+    """
     ext = _AUDIO_EXT.get(ctype, ".mp4")
     mime = ctype or "audio/mp4"
     recording_id = str(uuid.uuid4())
@@ -493,7 +505,11 @@ async def _ingest_recording(meeting_id: str, audio: bytes, ctype: str) -> None:
             {"id": meeting_id},
         )
         await db.commit()
-    _spawn(run_transcription(meeting_id, recording_id, str(run_row.id)))
+    _spawn(
+        run_transcription(
+            meeting_id, recording_id, str(run_row.id), requested_by or ""
+        )
+    )
     _log.info("notes.bot_ingested", meeting_id=meeting_id, bytes=len(audio), mime=mime)
 
 
@@ -508,8 +524,8 @@ async def _refresh_bot(bot_row_id: str) -> None:
         async with await _get_db() as db:
             row = (
                 await db.execute(
-                    text("SELECT id, meeting_id, provider_bot_id, status "
-                         "FROM meeting_bot WHERE id = :id"),
+                    text("SELECT id, meeting_id, provider_bot_id, status, "
+                         "requested_by FROM meeting_bot WHERE id = :id"),
                     {"id": bot_row_id},
                 )
             ).fetchone()
@@ -563,7 +579,10 @@ async def _refresh_bot(bot_row_id: str) -> None:
                 return  # another caller is ingesting
             try:
                 audio, ctype = await provider.download(download_url)
-                await _ingest_recording(str(row.meeting_id), audio, ctype)
+                await _ingest_recording(
+                    str(row.meeting_id), audio, ctype,
+                    getattr(row, "requested_by", None) or "",
+                )
             except Exception as exc:  # ingest failed after claiming
                 async with await _get_db() as db:
                     await _set_bot(db, bot_row_id, status="failed",

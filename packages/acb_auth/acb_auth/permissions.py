@@ -60,7 +60,16 @@ from typing import Iterable
 # ── Vocabulary ──────────────────────────────────────────────────────────────
 
 #: Nav panes / product surfaces. Kept in sync with the `feature_catalog` table
-#: (infra/postgres/130_org_access_control.sql) and the frontend's nav.ts.
+#: (seeded by infra/postgres/130_org_access_control.sql, extended with the
+#: `center.*` rows by infra/postgres/140_center_features.sql) and the
+#: frontend's nav.ts + centers.ts.
+#:
+#: This tuple — not the catalog table — is what `allowed_features()` iterates,
+#: so a slug seeded in SQL but missing here is invisible to `/auth/me` and
+#: therefore unreachable in the UI **even for an owner holding `*`**: the
+#: wildcard is only ever evaluated against these literals. Adding a
+#: feature_catalog row means adding it here too
+#: (tests/unit/test_org_access_control.py pins the Center half of that).
 FEATURES: tuple[str, ...] = (
     "chat",
     "email",
@@ -78,6 +87,17 @@ FEATURES: tuple[str, ...] = (
     "workflows",
     "build.agents",
     "build.apps",
+    # Departmental Centers (140_center_features.sql, category `centers`). Order
+    # matches that migration's sort_order: `allowed_features()` emits in tuple
+    # order and the member access editor renders in it
+    # (gateway/routes/admin/members.py). Slug = group slug, 1:1 —
+    # department_centers.md §1.
+    "center.sales",
+    "center.marketing",
+    "center.finance",
+    "center.operations",
+    "center.people",
+    "center.company",
 )
 
 #: Non-feature permissions, listed so the admin UI can offer a closed set and

@@ -237,6 +237,33 @@ def test_every_declared_permission_is_valid() -> None:
         validate_permission(cap)
 
 
+def test_every_center_has_a_feature_slug() -> None:
+    """A Center seeded in SQL but missing from FEATURES is unreachable.
+
+    ``allowed_features()`` iterates FEATURES, not ``feature_catalog``, and
+    ``/auth/me`` returns exactly that list — so a slug absent here is invisible
+    to the nav and to AccessGate for EVERY principal, including an owner
+    holding ``*`` (the wildcard is only matched against these literals). That
+    was the live defect: migration 140 seeded six ``center.*`` catalog rows and
+    ``routes/admin/groups.py`` has been writing ``allow feature:center.<slug>``
+    overrides the product could never display.
+
+    The expectation is derived from the group slugs rather than retyped, so the
+    1:1 group↔Center pairing (department_centers.md §1) cannot drift.
+    """
+    from gateway.routes.admin.groups import CENTER_GROUP_SLUGS
+
+    missing = [
+        feature_permission(f"center.{slug}")
+        for slug in CENTER_GROUP_SLUGS
+        if f"center.{slug}" not in FEATURES
+    ]
+    assert not missing, (
+        f"Center features seeded/granted but absent from FEATURES: {missing}. "
+        "They would be unreachable for every member, owners included."
+    )
+
+
 def test_agent_service_is_not_assignable_to_people() -> None:
     assert "agent_service" in SYSTEM_ROLES
     assert "agent_service" not in ASSIGNABLE_SYSTEM_ROLES

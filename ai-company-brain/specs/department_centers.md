@@ -1,6 +1,6 @@
 # Department Centers — one platform, many projections
 
-**Status:** Phase A shipped (UI scaffold + feature gating); Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-01 · **Owner:** vjvarada
+**Status:** Phase A shipped (UI scaffold + feature gating; the `center.*` feature vocabulary fix landed 2026-08-03 — until then no Center was reachable by anyone, owner included); Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-03 · **Owner:** vjvarada
 
 The commitment this document records: **CommandCenter stays one deployment, and
 departments get Centers — scoped projections of the same platform, never
@@ -76,6 +76,17 @@ it here in Phase D, and the company view becomes the Company Center dashboard.
 it. Granting a department = `allow feature:center.sales` (+ group membership,
 once groups have a UI). Route guards: `lib/access.ts` maps `/centers/<slug> →
 center.<slug>`.
+
+> **Seeding the catalog row is not enough — the slug must also be in
+> `acb_auth.permissions.FEATURES`** (fixed 2026-08-03; before that, no Center
+> was reachable by *anyone*). `/auth/me` returns
+> `list(access.allowed_features())`, and that method iterates the hardcoded
+> Python tuple, never `feature_catalog`; the wildcard in `feature:*` is only
+> ever evaluated against those literals, so an owner holding `*` still got an
+> empty Center set. `tests/unit/test_org_access_control.py::
+> test_every_center_has_a_feature_slug` now fails loudly on any Center group
+> whose slug is missing from the tuple, deriving the six from
+> `routes/admin/groups.py::CENTER_GROUP_SLUGS` so the pairing cannot drift.
 
 **Center rosters** (sub-apps + status) live in `lib/centers.ts` — that file is
 the registry; this spec deliberately does not duplicate it. Highlights: Sales

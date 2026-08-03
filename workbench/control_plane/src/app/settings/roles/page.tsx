@@ -197,6 +197,34 @@ export default function RolesPage() {
   );
 }
 
+/**
+ * `feature_catalog.category` → the heading an admin reads. The chip list used
+ * to be flat under a single "Apps" heading; 140_center_features.sql added the
+ * `centers` category, and six Center chips filed under "Apps" would be a lie.
+ * An unknown category falls back to its raw slug — a new category must never
+ * make its features silently disappear from this dialog.
+ */
+const CATEGORY_LABELS: Record<string, string> = {
+  apps: "Apps",
+  centers: "Centers",
+  configure: "Configure",
+  build: "Build",
+};
+
+/**
+ * Features grouped by category, preserving the order the gateway sent them in
+ * (`ORDER BY category, sort_order`) — this screen does not re-sort the catalog.
+ */
+function byCategory(features: Feature[]): [string, Feature[]][] {
+  const groups = new Map<string, Feature[]>();
+  for (const f of features) {
+    const rows = groups.get(f.category);
+    if (rows) rows.push(f);
+    else groups.set(f.category, [f]);
+  }
+  return [...groups];
+}
+
 function CreateRoleDialog({
   features,
   capabilities,
@@ -290,17 +318,23 @@ function CreateRoleDialog({
             className="mb-4 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
           />
 
-          <h3 className="mb-2 text-xs font-semibold text-foreground">Apps</h3>
-          <div className="mb-4 flex flex-wrap gap-1.5">
-            {features.map((f) => (
-              <PermissionChip
-                key={f.permission}
-                label={f.label}
-                on={selected.has(f.permission)}
-                onClick={() => toggle(f.permission)}
-              />
-            ))}
-          </div>
+          {byCategory(features).map(([category, rows]) => (
+            <div key={category}>
+              <h3 className="mb-2 text-xs font-semibold text-foreground">
+                {CATEGORY_LABELS[category] ?? category}
+              </h3>
+              <div className="mb-4 flex flex-wrap gap-1.5">
+                {rows.map((f) => (
+                  <PermissionChip
+                    key={f.permission}
+                    label={f.label}
+                    on={selected.has(f.permission)}
+                    onClick={() => toggle(f.permission)}
+                  />
+                ))}
+              </div>
+            </div>
+          ))}
 
           <h3 className="mb-2 text-xs font-semibold text-foreground">Capabilities</h3>
           <div className="flex flex-wrap gap-1.5">

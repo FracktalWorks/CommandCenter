@@ -14,13 +14,16 @@ This module now provides the real decision + execution core:
   registry. A real source-of-truth write happens ONLY inside a registered
   handler, and an action with no handler is REFUSED (never silently applied).
 
-Ships with **zero** handlers registered, so it cannot perform any real write yet
-— it is non-breaking and inert until handlers are wired in. Still pending
-(needs per-agent authority decisions + a queue table): persisting
-``needs_approval`` proposals to a ``pending_actions`` table (mirror
-``pending_commit``), the Control Plane approval binding, and routing the existing
-ClickUp/email writes through :func:`execute`. See FOUNDATION_BUILDOUT_CHECKLIST
-BO-1.
+This module itself registers nothing — handlers are wired in by the gateway at
+startup / import (five sites as of 2026-08-03: ClickUp task writes, workflow
+resume, WhatsApp broadcast, and two app-tool actions). It is therefore **live**,
+not inert: ``pending_actions`` persistence, the Control Plane approval binding
+(gateway ``routes/actions.py``) and the ClickUp task-write reroute all shipped
+2026-07-13. Remaining per FOUNDATION_BUILDOUT_CHECKLIST §BO-1: two gated ClickUp
+actions still have no handler (BO-1a), the queued-write ``sync_state`` marker is
+ignored (BO-1b), and email writes do not route through here at all (BO-1c).
+There is no Zoho write client anywhere in the repo, so the ``"zoho.email"``
+example below is illustrative, not a pointer to real code.
 """
 from __future__ import annotations
 

@@ -1,16 +1,48 @@
 # Calendar → Focus OS — evaluation & redesign brainstorm
 
 Status: **F0 + F1 BUILT** (2026-07-22, branch
-`claude/calendar-productivity-redesign-rdh50k`): leverage lens + One Thing +
+`claude/calendar-productivity-redesign-rdh50k`) — **verified against code on
+2026-08-03**: leverage lens + One Thing +
 leverage meter + outcome ribbon, Gap Filler (2-minute pile), Startup ritual
 (breathe → review → commit), Shutdown (leverage ratio, One-Thing verdict, seed
 tomorrow, close the day) and Focus Mode (pomodoro/flow, subtask checklist,
-+15 reflow, capture-in-focus via `C`). Frontend-only — per-day state
-(One Thing / seeds / ritual stamps / timer prefs) lives in localStorage
-(`lib/focusPrefs.ts`); the One-Thing planner directive rides the existing
-`energy_note` seam, so no backend or schema changes were needed. F2+ (breaks
-in the packer, batch blocks, Email windows, Waiting-on chase, `gtd_time_blocks`)
-and the Focus Shield remain per §7.
++15 reflow, capture-in-focus via `C`).
+
+**Also shipped since (do not re-dispatch these):**
+- **Breaks in the packer — SHIPPED 2026-07-23** (`80722e17`, migration
+  `infra/postgres/97_gtd_planning_prefs.sql`; the commit message's "mig 93" is
+  the pre-renumber number and is wrong — the file itself records `93→97`).
+  `gtd_settings.max_focus_run_mins` / `break_mins` + an optional protected lunch
+  window; the packer widens the buffer behind the block that trips the
+  focus-run limit
+  (`apps/services/gateway/gateway/routes/tasks/calendar.py` — `_planning_prefs`,
+  `_lunch_interval`, and the `want_break → buf = buffer_mins + break_mins` arm
+  in `_compute_day_plan`), reports breaks + lunch in the plan notes, and applies
+  lunch protection to rollover, replan and the nightly job.
+  **Caveat that keeps F2 alive:** a break is a *gap the packer leaves*, not a
+  row. There is no `kind='break'` block, nothing renders on the grid, nothing
+  is countable in the review. Typed break blocks stay F2, under
+  `gtd_time_blocks`.
+- **Per-day Focus-OS state is no longer localStorage-only.** Migration
+  `infra/postgres/92_gtd_day_state.sql` (`gtd_day_state`) +
+  `GET/PUT /tasks/calendar/day-state` persist the ★ One Thing and the
+  tomorrow-seeds server-side; the client already calls them
+  (`workbench/control_plane/src/app/tasks/components/CalendarView.tsx` hydrates
+  on open and writes on toggle,
+  `.../components/calendar/EndOfDayReview.tsx` writes seeds on "close the day").
+  `workbench/control_plane/src/app/tasks/lib/focusPrefs.ts` is now a *cache* for
+  those two, and remains the only home for **ritual stamps**
+  (`startupDoneOn`, `startupStreak`, `streakStampedOn`, `dayClosedOn`) and
+  **`timerMode`** — that residue is all that the F2 "migrate the local state"
+  clause still owes.
+- **Ideal-week templates — SUBSTANTIALLY SHIPPED** (see §7 F3): migration
+  `infra/postgres/98_gtd_day_templates.sql` + settings API + editor + grid
+  render + packer honouring. Only the named gap in §9 remains.
+
+The One-Thing planner directive rides the existing
+`energy_note` seam. **Still open per §7/§9:** `gtd_time_blocks` (and everything
+that needs block *kinds* — typed breaks, batch blocks, recurring ritual blocks),
+Email windows, Waiting-on chase, the Focus Shield, and external sync.
 **Follow-up (same day):** block context menu (right-click on desktop,
 long-press on touch — Open · Focus · Done · One Thing · Pin · Reschedule… ·
 Remove from calendar · Delete), undoable scheduling (every timebox/move/
@@ -143,6 +175,16 @@ Tap ▶ on any block (or the Now bar) → full-screen focus:
   The shield state is visible ("6 held · released at your break"), which is the
   honest version of Do-Not-Disturb: nothing is missed, everything is deferred.
   Full-screen by design; single-theme ultra-dim "quiet" mode.
+  *(Update 2026-08-03: **the hold/release primitive genuinely does not exist.**
+  `grep -rniE "focus_shield|focusShield|notification_hold|hold_notifications"`
+  over `*.ts`/`*.tsx`/`*.py` returns **zero hits** repo-wide. So the Shield is
+  two pieces of work, not one: (a) a notification hold/release primitive on the
+  platform's own notification surface, and (b) the Focus-Mode UI that arms it.
+  **Both are AGENT-SAFE** — this touches only Command Center's own surfaces,
+  needs no OS/browser permission, no external credential and no deploy gate.
+  It is blocked on being **specced**, not on an owner action; the earlier
+  "blocked on a platform primitive" note overstated it. Neither piece has a
+  done-when yet — write one before dispatch.)*
 - **Capture without leaving** (tips 20/22/87 — swirling-thoughts problem): the
   existing QuickCapture hotkey (`C`) opens a minimal capture drawer *inside*
   Focus Mode — the stray thought goes to the GTD inbox and the timer never
@@ -187,7 +229,9 @@ AI planner, is the unclaimed spot.
 
 ### 4.6 Breaks & recovery as first-class citizens
 - Packer rule: no more than N focus-minutes without a break (default 90 → 10);
-  lunch window protected by default.
+  lunch window protected by default. **✅ SHIPPED 2026-07-23** (`80722e17`,
+  migration `97_gtd_planning_prefs.sql`) — but as *geometry*: the packer widens
+  the buffer behind the tipping block. The break is a gap, not a row.
 - Break blocks have types (walk · stretch · breathe · coffee) with tiny guided
   timers; skipping is one tap (tracked, gently reported in review).
 - Buffers remain for meeting decompression; breaks are for recovery.
@@ -204,6 +248,17 @@ AI planner, is the unclaimed spot.
   the work or promote the outcome?" Everything else is an avoid-list, which is
   also the calendar's institutional way of **saying no** (tip 3): the planner
   declines to schedule over capacity and tells you *what it declined and why*.
+
+> **⚠️ OWNERSHIP COLLISION — recorded 2026-08-03, unresolved.** "Top-5 outcomes
+> (Horizons build-out)" is carried here (F3, §4.7) **and** in `work_plan.md`'s
+> WS-18 row (Tasks Phase 3), where the 2026-08-02 audit declared it
+> **NO-GO and MIS-ASSIGNED** — no acceptance criterion exists anywhere,
+> `gtd_horizons` (present since migration 48) has **no link column** to items or
+> projects, and `task_manager_app.md` puts Horizons in *Phase 4*, not 3. Two
+> rows gesture at Horizons and **neither owns it**. Resolving this needs a
+> single-owner decision in `work_plan.md` §4 (the single-owner registry) — it is
+> deliberately *not* resolved here. Until it is, **no agent should dispatch
+> Top-5 outcomes from either doc.**
 
 ### 4.8 AI task breakdown on drop
 - Dropping a task with estimate >90m (or none + big title) prompts: "Split into
@@ -241,8 +296,10 @@ follow-up a scheduled habit instead of a guilty memory.
 
 ### 4.12 Foundations this unlocks (already spec'd as P5)
 `gtd_time_blocks` (multi-block tasks, recurring blocks, break/ritual/external
-kinds), ideal-week templates, external calendar sync. The features above are
-the *reason* to now build that table. External sync (P4) is also what makes
+kinds), ~~ideal-week templates~~ (**shipped 2026-07-23** — §7 F3), external
+calendar sync (**OWNER-GATE**, §9.11). The features above are
+the *reason* to now build that table — and it is **four PRs, not one**: see the
+slice plan in §9.1. External sync (P4) is also what makes
 timeboxing **transparent** (tip 1's shared-calendar clause) — colleagues see
 the block, not the task detail — and what lets the packer respect commutes,
 meetings and travel buffers (tips 16/48).
@@ -311,11 +368,33 @@ No feature above is an island; each plugs into a surface that already exists:
   actual_start, actual_end, source, external_event_id, recurrence_rule`.
   `item_id` nullable because breaks/rituals aren't tasks. Batch blocks join to
   members via `gtd_block_members(block_id, item_id, done_at)`.
-  *(Update 2026-08-01 (doc-truth pass): this column set is **CANONICAL** for
-  `gtd_time_blocks`. The table is specified in three places with different
-  shapes — `calendar_timeboxing.md` §3, here, and the comment at
+  *(Update 2026-08-01 (doc-truth pass), re-verified 2026-08-03: this column set
+  is **CANONICAL** for `gtd_time_blocks`. The table is specified in three places
+  with different shapes — `calendar_timeboxing.md` §3, here, and the comment at
   `infra/postgres/76_gtd_scheduling.sql:14` — the other two now defer here.
-  The table is still unbuilt: no migration creates it as of 2026-08-01.)*
+  The table is still unbuilt: `grep -rl gtd_time_blocks` over `*.sql`/`*.py`/
+  `*.ts` matches exactly one file, the comment in `76_gtd_scheduling.sql`.
+  **Do not write an absolute migration number into this spec** — find the next
+  free number by listing `infra/postgres/` at build time.)*
+  *(Update 2026-08-03: **the "non-breaking swap" claim in
+  `calendar_timeboxing.md` §3 and in `76_gtd_scheduling.sql:14` is FALSE.**
+  There is no `TimeBlock[]` seam: `blocksForDay(items, day)` in
+  `workbench/control_plane/src/app/tasks/lib/scheduling.ts` *projects* blocks
+  out of `gtd_items.scheduledStart/scheduledEnd`, and every mutation goes
+  through `applySchedule(…{scheduledStart, scheduledEnd})`. Measured blast
+  radius on 2026-08-03: **17 files under
+  `workbench/control_plane/src/app/tasks/` reference
+  `scheduledStart|blocksForDay|applySchedule`** (`lib/scheduling.ts`,
+  `lib/scheduling.test.ts`, `lib/types.ts`, `lib/api.ts`, `lib/taskStore.ts`,
+  `lib/taskAssistantPersona.ts`, `components/CalendarView.tsx`,
+  `components/FocusMode.tsx`, `components/SchedulePopup.tsx`,
+  `components/StartupRitual.tsx`,
+  `components/calendar/{TimeGrid,MonthGrid,NowNextBar,ScheduleSheet,EndOfDayReview,PlanDayPanel}.tsx`,
+  `components/calendar/shared.ts`) plus **3 gateway modules**
+  (`apps/services/gateway/gateway/routes/tasks/{calendar,core,items}.py`),
+  `apps/skills/skill-task-gtd/skill_task_gtd/core.py`, and the tool
+  registration in `apps/agents/agent-task-manager/agents.py`. This is a
+  multi-PR migration, not a swap — see the slice plan in §9.)*
 - **`gtd_items`**: no change needed beyond what exists (leveraged, isTwoMinute,
   energy, estimates, actuals all present) — the redesign is mostly *surfacing*
   captured data.
@@ -345,18 +424,34 @@ No feature above is an island; each plugs into a surface that already exists:
   existing plan + review modals.
 - **F1:** Focus Mode (Pomodoro/flow, subtask checklist, +15 reflow, capture-in-
   focus via the existing QuickCapture, ambient sound) — timer state is
-  client-side; actuals API already exists. Focus Shield ships here if the
-  notification surface exposes a hold/release hook; otherwise F2.
-  *(Update 2026-08-01 (doc-truth pass): the hold/release hook does NOT exist —
-  no notification-hold primitive anywhere in `control_plane/src`. Focus Shield
-  is therefore F2+, blocked on that platform primitive; also flagged in
-  `work_plan.md` WS-21.)*
-- **F2:** `gtd_time_blocks` + breaks in the packer + batch blocks + recurring
-  ritual blocks + Email windows + Waiting-on chase block.
-- **F3:** ideal-week templates, Top-5 outcomes (Horizons build-out), mobile
-  timeline view, AI breakdown-on-drop, weekly review surface, external sync
-  (P4 creds permitting — unlocks shared-calendar transparency + meeting-aware
-  buffers).
+  client-side; actuals API already exists. **SHIPPED 2026-07-22.**
+  Focus Shield slipped to F2 — see the §4.1 note: the hold/release primitive
+  does not exist, but it is **AGENT-SAFE once specced**, not owner-gated.
+- **F2:** `gtd_time_blocks` + typed break blocks + batch blocks + recurring
+  ritual blocks + Email windows + Waiting-on chase block + Focus Shield.
+  ~~breaks in the packer~~ — **SHIPPED 2026-07-23** (`80722e17`, migration
+  `97_gtd_planning_prefs.sql`; the commit message's "mig 93" is wrong). What
+  shipped is *break geometry*: the packer widens the buffer after
+  `max_focus_run_mins` of continuous focus and protects a lunch window. What
+  F2 still owes is *typed break rows* — a break you can see on the grid, skip,
+  and count in the review — which needs block kinds, i.e. `gtd_time_blocks`.
+- **F3:** ~~ideal-week templates~~ (**SUBSTANTIALLY SHIPPED 2026-07-23** —
+  migration `98_gtd_day_templates.sql` (`gtd_settings.day_templates`), the
+  settings API round-trip
+  (`apps/services/gateway/gateway/routes/tasks/settings.py` — model field,
+  patch field, `_day_templates` normaliser, the write path's JSON dump), the
+  editor in
+  `workbench/control_plane/src/app/tasks/components/calendar/CalendarSettings.tsx`,
+  the grid render via `TimeGrid.tsx` + `calendar/shared.ts`, and the packer
+  honouring them — `kind='block'` windows become busy time, `kind='focus'`
+  windows bias matching energy via `_THEME_ENERGY`
+  (`.../routes/tasks/calendar.py` `_expand_templates`); covered by
+  `tests/unit/test_calendar_planner.py::test_block_template_is_busy_focus_template_is_not`
+  and `::test_template_day_of_week_filter_skips_other_days`). **Re-scoped to
+  the named gap in §9** — do not carry "ideal week" as an unbuilt F3 item.),
+  Top-5 outcomes (Horizons build-out — **see the ownership-collision warning in
+  §4.7; do not dispatch**), mobile timeline view, AI breakdown-on-drop, weekly
+  review surface, external sync (**OWNER-GATE**, see §9).
 
 ## 8. Mockups
 
@@ -366,29 +461,267 @@ break / ritual blocks + meters; Focus Mode; Gap Filler; Startup ritual;
 Shutdown review; mobile Today timeline. Visual language matches the control
 plane's dark theme (cyan primary, gold = leverage).
 
-## 9. Acceptance & verification for F2/F3 open items (added 2026-08-01, doc-truth pass)
+## 9. Acceptance & verification for F2/F3 open items
 
-- **F2 `gtd_time_blocks` — done when:** a migration creates the §5 table
-  (+ `gtd_block_members`) and blocks persist server-side — a timebox created on
-  one device survives reload and appears on a second device; the per-day
-  Focus-OS state currently in localStorage
-  (`app/tasks/lib/focusPrefs.ts`: One Thing, tomorrow seeds, ritual stamps,
-  timer prefs) is migrated to server-backed storage so it follows the user
-  across devices; breaks/rituals/batches exist as
-  `kind='break'|'ritual'|'batch'` rows, not client-side synthesis.
-- **F2 Email windows — done when:** a recurring Email window renders as a real
-  block, deep-links into the email app's triage, email-captured tasks route to
-  tomorrow's plan seed by default, and the end-of-day review reports email
-  planned-vs-actual like any block. *(Partial foundation already shipped
-  2026-07-23: recurring BLOCK/FOCUS windows — `gtd_settings.day_templates`,
-  mig `98_gtd_day_templates.sql` — can reserve an "Email" window on the grid;
-  the email-app deep-link, shield-hold and review accounting do not exist.)*
-- **F3 external sync — done when:** see `calendar_timeboxing.md` §13 (P4):
-  OAuth-backed `calendar_accounts`, `kind='external'` events the packer will
-  not book over, `POST /tasks/calendar/sync` no longer 501, two-way write.
-- **Verify:** `cd workbench/control_plane && npx tsc --noEmit && npm test`
-  (vitest); `pytest tests/unit -k calendar` — runs
-  `tests/unit/test_calendar_planner.py` (packer geometry, buffers, energy +
-  day-template windows, lunch carve-out) and
-  `tests/unit/test_email_calendar_context.py`; GTD API surface:
-  `pytest tests/unit/test_tasks_gtd.py`.
+*(Added 2026-08-01; **rewritten 2026-08-03 after verifying every clause against
+the code.** The 2026-08-01 pass wrote a `gtd_time_blocks` done-when whose first
+two clauses were **already green against shipped code** — an implementer could
+have "passed" it by creating an unused table. Those clauses are deleted below.)*
+
+### 9.0 How to read this section
+
+Every open item carries a label:
+
+- **AGENT-SAFE** — an independent agent can build it end to end: no credential,
+  no flag flip, no deploy, no reach outside this repo.
+- **OWNER-GATE** — needs an owner action named in `work_plan.md` §6 before the
+  work can even be verified. Do not dispatch; report and stop.
+
+Two standing constraints for anyone implementing from this section:
+
+1. **Never write an absolute future migration number** into a spec, a commit
+   message or a code comment. Find the next free number by listing
+   `infra/postgres/` at build time. This corpus already carries the disease:
+   `80722e17`'s message says "mig 93" (real: 97), and
+   `apps/services/gateway/gateway/routes/tasks/calendar.py`'s `_planning_prefs`
+   / `_day_templates` docstrings still say "migration 93" / "migration 94"
+   (real: 97 / 98).
+2. **Paths are repo-root-relative and fully qualified** —
+   `workbench/control_plane/src/app/tasks/…` for UI,
+   `apps/services/gateway/gateway/routes/tasks/…` for the gateway,
+   `apps/skills/skill-task-gtd/…`, `apps/agents/agent-task-manager/…`,
+   `infra/postgres/…` for migrations. Earlier revisions of this section wrote
+   `app/tasks/lib/focusPrefs.ts` and `routes/tasks/calendar.py`, both one tree
+   level short.
+
+### 9.1 F2 `gtd_time_blocks` — 4 slices, not one PR · **AGENT-SAFE**
+
+**The "non-breaking swap" claim is false.** `calendar_timeboxing.md` §3 and the
+comment at `infra/postgres/76_gtd_scheduling.sql:14` both assert the grid is
+written against a `TimeBlock[]` abstraction so promoting to a table is a drop-in
+swap. It is not: blocks are *projected* from `gtd_items.scheduled_start/end` by
+`blocksForDay()` and *mutated* through `applySchedule({scheduledStart,
+scheduledEnd})`. The measured blast radius (2026-08-03) is in §5. Anyone who
+plans this as one PR is planning to break the calendar.
+
+**Slices — each independently shippable and reviewable:**
+
+| # | Slice | Shape |
+|---|---|---|
+| S1 | **Schema + API, dual-write** | Migration (next free number at build time) creates `gtd_time_blocks` + `gtd_block_members` per §5. `PATCH /tasks/items/{id}` scheduling and `GET /tasks/calendar` write/read **both** the columns and the table; the columns stay authoritative. No UI change. |
+| S2 | **Client swap** | `blocksForDay()` reads blocks from the API instead of projecting from item columns; `applySchedule` targets block ids. Table becomes authoritative, columns become a mirror. All 17 touching files move together. |
+| S3 | **Packer + tool cutover** | `_compute_day_plan`, rollover, replan, `apps/skills/skill-task-gtd/skill_task_gtd/core.py` (`gtd_schedule`/`gtd_unschedule`/`gtd_list_schedule`) and `apps/agents/agent-task-manager/agents.py` emit blocks. Item columns dropped from the write path. |
+| S4 | **Kinds** | `kind` values `break` / `ritual` / `batch` / `external` + `gtd_block_members` become real: the packer emits typed break rows instead of widened buffers, batch blocks carry members, ritual blocks recur. |
+
+**Done when — every clause must fail against today's code:**
+
+*(Deleted from the 2026-08-01 version because they were already true:
+"blocks persist server-side / survive reload / appear on a second device" —
+`scheduled_start/scheduled_end` have been `gtd_items` columns since
+`76_gtd_scheduling.sql` and have always been server-side; and "the One Thing and
+tomorrow-seeds move off localStorage" — done by `92_gtd_day_state.sql` +
+`GET/PUT /tasks/calendar/day-state`.)*
+
+1. **One task holds two blocks on the same day and both render.** Split a 3h
+   task into 09:00–10:30 and 14:00–15:30; both appear on the day grid, both
+   count once each in the capacity meter, and completing the task closes both.
+   *(Impossible today: one row, one `scheduled_start`.)*
+2. **A `kind='break'` row inserted by the packer is visible on the grid and
+   excluded from the leverage meter.** "Plan my day" with
+   `max_focus_run_mins=90` produces a break the user can see, skip, and that the
+   end-of-day review counts — and it contributes **zero** minutes to both the
+   booked-focus meter and the leverage meter. *(Today the break is a widened
+   buffer: invisible, uncountable, unskippable.)*
+3. **A batch block with 3 `gtd_block_members` ticks members off
+   independently of the parent.** Drag "Batch 3 @calls" onto the grid; the block
+   shows an internal checklist; ticking one member marks that `gtd_item` done
+   and leaves the block and the other two open; the block closes when the last
+   member does.
+4. **Residual local state is gone.** The only remaining localStorage residue in
+   `workbench/control_plane/src/app/tasks/lib/focusPrefs.ts` — the **ritual
+   stamps** (`startupDoneOn`, `startupStreak`, `streakStampedOn`, `dayClosedOn`)
+   and **`timerMode`** — is server-backed, so the startup streak survives a
+   different browser. *(One Thing + seeds already are; do not re-do them.)*
+   This clause is satisfiable **independently of S1–S4** and may ship first as
+   its own small PR on `gtd_day_state`.
+
+### 9.2 F2 Email windows · **AGENT-SAFE**
+
+Foundation already shipped 2026-07-23: `gtd_settings.day_templates`
+(`98_gtd_day_templates.sql`) already reserves a recurring window, and
+`_THEME_ENERGY` in `apps/services/gateway/gateway/routes/tasks/calendar.py`
+already recognises `theme` values `"email"` and `"inbox"`. Missing: the
+email-app deep link, the shield hold, and the review accounting.
+
+**Done when:**
+
+1. A recurring Email window renders as a real block on the grid (not merely a
+   tinted template band).
+2. The block deep-links into the email app's triage surface.
+3. Email-captured tasks (`origin.emailId`, via `TaskCaptureModal`) route to
+   **tomorrow's** plan seed by default, not into today's focus.
+4. The end-of-day review reports email planned-vs-actual like any block —
+   **see the decision below for what "email time" means.**
+
+> **DECISION (agent-proposed 2026-08-03, owner may overrule) — what counts as
+> email time.** Clause 4 was untestable because "email time" was never defined.
+> Proposed definition, chosen because both halves already exist in the data:
+> - **Planned email minutes** = the total minutes of that local day's
+>   `day_templates` entries whose `theme` normalises to `"email"` or `"inbox"`
+>   (the `_THEME_ENERGY` mapping is the existing normaliser — reuse it, do not
+>   add a second one).
+> - **Actual email minutes** = summed `actual_start`→`actual_end` (migration
+>   `80_gtd_actuals.sql`, stamped by Focus Mode) of every block whose item
+>   carries `origin.emailId`, **plus** any block whose interval falls inside a
+>   planned email window regardless of origin.
+>
+> Rejected alternative: counting time spent in the email app itself. It would
+> need new client telemetry, and it measures the app rather than the
+> commitment — the review's whole point is planned-vs-actual against a block.
+> **If the owner prefers app-time, clause 4 changes shape and this slice grows
+> a telemetry sub-slice.**
+
+### 9.3 F2 Batch blocks · **AGENT-SAFE** · depends on §9.1 S4
+
+**Done when:** the unscheduled rail groups schedulable micro-tasks by
+`GtdContext` and offers "Batch 4 @calls (45m)" as one drag; the resulting grid
+block is a single `kind='batch'` row with `gtd_block_members`; Focus Mode plays
+it as a rapid-fire queue (done → next); and the AI planner, when it batches,
+emits a batch block rather than n adjacent task blocks.
+
+### 9.4 F2 Waiting-on chase block · **AGENT-SAFE** *(nudge SENDING is OWNER-GATE)*
+
+**Done when:** a recurring `kind='ritual'` Chase block auto-fills with WAITING
+items sorted by age then deadline, reusing the shipped
+`workbench/control_plane/src/app/tasks/lib/waiting.ts` predicates (Waiting-For
+surfacing landed 2026-08-02 under WS-18 — **do not rebuild it**); each row
+offers nudge / "got it" (marks received) / escalate; and "got it" clears the
+open `gtd_waiting` row.
+
+> **OWNER-GATE inside this slice:** *drafting and sending* the follow-up email
+> goes through a real mail account. The chase surface, the ordering, and the
+> "got it"/escalate paths are all agent-safe; the nudge **send** is not. Build
+> the surface with the nudge action stubbed behind the existing confirm-before-
+> send gate; do not wire an outbound send.
+
+### 9.5 F2 Focus Shield · **AGENT-SAFE once specced** · currently unspecced
+
+The primitive does not exist (§4.1: zero grep hits repo-wide). It needs no
+external access, so it is **not** owner-gated — it is blocked on a design.
+Before dispatch, someone must spec: where held notifications queue, what
+"release" means for each notification kind, and what happens to a hold if the
+session is abandoned. **Do not dispatch on §4.1 prose alone.**
+
+**Done when (draft, needs the design above first):** starting a focus session
+holds Command Center's own notifications; the Focus Mode header shows a live
+count ("6 held · released at your break"); ending the session or reaching a
+break releases them in one batch; nothing is dropped; and a crash or tab close
+releases the hold rather than stranding it.
+
+### 9.6 F3 Ideal week — **SUBSTANTIALLY SHIPPED**, re-scoped to one gap · **AGENT-SAFE**
+
+Do not carry "ideal week" as unbuilt work — see the §7 F3 note for the shipped
+inventory (migration `98_gtd_day_templates.sql`, settings round-trip, editor,
+grid render, packer honouring, 2 unit tests). **Recommendation: strike
+"ideal week" from the WS-21 row title** and carry only the named gap.
+
+**Remaining gap — done when:** a `kind='focus'` themed window that goes unused
+is visible as such (today an unfilled focus window is indistinguishable from
+empty time), and the weekly view rolls up template adherence — "your Mon-AM deep
+work window took admin work 3 weeks running". Everything else about ideal week
+is done.
+
+### 9.7 F3 Mobile timeline · **AGENT-SAFE**
+
+**Done when:** on a viewport under the `md` breakpoint the day view defaults to
+a vertical agenda journey (done above the now-marker, upcoming below, breaks as
+beads), the hour grid stays one toggle away, and the toggle persists like the
+existing list/board toggle.
+
+### 9.8 F3 AI breakdown-on-drop · **AGENT-SAFE** · depends on §9.1 (multi-block)
+
+**Done when:** dropping a task with `time_estimate_mins > 90` (or no estimate
+and a long title) offers "split into sessions?"; accepting creates **multiple
+blocks** for the one task with per-session estimates; declining is remembered
+for that item.
+> **EVAL-LOCKED:** `propose()` / `propose_with_llm()` in
+> `apps/services/gateway/gateway/routes/tasks/ai.py` are locked by the golden
+> eval — do not mutate them. Add a new function.
+
+### 9.9 F3 Weekly review surface · **AGENT-SAFE, but NOT owned here**
+
+`work_plan.md` WS-18 owns the GTD Weekly Review and its 2026-08-02 audit ruled
+it **NO-GO** (`task_manager_app.md` §9.2 is a bare checkbox; `gtd_reviews.summary`
+is untyped JSONB). The calendar's contribution is only the *recurring ritual
+block + planned-vs-actual/roll-over/focus-hours rollup*. **Do not dispatch a
+weekly review from this doc** — it must follow WS-18's JSON contract once that
+exists.
+
+### 9.10 F3 Top-5 outcomes (Horizons) · **DO NOT DISPATCH**
+
+See the ownership-collision warning in §4.7. Needs a `work_plan.md` §4
+single-owner decision.
+
+### 9.11 F3 External sync · **OWNER-GATE**
+
+Canonical done-when: `calendar_timeboxing.md` §13 (P4). Verified state
+2026-08-03: `calendar_accounts` **does not exist** (no migration, no code —
+the only matches are three comments in
+`apps/services/gateway/gateway/routes/tasks/calendar.py`),
+`GET /tasks/calendar/accounts` returns `[]` (`calendar.py:44-50`), and
+`POST /tasks/calendar/sync` raises **501** (`calendar.py:53-64`, the raise at
+`:60-64`).
+
+> **OWNER-GATE — credential requirement:** clause 1 is *"a `calendar_accounts`
+> row can be created through a real OAuth connect flow"*. That requires
+> **Google Calendar and/or Microsoft Graph OAuth client credentials
+> (client id + secret + redirect URI) provisioned on the VPS** and registered in
+> the Integration Registry. An agent cannot obtain, install or verify these.
+> **This gate is currently unregistered in `work_plan.md` §6 — register it.**
+
+### 9.12 Verify
+
+```
+cd workbench/control_plane && npx tsc --noEmit && npm test    # vitest
+```
+
+```
+uv run pytest tests/unit/test_calendar_planner.py \
+              tests/unit/test_email_calendar_context.py \
+              tests/unit/test_tasks_gtd.py
+```
+
+**Name the files. Never run `pytest tests/unit -k calendar`** (the form this
+section carried until 2026-08-03) — `-k` still *collects* the whole directory,
+and whole-directory collection hangs on the Windows dev box. The named-file
+form is the only safe one.
+
+Measured 2026-08-03 on this branch:
+- the two calendar files alone → **28 passed in 1.16s**;
+- all three files → **157 passed in 166.79s** (`test_tasks_gtd.py` is the slow
+  one — budget ~3 minutes, it is not hung).
+
+Coverage: `test_calendar_planner.py` = packer geometry (free intervals, buffers,
+energy windows, lunch carve-out, day-template block/focus windows, weekday
+filter); `test_email_calendar_context.py` = the email-side calendar context;
+`test_tasks_gtd.py` = the GTD API surface.
+
+### 9.13 Recorded, not fixed
+
+- **The reminders/notifications deferral went invisible.** `calendar_ux_review.md`
+  §"P1 — mobile & reminders" and its ranked list item 4 carry *"block
+  reminders/notifications when a block starts… without reminders, blocks are
+  ignored"*. The word "reminder" appears in **no other calendar spec** and in no
+  `work_plan.md` row, so the deferral was silently dropped rather than decided.
+  It is a real open item and it shares a surface with the Focus Shield (§9.5) —
+  both need the same notification primitive. Whoever specs the Shield should
+  decide whether reminders ride along or are explicitly killed.
+- **This spec family has four docs, not two.** `calendar_focus_os.md`,
+  `calendar_timeboxing.md`, `calendar_ai_review.md` and `calendar_ux_review.md`.
+  The WS-21 row names two; `calendar_ai_review.md` is cited by three migration
+  headers (`92`, `97`, `98`) yet is referenced by no other spec, no `work_plan.md`
+  row and no `ai-company-brain/AGENTS.md` index entry — and **the specs index in
+  `ai-company-brain/AGENTS.md` has no calendar row at all.** Cross-deferral
+  between focus_os and timeboxing is clean (§5 here is canonical for
+  `gtd_time_blocks`; `calendar_timeboxing.md` §13 is canonical for P4); the other
+  two docs are unregistered.

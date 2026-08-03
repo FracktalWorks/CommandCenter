@@ -98,11 +98,11 @@ class PresenceRequest(BaseModel):
 # ---------------------------------------------------------------------------
 
 def _valid_subject(subject: str) -> bool:
-    """email | ``group:<slug>`` | ``org`` — the ``app_grants`` vocabulary.
+    """email | ``group:<slug>`` | ``org`` — the room participant vocabulary.
 
-    Identical to ``routes/apps/grants.is_valid_subject`` on purpose. One
-    vocabulary across sharing surfaces means a person who has shared a Custom
-    App already knows how to share a room (org_access_control.md §10.2.1).
+    **NOT** identical to ``routes/apps/grants.is_valid_subject``: that one is
+    ``email | agent:<name> | agents:*`` and rejects ``org`` (``grants.py:77``).
+    Rooms alone honours ``group:`` — see ``tenancy_and_visibility.md`` §3.2.
     """
     if subject == "org":
         return True

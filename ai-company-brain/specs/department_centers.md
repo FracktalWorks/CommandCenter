@@ -2,6 +2,19 @@
 
 **Status:** Phase A shipped (UI scaffold + feature gating) — **but no Center is reachable by anyone on `main` today, owner included**: the `center.*` feature-vocabulary fix and its invariant tests are on the open branch `ws-13-centers-feature-vocabulary` (2026-08-03), **unmerged**. §2 records the defect and the registration checklist that prevents its recurrence. Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-03 · **Owner:** vjvarada
 
+**Verified against code:** 2026-08-03 (WS-14 doc remediation, on `ws-14-doc-remediation`
+off `bebbd924`). Scope of that pass: **§3 Phase C only** — all four bullets were audited
+against the tree, three were found to rest on things that do not exist, and each now
+carries acceptance and an **AGENT-SAFE / OWNER-GATE** label. §1, §2 and Phases B/D/E were
+not re-measured in that pass and keep their earlier stamps. Findings, so no reader has to
+re-derive them: `email_account_member` **exists nowhere in the repo** (0 hits across
+`*.sql` and `*.py`); the seven agents the team-instancing bullet pointed at
+(`sales`, `billing`, `delivery`, `startup-coach`, `triage`, `reconciler`, `strategy`)
+**do not exist** — `apps/agents/` holds exactly six others; and `pending_actions`
+(`infra/postgres/66_pending_actions.sql:13-38`) has **no column naming the requesting
+member, their group, or a Center**, so per-Center approvals is a schema change behind an
+open owner question, not a filter.
+
 The commitment this document records: **CommandCenter stays one deployment, and
 departments get Centers — scoped projections of the same platform, never
 separate systems.** A "Sales Center" is the sales team's slice of the one
@@ -137,19 +150,192 @@ shippable and folds in the pending items from earlier plans it depends on.
   read view here, not a parallel store.
 
 ### Phase C — Scoping deepens (org_access Phase 2, applied per Center)
-- **Tasks team slice**: `/tasks` scoped to the group's projects — the first
-  (app + scope) sub-app, proving rule 2.
-- **Shared mailboxes**: `email_account_member` by group (research §16.7);
-  "this mailbox belongs to the Sales team" ownership surfaced in UI.
-- **Team-instanced agents**: sales/billing/delivery per the `agent-kinds.md` §6
-  roster — `sharing.instancing: team`, memory `agent:<name>#t:<slug>`, blob
-  instance `t:<slug>`. The blob/memory substrate is live (mig 136 + run-path
-  wiring), but the **`dynamic_agents` sharing columns do not exist yet** —
-  agent-kinds' planned migration was never built. This phase includes that
-  migration (next free number at build time), per `work_plan.md` D3: columns
-  now, derived from `agent_defs` manifests when agent-architecture Phase A lands.
-- **Per-Center approvals routing**: approvals inbox filterable by originating
-  group (org_access open Q2).
+
+Board row: `work_plan.md` §2 **WS-14**. The binding mechanism for every bullet below is
+`tenancy_and_visibility.md` §3.2: **extend the shipped `email | group:<slug> | org`
+subject vocabulary; do not invent a second one.** Each bullet carries its gate label per
+the agent-ready spec contract item 7.
+
+#### C1 — Tasks team slice · **AGENT-SAFE** · ~1 PR + 1 migration
+
+`/tasks` scoped to the group's projects — the first (app + scope) sub-app, proving §1
+rule 2. This is the bullet that has read "`/tasks` scoped to the group's projects" and
+nothing else for weeks; that is not testable, so it is written out here.
+
+**The grant table.** `tenancy_and_visibility.md` §4.1 makes the call and records both
+options: **`gtd_project_grant (project_id, subject, role, granted_by, created_at)`**, a
+`gtd_*`-local table with a real FK onto `gtd_projects` — not a polymorphic
+`object_grants`. It is a `DECISION (agent-proposed, owner may overrule)`; read §4.1's
+reasoning before overruling it, and if it is overruled, the alternative is its own
+ticket that *also* migrates `app_grants`, never a side effect of this slice.
+
+**The migration.** One new file in `infra/postgres/`, at **the next free number resolved
+at build time by listing that directory** — never a number copied out of a document
+(R1). Idempotent `CREATE TABLE IF NOT EXISTS`, per the conventions in
+`infra/postgres/README.md`.
+
+**The read path.** "Mine" ∪ "granted to a group I'm in". Measured blast radius:
+**27 `user_id = :` predicates in `apps/services/gateway/gateway/routes/tasks/items.py`**
+(re-count before starting: `rg -c "user_id = :" apps/services/gateway/gateway/routes/tasks/items.py`).
+Resolve the caller's group set **once per request**, mirroring
+`gateway/rooms.py:181-199`'s `my_groups` — not once per predicate, and not per row.
+
+**Done when:**
+
+1. A member of group X, who does not own project P, can read P and its items when a
+   `gtd_project_grant` row exists with `subject = 'group:X'`.
+2. A member of **no** group containing X gets **`404`, not `403`**, on the same project
+   and on every item under it. This matches the shipped convention — see the probe at
+   `routes/memory.py:237-240` and its comment: *"404, not 403: whether a memory id
+   exists elsewhere is itself something the caller should not be able to probe for."*
+   A `403` here would leak the existence of another Center's project.
+3. Revoking the grant row restores the `404` on the next request, with no cache to
+   invalidate.
+4. A grant row with a subject outside `email | group:<slug> | org` is rejected at write
+   time by the **shared** validator, not a copy of it.
+5. Every one of the 27 `user_id` predicates is either widened through the union path or
+   explicitly justified in the PR as owner-only (e.g. a write path). "I widened the list
+   endpoint" is not this criterion.
+6. `uv run ruff check apps/services/gateway/gateway/routes/tasks/items.py` is clean.
+   Do **not** claim `uv run ruff check .` clean — it reports ~1983 pre-existing errors
+   on this tree and is not a signal.
+
+**Verification** — *name the test files; never `uv run pytest tests/unit/` as a
+directory, it hangs against this box's live DB*:
+
+```
+uv run pytest tests/unit/test_tasks_gtd.py tests/unit/test_tasks_archive_upstream.py \
+              tests/unit/test_admin_groups.py tests/unit/test_org_access_control.py -v -rs
+uv run ruff check apps/services/gateway/gateway/routes/tasks/items.py
+```
+
+Those four files exist and are hermetic today — none carries a `skipif` guard (verified
+2026-08-03), so a new grant-path test added beside them **cannot skip green**, unlike the
+room/authority files (`tenancy_and_visibility.md` §7's warning). Re-list `tests/unit/`
+at dispatch rather than trusting these names; there is no `test_tasks_items.py`.
+
+#### C2 — Shared mailboxes · 🔴 **NOT DISPATCHABLE — no owner in fact**
+
+*(Gate label, per contract item 7: it is neither AGENT-SAFE nor OWNER-GATE, because
+there is nothing to dispatch. Nobody may pick this up until the doc action below lands.)*
+
+**Struck from Phase C as an actionable bullet, 2026-08-03.** It read: *"`email_account_member`
+by group (research §16.7); 'this mailbox belongs to the Sales team' ownership surfaced in
+UI."* Two verified problems:
+
+- **`email_account_member` is vapour.** Zero hits repo-wide across `*.sql` and `*.py`
+  (measured 2026-08-03). It was cited as Phase-2 *content* by this spec and by
+  `org_access_control.md:311` in a way that reads as though it shipped. It never
+  existed. Nobody should cite it again as an existing table; if the work is built, the
+  table is designed then, at the next free migration number resolved at build time.
+- **The assigned owner does not mention it.** `work_plan.md` §4 assigns shared mailboxes
+  to `email_app_master_plan.md`, "sequenced by WS-14" (D5). That spec contains **zero**
+  occurrences of the phrase "shared mailbox" (measured 2026-08-03). Dispatching against
+  it would send an implementer to a spec with nothing to implement.
+
+**Where it really lives:** the storage shape is settled in
+`tenancy_and_visibility.md` §5 — *a grant on the `email_accounts` **row**, not on
+messages* — and `email_accounts.user_id` (`17_email_accounts.sql:16`) is the column it
+widens. **The next action is not code: it is for `email_app_master_plan.md` to gain a
+section for it, or for `work_plan.md` §4 to reassign the owner.** Until one of those
+happens this bullet is not dispatchable and no agent should treat it as such.
+WS-14 still *sequences* it (D5 is unchanged); WS-14 does not implement it.
+
+#### C3 — Team-instanced agents · **AGENT-SAFE**, but read the traps first · ~1 PR
+
+**Rewritten 2026-08-03 — the old bullet asked for agents that do not exist.** It sent
+the implementer to the `agent-kinds.md` §6 roster for `sales` / `billing` / `delivery`
+(`docs/multiplayer/agent-kinds.md:289-291`). **None of the seven aspirational agents named
+in that roster exists.** `apps/agents/` holds exactly six, and they are different ones:
+`agent-apis-config`, `agent-app-builder`, `agent-email-assistant`, `agent-orchestrator`,
+`agent-task-manager`, `agent-whatsapp-assistant`. The roster is aspirational; it is not a
+work list.
+
+> ⚠️ **Trap — do not "align the agents to the roster".** The §6 roster assigns
+> `task-manager`, `orchestrator` and `app-builder` **personal** instancing
+> (`agent-kinds.md:288`, `:295`, `:296`). All three shipped `config.json` files say
+> `"instancing": "shared"`. Flipping them to match the roster would **silently
+> re-partition three live agents' memory and blob store**: `instance_key()` would start
+> returning `u:<email>` instead of `''`, so `memory_scope()` moves from `agent:<slug>` to
+> `agent:<slug>#u:<email>` and `blob_instance()` likewise — every existing memory and
+> blob becomes unreachable from the running agent, with no error. That is a data
+> migration wearing a config change's clothes, and `agent-kinds.md` §6 itself prescribes
+> the quarantine-then-review procedure for it (shipped as migration 137). **It is not in
+> this slice, and it is not AGENT-SAFE.**
+
+> ⚠️ **Trap — the writer already exists.** `tenancy_and_visibility.md` §5 used to say
+> `t:<team>` "exists but nothing writes it". That was false and is corrected there:
+> `AgentManifest.instance_key()` returns `f"t:{self.sharing.team}"` for
+> `instancing == "team"` (`acb_skills/manifest.py:242-246`), live on four non-test call
+> sites. **What is missing is a config that asks for it, not code that produces it.**
+
+**What this slice actually is, in order:**
+
+1. **Decide which of the six existing agents (if any) should be team-instanced, and
+   record it here.** The honest current answer is *possibly none*: two are already
+   `personal` (email, whatsapp) and correctly so, and the four `shared` ones
+   (apis-config, app-builder, orchestrator, task-manager) have no team boundary to draw
+   yet because no team-owned agent has been built. A team-instanced agent becomes real
+   when a Center gets its own agent — which is a new agent, not a re-flag of an existing
+   one. **This is the first thing the ticket writes down**; it is a design note, and it
+   is AGENT-SAFE to produce, but changing any existing agent's `instancing` is not.
+2. **Reconcile the three contradictions** between `agent-kinds.md` §6 and the shipped
+   `config.json` files, in the roster table itself. Either the roster is annotated as
+   aspirational (preferred — it is an RFC), or a migration plan is written. Do not leave
+   a table that a future reader will implement.
+3. **The `dynamic_agents` sharing columns (D3).** Re-verified 2026-08-03:
+   `15_dynamic_agents.sql:7-20` carries no owner, visibility or sharing column, and a
+   repo-wide grep finds none — so this migration is genuinely WS-14's, at **the next
+   free number resolved at build time** (R1). Per D3: columns now, derived from
+   `agent_defs` manifests when agent-architecture Phase A lands.
+4. **Answer, in the PR, whether that migration is additive to the live `config.json`
+   path or replaces it.** `work_plan.md:149-153` (the D3 amendment) already says
+   instancing ships via `config.json` today; the `agent_architecture.md` body does not
+   say so, and this spec did not either. The default reading is **additive** —
+   `dynamic_agents` rows describe GitHub-registered agents, `config.json` describes
+   first-party ones, and `AgentManifest.from_config()` keeps reading the latter — but the
+   ticket must state it rather than leave two stores with no precedence rule.
+
+**Done when:** the roster contradictions are resolved in `agent-kinds.md`; the sharing
+columns exist at a build-time-resolved migration number; the additive-vs-replacing
+question is answered in prose in this spec; and **no existing agent's `instancing` value
+changed** (grep the six `config.json` files before and after — four `shared`, two
+`personal`, unchanged).
+
+**Verification:**
+
+```
+uv run pytest tests/unit/test_agent_paths.py tests/unit/test_org_access_control.py -v -rs
+rg -n '"instancing"' apps/agents/*/config.json     # expect 4 shared + 2 personal
+```
+
+#### C4 — Per-Center approvals routing · 🔴 **OWNER-GATE (an OWNER-DECISION)** — do not dispatch
+
+**Re-stated honestly 2026-08-03.** It read: *"approvals inbox filterable by originating
+group (org_access open Q2)."* That describes a UI filter. It is not one, for two
+verified reasons.
+
+**First, the question is open, verbatim.** `org_access_control.md:405` Q2:
+
+> *"**Approval routing.** When a member lacking `admin:*` triggers an action needing
+> approval, who is asked? Phase 1 routes to anyone with `feature:approvals`; per-module
+> approvers is a Phase 2 question."*
+
+Who is asked is a policy call about who can approve spending and outward writes on
+another Center's behalf. No agent may take it. **OWNER-GATE.**
+
+**Second, there is nothing to filter on.** `infra/postgres/66_pending_actions.sql:13-38`
+defines the whole row: `id`, `actor`, `action`, `target`, `payload`, `authority`,
+`destructive`, `disposition`, `status`, `result`, `reviewed_by`, `reviewed_at`,
+`created_at`. There is **no requesting member, no group, and no Center** — `actor` is the
+proposing *agent* (the column comment's own example is `"agent:sales"`), not the human
+behind it. A group cannot be derived from any existing column.
+
+**So the ticket is "answer Q2, then add a column", not "add a filter".** In that order:
+the column's shape (a `requested_by` member email? a `center` slug? both?) follows from
+the answer, and adding one first would bake in a routing model nobody chose. When Q2 is
+answered, the migration goes at the next free number resolved at build time (R1), and
+the filter is the small part.
 
 ### Phase D — Dashboards and the Company Center
 - **Center dashboards**: per-department rollup pages replacing the "planned"

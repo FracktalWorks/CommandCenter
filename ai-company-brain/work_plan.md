@@ -5,7 +5,13 @@ WS-11, WS-12, WS-21 swept to match their rewritten specs; D10 records two owner
 calls. **Second pass the same day:** D11 + D12 record the tenancy boundary and
 the visibility model from `specs/tenancy_and_visibility.md`; WS-14 unblocked;
 WS-13 gains the verified "Centers are unreachable by anyone" finding; §2 gains
-the three app-by-app exceptions) · **Owner:** vjvarada
+the three app-by-app exceptions. **Third pass the same day — WS-14 doc
+remediation:** WS-14 was audited NO-GO on 7 of 7 contract points and is now
+re-scoped onto four lettered bullets in `department_centers.md` §3 (C1 🟢 · C2
+struck, ownerless · C3 🟢 narrow · C4 🔴 owner-decision); **WS-14a is minted** for
+TV-1, which passed the contract but had no board row; six stale `rooms.py` anchors
+corrected in D11, D12 and the WS-14 row; §4's shared-mailbox and per-Center-approvals
+rows re-stated against measurement) · **Owner:** vjvarada
 **Purpose:** the single sequencing document from which independent agents are
 dispatched. Content lives in the owning specs; *this* doc owns ordering,
 ownership, and the rules that make a spec executable without questions.
@@ -111,7 +117,8 @@ looks. Full statements live in `FOUNDATION_BUILDOUT_CHECKLIST.md`.
 | WS | Workstream | State | Next / notes |
 |---|---|---|---|
 | WS-13 | **Centers B — groups become real** (groups admin UI, seed six groups, People directory read view) | 🟡 | Groups admin UI + six-group seed **built 2026-08-01, pending owner review** (`routes/admin/groups.py`, `/settings/groups`, seed migration; see `department_centers.md` Phase B update). People directory read view still open. The unlock for everything below. Single owner: Centers B (groups spec §6 step 5 and org_access Phase 2 are mirrors). ✅ **FIXED 2026-08-03 (`ws-13-centers-feature-vocabulary`): the feature-vocabulary half of this row is closed.** `acb_auth.permissions.FEATURES` now carries the six `center.*` slugs in migration-140 sort order, two invariant tests in `tests/unit/test_org_access_control.py` now fail loudly if one goes missing — `::test_every_center_has_a_feature_slug` (anchored on a literal `EXPECTED_CENTER_SLUGS`, because the first version *derived* the expectation from `CENTER_GROUP_SLUGS` and therefore went vacuous when that tuple was emptied) and `::test_centers_registry_matches_the_feature_vocabulary` (**parses** `lib/centers.ts` and pins it both ways to `FEATURES`, so the documented "add a Center" recipe can no longer reproduce this bug with a green suite). `department_centers.md` §2 now carries the five-place registration checklist. And the admin role editor groups its chips by `feature_catalog.category` with a real "Centers" heading (`settings/roles/page.tsx`, `Feature.category` union widened in `members/types.ts`). No migration was needed — 140 already widened the CHECK. **Separate, still open:** `workbench/control_plane/src/app/page.tsx:11-12` renders `NAV_SECTIONS` with **no** access filter, so the home grid still advertises every pane (Centers included) to every viewer while the sidebar correctly hides them — recorded in `workbench/AGENTS.md`. The finding as originally written, for the record: **Centers were unreachable by ANYONE, including the owner.** `/auth/me` returns `"features": list(access.allowed_features())` (`routes/admin/me.py:84`), and `allowed_features()` iterates the **hardcoded Python tuple** `acb_auth.permissions.FEATURES` (`:64-81` as the tuple then stood; `:73-101` after the fix) — sixteen slugs, **no `center.*` entry**. The frontend gates on exactly those slugs: `lib/access.ts:66` maps `/centers/<slug>` → `c.feature` (= `center.sales`…), `canUseFeature` is `access.features.includes(slug)` (`:118`), and `visibleSections` drops any pane whose feature is absent — **and drops the whole section when it empties** (`lib/nav.ts:229-233`). Net effect: the Centers section renders in neither nav, and typing `/centers/sales` hits `AccessGate`'s "You don't have access to this". Migration `140_center_features.sql` **does** seed six `feature_catalog` rows, but `allowed_features()` never reads that table — so migration 140's own comment ("owners and admins see all Centers via their `feature:*` baseline") is **false as written**: an owner holding `*` still gets an empty set, because the wildcard is only ever evaluated against the sixteen literals. The fix taken was the vocabulary one (`FEATURES` gains the Center slugs) plus the invariant test; making `allowed_features()` read `feature_catalog` was rejected — `permissions.py` is pure and does no I/O by design. |
-| WS-14 | **Centers C — scoping deepens** (tasks team slice, shared mailboxes, team-instanced agents, per-Center approvals) | 🟢 **unblocked 2026-08-03 (D12)** | **The blocker is answered.** This row read "blocked on what makes a project a team's project" for weeks; **D12** answers it: **a project belongs to a team when an explicit grant row carries a `group:<slug>` subject** — *not* derived from assignees, *not* an owning column. Both alternatives and why they were rejected are recorded in `specs/tenancy_and_visibility.md` §4 (`DECISION (owner-answered 2026-08-03)`); §5's gap table is the app-by-app map, and §3.2 is binding on the mechanism — **extend the existing `email \| group:<slug> \| org` subject vocabulary, do not invent a second one.** ⚠️ **The primitive is narrower than previously claimed:** only **rooms** honour `group:` today (`routes/rooms.py::_valid_subject` `:100-111`, expanded at `gateway/rooms.py:163-179`). `app_grants` does **not** — `routes/apps/grants.py::is_valid_subject` (`:68-85`) is `email \| agent:<name> \| agents:*` and explicitly **rejects `org`** (`:77`); the "identical to grants.is_valid_subject" docstring at `rooms.py:103` is false and should be corrected by whichever ticket touches it first. **What it can now build, in order:** (1) the tasks team slice — a project grant table + a read path unioning "mine" with "granted to a group I'm in" (blast radius: 27 `user_id` predicates in `routes/tasks/items.py`); (2) the `dynamic_agents` sharing columns per D3 — re-verified 2026-08-03, `15_dynamic_agents.sql:7-20` has **no** owner/visibility/sharing column and a repo-wide grep finds none, so this migration is genuinely WS-14's, at the **next free number resolved at build time** (R1); (3) `group:` on the Custom-Apps grant subject, the cheapest conversion since `apps.visibility` already carries the three tiers. Shared mailboxes stay `email_app_master_plan.md`'s implementation, sequenced here (D5). **Not blocked on WS-8 Phase A** (D3 amendment) and **not** waiting on WS-13's UI — but note WS-13's new finding: the Center *surfaces* are currently unreachable, so scoping work will need that one-line feature-vocabulary fix to be demonstrable. |
+| WS-14 | **Centers C — scoping deepens** (tasks team slice, shared mailboxes, team-instanced agents, per-Center approvals) | 🟢 **unblocked 2026-08-03 (D12)** | **The blocker is answered.** This row read "blocked on what makes a project a team's project" for weeks; **D12** answers it: **a project belongs to a team when an explicit grant row carries a `group:<slug>` subject** — *not* derived from assignees, *not* an owning column. Both alternatives and why they were rejected are recorded in `specs/tenancy_and_visibility.md` §4 (`DECISION (owner-answered 2026-08-03)`); §5's gap table is the app-by-app map, and §3.2 is binding on the mechanism — **extend the existing `email \| group:<slug> \| org` subject vocabulary, do not invent a second one.** ⚠️ **The primitive is narrower than previously claimed:** only **rooms** honour `group:` today (`routes/rooms.py::_valid_subject` `:100-111`, expanded at `gateway/rooms.py:181-199` — **corrected 2026-08-03 from the stale `:163-179`**, which is the `chat_session` SELECT, not the group join; the `SELECT g.slug` is at `:192`). `app_grants` does **not** — `routes/apps/grants.py::is_valid_subject` (`:68-85`) is `email \| agent:<name> \| agents:*` and explicitly **rejects `org`** (`:77`); the "identical to grants.is_valid_subject" docstring at `rooms.py:103` is false and should be corrected by whichever ticket touches it first. **What it can now build, in order:** (1) the tasks team slice — a project grant table + a read path unioning "mine" with "granted to a group I'm in" (blast radius: 27 `user_id` predicates in `routes/tasks/items.py`); (2) the `dynamic_agents` sharing columns per D3 — re-verified 2026-08-03, `15_dynamic_agents.sql:7-20` has **no** owner/visibility/sharing column and a repo-wide grep finds none, so this migration is genuinely WS-14's, at the **next free number resolved at build time** (R1); (3) `group:` on the Custom-Apps grant subject, the cheapest conversion since `apps.visibility` already carries the three tiers. Shared mailboxes stay `email_app_master_plan.md`'s implementation, sequenced here (D5). **Not blocked on WS-8 Phase A** (D3 amendment) and **not** waiting on WS-13's UI — but note WS-13's new finding: the Center *surfaces* are currently unreachable, so scoping work will need that one-line feature-vocabulary fix to be demonstrable. ⚠️ **Re-audited 2026-08-03 → the row was NOT dispatchable as written; `department_centers.md` §3 Phase C was rewritten and this row now points at four lettered bullets, only two of which are work.** **C1 tasks team slice — 🟢 AGENT-SAFE**, and it is the whole of the near-term value: grant table decided (`tenancy_and_visibility.md` §4.1, `gtd_project_grant`, agent-proposed and overrulable), union read path, migration at the next free number resolved at build time, and a **404-not-403** assertion for the non-member (the shipped convention — `routes/memory.py:237-240`). **C2 shared mailboxes — struck, no owner in fact** (see §4). **C3 team-instanced agents — 🟢 AGENT-SAFE but narrow:** the seven agents the old bullet named do not exist, and `t:<team>`'s *writer already ships* (`acb_skills/manifest.py:242-246`), so the slice is the `dynamic_agents` columns plus reconciling `agent-kinds.md` §6 against three shipped `config.json` files — **changing any existing agent's `instancing` is a silent memory/blob re-partition and is out of scope.** **C4 per-Center approvals — 🔴 OWNER-DECISION** (org_access Q2 open; `pending_actions` has no member/group/Center column). |
+| **WS-14a** | **Tenancy TV-1 — the three `org_group` slug-only joins** *(minted 2026-08-03)* | 🟢 **AGENT-SAFE · 1 small PR** | Owning spec: **`specs/tenancy_and_visibility.md` §2**, which passes all seven contract points and had **no board row** until now — §4 assigned it to a spec, and the dispatch loop selects from §2, so the corpus's most dispatch-ready ticket was undispatchable. `org_group` is joined on **slug alone** at three sites; slug is unique only *within* an org (`UNIQUE (organization_id, slug)`, `138_…sql:49`), and **two of the three sit inside the session-authority intersection**, where a too-wide group *widens* access. Nothing leaks today (D11: one org), but these are wrong within one org too, which is why they survive D11. **Anchors, re-verified 2026-08-03 — the previously-published ones were wrong at `520476ab` and are corrected in the spec:** (a) `apps/services/gateway/gateway/rooms.py:181-199`, the `SELECT g.slug` at `:192` *(was `:170-179` = `if row is None` + the participant fetch)*; (b) `:368-403`, `SESSION_VISIBLE_SQL` opening at `:368` with the slug join at `:377` *(was `:332-340` = the tail of `resolve_room_access`'s return)*; (c) `packages/acb_auth/acb_auth/access.py:330-336`, `_GROUP_MEMBER_SQL` — **correct, unchanged**. ⚠️ **The spec's own "verified red" requirement was unsatisfiable and was repaired in the same pass:** §7 named `tests/unit/test_session_authority.py` and `tests/unit/test_rooms.py` as the extension point, and both open with `pytest.mark.skipif(not _db_ready(), …)` (`:33-51` and `:33-52`), so a fixture added there **skips green** with no Postgres. §2 done-when 2 now attaches red-first to a genuinely hermetic string assertion over the three queries (which requires lifting anchor a's inline SQL to a module constant — that extraction is part of the ticket), and done-when 3 requires quoting a `-v`/`-rs` run showing the DB-backed fixture `passed`, never `skipped`. Numbered **14a** rather than a fresh WS-n because it is the `org_group`-join half of the same subject-vocabulary surface WS-14 generalises; the two are independent PRs and either may land first. |
 | WS-15 | **Centers D — dashboards + Company Center** (Center dashboards, personal dashboard, weekly digest workflows, orchestrator org-memory fix per D4) | 🟡 WS-13 | Digest workflows double as `workflows_app.md` G1 launch metric — one artifact, both scorecards. |
 | WS-16 | **Centers E — AI budgets** (per-member caps at the LLM choke points; per-room degrade later) | 🟡 WS-6 | Subjects per D2. |
 
@@ -229,9 +236,15 @@ calls, taken and dated.
   doctrine alongside D12's. The one carve-out is **TV-1** (§2 of that spec): the
   three `org_group` joins that match on **slug alone** are wrong *within* one org
   too, two of them inside the session-authority intersection —
-  `gateway/rooms.py:170-179`, `:332-340`, `acb_auth/access.py:330-336`.
-  AGENT-SAFE, one small PR, with a two-org fixture that must be verified red
-  first. Owner: the new spec.
+  `gateway/rooms.py:181-199` (the `SELECT g.slug` at `:192`), `:368-403`
+  (`SESSION_VISIBLE_SQL` from `:368`, slug join `:377`), `acb_auth/access.py:330-336`.
+  *(The first two were published as `:170-179` and `:332-340`; both were wrong at
+  `520476ab` and were corrected 2026-08-03 — see `tenancy_and_visibility.md` §2. The
+  third was and is correct.)* AGENT-SAFE, one small PR, with a two-org fixture that
+  must be verified red first — **but see the board row for the skip-green trap that
+  made "verified red" unsatisfiable as originally written.** Owner: the new spec;
+  **board row: WS-14a**, minted 2026-08-03 (it had none, which is why it never
+  dispatched).
 - **D12 — Visibility is private → Center → org, plus ad-hoc groups by invite;
   and a project belongs to a team by an explicit `group:` grant.** *(owner call,
   2026-08-03; owning spec `specs/tenancy_and_visibility.md` §3–§4.)* The owner's
@@ -244,11 +257,14 @@ calls, taken and dated.
   `routes/rooms.py::_valid_subject` (`:100-111`) already accepts
   `email | group:<slug> | org` and `chat_session.visibility` is already
   `private|people|org`, with group membership expanded at read time
-  (`gateway/rooms.py:163-179`). **Correction to the claim that reached this
+  (`gateway/rooms.py:181-199` — corrected 2026-08-03 from the stale `:163-179`).
+  **Correction to the claim that reached this
   board:** `app_grants` does **not** share that vocabulary — `routes/apps/
   grants.py::is_valid_subject` (`:68-85`) is `email | agent:<name> | agents:*`
   and **rejects the literal `org`** (`:77`), with no `group:` case at all; the
-  docstring at `rooms.py:103` claiming the two are "identical" is **false**.
+  docstring at `rooms.py:103` claiming the two are "identical" was **false** and
+  was corrected 2026-08-03 (a docstring-only edit — the false claim was actively
+  misdirecting implementers of this very decision).
   Rooms is the only surface honouring `group:` today; the gap table in §5 of the
   spec is the app-by-app map. **"A project belongs to a team" = an explicit grant
   row carrying a `group:<slug>` subject** — *not* derived from assignees (access
@@ -257,16 +273,19 @@ calls, taken and dated.
   for). This is the semantic that has blocked **WS-14** for weeks; it is
   answered. **Standing review rule:** a new persisted user-facing surface
   declares its tier — it does not inherit one by accident. Two doctrines in one
-  codebase is what produced the Notes hole (being fixed separately in PR #346).
+  codebase is what produced the Notes hole — **PR #346 merged as `d2ef7fa0` on
+  2026-08-03**, so the Notes owner filter has landed
+  (`routes/notes/core.OWNED_MEETING_PREDICATE`) and a grant table is the remaining
+  work there; the spec's §3.3 and §5 rows were updated to match.
 
 ## 4. Single-owner registry (who owns duplicated work)
 
 | Work | Owner | Mirrors (link-only after §5) |
 |---|---|---|
 | Groups admin UI + seeding | **WS-13 / Centers B** | groups_sessions_authority §6.5 · org_access §8 Ph2 · multiplayer §4.5 |
-| Team-instanced agents | **WS-14 / Centers C** (mechanism per D3) | agent-kinds §8 · agent_architecture §6/§12A · memory_architecture §6.1 · groups §6.2 |
-| Shared mailboxes | **email master** (sequenced by WS-14) | org_access §8 Ph2 · groups §1 · research §16.7 |
-| Per-Center approvals routing | **WS-14** | org_access §9 Q2 |
+| Team-instanced agents | **WS-14 / Centers C3** (mechanism per D3) | `docs/multiplayer/agent-kinds.md` §6/§8 — **note the path: it is under `docs/multiplayer/`, not `ai-company-brain/specs/`**, and its §6 roster is a **design proposal, not a work list** (seven of its twelve agents do not exist; it contradicts three shipped `config.json` files — both annotated there 2026-08-03) · agent_architecture §6/§12A · memory_architecture §6.1 · groups §6.2 |
+| Shared mailboxes | ⚠️ **OWNERLESS IN FACT — do not dispatch** (measured 2026-08-03) | D5 assigns implementation to `email_app_master_plan.md`, sequenced by WS-14. That spec contains **zero** occurrences of "shared mailbox", and `email_account_member` — cited as Phase-2 content by `department_centers.md` and `org_access_control.md:311` — **exists nowhere in the repo** (0 hits in `*.sql` and `*.py`). D5's *sequencing* stands; its *ownership* is nominal. **Next action is a doc action, not a build:** either `email_app_master_plan.md` gains a section for it, or this row names a different owner. Recorded in `department_centers.md` C2. | org_access §8 Ph2 · groups §1 · research §16.7 |
+| Per-Center approvals routing | **WS-14 C4 — 🔴 OWNER-DECISION, not dispatchable** | `org_access_control.md:405` Q2 is open verbatim (*"who is asked? … per-module approvers is a Phase 2 question"*), **and there is nothing to filter on**: `infra/postgres/66_pending_actions.sql:13-38` carries no requesting member, no group and no Center (`actor` is the proposing *agent*). The ticket is "answer Q2, then add a column", never "add a filter" |
 | Cost attribution | **WS-6** (D1) | multiplayer §5.3/Ph4 · agent-kinds §9 Q4 · Centers D |
 | Budgets | **WS-16** (D2) | multiplayer §4.3/§5.3/Ph4 |
 | Digest workflows | **WS-15** (also scores workflows G1) | workflows_app §1.2 |
@@ -427,6 +446,14 @@ routing still earn their place now that steer ships (`docs/multiplayer/README.md
 none should be written until the owner decides; an agent asked to "finish
 multiplayer Phase 2" must refuse **this** part by name and may build only the
 S1 `subject:` slice ·
+**the per-Center approvals-routing decision (WS-14 C4)** — `org_access_control.md:405`
+Q2 (*"who is asked? … per-module approvers is a Phase 2 question"*) is a policy call
+about who may approve an outward write or a spend on another Center's behalf. Same
+shape as the floor-control gate below: **no acceptance exists for it and none should
+be written until the owner decides.** Registered 2026-08-03 because it read as a UI
+filter and was not one — `pending_actions` (`infra/postgres/66_pending_actions.sql:13-38`)
+carries no requesting member, no group and no Center, so the follow-on is "answer Q2,
+then add a column at the next free migration number" ·
 **the WS-10 `prefs`/`user` backfill APPLY** — running the classifier's output
 against live Mem0 personal memories (`docs/multiplayer/memory-clearance.md` §8 Q1:
 *"it should be a deliberate, communicated choice"*). The classifier itself and a

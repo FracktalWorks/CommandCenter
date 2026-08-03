@@ -1,7 +1,7 @@
 # Organization Access Control — implementation spec
 
 > **Status:** 🟢 Phase 1 shipped. **Multi-tenant user management now hands off to the multiplayer agent collaboration workstream — see [§10](#10-handoff-multiplayer-agent-collaboration).** §10.4's requested spec exists: [`groups_sessions_authority.md`](groups_sessions_authority.md) decides the group primitive, `chat_session_participant`, and the authority rule (intersection).
-> **Created:** 2026-07-29 · **Handed off:** 2026-07-29
+> **Created:** 2026-07-29 · **Handed off:** 2026-07-29 · **Verified against code:** 2026-08-03 (WS-14 doc remediation — §8 Phase 2 row and §9 Q2 only; the rest keeps its earlier stamps). That pass found **`email_account_member` does not exist** (0 hits repo-wide in `*.sql` and `*.py`) and that §9 Q2 gates `department_centers.md` Phase C4 — both annotated in place.
 > **Scope:** Turning the single-tenant deployment into a real multi-user organization: named members, roles, per-user feature/agent access, and one enforcement path the whole platform shares.
 > **Parent research:** [`multi_user_organization_research.md`](multi_user_organization_research.md) — the *why* and the long-horizon (SaaS, memory scoping, entity-graph RLS) design. This document is the *what we are building now*, and it deliberately implements a subset.
 > **Companion:** [`permissions_sandbox_b6.md`](permissions_sandbox_b6.md) (tool-level risk gating — orthogonal: that answers "may this *tool call* proceed", this answers "may this *person* reach this feature at all").
@@ -308,7 +308,7 @@ Deploy order makes fail-closed safe: `apply_migrations.sh` runs before the gatew
 | Phase | Content | State |
 |---|---|---|
 | **1** | Schema, permission engine, admin API, member/role/access UI, nav + route gating, agent-run gate | 🔄 this spec |
-| **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; `email_account_member` | 🔲 — in progress as Centers Phases B/C (`specs/department_centers.md` §3 + `work_plan.md` WS-13/WS-14); `org_group` shipped (mig 138), admin UI + scoping remain |
+| **2** | Modules/teams (research §5) — team-scoped visibility; shared mailboxes; ~~`email_account_member`~~ | 🔲 — in progress as Centers Phases B/C (`specs/department_centers.md` §3 + `work_plan.md` WS-13/WS-14); `org_group` shipped (mig 138), admin UI + scoping remain. ⚠️ **`email_account_member` is vapour — struck 2026-08-03.** It has **zero** occurrences repo-wide across `*.sql` and `*.py`; it was never built and this row's phrasing made it read as existing Phase-2 content. Do not cite it as a table. The settled shape for shared mailboxes is a grant on the `email_accounts` **row** (`17_email_accounts.sql:16` is the `user_id` it widens) using the `email \| group:<slug> \| org` vocabulary — `tenancy_and_visibility.md` §5. See also `department_centers.md` C2: the assigned owner (`email_app_master_plan.md`, per `work_plan.md` D5) contains **zero** occurrences of "shared mailbox", so this work has no dispatchable home until that spec gains a section or §4 reassigns it. |
 | **3** | Memory + credential scoping (research §7–§8) — the real seam-3 work | 🔄 authorization done (below); isolation deferred to BO-7 |
 | **4** | Entity-graph visibility + RLS safety net (research §9, §16.5) | 🔲 |
 | **5** | Consent records, access reviews, audit completeness (research §11.3) | 🔲 |
@@ -402,7 +402,12 @@ Two things keep the list honest, both tested: a `PUBLIC_ROUTES` entry matching n
 ## 9. Open questions
 
 1. **Agent visibility vs. runnability.** Phase 1 gates *running* an agent. Should a member also be unable to *see* that an agent exists? Listing is currently a weaker signal than running, but agent names leak org structure.
-2. **Approval routing.** When a member lacking `admin:*` triggers an action needing approval, who is asked? Phase 1 routes to anyone with `feature:approvals`; per-module approvers is a Phase 2 question.
+2. **Approval routing.** 🔴 **OWNER-DECISION — still open, and it gates work.** When a member lacking `admin:*` triggers an action needing approval, who is asked? Phase 1 routes to anyone with `feature:approvals`; per-module approvers is a Phase 2 question.
+
+   > **Annotated 2026-08-03 (WS-14).** `department_centers.md` Phase C4 ("per-Center approvals routing") depends on this question and cannot be dispatched until it is answered — that bullet is labelled **OWNER-DECISION** for this reason. Two facts an answerer should have:
+   >
+   > - **It is a policy call, not a UI call.** "Who may approve an outward write or a spend on another Center's behalf" is exactly the kind of thing an agent must not decide.
+   > - **There is nothing to route on today.** `infra/postgres/66_pending_actions.sql:13-38` is the complete row — `id`, `actor`, `action`, `target`, `payload`, `authority`, `destructive`, `disposition`, `status`, `result`, `reviewed_by`, `reviewed_at`, `created_at`. **No requesting member, no group, no Center.** `actor` is the proposing *agent* (its own column comment's example is `"agent:sales"`), not the human behind it, and no group is derivable from any existing column. So the follow-on ticket is "answer this, then add a column" — at the next free migration number resolved at build time (R1) — not "add a filter".
 3. **Departure.** A removed member's private apps, chat sessions, and agent workspaces currently persist unowned. Transfer-on-removal is unbuilt (research §13 Q4).
 4. **Guest scope.** Does `guest` ever need email or tasks, or is chat-plus-shared-apps the whole product surface for externals?
 5. **Custom role ceiling.** Clerk caps at 10. Unbounded custom roles tend to produce one role per person, which is what overrides are for.

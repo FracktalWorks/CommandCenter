@@ -38,8 +38,8 @@ import {
 } from "../lib/api";
 import { callRecordingUrl } from "../lib/types";
 import type { WaAccount, WaCall, WaCallDiagnostics } from "../lib/types";
-import { startCallAudio } from "../lib/callAudio";
-import type { CallAudioHandle, CallAudioState } from "../lib/callAudio";
+import { prepareCallAudio } from "../lib/callAudio";
+import type { CallAudioState, PreparedCallAudio } from "../lib/callAudio";
 
 /** Phases where the call is still going — drives polling and the hangup button. */
 const LIVE_PHASES = new Set([
@@ -121,7 +121,10 @@ export default function WhatsAppCallsPage() {
   const [audioState, setAudioState] = useState<CallAudioState>("idle");
   const [audioCallId, setAudioCallId] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
-  const audioRef = useRef<CallAudioHandle | null>(null);
+  const audioRef = useRef<PreparedCallAudio | null>(null);
+  /** Whether the attached call has appeared in a poll yet — see the teardown
+   *  effect. Without this, attaching races the poll and always loses. */
+  const seenAudioCallRef = useRef(false);
   // Starts at 0 so the first server render has no clock to mismatch on; the
   // poll below fills it in once mounted.
   const [now, setNow] = useState(0);
@@ -184,6 +187,13 @@ export default function WhatsAppCallsPage() {
     setBusy(true);
     setError(null);
 
+    // Mic FIRST, while the click's user activation is still valid, then
+    // ringback immediately — so pressing Call is audible straight away instead
+    // of silent until the far end answers. A refused mic doesn't block the
+    // call; it just means this leg is listen-only.
+    const prepared = await prepareAudio();
+    prepared?.ringback(true);
+
     const parts = raw
       .split(/[,\n]/)
       .map((p) => p.trim())
@@ -199,39 +209,70 @@ export default function WhatsAppCallsPage() {
 
     setBusy(false);
     if (!res.ok) {
+      // No call means nothing to ring for — don't leave a tone playing into a
+      // failure, and don't leave the mic open either.
+      stopAudio();
       setError(explainError(res.error ?? "The call couldn't be placed."));
       return;
     }
     setTarget("");
+
+    // Join the call's audio immediately, while it's still ringing. Waiting for
+    // a phase transition is what previously left the caller with no way in.
+    if (prepared && res.data?.call_id) {
+      await attachAudio(prepared, res.data);
+    } else if (prepared) {
+      prepared.ringback(false);
+    }
     void refresh();
   }
 
   const stopAudio = useCallback(() => {
     audioRef.current?.stop();
     audioRef.current = null;
+    seenAudioCallRef.current = false;
     setAudioCallId(null);
     setAudioState("idle");
     setMuted(false);
   }, []);
 
-  async function joinAudio(call: WaCall) {
-    setError(null);
+  const onAudioState = useCallback((s: CallAudioState, detail?: string) => {
+    setAudioState(s);
+    if (s === "idle" && detail) setError(detail);
+  }, []);
+
+  /** Open the mic + audio graph. Must run inside the click, before any await
+   *  on the network — getUserMedia needs the user activation. */
+  async function prepareAudio(): Promise<PreparedCallAudio | null> {
     stopAudio();
     try {
-      const handle = await startCallAudio({
-        accountId,
-        callId: call.call_id,
-        onState: (s, detail) => {
-          setAudioState(s);
-          if (s === "idle" && detail) setError(detail);
-        },
-      });
-      audioRef.current = handle;
-      setAudioCallId(call.call_id);
+      const prepared = await prepareCallAudio({ accountId, onState: onAudioState });
+      audioRef.current = prepared;
+      return prepared;
     } catch (e) {
       setAudioState("failed");
       setError(explainError(e instanceof Error ? e.message : String(e)));
+      return null;
     }
+  }
+
+  async function attachAudio(prepared: PreparedCallAudio, call: WaCall) {
+    try {
+      await prepared.attach(call.call_id);
+      seenAudioCallRef.current = false;
+      setAudioCallId(call.call_id);
+    } catch (e) {
+      prepared.ringback(false);
+      setAudioState("failed");
+      setError(explainError(e instanceof Error ? e.message : String(e)));
+    }
+  }
+
+  /** Manual re-join, for a call this page didn't place (or after leaving). */
+  async function joinAudio(call: WaCall) {
+    setError(null);
+    const prepared = await prepareAudio();
+    if (prepared) await attachAudio(prepared, call);
   }
 
   function toggleMute() {
@@ -241,11 +282,33 @@ export default function WhatsAppCallsPage() {
   }
 
   // A call that ended (or was hung up elsewhere) must not leave the mic open.
+  //
+  // Only act once the call has actually been SEEN in a poll. We attach the
+  // moment the call is placed, which is before the next poll lands — so
+  // treating "not in the list" as "ended" would tear the audio down
+  // milliseconds after connecting, every single time.
   useEffect(() => {
     if (!audioCallId) return;
     const still = calls.find((c) => c.call_id === audioCallId);
-    if (!still || !isLive(still)) stopAudio();
+    if (still) {
+      seenAudioCallRef.current = true;
+      if (!isLive(still)) stopAudio();
+      return;
+    }
+    // Vanished after we'd seen it — reaped or hung up elsewhere.
+    if (seenAudioCallRef.current) stopAudio();
   }, [calls, audioCallId, stopAudio]);
+
+  // Once the call is observably up, the local ringback has done its job. It
+  // also stops on the first real audio frame; whichever happens first wins,
+  // so a call that connects without media doesn't ring forever.
+  useEffect(() => {
+    if (!audioCallId) return;
+    const call = calls.find((c) => c.call_id === audioCallId);
+    if (call?.media_ready || call?.phase === "active") {
+      audioRef.current?.ringback(false);
+    }
+  }, [calls, audioCallId]);
 
   // Leaving the page mid-call is the other way to strand an open microphone.
   useEffect(() => () => audioRef.current?.stop(), []);
@@ -315,8 +378,8 @@ export default function WhatsAppCallsPage() {
       <div className="mb-3 flex items-start gap-2 rounded-xl bg-secondary px-3 py-2.5 text-[11px] leading-relaxed text-muted-foreground">
         <Headphones className="mt-0.5 h-3.5 w-3.5 shrink-0" />
         <span>
-          Once a call connects, press <b className="text-foreground">Talk</b> to
-          join with your mic and speakers. <b className="text-foreground">Use
+          Your mic and speakers join automatically when you place a call, so you
+          hear it ringing straight away. <b className="text-foreground">Use
           headphones</b> — echo cancellation is best-effort on this path, and
           without them the other person hears themselves. Every call is also
           recorded server-side and playable from <b>Recent</b>.
@@ -616,7 +679,7 @@ export default function WhatsAppCallsPage() {
                         ? "Mic…"
                         : audioState === "connecting"
                           ? "Joining…"
-                          : "Talk"}
+                          : "Join audio"}
                     </button>
                   )
                 ) : null}

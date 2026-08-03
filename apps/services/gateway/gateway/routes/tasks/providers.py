@@ -97,9 +97,12 @@ def _broker_enforced(action: str) -> bool:
     so the broker only audits + chokepoints them. Set the env var to
     ``1``/``all``/``on`` to queue every write, or to a comma-list of action names
     to queue specific ones. This is the kill-switch — flip it without a redeploy
-    (env var + service restart). NOTE: the queue path needs a persistent handler
-    to execute on approval (a follow-up); until then, enforcing queues a write
-    but it won't run until that lands.
+    (env var + service restart). Persistent handlers ARE registered at startup
+    (``tasks/broker_handlers.py``), so an approved queued write really executes.
+    ⚠️ NOT for every gated action: this class gates SIX action names but only
+    four have handlers, so approving a queued ``clickup.delete_task`` or
+    ``clickup.archive_task`` is refused and the row is marked ``failed``. Do not
+    turn this on before FOUNDATION_BUILDOUT_CHECKLIST §BO-1a and §BO-1b land.
     """
     import os
 

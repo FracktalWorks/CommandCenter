@@ -19,7 +19,11 @@ any behaviour change:
   :meth:`isolation_tier`, :meth:`resolve_tool_surface`) are the values the
   platform should compute from the manifest instead of from hardcoded names.
 
-**Nothing here is wired into the run path yet.**  It is deliberately
+**Partly wired: only** :meth:`AgentManifest.from_config` **and**
+:meth:`AgentManifest.instance_key` **are on the run path** (``executor.py``'s
+``_resolve_agent_instance`` and ``gateway/routes/workspace.py``'s
+``_agent_instance_for``); every other derived accessor still has zero production
+callers — see ``agent_architecture.md`` §12.1.  It is deliberately
 side-effect-free so ``tests/unit/test_agent_manifest.py`` can assert that the
 derived values match what the platform does today — which is what makes the
 later flip a provable no-op rather than a hopeful one.

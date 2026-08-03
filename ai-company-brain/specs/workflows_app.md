@@ -1,7 +1,8 @@
 # Workflows App — Project Plan (deterministic automation over the agent fleet)
 
-> **Product:** CommandCenter · **Feature:** Workflows app (`/workflows`) · **Updated:** 2026-07-30 · **Version:** 0.2
+> **Product:** CommandCenter · **Feature:** Workflows app (`/workflows`) · **Updated:** 2026-08-03 · **Version:** 0.3 · **verified against code on 2026-08-03**
 > **Status:** 🔄 Slices 1+2 built — data model (migration 132) + gateway API + MAF compiler/engine + `/workflows` visual editor + Module Studio + **Workflow Copilot (F14)** + **keyword capability search (F15; semantic → BO‑22)** + **event triggers (F10)** + **approval node with pause/resume via the Action Broker inbox (F11)** + **workflows as agent tools (F13)** + **run-history drill-in (F9 complete: a history row replays its recorded node results onto the canvas)** + **F1/F6 complete (gallery search + duplicate/delete, version rollback via the status-badge popover)** + **F3's logic vocabulary complete (wait node — inline under a minute, durable pause above it; approval and wait now both in the catalog/palette)**. All five trigger kinds live: manual, api, webhook, schedule, event. Engine semantics are locked by a golden trajectory eval (`evals/trajectories/test_workflow_engine_trajectory.py`, CI-blocking); orphaned `running` rows are swept to `failed` at gateway startup (paused runs survive — resume rebuilds from the pause snapshot). **R2 is mitigated (migration 134):** a published workflow whose unattended runs fail `AUTO_DISABLE_AFTER` times consecutively disables itself with a recorded reason, and `POST /{id}/enable` is the one-click way back.
+> **Slice 3 re-scoped 2026-08-03 (truth pass, §8.3).** The one-line Slice 3 asked for three things and **one of them is already shipped**: describe→generate→refine full-graph authoring landed as F14 (`39b1e17a`) and is **struck**. "Parallel fan-out" is also shipped (`engine/graph.py:17`; MAF's superstep scheduler routes it) — the unbuilt half is **fan-in/join**, restated as such. What genuinely remains is **fan-in/join (8.3b), loops (8.3c), and a template gallery (8.3a — nothing exists)**. Two owner decisions recorded the same day: Command Center is an **internal Fracktal tool** (§1.4) and **loops are approved** despite §11 R1 (§8.3c).
 > **Parent RFC:** [`docs/workflow-editor/README.md`](../../docs/workflow-editor/README.md) — stack selection (React Flow), the compile-to-MAF-Workflows decision, data model, editor UX, trigger taxonomy. Read it for *how*; this doc is *what, why, and why now*. Interactive mockup: `docs/workflow-editor/mockup.html`.
 > **Reference precedents:** [`task_manager_app.md`](task_manager_app.md) (app spec shape) · [`docs/app-workshop/README.md`](../../docs/app-workshop/README.md) §4.0 (the platform contract this app also enforces).
 > **Policy amendment:** ADR-028 (see `system_architecture.md`) amends ADR-014 and `project_plan.md` C-09 / §2 non-goals — see §10.
@@ -54,6 +55,8 @@ The missing quadrant is **deterministic + self-serve**: the ops owner defines th
 - **Not multi-tenant marketplace tooling.** Workflows are org-internal; sharing/templates beyond this org are Phase 4+. *(Clarification 2026-08-01: the org-internal template gallery is Slice 3 — this non-goal refers to cross-org marketplace sharing, not in-org templates.)*
 - **No autonomous outward writes.** Same rule as everywhere else: write-class integration actions require the approval node / Action Broker disposition until BO‑1 lands fully.
 
+**OWNER DECISION 2026-08-03 — Command Center is an internal Fracktal tool.** The team uses it; there are no external tenants and none are planned in this app's horizon. Scope is weighed accordingly: features whose only justification is *someone else's org* (template marketplaces, per-tenant template stores, sharing permissions on content) are out, and "one org, engineers in the room, ships with the code" is a legitimate answer to a storage or distribution question — see the §8.3a decision, which is decided on exactly that basis. This does **not** relax the platform contract (§3.2), the approval gates (G4), or capability checks (Q3): internal does not mean unguarded, it means un-multi-tenanted.
+
 ---
 
 ## 2. Feature set (prioritized)
@@ -90,7 +93,7 @@ The RFC §3 mapping table is the source of truth; summary of the seams this buil
 - **Agent invocation** — `call_agent` / orchestrator executor (`apps/services/orchestrator/`). The agent node is a thin adapter; agents remain code-authored.
 - **Integration actions** — the integrations registry in `packages/acb_skills` (13 registered services today: zoho-crm, clickup, gmail, gmail-send, smtp, google-sheets, apollo, serpapi, apify, instantly, anymailfinder, google-maps, litellm) resolves credentials at run time; nodes never see secrets (D4). Write-class actions dispatch through the Action Broker's handler registry so disposition/approval semantics are the broker's, not the engine's.
 - **Trigger plumbing** — gateway webhook receivers, ingestion normalizers, Redis activity feed; the workflows scheduler is the platform's first real cron loop (D6).
-- **HITL** — approvals inbox + `workflow_run_pause` snapshots; Action Broker disposition once BO‑1 wires the write path.
+- **HITL** — approvals inbox + `workflow_run_pauses` snapshots; Action Broker disposition once BO‑1 wires the write path.
 - **Streaming** — run events over the existing SSE relay pattern; runs appear in `/observability`.
 - **New**: the `workflow*` tables, the graph→MAF compiler, the node handler set, the module library + generator, and the `/workflows` UI.
 
@@ -113,7 +116,7 @@ Enforcement ladder (each rung independent): (1) the editor and Module Studio **r
 
 ### 3.3a Trigger durability (what survives a restart, and what does not)
 
-There is **no OS cron and no scheduler process**. A schedule is a `workflow_trigger` row (`config.cron`, `config.timezone`, `last_fired_at`); the *scanner* is one supervised asyncio loop in the gateway (30s). APScheduler's `CronTrigger` is used purely as an expression **parser** — importing a scheduler daemon would be the "second runtime" this design exists to avoid. Durability therefore comes from the row, not the loop: **the schedule is a database fact, the scanner is a stateless reader of it.**
+There is **no OS cron and no scheduler process**. A schedule is a `workflow_triggers` row (`config.cron`, `config.timezone`, `last_fired_at`); the *scanner* is one supervised asyncio loop in the gateway (30s). APScheduler's `CronTrigger` is used purely as an expression **parser** — importing a scheduler daemon would be the "second runtime" this design exists to avoid. Durability therefore comes from the row, not the loop: **the schedule is a database fact, the scanner is a stateless reader of it.**
 
 | Situation | Behaviour |
 |---|---|
@@ -139,7 +142,7 @@ An external caller must be given the **gateway's own** origin (`public_api_base_
 
 ### 3.3 Trigger model
 
-RFC §7 verbatim, plus one product rule: **all trigger kinds converge on one entrypoint** (`start_run`) that seeds `variables.trigger` with a typed payload and creates a `workflow_run`. Kinds: `manual`, `api`, `webhook` (per-workflow secret token URL), `schedule` (cron expression, croniter-driven asyncio loop), `event` (bindings against normalized ingestion events — the successor to `agent_registry.json.webhook_routes`). Durable queueing/backoff for high-volume event triggers is BO‑20's scope; v1 executes runs as supervised asyncio tasks in-process and says so honestly in run status.
+RFC §7 verbatim, plus one product rule: **all trigger kinds converge on one entrypoint** (`start_run`) that seeds `variables.trigger` with a typed payload and creates a `workflow_runs` row. Kinds: `manual`, `api`, `webhook` (per-workflow secret token URL), `schedule` (cron expression parsed by APScheduler's `CronTrigger` inside the gateway's supervised asyncio scan loop — **not croniter**, which is not a dependency of this repo; see §3.3a and D6), `event` (bindings against normalized ingestion events — the successor to `agent_registry.json.webhook_routes`). Durable queueing/backoff for high-volume event triggers is BO‑20's scope; v1 executes runs as supervised asyncio tasks in-process and says so honestly in run status.
 
 ### 3.4 Code modules — scope and the sandbox line
 
@@ -149,10 +152,10 @@ The v1 module runtime is **restricted-execution, not a sandbox**: AST-allowliste
 
 ## 4. Data model
 
-Migration `infra/postgres/132_workflows.sql` (next free number after `131_integration_memory_permissions.sql`). Tables per RFC §4 — `workflow`, `workflow_version`, `workflow_trigger`, `workflow_run` (+ `node_results`), `workflow_run_pause` — plus one addition:
+Migration `infra/postgres/132_workflows.sql` (next free number after `131_integration_memory_permissions.sql`). **Table names are plural** — corrected 2026-08-03 against `132_workflows.sql:27/45/56/70/94/107`, which is the authority; every singular form previously written here (`workflow`, `workflow_version`, `workflow_trigger`, `workflow_run`, `workflow_run_pause`, `workflow_module`) was wrong and would send a reader to a table that does not exist. The real set is `workflows`, `workflow_versions`, `workflow_triggers`, `workflow_runs` (whose per-node history is the `node_results` JSONB **column**, `:81` — not a table), `workflow_run_pauses` — plus one addition:
 
 ```
-workflow_module                  -- the org module library (Module Studio)
+workflow_modules                 -- the org module library (Module Studio)
   id (uuid, pk)
   name (unique per org), description
   language          text         -- 'python' (only value in v1)
@@ -164,9 +167,9 @@ workflow_module                  -- the org module library (Module Studio)
   created_by / created_at / updated_at
 ```
 
-`workflow.graph` is React-Flow-native JSON persisted verbatim (edit-model); `workflow_version.serialized` is the compiled flat DAG (run-model). Node schema and edge `sourceHandle` branching per RFC §4.
+`workflows.graph` is React-Flow-native JSON persisted verbatim (edit-model); `workflow_versions.serialized` is the compiled flat DAG (run-model). Node schema and edge `sourceHandle` branching per RFC §4.
 
-Migration `134_workflows_automation_health.sql` adds three columns to `workflow` for the R2 mitigation: `disabled_reason` / `disabled_at` (why it is off — written identically by a human hitting Disable and by the auto-disable policy) and `health_since` (the instant the failure streak is counted from; publish, rollback, and enable all stamp it). The streak itself is deliberately **not** a counter column — it is derived from `workflow_run` on demand, so it can never drift from the history a human reads, and one success breaks it with no bookkeeping.
+Migration `134_workflows_automation_health.sql` adds three columns to `workflows` for the R2 mitigation: `disabled_reason` / `disabled_at` (why it is off — written identically by a human hitting Disable and by the auto-disable policy) and `health_since` (the instant the failure streak is counted from; publish, rollback, and enable all stamp it). The streak itself is deliberately **not** a counter column — it is derived from `workflow_runs` on demand, so it can never drift from the history a human reads, and one success breaks it with no bookkeeping.
 
 ---
 
@@ -211,10 +214,91 @@ Deferred to `FOUNDATION_BUILDOUT_CHECKLIST.md` per planning rules — not re-des
 
 Aligned to RFC §9, resequenced so each slice ships value:
 
-- **Slice 1 (this build):** migration 132 · gateway `routes/workflows/` + `workflows/` engine package (compiler → MAF `WorkflowBuilder`, handlers: trigger/agent/tool/condition/transform-module/set-variable/http/output) · module validator + restricted runner + conversational generator · manual + webhook + schedule triggers (croniter loop) · `/workflows` UI: gallery, editor (palette/canvas/inspector/console), Module Studio, run history · catalog endpoint · feature slug + nav.
+- **Slice 1 (this build):** migration 132 · gateway `routes/workflows/` + `workflows/` engine package (compiler → MAF `WorkflowBuilder`, handlers: trigger/agent/tool/condition/transform-module/set-variable/http/output) · module validator + restricted runner + conversational generator · manual + webhook + schedule triggers (APScheduler `CronTrigger` as an expression parser inside one supervised asyncio scan loop — **not croniter**; `scheduler.py:57-61`, dependency at `apps/services/gateway/pyproject.toml:37`) · `/workflows` UI: gallery, editor (palette/canvas/inspector/console), Module Studio, run history · catalog endpoint · feature slug + nav.
 - **Slice 2 (shipped):** event triggers via `/agent/webhook/{source}` + the ClickUp receiver's event-hook sink; approval node via `workflow_run_pauses` snapshots + the Action Broker approvals inbox, with cached-replay resume. Also landed: the publish-gate write-class check (`write_without_approval`) and F13 workflow-as-tool. Remaining: streaming from the raw MAF event stream (engine-level per-node events stream today).
-- **Slice 3:** describe→generate→refine full-graph authoring; loops/parallel fan-out in the compiler; template gallery. (Workflow-as-tool for the orchestrator shipped early — F13, Slice 2.)
-- **Slice 4 (post-BO‑20/BO‑7):** durable queued runs; sandboxed module execution; MCP exposure; retention policies.
+- **Slice 3:** three items — **8.3a templates**, **8.3b fan-in/join**, **8.3c loops**. Fully specified with per-item acceptance, gate labels and verification in **§8.3**; the old one-line version was 16 words and asked for one thing that already shipped. (Workflow-as-tool for the orchestrator shipped early — F13, Slice 2.)
+- **Slice 4:** blocked. Named dependencies and the reason in **§8.4** — it is *not* "post-BO‑20" in the vague sense.
+
+### 8.3 Slice 3 — specified (truth pass, verified against code 2026-08-03)
+
+**What was struck.** *"Describe→generate→refine full-graph authoring"* is **DONE — delivered by F14 in commit `39b1e17a`** ("feat(workflows): Workflow Copilot + semantic capability search"). `POST /workflows/{id}/copilot` (`copilot.py:1-12`) emits the **FULL updated graph** — the system prompt says so literally at `copilot.py:51` (`"graph": {...} // FULL updated graph, or null if no change`) — with a named-issue repair round against the same validators publish uses, and auto-creates the modules the graph needs. §2 already records this twice (F12 *"Superseded by F14"*, F14 *"Must (shipped)"*). Dispatching it would have sent an implementer to rebuild a live endpoint. **Do not re-open it.**
+
+**What "loops/parallel fan-out" actually meant.** **Fan-out already ships** — `engine/graph.py:17`: *"Fan-out from a node is allowed (parallel branches)"*, and `runner.py:7` records that MAF's superstep scheduler does the routing, fan-out and completion detection. The unbuilt halves are the two things the validator still rejects: **fan-in** (`graph.py:303-311`, `"a node may have only one incoming edge (v1)"`) and **cycles** (`graph.py:326-329`, comment *"loops arrive in a later slice"*). They are split into 8.3b and 8.3c because they are different problems with different risks.
+
+**The acceptance standard for all three items — the F14 lesson, stated once.** F14's acceptance is **mechanical, not vibes**: the emitted graph must pass `validate_graph`, and generated module code must pass `validate_module_code` (`copilot.py:30-31` imports exactly those two). The LLM's output is judged by a deterministic validator, never by an eyeball. Every done-when below is written to the same standard — an assertion a test can make, on a validator or a status code, not a screenshot. **Corollary, and the specific failure mode to design against:** 8.3b and 8.3c both *relax a rejection that is currently pinned by a passing test*. A ticket that adds a join executor or a loop bound but leaves `test_fan_in_rejected_v1` / `test_cycle_rejected` asserting rejection closes **green while delivering nothing**. Each done-when therefore names the test that must **invert**.
+
+**Verification (all three items, and never `tests/unit/` as a directory — the full directory hangs on Windows):**
+
+```
+uv run pytest tests/unit/test_workflows_engine.py tests/unit/test_workflows_slice2.py \
+  tests/unit/test_workflows_trigger_reliability.py \
+  evals/trajectories/test_workflow_engine_trajectory.py -q
+```
+
+Baseline on this branch, run 2026-08-03: **`4 failed, 69 passed, 2 warnings in 17.70s`** on Windows. ⚠️ **All four failures are the same known Windows-only defect and are green in CI** — `engine/modules.py:296` passes `preexec_fn=_limit_resources` to the module subprocess, and CPython raises `ValueError: preexec_fn is not supported on Windows platforms`, so every test whose graph contains a **module node** fails locally: `test_workflows_engine.py::test_module_node_runs_generated_code` plus, in the golden eval, `test_high_priority_run_pauses_at_the_gate`, `test_resume_replays_without_repeating_side_effects` and `test_tool_failure_surfaces_the_node_and_skips_downstream`. CI runs `tests/unit/` on `ubuntu-latest` (`pr-check.yml:84,101`) and `evals/trajectories/` on `ubuntu-latest` (`skill-eval.yml:29,47`, triggered by the `apps/services/gateway/gateway/routes/workflows/**` path filter), where `preexec_fn` is supported. **Do not report these four as a regression, and do not "fix" them by removing the rlimits.** On Windows the honest local signal is **69 passed / 4 known-Windows-fail** (73 in CI); a fifth failure is yours.
+
+#### 8.3a — Template gallery ✅ **AGENT-SAFE**
+
+**State: nothing exists.** No `workflow_template` table in migrations `132`/`133`/`134`, and zero `template` matches under `workbench/control_plane/src/app/workflows/`. This is a greenfield item, unlike the rest of Slice 3.
+
+**DECISION (agent-proposed, owner may overrule) — templates are repo JSON fixtures, not a DB table.** A template ships as a versioned file in the gateway route package (proposed home: `apps/services/gateway/gateway/routes/workflows/templates/<slug>.json` + a `templates.py` loader beside `catalog.py`, which is the module that already answers "what can the palette offer"). Rationale, resting directly on the 2026-08-03 owner decision in §1.4: templates are **product content that ships with the code**, not user data. Fixtures are reviewed in the PR that adds them, cannot drift between dev and prod, need no migration, no seeding path and no admin CRUD screen. A table would need all four — plus a migration whose number must be found by listing `infra/postgres/` at build time, never written in advance — to buy one capability nobody has asked for: **in-app "save as template" authoring**, which is also the direction §1.4 rules out as marketplace tooling. *Accepted cost, stated plainly:* adding a template is an engineer's PR, not a maker's button. If the owner wants maker-authored templates, this decision inverts and the table comes back — but then the ticket is a different, larger ticket and should be re-scoped, not stretched.
+
+**DECISION (agent-proposed, owner may overrule) — instantiation is a body field on `POST /workflows`, not a new route.** `WorkflowCreate` (`crud.py:35-37`) today carries only `name` + `description`; the field is `template: str | None = None`. The seam already exists: `duplicate_workflow` (`crud.py:141-202`) is *exactly* "insert a new draft carrying a graph + variables + triggers, regenerating the hook token because it is a credential" — instantiating a template is duplicating from a fixture instead of from a row. A third near-identical INSERT under a new route would be a parallel seam for no gain. Same rule applies: **the hook token is regenerated, never carried in a fixture** — a template file must not contain one, and the loader should refuse a fixture that does.
+
+**Done when:**
+1. `POST /workflows` with `{"name": "...", "template": "lead-intake"}` returns **201** with a graph that `validate_graph` accepts with **zero issues**, and `POST /workflows/{id}/publish` on that new workflow **succeeds**.
+2. An unknown `template` slug returns **422** naming the slug (not a 500, not a silent empty draft).
+3. `POST /workflows` **without** `template` behaves byte-identically to today (the field is additive and optional) — pinned, because `create_workflow` currently has **no covering test at all**.
+4. Every shipped fixture passes `validate_graph` in a parametrized test that walks the templates directory — so a broken template is caught at CI time, not at maker time. A fixture containing a `hook_token` fails the same test.
+5. All of the above pinned in a new **`tests/unit/test_workflows_templates.py`**.
+
+**Template *content* is an owner input, not an implementer's guess.** Which Fracktal processes deserve a starter graph is a business question; the engineer can ship the mechanism against one throwaway fixture and the real set lands after. ⚠️ **A report/weekly-digest template is NOT this row's artifact** — `work_plan.md` §4 assigns digest workflows to **WS-15** (where they double as this spec's G1 launch metric). Building one here duplicates WS-15's deliverable under a second owner; leave it to WS-15 and consume it.
+
+#### 8.3b — Fan-in / join ✅ **AGENT-SAFE**
+
+**Prescribe the state-bus semantics before an agent touches the compiler.** The engine's shared state bus keys **one slot per node**: `state[node_id] = output` (`runner.py:135` on replay, `:179` on live execution), and `node_results[node_id]` is likewise a single slot that becomes the run's persisted per-node history (`workflow_runs.node_results`, `132_workflows.sql:81`). The message routed along edges, `_Token` (`runner.py:55-59`), carries **only** `branch: str | None` — data never travels on the edge, only the permission to proceed. And the compiler adds one MAF edge per connection (`_build_maf_workflow`, `runner.py:236-246`). Consequence, and the reason this is not a one-line validator change: **wire two edges into one node today and MAF delivers two messages, so the executor body runs twice** — the second pass overwrites both `state[node_id]` and `node_results[node_id]`, and the run history silently shows only the last pass. A join therefore needs a *defined merge shape*, not a relaxed check.
+
+The merge shape must be recorded in the spec (here) before implementation, and must answer all three of:
+- **Where merged inputs live.** Proposed: the join node's own slot holds a dict keyed by **incoming source node id** — `state[join_id] = {src_a: out_a, src_b: out_b}` — so existing `{{join.src_a.field}}` reference resolution keeps working unchanged and nothing about `templating.py` has to learn a new shape. (Ordered-list-by-edge is the rejected alternative: edge order is not stable in the edit-model, so refs would silently re-bind when a maker re-draws an edge.)
+- **Quorum.** *Which* branches must arrive. "All incoming edges" is **wrong on its face** — a condition sends down exactly one of `true`/`false` (`_branch_condition`, `runner.py:241-244`), so a join downstream of a condition would wait forever on an edge that is structurally dead for that run. The rule must be expressed in terms of branches that can still arrive, and the deadlock case must be a **named run failure with the waiting node id**, never a hang to `RUN_TIMEOUT_SECS`.
+- **Interaction with pause/replay.** `_mark_unrun` currently marks never-run nodes `pending` while paused and `skipped` on a finished run (`runner.py:200-202`). A half-arrived join is neither; the resume path (`precomputed`, `runner.py:133-139`) must be able to rebuild a partial merge from the pause snapshot, or approval-under-a-join must be explicitly refused at publish.
+
+**Done when:**
+1. **`test_fan_in_rejected_v1` (`tests/unit/test_workflows_engine.py:155`) inverts** — the graph it feeds now validates, and the `fan_in` `GraphIssue` (`graph.py:303-311`) is either deleted or narrowed to the shapes still refused. *An un-inverted pinned test is how this ticket closes green while doing nothing.*
+2. A two-branch fan-out→join graph executes and `state[join_id]` contains **both** branch outputs under their source node ids; `node_results` records the join **once**, not twice.
+3. A join whose second branch is unreachable (condition false) resolves per the quorum rule and does **not** hang — asserted against a bounded `run_timeout`, so a regression fails fast rather than sleeping 15 minutes.
+4. A join that can never satisfy quorum fails the **publish gate** with a named issue, not at run time.
+5. The golden eval (`evals/trajectories/test_workflow_engine_trajectory.py`) gains a fan-out→join trajectory; the six existing trajectories stay green unchanged.
+
+#### 8.3c — Loops ✅ **AGENT-SAFE** · **APPROVED BY THE OWNER 2026-08-03**
+
+**Owner decision, recorded against §11 R1.** §11's standing risk R1 warns against *"scope creep toward n8n"*. **The owner has explicitly decided that loops are worth the engine complexity** — real automations iterate ("for each row in this sheet…", "retry until the CRM accepts it"), and an automation platform that cannot iterate pushes makers back to the toil quadrant §1.2 exists to close. **R1 is not a blocker on this item and must not be cited as one.** R1 keeps its original and unchanged meaning: *a node exists only if the Integration Registry has the integration* — it governs the **node catalog**, not the **control-flow vocabulary**. This is a deliberate call, dated, not drift.
+
+**The cost the owner accepted, stated honestly.** Today the engine's simplicity *is* its correctness argument: a DAG with one slot per node terminates by construction, and MAF's completion detection needs no help. Loops give that up. The run model acquires iteration state, run history acquires cardinality, `RUN_TIMEOUT_SECS` stops being the only bound that matters, and the graph validator loses "no cycles" as a cheap universal safety net — every later engine change must now reason about non-terminating graphs. That is real, permanent complexity in the one subsystem that is CI-locked by a golden eval, and it was accepted with open eyes.
+
+**What must be designed, not discovered:**
+- **Iteration state.** `state[node_id]` is a single slot overwritten on every pass (`runner.py:179`), and so is `node_results[node_id]` — which *is* the run history a human reads (`132_workflows.sql:81`). Unmodified, a 50-pass loop persists one pass and silently discards 49. The model must say what a node's slot means inside a loop (current pass? accumulated list?), what `{{node.field}}` resolves to for a node inside vs outside the loop body, and what run history records per pass. This is the load-bearing decision of the item.
+- **A max-iteration bound.** Mandatory, a **literal in code**, enforced by the engine (not only by the wall clock), and exceeded ⇒ a **named run failure**, not a timeout. Whether it is also per-workflow configurable is secondary; the unconditional ceiling is not.
+- **`foreach`-over-a-list vs true cyclic edges — DECISION required, and the two docs currently disagree.** The parent RFC §6 promises MAF handles cycles; `graph.py:326-329` forbids them outright. Both cannot stand. A `foreach` **body-scoped node** (bounded by the list, no cycle in the graph, `validate_graph`'s cycle check survives untouched, the golden eval's termination argument survives) is the smaller change and covers the "for each row" case that motivates the feature; true cyclic edges additionally cover "retry until", at the cost of the validator's cycle rejection and of every termination guarantee resting on the iteration bound alone. **Whichever is chosen, record it here with its rejected alternative before writing code** — and reconcile the RFC §6 sentence in the same change, because leaving it is how the next auditor finds a fourteenth contradiction.
+
+**Done when:**
+1. **`test_cycle_rejected` (`tests/unit/test_workflows_engine.py:148`) inverts** for the shape the chosen design admits, and stays red for the shapes still refused. *Same trap as 8.3b: leave it asserting rejection and the ticket closes green having built nothing.*
+2. A loop over an N-element list executes the body **exactly N times**, and the run's `node_results` accounts for **all N passes** (not one) in whatever shape the iteration-state model prescribes.
+3. Exceeding the max-iteration bound produces a **named** failure (the message identifies the loop node and the bound) — asserted, not inferred from a timeout.
+4. Publish refuses an unbounded / non-terminating loop shape with a named `GraphIssue`, so the failure lands at design time.
+5. **The golden eval gains a bounded-loop trajectory** — the eval is the engine's semantic lock (`skill-eval.yml`'s path filter fires it on every `routes/workflows/**` edit, blocking, on `ubuntu-latest`), and after this item it is the *only* CI artifact asserting that a workflow with a cycle still terminates. Without that trajectory the termination guarantee is untested; the six existing trajectories must stay green unchanged, proving loops cost nothing on the loop-free path.
+
+### 8.4 Slice 4 — durable queued runs; sandboxed module execution; MCP exposure; retention policies. **BLOCKED — do not absorb any of it into Slice 3.**
+
+Gate labels: the build work is ✅ **AGENT-SAFE**, but Slice 4 cannot be *activated* by an agent — 🔴 **OWNER-GATE** on the `INGESTION_CONSUMER=1` flip (registered in `work_plan.md` §6) that the durable path rides.
+
+The old anchor read "post-BO‑20/BO‑7", which is too vague to sequence against. Precisely, Slice 4 needs:
+
+- **BO‑20b slice 2 → BO‑20c → (BO‑20d, BO‑20e)** — retry via PEL reclaim + an honest `XACK` + DLQ hand-off, a drainable/visible DLQ, per-source rate limiting, bounded concurrency. BO‑20a (the drain loop) and BO‑20f (Gmail/Zoho receiver parity) are built; **BO‑20b slice 1 (the `emit_event` strict mode) is built**; slice 2 and c–e are open. Until BO‑20b lands, **a failed dispatch is `XACK`ed and lost** — BO‑20a's deliberate interim. "Durable queued runs" on that substrate would be a lie in the status field.
+- **The consumer is inert everywhere.** `INGESTION_CONSUMER` is unset in every environment, so the drain loop never starts and the receivers still emit inline. Flipping it is an owner gate and is not merely "start a loop": the same flag cuts all three provider receivers over to enqueue-only, so **Redis down = provider events dropped**.
+- **BO‑7** — still ☐ (`FOUNDATION_BUILDOUT_CHECKLIST.md:110`). Sandboxed module execution graduates into it; §3.4's restricted-execution runtime is documented as insufficient for untrusted code until then.
+
+Anything in Slice 4 that looks reachable today is reachable only because its dependency is being skipped.
 
 ## 9. Key design decisions
 
@@ -223,7 +307,9 @@ Aligned to RFC §9, resequenced so each slice ships value:
 - **D3 — Edit-model ≠ run-model.** React Flow JSON verbatim for editing; compiled serialized DAG per published version; runs pin versions.
 - **D4 — Nodes never hold secrets.** Integration resolution happens server-side at execution; graph JSON is safe to export/share by construction.
 - **D5 — Modules are pure transforms.** Import-free, I/O-free, time-boxed; everything bigger is a skill repo. The generator enforces this at authoring time, the validator at save time, the runner at run time.
-- **D6 — APScheduler's `CronTrigger` as a parser inside a supervised asyncio loop** (the canonical gateway scheduler shape — no APScheduler *process*). Already in the dependency tree via ingestion; due ticks are CAS-claimed on `last_fired_at` so multiple workers can't double-fire, and downtime collapses to one catch-up fire. Revisit under BO‑20.
+- **D6 — APScheduler's `CronTrigger` as a parser inside a supervised asyncio loop** (the canonical gateway scheduler shape — no APScheduler *process*). Already in the dependency tree via ingestion; due ticks are CAS-claimed on `last_fired_at` so multiple workers can't double-fire, and downtime collapses to one catch-up fire. Revisit under BO‑20 — **still correct and still unspent as of 2026-08-03**: `scheduler.py:57-61` imports `apscheduler.triggers.cron.CronTrigger` inside `compute_due_fire()` purely as an expression parser, and the one supervised `_scheduler_loop()` (`:270-284`) drives it via `_scan_once()`. The dependency is declared for exactly that and says so: `apps/services/gateway/pyproject.toml:35-37`.
+  **The house style now has two independent subsystems.** BO‑20a's ingestion drain (`apps/services/ingestion/ingestion/consumer.py`) shipped the identical shape — a supervised asyncio loop in the gateway lifespan rather than a scheduler/worker *process* — which strengthens D6 rather than dating it. **D6 needs no edit.**
+  ⚠️ **ID collision, flagged not resolved:** `work_plan.md` §3 also defines a **D6** — *"The Workflows app won"* (which names this spec as the winner over `multi_agent_orchestration.md` Phases 2–3). Two different live D6s are reachable from this row, so "D6" is ambiguous in any cross-doc sentence. Same class of defect `work_plan.md` §2 **R2** forbids for phase IDs (no ID reuse across docs), applied to decision IDs. Renaming either is a cross-doc edit that touches `work_plan.md` and is **not** in this spec's gift; until an owner picks, always qualify — *"D6 (`workflows_app.md` §9)"* vs *"D6 (`work_plan.md` §3)"*.
 - **D7 — The catalog is served, not hard-coded.** The palette's agents/integrations/modules come from the same registries the runtime uses, so the builder can never offer a capability the platform doesn't actually have (G3).
 
 ## 10. Policy reconciliation
@@ -238,7 +324,7 @@ Aligned to RFC §9, resequenced so each slice ships value:
 - **Q3 — RESOLVED (implemented).** Any `workflows`-granted member may draft, validate, Test-run, and duplicate; **publish, rollback, and disable require `workflows:publish`** (`acb_auth` capability; migration 133 seeds it to owner/admin/manager — `member`/`guest` drop to draft-and-test, and an admin can hand it back per-user with an override). The line is drawn at *arming*: a draft fires no triggers and its writes are still broker-held, while publishing starts webhooks/cron/events running it unattended. `/auth/me` now returns resolved `capabilities` so the editor greys out Publish with an explanation instead of surfacing a bare 403. Still worth validating against real usage: whether `manager` is the right default tier.
 - **Q4** — Event-trigger volume before BO‑20: in-process runs are honest-but-lossy on restart; cap per-workflow concurrency and surface "missed while down" in run history, or hold F10 GA until BO‑20?
 - **Q5** — Module review policy: is generator + validator + test-before-save enough, or should `ready` status require a second human (approver) before a module is usable in published workflows? **Sharpened by F14:** copilot-created modules save as `ready` immediately (provenance `auto_created: true` makes them auditable and filterable); if review-before-ready is adopted, the copilot path should queue them as `draft` and say so in its reply.
-- **R1** — *Scope creep toward n8n*: the catalog makes it tempting to add generic SaaS nodes. Rule: a node exists only if the Integration Registry has the integration — the registry is the roadmap.
+- **R1** — *Scope creep toward n8n*: the catalog makes it tempting to add generic SaaS nodes. Rule: a node exists only if the Integration Registry has the integration — the registry is the roadmap. **Scope clarified by owner decision 2026-08-03 (§8.3c): R1 governs the node *catalog*, not the control-flow *vocabulary*.** Loops are approved and R1 is not a blocker on them; the engine-complexity cost was stated and accepted in §8.3c. R1 continues to bind unchanged everywhere else — a generic-SaaS node with no registry entry is still refused.
 - **R2 — MITIGATED (implemented).** *Silent automation drift*: published workflows keep running while the business changes. All three mitigations are in: run-history visibility (F9 + the gallery's last-run dot), per-workflow `owner_email`, and a **disabled-on-repeated-failure policy** — `AUTO_DISABLE_AFTER` (5) consecutive failed runs from *unattended* triggers (`schedule`/`webhook`/`event`) flips the workflow to `disabled` with the reason recorded. Three narrowings keep it from firing on a working system: manual/api runs never count (a maker debugging must not take production down, and one agent passing bad arguments must not take it from everyone else); the streak is consecutive, derived from run history, so any success breaks it; and only runs after `health_since` count, which is why re-enabling sticks instead of re-disabling on the next failure. Notification is in-product — persisted reason on the card and an editor banner, a `workflows.auto_disabled` warning log, and a `disabled` event on the activity feed (/observability). Outward notification (email the owner) is an outward write and belongs on the Action Broker path, not in the run's `finally` block. **Open:** whether 5 is the right threshold under real webhook volume, and whether a high-volume workflow should get a per-workflow opt-out — dropping events is not obviously better than failing them, and today the policy chooses to stop.
 
 ## 12. Success criteria (v1)
@@ -248,4 +334,12 @@ Aligned to RFC §9, resequenced so each slice ships value:
 3. A module generated in Module Studio from a plain-English description passes validation, runs against sample data, and is reused in a second workflow unchanged.
 4. Every agent in the live registry and every integration action in the registry appears in the catalog with typed config — nothing hard-coded in the frontend.
 5. No workflow can be published with an unresolved `{{ref}}`, a secret-shaped string in node config, or a write-class node without a Human-approval ancestor (`write_without_approval` — enforced at publish/validate/copilot; draft Test runs stay permissive since the runtime broker still holds any real write).
-6. All engine/validator/generator logic is covered by unit tests that run without Docker; `uv run pytest tests/unit` green.
+6. All engine/validator/generator logic is covered by unit tests that run without Docker. **Verification is the named four-file command, never `tests/unit/` as a directory** (the whole directory hangs on a Windows dev box and is not a usable signal):
+
+   ```
+   uv run pytest tests/unit/test_workflows_engine.py tests/unit/test_workflows_slice2.py \
+     tests/unit/test_workflows_trigger_reliability.py \
+     evals/trajectories/test_workflow_engine_trajectory.py -q
+   ```
+
+   Green means **73 passed** in CI (`ubuntu-latest`). On Windows the honest expectation is **69 passed / 4 failed**, all four being the `preexec_fn` module-sandbox defect catalogued in §8.3 — see that section before reporting a regression. Items 1–5 above are Slice-1/2 criteria and are met; Slice 3's criteria are per-item in §8.3a/b/c, not here.

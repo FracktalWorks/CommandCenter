@@ -1,7 +1,13 @@
 # Agent Architecture — how agents are declared, stored, and run
 
-**Status:** Draft / RFC · **Date:** 2026-07-26 · **Owner:** vjvarada
+**Status:** Active · **Date:** 2026-08-03 · verified against code on 2026-08-03 · **Owner:** vjvarada
 **Supersedes:** the distributed-repo framing in the 2026-07-26 first draft of this file.
+
+> **Read §12.1 before writing any code against this spec.** Roughly 60% of what §12 calls
+> Phases A + B is **already on disk as unwired substrate** — `manifest.py` is complete and
+> partly wired, `declarative.py` is complete with zero callers, and all six `config.json`
+> files already carry a `sharing` block. An implementer who starts from §5/§6 alone will
+> rebuild working code. §12.1 is the inventory; §12.2 is the ticket list that assumes it.
 
 How an agent is defined, what it can see at each layer, how its knowledge is authored, and how
 it gets permanently better — for agents that live **inside CommandCenter**: first-party agents
@@ -142,10 +148,18 @@ SDK isn't buying those three anything. It's VS Code-era scaffolding.
 > explaining it. Both have been corrected; the analysis below is retained because it is
 > the clearest example of *why* an agent's own factory must not outrank platform policy,
 > which is the argument for the declarative model.
+>
+> **Re-verified 2026-08-03:** all three Copilot factories now carry the *"No
+> `on_permission_request` here: the executor injects the risk-aware…"* comment
+> (`agent-apis-config/agents.py:49`, `agent-app-builder/agents.py:45`,
+> `agent-task-manager/agents.py:118`) and no `approve_all` reference survives in
+> `apps/agents/*/agents.py`. This finding is **closed**; only the startup check that
+> would have *caught* it (§12.2 WS-8a) remains.
 
 `permissions_sandbox_b6.md` replaced `approve_all` with a risk-aware handler. The executor
-applies it at five sites, all guarded the same way
-(`executor.py:609, 2139, 2633, 3513, 4042`):
+applies it at five sites, all guarded the same way — the guard lines are
+`executor.py:634, 2485, 3011, 3909, 4444` (verified 2026-08-03; the call to
+`_copilot_permission_handler()` sits at `:632, :2483, :3012, :3910, :4442` respectively):
 
 ```python
 if hasattr(_a, "_permission_handler") and _a._permission_handler is None:
@@ -580,7 +594,7 @@ So MAF-only **deletes a duplicate HITL implementation** rather than needing a ne
 
 ### 11.1.1 Audit: what `/copilot/chat` still serves (2026-07-26)
 
-**It is not a Copilot endpoint.** Despite the name, `main.py:421` builds
+**It is not a Copilot endpoint.** Despite the name, `main.py:569` builds
 `build_orchestrator_agent()` — a **native MAF `Agent`** — and streams it through MAF's own
 AG-UI adapter (`agent_framework.ag_ui.AgentFrameworkAgent`). Its docstring says so outright:
 *"MAF orchestrator: per-request agent… The orchestrator is a native MAF agent."* The name is
@@ -590,28 +604,37 @@ VS Code-era residue, and it has made the runtime split look larger than it is.
 (24 lines) says exactly why it was written: *"This thin wrapper lets the orchestrator go
 through the same `run_agent_stream()` path that all other named agents use, eliminating the
 separate `/copilot/chat` endpoint path in `main.py` and the `isOrchestrator` branching in
-`route.ts`."* The migration was designed and half-built; the frontend still branches
-(`route.ts:678` — `mode === "copilot" && isOrchestrator`).
+`route.ts`."* The migration was designed and half-built; the frontend still branches — but
+**not in `route.ts` any more**: the branch now lives at
+`workbench/control_plane/src/components/AgentChat.tsx:336-337`
+(`const isOrchestrator = currentAgentName === "orchestrator" || … ; const effectiveRuntime =
+isOrchestrator ? currentRuntime : "copilot"`), with two further consumers at `:1914` and
+`:1946`. `route.ts` no longer mentions `isOrchestrator` at all.
 
-Only two things live solely on that path:
+Of the two things that used to live solely on that path, **one is now closed**:
 
-| Only on `/copilot/chat` | Status |
+| Only on `/copilot/chat` | Status (verified 2026-08-03) |
 |---|---|
-| `think_mode` → `_apply_thinking_mode` | `AgentRunRequest` has no such field. Must be ported before the branch is deleted. |
-| `enrich_instructions_with_memory` | A **second, divergent** memory-injection implementation — see below. |
+| `think_mode` → `_apply_thinking_mode` | ✅ **Ported.** `AgentRunRequest.think_mode` exists (`routes/agent.py:71`) with `_resolve_think_mode` (`:84`, also reading the nested `payload.think_mode` `route.ts` sends) and is passed to the executor at `:2016/:2024`; the executor applies it via `_apply_thinking_mode_for_agent` (`executor.py:2587-2595`). `main.py:546`'s `_apply_thinking_mode` is now a **thin delegate** to the single implementation in `orchestrator/_model_resolution.py:109`, and its own docstring says *"it disappears with `/copilot/chat`."* No longer a blocker. |
+| `enrich_instructions_with_memory` | ❌ **Still open.** A **second, divergent** memory-injection implementation — see below. This is now A1's only remaining functional blocker. |
 
 ### 11.1.2 Finding: the orchestrator gets less memory than every other agent
 
 The two memory paths do not inject the same thing:
 
-| Path | Injects |
+| Path | Injects (verified 2026-08-03) |
 |---|---|
-| `routes/agent.py:1291` `_build_memory_block` (named agents) | Mem0 **user** + Mem0 **`agent:<name>`** + Mem0 **`org:global`** + Graphiti |
-| `agents.py:498` `enrich_instructions_with_memory` (orchestrator) | Mem0 **user** + Graphiti |
+| `routes/agent.py:1815` `_build_memory_block` (named agents) | Mem0 **user** + **`room:<thread>`** + **`prefs:<user>`** + **`agent:<name>`** + **`org:global`** + Graphiti |
+| `orchestrator/agents.py:496` `enrich_instructions_with_memory` (orchestrator) | Mem0 **user** + Graphiti |
 
 So the orchestrator — the router that sees the most traffic — runs without agent-scope or
 org-scope memory. Company facts written via `save_org_memory` reach every named agent and not
-the orchestrator. That looks unintentional rather than designed.
+the orchestrator. That looks unintentional rather than designed. **The gap has widened since
+this was first written:** the named-agent path gained the room and prefs compartments when the
+multiplayer clearance work landed (2026-07-30), and the orchestrator path got neither. It does
+not even consult a `Clearance` — `enrich_instructions_with_memory` takes `thread_id` only as a
+Redis cache key, never as a compartment. Whatever room semantics `/agent/run/stream` enforces,
+`/copilot/chat` does not.
 
 Two consequences: it is a live behaviour gap worth closing on its own, and it means the
 compartment/clearance work in [`memory_architecture.md`](memory_architecture.md) would
@@ -672,28 +695,287 @@ consequence stated — rather than being a default nobody chose.
 
 ## 12. Phasing
 
-| Phase | Work | Depends on |
-|---|---|---|
-| **A0** | Drop `approve_all` from the three factories — **already fixed 2026-07-26 (§3.2)**; A0's remaining scope is the startup check that `runtime` matches the entrypoint only | — |
-| **A1** | **Single runtime (§11):** audit what `/copilot/chat` still serves that `/agent/run/stream` doesn't; retire the Copilot-native `on_user_input_request` path in favour of the existing `ask_tools` platform tools; make `code_task` the only Copilot entry point | A0 |
-| **A** | Manifest schema + validator · `agent_defs`/`agent_def_versions`/`agent_def_grants` (migration: next free number at build time) · derive `dynamic_agents` from them · backfill all six | A0 |
-| **B** | The one generic `build_declarative_agent` · migrate task-manager and apis-config · retire their `agents.py` | A |
-| **C** | Agent Workshop UI — the describe-to-create flow, draft/publish/rollback, mirroring the App Workshop | B |
-| **D** | Knowledge layer: migration (next free number at build time) · source-aware chunking · `kb/INDEX.md` always-on · KB-recall evals | A |
-| **E** | Retrieval quality: hybrid + IDF + age decay · distillation on ingest and on memory extraction | D |
-| **F** | Delegation modes + the clearance-intersection rule | A + multiplayer 3a |
-| **G** | Promotion loop: State → Knowledge proposals into the approval inbox | D + multiplayer 3a |
+The phase letters below are the **map**. The dispatchable unit is the lettered ticket in
+§12.2 (`WS-8a`…`WS-8n`); each phase row names which tickets carry it.
+
+| Phase | Work | Tickets | Depends on |
+|---|---|---|---|
+| **A0** | `approve_all` removal — **done 2026-07-26 (§3.2)**; remaining scope is the startup check that `runtime` matches the entrypoint | WS-8a, WS-8b | — |
+| **A1** | **Single runtime (§11):** retire `/copilot/chat` and the frontend's orchestrator branch; make `code_task` the only Copilot entry point | WS-8k, WS-8l, WS-8m | WS-8m (memory parity) |
+| **A** | Manifest schema + validator · `agent_defs`/`agent_def_versions`/`agent_def_grants` (migration: next free number at build time) · derive `dynamic_agents` from them · backfill all six · make the manifest's derived accessors authoritative | WS-8c…WS-8h | A0 |
+| **B** | The one generic `build_declarative_agent` · migrate task-manager and apis-config · retire their `agents.py` | WS-8i, WS-8j | A |
+| **C** | Agent Workshop UI — the describe-to-create flow, draft/publish/rollback, mirroring the App Workshop | WS-8n (spec only) | B |
+| **D** | Knowledge layer: migration (next free number at build time) · source-aware chunking · `kb/INDEX.md` always-on · KB-recall evals | *unticketed* | A + §13 Q1 |
+| **E** | Retrieval quality: hybrid + IDF + age decay · distillation on ingest and on memory extraction | *unticketed* | D + §13 Q1 |
+| **F** | Delegation modes + the clearance-intersection rule | *unticketed* | A + multiplayer 3a |
+| **G** | Promotion loop: State → Knowledge proposals into the approval inbox | *unticketed* | D + multiplayer 3a |
 
 > **Update 2026-08-01 (doc-truth pass):** the "multiplayer 3a" dependency is partly shipped —
 > room compartments + clearance landed 2026-07-30 ✅; `subject:` compartments and the
 > compartment registry are still open. F and G block only on that open half.
 
-A0 is a same-day fix. A–C are the Agent Workshop's critical path and don't depend on the
-multiplayer work.
+**D–G carry no acceptance criteria and are therefore not dispatchable.** They are named here
+so the shape is visible; nobody should be sent at them until they are ticketed the way
+§12.2 tickets A0/A1/A/B are. D and E additionally block on §13 Q1 (where a declarative
+agent's KB lives) — that is a decision this spec does not record, not a build.
 
-**Acceptance for A:** every agent's runtime behaviour is derivable from its manifest alone —
-no compartment key, blob instance, tool surface, permission handler, or room eligibility is
-computed from a hardcoded agent name anywhere in the codebase.
+**On Phase C's priority.** Command Center is an **internal Fracktal tool**: the team uses it,
+there are no external tenants. So the Agent Workshop's describe-to-create flow is about
+letting *colleagues* create agents, not about a public product surface. Its value is real but
+bounded by headcount, and it is the largest unspecced surface in this document (§12.2 WS-8n
+is a spec ticket, not a build ticket). **It should not outrank A0/A1/A/B**, all of which
+either close a security gap, delete a duplicated code path, or stop a second implementation
+of something that already exists.
+
+### 12.1 What is already built — read this before writing code
+
+Verified against the tree on **2026-08-03**. Roughly 60% of Phases A + B exists on disk. The
+consistent shape is **complete, tested substrate with no production caller** — which reads as
+"not built" to anyone who greps for the feature rather than for the module.
+
+#### Built and *wired*
+
+| Thing | Where | Wired at |
+|---|---|---|
+| `AgentManifest` + `SharingSpec` / `CapabilitySpec` / `MemorySpec` | `packages/acb_skills/acb_skills/manifest.py` | — |
+| `AgentManifest.from_config()` → `.instance_key()` (the state-partition key `''` / `u:<email>` / `t:<team>`) | `manifest.py:167, :235` | `executor.py:917-937` (`_resolve_agent_instance`, called at `:1771` and `:2368`) and `gateway/routes/workspace.py:247-256` (`_agent_instance_for`) |
+| A `sharing` block on **all six** first-party agents | `apps/agents/*/config.json` | consumed by the two sites above |
+| `think_mode` on the named-agent path | `routes/agent.py:71, :84, :2016` → `executor.py:2587` → `_model_resolution.py:109` | live; `main.py:546` is now a delegate (§11.1.1) |
+
+The six `sharing` blocks as they actually ship: `apis-config`, `app-builder`, `orchestrator`,
+`task-manager` = `instancing: shared, shareable: true`; `email-assistant`,
+`whatsapp-assistant` = `instancing: personal, shareable: false`. All six declare
+`visibility: organization` and `outputs_visibility: instance`.
+
+> **Consequence for the board:** **`config.json`-based instancing already ships.** The
+> per-user / per-team partition that `agent-kinds.md` describes is live today for the blob
+> store and the workspace file manager, derived from the manifest, with no schema change.
+> **WS-14 is therefore NOT waiting on this spec's Phase A** — the board has claimed otherwise
+> for weeks. See §12.5.
+
+#### Built and *not wired* — the duplicate-build hazard
+
+| Thing | Where | Production callers |
+|---|---|---|
+| `AgentManifest.validate()` / `.warnings()` | `manifest.py:305, :371` | **zero** |
+| `AgentManifest.memory_scope()` (`agent:<slug>#<instance>`) | `manifest.py:248` | **zero** — the compartment key is still built from the bare agent name at `acb_memory/compartments.py:160` |
+| `AgentManifest.blob_instance()` | `manifest.py:259` | **zero** — callers use `instance_key()` directly |
+| `AgentManifest.resolve_tool_surface()` | `manifest.py:263` | **zero** — deliberately identical to `_tool_injection._resolve_injected_scope` (`_tool_injection.py:183`), which still owns the computation |
+| `AgentManifest.isolation_tier()` | `manifest.py:277` | one, and only for a log field (`declarative.py:210`) |
+| `SharingSpec.shareable` / `is_shareable()` | `manifest.py:103, :293` | **zero anywhere in the repo** — no code, TS, or SQL reads `shareable` outside `manifest.py` itself. Room eligibility is not manifest-derived; it is not derived at all. |
+| `build_declarative_agent` + `resolve_skill_tools` + `load_instructions` | `apps/services/orchestrator/orchestrator/declarative.py` | **zero.** Complete, documented, tested. `task-manager` and `apis-config` still ship Copilot factories. |
+
+> `manifest.py`'s own module docstring said *"Nothing here is wired into the run path yet"*
+> until 2026-08-03. That was false — `from_config` + `instance_key` are on the run path. The
+> line has been corrected to name exactly which accessors are live and which are not, because
+> an implementer who believed it would have rebuilt the module.
+
+#### Genuinely not built
+
+- `agent_defs` / `agent_def_versions` / `agent_def_grants` — **no migration exists.** Zero
+  matches for those names in `infra/postgres/*.sql`. (Find the next free number at build
+  time by listing the migrations directory; do not copy a number out of this document.)
+- Deriving `dynamic_agents` from `agent_defs`.
+- The runtime-vs-entrypoint check (`agent.runtime_mismatch` matches nothing in the tree).
+- MCP-on-MAF (§12.2 WS-8c).
+- `/build/agents` — `workbench/control_plane/src/app/build/` contains **only** `apps/`.
+- Everything in Phases D–G.
+
+### 12.2 Tickets
+
+Every ticket carries a **gate label** (`work_plan.md` §6 vocabulary: **AGENT-SAFE** work may
+be dispatched to an unattended agent; **OWNER-GATE** work may not, and an agent must refuse it
+and say which gate). Every ticket carries a **done-when** that a command or an assertion can
+settle.
+
+#### A0 — enforce the runtime declaration
+
+**WS-8a — runtime/entrypoint check, log-only. AGENT-SAFE once the owner picks a mode (WS-8b).**
+Done when `load_agent()` (`packages/acb_skills/acb_skills/loader.py:1434`) compares
+`config.json`'s `runtime` against the type the factory actually returned and emits
+`agent.runtime_mismatch` (agent, declared, actual); a test loads a fixture agent declaring
+`maf` whose factory returns a Copilot agent and asserts the record; a second asserts the three
+real Copilot agents (`apis-config`, `app-builder`, `task-manager`) are detected; and the run
+**still proceeds** (log-only). Detect by capability, not by the registry label — `executor.py:2452`
+already documents why: *"Detect Copilot-SDK-backed agents by capability, NOT the registry
+runtime label… A genuine MAF agent has no `_default_options`."*
+
+**WS-8b — make the check fail-closed. OWNER-GATE.** Done when a mismatched agent refuses to
+load. **Refuse to build this without an explicit owner decision**: three of six agents declare
+`maf` and return `GitHubCopilotAgent`, so fail-closed refuses half the roster at startup. The
+gate is the owner choosing between (i) fail-closed after WS-8i/WS-8j migrate the drifted
+agents, or (ii) fail-closed now with the three configs corrected to `"runtime": "copilot"`,
+which contradicts AGENTS.md Global Constraint #6.
+
+#### A — make the manifest authoritative
+
+**WS-8c — MCP injection is a silent no-op on native MAF. AGENT-SAFE.** `work_plan.md` D7
+instructs *"scope it into WS-8 Phase A/B"*; that instruction was never carried into this spec
+until 2026-08-03. `_inject_mcp_servers` (`_tool_injection.py:1086`) runs for every agent and
+routes to `merge_mcp_servers` (`:1056`), which writes `agent._mcp_servers` (`:1081`). The
+**only** readers of that attribute are `copilot_agent.py:169` and `:276` — both inside the
+Copilot agent class. No `MCPStdioTool` / `MCPStreamableHTTPTool` wiring exists anywhere in the
+tree. So for a native-MAF agent, MCP injection silently does nothing, while
+`CapabilitySpec.mcp_servers` (`manifest.py:122`) already accepts the field and §6 promises it
+works. Done when a native MAF agent with a declared MCP server exposes that server's tools in
+its tool surface; a test asserts a MAF agent built with one declared MCP server has the
+server's tools attached (and that a `manifest.capabilities.mcp_servers` entry that cannot be
+resolved is logged rather than silently dropped); and `grep -rn "_mcp_servers" apps/` shows a
+non-Copilot reader.
+
+**WS-8d — enforce `validate()` / `warnings()` at registration. AGENT-SAFE.** Done when agent
+registration calls `AgentManifest.from_config(...).validate()` and `.warnings()`, logs each
+problem with the agent name, and a test asserts a config with `instancing: "team"` and no
+`sharing.team` produces a recorded problem while all six real `apps/agents/*/config.json`
+files produce `validate() == []`. Report-and-continue only; raising is a separate decision.
+**Second half — retire the duplicate tool-surface computation:**
+`_tool_injection._resolve_injected_scope` (`_tool_injection.py:183`) and
+`AgentManifest.resolve_tool_surface` (`manifest.py:263`) compute the same thing, and
+`test_agent_manifest.py` already asserts they agree. Done when one of them delegates to the
+other (the manifest is the intended owner) and that equivalence test still passes — closing
+row 3 of §12.3.
+
+**WS-8e — the `agent_defs` schema. AGENT-SAFE.** Done when a migration (next free number,
+found by listing `infra/postgres/` at build time — **never** copied from a doc) creates
+`agent_defs`, `agent_def_versions` and `agent_def_grants` as §5 specifies, `schema.generated.sql`
+is regenerated, and a test asserts the three tables exist with the `UNIQUE (agent_id, version)`
+and `PRIMARY KEY (agent_id, subject)` constraints.
+
+**WS-8f — derive `dynamic_agents` from `agent_defs` + backfill the six. AGENT-SAFE.** Done
+when every row in `dynamic_agents` for a first-party agent is projected from an `agent_defs`
+row, `GET /agents` returns the same six agents with the same names before and after, and a
+test asserts the projection is idempotent (running the backfill twice changes nothing).
+**Also closes §12.3 row 7:** the hardcoded `agent_name in ("orchestrator", "default")` branch
+at `gateway/routes/workspace.py:220` is replaced by a property of the resolved registry row
+(does this agent have a clone directory?) rather than a literal name list. Depends on WS-8e.
+
+**WS-8g — the memory compartment key comes from the manifest. OWNER-GATE.** Today
+`acb_memory/compartments.py:160` computes `scope_key(agent=agent_name)` → `agent:<name>` with
+no instance suffix, while `AgentManifest.memory_scope()` (`manifest.py:248`) computes
+`agent:<slug>#<instance>` and has zero callers. Flipping the computation is **not** a no-op:
+`email-assistant` and `whatsapp-assistant` declare `instancing: "personal"`, so their
+compartment moves from `agent:email-assistant` to `agent:email-assistant#u:<email>` and every
+fact already written under the old key becomes unreachable. **The gate is the owner choosing
+between migrating those rows, dual-reading during a window, or leaving those two agents
+shared.** Done when the decision is recorded here, the flip is implemented behind it, and a
+test asserts a `shared` agent's key is byte-identical to today's.
+
+**WS-8h — room eligibility comes from `sharing.shareable`. AGENT-SAFE.** Nothing in the repo
+reads `shareable` today, so this adds a gate where there is none. Done when the "share this
+session" affordance is enabled only for an agent whose manifest returns
+`is_shareable() == True`, a test asserts a `personal`-instanced agent with `shareable: false`
+(i.e. `email-assistant`, `whatsapp-assistant`) is refused, and a test asserts a `shared`
+agent is allowed.
+
+#### B — one builder
+
+**WS-8i — migrate `task-manager` onto `build_declarative_agent`. AGENT-SAFE.** The builder
+already exists (`orchestrator/declarative.py`) and
+`tests/unit/test_declarative_builder.py` already asserts the 29 callables `skill-task-gtd`
+exports are exactly the 29 tools `agent-task-manager/agents.py` assembles by hand. **Do not
+rewrite the builder.** Done when `agent-task-manager/agents.py` no longer imports
+`agent_framework_github_copilot`, the agent is built by `build_declarative_agent` from its
+manifest, `test_declarative_builder.py` still passes, and a test asserts the resulting tool
+list equals the pre-migration list. Blocked on the design question §12.4 records: the drifted
+agents' dependence on Copilot-native file tools (`code_tools.py:17`).
+
+**WS-8j — migrate `apis-config` onto `build_declarative_agent`. AGENT-SAFE.** Same done-when,
+same blocker. Sequence after WS-8i so the first migration carries the risk alone.
+
+#### A1 — one runtime
+
+**WS-8m — close the orchestrator's memory gap (§11.1.2). AGENT-SAFE, but owned by WS-15/D4 —
+check the board before starting.** Done when `/copilot/chat`'s memory injection reads the same
+compartments as `/agent/run/stream` (user + room + prefs + agent + org + Graphiti) and a test
+asserts both paths request the same scope-key set for the same run. This is A1's only
+remaining functional blocker; `think_mode` is already ported (§11.1.1).
+
+**WS-8k — retire the `/copilot/chat` backend. AGENT-SAFE after WS-8m.** Done when
+`main.py:569`'s `/copilot/chat` handler is deleted, the orchestrator runs through
+`run_agent_stream()` via `apps/agents/agent-orchestrator/agents.py` (the 24-line wrapper
+written for exactly this), `grep -rn "copilot/chat" apps/` returns nothing outside comments,
+and `_apply_thinking_mode` is deleted from `main.py` (its own docstring says *"it disappears
+with `/copilot/chat`"*). **Large blast radius — this is the primary chat surface.**
+
+**WS-8l — delete the frontend orchestrator branch. AGENT-SAFE after WS-8k.** Done when
+`grep -rn "isOrchestrator" workbench/control_plane/src/` returns nothing, `AgentChat.tsx:336-337`'s
+`effectiveRuntime` ternary is gone, the two UI consumers at `:1914` and `:1946` are resolved,
+and `npx tsc --noEmit` + the vitest suite are clean.
+
+#### C — Agent Workshop
+
+**WS-8n — specify the Agent Workshop before building it. AGENT-SAFE (a spec, not a build).**
+Phase C's entire content in this document is one phase-table row and the §10 lifecycle
+diagram. Nothing is dispatchable from that. Done when this spec (or a child spec under
+`ai-company-brain/specs/`) carries: the `/build/agents` route inventory, the describe-to-create
+conversation contract, the draft→validate→eval→publish→rollback state machine mapped onto
+`agent_defs.status` / `live_version`, who may publish (§13 Q2), and per-slice acceptance —
+each stated the way the App Workshop's `docs/app-workshop/README.md` states its own, since
+that is the precedent §5 says to copy exactly. **Do not open `/build/agents` until §13 Q2 is
+answered and WS-3's `tool_scope` deny-by-default has landed** — the Workshop is precisely the
+surface that lets a non-engineer create an agent with an absent `tool_scope`, which
+`manifest.py:359` already flags as a privilege grant nobody made.
+
+### 12.3 Acceptance for Phase A
+
+The previous wording was an **unbounded universal negative** — *"…no compartment key, blob
+instance, tool surface, permission handler, or room eligibility is computed from a hardcoded
+agent name anywhere in the codebase"* — which no implementer can ever prove. It is replaced by
+this enumeration. Phase A is accepted when **every row is Yes**, each demonstrated by the
+named assertion.
+
+| # | Derivation | Site that owns it today | Manifest accessor that should own it | State (2026-08-03) | Ticket |
+|---|---|---|---|---|---|
+| 1 | Blob / workspace instance | `executor.py:917-937`; `gateway/routes/workspace.py:247-256` | `instance_key()` | ✅ **already manifest-derived** | — |
+| 2 | Memory compartment key | `acb_memory/compartments.py:160` (`scope_key(agent=agent_name)`) | `memory_scope()` | ❌ bare agent name | WS-8g |
+| 3 | Injected tool surface | `_tool_injection.py:183` (`_resolve_injected_scope`) | `resolve_tool_surface()` | ❌ two implementations, asserted equal by `test_agent_manifest.py`, neither retired | WS-8d |
+| 4 | Isolation tier | `manifest.py:277`, log field only (`declarative.py:210`) | `isolation_tier()` | ❌ not consulted by any isolation decision | WS-3 owns the ladder; this spec owns the derivation |
+| 5 | Room / share eligibility | *nothing* | `is_shareable()` | ❌ not computed anywhere | WS-8h |
+| 6 | Permission handler | `executor.py:634, 2485, 3011, 3909, 4444` | `permissions.mode` (§6) | ⚠️ **not name-keyed** — the guard probes `_permission_handler is None`, a Copilot-capability test. Correct as-is; listed so nobody "fixes" it. | — |
+| 7 | Workspace fallback | `gateway/routes/workspace.py:220` — `agent_name in ("orchestrator", "default")` | — | ❌ a genuine hardcoded-name branch | WS-8f |
+| 8 | Runtime | `config.json` `runtime`, unchecked; `executor.py:2452` detects by capability instead | validated constant (§11.2) | ❌ decorative | WS-8a |
+
+**Done-when for the phase:** rows 2, 3, 5, 7 and 8 flip to Yes, each with the test its ticket
+names, and `python -m pytest tests/unit/test_agent_manifest.py tests/unit/test_declarative_builder.py tests/unit/test_agent_paths.py -q`
+stays green.
+
+### 12.4 Verification
+
+```bash
+python -m pytest tests/unit/test_agent_manifest.py tests/unit/test_declarative_builder.py tests/unit/test_agent_paths.py -q
+```
+
+Real result on 2026-08-03, `ws-0-truth-pass-six-rows` @ `2ccff9e0`:
+
+```
+........................................................................ [ 92%]
+......                                                                   [100%]
+78 passed in 2.47s
+```
+
+(`test_agent_manifest.py` + `test_declarative_builder.py` alone: `62 passed in 1.53s`.)
+
+These suites are the regression floor for every ticket in §12.2 — they assert that the
+manifest's derived values **already equal** what the platform computes today, which is what
+makes each flip in §12.3 provable rather than hopeful. Any ticket that changes a derivation
+must keep them green or state in its PR which assertion it intentionally changed and why.
+
+Open design questions a ticket must not silently decide:
+
+- **The drifted agents' dependence on Copilot-native file tools** (`code_tools.py:17` notes
+  those bypass the durability mirror and are specially handled). Blocks WS-8i/WS-8j.
+- **§13 Q1** — where a declarative agent's KB lives. Blocks D and E.
+- **§13 Q2** — who may publish. Blocks WS-8n.
+
+### 12.5 Out of this row's orbit
+
+**The `dynamic_agents` sharing columns (`instancing` / `visibility` / `team_ref` /
+`memory_mode` / `shareable`) are not this spec's work.** `schema.generated.sql:1853` shows
+`dynamic_agents` with 13 columns and none of those five;
+`docs/multiplayer/agent-kinds.md:148-151` already reassigns that migration to
+`department_centers.md` Phase C / **WS-14**, and that reassignment is correct. Because
+instancing already ships from `config.json` via `AgentManifest.instance_key()` (§12.1),
+**WS-14 is not blocked on this spec's Phase A.**
 
 ---
 

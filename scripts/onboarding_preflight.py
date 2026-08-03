@@ -22,6 +22,10 @@ WHAT IT WILL NOT DO
   against production — the DB reads go through the live database. An agent
   running this must use ``--mode local``, which refuses every box-only check
   and says so in the output.
+* It never PASSes a check it could not actually answer. Anything that is a
+  claim about *the deployment* — the two secrets, the live Caddyfile, the
+  backups that landed, the database — SKIPs in local mode rather than
+  reporting a laptop's answer as the box's.
 
 USAGE
 -----
@@ -40,13 +44,23 @@ EXIT CODE
 that ends in ``0`` means "nothing that could be checked here is broken", which
 the banner says out loud. Do not wire a local run into an onboarding gate.
 
+A local run CAN reach ``0``, and that is deliberate: every check either answers
+its locally-answerable half or SKIPs. Today it does not, because the repo
+Caddyfile genuinely lacks the two ``header_up -`` deletions (G1) and there is
+no ``scripts/backup_db.sh`` (G3) — both are repository defects an agent can fix
+without touching the box, which is exactly the signal a local run should carry.
+
 ENVIRONMENT (resolution is deliberately shaped like scripts/apply_migrations.sh
 and shares its defaults, so an operator does not have to learn a second set)
     APP_DIR       default /opt/acb/app in box mode, the repo root in local mode
+    WB_ENV        default $APP_DIR/workbench/control_plane/.env.local
+                  (same variable name and default the deploy workflow uses)
     PG_CONTAINER  default acb-postgres
     POSTGRES_USER / POSTGRES_DB   read from $APP_DIR/.env, else acb / acb
     CADDYFILE     default /etc/caddy/Caddyfile
     BACKUP_DIR    default /opt/acb/backups
+    BACKUP_TIMER  default acb-backup.timer (probed, never asserted — BO-23
+                  ships no unit file; freshness is the real assertion)
 """
 from __future__ import annotations
 
@@ -157,23 +171,45 @@ def _parse_env_file(path: Path) -> dict[str, str]:
 
 
 class Env:
-    """The effective environment: process env layered over ``$APP_DIR/.env``.
+    """The effective environment for BOTH processes that hold service identity.
 
-    Process env wins, matching how systemd + the gateway actually resolve
-    these — a value exported in the unit file is what the running process sees,
-    whatever the file says.
+    Two files, read separately and deliberately not merged:
+
+    * ``$APP_DIR/.env`` — the gateway's. Process env is layered over it, because
+      that is how systemd + the gateway actually resolve these: a value exported
+      in the unit file is what the running process sees, whatever the file says.
+    * ``$APP_DIR/workbench/control_plane/.env.local`` — the Next.js BFF's.
+      Process env is deliberately NOT layered over this one: the workbench is a
+      separate process with a separate environment, and the only thing that
+      answers "what Bearer will the BFF actually send" is the file it reads.
+      The path mirrors ``WB_ENV`` in ``.github/workflows/deploy.yml:167``, and
+      the ``WB_ENV`` variable overrides it here for the same reason.
+
+    Reading both is not tidiness. ``GATEWAY_INTERNAL_TOKEN`` present in one and
+    absent from the other is the total-lockout shape — see ``check_internal_token``.
     """
 
     def __init__(self, app_dir: Path) -> None:
         self.app_dir = app_dir
         self.env_path = app_dir / ".env"
         self.file = _parse_env_file(self.env_path)
+        self.wb_env_path = Path(
+            os.environ.get("WB_ENV")
+            or (app_dir / "workbench" / "control_plane" / ".env.local")
+        )
+        self.wb_file = _parse_env_file(self.wb_env_path)
 
     def get(self, key: str, default: str = "") -> str:
         val = os.environ.get(key)
         if val is None:
             val = self.file.get(key, default)
         return (val or "").strip()
+
+    def get_workbench(self, key: str, default: str = "") -> str:
+        """Read the workbench's ``.env.local`` ONLY. Never falls back to the
+        gateway's ``.env`` or to process env — the whole point of this accessor
+        is to detect that the two files disagree."""
+        return (self.wb_file.get(key, default) or "").strip()
 
 
 # ── Postgres access (docker exec psql, same shape as apply_migrations.sh) ────
@@ -244,25 +280,96 @@ class Psql:
 
 # ── Check 1 — service identity is not the LLM key ────────────────────────────
 
-def check_internal_token(env: Env) -> Check:
-    """GATEWAY_INTERNAL_TOKEN is provisioned AND distinct from LITELLM_MASTER_KEY.
+def _internal_token_remediation(env: Env, box: bool) -> str:
+    """The one remediation both halves of check 1 print.
 
-    WHAT THIS PREVENTS. ``acb_auth.deps._resolve_internal_token`` (:93-117)
-    falls back to ``LITELLM_MASTER_KEY`` when ``GATEWAY_INTERNAL_TOKEN`` is
-    unset. That LLM key is handed to every agent's BYOK client, so while the
-    fallback is in effect any agent holding it can present it as service
-    identity and then either assert an arbitrary ``X-User-Email``
-    (``deps.py`` branch 1a, :311-331) or act as the platform itself with
-    ``SERVICE_ACCESS`` (branch 1b, :339-344). With one user that is a
-    curiosity. With colleagues it is "any agent can read anyone's mail".
+    It says "redeploy, or set it in BOTH files" rather than the older "set it
+    and restart", because the older wording was a recipe for a total lockout —
+    see ``check_internal_token``'s docstring.
+
+    In local mode it names the BOX's paths, not this machine's: the instruction
+    is about the deployment, and printing a laptop's ``.env`` path here would
+    read as "create this file", which is not the fix.
+    """
+    env_path = env.env_path if box else Path("/opt/acb/app/.env")
+    wb_path = (
+        env.wb_env_path if box
+        else Path("/opt/acb/app/workbench/control_plane/.env.local")
+    )
+    return (
+        "Preferred: put GATEWAY_INTERNAL_TOKEN in "
+        f"{env_path} and then REDEPLOY. The pipeline reconciles the "
+        "workbench copy from .env on every deploy, in place and idempotently "
+        "(.github/workflows/deploy.yml:166-187), which is the only path that "
+        "cannot leave the two files disagreeing.\n"
+        "    By hand (no redeploy): you must write it to BOTH "
+        f"{env_path} and {wb_path}, then restart the gateway and "
+        "the workbench. Setting only the gateway .env is the lockout: the BFF "
+        "keeps sending its 'sk-local-dev-change-me' default "
+        "(workbench/control_plane/src/lib/gateway.ts:58-61), so every proxied "
+        "browser call arrives with a bad Bearer and a real X-User-Email, and "
+        "acb_auth/deps.py:356-361 resolves that to NO_ACCESS — for every "
+        "signed-in member, not just new ones.\n"
+        "    Provisioning the token makes GATEWAY_REFUSE_LLM_KEY_IDENTITY "
+        "inert, which is the point: the flag exists for boxes that cannot be "
+        "provisioned yet."
+    )
+
+
+def check_internal_token(env: Env, box: bool) -> Check:
+    """GATEWAY_INTERNAL_TOKEN is provisioned in BOTH files and is not the LLM key.
+
+    WHAT THIS PREVENTS, part one. ``acb_auth.deps._resolve_internal_token``
+    (:93-117) falls back to ``LITELLM_MASTER_KEY`` when
+    ``GATEWAY_INTERNAL_TOKEN`` is unset. That LLM key is handed to every agent's
+    BYOK client, so while the fallback is in effect any agent holding it can
+    present it as service identity and then either assert an arbitrary
+    ``X-User-Email`` (``deps.py`` branch 1a, :311-331) or act as the platform
+    itself with ``SERVICE_ACCESS`` (branch 1b, :339-344). With one user that is
+    a curiosity. With colleagues it is "any agent can read anyone's mail".
 
     Two secrets set to the SAME string is the same defect wearing a fix's
-    clothes, so equality is checked as well as presence — hence the comparison
-    rather than a mere ``is_set``.
+    clothes, so equality is checked as well as presence.
+
+    WHAT THIS PREVENTS, part two — and it is why the workbench file is read.
+    The token lives in TWO places: the gateway's ``.env`` and the Next.js BFF's
+    ``.env.local``. G2 is OWNER-GATE, so a human provisions it by hand, and a
+    check that looked only at ``.env`` would report ``[PASS]`` on the exact
+    state that bricks the deployment:
+
+        .env has the token, .env.local does not
+          -> the BFF sends "sk-local-dev-change-me" (lib/gateway.ts:58-61)
+          -> bearer_ok is false while X-User-Email is present and an internal
+             token IS configured
+          -> deps.py:356-361 returns NO_ACCESS for EVERY signed-in member.
+
+    A total lockout, produced by following the remediation, and previously
+    certified green by this very check. The partial mitigation is that
+    ``.github/workflows/deploy.yml:166-187`` reconciles ``.env.local`` from
+    ``.env`` on every deploy — so the dangerous window is precisely
+    "provisioned by hand without a redeploy", which is what a hand-run
+    OWNER-GATE action looks like.
+
+    WHY IT REFUSES TO ANSWER LOCALLY. Both values are claims about THE
+    DEPLOYMENT, and a local run reads a developer machine's ``.env``. A laptop
+    that happens to carry a real token would print ``[PASS] Service identity is
+    its own secret`` about a box it never touched. Same posture as check 7: a
+    local PASS here would be vacuous, so there is none.
 
     Neither value is printed, in any mode, ever.
     """
     c = Check("internal_token", "Service identity is its own secret")
+    c.remediation = _internal_token_remediation(env, box)
+
+    if not box:
+        c.status = SKIP
+        c.detail = (
+            "local mode — this is a claim about the deployment's .env AND the "
+            "workbench's .env.local, and a laptop's copies of those files say "
+            "nothing about the box. A local PASS would be vacuous."
+        )
+        return c
+
     internal = env.get("GATEWAY_INTERNAL_TOKEN")
     llm = env.get("LITELLM_MASTER_KEY")
 
@@ -271,15 +378,6 @@ def check_internal_token(env: Env) -> Check:
         c.detail = (
             "GATEWAY_INTERNAL_TOKEN is unset, so service identity falls back "
             "to LITELLM_MASTER_KEY (acb_auth/deps.py:108-117)."
-        )
-        c.remediation = (
-            "Set GATEWAY_INTERNAL_TOKEN to a fresh random secret in BOTH "
-            f"{env.env_path} and the workbench's .env.local (the Next.js BFF "
-            "mirrors the same fallback — workbench/control_plane/src/lib/"
-            "gateway.ts:58-61), then restart the gateway and the workbench. "
-            "Provisioning it makes GATEWAY_REFUSE_LLM_KEY_IDENTITY inert, "
-            "which is the point: the flag exists for boxes that cannot be "
-            "provisioned yet."
         )
         return c
 
@@ -290,21 +388,50 @@ def check_internal_token(env: Env) -> Check:
             "LITELLM_MASTER_KEY, so the two secrets are one secret and the "
             "separation does not exist."
         )
-        c.remediation = (
-            "Give GATEWAY_INTERNAL_TOKEN a value no agent is handed. Rotate "
-            "it in the gateway .env and the workbench .env.local together — "
-            "a mismatch between them turns every proxied browser call "
-            "anonymous."
+        return c
+
+    # The second file. Failing here is a LOCKOUT, not a hardening gap, so it is
+    # worded as one — nobody reading this line should think it can wait.
+    if not env.wb_env_path.is_file():
+        c.status = FAIL
+        c.detail = (
+            f"the gateway .env has the token but {env.wb_env_path} does not "
+            "exist, so the BFF falls back to 'sk-local-dev-change-me' "
+            "(lib/gateway.ts:58-61). LOCKOUT: every signed-in member resolves "
+            "to NO_ACCESS at deps.py:356-361."
+        )
+        return c
+
+    wb = env.get_workbench("GATEWAY_INTERNAL_TOKEN")
+    if not wb:
+        c.status = FAIL
+        c.detail = (
+            f"the gateway .env has the token but {env.wb_env_path} does not "
+            "set GATEWAY_INTERNAL_TOKEN, so the BFF falls back to "
+            "'sk-local-dev-change-me' (lib/gateway.ts:58-61). LOCKOUT: every "
+            "signed-in member resolves to NO_ACCESS at deps.py:356-361."
+        )
+        return c
+    if wb != internal:
+        c.status = FAIL
+        c.detail = (
+            f"{env.env_path} and {env.wb_env_path} both set "
+            "GATEWAY_INTERNAL_TOKEN and the two values DIFFER (compared in "
+            "memory, never printed). LOCKOUT: the BFF's Bearer is rejected, so "
+            "every proxied browser call arrives with an unaccompanied "
+            "X-User-Email and resolves to NO_ACCESS at deps.py:356-361."
         )
         return c
 
     c.status = PASS
+    c.remediation = ""
     c.detail = (
-        "GATEWAY_INTERNAL_TOKEN is set and differs from LITELLM_MASTER_KEY "
-        "(values compared in memory, never printed)."
-        if llm else
-        "GATEWAY_INTERNAL_TOKEN is set; LITELLM_MASTER_KEY is unset here, so "
-        "there is nothing it could collide with."
+        "GATEWAY_INTERNAL_TOKEN is set in both "
+        f"{env.env_path.name} and {env.wb_env_path.name}, the two agree, and "
+        + ("it differs from LITELLM_MASTER_KEY" if llm
+           else "LITELLM_MASTER_KEY is unset here so there is nothing it could "
+                "collide with")
+        + " (values compared in memory, never printed)."
     )
     if not llm:
         c.notes.append(
@@ -316,8 +443,14 @@ def check_internal_token(env: Env) -> Check:
 
 # ── Check 2 — EXECUTIVE_EMAILS is a real person ──────────────────────────────
 
-def check_executive_emails(env: Env) -> Check:
+def check_executive_emails(env: Env, box: bool) -> Check:
     """EXECUTIVE_EMAILS names a real address, not a placeholder.
+
+    WHY IT REFUSES TO ANSWER LOCALLY, like check 1. The claim is about the
+    DEPLOYMENT's environment. A developer machine carrying a real
+    EXECUTIVE_EMAILS in its own ``.env`` would otherwise print a green line
+    about a box this run never reached — and this is one of the two checks
+    somebody will cite when deciding it is safe to invite people.
 
     WHAT THIS PREVENTS. Two separate things read this variable:
 
@@ -333,6 +466,21 @@ def check_executive_emails(env: Env) -> Check:
       provisioned, and the only fix was hand-run SQL.
     """
     c = Check("executive_emails", "EXECUTIVE_EMAILS names a real owner")
+    if not box:
+        c.status = SKIP
+        c.detail = (
+            "local mode — this is a claim about the deployment's environment, "
+            "and a laptop's .env says nothing about the box. A local PASS "
+            "would be vacuous."
+        )
+        c.remediation = (
+            "Run on the box. EXECUTIVE_EMAILS must be set in "
+            "/opt/acb/app/.env to the owner's real sign-in address; it is the "
+            "only candidate list ensure_owner_bootstrap has "
+            "(acb_auth/access.py:467-519)."
+        )
+        return c
+
     raw = env.get("EXECUTIVE_EMAILS")
     if not raw:
         c.status = FAIL
@@ -471,6 +619,11 @@ def check_caddy_strip(env: Env, box: bool) -> Check:
     one fails ``caddy validate`` (``.github/workflows/deploy.yml:496-501``). A
     live file that is valid but wrong is therefore never corrected, and a repo
     file that is right can sit next to a live file that is not, indefinitely.
+
+    LOCAL MODE. The repo copy IS checkable from anywhere and a wrong one is a
+    real, locally-fixable defect, so it FAILs. The live copy is not reachable,
+    so a correct repo copy earns a SKIP rather than a PASS: half the answer is
+    not the answer, and the boundary is the file on the box.
     """
     c = Check("caddy_strip", "Caddy strips inbound identity headers (api vhost)")
 
@@ -536,8 +689,13 @@ def check_caddy_strip(env: Env, box: bool) -> Check:
         )
 
     c.detail = "; ".join(parts)
-    c.status = PASS if (repo_ok and live_ok) else FAIL
-    if not (repo_ok and live_ok):
+    if box:
+        c.status = PASS if (repo_ok and live_ok) else FAIL
+    else:
+        # A wrong repo copy is a defect an agent can fix from here; a right one
+        # proves only half, because the live file is the boundary.
+        c.status = FAIL if not repo_ok else SKIP
+    if c.status != PASS:
         c.remediation = remediation
 
     # Drift warning — deliberately a note on a check that may otherwise pass,
@@ -564,28 +722,170 @@ def check_caddy_strip(env: Env, box: bool) -> Check:
     return c
 
 
-# ── Check 4 — backups are real ───────────────────────────────────────────────
+# ── Check 4 — a restore path exists, and backups land ────────────────────────
 
 _BACKUP_MAX_AGE_SECONDS = 48 * 3600
 
+#: A dump smaller than this is not a data backup. A ``pg_dump --schema-only``
+#: of this database is a few hundred kB of DDL; a ``-Fc`` dump WITH rows is
+#: orders of magnitude larger. This floor exists for exactly one failure the
+#: previous version of this check waved through: a timer dumping schema-only
+#: into a dated directory, with a MANIFEST beside it, reported as
+#: "Backups run, land, and are recent" while backing up zero rows.
+_MIN_DUMP_BYTES = 256 * 1024
 
-def check_backups(env: Env, box: bool) -> Check:
-    """A backup timer is active and produced a readable, recent backup.
+#: Files that count as BO-23 done-when 3, "a runbook". The checklist names
+#: ``deploy/hostinger/RESTORE.md`` "or a section in that README"; the BO-23
+#: branch writes a differently-named file. All are accepted, because the
+#: done-when is that the procedure is WRITTEN DOWN, not where.
+_RUNBOOK_CANDIDATES = (
+    "deploy/hostinger/RESTORE.md",
+    "deploy/hostinger/BACKUP-RESTORE.md",
+    "deploy/hostinger/BACKUP_RESTORE.md",
+    "ai-company-brain/specs/backup_and_restore.md",
+    "docs/runbooks/restore.md",
+)
+
+#: Dump extensions this check will size-test. ``.dump``/``.pgc`` are ``-Fc``
+#: custom-format archives (BO-23 done-when 1); ``.sql.gz`` is a compressed
+#: plain dump, accepted because it still carries rows.
+_DUMP_SUFFIXES = (".dump", ".pgc", ".backup", ".sql.gz", ".sql")
+
+
+def _repo_restore_path() -> tuple[list[str], list[str]]:
+    """``(problems, satisfied)`` for BO-23's four *repo-side* done-whens.
+
+    Deliberately measured against ``FOUNDATION_BUILDOUT_CHECKLIST.md``'s BO-23
+    §"Done when" (items 1-4) and nothing else. The previous version of this
+    check asserted a timer unit name and a MANIFEST.txt that BO-23 never
+    specifies, which meant G3 could not go green even after BO-23 shipped
+    exactly what it promised — a permanently-blocked gate.
+    """
+    problems: list[str] = []
+    satisfied: list[str] = []
+
+    backup_sh = REPO_ROOT / "scripts" / "backup_db.sh"
+    restore_sh = REPO_ROOT / "scripts" / "restore_db.sh"
+    migrate_sh = REPO_ROOT / "scripts" / "apply_migrations.sh"
+
+    # (1) a data-inclusive dump script.
+    if not backup_sh.is_file():
+        problems.append("scripts/backup_db.sh does not exist (BO-23 done-when 1)")
+    else:
+        body = backup_sh.read_text(encoding="utf-8", errors="replace")
+        if "pg_dump" not in body:
+            problems.append("scripts/backup_db.sh never calls pg_dump")
+        elif not re.search(r"-Fc\b|--format[= ]c(ustom)?\b", body):
+            problems.append(
+                "scripts/backup_db.sh does not take a -Fc custom-format dump, "
+                "so a single table cannot be restored out of it "
+                "(BO-23 done-when 1)"
+            )
+        elif re.search(r"pg_dump[^\n|]*--schema-only", body):
+            problems.append(
+                "scripts/backup_db.sh passes --schema-only to pg_dump — that "
+                "is structure with ZERO ROWS, which is what dump_schema.sh "
+                "already does and is not a backup"
+            )
+        else:
+            satisfied.append("scripts/backup_db.sh takes a data-inclusive -Fc dump")
+
+    # (2) the documented inverse.
+    if not restore_sh.is_file():
+        problems.append("scripts/restore_db.sh does not exist (BO-23 done-when 2)")
+    elif "pg_restore" not in restore_sh.read_text(
+        encoding="utf-8", errors="replace"
+    ):
+        problems.append("scripts/restore_db.sh never calls pg_restore")
+    else:
+        satisfied.append("scripts/restore_db.sh restores via pg_restore")
+
+    # (3) a runbook that contains the VERIFY step, not just the commands.
+    #     "A backup nobody has restored is not a backup" — BO-23 done-when 3.
+    runbook = next(
+        (p for p in _RUNBOOK_CANDIDATES if (REPO_ROOT / p).is_file()), None
+    )
+    if runbook is None:
+        problems.append(
+            "no restore runbook found at any of: "
+            + ", ".join(_RUNBOOK_CANDIDATES)
+            + " (BO-23 done-when 3)"
+        )
+    else:
+        text_ = (REPO_ROOT / runbook).read_text(encoding="utf-8", errors="replace")
+        if not re.search(r"verif|row count|checksum", text_, re.IGNORECASE):
+            problems.append(
+                f"{runbook} exists but describes no VERIFICATION step — "
+                "BO-23 done-when 3 requires it in words: a backup nobody has "
+                "restored is not a backup"
+            )
+        else:
+            satisfied.append(f"{runbook} documents restore + verification")
+
+    # (4) the pre-migration hook — the clause that stops "forward-only ladder"
+    #     and "no backup" from compounding.
+    if migrate_sh.is_file() and "backup_db.sh" in migrate_sh.read_text(
+        encoding="utf-8", errors="replace"
+    ):
+        satisfied.append("apply_migrations.sh takes a backup before replaying")
+    else:
+        deploy_yml = REPO_ROOT / ".github" / "workflows" / "deploy.yml"
+        if deploy_yml.is_file() and "backup_db.sh" in deploy_yml.read_text(
+            encoding="utf-8", errors="replace"
+        ):
+            satisfied.append("the deploy step takes a backup before migrating")
+        else:
+            problems.append(
+                "nothing takes a backup BEFORE the migration ladder replays — "
+                "neither scripts/apply_migrations.sh nor the deploy workflow "
+                "references backup_db.sh (BO-23 done-when 4)"
+            )
+
+    return problems, satisfied
+
+
+def check_restore_path(env: Env, box: bool) -> Check:
+    """A restore path exists in the repo, and on the box backups actually land.
 
     WHAT THIS PREVENTS. Inviting colleagues multiplies the amount of work that
     exists only in this database — their notes, their tasks, their mail state.
     ``work_plan.md`` §2 exception 2 (checklist §BO-23) records the measured
     position: the only DB script that dumps anything is
     ``scripts/dump_schema.sh``, which is ``pg_dump --schema-only`` — structure,
-    zero rows. There is no restore path and no WAL archiving.
+    zero rows. So the spec's line is "do not invite colleagues onto a database
+    with no restore path", and this check has to actually look for one.
 
-    Four things must hold, and they are checked separately so a partial answer
-    is legible: the timer is active, at least one backup directory exists, its
-    MANIFEST.txt is readable, and the newest one is under 48h old. A timer that
-    is active but producing nothing is the failure mode a bare
-    ``systemctl is-active`` would miss.
+    TWO HALVES, because they fail differently.
+
+    * **The repo half, checked in every mode.** BO-23's done-whens 1-4: a
+      data-inclusive ``-Fc`` dump script, a ``pg_restore`` inverse, a runbook
+      that contains the *verification* step, and a pre-migration hook. This is
+      the half that answers "is there a restore path at all", and it is
+      answerable from a laptop because it is files in this repository.
+    * **The box half, box mode only.** A real artefact under ``BACKUP_DIR``,
+      newer than 48h, containing a dump above ``_MIN_DUMP_BYTES``.
+
+    WHAT CHANGED AND WHY. This check used to assert four things — an
+    ``acb-backup.timer`` unit, a subdirectory, a ``MANIFEST.txt``, an age — and
+    **none** of them tested the dump's format, size, row count, or the
+    existence of a restore script. Two consequences, both real:
+
+    1. A timer running ``pg_dump --schema-only`` into a dated directory with a
+       MANIFEST beside it printed "Backups run, land, and are recent" while
+       backing up zero rows.
+    2. BO-23's own done-when specifies ``scripts/backup_db.sh``,
+       ``scripts/restore_db.sh``, a runbook and a pre-migration hook — and
+       specifies **no timer unit name and no MANIFEST**. So the old check
+       looked for artefacts BO-23 would never produce, and G3 could not go
+       green even after BO-23 shipped precisely what it promised.
+
+    The schedule is now inferred from freshness rather than asserted by unit
+    name: a named timer is probed and reported as a NOTE when it is not found,
+    because installing one is OWNER-GATE and BO-23 ships no unit file. A stale
+    or absent artefact still FAILs — that is the assertion that a schedule is
+    in fact running.
     """
-    c = Check("backups", "Backups run, land, and are recent")
+    c = Check("restore_path", "A restore path exists and backups are recent")
     # Kept as the configured POSIX string for display: this path only exists on
     # the box, and rendering it through pathlib on a Windows dev machine turns
     # /opt/acb/backups into \opt\acb\backups, which reads as a typo.
@@ -593,32 +893,101 @@ def check_backups(env: Env, box: bool) -> Check:
     backup_dir = Path(backup_dir_raw)
     unit = env.get("BACKUP_TIMER", "acb-backup.timer")
 
+    repo_problems, repo_satisfied = _repo_restore_path()
+
     remediation = (
-        "BO-23 is unbuilt: as of this branch the repository contains no "
-        f"'{unit}' unit, no backup script under scripts/, and no restore "
-        "runbook (grep the tree for 'acb-backup' — zero hits). This check "
-        "cannot pass until BO-23 ships a timer, a logical (data, not "
-        "schema-only) dump, a MANIFEST.txt beside each dump, and a written "
-        "restore procedure. Until then the only backup is Hostinger's weekly "
-        "whole-VPS image (deploy/hostinger/README.md:115). Do not invite "
+        "BO-23 (FOUNDATION_BUILDOUT_CHECKLIST.md, 'Done when' 1-4) is the "
+        "owning ticket, and this check is measured against it verbatim: "
+        "scripts/backup_db.sh (data-inclusive pg_dump -Fc, not --schema-only), "
+        "scripts/restore_db.sh (pg_restore into a NAMED database, refusing the "
+        "live one without a force flag), a runbook that states how to verify a "
+        "restore — a row-count or checksum assertion, because a backup nobody "
+        "has restored is not a backup — and a pre-migration hook so the "
+        "forward-only ladder cannot compound with having nothing to roll back "
+        "to. Writing all four is AGENT-SAFE; RUNNING any of them, installing a "
+        "timer, or pointing anything at prod data is OWNER-GATE (work_plan.md "
+        "§6). Until it ships, the only backup is Hostinger's weekly whole-VPS "
+        "image (deploy/hostinger/README.md:115) — up to seven days of loss, "
+        "from an image whose restore has never been exercised. Do not invite "
         "colleagues onto a database with no restore path."
     )
+    c.remediation = remediation
+
+    if repo_satisfied:
+        c.notes.extend(repo_satisfied)
+
+    if repo_problems:
+        c.status = FAIL
+        c.detail = "no restore path in the repo: " + "; ".join(repo_problems)
+        return c
 
     if not box:
         c.status = SKIP
         c.detail = (
-            "local mode — systemd units and " + backup_dir_raw
-            + " only exist on the box"
+            "the repo half is satisfied (see notes), but whether a backup has "
+            f"actually landed recently is only answerable on the box — "
+            f"{backup_dir_raw} and the schedule live there"
         )
-        c.remediation = remediation
         return c
 
     problems: list[str] = []
 
-    # (a) the timer
-    if shutil.which("systemctl") is None:
-        problems.append("systemctl is not on PATH")
+    if not backup_dir.is_dir():
+        problems.append(f"{backup_dir} does not exist")
     else:
+        entries = list(backup_dir.iterdir())
+        if not entries:
+            problems.append(f"{backup_dir} is empty — nothing has ever landed")
+        else:
+            newest = max(entries, key=lambda p: p.stat().st_mtime)
+            age_h = (time.time() - newest.stat().st_mtime) / 3600.0
+            if age_h > _BACKUP_MAX_AGE_SECONDS / 3600.0:
+                problems.append(
+                    f"newest backup {newest.name} is {age_h:.1f}h old (>48h) — "
+                    "whatever schedule was installed is not running"
+                )
+            else:
+                c.notes.append(f"newest backup {newest.name} is {age_h:.1f}h old")
+
+            # Is there a dump in it, and does it plausibly carry rows?
+            dumps = (
+                [p for p in newest.iterdir()
+                 if p.is_file() and p.name.endswith(_DUMP_SUFFIXES)]
+                if newest.is_dir()
+                else ([newest] if newest.name.endswith(_DUMP_SUFFIXES) else [])
+            )
+            if not dumps:
+                problems.append(
+                    f"{newest} contains no dump file "
+                    f"({', '.join(_DUMP_SUFFIXES)}) — a dated directory is not "
+                    "a backup"
+                )
+            else:
+                biggest = max(dumps, key=lambda p: p.stat().st_size)
+                size = biggest.stat().st_size
+                if size < _MIN_DUMP_BYTES:
+                    problems.append(
+                        f"the largest dump in {newest.name} is {biggest.name} "
+                        f"at {size / 1024:.0f} kB, under the "
+                        f"{_MIN_DUMP_BYTES // 1024} kB floor — that is the "
+                        "size of a --schema-only dump, i.e. zero rows"
+                    )
+                else:
+                    c.notes.append(
+                        f"largest dump {biggest.name} is "
+                        f"{size / (1024 * 1024):.1f} MB"
+                    )
+
+            # A MANIFEST is not a BO-23 done-when, so it is read when present
+            # and never required. Reported because it is what tells an operator
+            # what was true when the backup was taken.
+            manifest = (newest / "MANIFEST.txt") if newest.is_dir() else None
+            if manifest is not None and manifest.is_file():
+                c.notes.append(f"{manifest.name} is present and readable")
+
+    # The schedule, probed but not asserted by name: BO-23 ships no unit file,
+    # and installing one is the owner's act. Freshness above is the assertion.
+    if shutil.which("systemctl") is not None:
         try:
             proc = subprocess.run(
                 ["systemctl", "is-active", unit],
@@ -627,46 +996,29 @@ def check_backups(env: Env, box: bool) -> Check:
             state = proc.stdout.strip() or proc.stderr.strip()
         except (OSError, subprocess.SubprocessError) as exc:
             state = f"error: {exc}"
-        if state != "active":
-            problems.append(f"{unit} is '{state}', not 'active'")
-
-    # (b)-(d) the artefacts
-    if not backup_dir.is_dir():
-        problems.append(f"{backup_dir} does not exist")
-    else:
-        subdirs = [d for d in backup_dir.iterdir() if d.is_dir()]
-        if not subdirs:
-            problems.append(f"{backup_dir} contains no backup directory")
+        if state == "active":
+            c.notes.append(f"{unit} is active")
         else:
-            newest = max(subdirs, key=lambda d: d.stat().st_mtime)
-            age_h = (time.time() - newest.stat().st_mtime) / 3600.0
-            manifest = newest / "MANIFEST.txt"
-            if not manifest.is_file():
-                problems.append(f"{manifest} is missing")
-            else:
-                try:
-                    manifest.read_text(encoding="utf-8", errors="replace")
-                except OSError as exc:
-                    problems.append(f"{manifest} is unreadable: {exc}")
-            if age_h > _BACKUP_MAX_AGE_SECONDS / 3600.0:
-                problems.append(
-                    f"newest backup {newest.name} is {age_h:.1f}h old (>48h)"
-                )
-            else:
-                c.notes.append(
-                    f"newest backup {newest.name} is {age_h:.1f}h old"
-                )
+            c.notes.append(
+                f"no active '{unit}' (systemctl says '{state}'). Not a "
+                "failure: BO-23 specifies scripts and a runbook, not a unit "
+                "name, so the schedule may be cron or a differently-named "
+                "timer. Set BACKUP_TIMER to name it. The freshness check above "
+                "is what actually proves a schedule is running."
+            )
 
     if problems:
         c.status = FAIL
         c.detail = "; ".join(problems)
-        c.remediation = remediation
-    else:
-        c.status = PASS
-        c.detail = (
-            f"{unit} is active and {backup_dir} holds a readable backup "
-            "newer than 48h"
-        )
+        return c
+
+    c.status = PASS
+    c.remediation = ""
+    c.detail = (
+        f"the repo carries a backup script, a pg_restore inverse, a verified "
+        f"runbook and a pre-migration hook, and {backup_dir} holds a dump "
+        "newer than 48h with rows in it"
+    )
     return c
 
 
@@ -1084,10 +1436,10 @@ def main(argv: list[str] | None = None) -> int:
     db = Psql(env, enabled=box)
 
     checks = [
-        check_internal_token(env),
-        check_executive_emails(env),
+        check_internal_token(env, box),
+        check_executive_emails(env, box),
         check_caddy_strip(env, box),
-        check_backups(env, box),
+        check_restore_path(env, box),
         check_roles_seeded(db),
         check_centers_reachable(db),
         check_default_deny(env, db),

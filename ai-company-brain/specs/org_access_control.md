@@ -78,7 +78,7 @@ A role is a named bundle of permissions, scoped to an organization. Five are see
 |---|---|---|
 | `owner` | The person who owns the deployment. | `*` |
 | `admin` | Runs the platform day to day. | `admin:*`, `feature:*`, `agents:*`, `apps:*`, `integrations:*`, `data:org:read` |
-| `manager` | Sees org-wide data, cannot change platform config. | all `feature:*` except `build.*`, `agents:run:*`, `apps:use:*`, `data:org:read`, `admin:members:read` |
+| `manager` | Reads the member directory; cannot change platform config. | `feature:` chat, email, whatsapp, tasks, notes, memory, dashboard, observability, artifacts, approvals; `agents:run:*`; `apps:use:*`, `apps:create`; `data:org:read`; `admin:members:read` |
 | `member` | Default for a new employee. | `feature:` chat, email, tasks, notes, memory, artifacts, dashboard; `agents:run:*`; `apps:use:*` |
 | `guest` | Contractor / external collaborator. | `feature:chat`, `apps:use:*` |
 
@@ -88,7 +88,9 @@ A member may hold several roles; grants are the **union**. Note what `member` de
 
 > ⚠️ **This table is incomplete and one cell of it is stale — measured 2026-08-04, see `colleague_onboarding.md` §3.0.**
 > **(a)** These are `130_org_access_control.sql`'s grants only. `131_integration_memory_permissions.sql` adds more to four of the six roles — notably `member` also gets `integrations:use:*` **and `memory:read_org`** (`131:70-78`), while `guest` gets nothing (`131:80`). Quoting this table alone gets `member` wrong.
-> **(b)** `manager`'s *"Sees org-wide data"* is **not true as written**: `data:org:read` has **zero consumers** — nothing in the repository ever checks it (`permissions.py:132` declares it, `130:205, 221, 258` grant it, `access.py:148` lists it, and no route, query or predicate reads it). What actually widens a `manager` is `admin:members:read`, which is the auth floor for the **whole** `/admin` package (`routes/admin/_common.py:77-91`), plus `feature:approvals`/`observability`/`whatsapp` and `memory:write_org`. Recorded as **D14** in `work_plan.md` §3 (`agent-proposed, owner may overrule`). Do not write acceptance criteria against `data:org:read` until it has a consumer.
+> **(b)** `manager`'s former *"Sees org-wide data"* intent is **not true as written**: `data:org:read` has **zero consumers** — nothing in the repository ever checks it (`permissions.py:132` declares it, `130:205, 221, 258` grant it, `access.py:148` lists it, and no route, query or predicate reads it). What actually widens a `manager` is `admin:members:read`, which is the auth floor for the **whole** `/admin` package (`routes/admin/_common.py:77-91`), plus `feature:approvals`/`observability`/`whatsapp` and `memory:write_org`. Recorded as **D14** in `work_plan.md` §3 (`agent-proposed, owner may overrule`). Do not write acceptance criteria against `data:org:read` until it has a consumer.
+>
+> **(c)** `manager`'s **Grants** cell used to read *"all `feature:*` except `build.*`"*. That was wrong in five slugs, not one: the seeded list (`130:216-221`) omits `feature:workflows`, `feature:integrations`, `feature:models`, `feature:agents` **and every `center.*`**, on top of both Build panes. The cell above is now the literal array, and `manager`'s **Intent** was reworded for the same reason as (b) — what it actually has is `admin:members:read`, not org-wide data.
 >
 > The role × app capability matrix — what each role can *actually see*, per app, with the `file:line` that settles each cell — lives in [`colleague_onboarding.md`](colleague_onboarding.md) §3, not here.
 

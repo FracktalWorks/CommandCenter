@@ -92,6 +92,27 @@ scripts/restore_db.sh --table gtd_task
 scripts/restore_db.sh --target acb --force
 ```
 
+## 3a. 🔴 Merge precondition — read before landing the PR
+
+`scripts/apply_migrations.sh` now **fails closed** without a pre-migration
+dump, and that runner is on the release path. **`backup_db.sh` has never been
+executed** — no agent was permitted to run it against the production database.
+
+So the fail-closed gate is, until proven, an untested script that can break
+every release. Run it by hand **once** before merging:
+
+```bash
+ssh <box> 'bash /opt/acb/app/scripts/backup_db.sh --verify-restore'
+```
+
+Expect `restore verified` and `public tables: live=N restored=N`. If it fails,
+either fix it or land the PR with `SKIP_PRE_MIGRATION_BACKUP=1` set in the
+release environment until it passes — do not merge and hope.
+
+The script's own failure modes are bounded (it writes to a fresh timestamped
+directory, and exits non-zero before touching anything), so a failed run costs
+a directory, not data.
+
 ## 4. Still open — OWNER-GATE
 
 These could not be completed by an agent. Two independent guards refused:

@@ -275,6 +275,52 @@ async def test_recording_enforces_account_ownership(monkeypatch) -> None:
     assert exc.value.status_code == 404
 
 
+# ── event timeline ────────────────────────────────────────────────────────────
+
+async def test_timeline_returns_events_in_order(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {
+        "call": {"call_id": "A", "phase": "ended", "audio_seconds": 4.2},
+        "events": [
+            {"at": "2026-08-02T20:00:00.000Z", "kind": "signal", "detail": "dialled"},
+            {"at": "2026-08-02T20:00:01.000Z", "kind": "audio",
+             "detail": "uplink closed: status=1006"},
+        ],
+    })
+    out = await calls.call_events("A", "acct", _User())
+    assert [e.kind for e in out.events] == ["signal", "audio"]
+    assert "1006" in out.events[1].detail
+    assert out.call.audio_seconds == 4.2
+
+
+async def test_timeline_survives_a_down_bridge(monkeypatch) -> None:
+    """The timeline is what you reach for when things are broken; it must not
+    be the thing that breaks."""
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, calls._BRIDGE_DOWN, {})
+    out = await calls.call_events("A", "acct", _User())
+    assert out.bridge_reachable is False
+    assert out.events == []
+
+
+async def test_timeline_ignores_malformed_events(monkeypatch) -> None:
+    _patch_db(monkeypatch, _Row("live"))
+    _patch_bridge(monkeypatch, 200, {
+        "call": {"call_id": "A"},
+        "events": [{"at": "t", "kind": "k", "detail": "d"}, "junk", None],
+    })
+    out = await calls.call_events("A", "acct", _User())
+    assert len(out.events) == 1
+
+
+async def test_timeline_enforces_account_ownership(monkeypatch) -> None:
+    _patch_db(monkeypatch, None)
+    _patch_bridge(monkeypatch, 200, {})
+    with pytest.raises(HTTPException) as exc:
+        await calls.call_events("A", "someone-elses", _User())
+    assert exc.value.status_code == 404
+
+
 # ── diagnostics ───────────────────────────────────────────────────────────────
 
 async def test_diagnostics_reports_bridge_verdict(monkeypatch) -> None:

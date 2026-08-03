@@ -125,6 +125,7 @@ func (s *Server) handleCallAudio(w http.ResponseWriter, r *http.Request) {
 	})
 	if err != nil {
 		s.log.Warnf("call %s: audio websocket accept: %v", callID, err)
+		lc.event("error", "audio websocket upgrade failed: %v", err)
 		return
 	}
 	defer func() { _ = conn.CloseNow() }()
@@ -142,7 +143,13 @@ func (s *Server) handleCallAudio(w http.ResponseWriter, r *http.Request) {
 	defer detach()
 
 	s.log.Infof("call %s: browser audio attached", callID)
-	defer s.log.Infof("call %s: browser audio detached", callID)
+	lc.event("audio", "browser attached (mic + speakers)")
+	var up, down int64
+	defer func() {
+		s.log.Infof("call %s: browser audio detached", callID)
+		lc.event("audio", "browser detached — %d mic frames up, %d peer frames down",
+			up, down)
+	}()
 
 	// Uplink: browser mic → call. Runs in its own goroutine; when it returns
 	// (socket closed) it cancels the downlink too.
@@ -153,11 +160,18 @@ func (s *Server) handleCallAudio(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				if !errors.Is(err, context.Canceled) {
 					s.log.Infof("call %s: audio uplink closed: %v", callID, err)
+					// The close status is the single most useful number when a
+					// browser's audio dies — record it verbatim.
+					lc.event("audio", "uplink closed after %d frames: status=%s err=%v",
+						up, websocket.CloseStatus(err), err)
 				}
 				return
 			}
 			if typ != websocket.MessageBinary || len(data) < 2 {
 				continue // control/text chatter, or a runt frame
+			}
+			if up++; up == 1 {
+				lc.event("audio", "first microphone frame received from the browser")
 			}
 			src.push(pcmToFloat(data))
 		}
@@ -177,7 +191,12 @@ func (s *Server) handleCallAudio(w http.ResponseWriter, r *http.Request) {
 			wcancel()
 			if err != nil {
 				s.log.Infof("call %s: audio downlink closed: %v", callID, err)
+				lc.event("audio", "downlink closed after %d frames: status=%s err=%v",
+					down, websocket.CloseStatus(err), err)
 				return
+			}
+			if down++; down == 1 {
+				lc.event("audio", "first peer frame sent to the browser")
 			}
 		}
 	}

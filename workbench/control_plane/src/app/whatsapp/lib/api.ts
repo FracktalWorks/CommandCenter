@@ -8,6 +8,7 @@ import type {
   WaCall,
   WaCallDiagnostics,
   WaCallList,
+  WaCallTimeline,
   WaCategory,
   WaChat,
   WaChatContext,
@@ -363,6 +364,16 @@ export function placeCall(input: {
     group_id: input.groupId ?? "",
     targets: input.targets ?? [],
   });
+}
+
+export function fetchCallEvents(
+  accountId: string,
+  callId: string
+): Promise<WaCallTimeline> {
+  return getJSON<WaCallTimeline>(
+    `calls/${encodeURIComponent(callId)}/events?account_id=${encodeURIComponent(accountId)}`,
+    { call: null, events: [], bridge_reachable: false }
+  );
 }
 
 export function callAction(

@@ -24,6 +24,8 @@ import {
   Phone,
   PhoneIncoming,
   PhoneOff,
+  ClipboardCheck,
+  ClipboardList,
   Stethoscope,
   Users,
   Volume2,
@@ -33,12 +35,13 @@ import {
   callAction,
   fetchAccounts,
   fetchCallDiagnostics,
+  fetchCallEvents,
   fetchCalls,
   placeCall,
 } from "../lib/api";
 import { callRecordingUrl } from "../lib/types";
 import type { WaAccount, WaCall, WaCallDiagnostics } from "../lib/types";
-import { prepareCallAudio } from "../lib/callAudio";
+import { prepareCallAudio, readAudioLog } from "../lib/callAudio";
 import type { CallAudioState, PreparedCallAudio } from "../lib/callAudio";
 
 /** Phases where the call is still going — drives polling and the hangup button. */
@@ -118,6 +121,9 @@ export default function WhatsAppCallsPage() {
   const [diag, setDiag] = useState<WaCallDiagnostics | null>(null);
   const [showDiag, setShowDiag] = useState(false);
   const [prefillName, setPrefillName] = useState("");
+  const [report, setReport] = useState<string | null>(null);
+  const [reportBusy, setReportBusy] = useState(false);
+  const [copied, setCopied] = useState(false);
   const [audioState, setAudioState] = useState<CallAudioState>("idle");
   const [audioCallId, setAudioCallId] = useState<string | null>(null);
   const [muted, setMuted] = useState(false);
@@ -317,6 +323,62 @@ export default function WhatsAppCallsPage() {
     if (!accountId) return;
     setShowDiag(true);
     setDiag(await fetchCallDiagnostics(accountId));
+  }
+
+  /**
+   * Assemble everything needed to diagnose a call into one pasteable block:
+   * what the server saw, what the browser saw, and the environment. Deliberately
+   * plain text — a bug report should survive a chat window.
+   */
+  async function buildReport(call: WaCall): Promise<string> {
+    const [timeline, readiness] = await Promise.all([
+      fetchCallEvents(accountId, call.call_id),
+      fetchCallDiagnostics(accountId),
+    ]);
+    const lines: string[] = [
+      "=== WhatsApp call debug report ===",
+      `generated: ${new Date().toISOString()}`,
+      `call: ${call.call_id}  (${call.direction} ${call.kind})`,
+      `phase: ${call.phase}  media_ready: ${call.media_ready ?? false}  ` +
+        `audio: ${(call.audio_seconds ?? 0).toFixed(1)}s`,
+      `client audio state: ${audioState}${muted ? " (muted)" : ""}`,
+      "",
+      "--- readiness ---",
+      `bridge_reachable=${readiness.bridge_reachable} connected=${readiness.connected} ` +
+        `logged_in=${readiness.logged_in} caller_ready=${readiness.caller_ready}`,
+      `verdict: ${readiness.verdict}`,
+      "",
+      "--- server timeline ---",
+      ...(timeline.bridge_reachable
+        ? timeline.events.length
+          ? timeline.events.map((e) => `${e.at}  [${e.kind}] ${e.detail}`)
+          : ["(no events recorded)"]
+        : ["(bridge unreachable — no server timeline)"]),
+      "",
+      "--- browser timeline ---",
+      ...(readAudioLog().length
+        ? readAudioLog().map((e) => `${e.at}  ${e.detail}`)
+        : ["(no browser audio events — audio was never started)"]),
+    ];
+    // Peer numbers are personal data and add nothing to a protocol bug.
+    return lines.join("\n");
+  }
+
+  async function copyReport(call: WaCall) {
+    setReportBusy(true);
+    try {
+      const text = await buildReport(call);
+      setReport(text);
+      try {
+        await navigator.clipboard.writeText(text);
+        setCopied(true);
+        setTimeout(() => setCopied(false), 2500);
+      } catch {
+        /* clipboard blocked — the text is on screen to copy by hand */
+      }
+    } finally {
+      setReportBusy(false);
+    }
   }
 
   async function act(action: "hangup" | "answer" | "reject", call: WaCall) {
@@ -684,6 +746,21 @@ export default function WhatsAppCallsPage() {
                   )
                 ) : null}
 
+                <button
+                  onClick={() => void copyReport(c)}
+                  disabled={reportBusy}
+                  title="Copy a debug report for this call"
+                  className="shrink-0 rounded-lg border border-border px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground tech-transition disabled:opacity-50"
+                >
+                  {reportBusy ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : copied ? (
+                    <ClipboardCheck className="h-3.5 w-3.5 text-success" />
+                  ) : (
+                    <ClipboardList className="h-3.5 w-3.5" />
+                  )}
+                </button>
+
                 {c.direction === "incoming" && c.phase === "ringing" ? (
                   <div className="flex gap-1.5">
                     <button
@@ -711,6 +788,46 @@ export default function WhatsAppCallsPage() {
               </div>
             ))}
           </div>
+        </section>
+      )}
+
+      {/* The report itself — shown as well as copied, because the clipboard is
+          blocked in plenty of contexts and a report you can't get out of the
+          browser is no report at all. */}
+      {report && (
+        <section className="mt-4 rounded-2xl border border-border bg-card p-4">
+          <div className="mb-2 flex items-center justify-between gap-2">
+            <h2 className="flex items-center gap-1.5 text-xs font-semibold text-foreground">
+              <ClipboardList className="h-3.5 w-3.5" />
+              Debug report {copied && <span className="text-success">· copied</span>}
+            </h2>
+            <div className="flex gap-2">
+              <button
+                onClick={() => void navigator.clipboard.writeText(report)}
+                className="text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                Copy again
+              </button>
+              <button
+                onClick={() => setReport(null)}
+                className="text-[10px] text-muted-foreground hover:text-foreground"
+              >
+                Dismiss
+              </button>
+            </div>
+          </div>
+          <textarea
+            readOnly
+            value={report}
+            rows={14}
+            onFocus={(e) => e.currentTarget.select()}
+            className="w-full resize-y rounded-lg border border-border bg-background p-2 font-mono text-[10px] leading-relaxed text-foreground"
+          />
+          <p className="mt-1.5 text-[10px] text-muted-foreground">
+            Paste this into the conversation. It carries the server timeline,
+            the browser timeline and any websocket close codes — no phone
+            numbers and no tokens.
+          </p>
         </section>
       )}
 

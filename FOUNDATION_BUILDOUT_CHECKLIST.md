@@ -2,7 +2,8 @@
 
 **Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13 · **Competitive refs added:** 2026-07-13
 **§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0). **That decision was answered on 2026-08-02 — `BO‑20 = Option A (in‑process)`** — so nothing in §BO‑20 is blocked on a decision any more. **BO‑20f and BO‑20a are BUILT (both 2026-08-02) and BO‑20b slice 1 (`emit_event` strict mode) 2026-08-03, moving §BO‑20 ☐ → ◑; BO‑20b slice 2 and BO‑20c–e are open and dispatchable.** ⚠️ **Slice 1 is necessary but NOT sufficient** (adversarial review 2026-08-03): the only sink production registers, `workflows.triggers.dispatch_event`, swallows every exception, so `raise_on_error=True` is a no‑op on the real registry — **slice 2's scope grew** to include a matching strict path in `dispatch_event`, and the §BO‑20 non‑goal "Not a change to `dispatch_event`" is struck and qualified. Two claims in the stamp above were made false by BO‑20a and are corrected in place below: `xreadgroup`/`xgroup`/`xack` now exist (in `ingestion/consumer.py` only), and the lifespan's supervised loops are **six** wired / **all six** stopped on shutdown (how many actually *start* is data‑dependent — see §BO‑20 "What is true today" §7, which counts it honestly; the new ingestion consumer joins WhatsApp enrichment as flag‑gated **off**, so it starts nowhere today). `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
-**Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block) · competitive learnings (proven reference implementations from Hermes Agent & OpenClaw) in `ai-company-brain/specs/competitive_hardening_2026-07.md` (`CH-*`) and `COMPETITIVE_COMPARISON.md`.
+**§BO‑10 / §BO‑13 / §BO‑14 / §BO‑15 / §BO‑19 re-measured and corrected, §BO‑23 added, and the "can we go app by app?" verdict block added: 2026-08-03** (WS‑0 truth pass, second commit on PR #344). Verified this pass by measuring, not by reading the prior doc: the **12** `create_async_engine` call sites across 10 modules and the fact that the 8 cached singletons are never disposed (BO‑10 said "three+"); `executor.py` at **5,010** lines and `run_agent_stream` at **~1,942** (BO‑13 claimed 4,069 / ~1,600 — both July numbers the file has since grown past); `permission_policy.decide`'s two hard‑veto return paths and `install_dependency`'s `destructive: True` annotation (BO‑14 claimed the gate "can never deny" and the registry was "empty" — **both false**); `model_limits.py` as the retired‑five‑sources context‑window SoT versus `_TIER_DEFAULTS` + three still‑on‑disk config files (BO‑15 is **half** closed, not closed and not untouched); the root `AGENTS.md`'s deleted version table and `infra/AGENTS.md`'s corrected proxy/Langfuse lines (BO‑19 → ✅); `dump_schema.sh`'s `--schema-only`, `apply_migrations.sh`'s 140‑file `ON_ERROR_STOP=1` replay, the absence of any WAL/pgbackrest/wal‑g config, and `deploy/hostinger/README.md:115` (→ **BO‑23**); and, live against GitHub, `branches/main/protection` → 404 with `rulesets` → `[]`. **Two audit claims handed to this pass were wrong and are not transcribed:** BO‑14/BO‑15 were described as fully closed (BO‑14's defects are closed but its *residual* is real and different; BO‑15 is half). Tenancy/visibility architecture from the same day lives in `ai-company-brain/specs/tenancy_and_visibility.md`, not here.
+**Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block) · competitive learnings (proven reference implementations from Hermes Agent & OpenClaw) in `ai-company-brain/specs/competitive_hardening_2026-07.md` (`CH-*`) and `COMPETITIVE_COMPARISON.md` · tenancy + visibility architecture of record in `ai-company-brain/specs/tenancy_and_visibility.md`.
 
 > **🚀 Deploy status:** read live deploy state from `gh run list` and `git log origin/main` — not from this doc. Next recommended P0: **BO‑8** (secret rotation + history purge — owner‑gated); BO‑1's approval loop has since shipped (see §BO‑1).
 > **Update 2026-08-01 (doc-truth pass):** the previous pinned‑commit claim here (`origin/main = ccccdc8`, unpushed `1684e1a`) was a 2026‑07‑13 snapshot and went stale; this doc no longer tracks deploy state.
@@ -12,6 +13,32 @@ This is the list of foundational capabilities that are **missing, partially impl
 **Priority legend:** **P0** = do before any new feature work · **P1** = next hardening sprint · **P2** = scheduled tech‑debt · **P3** = opportunistic.
 
 **Status legend:** ☐ not started · ◑ partial · ✅ done this pass.
+
+---
+
+## Verdict — can we go app by app? *(2026‑08‑03)*
+
+**Yes, with three exceptions.** The owner asked whether the foundation is complete
+enough to stop doing platform work and start doing app work. It is: auth is
+default‑deny and enforced by construction (BO‑2 ✅), the Action Broker is a live
+audited chokepoint (BO‑1 ◑ with three lettered tickets), the runtime story is
+settled (BO‑12 ✅), the permission gate denies the two things that matter
+(BO‑14, corrected below), and the event intake substrate is half built and
+sequenced (BO‑20 ◑). None of that blocks the next app.
+
+**Three items are exceptions.** They are not app work, they do not improve by
+being deferred behind app work, and **one of them gets worse with every app
+added**:
+
+| # | Exception | Item | The one‑line reason |
+|---|---|---|---|
+| 1 | **`main` has no branch protection** | §BO‑17 / `work_plan.md` WS‑5 | Verified live 2026‑08‑03: branch protection → **404**, rulesets → **`[]`**. Every "blocking" gate in the workflow YAMLs is therefore decorative, and every app shipped from here inherits that. **OWNER‑GATE** — a GitHub settings change no agent can make. |
+| 2 | **No backup / restore path** | **§BO‑23** (new, below) | Schema‑only dump, no data dump, no restore, no PITR — while 140 migrations replay forward‑only on every deploy under `ON_ERROR_STOP=1` with no down‑migrations. Largest uncovered risk; scales with app count. Scripts + runbook are AGENT‑SAFE, **execution is OWNER‑GATE**. |
+| 3 | **DB engine sprawl** | §BO‑10 | **12 `create_async_engine` call sites across 10 modules** (+ one sync engine), 8 of them undisposed process‑lifetime singletons. One arrived per app. **This is the only item whose cost compounds per app** — fix the seam before the next app, not after. |
+
+Nothing else on this list needs to be closed first. Items 1 and 2 are risk
+containment the owner must action; item 3 is the one an agent should fix before
+the next app opens engine number 13.
 
 ---
 
@@ -152,8 +179,23 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 
 ### BO‑10 — Consolidate DB access to one engine/pool *(P2)* ◑
 - **Done (Session 2, 2026‑07‑13):** **every** engine now bounds the CONNECT phase so a slow/unreachable DB can't hang callers — `settings.db_connect_timeout` (default 10s) on `acb_graph.get_engine()` (`ccccdc8`, live in prod), the two gateway asyncpg engines (`1684e1a`), and the four `email_ingestion` async engines (`1ff6c0d`, local, unpushed) via `connect_args={"timeout": …}`. This makes `acb_audit.record()`'s "never block the caller" guarantee real against a hung connect. Test: `tests/unit/test_db_connect_timeout.py`.
-- **Missing:** still three+ engines (`acb_graph/db.py`, `routes/tasks/core.py`, `routes/email/core.py`, plus per‑call engines in `email_ingestion/{scheduler,inbound}.py` that also leak — BO‑9), the foundational one otherwise unconfigured; sync `acb_audit.record()` still blocks the async loop (H11) — connect_timeout bounds the hang but the call is still synchronous.
-- **Approach:** Provide a single configured async engine in `acb_graph` (sized pool), funnel all callers through it, and make `acb_audit.record()` async (or always call via `to_thread`).
+- **Missing — the "three+" above was written in July and is now materially wrong; re‑measured 2026‑08‑03.** It is **12 `create_async_engine(...)` call sites across 10 modules**, plus a 13th **sync** `create_engine` in `acb_graph/db.py:32`:
+  | Module | Sites | Shape |
+  |---|---|---|
+  | `packages/acb_auth/acb_auth/access.py:69` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/admin/_common.py:62` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/apps/_common.py:89` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/email/core.py:404` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/notes/core.py:160` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/tasks/core.py:161` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/whatsapp/core.py:135` | 1 | cached `_ENGINE` singleton |
+  | `gateway/routes/workflows/core.py:64` | 1 | cached `_ENGINE` singleton |
+  | `email_ingestion/inbound.py:273` | 1 | per‑call, disposed at `:288` |
+  | `email_ingestion/scheduler.py:142, 527, 560` | 3 | per‑call, disposed at `:424`/`:540`/`:590` |
+  | `packages/acb_graph/acb_graph/db.py:32` | (1 sync) | `create_engine`, a different flavour again |
+  **The eight cached singletons are never disposed** — repo‑wide, the only `engine.dispose()` calls are the four `email_ingestion` per‑call engines cleaning up after themselves, and nothing in the gateway lifespan disposes anything (BO‑9). Also still open: sync `acb_audit.record()` blocks the async loop (H11) — connect_timeout bounds the hang but the call is still synchronous.
+- **Why it moved up the list:** the count grew by *one engine per app* — `notes`, `whatsapp`, `workflows` and `apps` all arrived with their own. This is the only foundation item whose cost **compounds per app**, so it is the one to fix before the next app rather than after (see `work_plan.md` §2's "Can we go app by app?" block, exception 3).
+- **Approach:** Provide a single configured async engine in `acb_graph` (sized pool), funnel all callers through it, dispose it in the gateway lifespan, and make `acb_audit.record()` async (or always call via `to_thread`).
 
 ### BO‑11 — Decide `acb_schemas`: wire in or delete *(P2)* ✅
 - **Done:** deleted the package (0 production importers, drifted from the ORM — H10). Removed its 7 `pyproject` dependency declarations + `tool.uv.sources` entry, the smoke‑test import, and the stale "wire/API surface" comment in `acb_graph/models.py`; re‑locked. Bonus: this exposed a latent under‑declared dependency — `orchestrator/triage/schema.py` uses pydantic `EmailStr` (needs `email‑validator`) but only got it transitively via `acb_schemas`; now declared explicitly as `pydantic[email]` on the orchestrator.
@@ -174,6 +216,37 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 - **Note:** until this lands, new apps needing search should copy the Workflows stance — deterministic keyword ranking, no private embedding stacks.
 
 
+### BO‑23 — Backup, restore, and point‑in‑time recovery *(P0)* ☐ *(new — 2026‑08‑03, WS‑0 truth pass; verified against the tree)*
+
+> **This is the largest uncovered risk on the platform, and it scales with app count.** Every app that ships adds tables whose only copy is one Postgres volume on one VPS. It is filed P0 rather than P2 because unlike every other item here, the failure mode is *unrecoverable* — there is nothing to fix afterwards.
+
+**What is true today (each claim measured 2026‑08‑03, not inherited):**
+
+1. **There is no data backup.** The only Postgres dump script in the repo is `scripts/dump_schema.sh`, and it runs `pg_dump --schema-only --no-owner --no-privileges` (`:52`) writing `infra/postgres/schema.generated.sql`. That is **structure with zero rows** — it exists so humans and agents can read the current schema shape in one file, and it is explicitly *not* a backup.
+2. **There is no restore path.** Repo‑wide there is no `pg_restore`, no logical data dump, no `--data-only`, and no restore runbook. A grep for `pg_dump|pg_restore|pgbackrest|wal-g|barman` across `*.sh|*.yml|*.yaml|*.py` returns exactly two files: `scripts/apply_migrations.sh` and `scripts/dump_schema.sh`.
+3. **There is no PITR.** `archive_mode`, `wal_level` and `archive_command` appear nowhere in `infra/` or `deploy/`; the Postgres compose service (`infra/docker-compose.yml:34-37`) mounts one named volume, `acb-postgres-data`, with default settings.
+4. **The only backup that exists is outside the repo and outside our control.** `deploy/hostinger/README.md:115`: *"Hostinger takes weekly backups of the whole VPS automatically (included in plan). For Postgres‑level point‑in‑time recovery later, add `pgbackrest` or a `pg_dump` cron job."* Honest, but it means the worst case is **up to seven days of data loss**, from an image whose restore has never been exercised.
+5. **Migrations auto‑apply on every deploy, forward‑only.** `scripts/apply_migrations.sh` replays every numbered file from `02_` upward, in `sort -V` order, through `psql -v ON_ERROR_STOP=1` (`:59-74`), exiting non‑zero on the first failure. **140** files are replayed today (**142** numbered files on disk; `00_`/`01_` are initdb‑only). There is no ledger, no down‑migration, and no dry run. A migration that is idempotent in intent but not in fact takes the deploy down mid‑ladder with the database in a partially‑migrated state — and item 1 means there is nothing to roll back to.
+6. **Redis has no persistence configured either.** `infra/` sets no `appendonly`, which `work_plan.md`'s WS‑4 row already records from the other direction: BO‑20b's retry counter *"survives a gateway restart but not a Redis one"*.
+
+**Done when:**
+
+1. `scripts/backup_db.sh` exists: a **data‑inclusive** `pg_dump -Fc` of the application database to a timestamped file, with the same `.env`/container‑name resolution shape as `dump_schema.sh` and `apply_migrations.sh` (so the three are operationally consistent), plus a retention sweep and a non‑zero exit on any failure.
+2. `scripts/restore_db.sh` exists and is the **documented inverse** — `pg_restore` into a named database, refusing by default to target the live one without an explicit `--force`‑style flag.
+3. A runbook (`deploy/hostinger/RESTORE.md` or a section in that README) states, in order: how to take an ad‑hoc backup before a risky deploy, how to restore into a scratch database, how to verify the restore (a row‑count or checksum assertion against a known table), and how to cut over. **A backup nobody has restored is not a backup** — the runbook must contain the verification step, not just the commands.
+4. A pre‑migration hook: `apply_migrations.sh` (or the deploy step that calls it) takes a backup **before** replaying the ladder, or refuses to run without one. This is the clause that makes items 1 and 5 above stop compounding.
+5. The `deploy/hostinger/README.md:115` "add it later" note is replaced by a pointer to what now exists.
+6. Whatever ships is reflected in `infra/AGENTS.md` and `deploy/AGENTS.md` (DOX pass).
+
+**Gate labels — read this before dispatching:**
+
+- **AGENT‑SAFE:** writing the two scripts, the runbook, and the doc updates. These are files in the repo.
+- **OWNER‑GATE:** *executing* any of it. Running a backup, running a restore, configuring WAL archiving, provisioning off‑box storage, and changing the deploy pipeline all reach the VPS and the production database — `work_plan.md` §6, and the `plan-guard.mjs` hook enforces it independently. An agent must write the tooling, verify it only by reading it, and hand execution to the owner. ⚠️ **Also verify the hook's posture on the paths you intend to write** before promising a PR: `plan-guard` blocks agent *commands* that reach the VPS, and an implementer should confirm rather than assume that authoring a new `scripts/*_db.sh` is permitted.
+- **Explicit non‑goal:** do not "test" the restore against the live database. The scratch‑database path in done‑when 3 is the whole point.
+
+**Dependencies:** none in code. It does *not* wait on BO‑6 (Alembic) — a backup is useful under raw numbered migrations and more useful, not less, because of them.
+
+
 ---
 
 ## D. Orchestration & runtime
@@ -183,7 +256,9 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 - **Competitive ref (CH‑5):** Hermes's multi‑agent layer (orchestrator + isolated sub‑agents exchanging **typed result objects**, resource‑aware concurrency limits, Kanban dispatch) is more built‑out than ours on coordination mechanics — the reference when we finally instantiate the Workflow engine and replace bare‑string sub‑agent handoffs (ties to HH‑7). See `specs/competitive_hardening_2026-07.md`.
 
 ### BO‑13 — Break up the executor monolith *(P2)* ◑
-- **Done this pass (behaviour‑preserving extractions, each verified green):** the 5,094‑line file is down to **4,069 lines** via four cohesive‑concern extractions, each re‑exported from `executor` so no importer changed:
+> ⚠️ **The line counts below are stale in the optimistic direction — re‑measured 2026‑08‑03 (WS‑0 truth pass).** `executor.py` is **5,010 lines** (`wc -l`), not 4,069, and `run_agent_stream` is **~1,942 lines** (`:2139` to the next top‑level `def` at `:4081`), not ~1,600. The four extractions below did happen and did work; the file has since **grown back past its pre‑extraction size minus 84 lines** because features kept landing in it. Read the July numbers as a record of what the extractions removed, not as the current state. **The honest headline: the extractions netted ‑84 lines against the original 5,094, and the residual function is larger than when the residual was written.**
+
+- **Done this pass (behaviour‑preserving extractions, each verified green):** the 5,094‑line file was taken down to **4,069 lines** *at the time of that pass* via four cohesive‑concern extractions, each re‑exported from `executor` so no importer changed:
   - `orchestrator/_todo_tracker.py` — todo‑SQL parsing.
   - `orchestrator/_copilot_session.py` — Copilot permission handler + infinite‑session policy.
   - `orchestrator/_tool_injection.py` — platform tool injection + system‑prompt addendum (~630 lines, the biggest cohesive concern).
@@ -192,12 +267,15 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
   - **Tier‑2 batch:** envelope contract (`RUN_STARTED` first → text streamed → `RUN_FINISHED` terminal), run_id/thread_id propagation, agent‑exception → `RUN_ERROR` (not a crash).
   - **Tier‑1 native streaming:** a mock agent that yields MAF‑shaped `run(..., stream=True)` updates → asserts the `TEXT_MESSAGE_START/CONTENT/END` lifecycle and `TOOL_CALL_START/ARGS/RESULT` events (via the real event_translator).
   - **HITL parking (new this pass):** `resolve_user_input` (found / not‑found) and the full `_make_user_input_handler` round‑trip — emits the `user_input_requested` frame to the relay, parks a Future, and returns the answer once `resolve_user_input` fires. Locks the ask_user → prompt → resolve contract.
-- **Residual:** the Tier‑1.5 Copilot‑SDK tier and the idle‑timeout / fall‑through control‑flow branches are still not covered (the Copilot/full‑stream branches can't be exercised on the Windows dev box — they hit the same multi‑point infra hang that deselects this file locally — so they need a Linux/CI‑run harness to add safely); and `run_agent_stream` is still one ~1,600‑line function.
+- **Residual:** the Tier‑1.5 Copilot‑SDK tier and the idle‑timeout / fall‑through control‑flow branches are still not covered (the Copilot/full‑stream branches can't be exercised on the Windows dev box — they hit the same multi‑point infra hang that deselects this file locally — so they need a Linux/CI‑run harness to add safely); and `run_agent_stream` is still one **~1,942‑line** function (`executor.py:2139-4080`, measured 2026‑08‑03 — the "~1,600" this bullet used to claim was a July number that has since grown).
 - **Approach for the residual:** (1) extend the harness to the Copilot tier + HITL/idle branches. (2) THEN extract the native / Copilot / batch tiers behind a `Runtime` strategy interface — the `return`‑to‑end vs fall‑through‑to‑batch control flow is the delicate part, so it needs those branches covered first — and move HITL/session‑store/cleanup into collaborators, guarded by this net + the trajectory evals. (3) Ratchet the xenon absolute ceiling down from F.
 
 ### BO‑14 — Enforce the permission/risk model *(P1)* ◑
 - **Done this pass:** **workspace‑path containment** shipped — `write_artifact`/`save_note`/`recall_notes` routed every caller path through a single `write_artifact.resolve_in_workspace` guard that fails closed on an embedded `..` or an absolute path resolving outside the workspace (previously `write_artifact` could write, and `recall_notes` could READ, arbitrary files). Also fixed a latent bug: `recall_notes` now applies the same `agent-data/` prefixing as `save_note`, so the documented `recall_notes("NOTES.md")` round‑trip actually works. 7 unit tests added.
-- **Missing (the enforcement redesign):** the injected‑tool gate still can never deny (M5) and the destructive platform registry is empty. This is deliberately deferred — `decide()` currently *defers* destructive tools (approves, relying on each tool's own `request_confirmation`), so forcing denials risks false‑blocking legitimate tool use across every agent; it needs a product decision on which tools hard‑block + the confirmation UX.
+- ~~**Missing:** the injected‑tool gate still can never deny (M5) and the destructive platform registry is empty.~~ **Both halves struck 2026‑08‑03 (WS‑0 truth pass) — verified false against the code:**
+  - **The gate CAN deny.** `acb_skills/permission_policy.py::decide` (`:127`) returns `False` on two hard vetoes that run **before** the annotation lookup: `("shell_denied", …)` when the command text matches a deny pattern (`:166-169`) and `("write_out_of_workspace", …)` when a write resolves outside the agent workspace (`:171-176`). Both fail closed and a tool's own annotation cannot waive either.
+  - **The registry is not empty.** `acb_skills/tool_annotations.TOOL_ANNOTATIONS` carries `install_dependency` with `"destructive": True`, with the rationale in place (it installs into the *shared* gateway venv).
+- **The real residual, stated accurately.** `decide()` still **approves** annotated‑destructive tools — the `tool_destructive_defer` branch at `:193-197` returns `True` on purpose, deferring to each tool's own `request_confirmation`. The gap is that, per the annotation registry's own comment on `install_dependency`, **no tool in this codebase yet calls `request_confirmation` on its own behalf before running**, so "defer to the tool's confirmation" defers to a card that never fires. That is BO‑14's job. It stays deferred deliberately: forcing denials risks false‑blocking legitimate tool use across every agent, and it needs a product decision on which tools hard‑block plus the confirmation UX. **Do not read "the gate can never deny" anywhere; it is wrong. Read: the gate denies two things and defers the third.**
 - **Approach for the residual:** annotate the genuinely destructive platform tools (`install_dependency`, outward‑write tools) as `destructive`, pass full call context (not just the name) to `decide`, and make `enforce` mode block destructive/out‑of‑policy calls with a real confirmation card.
 - **Competitive ref (CH‑1):** Hermes ships an always‑on **hardline blocklist** (`rm -rf /`, fork bombs, `mkfs`, disk‑zeroing `dd`) that no mode can override, plus **fail‑closed timeout→deny** on the approval prompt — both worth adopting as the floor. NVIDIA **NemoClaw**'s key idea for OpenClaw is **out‑of‑process policy enforcement**: evaluate the gate *outside* the agent's own tool surface so a prompt‑injected agent can't route around it. See `specs/competitive_hardening_2026-07.md`.
 
@@ -1528,9 +1606,12 @@ non‑blocking style backlog.
 ## E. LLM configuration
 
 ### BO‑15 — Single source of truth for tier→model + context windows *(P1)* ◑
+> **Split verdict, verified against code 2026‑08‑03 (WS‑0 truth pass).** This item bundled two problems and they are now in different states, so "BO‑15's defects are closed" and "BO‑15 is untouched" are **both wrong**. The **context‑window** half is done; the **tier→model** half is not. The ◑ is honest; what follows says which half is which.
+
 - **Done this pass:** the two hand‑synced tier‑alias maps are collapsed — `v1_compat` now imports `acb_llm.client._TIER_ALIAS_MAP` (the map `context.py` and the tests already use) instead of duplicating it.
-- **Missing:** the tier→**model** mapping still has four disagreeing definitions (M3: `client._TIER_DEFAULTS`, `config.yaml`, `tier_overrides.yaml`, `settings.py` comment); `_TIER_CONTEXT_WINDOWS` a stale second copy of what `context.py` computes.
-- **Approach:** Make the DB `model_config` table authoritative; delete `tier_overrides.yaml`, `enabled_models.json`, and the proxy directives in `config.yaml` once seeded; have `settings.py` read windows from `context.py`'s dynamic resolver instead of a hardcoded map.
+- ~~**Missing:** `_TIER_CONTEXT_WINDOWS` a stale second copy of what `context.py` computes.~~ **✅ CLOSED — struck 2026‑08‑03.** `packages/acb_llm/acb_llm/model_limits.py` is now the single source of truth for "how big is this model?" (`get_limits()`), and its module docstring enumerates the five disagreeing sources it retired — including `_TIER_CONTEXT_WINDOWS` "duplicated verbatim in two packages". `settings.py:1494` is now `_TIER_CONTEXT_WINDOWS = FALLBACK_CONTEXT_WINDOWS` — an alias with **the tier aliases deliberately absent** so the dynamic resolution stands (the comment at `:1485-1493` records the bug this fixed: the stale pin was applied *after* dynamic resolution and overwrote it, under‑reporting the UI's context ring by ~7.6×).
+- **Still missing — the tier→model half (M3), re‑verified on disk 2026‑08‑03:** `acb_llm/client.py:37` still defines `_TIER_DEFAULTS` as a hardcoded fallback map, populated at import time from `config.yaml` + `tier_overrides.yaml`; **all three of the files this item wanted deleted still exist** — `infra/litellm/tier_overrides.yaml`, `infra/enabled_models.json`, `infra/provider_models_cache.json` — and the DB `model_config` table is not authoritative over them. This half is unchanged since July.
+- **Approach (for the remaining half only):** make the DB `model_config` table authoritative; delete `tier_overrides.yaml`, `enabled_models.json`, `provider_models_cache.json`, and the proxy directives in `config.yaml` once seeded. **Do not** re‑open the context‑window work — route every "how big is this model" question through `model_limits.get_limits()`.
 
 ### BO‑16 — Retire the vestigial LiteLLM proxy config *(P3)* ☐
 - **Missing:** `infra/litellm/config.yaml` is a full proxy config but no proxy runs; only its tier rows are read (M6). `provider_models_cache.json` is a rotting committed cache.
@@ -1552,18 +1633,22 @@ non‑blocking style backlog.
 
 ## G. Documentation
 
-### BO‑19 — Doc↔code reconciliation *(P1)* ◑
-- **Missing:** README described LangGraph/Theia/PostgresSaver/escalation_ui and had a garbled layout (**✅ F3** rewrites it); stale "placeholder"/LangGraph docstrings across packages (**✅ F6** sweeps the worst); `AGENTS.md` version pins lag.
-- **Done this pass:** `AGENTS.md` Python‑version mismatch fixed — "Python 3.11+" → "3.12+" to match `pyproject` (`>=3.12,<3.14`) and CI/prod (3.12).
-- **Residual:** update `AGENTS.md` package versions to the lockfile (`agent-framework-core 1.8.1`) and update `infra/AGENTS.md`'s "no proxy files / no Langfuse" claims to match reality. *(The 3.11/3.12 mismatch is fixed — see "Done this pass" above; duplicate residual entry removed 2026-08-01, doc-truth pass.)*
+### BO‑19 — Doc↔code reconciliation *(P1)* ✅
+
+> **Closed 2026‑08‑03 (WS‑0 truth pass).** Both residuals were re‑checked against the files, not against the previous doc, and **both are done**. Marking it ✅ does *not* claim the corpus is drift‑free — it claims this item's two named residuals are closed. Ongoing doc truth is `work_plan.md` §5's remediation backlog, which is where new drift belongs.
+
+- **Missing (historical):** README described LangGraph/Theia/PostgresSaver/escalation_ui and had a garbled layout (**✅ F3** rewrites it); stale "placeholder"/LangGraph docstrings across packages (**✅ F6** sweeps the worst); `AGENTS.md` version pins lag.
+- **Done (earlier pass):** `AGENTS.md` Python‑version mismatch fixed — "Python 3.11+" → "3.12+" to match `pyproject` (`>=3.12,<3.14`) and CI/prod (3.12).
+- **Residual 1 — `AGENTS.md` package pins → ✅ closed, and better than asked.** The ask was "update the pins to the lockfile". The root `AGENTS.md` **deleted the hand‑copied table instead**, replacing it with *"`uv.lock` is the single source of truth for pinned versions — do not maintain a hand‑copied table here (it drifts: the previous snapshot was stale on 3 of 6 pins)"* plus `uv tree` / `uv pip list` as the check. A table that cannot drift beats a table that is currently accurate.
+- **Residual 2 — `infra/AGENTS.md`'s "no proxy files / no Langfuse" claims → ✅ closed.** It now reads *"The legacy proxy files `litellm/config.yaml` + `litellm/tier_overrides.yaml` are **still on disk but vestigial** — only their tier rows are read; retiring them is tracked as BO‑16"* (`:4`) and *"Langfuse container is defined but **opt‑in behind `--profile obs`** and dormant … Distributed tracing is tracked as BO‑5"* (`:18`). Both match the tree: the two YAMLs exist, and Langfuse is a `--profile obs` compose service with the Python package uninstalled.
 
 ---
 
 ## Suggested sequencing
 
-1. **P0 hardening sprint (do first):** BO‑8 (rotate+purge secrets), BO‑2 (auth enforcement), BO‑1 (Action Broker), BO‑3 (mutation governance). These close the Critical trust‑boundary and governance gaps that everything else sits on.
-2. **P1 sprint:** BO‑7 (sandbox), BO‑5 (observability+cost), BO‑6 (migrations), BO‑12/BO‑14 (runtime + permission model), BO‑15 (LLM config SoT), BO‑17/BO‑18 (gates), BO‑19 residual, **BO‑20 (event‑bus consumer + job queue)**.
-3. **P2/P3:** BO‑9, BO‑10, BO‑11, BO‑13, BO‑16, **BO‑21 (memory activation)**.
+1. **P0 hardening sprint (do first):** **BO‑23 (backup/restore — scripts + runbook are AGENT‑SAFE; it is P0 because it is the only unrecoverable failure mode here)**, BO‑8 (rotate+purge secrets), BO‑2 (auth enforcement — ✅ since), BO‑1 (Action Broker), BO‑3 (mutation governance). These close the Critical trust‑boundary and governance gaps that everything else sits on.
+2. **P1 sprint:** BO‑7 (sandbox), BO‑5 (observability+cost), BO‑6 (migrations), BO‑12/BO‑14 (runtime + permission model), BO‑15 (LLM config SoT — **tier→model half only**), BO‑17/BO‑18 (gates), **BO‑20 (event‑bus consumer + job queue)**. *(BO‑19 closed 2026‑08‑03.)*
+3. **P2/P3:** BO‑9, **BO‑10 (promoted in practice — it is the one item that compounds per app; see the verdict block at the top)**, BO‑11, BO‑13, BO‑16, **BO‑21 (memory activation)**.
 
 **Competitive‑informed items** (proven reference implementations from Hermes Agent / OpenClaw — full mapping in `ai-company-brain/specs/competitive_hardening_2026-07.md`): CH‑1→BO‑7/BO‑14, CH‑2→BO‑1, CH‑3→BO‑20, CH‑4→WBS 3.3, CH‑5→BO‑12, CH‑6→BO‑21, CH‑7→Phase‑5 Annealer, CH‑8→BO‑5. These do not change the sequencing above — they attach a "what good looks like" reference to items we already have, plus the two new items (BO‑20/BO‑21) the comparison surfaced.
 

@@ -17,7 +17,13 @@ discoverable only inside the WS-14 row); C1's acceptance gains a caller-reachabl
 creation path; and a factual claim this board carried twice is retracted — `actor` in
 `pending_actions` **does** name the requesting human at two of its six writers, so §4's
 row and §6's gate now rest on the measured shapes rather than on a false absolute. The
-C4 verdict is unchanged) · **Owner:** vjvarada
+C4 verdict is unchanged. **2026-08-04 — WS-24 minted:** colleague onboarding
+readiness gets a row, an owning spec (`specs/colleague_onboarding.md`) and an
+executable gate (`scripts/onboarding_preflight.py`); the single member of record
+and the five member/group write endpoints join §4 and §6; **D14** records that
+`data:org:read` grants nothing — it has zero consumers — so `manager`'s
+"org-wide visibility" is a name and the department-privacy question is really
+about `admin:members:read`) · **Owner:** vjvarada
 **Purpose:** the single sequencing document from which independent agents are
 dispatched. Content lives in the owning specs; *this* doc owns ordering,
 ownership, and the rules that make a spec executable without questions.
@@ -106,6 +112,7 @@ looks. Full statements live in `FOUNDATION_BUILDOUT_CHECKLIST.md`.
 | WS-5 | **CI gates real** (BO-17/BO-18) | checklist §F | 🟡 Docs | Un-gate evals, blocking gitleaks, coverage floor. ~~AGENT-SAFE~~ → **mixed: the highest-value item is a GitHub *settings* change an agent cannot make.** **Audited 2026-08-01 → NO-GO**: §F has zero testable "done when" ("per the existing plan", "a few green PRs", "for foundation packages"), its ratchet-plan anchor points at a path that moved to `specs/archive/` (3 stale citations live *in the workflow files*), and BO-17 reads ☐ while half of it shipped (blocking ruff-correctness + xenon, a frontend tsc/vitest job, gitleaks, per-PR health). **THE MISSING ITEM — why the 2026-08-01 F821 escape happened, in no doc today:** (1) `main` has **no branch protection** (`gh api …/branches/main/protection` → 404) — every "blocking" gate in these YAMLs is decorative; (2) commits pushed straight to main get **zero check-runs** (`15c8933f` had none); (3) `deploy.yml:56-58` lints with the *non-blocking full* `ruff check .`, **not** the `--select F821,…` correctness gate, so deploy went green over a broken tree; (4) PR #318's `pr-check` **failed on that exact F821 and merged anyway**. **Slice when specced (BO-17a "main-guard"):** add a `correctness` job to `deploy.yml` on push-to-main running the `--select` gate, deliberately NOT in the deploy job's `needs:` — loud, not blocking. AGENT-SAFE. **OWNER-GATE:** enabling branch protection / required checks, wiring any gate into `needs:`, removing `skip_tests`; BO-18's purge+rotation is WS-2's, not this row's. Refuted two long-standing beliefs: pr-check **does** cover the frontend, and it **does** run on non-main branches. |
 | WS-6 | **Observability wiring + attribution** (BO-5 + decision D1) | `observability_e2.md` **§7** | 🟡 partial | **Docs gate CLEARED** (PR #319 added the numbered §7 with nine lettered tickets WS-6a–i, per-item done-whens and gate labels). **Re-audited 2026-08-02 → GO-NARROWED to WS-6a+WS-6c only.** ✅ **BUILT 2026-08-02, pending review:** D1's attribution stamp exists as a substrate — `instance` joins `_RUN_CONTEXT_KEYS`/`bind_run_context`, resolved once in `run_agent_stream` via a **second additive bind** after `load_agent` (the early bind stays: it is what correlates a failure *during* load; moving it would trade 5 fields for 1), and `_emit_usage` carries the full (run, member, agent, instance) tuple with **zero call-site changes** — it arrives by inheritance via `activity._INHERIT`. Shared agents produce an **absent key, never `''`** (double-guarded + pinned). `refresh_run_presence()` patches `cc:activity:live:{run_id}` after the late bind, so `/observability/active` + `/roster` carry it; interim `by_instance` cost dimension added to the Redis rollup. **Nothing durable is written yet** — logs + Redis feed only. **🔴 WS-6b/6d/6e HELD, still NO-GO:** WS-6b's security amendment names *no workable mechanism* — `bind_run_context` has one call site (`executor.py`), contextvars do not cross the HTTP hop to `v1_compat`, and `agent_run` rows are written at the run *boundary* so a mid-run join finds nothing. **The only mechanism the code supports at request time is the presence key `cc:activity:live:{run_id}`**, which for the orchestrator path carries a server-established `user`; §7 must name it (or name another) before WS-6b dispatches. WS-6e has no token source (`build_run_trace_row` is pure over events+folded) so it sequences *after* WS-6b, not independently; WS-6d additionally waits on the retention/PII answer (Q3). **Two recorded asymmetries** — the `phase="start"` event predates the bind, and **a delegated sub-run inherits the caller's partition** while its blobs key to `''`, so WS-6d must not treat `instance` as a foreign key onto `agent_blob.instance`. **OWNER-GATE:** WS-6f/g/h/i (Langfuse keys, `--profile obs`, `OTEL_EXPORTER_OTLP_ENDPOINT`, `LLM_USAGE_AUDIT`, the MAF telemetry kill switch) — all now listed in §6. |
 | WS-7 | **Memory activation + search** (BO-21 → BO-22) | checklist §C + `llm_caching_memory.md` | 🔴 | **OWNER-GATE:** flipping `MEM0_ENABLED`/`GRAPHITI_ENABLED` in prod (cost + latent findings in `agent_platform_hardening` Part 5). `acb_search` (BO-22) after. |
+| **WS-24** | **Colleague onboarding readiness** — the gate, the runbook, and the capability matrix *(minted 2026-08-04)* | `specs/colleague_onboarding.md` | 🔴 **NOT READY — 4 blocking items (2 OWNER-GATE, 2 AGENT-SAFE)** | **Read this row before inviting anybody, and before assuming any other row's access work is safe to demonstrate with a second person.** Exactly one member is signed in (`vjvarada@fracktal.in`, §4). The question "is it safe to invite colleagues" had been re-derived in conversation repeatedly and recorded nowhere; the spec is the durable answer and `scripts/onboarding_preflight.py` is its executable half (**agent-safe to write, NOT to run against prod — `--mode local` is an agent's only mode**; it refuses the box-only checks rather than guessing, because `resolve_access` degrades to `is_active=False` on an unreachable DB too, so a local PASS on default-deny would be vacuous). **The four blockers, each with a done-when in §1.1: G1** the Caddy strip — `deploy/hostinger/caddy/Caddyfile:13-18` has **no** `header_up -X-User-Email` / `-X-User-Role`, and `acb_auth/deps.py:27-35` says in its own docstring that the reverse proxy IS the boundary, because nothing in that module can tell a forwarded identity header from a forged one. 🔴 OWNER-GATE to install (writing the repo file is agent-safe). **G2** `GATEWAY_INTERNAL_TOKEN` unprovisioned ⇒ service identity falls back to `LITELLM_MASTER_KEY` (`deps.py:108-117`), the key every agent's BYOK client holds; `GATEWAY_REFUSE_LLM_KEY_IDENTITY` (PR #346) makes that refusable and **ships OFF**, and is inert once the token is set. 🔴 OWNER-GATE (a credential, in two places — the Next BFF mirrors the same fallback at `lib/gateway.ts:58-61`, so flipping the flag with the token unset 401s every signed-in member). **G3** backups — **BO-23 is unbuilt**: a repo-wide grep for `acb-backup` returns **zero hits**, there is no timer, no logical dump and no restore runbook; `scripts/dump_schema.sh` is `--schema-only`. 🟢 agent-safe to build, 🔴 owner-gate to install. **G4** the three Notes/actions holes PR #346 named rather than fixed (below). **PR #348 IS in this branch's ancestry** — `permissions.py:95-100` carries the six `center.*` slugs, so the preflight's Centers check passes here. **The three G4 tickets, all 🟢 AGENT-SAFE, sized in spec §4 — latent with one user, live the moment a colleague signs in, and all three are reachable with the default `member` role because it holds `feature:notes` (`130:235`): N1 (M)** six route families read a meeting by id with no owner predicate — `recordings.py` (`:64` upload, `:159` start, `:228` chunk, `:267` complete, `:377` audio; note `:321` retranscribe IS guarded at `:337` and is the shape to copy), `qa.py:82` (reads the **whole transcript** at `:95-99` and answers questions about it), `share.py:25` (drafts a recap email from `:33-36`), `copilot.py:484`/`:501`, and `live.py:256` (bot-token authed, a *different* shape — confirm before "fixing" it into member auth). Done-when: every one loads through `core.load_owned_meeting`, **404 never 403**, red-first test per family. **N2 (S)** `actions.py::_load_action` (`:62-75`) has no join to `meeting`; `approve` (`:78-111`) writes a `gtd_items` row under **the caller's** `user_id` (`:46-58`, bound `:90`) with the colleague's description as the title, and `reject` (`:114-130`) flips their item. `approve-all` (`:141`) is out of scope — it goes through the `dispatch.cross_owner_refusal` seam PR #346 hardened. **N3 (S)** `meeting_bot.bot_join` (`:691`): the attach branch `UPDATE meeting SET status='recording' … WHERE id = CAST(:id AS UUID)` (`:728-737`) has no owner predicate, so any member flips a colleague's prepared meeting into recording, mutates its title/start, attaches a bot and registers presence as themselves (`:817`). ⚠️ Preserve the deliberate asymmetry: the pipeline carries `meeting_bot.requested_by` as `triggered_by`, **not** the meeting's owner, so the requester's authority is not laundered into the owner's. **Two findings that correct the received account of the roles, both in spec §3.0 — anything quoting `130` alone is wrong:** (a) role grants come from **two** migrations — `131_integration_memory_permissions.sql` additionally gives `member` `integrations:use:*` **and `memory:read_org`** (`131:70-78`), gives `manager`/`admin` `memory:write_org` too, and gives `guest` **nothing** (`131:80`); (b) **`data:org:read` grants nothing — it has zero consumers.** It is declared (`permissions.py:132`), granted to admin/manager/agent_service (`130:205, 221`) and listed in the legacy fallback (`access.py:148`), and **no route, query or predicate in the tree ever checks it**. So "manager has org-wide visibility" is a name, not a mechanism; what actually widens a manager is `admin:members:read` (the floor for the **whole** `/admin` package, `admin/_common.py:77-91`, and `is_admin: true` at `me.py:96`), plus `feature:approvals`/`observability`/`whatsapp` and `memory:write_org`. That is **D14**. **Three more measured cells worth carrying up here** (full matrix in spec §3): `feature:memory`, `feature:artifacts` and `feature:observability` are enforced **nowhere server-side** (`memory.py:45-48` gates on the internal Bearer then per-scope; `workspace.py:53` and `observability.py:46-51` gate on nothing beyond authentication) — they hide a nav pane and the per-object rule is the boundary, exactly as `lib/access.ts:126-129` says; **artifacts are shared for most agents**, because 4 of the 6 first-party `config.json`s declare `instancing: "shared"` ⇒ `instance_key()` = `''` ⇒ one workspace for everybody (`workspace.py:230-260` → `manifest.py:235-246`); and a **member can read/write every agent's memory compartment**, since `_authorize_agent` (`memory.py:103-109`) gates on `can_run_agent` and member holds `agents:run:*`. **Granting `feature:workflows` is a labelled consequence, not a defect** (spec §3.4): org-wide read is a recorded v1 decision (`crud.py:1-5`), the detail response returns `hook_token` (`crud.py:230`), and the hook route is unauthenticated by design (`core.py:29`, `hooks.py:3` — "the token IS the credential"), so the grant hands over a permanent copyable trigger for **every** workflow that survives off-boarding, and there is no rotate endpoint. **Not in this row:** fixing N1–N3 (WS-24 is the gate and the plan), per-Center *data* scoping (WS-14/WS-15 — `140_center_features.sql:9-12` is explicit that Center features gate navigation and the landing pages, not data), and shared mailboxes (ownerless, §4). |
 
 ### Platform
 
@@ -143,10 +150,11 @@ looks. Full statements live in `FOUNDATION_BUILDOUT_CHECKLIST.md`.
 
 ## 3. Decisions recorded (2026-07-31)
 
-Resolutions for the cross-doc conflicts the audit surfaced. D1–D8 and **D13** are
-**proposed defaults, adopted unless the owner objects** (D13 is labelled
-`agent-proposed, owner may overrule` in its owning spec and stays distinct from
-D11/D12's `owner-answered`); D9, D10, D11 and D12 are owner calls, taken and dated.
+Resolutions for the cross-doc conflicts the audit surfaced. D1–D8, **D13** and
+**D14** are **proposed defaults, adopted unless the owner objects** (D13 and D14
+are labelled `agent-proposed, owner may overrule` in their owning specs and stay
+distinct from D11/D12's `owner-answered`); D9, D10, D11 and D12 are owner calls,
+taken and dated.
 
 - **D1 — Cost attribution is one workstream.** Stamp every LLM call at the
   gateway choke points with (run_id, member_email, agent, instance). Per-room
@@ -307,10 +315,44 @@ D11/D12's `owner-answered`); D9, D10, D11 and D12 are owner calls, taken and dat
   vocabulary, no new import edge), because "the shared validator" previously named no
   module and no shared home existed. Acceptance: `department_centers.md` C1.
 
+- **D14 — `manager`'s "org-wide visibility" is not `data:org:read`, and
+  `data:org:read` should not be relied on by anything.** *(`agent-proposed,
+  owner may overrule` — 2026-08-04; owning spec `specs/colleague_onboarding.md`
+  §3.0(b).)* Minted because WS-24's capability matrix had to answer "does
+  `manager` contradict D12's department privacy?" and the received answer named
+  the wrong permission. **The measurement:** `data:org:read` is declared
+  (`packages/acb_auth/acb_auth/permissions.py:132`), granted to `admin`,
+  `manager` and `agent_service` (`130_org_access_control.sql:205, 221`;
+  `:258`), and listed in the legacy-fallback set (`acb_auth/access.py:148`) —
+  and **no route, query, predicate or frontend check in the repository ever
+  reads it.** A repo-wide search outside the vocabulary, the seed migrations and
+  the specs returns nothing. `org_access_control.md:81` describes `manager` as
+  "sees org-wide data" on the strength of it; that sentence is aspirational.
+  **The proposed call, in two parts.** (i) **No spec, ticket or acceptance
+  criterion may rest on `data:org:read` until it has a consumer.** Writing one
+  is its own ticket: either give it a meaning (which is an org-wide read path,
+  i.e. the exact thing D12 constrains) or strike it from `CAPABILITIES` and the
+  three seed grants. Leaving it as-is is also acceptable — it grants nothing —
+  provided nobody *cites* it. (ii) **The department-privacy question the owner
+  actually has to answer is about `admin:members:read`**, which is the floor for
+  the **entire** `/admin` package (`routes/admin/_common.py:77-91`), not just
+  the member list: a `manager` reads the full member directory, the role
+  catalogue and the group list, and `/auth/me` returns `is_admin: true` for them
+  (`routes/admin/me.py:96`). Combined with `feature:approvals`,
+  `feature:observability` and `memory:write_org` (`131:62`), that is the real
+  breadth of the role. **Rejected alternative:** quietly narrowing `manager` in
+  a migration. It is a policy call about who may see the shape of the
+  organisation, it is exactly the shape of D12, and no acceptance should be
+  written for it until the owner decides. **Consequence if the owner does
+  nothing:** `manager` stays as seeded and WS-24's matrix labels it accurately;
+  nothing breaks, and the only standing rule is (i).
+
 ## 4. Single-owner registry (who owns duplicated work)
 
 | Work | Owner | Mirrors (link-only after §5) |
 |---|---|---|
+| **Colleague onboarding readiness** (the pre-invite gate, the invite runbook, the role × app capability matrix) | **WS-24 — `specs/colleague_onboarding.md`** | `org_access_control.md` §7 (bootstrap) and its role table §80-81 — **§81's "sees org-wide data" for `manager` is stale per D14** · `department_centers.md` §2 (the five-place Center registration checklist the runbook's step 3 depends on) · `tenancy_and_visibility.md` §5 (the app-by-app gap table — that doc owns the *doctrine*, this one owns the *measured current state per role*) |
+| **The single member of record** | **`vjvarada@fracktal.in` is the only signed-in member** (measured 2026-08-04) | There is exactly one. `EXECUTIVE_EMAILS` is the bootstrap candidate list (`acb_auth/access.py:467-519`) and is **not** a role — a member's real access is resolved from `app_user` + `user_role` + `user_permission_override`. **No agent may add, promote or suspend a member**: `POST /admin/members`, `PUT /admin/members/{email}/roles` and `PATCH/DELETE /admin/members/{email}` are live-DB writes to the access model and are registered in §6. Onboarding runbook: `specs/colleague_onboarding.md` §2 |
 | Groups admin UI + seeding | **WS-13 / Centers B** | groups_sessions_authority §6.5 · org_access §8 Ph2 · multiplayer §4.5 |
 | Team-instanced agents | **WS-14 / Centers C3** (mechanism per D3) | `docs/multiplayer/agent-kinds.md` §6/§8 — **note the path: it is under `docs/multiplayer/`, not `ai-company-brain/specs/`**, and its §6 roster is a **design proposal, not a work list** (seven of its twelve agents do not exist; it contradicts three shipped `config.json` files — both annotated there 2026-08-03) · agent_architecture §6/§12A · memory_architecture §6.1 · groups §6.2 |
 | Shared mailboxes | ⚠️ **OWNERLESS IN FACT — do not dispatch** (measured 2026-08-03) | D5 assigns implementation to `email_app_master_plan.md`, sequenced by WS-14. That spec contains **zero** occurrences of "shared mailbox", and `email_account_member` — cited as Phase-2 content by `department_centers.md` and `org_access_control.md:311` — **exists nowhere in the repo** (0 hits in `*.sql` and `*.py`). D5's *sequencing* stands; its *ownership* is nominal. **Next action is a doc action, not a build:** either `email_app_master_plan.md` gains a section for it, or this row names a different owner. Recorded in `department_centers.md` C2. | org_access §8 Ph2 · groups §1 · research §16.7 |
@@ -493,4 +535,33 @@ against live Mem0 personal memories (`docs/multiplayer/memory-clearance.md` §8 
 **dry-run report** are AGENT-SAFE and are the whole of the agent's mandate; the
 mutating pass is a live-DB one-off ·
 `test_owner_bootstrap.py` against prod (never) · any deploy that changes auth
-behaviour (supervised window per `FOUNDATION_CONTINUATION.md`).
+behaviour (supervised window per `FOUNDATION_CONTINUATION.md`) ·
+**the four WS-24 colleague-onboarding gates** (`specs/colleague_onboarding.md`
+§1.1), registered 2026-08-04 because "invite a colleague" reads like a UI
+action and is not one:
+**(a) installing the Caddy identity-header strip** — writing
+`deploy/hostinger/caddy/Caddyfile` is AGENT-SAFE, `sudo install` +
+`systemctl reload caddy` on the box is not; it changes auth behaviour, and the
+pipeline only reinstalls the repo copy when the live one **fails**
+`caddy validate` (`.github/workflows/deploy.yml:496-501`), so the two can drift
+silently and an agent must not assume a merged repo file is live ·
+**(b) provisioning `GATEWAY_INTERNAL_TOKEN`** — a credential, and it must land
+in **both** `/opt/acb/app/.env` and the workbench's `.env.local`, because the
+Next BFF mirrors the same `LITELLM_MASTER_KEY` fallback
+(`workbench/control_plane/src/lib/gateway.ts:58-61`); a mismatch turns every
+proxied browser call anonymous. **`GATEWAY_REFUSE_LLM_KEY_IDENTITY` is a
+separate owner gate of its own** — it ships OFF, defaults to today's behaviour
+exactly, and flipping it while the token is unset **401s every signed-in
+member** ·
+**(c) installing/scheduling the BO-23 backup timer** — building the dump
+script, the manifest and the restore runbook is AGENT-SAFE; installing the
+systemd unit and pointing it at prod data is not ·
+**(d) any write to the member/role/group tables on the live box** —
+`POST /admin/members`, `PUT /admin/members/{email}/roles`,
+`PATCH`/`DELETE /admin/members/{email}`, `PUT /admin/members/{email}/overrides`,
+`POST`/`DELETE /admin/groups/{slug}/members`. Inviting a real person, changing
+what they can see, or removing them is the owner's act. An agent may write the
+runbook, the preflight and the matrix, and must stop there ·
+**running `scripts/onboarding_preflight.py` against production** — the script
+is agent-safe to author and its DB checks read the live database, so an agent's
+only mode is `--mode local`, which refuses the box-only checks by design.

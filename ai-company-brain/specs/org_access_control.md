@@ -86,6 +86,12 @@ Plus one non-assignable service role, `agent_service`, for the internal bearer p
 
 A member may hold several roles; grants are the **union**. Note what `member` deliberately omits: WhatsApp, Approvals, Integrations, Models, and both Build panes. The default is the conservative one, and access is added rather than taken away.
 
+> ⚠️ **This table is incomplete and one cell of it is stale — measured 2026-08-04, see `colleague_onboarding.md` §3.0.**
+> **(a)** These are `130_org_access_control.sql`'s grants only. `131_integration_memory_permissions.sql` adds more to four of the six roles — notably `member` also gets `integrations:use:*` **and `memory:read_org`** (`131:70-78`), while `guest` gets nothing (`131:80`). Quoting this table alone gets `member` wrong.
+> **(b)** `manager`'s *"Sees org-wide data"* is **not true as written**: `data:org:read` has **zero consumers** — nothing in the repository ever checks it (`permissions.py:132` declares it, `130:205, 221, 258` grant it, `access.py:148` lists it, and no route, query or predicate reads it). What actually widens a `manager` is `admin:members:read`, which is the auth floor for the **whole** `/admin` package (`routes/admin/_common.py:77-91`), plus `feature:approvals`/`observability`/`whatsapp` and `memory:write_org`. Recorded as **D14** in `work_plan.md` §3 (`agent-proposed, owner may overrule`). Do not write acceptance criteria against `data:org:read` until it has a consumer.
+>
+> The role × app capability matrix — what each role can *actually see*, per app, with the `file:line` that settles each cell — lives in [`colleague_onboarding.md`](colleague_onboarding.md) §3, not here.
+
 ### 3.3 Permission vocabulary
 
 Colon-separated, with `*` legal **only as the final segment**, where it matches any non-empty suffix.

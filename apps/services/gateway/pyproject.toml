@@ -23,6 +23,11 @@ dependencies = [
     "orchestrator",
     "email-ingestion",
     "whatsapp-ingestion",
+    # Provider webhook receivers + the ingestion event-bus consumer the lifespan
+    # starts (ingestion/consumer.py, §BO-20a). It resolved only via the root
+    # workspace umbrella before, which is why the event-sink registration is
+    # wrapped in a try/except ("ingestion optional in some deploys").
+    "ingestion",
     "action-broker",
     # Résumé ingestion (Task Manager HR): PDF + DOCX text extraction.
     "pymupdf>=1.24",

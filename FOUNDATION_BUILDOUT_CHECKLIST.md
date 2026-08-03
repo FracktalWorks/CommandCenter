@@ -1,7 +1,7 @@
 # Foundation Build‑Out Checklist — CommandCenter
 
 **Date:** 2026-07-11 · **Deploy status updated:** 2026-07-13 · **Competitive refs added:** 2026-07-13
-**§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0), which blocks BO‑20a–e only — **BO‑20f was dispatchable immediately and is now BUILT (2026-08-02), moving §BO‑20 ☐ → ◑**, and `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
+**§BO‑20 rewritten and verified against code: 2026-08-02** (WS‑4 audit remediation). Verified this pass: the ingestion package contents (no `worker.py`), the ClickUp → `event_hooks.emit_event` → `workflows.triggers.dispatch_event` → `start_run` fan-out, the Gmail/Zoho `TODO` stubs, the repo-wide absence of `xreadgroup`/`xgroup`/`xack`, the four checked-in systemd units, the already-provisioned Redis compose service, `uv.lock`'s lack of any job-queue library, and the gateway lifespan's supervised loops (five wired, **all five** stopped on shutdown, four actually started in the default config — WhatsApp enrichment is flag-gated off). §BO‑20 now carries acceptance criteria, verification commands, gate labels, and one named owner decision (§BO‑20.0). **That decision was answered on 2026-08-02 — `BO‑20 = Option A (in‑process)`** — so nothing in §BO‑20 is blocked on a decision any more. **BO‑20f and BO‑20a are BUILT (both 2026-08-02), moving §BO‑20 ☐ → ◑; BO‑20b–e are open and dispatchable.** Two claims in the stamp above were made false by BO‑20a and are corrected in place below: `xreadgroup`/`xgroup`/`xack` now exist (in `ingestion/consumer.py` only), and the lifespan's supervised loops are **six** wired / **all six** stopped on shutdown (how many actually *start* is data‑dependent — see §BO‑20 "What is true today" §7, which counts it honestly; the new ingestion consumer joins WhatsApp enrichment as flag‑gated **off**, so it starts nowhere today). `INGESTION_CONSUMER` is registered in `work_plan.md` §6. **Other sections carry no such stamp** — BO‑1/BO‑19 were stamped by the 2026-08-01 doc-truth pass; the rest are as-authored.
 **Companion to:** `FOUNDATION_AUDIT_REPORT.md` · handoff details in `FOUNDATION_CONTINUATION.md` (see its "LATEST STATUS" block) · competitive learnings (proven reference implementations from Hermes Agent & OpenClaw) in `ai-company-brain/specs/competitive_hardening_2026-07.md` (`CH-*`) and `COMPETITIVE_COMPARISON.md`.
 
 > **🚀 Deploy status:** read live deploy state from `gh run list` and `git log origin/main` — not from this doc. Next recommended P0: **BO‑8** (secret rotation + history purge — owner‑gated); BO‑1's approval loop has since shipped (see §BO‑1).
@@ -146,15 +146,15 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 > handed the old row would have built a second, parallel dispatch path for work
 > that already has one.
 >
-> **⚠️ One owner decision (§BO‑20.0) blocks BO‑20a–e — but it never blocked
-> BO‑20f**, which needed no consumer, no flag and no decision. Everything
-> else below is written so that a single "Option A" answer makes BO‑20a–e
-> dispatchable as written — **and only "Option A"; see §BO‑20.0 for why answering
-> "Option B" buys a design round rather than a dispatch.** The item moved
-> ☐ → ◑ on **2026-08-02**: **BO‑20f is BUILT** (Gmail + Zoho receivers now
-> enqueue + emit; `tests/unit/test_ingestion_receiver_parity.py`), **BO‑20a–e
-> are not** and still wait on §BO‑20.0. The *reason* the row existed has
-> changed, so read "What is true today" before anything else.
+> **✅ The owner decision (§BO‑20.0) was taken on 2026-08-02: Option A** — an
+> in‑process supervised asyncio consumer started from the gateway lifespan.
+> Nothing below is blocked on a decision any more. BO‑20f needed no consumer,
+> no flag and no decision and shipped first; **BO‑20a is BUILT** (2026-08-02,
+> pending review) with the consumer shipped **OFF** behind `INGESTION_CONSUMER`.
+> **BO‑20b–e remain open and are now dispatchable as written.** The item is
+> ◑ as of **2026-08-02**: two of six sub‑items built, the flag unflipped in
+> every environment. The *reason* the row existed has changed twice now, so
+> read "What is true today" before anything else.
 > (`work_plan.md`'s WS‑4 State cell mirrors this split.)
 >
 > **Hardened 2026-08-02 after adversarial review** (that pass shipped no code;
@@ -173,7 +173,8 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
    normalisation for task events (`:110`), and schedules
    `emit_event("clickup", event_type, payload)` (`:114‑116`). The gateway
    registers `workflows.triggers.dispatch_event` into that sink registry at
-   import time (`apps/services/gateway/gateway/main.py:1043‑1049`), and
+   import time (`apps/services/gateway/gateway/main.py:1070‑1076`; the
+   `register_event_sink` call is `:1074`), and
    `dispatch_event` (`apps/services/gateway/gateway/routes/workflows/triggers.py:40`)
    calls `start_run(...)` for every **published** workflow whose `kind='event'`
    trigger matches `(source, event_type)`.
@@ -203,13 +204,17 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
    first `TestClient` drive‑through exposed it, and the same collision in
    `clickup/webhook.py::_normalise_task` had been **dead‑lettering every
    successfully‑normalised task**.
-4. **The `ingestion:*` streams are write‑only.** `xadd` is the only stream verb
-   in the ingestion package. `xreadgroup` / `xgroup` / `xack` appear **nowhere in
-   the repo**; the only `xread` callers are unrelated transports
-   (`gateway/room_stream.py:133,161`, `orchestrator/stream_relay.py:221,285,306`,
-   `acb_common/activity.py:257`). The streams are capped at
-   `maxlen=10_000, approximate=True` (`queue.py:46,72‑73`) and are therefore
-   **trimmed unread** — an audit buffer nobody reads, not a queue.
+4. ~~**The `ingestion:*` streams are write‑only.**~~ **Half‑closed 2026-08-02 by
+   BO‑20a.** It was true as written: `xadd` was the only stream verb in the
+   ingestion package and `xreadgroup` / `xgroup` / `xack` appeared **nowhere in
+   the repo** (the only `xread` callers being unrelated transports —
+   `gateway/room_stream.py:133,161`, `orchestrator/stream_relay.py:221,285,306`,
+   `acb_common/activity.py:257`). `ingestion/consumer.py` now issues all three.
+   ⚠️ **Still true in every environment:** the loop is gated OFF
+   (`INGESTION_CONSUMER` unset everywhere), so the streams are *today* still
+   capped at `maxlen=10_000, approximate=True` (`queue.py:46,72‑73`) and
+   **trimmed unread**. The `$` group start means the flip does not change that
+   for the already‑buffered entries either — see BO‑20a.
 5. **`ingestion:dlq` is worse: written and never drained.** `enqueue_dlq`
    (`queue.py:79`) is called from exactly two sites (`clickup/webhook.py:48`
    fetch failure, `:69` normalise failure). Nothing reads, displays, replays or
@@ -237,10 +242,12 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
    wired into the gateway lifespan — email sync (`main.py:230`), WhatsApp
    enrichment (`:253`), tasks provider‑sync (`:265`), calendar auto‑rollover
    (`:275`), workflow schedule scanner (`:294`) — and **all five** are explicitly
-   stopped on shutdown (`:311`, `:320`, `:327`, `:334`, `:341`; the cited lines
+   stopped on shutdown (`:324`, `:333`, `:340`, `:347`, `:354`; the cited lines
    are the `await stop_*()` calls, as the start lines are the `await start_*()`
-   calls). How many actually *run* is data‑dependent, and **on an empty DB it is
-   two**: only the calendar auto‑rollover (`routes/tasks/calendar.py:1543` — a
+   calls). **BO‑20a made it six** — the ingestion consumer starts at `:307` and
+   stops at `:364`, which is why the shutdown line numbers here moved (they were
+   `:311`–`:341` before that PR; the start lines did not move). How many actually
+   *run* is data‑dependent, and **on an empty DB it is two**: only the calendar auto‑rollover (`routes/tasks/calendar.py:1543` — a
    single loop) and the workflow scanner start unconditionally, while email sync
    and tasks provider‑sync launch **one loop per enabled account row**
    (`routes/tasks/scheduler.py:181‑210`,
@@ -260,20 +267,27 @@ was stale — corrected 2026-08-02 to match §BO‑20) were anonymous‑reachabl
 9. **The code already points here.** `gateway/main.py:280‑283` ("Workflow runs
    are in-process asyncio tasks (BO-20 pending)") and
    `gateway/routes/workflows/service.py:14` both cite this item by name.
-10. **Latent packaging defect this item must fix.** The gateway's own
-    `apps/services/gateway/pyproject.toml` declares `email-ingestion` and
-    `whatsapp-ingestion` but **not `ingestion`** — which is why `main.py:1043`
-    wraps the sink registration in `try/except` ("ingestion optional in some
-    deploys"). It resolves today only because the root umbrella `pyproject.toml`
-    lists `ingestion` and every environment `uv sync`s the whole workspace. A
-    consumer started from the gateway lifespan would inherit the same silent
-    conditionality. BO‑20a declares it.
+10. ~~**Latent packaging defect this item must fix.**~~ **Closed 2026-08-02 by
+    BO‑20a**, which added `"ingestion"` to
+    `apps/services/gateway/pyproject.toml` `dependencies` and regenerated
+    `uv.lock` (it now appears in the `name = "gateway"` package block and in its
+    `requires-dist`). It was true as written: the gateway declared
+    `email-ingestion` and `whatsapp-ingestion` but **not `ingestion`** — which
+    is why the sink registration sits in a `try/except` (the `try` at
+    `main.py:1070`, the `register_event_sink` call at `:1074`; comment
+    "ingestion optional in some deploys"). It resolved only because the root
+    umbrella `pyproject.toml` lists `ingestion` and every environment
+    `uv sync`s the whole workspace. The `try/except` itself is left in place —
+    it is now belt‑and‑braces rather than the load‑bearing conditionality it
+    was.
 
-**Why the item still matters:** durability and replay (the buffer is written and
-never read), retry/backoff, a drainable dead‑letter path, per‑source rate
-limiting, and bounded concurrency. (**Coverage** — "only one of three receivers
-emits anything at all" — was the sixth reason and is **closed**: BO‑20f shipped
-2026-08-02.)
+**Why the item still matters:** retry/backoff (BO‑20b), a drainable dead‑letter
+path (BO‑20c), per‑source rate limiting (BO‑20d), and bounded concurrency
+(BO‑20e). Two of the six reasons are **closed**: **coverage** — "only one of
+three receivers emits anything at all" — by BO‑20f, and **durability/replay** —
+"the buffer is written and never read" — by BO‑20a, *in code*. The second one is
+closed conditionally and the condition is unmet: with `INGESTION_CONSUMER` unset
+in every environment the streams are still trimmed unread today.
 
 #### Scope and non‑goals
 
@@ -301,14 +315,21 @@ emits anything at all" — was the sixth reason and is **closed**: BO‑20f ship
   agent‑routing half of `/agent/webhook/{source}` are untouched.
 - **Not BO‑9.** See the dependency resolution below.
 
-#### BO‑20.0 — OWNER DECISION (blocks dispatch): the process model
+#### BO‑20.0 — OWNER DECISION: the process model — ✅ **ANSWERED 2026-08-02**
 
-*The one thing this section cannot decide for itself. Both options are stated
-with their consequences; the recommendation carries its evidence; the acceptance
-criteria below are written for the recommended option.*
+> ## `BO‑20 = Option A (in‑process)`
+>
+> **Decided by the owner on 2026-08-02.** BO‑20a–e are dispatchable as written
+> from that date; BO‑20a was built the same day. Option B is **rejected** — its
+> analysis is kept below, in full, because a future reader deciding whether to
+> move the consumer into its own process needs to know what was weighed and why
+> it was refused, not merely that it was.
+
+*Both options are stated with their consequences; the recommendation carried its
+evidence; the acceptance criteria below are written for the chosen option.*
 
 **Option A — an in‑process supervised asyncio consumer, started from the gateway
-lifespan. ✅ RECOMMENDED.**
+lifespan. ✅ RECOMMENDED → ✅ CHOSEN 2026-08-02.**
 Code lives in `apps/services/ingestion/ingestion/consumer.py` (the package that
 owns the producer), exposing `start_ingestion_consumer()` /
 `stop_ingestion_consumer()` / `consumer_status()`, called from the gateway
@@ -329,9 +350,10 @@ a service package and is started by the gateway).
   `start_workflow_scheduler` `:289`, `stop_workflow_scheduler` `:300`,
   `scheduler_status` `:309`).
 
-**Option B — a separate `python -m ingestion.worker` process** (what the previous
-§Approach literally specified, and what `queue.py`'s own docstring still promises
-at `:11‑14`).
+**Option B — a separate `python -m ingestion.worker` process. ❌ REJECTED
+2026-08-02** (what the previous §Approach literally specified, and what
+`queue.py`'s own docstring still promises at `:11‑14`). *The reasons, kept
+verbatim — this is the record of why, not a live option:*
 - *Consequence:* an independent failure domain and an independent restart —
   genuinely better isolation. But it **cannot be shipped by an agent**: it needs a
   new systemd unit on the VPS plus a deploy change, and there is no worker unit
@@ -346,7 +368,7 @@ at `:11‑14`).
   the sink registry", and its done‑when asserts delivery to a sink registered via
   `register_event_sink`. But `_SINKS` (`event_hooks.py:23`) is a **module‑level
   list in the registering process**, and the only registration of a real sink
-  happens at **gateway import time** (`main.py:1043‑1049`). A separate
+  happens at **gateway import time** (`main.py:1070‑1076`). A separate
   `python -m ingestion.worker` starts with `_SINKS == []` — it would
   `XREADGROUP`, `XACK`, and dispatch to **nothing**. So under B the *dispatch*
   step is not "unchanged", it is **undefined**, and the owner is implicitly
@@ -362,43 +384,63 @@ at `:11‑14`).
   3. **The worker runs the workflow engine itself.** The engine lives in the
      gateway package (`gateway/routes/workflows/`); this is a package move, not a
      ticket.
-- *If the owner picks B:* BO‑20a's "start from the lifespan" half is replaced by
-  a `__main__` entrypoint + a unit file + a `deploy.sh` install step **and** a
-  written answer to the dispatch question above; **the deployment half of
-  BO‑20a–e becomes OWNER‑GATE and every affected sub‑item must be re‑labelled**;
-  and **BO‑20a must be re‑written before it is dispatchable at all**. The
-  drain/retry/DLQ/limiter/concurrency logic and all of BO‑20f are unchanged and
-  stay AGENT‑SAFE either way — **the dispatch step is not**.
+- *Had the owner picked B:* BO‑20a's "start from the lifespan" half would have
+  been replaced by a `__main__` entrypoint + a unit file + a `deploy.sh` install
+  step **and** a written answer to the dispatch question above; **the deployment
+  half of BO‑20a–e would have become OWNER‑GATE**; and **BO‑20a would have had
+  to be re‑written before it was dispatchable at all**. The
+  drain/retry/DLQ/limiter/concurrency logic and all of BO‑20f were unchanged
+  either way — **the dispatch step was not**. That asymmetry is what decided it:
+  A shipped by ordinary merge with the risk parked behind a flag, B bought a
+  design round first.
 
-**Owner: answer with exactly one line — `BO‑20 = Option A (in‑process)` or
-`BO‑20 = Option B (separate process)`.** Record it here when answered.
-**Read this before answering:** only **Option A** makes BO‑20a–e dispatchable
-*as written*. **Option B unblocks nothing on its own** — it opens a design round
-(which of the three dispatch mechanisms) and a rewrite of BO‑20a. The
-one‑line‑answer‑unblocks‑dispatch promise of this section holds for A only.
+**Not closed forever.** Choosing A does not assert that the consumer must live
+in the gateway process for all time — it asserts that isolation is not worth a
+design round and an undeployable PR *today*. Moving it later is a re‑opening of
+this decision with a named dispatch mechanism attached (one of the three above),
+not a refactor.
 
-**Risk note that makes Option A cheap:** BO‑20a ships the consumer **OFF** behind
-`INGESTION_CONSUMER` (default off), so merging it changes nothing at runtime.
-Turning it on in prod is a **🔒 OWNER‑GATE** env flip in the same family as
-`SKILLS_INDEX_ONLY` / `SKILLS_FAIL_CLOSED`, and is **registered as one** in
-`work_plan.md` §6 (added 2026-08-02).
+**Risk note that made Option A cheap, and still governs:** BO‑20a ships the
+consumer **OFF** behind `INGESTION_CONSUMER` (default off), so merging it
+changed nothing at runtime. Turning it on in prod is a **🔒 OWNER‑GATE** env flip
+in the same family as `SKILLS_INDEX_ONLY` / `SKILLS_FAIL_CLOSED`, and is
+**registered as one** in `work_plan.md` §6 (added 2026-08-02). It is not merely
+"start a loop": the same flag cuts all three receivers over to enqueue‑only
+(Q1 below), so it should be flipped when someone is watching, and reverted by
+unsetting it — the receivers read it per request, so a revert takes effect on
+the next webhook without a restart (the loop needs one).
 
-#### Open question Q1 — what happens to the inline `emit_event` once a consumer exists?
+#### Open question Q1 — what happens to the inline `emit_event` once a consumer exists? — **ANSWERED, and shipped in BO‑20a**
 
 *Recorded so nobody decides it silently in a PR description.*
 If the consumer emits to the sinks **and** the receivers keep emitting inline,
 every event fires its workflows **twice**. So the consumer's arrival forces a
-cutover: receivers become `enqueue`‑only and the consumer becomes the single
-dispatch path.
-- *Consequence to accept honestly:* today, if Redis is down, ClickUp events still
-  dispatch (the enqueue is best‑effort, `webhook.py:96‑99`). After the cutover,
-  Redis down = events buffered nowhere and **dropped**. That is a real regression
-  in one axis traded for durability/replay in another.
-- **Recommendation:** do the cutover, but **gate it on the same
-  `INGESTION_CONSUMER` flag** — flag OFF ⇒ receivers emit inline exactly as today
-  and the consumer never starts; flag ON ⇒ receivers only `enqueue` and the
-  consumer is the sole emitter. One flag, one path, never both. This is what
-  makes BO‑20a's "no double dispatch" done‑when checkable.
+cutover: receivers become `enqueue`‑only and the consumer becomes the **only
+provider‑webhook path into the sink registry** — precisely, the only caller of
+`ingestion.event_hooks.emit_event`.
+- ⚠️ **Not "the single dispatch path", full stop** — that phrasing was loose and
+  is corrected here. `gateway/routes/agent.py:3476‑3478` calls
+  `workflows.triggers.dispatch_event` **directly** from the signed generic
+  webhook `POST /agent/webhook/{source}`; it does not go through the sink
+  registry, it is a deliberate second path (see "What is true today" §2), and it
+  is **untouched by the cutover**. The cutover is about the three provider
+  receivers only.
+- *Consequence to accept honestly:* before the cutover, if Redis is down
+  provider events still dispatch (the enqueue is best‑effort — ClickUp's
+  `try`/`except` at `clickup/webhook.py:101‑106`, and the same shape in
+  `gmail/webhook.py` and `zoho/webhook.py`). After it, Redis down = events
+  buffered nowhere and **dropped**. That is a real regression in one axis traded
+  for durability/replay in another. BO‑20a makes it **loud rather than silent**:
+  each receiver logs `<source>.queue.dropped` at warning when — and only when —
+  the flag is on and the enqueue failed. It must **not** be "fixed" by falling
+  back to an inline emit; that is double dispatch by another name.
+- **Decision (shipped):** do the cutover, **gated on the same
+  `INGESTION_CONSUMER` flag** — flag OFF ⇒ receivers emit inline exactly as
+  before and the consumer never starts; flag ON ⇒ receivers only `enqueue` and
+  the consumer is the sole emitter. One flag, one path, never both. Each
+  receiver reads the flag **per request** (`consumer.consumer_enabled()`), which
+  is what makes BO‑20a's "no double dispatch" done‑when checkable — see its
+  acceptance E (three receivers × two modes).
 
 #### Dependencies (resolved, not dangling)
 
@@ -408,12 +450,15 @@ dispatch path.
   `redis.from_url` on every `enqueue`. A consumer needs a **long‑lived async**
   client to hold a blocking `XREADGROUP`; that is a different object, and the
   precedent for owning one already ships:
-  `packages/acb_common/acb_common/activity.py:54‑66` — a module‑level pooled
+  `packages/acb_common/acb_common/activity.py:66‑76` (`_get_client` at `:66`,
+  the pooled `from_url` at `:70‑75`; the previously‑cited `:54‑66` was stale and
+  was corrected 2026-08-02) — a module‑level pooled
   `aioredis.from_url(..., max_connections=16, health_check_interval=30)` behind
   `_get_client()` (same pattern in `orchestrator/stream_relay.py` and
-  `gateway/room_stream.py`). **BO‑20a reuses that shape.** Consolidating the
-  *producer's* per‑call sync client into a shared pool remains BO‑9's work — do
-  not do it inside a BO‑20 PR.
+  `gateway/room_stream.py`). **BO‑20a reused that shape verbatim**
+  (`ingestion/consumer.py::_get_client`). Consolidating the *producer's*
+  per‑call sync client into a shared pool remains BO‑9's work — BO‑20a did not
+  touch `queue.py`.
 - **Redis** — already provisioned (`infra/docker-compose.yml:44`). No action.
 - **Verified anchors** (all re‑checked 2026-08-02):
   producer `apps/services/ingestion/ingestion/queue.py`
@@ -421,9 +466,12 @@ dispatch path.
   sink registry `apps/services/ingestion/ingestion/event_hooks.py`
   (`register_event_sink` `:26`, `emit_event` `:37`) ·
   receivers `apps/services/ingestion/ingestion/sources/{clickup,gmail,zoho}/webhook.py` ·
-  gateway wiring `apps/services/gateway/gateway/main.py:1043‑1049` ·
-  dispatcher `apps/services/gateway/gateway/routes/workflows/triggers.py:40` ·
-  MAF executor entry point **`apps/services/orchestrator/orchestrator/executor.py::run_agent` (`:1640`)** ·
+  gateway wiring `apps/services/gateway/gateway/main.py` (the `try` at `:1070`,
+  `register_event_sink(_wf_dispatch)` at `:1074`) ·
+  dispatcher `apps/services/gateway/gateway/routes/workflows/triggers.py:40`
+  (`event_trigger_matches` `:32`) ·
+  MAF executor entry point **`apps/services/orchestrator/orchestrator/executor.py::run_agent` (`:1683`
+  — the cited `:1640` was stale, corrected 2026-08-02)** ·
   canonical supervised loop `apps/services/gateway/gateway/routes/workflows/scheduler.py` ·
   hermetic test pattern `tests/unit/test_clickup_ingestor.py:158‑181`.
 
@@ -431,14 +479,18 @@ dispatch path.
 
 **Sequence: f → a → b → c → (d, e).** BO‑20f needed no consumer, no owner
 decision and no flag; it is what **multi‑channel event triggers** actually need,
-and it **shipped 2026-08-02**. BO‑20a–e wait on §BO‑20.0.
+and it **shipped 2026-08-02**. **BO‑20a shipped the same day**, once §BO‑20.0
+was answered `Option A`. **BO‑20b is next and is dispatchable now** — nothing in
+b–e waits on a decision any more; each waits only on its predecessor.
 
-⚠️ **BO‑20f does NOT unblock WS‑11 Slice 4.** `specs/workflows_app.md:217`
-defines Slice 4 as *"(post‑BO‑20/BO‑7): durable queued runs; sandboxed module
-execution; MCP exposure; retention policies"* — none of which Gmail/Zoho receiver
-parity delivers. **WS‑11 Slice 4 needs BO‑20a–e (plus BO‑7) and therefore still
-waits on §BO‑20.0.** (Same statement as the "Not workflow‑run durability"
-non‑goal above; if these two ever disagree, the non‑goal is right.)
+⚠️ **Neither BO‑20f nor BO‑20a unblocks WS‑11 Slice 4.**
+`specs/workflows_app.md:217` defines Slice 4 as *"(post‑BO‑20/BO‑7): durable
+queued runs; sandboxed module execution; MCP exposure; retention policies"* —
+none of which Gmail/Zoho receiver parity delivers, and **durable queued runs
+means a–e, not a alone**: without BO‑20b a failed dispatch is acked and lost,
+which is the opposite of durable. **WS‑11 Slice 4 needs BO‑20a–e plus BO‑7.**
+(Same statement as the "Not workflow‑run durability" non‑goal above; if these
+two ever disagree, the non‑goal is right.)
 
 ---
 
@@ -561,13 +613,29 @@ the provider retries and makes the backlog worse.
 
 ---
 
-**BO‑20a — Consumer group + `XREADGROUP` drain loop.** ✅ **AGENT‑SAFE** *(under Option A; see §BO‑20.0 if the owner picks B)* · *blocked on §BO‑20.0*
-New `apps/services/ingestion/ingestion/consumer.py`: `XGROUP CREATE <stream>
-cc-ingest $ MKSTREAM` per stream (idempotent — swallow `BUSYGROUP`), then a
+**BO‑20a — Consumer group + `XREADGROUP` drain loop.** ✅ **BUILT 2026-08-02** *(under §BO‑20.0 Option A; ships **OFF** behind `INGESTION_CONSUMER`)* · *the flag flip is 🔒 OWNER‑GATE*
+> **Shipped.** `apps/services/ingestion/ingestion/consumer.py` declares the
+> `cc-ingest` group on all three streams and drains them into the existing sink
+> registry; the gateway lifespan starts it (`main.py:307`) and stops it
+> unconditionally (`:364`); all three receivers are cut over behind the flag;
+> `ingestion` is now a declared gateway dependency. Pinned by
+> `tests/unit/test_ingestion_consumer.py` (**41 tests**, no Redis/DB/network).
+> ⚠️ **Inert in every environment:** `INGESTION_CONSUMER` is unset everywhere, so
+> the loop does not start and the receivers still emit inline — **dispatch‑identical**
+> to before the PR until an owner flips it. *(Not "byte‑identical": each receiver
+> now does one extra function‑body import of `ingestion.consumer` plus one
+> `os.environ` read per request. Nothing observable changes; the wording is
+> corrected because a claim that strong is either exact or it is decoration.)*
+> **BO‑20b is the next ticket and needs no new decision.**
+
+`apps/services/ingestion/ingestion/consumer.py`: `XGROUP CREATE <stream>
+cc-ingest $ MKSTREAM` per stream (idempotent — swallow `BUSYGROUP` **only**;
+any other `ResponseError` fails the cycle rather than being hidden), then a
 supervised `XREADGROUP GROUP cc-ingest <consumer-name> BLOCK … COUNT …` loop
 across `ingestion:{clickup,zoho,gmail}` that decodes each entry
 (`event_type` + JSON `data`, the shape `queue.enqueue` writes at `:66‑74`),
-hands it to the sink registry, and `XACK`s it.
+hands `(source, event_type, payload_as_dict)` to `event_hooks.emit_event` — a
+**decoded dict, never the JSON string** — and `XACK`s it.
 **`$` is deliberate, not an oversight:** the group starts at the stream tail, so
 everything already buffered is **skipped** — the "audit buffer nobody reads"
 (§4 above) stays unread at cutover and is trimmed as before. The alternative,
@@ -576,48 +644,204 @@ of real workflow runs the moment the flag flips. Accept the skip; do not
 "fix" it. A one‑off replay, if ever wanted, is BO‑20c's `replay_dlq` shape
 applied by hand, not a startup behaviour. Lifecycle
 `start_ingestion_consumer()` / `stop_ingestion_consumer()` / `consumer_status()`
-copied from `routes/workflows/scheduler.py:272‑313`, wired into the gateway
-lifespan next to the existing five, **and stopped on shutdown** beside all five
-existing stop calls (`:311`, `:320`, `:327`, `:334`, `:341`) — stop it
-unconditionally, exactly as `stop_whatsapp_enrichment` (`:334`) is called even
-when its loop never started. Gated on `INGESTION_CONSUMER` (default **off**).
-- **Done when:** `tests/unit/test_ingestion_consumer.py` asserts, with the
-  consumer's Redis client faked per the `test_clickup_ingestor.py` pattern
-  (**no Redis, no VPS**), that a message `xadd`'d to `ingestion:clickup` — i.e.
-  returned by the fake's `xreadgroup` in the shape `queue.enqueue` produces — is
-  delivered to a sink registered via `register_event_sink` as
-  `("clickup", event_type, payload)` byte‑equal to what the producer encoded, and
-  is then `xack`'d **exactly once** on `ingestion:clickup` with group `cc-ingest`.
-- **Done when:** a fake whose `xgroup_create` raises
-  `redis.ResponseError("BUSYGROUP …")` does not fail startup, and a second
-  `start_ingestion_consumer()` while running is a no‑op (`consumer_status()`
-  reports one task, not two).
-- **Done when (no double dispatch, per Q1):** with `INGESTION_CONSUMER` unset,
+copied in shape from `routes/workflows/scheduler.py:272‑313`, wired into the
+gateway lifespan next to the existing five, **and stopped on shutdown** beside
+all five existing stop calls — stopped **unconditionally**, exactly as
+`stop_whatsapp_enrichment` is called even when its loop never started.
+
+**Constants — prescribed by the dispatch audit, not PR‑author choices.** A
+deliberate change to any of these is a doc change here, in the same way BO‑20b's
+`MAX_ATTEMPTS` is:
+- `_GROUP = "cc-ingest"`.
+- `_BLOCK_MS = 5_000` — finite, so a cancelled task returns promptly instead of
+  parking on a read that never times out.
+- `_READ_COUNT = 8` — at or below BO‑20e's `INGESTION_MAX_CONCURRENCY = 8`, so
+  that ticket bounds a batch this one already produces.
+- consumer name = `f"gw-{socket.gethostname()}-{os.getpid()}"`, **not a
+  constant**: BO‑20b's `XAUTOCLAIM` identifies a dead worker by its name in the
+  PEL, so two workers sharing one name make a crashed worker's backlog
+  unreclaimable.
+- `_ERROR_BACKOFF_SECS = 1.0` *(added by the implementation, recorded here)* —
+  the pause after a failed cycle. Without it a Redis outage turns the supervised
+  loop into a hot loop, because `xreadgroup` raises immediately and no `BLOCK`
+  elapses.
+- `_DISPATCH_TIMEOUT_SECS = 30.0` *(added by the implementation, recorded here)*
+  — the ceiling on **one entry's whole sink fan‑out**, applied as
+  `async with asyncio.timeout(…)` around `emit_event`. **It is not retry
+  machinery** (that is BO‑20b); it exists because this ticket changes the blast
+  radius of a hung sink. Before the cutover a sink that never returns hangs one
+  request's `BackgroundTasks` and the other two sources keep flowing; here one
+  serial loop drains all three streams, so an unbounded `await` converts a
+  per‑event hang into a **bus‑wide stall** — and a silent one, since
+  `emit_event` swallows sink exceptions and it could never surface as
+  `cycle_failed`. 30.0 is far above any legitimate sink: the registered one,
+  `workflows/triggers.dispatch_event`, is DB‑bound (it inserts the run row and
+  `create_task`s `_execute_run` at `service.py:226`; it never awaits the run
+  itself), so this cannot truncate a workflow. A timed‑out entry is still
+  `XACK`'d — interim BO‑20a semantics, below. Logged on its own key
+  `consumer.dispatch_timeout`.
+
+**Flag home — `consumer.py`, not `Settings`.** `INGESTION_CONSUMER` is read
+through a pure `consumer_enabled(env: dict[str, str] | None = None) -> bool`
+that reads `os.environ` **at call time**, truthy set `{"1","true","yes","on"}` —
+a verbatim mirror of `gateway/routes/whatsapp/scheduler.py::enrichment_enabled`
+(`:36`). It is deliberately **not** a `Settings` field: `get_settings` is
+`@lru_cache(maxsize=1)` (`packages/acb_common/acb_common/settings.py:384`),
+which freezes the flag for the process and makes it untestable per call. The
+receivers call `consumer_enabled()` per request via a function‑body import, the
+same shape as their `emit_event` import. (`settings.py` was on this ticket's
+Files list until 2026-08-02; it was wrong and is struck.)
+
+**Ack semantics are interim by design:** BO‑20a acks after dispatch **regardless
+of outcome**. Honest `XACK` + retry + DLQ is BO‑20b, which also adds the
+`emit_event(..., raise_on_error=True)` strict mode this loop would need to
+*observe* a failure at all. Do not pre‑build it. One deliberate exception: an
+entry whose `data` does not decode to a JSON **object** is logged
+(`consumer.entry_undecodable`) and acked **without** dispatch — there is nothing
+a sink could act on, and re‑delivering it forever would wedge the group.
+
+**Three "enqueued but never dispatched" states exist in BO‑20a, not one.** The
+first is the accepted §BO‑20 Q1 drop at the receiver (Redis down ⇒ the enqueue
+fails ⇒ nothing to dispatch). The other two are consequences of `XACK` being
+**unguarded** in `_dispatch_entry` while the loop only ever reads `">"`, never
+`"0"` — they are recorded here so BO‑20b does not rediscover them:
+1. **Ack failure mid‑batch.** A connection reset on `client.xack` propagates
+   through `_drain_once` into the supervised loop's `except` → backoff. The
+   entries **already returned by that `XREADGROUP`** (up to `_READ_COUNT` = 8
+   per stream) were never dispatched, sit in the PEL, and this process will not
+   re‑read them. The only log is `consumer.cycle_failed`.
+2. **SIGTERM mid‑batch.** Same shape — and the restarted process has a new pid,
+   so the stranded entries sit under a `gw-<host>-<pid>` name it never uses.
+
+The unguarded `XACK` is **deliberate, not an oversight**: a raising `xack` means
+Redis is gone, and swallowing it would hot‑loop against a dead server instead of
+reaching `_ERROR_BACKOFF_SECS`. Both states are recoverable — BO‑20b's reclaim
+pass (`XAUTOCLAIM` / `XPENDING` + `XCLAIM`) reclaims **any** consumer name in the
+group, including a dead pid's — **but the window is finite**: `queue._MAXLEN`
+(`queue.py:46`) trims each stream at 10 000 entries, and a trimmed entry is
+beyond the PEL's reach for good. That is why BO‑20b's done‑when below requires
+the reclaim pass to run **at startup**, not only on a periodic cadence.
+
+- **Done when (A — delivery + ack):** ✅ `tests/unit/test_ingestion_consumer.py`
+  asserts, with the consumer's Redis client faked at `consumer._get_client` per
+  the `test_clickup_ingestor.py:158‑181` pattern (**no Redis, no DB, no VPS**)
+  and the **real** sink registry (a recording sink via `register_event_sink`,
+  never a monkeypatched `emit_event`), that an entry returned by the fake's
+  `xreadgroup` **in the shape the real `queue.enqueue` produces** is delivered as
+  `("clickup", event_type, payload)` with `payload` a **dict** equal to what the
+  producer encoded, and is then `xack`'d **exactly once** on `ingestion:clickup`
+  with group `cc-ingest`. **The ack must be asserted to happen *after* the
+  dispatch, on one shared ordered timeline** — the recording sink and the fake's
+  `xack` append to the *same* list. Two independent lists satisfy every other
+  word of this criterion with the `XACK` hoisted **above** `emit_event`, which is
+  precisely the line BO‑20b edits.
+  → `test_entry_is_delivered_to_the_sink_and_acked_once`,
+  `test_read_uses_the_prescribed_group_and_constants`.
+- **Done when (B — the group starts at the tail, on all three streams):** ✅
+  `xgroup_create` is asserted for **each** of `ingestion:{clickup,zoho,gmail}`
+  with `id="$"` and `mkstream=True`. *A test that does not pin `id="$"` does not
+  close this ticket* — the difference between `$` and `0` is a quiet startup and
+  a dispatch storm.
+  → `test_group_created_on_every_stream_at_the_tail`,
+  `test_ensure_groups_called_directly_pins_the_same_contract`.
+- **Done when (C — idempotence):** ✅ a fake whose `xgroup_create` raises
+  `redis.ResponseError("BUSYGROUP …")` does not fail startup (the entry after it
+  still dispatches and acks), a non‑BUSYGROUP `ResponseError` is **not**
+  swallowed, and a second `start_ingestion_consumer()` while running is a no‑op —
+  one live task named `ingestion-consumer`, not two.
+  → `test_busygroup_does_not_fail_startup`,
+  `test_non_busygroup_response_error_is_not_swallowed`,
+  `test_second_start_while_running_is_a_no_op`.
+- **Done when (D — flag OFF):** ✅ with `INGESTION_CONSUMER` unset,
   `start_ingestion_consumer()` creates no task, `consumer_status()["running"] is
-  False`, and the receivers still emit inline — asserted by
-  `test_clickup_ingestor.py` remaining **10 passed, unmodified** *and* by
-  `tests/unit/test_ingestion_receiver_parity.py` (BO‑20f, **22 passed**)
-  remaining green, which is what pins the Gmail and Zoho halves of the same
-  guarantee. With the flag set, **none of the three receivers** calls
-  `emit_event` and the consumer does — assert the sink is invoked exactly once
-  per event in each mode, never twice. **The cutover is now three receivers
-  wide, not one**: BO‑20f gave Gmail and Zoho the same inline emit, so a
-  flag‑gated cutover that only covers ClickUp double‑dispatches the other two.
-- **Done when (supervision):** a sink that raises does not kill the loop (the
-  next cycle still runs) and `asyncio.CancelledError` propagates so
-  `stop_ingestion_consumer()` returns — the same two guarantees
-  `_scheduler_loop` (`:272‑286`) makes.
-- **Done when (packaging):** `ingestion` appears in
-  `apps/services/gateway/pyproject.toml` `dependencies`, and
+  False`, no Redis verb is issued at all, and the receivers still emit inline —
+  `test_clickup_ingestor.py` stays **10 passed, unmodified** and
+  `tests/unit/test_ingestion_receiver_parity.py` (BO‑20f) stays **22 passed**.
+  → `test_flag_off_starts_no_task`, `test_consumer_enabled_truthy_set`,
+  `test_consumer_enabled_reads_os_environ_at_call_time`.
+- **Done when (E — no double dispatch, per receiver, per Q1):** ✅ with the flag
+  ON, **each** of the three receivers is driven through `TestClient` with a valid
+  credential and the sink is invoked **zero** times while `xadd` still happens
+  exactly once; with the flag OFF, exactly once. Six assertions (3 receivers × 2
+  modes). **The cutover is three receivers wide, not one**: BO‑20f gave Gmail and
+  Zoho the same inline emit, so a ClickUp‑only test would leave the other two
+  double‑dispatching.
+  → `test_receiver_emits_inline_when_flag_off[clickup|gmail|zoho]`,
+  `test_receiver_does_not_emit_when_flag_on[clickup|gmail|zoho]`.
+- **Done when (F — flag ON + Redis down):** ✅ with `xadd` raising, each receiver
+  still returns **200** `{"status": "accepted"}`, the sink is **not** invoked
+  (the event is dropped — the accepted Q1 regression), and the drop is logged at
+  warning on its own key `<source>.queue.dropped`, so it is loud rather than
+  silent. The mirror case is pinned too: with the flag OFF, Redis down still
+  dispatches inline and claims **no** drop. Do **not** "fix" the drop by
+  re‑emitting inline.
+  → `test_flag_on_redis_down_drops_the_event_but_says_so[…]`,
+  `test_flag_off_redis_down_still_dispatches_inline[…]`.
+- **Done when (G — supervision):** ✅ a sink that raises does not kill the loop
+  (the next entry is still delivered and acked), a failing `xreadgroup` does not
+  either, and `asyncio.CancelledError` propagates so `stop_ingestion_consumer()`
+  returns — the same two guarantees `_scheduler_loop` (`:272‑286`) makes.
+  The cancellation half needs **both** halves of a fix that is easy to get
+  half-right: (i) assert `task.cancelled()`, not `task.done()` — a loop that
+  caught `CancelledError` and returned normally is `done()` too; **and (ii) let
+  the loop actually reach its blocking read before calling `stop`.** (ii) is
+  load-bearing and is not obvious: cancelling a task that has never been stepped
+  makes asyncio throw `CancelledError` in at the coroutine's *first instruction*
+  — above the `try` — so the task is marked cancelled whatever the `except`
+  clause does, and even `task.cancelled()` passes against a swallowing loop.
+  Verified both ways against a deliberately-swallowing `_consumer_loop`: with
+  the wait, red (`Task finished … result=None`); without it, green. A test that
+  stops before the first read pins asyncio's `_must_cancel` fast path, not this
+  loop.
+  → `test_a_raising_sink_does_not_kill_the_loop`,
+  `test_a_failing_read_does_not_kill_the_loop`,
+  `test_cancellation_propagates_so_stop_returns`,
+  `test_stop_when_never_started_is_a_no_op`,
+  `test_undecodable_entry_is_acked_not_dispatched`.
+- **Done when (G2 — a hung sink cannot stall the bus):** ✅ with
+  `_DISPATCH_TIMEOUT_SECS` monkeypatched small and a registered sink that never
+  returns, **both** queued entries still reach the recording sink, both are
+  `xack`'d, and `consumer.dispatch_timeout` is logged **once per entry** — the
+  regression this ticket would otherwise introduce is that one serial loop
+  drains all three streams, so an unbounded `await emit_event` stalls **every**
+  source, silently. Without the timeout this test hangs until `_drain`'s
+  `wait_for` fires; it is a real pin, not a tautology.
+  → `test_a_hung_sink_times_out_and_the_bus_keeps_draining`.
+- **Done when (H — packaging):** ✅ `ingestion` appears in
+  `apps/services/gateway/pyproject.toml` `dependencies` **and** in `uv.lock`'s
+  `name = "gateway"` package block (both `dependencies` and `requires-dist`), and
   `uv run python -c "import ingestion.consumer"` succeeds — closing the silent
-  `try/except` conditionality at `main.py:1043‑1049`.
-- **Verify:** `uv run pytest tests/unit/test_ingestion_consumer.py tests/unit/test_clickup_ingestor.py -q`
-- **Files:** `apps/services/ingestion/ingestion/consumer.py`,
-  `apps/services/ingestion/ingestion/sources/*/webhook.py` (flag‑gated cutover),
-  `apps/services/gateway/gateway/main.py`,
-  `apps/services/gateway/pyproject.toml`,
-  `packages/acb_common/acb_common/settings.py` (the flag),
-  `tests/unit/test_ingestion_consumer.py`.
+  `try/except` conditionality at `main.py:1070‑1076` (§10 above).
+  → `test_gateway_declares_the_ingestion_dependency`,
+  `test_uv_lock_records_ingestion_under_gateway`,
+  `test_consumer_module_imports_and_exposes_its_lifecycle`.
+- **Done when (I — the lifespan wiring is pinned, not just asserted in prose):**
+  ✅ the "stopped **unconditionally**" contract stated above (and in
+  `apps/services/gateway/AGENTS.md` §1) is covered by a test, or deleting the
+  stop call leaves every other test in this file green. Text‑level over
+  `main.py`, for the same reason the two packaging tests above are: importing
+  `gateway.main` pulls in the whole app. Asserts both names appear, that the
+  start precedes the `yield` and the stop follows it, and that the shutdown
+  half contains no `consumer_enabled` guard.
+  → `test_gateway_lifespan_starts_the_consumer_and_stops_it_after_yield`.
+- **Constraint (kept):** no log call in `consumer.py` may pass `event=` —
+  `tests/unit/test_clickup_normalise_dlq.py` carries an AST guard over `apps/` +
+  `packages/` (`_SCANNED` at `:119`). Use `clickup_event=` / `zoho_event=` /
+  `source=` style keys.
+- **Verify:** `uv run pytest tests/unit/test_ingestion_consumer.py tests/unit/test_clickup_ingestor.py tests/unit/test_ingestion_receiver_parity.py tests/unit/test_clickup_normalise_dlq.py -q`
+  → **77 passed** (41 + 10 + 22 + 4; the last three unmodified — that is the
+  regression fence). The single‑file form this ticket used to carry is
+  insufficient: it cannot see the Gmail/Zoho halves of the cutover.
+  Plus `uv run ruff check --select F821,F601,F602,F502,F7,B006 apps/services/ingestion/ingestion apps/services/gateway/gateway/routes/workflows`
+  → `All checks passed!`
+- **Files:** `apps/services/ingestion/ingestion/consumer.py` (new),
+  `apps/services/ingestion/ingestion/sources/{clickup,gmail,zoho}/webhook.py`
+  (flag‑gated cutover), `apps/services/gateway/gateway/main.py`,
+  `apps/services/gateway/pyproject.toml` + `uv.lock`,
+  `tests/unit/test_ingestion_consumer.py` (new).
+  ~~`packages/acb_common/acb_common/settings.py`~~ — struck; the flag lives in
+  `consumer.py` (see "Flag home" above). `queue.py` is deliberately untouched
+  (its per‑call sync client is BO‑9's).
 
 ---
 
@@ -651,6 +875,22 @@ written to `ingestion:dlq` via the existing `queue.enqueue_dlq` (`:79`) and
 - **Done when:** `MAX_ATTEMPTS == 5` and `_RECLAIM_MIN_IDLE_MS == 60_000` are
   asserted against those literals, and the reclaim call is asserted to pass
   `_RECLAIM_MIN_IDLE_MS` (not `0`) as `min-idle-time`.
+- **Done when — the reclaim pass runs at STARTUP, before the first `">"` read**,
+  not only on the periodic cadence, and a test asserts that ordering. *Reason
+  (recorded from the BO‑20a review, §BO‑20a "Three enqueued but never dispatched
+  states"):* BO‑20a strands a batch's remainder in the PEL on an `xack` failure
+  or a SIGTERM mid‑batch, under the **previous pid's** consumer name — which
+  only a reclaim reaches, and only until `queue._MAXLEN` trims the entry out of
+  the stream. Without a startup pass, every restart while the flag is on adds to
+  a backlog that nothing drains until the next periodic tick.
+  - ⚠️ **Open sub‑question for this ticket to answer (do not guess):** at
+    startup, entries stranded by a *fast* restart have been idle for less than
+    `_RECLAIM_MIN_IDLE_MS`, so the min‑idle filter excludes exactly the case the
+    startup pass exists for. Decide and record one of: (a) the startup pass uses
+    a lower idle bound **restricted to consumer names that are not this process**
+    (a dead pid cannot have work in flight), or (b) it uses the same 60 s bound
+    and accepts one periodic tick of latency. `_RECLAIM_MIN_IDLE_MS > 0` remains
+    binding for the periodic pass either way.
 - **Done when:** with a faked Redis and a sink that raises on the first **4**
   deliveries and succeeds on the **5th**, the entry is `xack`'d **exactly once**
   and **never** written to `ingestion:dlq` — i.e. the retry path is exercised
@@ -772,6 +1012,16 @@ uv run pytest tests/unit/test_clickup_ingestor.py -q
 Baseline confirmed 2026-08-02 on a clean tree: **10 passed** (~0.5–0.8s). Every
 BO‑20 PR must keep this green **and unmodified** — it is the regression net that
 proves the ClickUp path did not change.
+
+Since BO‑20a the fence is four files wide, because the cutover touches all three
+receivers and the consumer:
+```
+uv run pytest tests/unit/test_ingestion_consumer.py tests/unit/test_clickup_ingestor.py \
+  tests/unit/test_ingestion_receiver_parity.py tests/unit/test_clickup_normalise_dlq.py -q
+```
+Measured after BO‑20a (2026-08-02): **75 passed in 2.35s** — 39 + 10 + 22 + 4,
+with the last three **unmodified**. BO‑20b–e must keep that shape: their own new
+file grows, the other three do not move.
 
 ```
 uv run ruff check --select F821,F601,F602,F502,F7,B006 \

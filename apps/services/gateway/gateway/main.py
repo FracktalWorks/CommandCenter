@@ -296,6 +296,19 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     except Exception as exc:
         _log.warning("gateway.workflow_scheduler_skipped", error=str(exc))
 
+    # Start the ingestion event-bus consumer — drains ingestion:{clickup,zoho,
+    # gmail} through the same event-sink registry the receivers emit to
+    # (FOUNDATION_BUILDOUT_CHECKLIST.md §BO-20, BO-20a; §BO-20.0 Option A: the
+    # loop lives in the ingestion package, the gateway starts it). Gated OFF by
+    # default on INGESTION_CONSUMER — flipping it on is an OWNER-GATE because it
+    # also cuts the receivers over to enqueue-only (Q1).
+    try:
+        from ingestion.consumer import start_ingestion_consumer
+        started = await start_ingestion_consumer()
+        _log.info("gateway.ingestion_consumer", started=started)
+    except Exception as exc:
+        _log.warning("gateway.ingestion_consumer_skipped", error=str(exc))
+
     # Anthropic prompt-cache warming (specs/llm_caching_memory.md Phase 6).
     # Fire the orchestrator's stable prefix at any Anthropic-backed tier with
     # max_tokens=0 so the first real user request is a cache HIT, not a cold
@@ -339,6 +352,16 @@ async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
     try:
         from gateway.routes.workflows import stop_workflow_scheduler
         await stop_workflow_scheduler()
+    except Exception:
+        pass
+
+    # Stop the ingestion event-bus consumer. Called UNCONDITIONALLY — like
+    # stop_whatsapp_enrichment above, it is a no-op when the flag kept the loop
+    # from ever starting, and a flag read at shutdown could differ from the one
+    # at startup and leak the task.
+    try:
+        from ingestion.consumer import stop_ingestion_consumer
+        await stop_ingestion_consumer()
     except Exception:
         pass
 

@@ -103,6 +103,13 @@ async def receive(
         _log.warning("gmail.webhook.undecodable", envelope_keys=sorted(envelope)[:5])
         return {"status": "accepted"}
 
+    # §BO-20 Q1 cutover: with INGESTION_CONSUMER on, the consumer drains the
+    # stream and is the dispatch path, so this receiver must NOT also emit
+    # inline — one event, one fan-out, never both.
+    from ingestion.consumer import consumer_enabled
+
+    consumer_on = consumer_enabled()
+
     # Always enqueue to Redis Streams for audit trail and replay capability.
     try:
         enqueue(STREAM_GMAIL, EVENT_HISTORY_UPDATED, notification)
@@ -110,12 +117,24 @@ async def receive(
         # Redis unavailable — log and continue; do NOT return 5xx to Pub/Sub
         # (that triggers retries which would make the backlog worse).
         _log.warning("gmail.queue.unavailable", error=str(exc))
+        if consumer_on:
+            # After the cutover the queue is the ONLY path, so a failed enqueue
+            # is a dropped event — the accepted §BO-20 Q1 regression. Loud on
+            # its own key; do NOT re-emit inline (that is double dispatch).
+            _log.warning(
+                "gmail.queue.dropped",
+                gmail_event=EVENT_HISTORY_UPDATED,
+                error=str(exc)[:160],
+            )
 
     # Fan out to registered event sinks (workflow event triggers) — a no-op
     # unless the gateway wired a sink in at startup (event_hooks.py).
-    from ingestion.event_hooks import emit_event
+    if not consumer_on:
+        from ingestion.event_hooks import emit_event
 
-    background_tasks.add_task(emit_event, SOURCE, EVENT_HISTORY_UPDATED, notification)
+        background_tasks.add_task(
+            emit_event, SOURCE, EVENT_HISTORY_UPDATED, notification
+        )
 
     # TODO WBS 1.3 follow-up: list_history + normalise + triage chain.
     return {"status": "accepted"}

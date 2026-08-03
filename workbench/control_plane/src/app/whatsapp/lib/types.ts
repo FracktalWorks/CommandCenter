@@ -62,6 +62,15 @@ export type WaCallList = {
   bridge_reachable: boolean;
 };
 
+/** One server-side thing that happened to a call, in order. */
+export type WaCallEvent = { at: string; kind: string; detail: string };
+
+export type WaCallTimeline = {
+  call: WaCall | null;
+  events: WaCallEvent[];
+  bridge_reachable: boolean;
+};
+
 /** Whether a paired number can place a call, and if not, what's missing. */
 export type WaCallDiagnostics = {
   account_id: string;

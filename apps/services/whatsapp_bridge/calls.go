@@ -142,6 +142,22 @@ type callInfo struct {
 	MediaReady bool `json:"media_ready"`
 }
 
+// callEvent is one timestamped thing that happened to a call.
+//
+// A call that fails leaves almost no trace otherwise: the phase is a single
+// word, the error (if any) is long gone, and the interesting part is usually
+// *where in the sequence* it stopped. This is that sequence, kept in memory and
+// served back so a failure can be reported without shell access to the box.
+type callEvent struct {
+	At     string `json:"at"`   // RFC3339 with millis
+	Kind   string `json:"kind"` // signal | phase | media | audio | error | end
+	Detail string `json:"detail"`
+}
+
+// maxCallEvents caps the per-call ring. Long enough for a full call's story,
+// short enough that a wedged call can't grow without bound.
+const maxCallEvents = 60
+
 // liveCall is one call plus the bookkeeping the HTTP surface reports on. The
 // mutex guards every mutable field: meowcaller fires its callbacks from its own
 // goroutines while HTTP handlers read concurrently.
@@ -165,7 +181,37 @@ type liveCall struct {
 	sink       meowcaller.AudioSink
 	counter    *callSink
 	mediaReady bool
+	events     []callEvent
 	closeOnce  sync.Once
+}
+
+// event appends to the call's timeline. Safe from any goroutine, and safe to
+// call on a nil-ish call — diagnostics must never be the thing that panics.
+func (lc *liveCall) event(kind, format string, args ...any) {
+	if lc == nil {
+		return
+	}
+	e := callEvent{
+		At:     time.Now().UTC().Format("2006-01-02T15:04:05.000Z"),
+		Kind:   kind,
+		Detail: fmt.Sprintf(format, args...),
+	}
+	lc.mu.Lock()
+	lc.events = append(lc.events, e)
+	if len(lc.events) > maxCallEvents {
+		// Keep the tail: the end of a failing call is the informative part.
+		lc.events = lc.events[len(lc.events)-maxCallEvents:]
+	}
+	lc.mu.Unlock()
+}
+
+// timeline returns a copy of the call's events.
+func (lc *liveCall) timeline() []callEvent {
+	lc.mu.RLock()
+	defer lc.mu.RUnlock()
+	out := make([]callEvent, len(lc.events))
+	copy(out, lc.events)
+	return out
 }
 
 func (lc *liveCall) snapshot() callInfo {
@@ -470,28 +516,34 @@ func (cm *CallManager) track(lc *liveCall) {
 	// up; reaching "active" without OnReady means signalling worked and media
 	// didn't.
 	c.OnStateChange(func(p meowcaller.CallPhase) {
-		cm.log.Infof("call %s: %s -> %s (+%s)",
-			lc.callID, lc.snapshot().Phase, phaseName(p),
-			time.Since(lc.startedAt).Round(time.Millisecond))
+		prev := lc.snapshot().Phase
+		elapsed := time.Since(lc.startedAt).Round(time.Millisecond)
+		cm.log.Infof("call %s: %s -> %s (+%s)", lc.callID, prev, phaseName(p), elapsed)
+		lc.event("phase", "%s → %s (+%s)", prev, phaseName(p), elapsed)
 		lc.setPhase(phaseName(p))
 		cm.push(lc)
 	})
 	c.OnPeerAccept(func() {
-		cm.log.Infof("call %s: peer accepted (+%s)",
-			lc.callID, time.Since(lc.startedAt).Round(time.Millisecond))
+		elapsed := time.Since(lc.startedAt).Round(time.Millisecond)
+		cm.log.Infof("call %s: peer accepted (+%s)", lc.callID, elapsed)
+		lc.event("signal", "peer accepted (+%s)", elapsed)
 		cm.push(lc)
 	})
 	c.OnReady(func() {
 		lc.mu.Lock()
 		lc.mediaReady = true
 		lc.mu.Unlock()
+		elapsed := time.Since(lc.startedAt).Round(time.Millisecond)
 		cm.log.Infof("call %s: media active (+%s) — recording=%q",
-			lc.callID, time.Since(lc.startedAt).Round(time.Millisecond), lc.recording)
+			lc.callID, elapsed, lc.recording)
+		lc.event("media", "relay bound, media active (+%s)", elapsed)
 		cm.push(lc)
 	})
 	c.OnEnd(func(reason string) {
 		lc.finish(reason)
 		secs := counter.seconds()
+		lc.event("end", "ended (%s) after %s — %.1fs of peer audio received",
+			reason, time.Since(lc.startedAt).Round(time.Millisecond), secs)
 		if secs == 0 {
 			// The failure that looks like success: signalling worked, media
 			// didn't. Say so loudly — the recording will be an empty WAV.
@@ -581,6 +633,8 @@ func (m *SessionManager) PlaceCall(ctx context.Context, accountID, target string
 		direction: "outgoing", kind: "direct",
 	}
 	m.calls.track(lc)
+	lc.event("signal", "dialled %q (typed %q); offer on the wire in %s",
+		dial, target, time.Since(started).Round(time.Millisecond))
 	return lc.snapshot(), nil
 }
 
@@ -702,6 +756,15 @@ type callDiagnostics struct {
 	ActiveCalls   int    `json:"active_calls"`
 	RecordingDir  string `json:"recording_dir,omitempty"`
 	Verdict       string `json:"verdict"`
+}
+
+// CallTimeline returns one call's snapshot plus its event log.
+func (m *SessionManager) CallTimeline(accountID, callID string) (callInfo, []callEvent, error) {
+	lc, ok := m.calls.get(callID)
+	if !ok || (accountID != "" && lc.accountID != accountID) {
+		return callInfo{}, nil, ErrCallNotFound
+	}
+	return lc.snapshot(), lc.timeline(), nil
 }
 
 // RecordingFor returns the on-disk path of a call's audio, scoped to the

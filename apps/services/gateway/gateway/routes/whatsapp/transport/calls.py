@@ -294,6 +294,45 @@ async def call_recording(
     )
 
 
+class CallEventModel(BaseModel):
+    at: str = ""
+    kind: str = ""
+    detail: str = ""
+
+
+class CallTimelineModel(BaseModel):
+    """One call's story, in order — what a user pastes when a call misbehaves."""
+
+    call: CallModel = CallModel()
+    events: list[CallEventModel] = []
+    bridge_reachable: bool = True
+
+
+@router.get("/calls/{call_id}/events", response_model=CallTimelineModel)
+async def call_events(
+    call_id: str, account_id: str, user: UserContext = Depends(get_current_user),
+) -> CallTimelineModel:
+    """The call's server-side event timeline: signalling, phases, media, and the
+    audio socket's own open/close with status codes."""
+    await _assert_owns_account(account_id, user)
+    status, data = await _bridge(
+        "GET", "/calls/events", _READ_TIMEOUT_SECS,
+        params={"session": account_id, "call_id": call_id})
+    if status <= 0:
+        return CallTimelineModel(bridge_reachable=False)
+    if status >= 300:
+        raise HTTPException(
+            status_code=status, detail=_detail(data, "no timeline for that call"))
+    if not isinstance(data, dict):
+        return CallTimelineModel(bridge_reachable=True)
+    raw = data.get("events")
+    return CallTimelineModel(
+        call=_as_call(data.get("call")),
+        events=[CallEventModel(**e) for e in (raw or []) if isinstance(e, dict)],
+        bridge_reachable=True,
+    )
+
+
 class CallDiagnosticsModel(BaseModel):
     """Whether this account can place a call, and if not, what's missing.
 

@@ -131,7 +131,20 @@ func (s *Server) routes() http.Handler {
 	mux.HandleFunc("GET /calls/diagnostics", s.auth(s.handleCallDiagnostics))
 	mux.HandleFunc("GET /calls/recording", s.auth(s.handleCallRecording))
 	mux.HandleFunc("GET /call/audio", s.auth(s.handleCallAudio))
+	mux.HandleFunc("GET /calls/events", s.auth(s.handleCallEvents))
 	return mux
+}
+
+// handleCallEvents returns one call's timeline — what happened, in order, with
+// timings. This is what a user reports when a call misbehaves.
+func (s *Server) handleCallEvents(w http.ResponseWriter, r *http.Request) {
+	q := r.URL.Query()
+	info, events, err := s.mgr.CallTimeline(q.Get("session"), q.Get("call_id"))
+	if err != nil {
+		http.Error(w, err.Error(), statusForCall(err))
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]any{"call": info, "events": events})
 }
 
 // handleCallRecording streams a call's recorded audio. The path comes from the

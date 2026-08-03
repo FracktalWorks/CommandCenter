@@ -16,6 +16,21 @@
 > quotes** — `work_plan.md` D11/D12 and the WS-14 row carried the same stale ranges and
 > were corrected in the same change.
 
+> **Repair round, 2026-08-03 (review REQUEST-CHANGES on the pass above).** Three fixes
+> here. (1) **`_load_room_row` does not exist** — §2 anchor a and §2 done-when 2 named
+> it; the function is **`_load_room`** (`gateway/rooms.py:149`), and `_load_room_state`
+> (`routes/rooms.py:118`) is a *different* function, so the wrong name pointed at real
+> but unrelated code. The line ranges were right; only the symbol was wrong.
+> (2) **WS-14a done-when 2 had no home its own command could reach** — §7 names
+> `test_app_grants.py` and `test_org_access_control.py` as the wholly hermetic files,
+> but done-when 5's command listed only the two `skipif` files, so quoting it verified
+> the DB-backed half and nothing else. Done-when 2 now names
+> `tests/unit/test_org_access_control.py` and done-when 5's command includes it.
+> (3) **§4.1's "one shared validator" named no module, and no shared home exists** —
+> it now names `packages/acb_auth/acb_auth/permissions.py` and justifies it, drops
+> `role` from the proposed schema, records the previously-unconsidered "reuse
+> `app_grants`" alternative, and cross-references the board as **D13**.
+
 **Purpose.** Two audits asked whether the multi-tenant foundation is complete. It is
 not built, and the owner's answer is that it should not be. This document records
 that decision and the visibility model that replaces it, so the next cycle builds
@@ -157,7 +172,7 @@ Getting a wider group than intended there widens, it does not narrow.
 
 | Anchor | Symbol | The join |
 |---|---|---|
-| a | `apps/services/gateway/gateway/rooms.py:181-199` (the `SELECT g.slug` is at `:192`) | `SELECT g.slug FROM org_group g JOIN org_group_member m … WHERE u.email = :email AND g.slug = ANY(:slugs)` — inside `_load_room_row`, feeding `my_groups` |
+| a | `apps/services/gateway/gateway/rooms.py:181-199` (the `SELECT g.slug` is at `:192`) | `SELECT g.slug FROM org_group g JOIN org_group_member m … WHERE u.email = :email AND g.slug = ANY(:slugs)` — inside **`_load_room`** (`rooms.py:149`), feeding `my_groups` |
 | b | `apps/services/gateway/gateway/rooms.py:368-403` (`SESSION_VISIBLE_SQL` opens at `:368`; the slug join is at `:377`) | `SESSION_VISIBLE_SQL`: `JOIN org_group g ON g.slug = substring(p.subject from 7)` |
 | c | `packages/acb_auth/acb_auth/access.py:330-336` | `_GROUP_MEMBER_SQL`: `WHERE g.slug = :slug AND au.status = 'active'` |
 
@@ -180,10 +195,23 @@ Re-derive all three with the `grep -n "org_group"` command in §7 before editing
    Postgres up and "verified red" is unsatisfiable against it. The red-first obligation
    therefore attaches to a test that needs no database: assert, as strings, that each of
    the three queries carries an organization predicate.
+   - **Where it lives — named, because the mandated command in done-when 5 reaches
+     neither skipping file's hermetic half:** `tests/unit/test_org_access_control.py`.
+     §7 measures it as one of the two *wholly* hermetic files in this area (no DB, no
+     skip, verified 2026-08-03), it already imports `acb_auth.access` where anchor c's
+     constant lives, and `tests/unit/test_admin_groups.py` shows a gateway module being
+     imported from a hermetic unit test, so pulling in `gateway.rooms` for anchors a
+     and b is established practice. A **new** file is acceptable instead — but only if
+     it carries no `_db_ready()` guard and is added to done-when 5's command; the
+     default is the named file, so this criterion always has a home.
    - `SESSION_VISIBLE_SQL` (`gateway/rooms.py:368`) and `_GROUP_MEMBER_SQL`
      (`acb_auth/access.py:330`) are already module-level constants — import and assert
      on them directly.
-   - Anchor a's query is an inline string inside `_load_room_row`. **Lift it to a
+   - Anchor a's query is an inline string inside **`_load_room`**
+     (`gateway/rooms.py:149` — *the name was published as `_load_room_row` until
+     2026-08-03; no such symbol exists, and `_load_room_state`
+     (`routes/rooms.py:118`) is a **different** function, so the wrong name pointed
+     at real but unrelated code*). **Lift it to a
      module-level constant** (e.g. `MY_GROUPS_SQL`) as part of this PR, so the same
      assertion reaches all three. That extraction is the reason this criterion is
      buildable rather than a wish.
@@ -205,10 +233,15 @@ Re-derive all three with the `grep -n "org_group"` command in §7 before editing
 5. **Verification commands** (name the files; never `pytest tests/unit/` as a
    directory — whole-directory collection hangs against this box's live DB):
    ```
-   uv run pytest tests/unit/test_session_authority.py tests/unit/test_rooms.py -v -rs
+   uv run pytest tests/unit/test_session_authority.py tests/unit/test_rooms.py \
+                 tests/unit/test_org_access_control.py -v -rs
    uv run ruff check apps/services/gateway/gateway/rooms.py \
                      packages/acb_auth/acb_auth/access.py
    ```
+   The third file is **not optional garnish** — it is the only one of the three that
+   runs done-when 2. The first two both `skipif` without a database, so quoting a run
+   of just those two verifies the DB-backed half and *nothing else*. If done-when 2
+   was placed in a new hermetic file instead, name that file here too.
 
 **Non-goals.** Do not add `organization_id` to any other table, do not thread
 `UserContext.organization_id` into unrelated queries, and do not touch sites 1–10 in
@@ -366,14 +399,25 @@ single-valued when it has one row.
 
 ### 4.1 Where the project grant table lives *(the first decision the tasks slice makes)*
 
-`DECISION (agent-proposed, owner may overrule) — 2026-08-03.` §8 used to defer this
+`DECISION (agent-proposed, owner may overrule) — 2026-08-03.` Registered on the board as
+**D13** (`work_plan.md` §3) so it is discoverable without reading this section.
+§8 used to defer this
 ("`gtd_*` vs a shared `object_grants`… WS-14's design call"), which made the tasks team
 slice undispatchable: acceptance cannot name a table the implementer is also being asked
 to invent. It is decided here so it stops blocking, and recorded as overrulable so the
 owner keeps the call.
 
-> **A `gtd_*`-local table — `gtd_project_grant (project_id, subject, role, granted_by,
-> created_at)` — not a polymorphic `object_grants`.**
+> **A `gtd_*`-local table — `gtd_project_grant (project_id, subject, granted_by,
+> created_at)` — not a polymorphic `object_grants`, and not `app_grants`.**
+
+**No `role` column.** The draft carried one, copied from `app_grants.role`
+(`114_custom_apps.sql:61-62`). Cut 2026-08-03: `app_grants.role` is read by `can_edit`
+(`routes/apps/_common.py:473`), whereas every clause of the tasks slice's acceptance
+(`department_centers.md` C1) is a **read**-path clause, so a project grant's role would
+have one legal value and no reader. Write-through-grant ("may a grantee edit items in a
+granted project?") is a real, *unanswered* question; when it is answered it arrives as
+`ALTER TABLE … ADD COLUMN role` at the next free migration number (R1), additive and
+backfill-free. See C1's boxed note for the full reasoning.
 
 **Why.** `app_grants` already exists and is per-surface. A shared `object_grants` would
 therefore be a *second* grant shape on day one unless it also migrated `app_grants` —
@@ -383,6 +427,33 @@ promises. A local table also keeps referential integrity (a real FK onto
 must **not** fork is the *subject grammar*: §3.2's standing rule forbids "a per-app grant
 table with its own subject grammar", not a per-app grant table. One shared validator
 accepting `email | group:<slug> | org` satisfies the rule; two validators would not.
+
+**Where that shared validator lives — `packages/acb_auth/acb_auth/permissions.py`,
+exported from `acb_auth/__init__.py`.** Named here because "the shared validator" named
+no module and **no shared home exists**: the only two subject validators today are
+route-local and disjoint, `routes/rooms.py::_valid_subject` (`:100-111`) and
+`routes/apps/grants.py::is_valid_subject` (`:68-85`), so an implementer told to reuse
+"the shared one" would have had to import a *private* symbol across route packages and
+the criterion would still have read green. `permissions.py` is the right home because it
+already owns the permission vocabulary, is **pure by contract** (no DB, no FastAPI, no
+I/O — `permissions.py:1-8` and `packages/AGENTS.md`), and every consumer already imports
+`acb_auth`, so it adds no import-graph edge. The tasks slice creates it and is its first
+caller; converting the two existing validators to compose with it is a **named follow-on**
+(their grammars differ, and `rooms.py:100-111` is an anchor four documents publish —
+see the line-count-neutrality rule in §3.2). Acceptance: `department_centers.md` C1
+done-when 5.
+
+**The third alternative, now that it has been asked: reuse `app_grants` itself.**
+Rejected, and not on taste — on its key. `app_grants` is
+`app_id UUID NOT NULL REFERENCES apps(id) ON DELETE CASCADE`, `PRIMARY KEY (app_id,
+subject)` (`114_custom_apps.sql:58-67`). A project is not an app, so reuse means
+dropping that FK and renaming the column to something polymorphic — which *is* the
+`object_grants` option, arrived at by mutating a live table that four Custom-Apps code
+paths read (`grants.py`, `_common.load_grants`, `lifecycle.list_apps:299-301`,
+`can_view`/`can_edit`) instead of by creating a new one. It is strictly the worse way to
+reach the same place: same loss of referential integrity, plus a migration on shipped
+data. If the owner wants one grant table, take the `object_grants` route below, not this
+one.
 
 **What the alternative costs, stated so the overrule is informed.** `object_grants`
 would mean: one expansion helper for every future surface (Notes, Workflows) instead of

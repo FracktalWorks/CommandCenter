@@ -3,17 +3,33 @@
 **Status:** Phase A shipped (UI scaffold + feature gating) — **but no Center is reachable by anyone on `main` today, owner included**: the `center.*` feature-vocabulary fix and its invariant tests are on the open branch `ws-13-centers-feature-vocabulary` (2026-08-03), **unmerged**. §2 records the defect and the registration checklist that prevents its recurrence. Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-03 · **Owner:** vjvarada
 
 **Verified against code:** 2026-08-03 (WS-14 doc remediation, on `ws-14-doc-remediation`
-off `bebbd924`). Scope of that pass: **§3 Phase C only** — all four bullets were audited
-against the tree, three were found to rest on things that do not exist, and each now
-carries acceptance and an **AGENT-SAFE / OWNER-GATE** label. §1, §2 and Phases B/D/E were
-not re-measured in that pass and keep their earlier stamps. Findings, so no reader has to
-re-derive them: `email_account_member` **exists nowhere in the repo** (0 hits across
+off `bebbd924`; **repair round the same day off `264f881e`**). Scope of that pass: **§3
+Phase C only** — all four bullets were audited against the tree, three were found to rest
+on things that do not exist, and each now carries acceptance and an **AGENT-SAFE /
+OWNER-GATE** label. §1, §2 and Phases B/D/E were not re-measured in that pass and keep
+their earlier stamps. Findings, so no reader has to re-derive them: `email_account_member`
+**exists nowhere in the repo** (0 hits across
 `*.sql` and `*.py`); the seven agents the team-instancing bullet pointed at
 (`sales`, `billing`, `delivery`, `startup-coach`, `triage`, `reconciler`, `strategy`)
 **do not exist** — `apps/agents/` holds exactly six others; and `pending_actions`
 (`infra/postgres/66_pending_actions.sql:13-38`) has **no column naming the requesting
 member, their group, or a Center**, so per-Center approvals is a schema change behind an
 open owner question, not a filter.
+
+**Repair round, 2026-08-03 (review REQUEST-CHANGES on the pass above).** Four defects in
+that pass, all fixed here: (1) **C1's acceptance could go green with no way to create a
+grant** — done-when 1 now names a caller-reachable creation path (method, path,
+permission) and done-when 2 requires the grant under test to be created *through it*, not
+by a fixture `INSERT`; (2) **`role` was in the proposed schema with zero done-when
+touching it** — it is **cut**, with the reasoning and the additive path back recorded;
+(3) **C4 repeated an absolute this ticket exists to stop** — *"`actor` is the proposing
+agent … not the human behind it"* is **false**, `routes/apps/tools.py:393` and
+`routes/apps/actions.py:345` both write `app:<slug>:<email>`; the six proposers and five
+actor shapes are now measured in place and **the OWNER-GATE verdict is unchanged and
+better supported**; (4) **C2's "NOT DISPATCHABLE" was a third gate token** in a corpus
+whose contract allows two — mapped onto AGENT-SAFE (the doc action) + blocked (the
+build). C3 additionally states that its migration is pre-provisioning with columns
+intentionally unread, and reproduces D3's column shape.
 
 The commitment this document records: **CommandCenter stays one deployment, and
 departments get Centers — scoped projections of the same platform, never
@@ -162,12 +178,29 @@ the agent-ready spec contract item 7.
 rule 2. This is the bullet that has read "`/tasks` scoped to the group's projects" and
 nothing else for weeks; that is not testable, so it is written out here.
 
-**The grant table.** `tenancy_and_visibility.md` §4.1 makes the call and records both
-options: **`gtd_project_grant (project_id, subject, role, granted_by, created_at)`**, a
+**The grant table.** `tenancy_and_visibility.md` §4.1 makes the call and records the
+alternatives: **`gtd_project_grant (project_id, subject, granted_by, created_at)`**, a
 `gtd_*`-local table with a real FK onto `gtd_projects` — not a polymorphic
-`object_grants`. It is a `DECISION (agent-proposed, owner may overrule)`; read §4.1's
-reasoning before overruling it, and if it is overruled, the alternative is its own
-ticket that *also* migrates `app_grants`, never a side effect of this slice.
+`object_grants`, and not a reuse of `app_grants` (whose key *is* `app_id UUID NOT NULL
+REFERENCES apps(id)`, `114_custom_apps.sql:59`). It is a
+`DECISION (agent-proposed, owner may overrule)` — registered on the board as
+**D13** (`work_plan.md` §3); read §4.1's reasoning before overruling it, and if it is
+overruled, the alternative is its own ticket that *also* migrates `app_grants`, never a
+side effect of this slice.
+
+> **No `role` column — decided 2026-08-03, not deferred.** Earlier drafts of this
+> schema carried `role`, copied from `app_grants.role`
+> (`114_custom_apps.sql:61-62`, `CHECK (role IN ('use','edit','own'))`). It is **cut**.
+> `app_grants.role` earns its place because something branches on it — `can_edit`, at
+> `routes/apps/_common.py:473`. Nothing would branch on a project grant's role in this
+> slice: every done-when below is a **read**-path clause, and done-when 7 explicitly
+> lets every write predicate stay owner-only. `role` would therefore ship with one
+> legal value and no reader — a dead column, and an invitation for the next
+> implementer to invent write semantics nobody chose. Whether a grantee may *edit*
+> items in a granted project is a real question and it is **not answered here**; when
+> it is, it arrives as its own ticket —
+> `ALTER TABLE gtd_project_grant ADD COLUMN role …` at the next free migration number
+> resolved at build time (R1). Additive, no backfill, no data at risk.
 
 **The migration.** One new file in `infra/postgres/`, at **the next free number resolved
 at build time by listing that directory** — never a number copied out of a document
@@ -182,21 +215,84 @@ Resolve the caller's group set **once per request**, mirroring
 
 **Done when:**
 
-1. A member of group X, who does not own project P, can read P and its items when a
-   `gtd_project_grant` row exists with `subject = 'group:X'`.
-2. A member of **no** group containing X gets **`404`, not `403`**, on the same project
+1. **A grant is creatable by a caller — not only by hand-written SQL.** Two routes
+   exist, on the shipped `/tasks` router (`routes/tasks/core.py:27-30`, which already
+   carries `dependencies=[require_feature_router("tasks")]`):
+
+   | Method + path | Body / param | Does |
+   |---|---|---|
+   | `POST /tasks/projects/{project_id}/grants` | `{"subject": "group:<slug>"}` | upserts one `gtd_project_grant` row, `granted_by` = the caller |
+   | `DELETE /tasks/projects/{project_id}/grants/{subject}` | — | revokes it |
+
+   **The permission required is `feature:tasks` plus project ownership, and nothing
+   else.** No new permission slug is minted — do not add one to
+   `acb_auth.permissions.FEATURES` or `CAPABILITIES` in this slice — and **no
+   `admin:*` is required**: granting your own project to your own Center is not an
+   admin act (contrast `routes/admin/groups.py`, where minting a `center.*` feature
+   override for someone else legitimately needs `admin:access:manage`). Ownership is
+   `gtd_projects.user_id = <caller>`, and the status codes mirror the shipped
+   app-grant shape `get_app_or_404(db, slug, user, edit=True)`
+   (`routes/apps/_common.py:459-475`): **404 when the caller cannot see the project,
+   403 when they can see it but do not own it.**
+
+   > ⚠️ The routes go in a new `routes/tasks/grants.py`, and that module **must be
+   > added to the import list in `routes/tasks/__init__.py:7-18`**. The feature
+   > modules register onto the one shared `router` as an *import side effect*
+   > (`__init__.py:3-5`), so a module left out of that list mounts **nothing** —
+   > while every test that calls the route function directly still passes. That is
+   > the exact failure this criterion exists to prevent.
+
+2. A member of group X, who does not own project P, can read P and its items when a
+   `gtd_project_grant` row with `subject = 'group:X'` exists — **and the grant under
+   test was created by invoking criterion 1's `POST` route function, not by an
+   `INSERT` in a fixture.** A repository helper reachable only from a fixture does
+   **not** satisfy this. Use the shipped hermetic convention rather than a live DB:
+   call the async route function directly with a fake in-memory session,
+   monkeypatching the DB seam on the SUT submodule —
+   `tests/unit/test_admin_groups.py:7-21` states the convention verbatim and
+   `tests/unit/test_app_grants.py` is where it started.
+3. A member of **no** group containing X gets **`404`, not `403`**, on the same project
    and on every item under it. This matches the shipped convention — see the probe at
    `routes/memory.py:237-240` and its comment: *"404, not 403: whether a memory id
    exists elsewhere is itself something the caller should not be able to probe for."*
    A `403` here would leak the existence of another Center's project.
-3. Revoking the grant row restores the `404` on the next request, with no cache to
-   invalidate.
-4. A grant row with a subject outside `email | group:<slug> | org` is rejected at write
-   time by the **shared** validator, not a copy of it.
-5. Every one of the 27 `user_id` predicates is either widened through the union path or
+4. Revoking the grant **through criterion 1's `DELETE` route** restores the `404` on
+   the next request, with no cache to invalidate.
+5. A subject outside `email | group:<slug> | org` is rejected at write time by a
+   validator that is **not a third route-local copy**. There is no shared home today,
+   which is why "use the shared validator" was unbuildable as previously written: the
+   only two validators are route-local, private, and disjoint —
+   `routes/rooms.py::_valid_subject` (`:100-111`; `email | group:<slug> | org`) and
+   `routes/apps/grants.py::is_valid_subject` (`:68-85`; `email | agent:<name> |
+   agents:*`, and it **rejects** the literal `org` at `:77`). Importing either into
+   the other's route package means importing a private symbol across packages.
+
+   **This slice creates the home: `packages/acb_auth/acb_auth/permissions.py`,
+   exported from `acb_auth/__init__.py`** — e.g. `valid_grant_subject(subject: str)
+   -> bool`, which becomes the definition of record for the
+   `email | group:<slug> | org` grammar. Why there, and not a new module: that file
+   already owns the permission vocabulary and is **pure — no DB, no FastAPI, no I/O**
+   (its own docstring, `permissions.py:1-8`, and `packages/AGENTS.md`); a subject
+   grammar is vocabulary of exactly that kind; and all three consumers already import
+   `acb_auth` (`routes/rooms.py:38`, `routes/apps/grants.py:26`,
+   `routes/tasks/items.py:23`), so this adds **no new edge** to the import graph.
+   The alternative homes were considered and rejected: a `gateway/`-local helper is
+   not reachable from `packages/`, and a new `acb_auth` submodule would split one
+   vocabulary across two files.
+
+   > **Deliberately NOT in this slice:** repointing `_valid_subject` and
+   > `is_valid_subject` at the new helper. `rooms.py:100-111` is published as an
+   > anchor by this spec, `tenancy_and_visibility.md` §3.2, `work_plan.md` D12 and
+   > `docs/multiplayer/memory-clearance.md`; editing it here would move four
+   > documents' anchors for no gain to this slice. It is a named follow-on, not an
+   > oversight — and per §3.2 the two grammars are not identical, so it is a
+   > *composition*, not a deletion.
+6. Every one of the 27 `user_id` predicates is either widened through the union path or
    explicitly justified in the PR as owner-only (e.g. a write path). "I widened the list
    endpoint" is not this criterion.
-6. `uv run ruff check apps/services/gateway/gateway/routes/tasks/items.py` is clean.
+7. `uv run ruff check apps/services/gateway/gateway/routes/tasks/items.py \
+   apps/services/gateway/gateway/routes/tasks/grants.py \
+   packages/acb_auth/acb_auth/permissions.py` is clean.
    Do **not** claim `uv run ruff check .` clean — it reports ~1983 pre-existing errors
    on this tree and is not a signal.
 
@@ -205,19 +301,32 @@ directory, it hangs against this box's live DB*:
 
 ```
 uv run pytest tests/unit/test_tasks_gtd.py tests/unit/test_tasks_archive_upstream.py \
-              tests/unit/test_admin_groups.py tests/unit/test_org_access_control.py -v -rs
-uv run ruff check apps/services/gateway/gateway/routes/tasks/items.py
+              tests/unit/test_admin_groups.py tests/unit/test_org_access_control.py \
+              tests/unit/test_tasks_project_grants.py -v -rs
+uv run ruff check apps/services/gateway/gateway/routes/tasks/items.py \
+                  apps/services/gateway/gateway/routes/tasks/grants.py \
+                  packages/acb_auth/acb_auth/permissions.py
 ```
 
-Those four files exist and are hermetic today — none carries a `skipif` guard (verified
-2026-08-03), so a new grant-path test added beside them **cannot skip green**, unlike the
-room/authority files (`tenancy_and_visibility.md` §7's warning). Re-list `tests/unit/`
-at dispatch rather than trusting these names; there is no `test_tasks_items.py`.
+The first four files exist and are hermetic today — none carries a `skipif` guard
+(verified 2026-08-03), so a new grant-path test added beside them **cannot skip green**,
+unlike the room/authority files (`tenancy_and_visibility.md` §7's warning).
+`test_tasks_project_grants.py` is **created by this slice** and is where done-when 1–5
+live; it must likewise carry no `_db_ready()` guard. Re-list `tests/unit/` at dispatch
+rather than trusting these names; there is no `test_tasks_items.py`.
 
-#### C2 — Shared mailboxes · 🔴 **NOT DISPATCHABLE — no owner in fact**
+#### C2 — Shared mailboxes · 🟢 **AGENT-SAFE (the doc action only)** · the build is 🔴 **blocked — no owner in fact**
 
-*(Gate label, per contract item 7: it is neither AGENT-SAFE nor OWNER-GATE, because
-there is nothing to dispatch. Nobody may pick this up until the doc action below lands.)*
+*(Gate label, per contract item 7. **Corrected 2026-08-03:** this bullet used to read
+"NOT DISPATCHABLE", which minted a **third** gate token into a corpus whose contract
+allows exactly two — the same class of drift R2 and R3 exist to stop. It maps onto the
+two without loss: the **doc action** below is ordinary AGENT-SAFE spec work — writing
+the missing shared-mailbox section into `email_app_master_plan.md`, the spec D5 already
+assigns — and the **build** is not gated on an owner *decision* but on that doc action,
+so it is simply not dispatchable yet. Two clauses inside it stay owner's: **reassigning
+ownership in `work_plan.md` §4** (an agent may not move work off the owner D5 named) and
+any live mailbox reach. If the doc action lands and the build is still refused, that is
+this bullet failing, not a missing third token.)*
 
 **Struck from Phase C as an actionable bullet, 2026-08-03.** It read: *"`email_account_member`
 by group (research §16.7); 'this mailbox belongs to the Sales team' ownership surfaced in
@@ -288,6 +397,15 @@ work list.
    repo-wide grep finds none — so this migration is genuinely WS-14's, at **the next
    free number resolved at build time** (R1). Per D3: columns now, derived from
    `agent_defs` manifests when agent-architecture Phase A lands.
+
+   **The column shape is already written down — do not redesign it.** D3 points at
+   `docs/multiplayer/agent-kinds.md` **§3**, whose `ALTER TABLE dynamic_agents` block
+   (`agent-kinds.md:143-155`) is the shape of record: `instancing`
+   (`personal|team|shared`, default `personal`), `visibility`
+   (`private|team|organization`, default `organization`), `team_ref`, `memory_mode`
+   (`instance|none`), `shareable`. Reproduced here so C3 is readable without opening
+   an RFC under `docs/`. ⚠️ That block's own comment retains a stale `"119"`; take the
+   **shape**, resolve the **number** at build time (R1).
 4. **Answer, in the PR, whether that migration is additive to the live `config.json`
    path or replaces it.** `work_plan.md:149-153` (the D3 amendment) already says
    instancing ships via `config.json` today; the `agent_architecture.md` body does not
@@ -297,10 +415,20 @@ work list.
    ticket must state it rather than leave two stores with no precedence rule.
 
 **Done when:** the roster contradictions are resolved in `agent-kinds.md`; the sharing
-columns exist at a build-time-resolved migration number; the additive-vs-replacing
-question is answered in prose in this spec; and **no existing agent's `instancing` value
-changed** (grep the six `config.json` files before and after — four `shared`, two
-`personal`, unchanged).
+columns exist at a build-time-resolved migration number, in the `agent-kinds.md` §3
+shape; the additive-vs-replacing question is answered in prose in this spec; and **no
+existing agent's `instancing` value changed** (grep the six `config.json` files before
+and after — four `shared`, two `personal`, unchanged).
+
+> **For the reviewer, so this does not read as a no-op.** C3's only code artifact is a
+> migration whose columns **nothing reads, on purpose**: it is **pre-provisioning,
+> columns intentionally unread**, sanctioned by D3 ("columns now, manifest later"). No
+> read path may be wired to them in this slice — instancing is served today by
+> `AgentManifest.from_config()` / `instance_key()` off `config.json`, and adding a
+> second live reader before WS-8 Phase A decides precedence is how two stores of truth
+> start. A PR that ships these columns *and* a consumer is out of scope, not ahead of
+> schedule. The rest of C3's value is documentary (the roster reconciliation and the
+> additive-vs-replacing answer), and that is the honest description of the slice.
 
 **Verification:**
 
@@ -324,12 +452,48 @@ verified reasons.
 Who is asked is a policy call about who can approve spending and outward writes on
 another Center's behalf. No agent may take it. **OWNER-GATE.**
 
-**Second, there is nothing to filter on.** `infra/postgres/66_pending_actions.sql:13-38`
+**Second, there is no column you can route on.** `infra/postgres/66_pending_actions.sql:13-38`
 defines the whole row: `id`, `actor`, `action`, `target`, `payload`, `authority`,
 `destructive`, `disposition`, `status`, `result`, `reviewed_by`, `reviewed_at`,
-`created_at`. There is **no requesting member, no group, and no Center** — `actor` is the
-proposing *agent* (the column comment's own example is `"agent:sales"`), not the human
-behind it. A group cannot be derived from any existing column.
+`created_at`. There is **no requesting-member column, no group column, and no Center
+column.**
+
+> **Correction, 2026-08-03 — this paragraph previously overstated its own evidence, and
+> the overstatement was the exact sin WS-14 exists to fix.** It read: *"`actor` is the
+> proposing agent … not the human behind it. A group cannot be derived from any existing
+> column."* **Both halves of that absolute are false.** `pending_actions.actor` is
+> written by exactly six `propose()` call sites, and **two of them put the requesting
+> human's email in the string**: `routes/apps/tools.py:392-393` and
+> `routes/apps/actions.py:344-345` both pass `actor=f"app:{slug}:{email}"`, where
+> `email = _uid(user)` is the caller's identity (`tools.py:375`). For an app-tool
+> proposal a group **is** derivable — parse the email out of the string and join
+> `org_group_member`. The column comment's `"agent:sales"` is an *example*, and as it
+> happens no shipped call site produces that shape at all.
+>
+> **The six shapes, measured (`rg -n 'proposal = propose\('` + the `actor=` argument at
+> each site):**
+>
+> | Shape | Written at |
+> |---|---|
+> | `app:<slug>:<email>` | `routes/apps/tools.py:393` · `routes/apps/actions.py:345` |
+> | `app:<slug>` | `routes/apps/publish.py:211` |
+> | `workflow:<name-or-id>` | `routes/workflows/service.py:668`; threaded into `routes/workflows/tools.py:190` from `service.py:337` |
+> | `tasks:<provider>` | `routes/tasks/providers.py:159` via `_broker_actor()` (`:127-130`) |
+> | `tasks:clickup:ws:<workspace_id>` | the ClickUp override of the same method, `providers.py:314-317` |
+>
+> One shape on the list handed to this correction — `system:action_broker` — is **not**
+> a `pending_actions.actor` at all: it is the *audit-event* actor the broker stamps on
+> its own bookkeeping (`action_broker/broker.py:151`, `:161`, `:172`, `:225`, `:233`).
+> Recorded so the next reader does not go looking for a seventh proposer.
+>
+> **The verdict survives; only the reasoning is repaired.** `actor` is a free-text
+> identity string with **five** shapes and no grammar, and only **two of six** call
+> sites carry a human at all. You cannot route approvals on a field that four of six
+> proposers populate with no person in it — a Center-scoped inbox would silently show
+> nothing for every workflow-, publish-, and provider-originated proposal. So C4 is
+> still "answer Q2, then add a column", and the column must be **written by every
+> proposer**, not parsed out of an ad-hoc string by the reader. That is a stronger
+> argument than the false absolute it replaces, not a weaker one.
 
 **So the ticket is "answer Q2, then add a column", not "add a filter".** In that order:
 the column's shape (a `requested_by` member email? a `center` slug? both?) follows from

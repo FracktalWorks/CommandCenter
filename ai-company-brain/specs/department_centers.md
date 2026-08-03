@@ -1,6 +1,6 @@
 # Department Centers — one platform, many projections
 
-**Status:** Phase A shipped (UI scaffold + feature gating; the `center.*` feature vocabulary fix landed 2026-08-03 — until then no Center was reachable by anyone, owner included); Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-03 · **Owner:** vjvarada
+**Status:** Phase A shipped (UI scaffold + feature gating) — **but no Center is reachable by anyone on `main` today, owner included**: the `center.*` feature-vocabulary fix and its invariant tests are on the open branch `ws-13-centers-feature-vocabulary` (2026-08-03), **unmerged**. §2 records the defect and the registration checklist that prevents its recurrence. Phase B groups admin UI + seed shipped pending review (2026-08-01 — directory read view still open) · **Date:** 2026-08-03 · **Owner:** vjvarada
 
 The commitment this document records: **CommandCenter stays one deployment, and
 departments get Centers — scoped projections of the same platform, never
@@ -78,15 +78,31 @@ once groups have a UI). Route guards: `lib/access.ts` maps `/centers/<slug> →
 center.<slug>`.
 
 > **Seeding the catalog row is not enough — the slug must also be in
-> `acb_auth.permissions.FEATURES`** (fixed 2026-08-03; before that, no Center
-> was reachable by *anyone*). `/auth/me` returns
-> `list(access.allowed_features())`, and that method iterates the hardcoded
-> Python tuple, never `feature_catalog`; the wildcard in `feature:*` is only
-> ever evaluated against those literals, so an owner holding `*` still got an
-> empty Center set. `tests/unit/test_org_access_control.py::
-> test_every_center_has_a_feature_slug` now fails loudly on any Center group
-> whose slug is missing from the tuple, deriving the six from
-> `routes/admin/groups.py::CENTER_GROUP_SLUGS` so the pairing cannot drift.
+> `acb_auth.permissions.FEATURES`** (fix on branch `ws-13-centers-feature-vocabulary`,
+> 2026-08-03, unmerged; until it lands, no Center is reachable by *anyone*).
+> `/auth/me` returns `list(access.allowed_features())`, and that method iterates
+> the hardcoded Python tuple, never `feature_catalog`; the wildcard in
+> `feature:*` is only ever evaluated against those literals, so an owner
+> holding `*` still gets an empty Center set.
+
+**Registering a Center — every place, or it is unreachable.** A Center is one
+concept spread across five declarations, and omitting any one of them fails
+*silently* in a different way. This is the checklist; nothing else in this spec
+supersedes it.
+
+| # | Where | What it decides | Omitted ⇒ |
+|---|---|---|---|
+| 1 | `workbench/control_plane/src/lib/centers.ts` | The registry the UI renders — `nav.ts` builds the Centers section from it, `access.ts` the `/centers/<slug>` → `center.<slug>` route map | No nav item, no landing page, no route guard entry |
+| 2 | `infra/postgres/<next>_*.sql` — a `feature_catalog` row (category `centers`) **and** an `org_group` row, the way `140_center_features.sql` + `141_seed_center_groups.sql` did for the six (**find the next free number by listing the directory; never assume one**) | The admin UI's grantable-feature list and its category grouping; the group the Center projects | The feature cannot be granted or denied from `/settings/members` or `/settings/roles`, and the Center has no team behind it |
+| 3 | `acb_auth.permissions.FEATURES` | The **only** vocabulary `allowed_features()` iterates; `/auth/me` returns exactly it | The pane is dropped from the nav and `/centers/<slug>` hits AccessGate — **for every principal, owner included** |
+| 4 | `gateway/routes/admin/groups.py::CENTER_GROUP_SLUGS` | Which groups pair 1:1 with a Center — the grant-access toggle and the undeletable-group rule | The group is deletable and "grant the department in one admin action" does not appear |
+| 5 | `tests/unit/test_org_access_control.py::EXPECTED_CENTER_SLUGS` | The one retyped literal — the anchor that stops the two invariant tests going vacuous when a derivation source empties | The suite goes red until you update it — deliberately: changing the set of Centers is a decision, not a refactor |
+
+Rows 1, 3 and 4 are pinned to each other by
+`tests/unit/test_org_access_control.py::test_centers_registry_matches_the_feature_vocabulary`
+(it parses `centers.ts`, so a retyped copy cannot drift) and
+`::test_every_center_has_a_feature_slug`. Row 2 is not machine-checked — the
+catalog table is the admin UI's list, not the authorization vocabulary.
 
 **Center rosters** (sub-apps + status) live in `lib/centers.ts` — that file is
 the registry; this spec deliberately does not duplicate it. Highlights: Sales
@@ -175,11 +191,16 @@ shippable and folds in the pending items from earlier plans it depends on.
    record: `work_plan.md` D9.
 2. **R&D / Engineering Center?** Fracktal is a product company; a seventh
    Center (projects, test logs, design docs) is plausible. Deferred until a
-   real workflow demands it — adding one is a `lib/centers.ts` edit + one
-   feature row.
+   real workflow demands it. Adding one is **not** a one-file edit: work §2's
+   *Registering a Center* checklist end to end — `lib/centers.ts`, a
+   `feature_catalog` migration row, `acb_auth.permissions.FEATURES`,
+   `CENTER_GROUP_SLUGS`, and the test anchor `EXPECTED_CENTER_SLUGS`. Doing
+   only the first two is how Centers came to be unreachable by everyone once
+   already; `tests/unit/test_org_access_control.py::test_centers_registry_matches_the_feature_vocabulary`
+   is what now stops that recipe from passing CI.
 3. **Support: Operations sub-app or own Center?** Service & AMC starts inside
    Operations; if the support team grows its own membership and mailbox, it
-   graduates to a Center by the same one-edit path.
+   graduates to a Center by that same checklist.
 4. **Guest access to Centers** — org_access open Q4; a guest with
    `center.sales` only is a plausible contractor shape and needs a decision
    before external sharing.

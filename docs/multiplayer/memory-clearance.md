@@ -598,7 +598,7 @@ judgement.
 | `_authorize_scope` | refuses unknown shapes with 404 — `routes/memory.py:167`. **So `subject:` is a 404 today, from the gate, not from a missing row.** |
 | Room settings writer | `PATCH /chat/sessions/{id}/room` — `routes/rooms.py:553`, model `:81-85`, gated `access.can_manage`, SQL `_update_room` `:589` |
 | Groups | `org_group` / `org_group_member` shipped (migration 138 `:40-66`); admin CRUD `routes/admin/groups.py`; membership expanded at read time by `gateway/rooms.py:163-179` |
-| Permission vocabulary | closed tuples in `packages/acb_auth/acb_auth/permissions.py` — `FEATURES` `:64-81` (includes `memory`), `CAPABILITIES` `:85-113` (includes `memory:read_org` / `memory:write_org`; **no compartment permission**) |
+| Permission vocabulary | closed tuples in `packages/acb_auth/acb_auth/permissions.py` — `FEATURES` `:73-101` (includes `memory`; the six `center.*` slugs were appended 2026-08-03, which is what moved both tuples down), `CAPABILITIES` `:105-133` (includes `memory:read_org` / `memory:write_org`; **no compartment permission**) |
 
 #### 7.1.1 The scope key must be one URL path segment
 

@@ -846,9 +846,17 @@ _MENTION_RE = re.compile(r"^\s*@([A-Za-z0-9][A-Za-z0-9._-]*)\s*")
 def _resolve_room(thread_id: str, email: str):
     """This person's place in the room, or ``None`` when rooms are unavailable.
 
-    ``None`` — not a refusal — is the answer when the room layer cannot be
-    consulted, because the run path predates rooms and must keep working
-    without them.
+    ``None`` — not a refusal — means the room layer is not there AT ALL: no
+    ``thread_id``, no ``email``, or the ``gateway.rooms`` import failed. The run
+    path predates rooms and must keep working without them, and the caller
+    reads ``None`` as "no room to enforce".
+
+    A *failed lookup* is a different thing and does NOT come back as ``None``:
+    ``resolve_room_access`` handles its own database errors and returns a
+    RoomAccess with ``resolve_failed`` set and every capability false, so the
+    caller refuses with "try again in a moment" rather than sending into a room
+    it could not identify. Returning ``None`` there would have quietly restored
+    the old permissive behaviour on every Postgres hiccup.
     """
     if not thread_id or not email:
         return None
@@ -2248,10 +2256,20 @@ def _thread_owner_ok(thread_id: str, user_id: str) -> bool:
 
     Ownership became membership when sessions became rooms (migration 138): a
     viewer invited to watch a run must be able to hold the replay stream open,
-    which is the whole of read-only multiplayer. The permissive cases are
-    unchanged and still deliberate — an absent session row (ephemeral / legacy
-    thread) and any DB error resolve to True, so legitimate solo operations are
-    never blocked by an infra hiccup.
+    which is the whole of read-only multiplayer.
+
+    The two "we don't know" cases no longer answer the same way, and
+    ``gateway.rooms`` owns that split, not this function. An **absent session
+    row** (ephemeral / legacy thread) still resolves to True — it belongs to
+    nobody, so it belongs to whoever is asking. A **failed lookup** now
+    resolves to False: handing out read access on a room we cannot identify is
+    exactly the wrong direction for the one input we know nothing about.
+
+    The ``except`` here is not that case and is not dead code: the only thing
+    inside the ``try`` that can still raise is the ``import`` — and an import
+    failure means the rooms layer is absent altogether, i.e. the pre-138 world
+    where every thread was solo and this guard did not exist. True is the right
+    answer to that, and it cannot be reached by a database outage.
 
     The name is kept because it is the guard two endpoints already name; what
     it means is now "may read this room".
@@ -2259,7 +2277,7 @@ def _thread_owner_ok(thread_id: str, user_id: str) -> bool:
     try:
         from gateway.rooms import resolve_room_access
         return resolve_room_access(thread_id, user_id).can_read
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — rooms layer absent (import), not a DB error
         return True
 
 
@@ -2267,12 +2285,15 @@ def _thread_control_ok(thread_id: str, user_id: str) -> bool:
     """True if *user_id* may STOP a run in *thread_id*.
 
     Watching and stopping are different rights: a viewer sees the transcript
-    but cannot end somebody else's work. Same permissive fallbacks.
+    but cannot end somebody else's work. Same fallbacks as
+    :func:`_thread_owner_ok`, with the same split: an unsaved thread is yours,
+    a failed lookup is nobody's, and the ``except`` below only covers the rooms
+    module failing to import.
     """
     try:
         from gateway.rooms import resolve_room_access
         return resolve_room_access(thread_id, user_id).can_cancel
-    except Exception:  # noqa: BLE001
+    except Exception:  # noqa: BLE001 — rooms layer absent (import), not a DB error
         return True
 
 
@@ -2300,8 +2321,13 @@ async def cancel_agent_run(
 
     # Control guard: stopping a run is a contributor's act, not a viewer's.
     # A viewer who could cancel would be able to end work they were only
-    # invited to watch. Allow when the session is not found (ephemeral/legacy
-    # thread) or on a DB hiccup, so legitimate cancels never get stuck.
+    # invited to watch. Allowed when the session is not found (ephemeral/legacy
+    # thread — it belongs to nobody, so it belongs to the caller); REFUSED when
+    # the lookup itself fails, because the room may be somebody else's and a
+    # cancel we cannot justify ends real work. That failure surfaces as this
+    # 403, so an outage can look like a permissions problem here — see
+    # RoomAccess.resolve_failed, which carries the "try again" wording for the
+    # paths that render a reason.
     actor = getattr(user, "email", None) or "default"
     if not await asyncio.to_thread(_thread_control_ok, thread_id, actor):
         raise HTTPException(

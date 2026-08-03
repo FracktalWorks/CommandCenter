@@ -27,11 +27,19 @@ becomes a privilege-escalation primitive: being a member here never grants a
 permission you don't hold in the org, it can only narrow what the room's agents
 may reach.
 
-The permissive fallbacks are inherited deliberately from ``_thread_owner_ok``,
-which they replace: a thread with no ``chat_session`` row (ephemeral runs,
-pre-persistence threads) and a database error both resolve to full access. A
-solo operator must never be locked out of their own work by an infra hiccup —
-and a caller who reaches these paths is already authenticated.
+Two "we don't know" cases used to share one permissive answer, inherited from
+``_thread_owner_ok``. They are now separated, because only one of them is
+actually about a person's own work:
+
+* **No ``chat_session`` row** (ephemeral run, a thread whose first turn has not
+  persisted yet) still resolves to full access. Refusing it would break every
+  brand-new conversation, and there is no other party for it to belong to.
+* **A database error** now resolves to NO access. It used to resolve to owner —
+  which meant a failed lookup handed the caller full read/send/cancel on
+  somebody else's room, and the one moment we are least able to say who a
+  transcript belongs to was the moment we granted it. Refusing costs nothing a
+  Postgres outage was not already costing: the same store holds the transcript
+  the caller is asking for.
 """
 from __future__ import annotations
 
@@ -85,6 +93,13 @@ class RoomAccess:
     #: lookup failed. Callers that must not create rooms out of thin air check
     #: this; callers that only need "don't lock the user out" ignore it.
     unknown_session: bool = False
+    #: True when the lookup itself failed. Distinct from ``unknown_session``
+    #: (which also covers "no row yet, and that is fine"): this one means we
+    #: could not answer, so the answer is no. Only ``denied()`` reads it, to
+    #: say "retry" rather than "you are not a participant" — a refusal that
+    #: names the wrong reason is how an outage becomes a support ticket about
+    #: permissions.
+    resolve_failed: bool = False
 
     @property
     def is_member(self) -> bool:
@@ -98,6 +113,11 @@ class RoomAccess:
 
     def denied(self, action: str) -> str:
         """A refusal that names the room rule, not just 'forbidden'."""
+        if self.resolve_failed:
+            return (
+                "We could not check your access to this conversation just "
+                "now. Please try again in a moment."
+            )
         if not self.can_read:
             return "You are not a participant of this conversation."
         return (
@@ -228,7 +248,14 @@ def resolve_room_access(session_id: str, email: str) -> RoomAccess:
     """
     email = (email or "").strip()
 
-    def _permissive() -> RoomAccess:
+    def _unsaved_thread() -> RoomAccess:
+        """A thread that has no row yet — a room of one, the caller's own.
+
+        This is the ONLY permissive fallback. It is not a guess: a session id
+        with no ``chat_session`` row belongs to nobody else, because the row is
+        what would make it somebody's. Every new conversation passes through
+        this state between the composer and the first persisted turn.
+        """
         return RoomAccess(
             session_id=session_id, email=email, role="owner",
             can_read=True, can_send=True, can_cancel=True,
@@ -237,22 +264,38 @@ def resolve_room_access(session_id: str, email: str) -> RoomAccess:
             unknown_session=True,
         )
 
+    def _undecidable() -> RoomAccess:
+        """The lookup failed, so we cannot say — and cannot say yes.
+
+        This used to return ``_unsaved_thread()``, i.e. full owner access on
+        any database error. That is the wrong direction for the one input we
+        have no information about: the room may well be somebody else's, and a
+        transient failure would have handed over its transcript, its agents and
+        its cancel button. Denying costs nothing extra during an outage — the
+        transcript the caller wants lives in the store that just failed.
+        """
+        return RoomAccess(
+            session_id=session_id, email=email, role=None,
+            can_read=False, can_send=False, can_cancel=False,
+            can_invite=False, can_manage=False,
+            is_shared=False, members=[],
+            unknown_session=True, resolve_failed=True,
+        )
+
     if not session_id:
-        return _permissive()
+        return _unsaved_thread()
 
     try:
         loaded = _load_room(session_id, email)
     except Exception:
-        # An infra hiccup must not lock a solo operator out of their own work —
-        # the contract _thread_owner_ok established and this inherits.
         _log.warning("rooms.resolve_failed", session_id=session_id, exc_info=True)
-        return _permissive()
+        return _undecidable()
 
     if loaded is None:
         # Ephemeral thread with no session row yet: the run path creates the
         # row on first persist. Treating this as "no access" would break every
         # brand-new conversation.
-        return _permissive()
+        return _unsaved_thread()
 
     row = loaded["session"]
     parts = loaded["participants"]

@@ -15,12 +15,23 @@ routes each one to the system that actually does that kind of work:
                  (``outputs/meetings/…``), durable in the blob store and
                  editable in the Artifacts side-panel editor.
 
-Two entry points: ``auto_dispatch(meeting_id)`` runs after notes generation
-(per-kind settings + a confidence gate), and ``POST /notes/actions/{id}/
-dispatch`` is the manual per-item button. Both funnel through ``_dispatch``
-so behaviour never diverges. Every dispatch writes an ``audit_event`` row and
-records its destination in ``action_item.dispatch_ref`` — or its failure in
-``dispatch_error``, leaving the row a draft so a human can retry.
+Two entry points: ``auto_dispatch(meeting_id, triggered_by)`` runs after notes
+generation (per-kind settings + a confidence gate), and ``POST /notes/actions/
+{id}/dispatch`` is the manual per-item button. Both funnel through
+``_dispatch`` so behaviour never diverges. Every dispatch writes an
+``audit_event`` row and records its destination in
+``action_item.dispatch_ref`` — or its failure in ``dispatch_error``, leaving
+the row a draft so a human can retry.
+
+``triggered_by`` is not decoration. ``auto_dispatch`` is reached from notes
+generation, notes generation is reached from ``POST /meetings/{id}/summarize``
+and from the transcription pipeline, and the pipeline is reached from an
+upload, a live recording and ``POST /meetings/{id}/retranscribe`` — every one
+of which is a request some member made. The identity of that member is carried
+all the way down and is what ``cross_owner_refusal`` judges. There is
+deliberately no "this one is automatic" sentinel: a dispatch's legitimacy comes
+from *who triggered the generation*, never from a string the code passes
+itself, because a request-triggerable sentinel is a request-triggerable bypass.
 """
 
 from __future__ import annotations
@@ -44,6 +55,54 @@ MIN_AUTO_CONFIDENCE = 0.8
 DOC_AGENT = "note-taker"
 
 KINDS = ("task", "email", "document")
+
+
+def _same_person(a: str | None, b: str | None) -> bool:
+    return (a or "").strip().casefold() == (b or "").strip().casefold()
+
+
+def cross_owner_refusal(owner_email: str | None, actor: str) -> str | None:
+    """Why ``actor`` may not dispatch on behalf of ``owner_email``, or None.
+
+    Dispatch acts AS the meeting's owner: it sends from their mailbox, files
+    tasks into their GTD list and writes documents attributed to them. Every
+    route into ``_dispatch`` used to load the action item or the meeting by id
+    alone, so any member could make a colleague's mailbox send an LLM-drafted
+    email to a real customer, with the audit row naming the colleague.
+
+    The check lives here, at the seam every dispatch goes through, rather than
+    only at the endpoints. ``_dispatch`` has three call sites — the two manual
+    endpoints and :func:`auto_dispatch` — but **seven** request paths reach it,
+    and the count that matters is the second one:
+
+    1. ``POST /notes/actions/{id}/dispatch``             (the manual button)
+    2. ``POST /notes/meetings/{id}/actions/approve-all``
+       …and, via notes generation → ``auto_dispatch``:
+    3. ``POST /notes/meetings/{id}/summarize``           → ``enqueue_summary``
+       …and, via the transcription pipeline → ``enqueue_summary``:
+    4. ``POST /notes/meetings/{id}/upload``
+    5. ``POST /notes/meetings/{id}/recordings/{rid}/complete``
+    6. ``POST /notes/meetings/{id}/retranscribe``
+    7. ``POST /notes/meetings/bot-join``  (asynchronously, when the poller
+       finds the notetaker's recording ready — the actor is the bot's
+       ``requested_by``, not the meeting's owner)
+
+    3-7 are why there is no "automatic" escape hatch. A sentinel actor string —
+    ``actor == "auto"`` returning None here — reads like it describes the
+    background job, but every one of those background jobs is *started by a
+    request*, so the sentinel was a bypass any member could reach by asking the
+    platform to re-summarise a colleague's meeting. The identity of the person
+    who triggered the generation is threaded down instead, and it is judged
+    here like any other.
+    """
+    if not owner_email:
+        return None  # legacy row with no owner — nobody is being acted as
+    if _same_person(actor, owner_email):
+        return None
+    return (
+        "This meeting belongs to another member. Dispatching would act as "
+        "them — send from their mailbox, or file work under their name."
+    )
 
 
 class DispatchError(Exception):
@@ -195,12 +254,29 @@ async def _default_email_account(db, owner_email: str) -> str | None:
     return str(row.id) if row else None
 
 
-async def _dispatch_email(action, meeting, owner_email: str) -> str:
+async def _dispatch_email(action, meeting, owner_email: str, actor: str) -> str:
     """Send (recipient known) or draft (recipient unknown) the committed email.
 
     Returns the dispatch ref: ``sent:<provider msg id>`` or
     ``draft:<provider draft id>``.
+
+    ``provider_session(db, owner_email, …)`` loads the account scoped to
+    ``owner_email``, so this function will happily authenticate as whoever it
+    is handed. The mailbox check is therefore made HERE, before anything is
+    opened — ``_dispatch`` makes the same check for all three kinds, and this
+    is the backstop at the last line before a real message leaves a real
+    mailbox for a real external address.
+
+    A backstop, not the guard: it can only compare the two things it was
+    handed, so it is correct exactly when its caller passed an honest
+    ``actor``. That is why the sentinel was removed upstream rather than
+    special-cased here — a check that trusts a string can be satisfied by
+    supplying the string.
     """
+    refusal = cross_owner_refusal(owner_email, actor)
+    if refusal:
+        raise DispatchError(refusal)
+
     from gateway.routes.email.core import _get_db as _email_db
     from gateway.routes.email.core import provider_session
     from gateway.routes.email.signature import build_signed_bodies
@@ -394,6 +470,22 @@ async def _dispatch(action, meeting, actor: str) -> tuple[str | None, str | None
     kind = action.kind if action.kind in KINDS else "task"
     ref: str | None = None
     error: str | None = None
+
+    # Refuse before touching the row: the item belongs to the meeting's owner,
+    # and a refusal is not a failed dispatch of theirs to record. It IS worth
+    # auditing — an attempt to act as a colleague is exactly what the audit
+    # trail is for.
+    refusal = cross_owner_refusal(meeting.owner_email, actor)
+    if refusal:
+        _log.warning(
+            "notes.dispatch_refused_cross_owner",
+            action_id=str(action.id), actor=actor[:64],
+            owner=(meeting.owner_email or "")[:64], kind=kind,
+        )
+        await _audit(actor, str(action.id), str(action.meeting_id), kind,
+                     None, refusal)
+        return None, refusal
+
     try:
         if kind == "task":
             async with await _get_db() as db:
@@ -402,7 +494,7 @@ async def _dispatch(action, meeting, actor: str) -> tuple[str | None, str | None
             await _mark(str(action.id), ref=task_id, task_id=task_id, error=None)
             ref = task_id
         elif kind == "email":
-            ref = await _dispatch_email(action, meeting, owner)
+            ref = await _dispatch_email(action, meeting, owner, actor)
             await _mark(str(action.id), ref=ref, task_id=None, error=None)
         else:
             ref = await _dispatch_document(action, meeting, owner)
@@ -428,9 +520,22 @@ _ACTION_COLS = (
 )
 
 
-async def auto_dispatch(meeting_id: str) -> dict:
+async def auto_dispatch(meeting_id: str, triggered_by: str) -> dict:
     """After notes generation: dispatch every confident draft item whose kind
-    the owner has auto-dispatch enabled for. Never raises."""
+    the owner has auto-dispatch enabled for. Never raises.
+
+    ``triggered_by`` is the member whose request set this generation running —
+    threaded down from the endpoint through ``enqueue_summary`` /
+    ``run_transcription``, never defaulted. It is passed to ``_dispatch`` as
+    the actor, so an item only dispatches when the person who asked for the
+    notes is the person the dispatch would act as. Required rather than
+    optional on purpose: a dropped argument must be a ``TypeError`` at the call
+    site, not a silent return to acting as anybody.
+
+    For the meeting-bot ingest, which nobody clicks, the caller reads the
+    meeting's own ``owner_email`` and passes that — authority derived from the
+    row rather than asserted by a string.
+    """
     from gateway.routes.notes import settings as notes_settings
 
     async with await _get_db() as db:
@@ -461,7 +566,7 @@ async def auto_dispatch(meeting_id: str) -> dict:
         if not allowed.get(kind, False):
             skipped += 1
             continue
-        ref, error = await _dispatch(action, meeting, "auto")
+        ref, error = await _dispatch(action, meeting, triggered_by)
         if error is None and ref is not None:
             done += 1
         else:
@@ -469,6 +574,7 @@ async def auto_dispatch(meeting_id: str) -> dict:
     _log.info(
         "notes.auto_dispatched",
         meeting_id=meeting_id, dispatched=done, failed=failed, skipped=skipped,
+        triggered_by=(triggered_by or "")[:64],
     )
     return {"dispatched": done, "failed": failed, "skipped": skipped}
 
@@ -487,7 +593,13 @@ async def dispatch_action(
     user: UserContext = Depends(get_current_user),
 ) -> DispatchResponse:
     """Dispatch one action item to its kind's system NOW (no confidence gate —
-    a human clicked). Idempotent: an already-dispatched item returns its ref."""
+    a human clicked). Idempotent: an already-dispatched item returns its ref.
+
+    The action item is addressed by its own id, so the meeting it belongs to
+    has to be loaded and checked before anything else happens — including the
+    idempotent early return, which would otherwise hand a stranger the ref of
+    a colleague's already-sent email.
+    """
     async with await _get_db() as db:
         action = (
             await db.execute(
@@ -495,6 +607,18 @@ async def dispatch_action(
             )
         ).fetchone()
         if action is None:
+            raise HTTPException(status_code=404, detail="action item not found")
+        owner_meeting = await _load_meeting(db, str(action.meeting_id))
+        if owner_meeting is None:
+            raise HTTPException(status_code=404, detail="meeting not found")
+        if cross_owner_refusal(owner_meeting.owner_email, user.email or ""):
+            # 404, not 403: an action item id belonging to somebody else is
+            # not a permissions problem the caller can act on, and saying
+            # "exists but not yours" confirms the id.
+            _log.warning(
+                "notes.dispatch_refused_cross_owner",
+                action_id=action_id, actor=(user.email or "")[:64],
+            )
             raise HTTPException(status_code=404, detail="action item not found")
         if action.dispatch_ref or action.resulting_task_id:
             return DispatchResponse(
@@ -508,9 +632,7 @@ async def dispatch_action(
                 or (str(action.resulting_task_id)
                     if action.resulting_task_id else None),
             )
-        meeting = await _load_meeting(db, str(action.meeting_id))
-    if meeting is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
+        meeting = owner_meeting
 
     ref, error = await _dispatch(action, meeting, user.email or "unknown")
     kind = action.kind if action.kind in KINDS else "task"

@@ -23,8 +23,20 @@ async def _set_run(db, run_id: str, **fields) -> None:
     )
 
 
-async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> None:
-    """Transcribe one recording and persist segments. Never raises."""
+async def run_transcription(
+    meeting_id: str, recording_id: str, run_id: str, triggered_by: str
+) -> None:
+    """Transcribe one recording and persist segments. Never raises.
+
+    ``triggered_by`` is the member whose request started this — an upload, a
+    finished live recording, a re-transcribe, or (for the meeting bot) the
+    meeting's own owner read off the row. It is carried through to
+    ``enqueue_summary`` because this job chains into notes generation, which
+    chains into ``auto_dispatch``, which can send mail from the owner's
+    mailbox: the authority for that send is who asked, and this is the only
+    thread of it that survives into the background task. No default —
+    forgetting it must be a ``TypeError``, not an anonymous send.
+    """
     try:
         async with await _get_db() as db:
             rec = (
@@ -204,7 +216,7 @@ async def run_transcription(meeting_id: str, recording_id: str, run_id: str) -> 
             try:
                 from gateway.routes.notes.summaries import enqueue_summary
 
-                await enqueue_summary(meeting_id)
+                await enqueue_summary(meeting_id, triggered_by)
             except Exception as exc:
                 _log.warning("notes.autosummary_enqueue_failed", error=str(exc)[:200])
     except Exception as exc:

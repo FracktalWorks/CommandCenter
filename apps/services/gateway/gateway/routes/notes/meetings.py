@@ -1,10 +1,37 @@
-"""Meeting CRUD — library list, detail, create/patch/delete."""
+"""Meeting CRUD — library list, detail, create/patch/delete.
+
+**A meeting is private to the member who owns it.** Notes is the surface that
+holds verbatim transcripts of conversations people did not choose to publish —
+a recorded 1:1, a salary discussion, a customer call — so `feature:notes` is
+permission to keep your OWN meetings here, never permission to read the
+company's. Until this change every endpoint in this module queried `meeting` by
+id alone, so any member with the feature could open, edit and hard-delete any
+colleague's transcript.
+
+Scoping is `owner_email`, and the predicate itself lives ONCE in
+`core.OWNED_MEETING_PREDICATE` (case-insensitive: the column is stamped
+verbatim from `X-User-Email`, and an IdP that changes the casing of a UPN
+between sessions would otherwise empty a member's own library). It is applied
+in two places on purpose: the list SQL filters (so the library is a query, not
+a filtered-in-Python view) and `_load_meeting` — a thin call to
+`core.load_owned_meeting` — refuses a row it did not match. Sharing, when it comes, is the
+`subject` vocabulary the rooms layer already speaks (`email | group:<slug> |
+org` — `routes/rooms.py::_valid_subject`); it is deliberately NOT invented here.
+
+One deliberate exception: rows with a NULL `owner_email` stay visible to
+everyone with the feature. Those are pre-ownership legacy rows (the column
+arrived in migration 95 as nullable); both insert paths have stamped an owner
+ever since, so nothing new can enter that set, and excluding them would make a
+member's own old meetings vanish from their library rather than protect
+anybody.
+"""
 
 from __future__ import annotations
 
 from acb_auth import UserContext, get_current_user
-from fastapi import Depends, HTTPException
+from fastapi import Depends
 from gateway.routes.notes.core import (
+    OWNED_MEETING_PREDICATE,
     Attendee,
     CreateMeetingRequest,
     MeetingDetail,
@@ -12,6 +39,7 @@ from gateway.routes.notes.core import (
     PatchMeetingRequest,
     _get_db,
     _log,
+    load_owned_meeting,
     media_dir,
     router,
     row_to_list_item,
@@ -46,7 +74,8 @@ SELECT m.id, m.title, m.platform, m.status, m.language, m.duration_s,
                 WHERE ls.meeting_id = m.id AND ls.status = 'live')
            AS is_live
 FROM meeting m
-WHERE (CAST(:q AS TEXT) IS NULL
+WHERE """ + OWNED_MEETING_PREDICATE + """
+  AND (CAST(:q AS TEXT) IS NULL
        OR m.title ILIKE '%' || :q || '%'
        OR m.transcript ILIKE '%' || :q || '%')
 ORDER BY m.created_at DESC
@@ -58,12 +87,20 @@ LIMIT :limit
 async def list_meetings(
     query: str | None = None,
     limit: int = 100,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> list[MeetingListItem]:
+    """The caller's own meeting library. Never anybody else's — the search box
+    searches transcript text, so an unscoped list was a full-text search over
+    every recorded conversation in the company."""
     async with await _get_db() as db:
         rows = (
             await db.execute(
-                text(_LIST_SQL), {"q": query or None, "limit": min(max(limit, 1), 500)}
+                text(_LIST_SQL),
+                {
+                    "q": query or None,
+                    "limit": min(max(limit, 1), 500),
+                    "owner": user.email or "",
+                },
             )
         ).fetchall()
     return [row_to_list_item(r) for r in rows]
@@ -102,34 +139,33 @@ async def create_meeting(
     return row_to_list_item(row)
 
 
-async def _load_meeting(db, meeting_id: str):
-    row = (
-        await db.execute(
-            text(
-                """
-                SELECT m.*,
+_DETAIL_COLS = """m.*,
                        (SELECT count(*) FROM transcript_segment ts
                         WHERE ts.meeting_id = m.id) AS segment_count,
                        EXISTS (SELECT 1 FROM meeting_note mn
-                               WHERE mn.meeting_id = m.id) AS has_notes
-                FROM meeting m WHERE m.id = :id
-                """
-            ),
-            {"id": meeting_id},
-        )
-    ).fetchone()
-    if row is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
-    return row
+                               WHERE mn.meeting_id = m.id) AS has_notes"""
+
+
+async def _load_meeting(db, meeting_id: str, user: UserContext):
+    """The meeting — if it belongs to ``user``. 404 otherwise.
+
+    Every by-id endpoint in this module goes through here, and here goes
+    through ``core.load_owned_meeting`` — the same door ``summaries.summarize``
+    and ``recordings.retranscribe`` use, so the owner predicate is written
+    once and cannot drift between the modules that enforce it.
+    """
+    return await load_owned_meeting(
+        db, meeting_id, user.email, columns=_DETAIL_COLS
+    )
 
 
 @router.get("/meetings/{meeting_id}")
 async def get_meeting(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> MeetingDetail:
     async with await _get_db() as db:
-        m = await _load_meeting(db, meeting_id)
+        m = await _load_meeting(db, meeting_id, user)
         recs = (
             await db.execute(
                 text(
@@ -186,11 +222,11 @@ class PutScratchRequest(BaseModel):
 async def put_scratch(
     meeting_id: str,
     body: PutScratchRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict:
     """Save the user's rough notes — merged into generation as emphasis signals."""
     async with await _get_db() as db:
-        await _load_meeting(db, meeting_id)
+        await _load_meeting(db, meeting_id, user)
         await db.execute(
             text("UPDATE meeting SET scratch_notes = :s WHERE id = :id"),
             {"s": body.scratch_notes or None, "id": meeting_id},
@@ -207,7 +243,7 @@ class PutAttendeesRequest(BaseModel):
 async def put_attendees(
     meeting_id: str,
     body: PutAttendeesRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> list[Attendee]:
     """Replace the meeting's external attendee list (name + email)."""
     import json as _json
@@ -216,7 +252,7 @@ async def put_attendees(
         a for a in body.attendees if (a.name.strip() or a.email.strip())
     ]
     async with await _get_db() as db:
-        await _load_meeting(db, meeting_id)
+        await _load_meeting(db, meeting_id, user)
         await db.execute(
             text("UPDATE meeting SET attendees = CAST(:a AS JSONB) WHERE id = :id"),
             {"a": _json.dumps([a.model_dump() for a in clean]), "id": meeting_id},
@@ -234,7 +270,7 @@ class PutSpeakersRequest(BaseModel):
 async def put_speakers(
     meeting_id: str,
     body: PutSpeakersRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> dict[str, str]:
     """Name the diarized speakers. Maps segment labels (S1/S2/…) → real people;
     resolved at display and prompt time so notes, action owners and the
@@ -247,7 +283,7 @@ async def put_speakers(
         if str(k).strip() and isinstance(v, str) and v.strip()
     }
     async with await _get_db() as db:
-        await _load_meeting(db, meeting_id)
+        await _load_meeting(db, meeting_id, user)
         await db.execute(
             text(
                 "UPDATE meeting SET speaker_names = CAST(:n AS JSONB) WHERE id = :id"
@@ -263,10 +299,10 @@ async def put_speakers(
 async def patch_meeting(
     meeting_id: str,
     body: PatchMeetingRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> MeetingListItem:
     async with await _get_db() as db:
-        await _load_meeting(db, meeting_id)
+        await _load_meeting(db, meeting_id, user)
         await db.execute(
             text(
                 """
@@ -288,7 +324,7 @@ async def patch_meeting(
             },
         )
         await db.commit()
-        row = await _load_meeting(db, meeting_id)
+        row = await _load_meeting(db, meeting_id, user)
     return row_to_list_item(row)
 
 
@@ -297,9 +333,13 @@ async def delete_meeting(
     meeting_id: str,
     user: UserContext = Depends(get_current_user),
 ) -> None:
-    """Hard delete: rows cascade; media files are removed; audited."""
+    """Hard delete: rows cascade; media files are removed; audited.
+
+    Irreversible and the reason the owner check above is not optional: a
+    colleague's recording, transcript, notes and action items all go with it.
+    """
     async with await _get_db() as db:
-        await _load_meeting(db, meeting_id)
+        await _load_meeting(db, meeting_id, user)
         paths = (
             await db.execute(
                 text("SELECT artifact_path FROM meeting_recording WHERE meeting_id = :id"),

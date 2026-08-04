@@ -247,22 +247,46 @@ def test_both_off_boarding_doors_call_the_one_shared_guard() -> None:
     included automatically. Each must call the shared helper and must NOT
     carry a comparison of its own: the version of this check that lived inside
     `remove_member` alone is precisely why the other door never grew one.
-    """
-    from gateway.routes.admin._common import assert_not_self_lockout, router
 
-    doors = [
+    ⚠️ "Found automatically" was an over-claim in this test's first version:
+    it looks at **one path**, so the third door — ``PUT
+    /admin/members/{email}/roles``, which reaches the same lockout without
+    touching `status` — was invisible to it. That door is now included below,
+    with its own guard, and its absence is the reason to distrust "the test
+    finds them for us" as a substitute for enumerating them.
+    """
+    from gateway.routes.admin._common import (
+        assert_not_self_demotion,
+        assert_not_self_lockout,
+        router,
+    )
+
+    status_doors = [
         route
         for route in router.routes
         if getattr(route, "path", "") == "/admin/members/{email}"
         and {"PATCH", "DELETE"} & (getattr(route, "methods", set()) or set())
     ]
-    assert len(doors) == 2, f"expected PATCH + DELETE, found {len(doors)}"
+    roles_door = [
+        route
+        for route in router.routes
+        if getattr(route, "path", "") == "/admin/members/{email}/roles"
+        and "PUT" in (getattr(route, "methods", set()) or set())
+    ]
+    assert len(status_doors) == 2, (
+        f"expected PATCH + DELETE, found {len(status_doors)}"
+    )
+    assert len(roles_door) == 1, "the roles door is missing"
 
-    for route in doors:
+    expected = {id(r): "assert_not_self_lockout(" for r in status_doors}
+    expected.update({id(r): "assert_not_self_demotion(" for r in roles_door})
+
+    for route in status_doors + roles_door:
         name = f"{sorted(route.methods)} {route.path}"
         src = inspect.getsource(route.endpoint)
-        assert "assert_not_self_lockout(" in src, (
-            f"{name} does not call the shared self-guard"
+        assert expected[id(route)] in src, (
+            f"{name} does not call the shared self-guard "
+            f"({expected[id(route)][:-1]})"
         )
         for line in src.splitlines():
             if "admin.email" in line and "_log" not in line:
@@ -494,8 +518,16 @@ def test_no_destructive_control_is_rendered_on_the_viewers_own_row() -> None:
         ("actions.canRemove", "onRemove(member)"),
     ):
         assert flag in row and call in row, f"{flag} / {call} missing from the row"
-        assert row.index(flag) < row.index(call), (
-            f"{call} is rendered before {flag} is consulted"
+        # ⚠️ Position is NOT enough, and asserting it was this test's own bug.
+        # `void actions.canSuspend;` above a `{true && (` satisfies
+        # index(flag) < index(call) while the control renders on the viewer's
+        # own row — a reference before the call site is not a guard on it. The
+        # JSX condition itself is what has to be there. (Third instance of
+        # "the assertion is weaker than the docstring" in this area; see §6
+        # *Repair round 3* for the other two.)
+        assert f"{{{flag} && (" in row, (
+            f"{call} is not rendered behind `{{{flag} && (` — merely "
+            f"mentioning {flag} first does not gate anything"
         )
 
     # The destructive verbs appear exactly once each, so there is no second,
@@ -505,6 +537,132 @@ def test_no_destructive_control_is_rendered_on_the_viewers_own_row() -> None:
     # And the own row is labelled rather than left blank.
     assert "actions.isSelf" in row
     assert "This is you" in row
+
+
+async def test_self_demotion_is_refused_even_when_another_owner_survives(
+    db: _FakeDB,
+) -> None:
+    """The **third door**, and the one N7's first pass left open.
+
+    ``PUT /admin/members/{email}/roles`` never touches `status`, so
+    `assert_not_self_lockout` cannot see it — yet demoting yourself out of
+    `admin:members:manage` is the same lockout, and the permission you just
+    gave up is the floor for undoing it.
+
+    Measured before the guard existed, in exactly this two-owner world: the
+    call was **accepted**, the caller kept `status='active'` and lost the
+    rights. With one owner it happened to be refused — by
+    `assert_owner_survives`, i.e. by the coincidence invariant 4 exists to
+    stop depending on. That is why this seeds a second owner.
+    """
+    from gateway.routes.admin.members import RoleAssignment, set_member_roles
+
+    _second_owner(db)
+
+    with pytest.raises(HTTPException) as exc:
+        await set_member_roles(
+            "owner@fracktal.in", RoleAssignment(roles=["member"]), admin=OWNER,
+        )
+
+    assert exc.value.status_code == 409
+    detail = str(exc.value.detail)
+    # Both guards on this route answer 409. Discriminate, or this test passes
+    # against `assert_owner_survives` and proves nothing.
+    assert "member-management rights" in detail
+    assert "no owner" not in detail, (
+        "this is invariant 1 firing, not the self-guard — the two-owner world "
+        "was supposed to make invariant 1 silent here"
+    )
+    assert db.user_roles["u-owner"] == ["owner"], "the demotion was applied"
+    _nothing_was_written(db)
+
+
+async def test_that_same_world_still_lets_another_owner_be_demoted(
+    db: _FakeDB,
+) -> None:
+    """The converse, in the identical world: only the identity differs.
+
+    Without this, a guard that simply refused every role change would look
+    correct. `admin:members:manage` is meant to govern *other* people's roles;
+    what it may not do is take itself away.
+    """
+    from gateway.routes.admin.members import RoleAssignment, set_member_roles
+
+    _second_owner(db)
+
+    await set_member_roles(
+        "second@fracktal.in", RoleAssignment(roles=["member"]), admin=OWNER,
+    )
+
+    assert db.user_roles["u-owner2"] == ["member"]
+    assert db.committed == 1
+
+
+async def test_a_self_edit_that_keeps_the_rights_is_allowed(
+    db: _FakeDB,
+) -> None:
+    """The guard is about the *permission*, not about self-editing.
+
+    A blanket "you may not touch your own roles" would have been simpler and
+    wrong: an owner moving themselves to `admin` still holds
+    `admin:members:manage` and can undo it, so there is no lockout to prevent.
+    Checking the permissions the new roles actually grant — rather than an
+    allowlist of slugs — is also what lets a *custom* role carrying the
+    permission through.
+    """
+    from gateway.routes.admin.members import RoleAssignment, set_member_roles
+
+    _second_owner(db)
+
+    await set_member_roles(
+        "owner@fracktal.in", RoleAssignment(roles=["admin"]), admin=OWNER,
+    )
+
+    assert db.user_roles["u-owner"] == ["admin"]
+    assert db.committed == 1
+
+
+async def test_the_last_owner_demoting_themselves_hears_the_self_refusal(
+    db: _FakeDB,
+) -> None:
+    """One owner, so BOTH guards would refuse. The self-guard must answer.
+
+    It runs first deliberately: "you cannot take your own rights away" is the
+    true reason and tells the caller what to do, where "assign another owner
+    first" invites them to do exactly that and then hit the real wall.
+    """
+    from gateway.routes.admin.members import RoleAssignment, set_member_roles
+
+    with pytest.raises(HTTPException) as exc:
+        await set_member_roles(
+            "owner@fracktal.in", RoleAssignment(roles=["member"]), admin=OWNER,
+        )
+
+    assert "member-management rights" in str(exc.value.detail)
+    _nothing_was_written(db)
+
+
+def test_the_third_doors_guard_reads_the_permissions_not_the_slugs() -> None:
+    """Structural, because the fake answers this query from a Python mapping.
+
+    ``_FakeDB.ROLE_PERMISSIONS`` is a mirror, and a mirror only ever agrees
+    with itself — every behavioural case above would stay green if the real
+    statement started reading role *slugs* and an allowlist instead. Then a
+    custom role carrying `admin:members:manage` would be refused and the guard
+    would be enforcing something nobody wrote down.
+    """
+    from gateway.routes.admin._common import (
+        _ROLE_PERMISSIONS_SQL,
+        SELF_RECOVERY_PERMISSION,
+    )
+
+    assert "org_role_permission" in _ROLE_PERMISSIONS_SQL
+    assert "permission" in _ROLE_PERMISSIONS_SQL
+    assert "slug" not in _ROLE_PERMISSIONS_SQL, (
+        "the guard is deciding by role name; a custom role that carries "
+        f"{SELF_RECOVERY_PERMISSION} would be refused"
+    )
+    assert SELF_RECOVERY_PERMISSION == "admin:members:manage"
 
 
 def test_removing_somebody_asks_first_and_names_them() -> None:

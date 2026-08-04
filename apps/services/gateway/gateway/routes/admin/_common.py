@@ -14,11 +14,16 @@ an access model and an outage:
 3. **System roles are immutable.** The five seeded roles are the floor the
    bootstrap path depends on; custom roles are where admins express local
    policy.
-4. **Nobody locks themselves out.** A caller may not put their own row into any
-   status other than `active`, whichever door they use — :func:`assert_not_self_lockout`
-   is called by both ``PATCH`` and ``DELETE`` on ``/admin/members/{email}``.
-   Invariant 1 is not a substitute: it refuses self-suspension only while the
-   caller is the *last* owner.
+4. **Nobody locks themselves out**, by any of the **three** doors that reach it.
+   A caller may not put their own row into any status other than `active`
+   (:func:`assert_not_self_lockout`, called by both ``PATCH`` and ``DELETE`` on
+   ``/admin/members/{email}``), and may not strip their own row of
+   ``admin:members:manage`` (:func:`assert_not_self_demotion`, called by ``PUT
+   /members/{email}/roles``) — the third door leaves `status` alone and takes
+   the *permission* instead, reaching the same lockout without touching the
+   column the first two guard. Invariant 1 is not a substitute for any of
+   them: it refuses only while the caller is the *last* owner, which is a
+   coincidence of org size, not a rule.
 """
 
 from __future__ import annotations
@@ -27,7 +32,12 @@ import os
 from datetime import datetime, timezone
 from typing import Any
 
-from acb_auth import UserContext, get_current_user, invalidate_access
+from acb_auth import (
+    UserContext,
+    get_current_user,
+    invalidate_access,
+    permission_matches,
+)
 from acb_common import get_logger, get_settings
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy import text
@@ -286,6 +296,80 @@ def assert_not_self_lockout(
         "it would take away your own access.",
     )
     raise HTTPException(status_code=409, detail=f"{wording} {_SELF_LOCKOUT_ADVICE}")
+
+
+#: The capability a caller needs to undo whatever they just did to themselves.
+#: It is the gate on all three doors — ``PATCH``, ``DELETE`` and ``PUT
+#: …/roles`` — so a caller who no longer holds it cannot restore their own row
+#: by any route.
+SELF_RECOVERY_PERMISSION = "admin:members:manage"
+
+#: Read as the third door's fence. Held as a constant for the same reason
+#: ``_PROVISION_MEMBER_SQL`` is: the test fake answers it from a Python mapping,
+#: and a mirror can only ever agree with itself.
+_ROLE_PERMISSIONS_SQL = (
+    "SELECT permission FROM org_role_permission "
+    " WHERE role_id = ANY(CAST(:ids AS uuid[]))"
+)
+
+
+async def assert_not_self_demotion(
+    db: Any,
+    admin: UserContext,
+    member: dict[str, Any],
+    *,
+    role_ids: list[tuple[str, str]],
+) -> None:
+    """Invariant 4's **third door**: ``PUT /admin/members/{email}/roles``.
+
+    :func:`assert_not_self_lockout` closes the two doors that set
+    ``status``. This one closes the door that leaves the status alone and
+    takes the *permission* away instead — the outcome is the same lockout,
+    reached by a route that never touches ``app_user.status``.
+
+    Measured before this existed, in the two-owner world that
+    ``colleague_onboarding.md`` §2 Step 2 exists to create: an owner calling
+    ``PUT /admin/members/<their own address>/roles {"roles": ["member"]}`` was
+    **accepted**. They kept `status = 'active'` and lost
+    ``admin:members:manage``, which is the floor for undoing it — so recovery
+    was the other owner, or hand-run SQL. With a single owner the call
+    happened to be refused, but by :func:`assert_owner_survives` and its
+    wording, i.e. by the same coincidence invariant 4 was written to stop
+    relying on.
+
+    ``{"roles": []}`` is **not** the sequence — a separate check rejects an
+    empty set. The reachable one is a self-demotion to any role that does not
+    carry the recovery permission.
+
+    Checked against the permissions the *new* roles actually grant rather than
+    against a list of role slugs, because a custom role may carry
+    ``admin:members:manage`` and a seeded-slug allowlist would refuse a
+    legitimate self-edit. Wildcards resolve through
+    :func:`acb_auth.permission_matches`, so an owner holding ``*`` passes.
+    """
+    me = (admin.email or "").strip().lower()
+    them = (member.get("email") or "").strip().lower()
+    if not me or not them or me != them:
+        return
+
+    ids = [rid for rid, _slug in role_ids]
+    if ids:
+        granted = (
+            await db.execute(text(_ROLE_PERMISSIONS_SQL), {"ids": ids})
+        ).scalars().all()
+        if any(
+            permission_matches(str(p), SELF_RECOVERY_PERMISSION)
+            for p in granted
+        ):
+            return
+
+    raise HTTPException(
+        status_code=409,
+        detail=(
+            "You cannot take your own member-management rights away — you "
+            "would not be able to give them back. " + _SELF_LOCKOUT_ADVICE
+        ),
+    )
 
 
 # ── Provisioning: the one path from an address to a member ──────────────────

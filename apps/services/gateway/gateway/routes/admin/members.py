@@ -34,6 +34,7 @@ from sqlalchemy import text
 from gateway.routes.admin._common import (
     _iso,
     _log,
+    assert_not_self_demotion,
     assert_not_self_lockout,
     assert_owner_survives,
     get_db,
@@ -323,6 +324,14 @@ async def set_member_roles(
         org_id = await get_org_id(db)
         member = await get_member(db, email)
         role_ids = await resolve_assignable_roles(db, org_id, req.roles, admin)
+
+        # Invariant 4, third door: this route never touches `status`, so
+        # `assert_not_self_lockout` cannot see it — yet demoting yourself out
+        # of `admin:members:manage` is the same lockout, and the floor for
+        # undoing it is the permission you just gave up. Runs before invariant
+        # 1 so the caller hears the true reason: "assign another owner first"
+        # invites them to do exactly that and then hit the real wall.
+        await assert_not_self_demotion(db, admin, member, role_ids=role_ids)
 
         # Demoting the last owner is the same lockout as removing them.
         if "owner" not in req.roles:

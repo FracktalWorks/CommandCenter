@@ -94,6 +94,19 @@ class _FakeDB:
         "owner": 0, "admin": 10, "manager": 20, "member": 30,
     }
 
+    #: Only what invariant 4's third door needs to decide: does this role still
+    #: let its holder undo what they just did? `owner` holds `*`, so it is
+    #: matched through `permission_matches`, not by string equality — an
+    #: allowlist of slugs would have refused a custom role that legitimately
+    #: carries the permission. `manager` deliberately holds only
+    #: `admin:members:read` (see D14: it can see the roster, not change it).
+    ROLE_PERMISSIONS: ClassVar[dict[str, tuple[str, ...]]] = {
+        "owner": ("*",),
+        "admin": ("admin:members:read", "admin:members:manage"),
+        "manager": ("admin:members:read",),
+        "member": (),
+    }
+
     def __init__(self) -> None:
         self.users: dict[str, dict[str, Any]] = {}          # id → row
         self.user_roles: dict[str, list[str]] = {}          # uid → [slug]
@@ -153,6 +166,25 @@ class _FakeDB:
             slugs = self.user_roles.get(me["id"], []) if me else []
             ranks = [self.ROLE_RANKS[x] for x in slugs if x in self.ROLE_RANKS]
             return _Rows([{"rank": min(ranks) if ranks else None}])
+
+        if "UPDATE app_user SET role = :role" in s:
+            # members.set_member_roles keeps the legacy coarse column truthful
+            # (spec §7). Only the accept path reaches it, which is why the
+            # refusal cases never needed this branch.
+            self.users[p["uid"]]["legacy_role"] = p["role"]
+            return _Rows([], rowcount=1)
+
+        if "FROM org_role_permission" in s:
+            # Mirror of `_common._ROLE_PERMISSIONS_SQL`, answering from
+            # ROLE_PERMISSIONS. ⚠️ A mirror agrees with itself: a behavioural
+            # test here cannot notice the real statement changing shape, so
+            # `assert_not_self_demotion`'s SQL is *also* pinned structurally.
+            out: list[dict[str, Any]] = []
+            for rid in p["ids"]:
+                slug = str(rid).removeprefix("role-")
+                out += [{"permission": x}
+                        for x in self.ROLE_PERMISSIONS.get(slug, ())]
+            return _Rows(out)
 
         if "FROM org_role WHERE organization_id" in s and "ANY(:slugs)" in s:
             return _Rows([

@@ -121,8 +121,15 @@ def test_the_bff_route_authenticates_and_keeps_the_redirect_intact() -> None:
       credentials and returning HTML the browser has no provider cookies for.
     - reading ``location`` off the upstream response is the only way the consent
       URL reaches the browser.
+
+    ⚠️ Comment-stripped, and that is not a nicety. The first version of this test
+    asserted against the raw file and **survived** the mutation that downgrades
+    ``redirect: "manual"`` to ``"follow"`` — the header comment on that file
+    explains the flag by name, so the prose satisfied the check while the code
+    did the wrong thing. Exactly the failure mode this file exists to prevent,
+    found in this file. Every source assertion here reads code only.
     """
-    src = _read(BFF_ROUTE)
+    src = _code_only(_read(BFF_ROUTE))
     assert "gatewayHeaders" in src, "the BFF must act as the signed-in member"
     assert "serviceHeaders" not in src, (
         "serviceHeaders is bearer-only — it would bind the mailbox to the "

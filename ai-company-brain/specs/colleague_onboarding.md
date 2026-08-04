@@ -32,13 +32,25 @@ round 3*).
 **N6b needs no code** (§2 Step 1b shipped the fix) and leaves one recorded
 owner question. **Merging N6a is
 OWNER-GATE**: `deploy.yml:202-203` replays every migration on deploy, so the
-merge arms an auth-behaviour deploy. · **Board row:** WS-24 ·
+merge arms an auth-behaviour deploy.
+**§2 Step 5 also gained N7, BUILT 2026-08-04 (`ws-24-n7-self-removal-guard`):
+off-boarding *yourself*.** `DELETE` refused the caller; `PATCH {"status":
+"suspended"}` reached the identical `is_active=False` with **no self-check at
+all**, and refused only by the accident of `assert_owner_survives` firing in a
+one-owner org — a second owner (which §2 Step 2 exists to create) opened it.
+The Members page drew the button, because it never learned who the viewer was.
+Both doors now call one guard (`_common.assert_not_self_lockout`), the rule is
+"any status that is not `active`" so `invited` is covered too, and the roster
+renders **This is you** where the destructive controls were. **No migration, no
+new slug** — so unlike N6a this one is not a deploy-behaviour gate. ·
+**Board row:** WS-24 ·
 **Owner:** vjvarada · **Date:** 2026-08-04 ·
 **Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
 cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
 N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`; N1–N3 on
 `ws-24-n1n3-notes-scoping`, cut from `891903de`; N6a on
-`ws-24-n6-signin-requests`, cut from `5beeabbe`).
+`ws-24-n6-signin-requests`, cut from `5beeabbe`; N7 on
+`ws-24-n7-self-removal-guard`, cut from `2a41099b`).
 
 **What this doc is for.** Exactly one person is signed in to this deployment
 (**owner-reported, not measured** — see the note below). The question "is it
@@ -49,7 +61,7 @@ parts:
 | § | Section | Kind |
 |---|---|---|
 | §1 | **The readiness gate** — what must be true before colleague #1 | checklist with per-item done-whens + gate labels |
-| §2 | **The onboarding runbook** — invite → role → Center group → verify | procedure, grounded in real endpoints |
+| §2 | **The onboarding runbook** — invite → role → Center group → verify, and off-boarding (Step 5, incl. **N7 — built**) | procedure, grounded in real endpoints |
 | §3 | **The capability matrix** — what a colleague on each role can actually see | evidence table, every cell carries `file:line` |
 | §4 | **The four open owner-scoping holes** — blocking items with sizes | tickets |
 | §5 | **Verification** — the exact commands, and what must never be run | commands |
@@ -262,18 +274,137 @@ directory identity into a member**.
 
 ### Step 5 — Off-boarding (the other half, recorded here so it is not invented later)
 
-    PATCH  /admin/members/{email}   { "status": "suspended" }   # members.py:202-203
-    DELETE /admin/members/{email}                               # members.py:263-264
+    PATCH  /admin/members/{email}   { "status": "suspended" }   # members.py:191-192
+    DELETE /admin/members/{email}                               # members.py:262-263
 
 `resolve_access` treats status as a property of the *result*, not a filter on
 the query, so a suspended member resolves to no access within the 60s cache TTL
 at worst (`acb_auth/access.py:209-215`).
+
+**You cannot off-board yourself, by either door.** Both routes call the one
+shared guard `_common.assert_not_self_lockout` (`_common.py:248`;
+`members.py:214` and `:283`) — a caller may not put their own row into any
+status other than `active`. It is stated that way, rather than as a list of
+destructive statuses, because `is_active` is `status == "active"` exactly, so
+`invited` locks you out exactly as `suspended` does. Renaming yourself and
+re-activating your own row are unaffected. This is **not**
+`assert_owner_survives`: that one is about the *org* keeping an owner and would
+let either of two owners suspend themselves. The Members page reads
+`/auth/me`'s `email` and renders **This is you** where the destructive controls
+would be (`settings/members/selfGuard.ts`) — a courtesy, since the guard above
+is the boundary.
 
 **Bringing somebody back is `admin:members:manage`, and only that.** Neither
 Invite nor approving a sign-in request can turn a `removed` or `suspended` row
 back into `active` — both hold the weaker `admin:members:invite`. Invite
 returns a removed member to `invited`; the activation is still Step 1b. See §6
 *Repair round* for why that boundary is enforced in two places.
+
+### N7 — off-boarding yourself · size: S (two routes + one page) · ✅ **BUILT 2026-08-04**
+
+> **Built** on `ws-24-n7-self-removal-guard` (cut from `main` @ `2a41099b`).
+> All seven done-whens met; fenced by `tests/unit/test_admin_member_offboarding.py`
+> (22 cases) and `settings/members/selfGuard.test.ts` (8). The problem statement
+> below is kept in the past tense it describes — it is the reason the guard is
+> shaped the way it is.
+>
+> **One deliberate widening.** Done-when 2 named `suspended` and `removed`; the
+> shipped rule is **"any status that is not `active`"**, which also covers
+> `invited` — a status this same route accepts and which sets `is_active` to
+> false just as surely (`EffectiveAccess.is_active` is `status == "active"`
+> exactly). An enumeration would have had to remember the third door; the rule
+> does not. It satisfies done-when 2 as written (fires on `suspended` and
+> `removed`, not on `active`, not on `display_name`).
+
+**Two doors reach the same outcome and only one of them is guarded.**
+`DELETE /admin/members/{email}` refuses to remove the caller
+(`members.py:269-272`, *"You cannot remove yourself."*). `PATCH
+/admin/members/{email} {"status": "suspended"}` — which produces the same
+`is_active=False` by the same mechanism — has **no self-check at all**; its only
+invariant is `assert_owner_survives`.
+
+That invariant is what has been standing in for one. With exactly one owner it
+happens to refuse, so the hole is invisible. **Add a second owner — which §2
+Step 2 exists to do — and either owner can suspend themselves out of the admin
+surface in one click.** `admin:members:manage` is the floor for restoring it, so
+the recovery is the other owner, or hand-run SQL if both do it.
+
+**And the UI offers exactly that click.** `settings/members/page.tsx` renders
+**Suspend** on every active row; it never learns who the viewer is, so it draws
+the button on the owner's own row like any other. Meanwhile it exposes **no
+removal control at all** — the shipped `DELETE` route has no caller in the
+product, so the only off-boarding an owner can perform from the UI is the
+unguarded one.
+
+**Done when** — all seven ✅
+
+1. ✅ A single shared guard — one helper, called by **both** `update_member` and
+   `remove_member` — refuses a caller acting destructively on their own row.
+   One rule with two call sites, not two rules: the old split is exactly
+   how the two doors came to disagree.
+   → `_common.assert_not_self_lockout` (`_common.py:248`), called from
+   `members.py:214` (PATCH) and `:283` (DELETE). Neither route compares
+   addresses itself any more, and
+   `test_both_off_boarding_doors_call_the_one_shared_guard` finds the doors
+   from the **router** — a third one added later is included automatically.
+2. ✅ It fires on `PATCH` for **`suspended` and `removed`**, and not on
+   `active` — an owner re-activating their own row is harmless — nor on
+   `display_name`. → Shipped as the wider rule (see the note above);
+   `status=None` returns early, so a display-name-only patch is safe by
+   construction rather than by the caller remembering to skip the check.
+3. ✅ The comparison is case-insensitive on both sides. An IdP that changes UPN
+   casing between sessions must not turn the guard off (the same property
+   `load_owned_meeting` preserves for Notes). → Both sides `.strip().lower()`;
+   four parametrised cases, and an empty address on either side matches
+   nothing. Mutation-checked: dropping the `.lower()` fails exactly those four.
+4. ✅ It is independent of `assert_owner_survives`: a test seeds **two** owners and
+   asserts self-suspension is still refused, because the old refusal was that
+   invariant firing by accident and would disappear the moment a second owner
+   exists.
+   → `test_self_suspension_is_refused_even_when_another_owner_survives`, paired
+   with `test_that_same_world_still_lets_the_other_owner_be_suspended`: same
+   world, same route, only the identity differs. The two 409s are told apart by
+   their detail text *and* by what was written — deleting the guard from
+   `update_member` fails the first test (the PATCH goes through).
+5. ✅ The Members page learns the viewer's identity (`GET /admin/me` already
+   returns `email` — `me.py:76`) and renders **no destructive control** on that
+   row, labelling it as the viewer's own instead. → `access.email` →
+   `rowActions()`; the row renders **This is you** in place of Suspend/Remove.
+6. ✅ A **Remove** control appears on other rows, calling the existing `DELETE`
+   route, with a confirmation step naming the person — it drops every role
+   assignment and is not a toggle. → `RemoveDialog`; the row only *opens* it,
+   the `fetch` lives in `removeMember`, and the copy points at Suspend for
+   anybody who wanted the reversible act.
+7. ✅ Refusals surface in the UI rather than failing silently. Hiding the control
+   is a courtesy; the server is the boundary (`lib/access.ts:126-129`).
+   → `removeMember` sets `error` from the gateway's `detail` and re-reads the
+   roster on **every** response, refusals included (the N6a rule: a refusal is
+   about the row that was clicked, so that row is the stale one).
+
+**Verification**
+
+    uv run pytest tests/unit/test_admin_member_offboarding.py -q
+    uv run pytest tests/unit/test_signin_requests.py \
+                  tests/unit/test_org_access_control.py \
+                  tests/unit/test_org_access_enforcement.py -q
+    uv run ruff check . --select F821,F601,F602,F502,F7,B006
+    cd workbench/control_plane && npx tsc --noEmit
+    cd workbench/control_plane && npx vitest run src/app/settings/members/selfGuard.test.ts
+
+Measured 2026-08-04: **22 passed**, **133 passed** (52 + 50 + 31 — unchanged
+from `main`), `All checks passed!`, tsc silent, **8 passed**.
+
+**The test fake is shared, not copied.** `tests/unit/_admin_fakes.py` holds the
+`app_user`/`user_role`/`access_request` mirror that `test_signin_requests.py`
+grew; both files import it. Its warning travels with it — the mirror can only
+agree with itself about anything that lives *inside* a SQL statement. That does
+not apply to this ticket's guard, which is Python in the route, so the
+behavioural cases here really do exercise it; what does apply is that
+`assert_not_self_lockout` and `assert_owner_survives` **both answer 409**, so no
+test may assert the bare status code.
+
+**No migration.** No new permission slug — both routes keep
+`admin:members:manage`.
 
 ---
 

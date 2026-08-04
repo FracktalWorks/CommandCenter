@@ -3,7 +3,7 @@
 DB access, the org lookup, and the invariants every write path in this package
 has to respect. Spec: ``ai-company-brain/specs/org_access_control.md``.
 
-The three invariants, stated once here because they are the difference between
+The four invariants, stated once here because they are the difference between
 an access model and an outage:
 
 1. **The org always has an owner.** Every path that could remove the last
@@ -14,6 +14,11 @@ an access model and an outage:
 3. **System roles are immutable.** The five seeded roles are the floor the
    bootstrap path depends on; custom roles are where admins express local
    policy.
+4. **Nobody locks themselves out.** A caller may not put their own row into any
+   status other than `active`, whichever door they use — :func:`assert_not_self_lockout`
+   is called by both ``PATCH`` and ``DELETE`` on ``/admin/members/{email}``.
+   Invariant 1 is not a substitute: it refuses self-suspension only while the
+   caller is the *last* owner.
 """
 
 from __future__ import annotations
@@ -225,6 +230,62 @@ async def assert_owner_survives(
                 "Assign another owner first."
             ),
         )
+
+
+#: How the refusal reads back to the caller who asked for it. Only the two
+#: statuses a human actually chooses are worded; anything else falls through to
+#: the generic message, because the RULE below is ``status != "active"`` and not
+#: this table — a fifth `app_user.status` is guarded the day it is added rather
+#: than the day somebody remembers to list it here.
+_SELF_LOCKOUT_WORDING = {
+    "removed": "You cannot remove yourself.",
+    "suspended": "You cannot suspend yourself.",
+}
+
+_SELF_LOCKOUT_ADVICE = "Ask another owner or admin to do it."
+
+
+def assert_not_self_lockout(
+    admin: UserContext, member: dict[str, Any], *, status: str | None
+) -> None:
+    """Refuse a caller who is taking their own access away — invariant 4.
+
+    **One rule, two call sites.** ``PATCH /admin/members/{email}`` with a
+    status and ``DELETE /admin/members/{email}`` reach the same
+    ``is_active = False`` by the same mechanism, and the version of this check
+    that lived *inside* the DELETE handler alone is exactly how the two doors
+    came to disagree: the PATCH had no self-check at all, and its only
+    invariant — :func:`assert_owner_survives` — refuses self-suspension solely
+    by coincidence in an org that has one owner. Add a second owner (which §2
+    Step 2 of ``colleague_onboarding.md`` exists to do) and either owner could
+    suspend themselves out of the admin surface in one click, with
+    ``admin:members:manage`` the floor for getting back in.
+
+    The rule is stated as **"any status that is not `active`"**, never as a list
+    of destructive ones: ``EffectiveAccess.is_active`` is ``status ==
+    "active"`` exactly, so `invited` locks the caller out just as `suspended`
+    does. ``status=None`` — a display-name-only patch — changes no access and
+    passes.
+
+    Case-insensitive on both sides. ``app_user.email`` and ``X-User-Email``
+    come from the same directory but not necessarily with the same casing, and
+    an IdP that returns a UPN cased differently between sessions must not
+    silently switch the guard off (the property ``core.load_owned_meeting``
+    preserves for Notes). An empty address on either side matches nothing — a
+    caller with no identity of their own is not everybody.
+    """
+    if status is None or status == "active":
+        return
+    me = (admin.email or "").strip().lower()
+    them = (member.get("email") or "").strip().lower()
+    if not me or not them or me != them:
+        return
+    wording = _SELF_LOCKOUT_WORDING.get(
+        status,
+        f"You cannot set your own membership to '{status}' — "
+        "it would take away your own access.",
+    )
+    raise HTTPException(status_code=409, detail=f"{wording} {_SELF_LOCKOUT_ADVICE}")
 
 
 # ── Provisioning: the one path from an address to a member ──────────────────

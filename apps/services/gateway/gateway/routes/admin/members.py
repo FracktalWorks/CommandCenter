@@ -34,6 +34,7 @@ from sqlalchemy import text
 from gateway.routes.admin._common import (
     _iso,
     _log,
+    assert_not_self_lockout,
     assert_owner_survives,
     get_db,
     get_member,
@@ -205,7 +206,17 @@ async def update_member(
         org_id = await get_org_id(db)
         member = await get_member(db, email)
 
+        # Invariant 4 — nobody locks themselves out. The same helper guards the
+        # DELETE below: this route reaches the identical `is_active = False`,
+        # and a check written into only one of the two doors is how they came
+        # to disagree. Passing `patch.status` unconditionally is what makes a
+        # display-name-only patch safe by construction rather than by luck.
+        assert_not_self_lockout(admin, member, status=patch.status)
+
         # Suspending or removing the last owner locks everyone out of admin.
+        # Independent of the guard above: this one is about the ORG keeping an
+        # owner, and it happens to refuse self-suspension only while there is
+        # exactly one.
         if patch.status in ("suspended", "removed"):
             await assert_owner_survives(db, org_id, excluding_user_id=member["id"])
 
@@ -266,10 +277,10 @@ async def remove_member(
     async with db:
         org_id = await get_org_id(db)
         member = await get_member(db, email)
-        if (member["email"] or "").lower() == (admin.email or "").lower():
-            raise HTTPException(
-                status_code=409, detail="You cannot remove yourself."
-            )
+        # Invariant 4, from the same helper the PATCH above calls — this route
+        # used to hold its own copy of the comparison, which is precisely why
+        # the other door never grew one.
+        assert_not_self_lockout(admin, member, status="removed")
         await assert_owner_survives(db, org_id, excluding_user_id=member["id"])
 
         await db.execute(

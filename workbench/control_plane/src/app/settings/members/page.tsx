@@ -16,6 +16,12 @@
  * front door produced a log line nobody read. The badge is the whole point —
  * the owner is supposed to learn that a colleague is locked out without being
  * told.
+ *
+ * **The roster knows who is reading it** (N7). It used to not, so it drew
+ * **Suspend** on the viewer's own row like any other — the one click that
+ * takes an owner out of the surface they would need to undo it. `rowActions`
+ * (./selfGuard) decides what a row may offer; the refusal itself is the
+ * gateway's, and this is only a courtesy (`lib/access.ts:126-129`).
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
@@ -28,6 +34,7 @@ import {
   Plus,
   RefreshCw,
   ShieldOff,
+  UserMinus,
   UserPlus,
   Users,
   X,
@@ -35,6 +42,7 @@ import {
 import FilterPills from "@/components/FilterPills";
 import Tabs from "@/components/Tabs";
 import { useAccess } from "@/components/AccessProvider";
+import { rowActions } from "./selfGuard";
 import type { AccessRequest, Member, Role } from "./types";
 
 const STATUS_STYLES: Record<Member["status"], string> = {
@@ -102,6 +110,19 @@ export default function MembersPage() {
   const [tab, setTab] = useState("members");
   const [filter, setFilter] = useState("all");
   const [inviting, setInviting] = useState(false);
+  /**
+   * The person an off-boarding is being confirmed for. Removal drops every
+   * role assignment and is not a toggle — Activate does not undo it — so it
+   * goes through a step that names them (N7 done-when 6).
+   */
+  const [removing, setRemoving] = useState<Member | null>(null);
+
+  /**
+   * Who is reading this screen. `/auth/me` returns it and the shell already
+   * has it; the roster simply never asked, which is why it offered every
+   * viewer the one action that locks them out of it.
+   */
+  const viewerEmail = access.email;
 
   const load = useCallback(async () => {
     try {
@@ -180,6 +201,35 @@ export default function MembersPage() {
     }
     await load();
     // The admin may have just changed their own access.
+    await refreshAccess();
+  };
+
+  /**
+   * Off-board somebody: `DELETE /admin/members/{email}` — status `removed`,
+   * every role assignment dropped. The route has shipped since the roster
+   * existed and had no caller in the product, so the only off-boarding this
+   * screen could perform was Suspend.
+   *
+   * Two rules, both from the Requests tab's own history:
+   *
+   * 1. **The refusal is shown.** Hiding the control on the viewer's own row is
+   *    a courtesy; the gateway's guard is the boundary, and a 409 that never
+   *    reaches the screen looks exactly like a click that did nothing.
+   * 2. **No early return.** A refusal is almost always ABOUT the row that was
+   *    clicked — self, last owner, already off-boarded — so the row on screen
+   *    is the stale thing. `load()` runs on every response.
+   */
+  const removeMember = async (email: string) => {
+    setError("");
+    setNotice("");
+    const res = await fetch(`/api/admin/members/${encodeURIComponent(email)}`, {
+      method: "DELETE",
+    });
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setError(body.detail ?? "Could not remove this member.");
+    }
+    await load();
     await refreshAccess();
   };
 
@@ -368,85 +418,14 @@ export default function MembersPage() {
         ) : (
           <div className="flex flex-col gap-2">
             {shown.map((m) => (
-              <div
+              <MemberRow
                 key={m.email}
-                className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3 sm:p-4"
-              >
-                <div className="min-w-0 flex-1">
-                  <Link
-                    href={`/settings/members/${encodeURIComponent(m.email)}`}
-                    className="truncate text-sm font-medium text-foreground hover:text-primary tech-transition"
-                  >
-                    {m.display_name || m.email}
-                  </Link>
-                  <div className="truncate text-[11px] text-muted-foreground">
-                    {m.email}
-                  </div>
-                </div>
-
-                <div className="flex flex-wrap items-center gap-1.5">
-                  {m.roles.length === 0 ? (
-                    <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
-                      no role
-                    </span>
-                  ) : (
-                    m.roles.map((r) => (
-                      <span
-                        key={r}
-                        className="rounded-md bg-secondary px-2 py-0.5 text-[10px] text-foreground"
-                      >
-                        {roles.find((x) => x.slug === r)?.display_name ?? r}
-                      </span>
-                    ))
-                  )}
-                </div>
-
-                <div className="flex items-center gap-1.5">
-                  <span
-                    className={`h-1.5 w-1.5 rounded-full ${
-                      m.status === "active"
-                        ? "bg-success"
-                        : m.status === "invited"
-                          ? "bg-warning"
-                          : "bg-muted"
-                    }`}
-                  />
-                  <span
-                    className={`text-[11px] ${STATUS_STYLES[m.status]}`}
-                    title={
-                      m.status === "invited"
-                        ? "Their row exists but is not active — they still see the same dead-end screen as a stranger. Activate them."
-                        : undefined
-                    }
-                  >
-                    {STATUS_LABELS[m.status]}
-                  </span>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Link
-                    href={`/settings/members/${encodeURIComponent(m.email)}`}
-                    className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
-                  >
-                    Manage access
-                  </Link>
-                  {m.status === "suspended" || m.status === "invited" ? (
-                    <button
-                      onClick={() => void setStatus(m.email, "active")}
-                      className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
-                    >
-                      Activate
-                    </button>
-                  ) : (
-                    <button
-                      onClick={() => void setStatus(m.email, "suspended")}
-                      className="rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/20"
-                    >
-                      Suspend
-                    </button>
-                  )}
-                </div>
-              </div>
+                member={m}
+                roles={roles}
+                viewerEmail={viewerEmail}
+                setStatus={setStatus}
+                onRemove={setRemoving}
+              />
             ))}
           </div>
         )}
@@ -462,6 +441,206 @@ export default function MembersPage() {
           }}
         />
       )}
+
+      {removing && (
+        <RemoveDialog
+          member={removing}
+          onClose={() => setRemoving(null)}
+          onConfirm={async () => {
+            const target = removing;
+            setRemoving(null);
+            await removeMember(target.email);
+          }}
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * One person on the roster.
+ *
+ * It is its own component so the destructive controls have exactly one place
+ * to live, and so `rowActions` is consulted once per row rather than being
+ * re-derived beside each button. The viewer's own row shows **This is you**
+ * where Suspend and Remove would be: the server refuses either anyway
+ * (`_common.assert_not_self_lockout`), and offering a button whose only
+ * outcome is a 409 is worse than not offering it.
+ */
+function MemberRow({
+  member,
+  roles,
+  viewerEmail,
+  setStatus,
+  onRemove,
+}: {
+  member: Member;
+  roles: Role[];
+  /** The signed-in member's address, from `/auth/me`. */
+  viewerEmail: string;
+  setStatus: (email: string, status: Member["status"]) => Promise<void>;
+  /** Opens the confirmation; the DELETE is fired from there, never here. */
+  onRemove: (member: Member) => void;
+}) {
+  const actions = rowActions(viewerEmail, member);
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+      <div className="min-w-0 flex-1">
+        <Link
+          href={`/settings/members/${encodeURIComponent(member.email)}`}
+          className="truncate text-sm font-medium text-foreground hover:text-primary tech-transition"
+        >
+          {member.display_name || member.email}
+        </Link>
+        <div className="truncate text-[11px] text-muted-foreground">
+          {member.email}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-1.5">
+        {member.roles.length === 0 ? (
+          <span className="rounded-md bg-muted px-2 py-0.5 text-[10px] text-muted-foreground">
+            no role
+          </span>
+        ) : (
+          member.roles.map((r) => (
+            <span
+              key={r}
+              className="rounded-md bg-secondary px-2 py-0.5 text-[10px] text-foreground"
+            >
+              {roles.find((x) => x.slug === r)?.display_name ?? r}
+            </span>
+          ))
+        )}
+      </div>
+
+      <div className="flex items-center gap-1.5">
+        <span
+          className={`h-1.5 w-1.5 rounded-full ${
+            member.status === "active"
+              ? "bg-success"
+              : member.status === "invited"
+                ? "bg-warning"
+                : "bg-muted"
+          }`}
+        />
+        <span
+          className={`text-[11px] ${STATUS_STYLES[member.status]}`}
+          title={
+            member.status === "invited"
+              ? "Their row exists but is not active — they still see the same dead-end screen as a stranger. Activate them."
+              : undefined
+          }
+        >
+          {STATUS_LABELS[member.status]}
+        </span>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Link
+          href={`/settings/members/${encodeURIComponent(member.email)}`}
+          className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
+        >
+          Manage access
+        </Link>
+        {actions.isSelf && (
+          <span
+            className="rounded-lg border border-dashed border-border px-2.5 py-1.5 text-[11px] text-muted-foreground"
+            title="You cannot suspend or remove your own access. Another owner or admin can."
+          >
+            This is you
+          </span>
+        )}
+        {actions.canActivate && (
+          <button
+            onClick={() => void setStatus(member.email, "active")}
+            className="rounded-lg border border-border px-2.5 py-1.5 text-[11px] text-muted-foreground tech-transition hover:border-primary/30 hover:text-foreground"
+          >
+            Activate
+          </button>
+        )}
+        {actions.canSuspend && (
+          <button
+            onClick={() => void setStatus(member.email, "suspended")}
+            className="rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/20"
+          >
+            Suspend
+          </button>
+        )}
+        {actions.canRemove && (
+          <button
+            onClick={() => onRemove(member)}
+            className="flex items-center gap-1 rounded-lg border border-destructive/30 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/10"
+          >
+            <UserMinus size={12} />
+            Remove
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Confirm an off-boarding, by name.
+ *
+ * Remove is not the loud version of Suspend: it drops every role assignment
+ * and the way back is a fresh invite plus an activation, not a click on this
+ * screen. Suspend is the reversible one, and the copy says so — an admin who
+ * wanted the reversible act should be able to notice before, not after.
+ */
+function RemoveDialog({
+  member,
+  onClose,
+  onConfirm,
+}: {
+  member: Member;
+  onClose: () => void;
+  onConfirm: () => Promise<void>;
+}) {
+  const [busy, setBusy] = useState(false);
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+      <div className="absolute inset-0 bg-black/60" onClick={onClose} />
+      <div className="relative w-full max-w-md rounded-xl border border-border bg-card p-5 shadow-2xl">
+        <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+          <UserMinus size={15} className="text-destructive" />
+          Remove {member.display_name || member.email}?
+        </h2>
+        <p className="mt-2 text-xs text-muted-foreground">
+          <span className="font-mono text-foreground">{member.email}</span> loses
+          access immediately and every role assignment they hold is dropped.
+          Their record is kept, because the rest of the system refers to people
+          by address.
+        </p>
+        <p className="mt-2 text-xs text-muted-foreground">
+          This is not a toggle — bringing them back means inviting them again
+          and activating the invitation. If you only want to pause their access,
+          use <span className="text-foreground">Suspend</span> instead.
+        </p>
+
+        <div className="mt-5 flex justify-end gap-2">
+          <button
+            onClick={onClose}
+            className="rounded-lg border border-border px-4 py-2 text-sm text-muted-foreground tech-transition hover:text-foreground"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => {
+              setBusy(true);
+              void onConfirm();
+            }}
+            disabled={busy}
+            className="flex items-center gap-1.5 rounded-lg bg-destructive px-4 py-2 text-sm font-medium text-destructive-foreground tech-transition hover:opacity-90 disabled:opacity-50"
+          >
+            {busy && <Loader2 size={14} className="animate-spin" />}
+            Remove
+          </button>
+        </div>
+      </div>
     </div>
   );
 }

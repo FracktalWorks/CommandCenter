@@ -1554,6 +1554,14 @@ async def test_an_unrecognised_member_status_fails_closed(db: _FakeDB) -> None:
     pinned it: flipping the fallback to `"provision"` left all 50 cases green.
     The lesson of round 1 was that a test mirroring the code is not a check on
     it, so this asserts the behaviour a new status must meet, not the dict.
+
+    ⚠️ **Asserting only ``status_code == 409`` is not enough**, and the first
+    version of this test made exactly that mistake. With the fallback flipped
+    to `provision`, ``provision_member`` runs, the CASE arms decline the
+    unknown status in silence, and the terminal read-back check then raises
+    its own 409 — so a bare status-code assertion passes while the matrix is
+    wide open. The two refusals are told apart by *when* they fire: this one
+    happens before anything is written, so no role may have been granted.
     """
     from gateway.routes.admin.access_requests import (
         ApproveRequest,
@@ -1569,6 +1577,14 @@ async def test_an_unrecognised_member_status_fails_closed(db: _FakeDB) -> None:
         )
 
     assert exc.value.status_code == 409
+    assert "does not know how to answer" in str(exc.value.detail), (
+        "the refusal came from somewhere further down — the matrix let an "
+        "unrecognised status through to provisioning"
+    )
+    # The discriminator: nothing was written at all. `set_roles` runs inside
+    # `provision_member`, so a granted role proves the matrix fell through.
+    assert db.user_roles.get("u-odd", []) == []
     assert db.users["u-odd"]["status"] == "archived"
     assert db.requests["future@fracktal.in"]["status"] == "pending"
     assert db.audit == []
+    assert db.committed == 0

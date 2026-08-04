@@ -24,7 +24,11 @@ pass found the other half: the guard *declined* silently, so approve still
 answered **200**, marked the request `approved`, and re-granted roles — which
 took the still-locked-out person out of a queue that renders only `pending`.
 **Approve now either fully succeeds or refuses with a 409, per the approve
-matrix in §6 *Repair round 2*.**
+matrix in §6 *Repair round 2*.** A third pass found the same shape once more —
+this time a race, not a sequence — and with it the reason it kept recurring:
+**approve verified by prediction, never by reading back what it wrote.** It now
+requires the member to be `active` before the decision is stamped (§6 *Repair
+round 3*).
 **N6b needs no code** (§2 Step 1b shipped the fix) and leaves one recorded
 owner question. **Merging N6a is
 OWNER-GATE**: `deploy.yml:202-203` replays every migration on deploy, so the
@@ -866,7 +870,9 @@ the fence that had missed it. Round 2 closed the half it left: the refusal was
 queue that renders only `pending`. **Read *Repair round 2* before reading dw7:
 it carries the approve matrix, which is the binding contract for what approve
 does about an address that already has an `app_user` row, and dw7's
-"idempotent: approving twice is not an error" is superseded.**
+"idempotent: approving twice is not an error" is superseded.** Round 3 closed
+the concurrent instance of the same shape and named its structural cause —
+approve predicted the write instead of verifying it. **52 cases.**
 **N6b: nothing to build**; one owner question remains open below. **Merging is
 OWNER-GATE** — see the note at the end of this section.
 
@@ -1378,3 +1384,67 @@ supervised window). Writing the migration and the routes is AGENT-SAFE.
 **Not in scope:** notifying the owner out-of-band (email/push on a new
 request), self-service role requests, and any auto-approval rule. Capture and
 answer, nothing else.
+
+#### Repair round 3 (2026-08-04) — approve predicted the write instead of verifying it
+
+**The same shape, a third time — and this round found *why* it kept coming
+back.** Rounds 1 and 2 each fixed one instance of "approve returns 200 for
+somebody it never let in". Round 2's fix was `APPROVE_MATRIX`, read **before**
+the write. That closes the two *sequential* holes. It does not close the
+*concurrent* one:
+
+`_PROVISION_MEMBER_SQL`'s `CASE` arms are re-evaluated by Postgres against the
+latest **committed** row — `ON CONFLICT DO UPDATE` waits on a concurrent writer
+and then re-reads. So a second admin off-boarding or suspending the same person
+between approve's `find_member` and its upsert lands every arm on
+`ELSE app_user.status`. The provisioning declines **in silence**, and approve
+went on to stamp `approved` and record an `org.access_request_approved` for it.
+Measured, with the SUT unpatched — only the world underneath it moved:
+
+    RESULT         : HTTP 200  status='removed'  roles=['member']  detail=''
+    app_user.status: removed        can they sign in? NO
+    request.status : approved       still in the owner's queue? NO, GONE
+
+Three consequences, the same three as both earlier rounds: the owner is shown
+success, the person is still locked out, and — because the queue renders only
+`pending` and the resolver's upsert deliberately never rewrites `status`
+(done-when 9) — **they can never reappear.** Every future knock bumps
+`last_seen_at` on a row nobody will ever see again.
+
+**The structural cause, stated plainly so it is not rediscovered a fourth
+time:** `_DECIDE_SQL` was made race-safe in round 2, but that hardened the
+`access_request` row only. The `app_user` row stayed a read-then-write with no
+write-side guard. Approve verified by **prediction** — it read the row, decided
+what *would* happen, and never read back what *did*. Every instance of this bug
+has been a variation on that one omission.
+
+**The fix:** before `_decide` stamps anything, the member must actually be
+`active`, or the whole transaction is abandoned (nothing has been committed
+yet, so the provisioning goes with it). Predicting is now only an optimisation;
+the read-back is the authority.
+
+**Also fenced:** the matrix's sixth row — "an unrecognised `app_user.status`
+fails closed" — had no test. Flipping `APPROVE_MATRIX.get(status, "refuse")` to
+`"provision"` left all 50 cases green.
+
+> ⚠️ **A note on the fence for that one, because the first attempt at it was
+> wrong in the way this section keeps warning about.** Asserting only
+> `status_code == 409` is *not* enough: with the fallback flipped to
+> `provision`, the provisioning runs, declines the unknown status silently, and
+> the **new terminal read-back check** then raises its own 409 — so the test
+> passed while the matrix was wide open. The two refusals are told apart by
+> *when* they fire: the matrix refuses before anything is written, so the
+> discriminator is that no role was granted (`set_roles` runs inside
+> `provision_member`). Both assertions are now in the test. This is the third
+> time in this ticket that a test asserted less than its docstring claimed;
+> treat a bare status-code assertion here as a smell.
+
+**Mutation evidence** (each applied, measured, reverted; the tree restored
+byte-identical by sha256 — `250ab021…`):
+
+| Mutation | Result |
+|---|---|
+| terminal read-back check disabled | **1 failed** — and the captured log under it is the trace above verbatim, `access_request_approved … disposition=provision` |
+| `APPROVE_MATRIX.get(status, "refuse")` → `"provision"` | **1 failed**, on the "came from somewhere further down" assertion — the weak first version of the same test **survived** this |
+
+`tests/unit/test_signin_requests.py`: **50 → 52 passed.**

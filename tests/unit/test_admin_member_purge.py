@@ -758,9 +758,14 @@ def test_every_person_keyed_cascade_child_is_reported_on_one_side_or_other(
     `gtd_items` and `gtd_projects` (plus the three access-grant tables under
     `app_user`, which are wholly deleted and already listed).
 
-    ⚠️ Mutation-checked: deleting the `synced_projects` row-spec fails here.
-    A migration that hangs another dual-source table off a credential fails
-    here too, which is the point — nobody will notice it by reading.
+    ⚠️ Mutation-checked, and the wording matters: this fires on a table that
+    is on **neither** list — removing both `gtd_projects` row-specs, which is
+    the state that shipped. Removing only the delete-side one is caught by
+    `test_no_keep_clause_survives_a_cascade_on_the_delete_side` instead, and
+    the two together are what make a dual-source table impossible to
+    half-report. A migration that hangs another dual-source table off a
+    credential fails here — which is the point, since nobody will notice it
+    by reading.
     """
     from gateway.routes.admin.members import _PURGE_DELETES, _PURGE_KEEPS
 

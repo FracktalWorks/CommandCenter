@@ -7,6 +7,15 @@ from agent-project-manager's agent-data via scripts/import_hr_people.py.
 This is what makes Clarify capability-aware: the delegation/assignee pickers
 and the proposal heuristic see WHO can do WHAT and who has hours free, not
 just names. Personal phone numbers are never stored or served.
+
+Access (colleague_onboarding.md §4 N4, owner-answered 2026-08-04 — "directory
+open, HR fields restricted"): the roster is org data, so the *directory* stays
+readable by anyone holding `feature:tasks`, but the HR-sensitive half
+(:data:`HR_FIELDS`) is projected away for a caller without
+``admin:members:read``, and every write here is gated on
+``admin:members:manage``. Both permissions and the two seams live in
+``core.py``. ``fetch_people_for_clarify`` is deliberately OUTSIDE that rule —
+see its docstring.
 """
 
 from __future__ import annotations
@@ -19,7 +28,13 @@ from uuid import uuid4
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException, UploadFile
 from gateway.routes.tasks.attachments import _safe_name, _storage_dir
-from gateway.routes.tasks.core import _get_db, _uid, router
+from gateway.routes.tasks.core import (
+    _get_db,
+    _uid,
+    can_read_hr_fields,
+    require_people_write,
+    router,
+)
 from gateway.routes.tasks.resume_parse import parse_resume
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -53,8 +68,54 @@ class OrgPersonModel(BaseModel):
     provider_user_id: str | None = None   # ClickUp user id (assignment target)
 
 
-def _row_to_person(row: Any) -> OrgPersonModel:
-    return OrgPersonModel(
+#: The HR-sensitive half of a person record — everything the owner's N4
+#: answer restricts to `admin:members:read`. The rest of `OrgPersonModel`
+#: (name, email, role, title, department, team, reports_to/manager_id,
+#: status, domain, provider_user_id) is the basic directory and stays visible
+#: to every holder of `feature:tasks`.
+HR_FIELDS: tuple[str, ...] = (
+    "skills",
+    "skills_source",
+    "resume_summary",
+    "years_experience",
+    "capacity_hours_per_week",
+    "current_load_hours_per_week",
+    "available_hours_per_week",
+)
+
+
+def _blank_hr() -> dict[str, Any]:
+    """A fresh empty value per HR field — the projected-away form.
+
+    Fresh containers, not a module-level dict: a shared `[]`/`{}` would be
+    aliased into every projected model on every request.
+    """
+    return {
+        "skills": [],
+        "skills_source": {},
+        "resume_summary": None,
+        "years_experience": None,
+        "capacity_hours_per_week": None,
+        "current_load_hours_per_week": None,
+        "available_hours_per_week": None,
+    }
+
+
+def _row_to_person(row: Any, *, include_hr: bool) -> OrgPersonModel:
+    """Row → model, with the HR half carried or projected away.
+
+    ``include_hr`` is keyword-only and has **no default**: every call site has
+    to state which audience it is serving, so a route added later cannot
+    inherit the permissive answer by omission.
+
+    The projection is at the SERIALIZATION layer, never in the SQL, for two
+    reasons. (1) ``fetch_people_for_clarify`` runs its own query and must keep
+    seeing everything — a WHERE/SELECT-level projection would silently degrade
+    agent delegation. (2) The response SHAPE is unchanged: restricted fields
+    come back null/empty rather than absent, so the frontend mapper and the
+    generated TS type read the same object either way.
+    """
+    person = OrgPersonModel(
         id=str(row.id),
         name=row.name,
         email=row.email,
@@ -75,22 +136,29 @@ def _row_to_person(row: Any) -> OrgPersonModel:
         available_hours_per_week=row.available_hours_per_week,
         provider_user_id=row.clickup_user_id,
     )
+    if include_hr:
+        return person
+    return person.model_copy(update=_blank_hr())
 
 
 @router.get("/people", response_model=list[OrgPersonModel])
 async def list_people(
     q: str = "",
     include_inactive: bool = False,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ):
-    """The org's people. `q` filters by name/role/department/skill."""
+    """The org's people. `q` filters by name/role/department — and by skill,
+    but only for a caller who may see skills: matching on a column that is
+    then stripped from the response turns the search box into an oracle for
+    the field the projection exists to hide."""
+    hr = can_read_hr_fields(user)
     clauses = ["true"] if include_inactive else ["status = 'active'"]
     params: dict[str, Any] = {}
     if q.strip():
-        clauses.append(
-            "(name ILIKE :q OR role ILIKE :q OR department ILIKE :q "
-            "OR EXISTS (SELECT 1 FROM unnest(skills) s WHERE s ILIKE :q))"
-        )
+        match = "(name ILIKE :q OR role ILIKE :q OR department ILIKE :q"
+        if hr:
+            match += " OR EXISTS (SELECT 1 FROM unnest(skills) s WHERE s ILIKE :q)"
+        clauses.append(match + ")")
         params["q"] = f"%{q.strip()}%"
     db = await _get_db()
     try:
@@ -99,7 +167,7 @@ async def list_people(
                  + " ORDER BY department, name"),
             params,
         )).fetchall()
-        return [_row_to_person(r) for r in rows]
+        return [_row_to_person(r, include_hr=hr) for r in rows]
     finally:
         await db.close()
 
@@ -109,6 +177,13 @@ async def fetch_people_for_clarify(db: Any) -> list[dict[str, Any]]:
     skills + availability + the reporting line (§5, Phase 2). Used by
     ai.clarify_item (org people first; the caller falls back to provider
     members when this is empty).
+
+    ⚠️ **Deliberately outside the N4 read projection.** It takes ``db`` and no
+    user because it is never reached through the router: every caller is an
+    in-process server-side path (``ai.py``, ``capture_email.py``,
+    ``planning.py``). It must keep returning FULL data — this is the
+    capability-aware delegation the roster exists for, and narrowing it would
+    degrade agent delegation silently rather than protect anybody.
 
     ``manager_name`` resolves the structured ``manager_id`` FK (a self-join),
     falling back to the free-text ``reports_to`` display name — so the clarify
@@ -149,6 +224,11 @@ async def fetch_people_for_clarify(db: Any) -> list[dict[str, Any]]:
 
 # ── Write surface: the app is now the source of truth for HR data ─────────────
 # (user decision 2026-07-16). Edits stamp source='manual'/'resume' + updated_by.
+#
+# Being the source of truth for HR data is exactly why these are ADMIN writes:
+# every route below carries `require_people_write()` (`admin:members:manage`)
+# as a route dependency — N4, owner-answered 2026-08-04. `POST /people/embed`
+# in capability.py is the fourth; count routes, not call sites.
 
 
 class PersonWrite(BaseModel):
@@ -187,12 +267,15 @@ async def _get_person_row(db: Any, person_id: str) -> Any:
     return row
 
 
-@router.post("/people", response_model=OrgPersonModel, status_code=201)
+@router.post("/people", response_model=OrgPersonModel, status_code=201,
+             dependencies=[require_people_write()])
 async def create_person(
     body: PersonWrite,
     user: UserContext = Depends(get_current_user),
 ):
-    """Add a person to the org (manual entry). `name` is required + unique."""
+    """Add a person to the org (manual entry). `name` is required + unique.
+
+    Admin-only (`admin:members:manage`)."""
     name = (body.name or "").strip()
     if not name:
         raise HTTPException(status_code=400, detail="name is required")
@@ -233,19 +316,23 @@ async def create_person(
              "clickup_user_id": body.clickup_user_id, "updated_by": _uid(user)})
         await db.commit()
         await _reembed_capability(db, pid)
-        return _row_to_person(await _get_person_row(db, pid))
+        # include_hr: the route gate already proved this caller is an admin.
+        return _row_to_person(await _get_person_row(db, pid), include_hr=True)
     finally:
         await db.close()
 
 
-@router.patch("/people/{person_id}", response_model=OrgPersonModel)
+@router.patch("/people/{person_id}", response_model=OrgPersonModel,
+              dependencies=[require_people_write()])
 async def update_person(
     person_id: str,
     body: PersonWrite,
     user: UserContext = Depends(get_current_user),
 ):
     """Edit a person (title/role/manager/skills/capacity/ClickUp link). Skills
-    replace the array; each skill keeps its prior provenance, new ones = manual."""
+    replace the array; each skill keeps its prior provenance, new ones = manual.
+
+    Admin-only (`admin:members:manage`)."""
     fields = body.model_dump(exclude_unset=True)
     db = await _get_db()
     try:
@@ -288,7 +375,8 @@ async def update_person(
             params)
         await db.commit()
         await _reembed_capability(db, person_id)
-        return _row_to_person(await _get_person_row(db, person_id))
+        return _row_to_person(
+            await _get_person_row(db, person_id), include_hr=True)
     finally:
         await db.close()
 
@@ -300,14 +388,17 @@ class ResumeIngestResult(BaseModel):
     person: OrgPersonModel
 
 
-@router.post("/people/{person_id}/resume", response_model=ResumeIngestResult)
+@router.post("/people/{person_id}/resume", response_model=ResumeIngestResult,
+             dependencies=[require_people_write()])
 async def ingest_resume(
     person_id: str,
     file: UploadFile,
     user: UserContext = Depends(get_current_user),
 ):
     """Upload a résumé (PDF/DOCX/TXT), parse it, and MERGE the extracted skills +
-    profile into the person — 'ingest résumés to automatically update skills'."""
+    profile into the person — 'ingest résumés to automatically update skills'.
+
+    Admin-only (`admin:members:manage`)."""
     fname = _safe_name(file.filename or "resume")
     ext = Path(fname).suffix.lower()
     if ext not in _RESUME_EXT:
@@ -378,7 +469,8 @@ async def ingest_resume(
         await _reembed_capability(db, person_id)
         return ResumeIngestResult(
             resume_id=rid, added_skills=added, extracted=extracted,
-            person=_row_to_person(await _get_person_row(db, person_id)))
+            person=_row_to_person(
+                await _get_person_row(db, person_id), include_hr=True))
     finally:
         await db.close()
 

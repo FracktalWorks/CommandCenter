@@ -52,7 +52,9 @@ export type Feature = {
   label: string;
   description: string;
   nav_href: string;
-  category: "apps" | "configure" | "build";
+  /** feature_catalog.category, passed through verbatim by the gateway.
+   *  `centers` was added by 140_center_features.sql. */
+  category: "apps" | "configure" | "build" | "centers";
   sort_order: number;
   is_default: boolean;
   permission: string;

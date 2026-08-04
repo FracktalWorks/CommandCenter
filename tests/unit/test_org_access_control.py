@@ -10,6 +10,9 @@ shouldn't.
 """
 from __future__ import annotations
 
+import re
+from pathlib import Path
+
 import pytest
 from fastapi import Depends, FastAPI
 from fastapi.testclient import TestClient
@@ -203,8 +206,18 @@ def test_decision_explains_its_provenance() -> None:
 
 
 def test_allowed_features_follows_catalog_order() -> None:
-    access = build_access(["feature:*"])
-    assert access.allowed_features() == FEATURES
+    """Catalog order, not grant order — the access editor renders this list.
+
+    Written against literals because the obvious form,
+    ``build_access(["feature:*"]).allowed_features() == FEATURES``, compares
+    the tuple with itself: ``allowed_features()`` is built by filtering
+    FEATURES, so that assertion is green for any contents, in any order, and
+    stayed green under a mutation that emptied the Centers half.
+    """
+    access = build_access(
+        ["feature:center.sales", "feature:notes", "feature:chat"]
+    )
+    assert access.allowed_features() == ("chat", "notes", "center.sales")
 
 
 # ── Agent inheritance ───────────────────────────────────────────────────────
@@ -235,6 +248,143 @@ def test_every_declared_permission_is_valid() -> None:
         validate_permission(feature_permission(slug))
     for cap in CAPABILITIES:
         validate_permission(cap)
+
+
+#: The Centers the product commits to — department_centers.md §1, seeded in
+#: that order by infra/postgres/140_center_features.sql.
+#:
+#: Retyped here ON PURPOSE, and it is the only list in this file that is. Every
+#: other copy (``CENTER_GROUP_SLUGS``, ``FEATURES``, ``lib/centers.ts``) is a
+#: *derivation source* for the checks below, and a check written only against
+#: its own source goes green when that source empties. That is not
+#: hypothetical: the first version of ``test_every_center_has_a_feature_slug``
+#: iterated ``CENTER_GROUP_SLUGS``, so emptying that tuple to ``()`` turned the
+#: test into a no-op that still passed. This literal is the anchor that makes
+#: shrinking any of the three loud. Changing the set of Centers therefore means
+#: editing this line — deliberately — and department_centers.md §4 lists every
+#: other place that same edit has to land.
+EXPECTED_CENTER_SLUGS: tuple[str, ...] = (
+    "sales", "marketing", "finance", "operations", "people", "company",
+)
+
+#: The frontend Center registry — the file `lib/nav.ts` and `lib/access.ts`
+#: both derive from, i.e. the list that decides what actually renders.
+CENTERS_TS = (
+    Path(__file__).resolve().parents[2]
+    / "workbench" / "control_plane" / "src" / "lib" / "centers.ts"
+)
+
+#: Matches ``feature: "center.sales",`` — an assignment whose value is a string
+#: literal, so the ``feature: string;`` line in the `Center` type is not a hit.
+#: That every Center *has* the field is TypeScript's job (`npx tsc --noEmit`);
+#: this only reads what each one says.
+_CENTER_TS_FEATURE_RE = re.compile(r'^\s*feature:\s*"([^"]+)"\s*,?\s*$', re.MULTILINE)
+
+
+def _centers_ts_features() -> list[str]:
+    """Every ``feature:`` value declared in `lib/centers.ts`, in file order.
+
+    Parsed, never retyped: a hand-copied list drifts in exactly the way the
+    thing it is meant to catch drifts.
+    """
+    assert CENTERS_TS.is_file(), (
+        f"{CENTERS_TS} is missing — the Center registry the UI reads has moved "
+        "or been deleted. This is a failure, not a skip: the pairing it is "
+        "pinned to is precisely the thing that breaks silently, so an "
+        "unenforceable invariant must be loud. Point CENTERS_TS at the new "
+        "location."
+    )
+    declared = _CENTER_TS_FEATURE_RE.findall(CENTERS_TS.read_text(encoding="utf-8"))
+    assert declared, (
+        f"No `feature: \"...\"` declarations found in {CENTERS_TS}. Either the "
+        "registry is empty or its shape changed and this parser no longer "
+        "reads it — both leave the vocabulary unpinned."
+    )
+    return declared
+
+
+def test_every_center_has_a_feature_slug() -> None:
+    """A Center seeded in SQL but missing from FEATURES is unreachable.
+
+    ``allowed_features()`` iterates FEATURES, not ``feature_catalog``, and
+    ``/auth/me`` returns exactly that list — so a slug absent here is invisible
+    to the nav and to AccessGate for EVERY principal, including an owner
+    holding ``*`` (the wildcard is only matched against these literals). That
+    was the live defect: migration 140 seeded six ``center.*`` catalog rows and
+    ``routes/admin/groups.py`` has been writing ``allow feature:center.<slug>``
+    overrides the product could never display.
+
+    Pinned against ``EXPECTED_CENTER_SLUGS`` first, because iterating
+    ``CENTER_GROUP_SLUGS`` alone makes the check evaporate along with its
+    source — dropping a slug from that tuple would silently narrow what is
+    being checked instead of failing.
+    """
+    from gateway.routes.admin.groups import CENTER_GROUP_SLUGS
+
+    assert CENTER_GROUP_SLUGS == EXPECTED_CENTER_SLUGS, (
+        f"CENTER_GROUP_SLUGS is {CENTER_GROUP_SLUGS}, expected "
+        f"{EXPECTED_CENTER_SLUGS}. Group slug = Center slug, 1:1 "
+        "(department_centers.md §1). If the set of Centers really changed, "
+        "update EXPECTED_CENTER_SLUGS here and every other registration point "
+        "in department_centers.md §4."
+    )
+
+    missing = [
+        feature_permission(f"center.{slug}")
+        for slug in EXPECTED_CENTER_SLUGS
+        if f"center.{slug}" not in FEATURES
+    ]
+    assert not missing, (
+        f"Center features seeded/granted but absent from FEATURES: {missing}. "
+        "They would be unreachable for every member, owners included."
+    )
+
+
+def test_centers_registry_matches_the_feature_vocabulary() -> None:
+    """`lib/centers.ts` is the registry the UI renders — pin it to FEATURES.
+
+    `lib/nav.ts` builds the Centers nav section from `CENTERS` and
+    `lib/access.ts` builds the ``/centers/<slug>`` → ``center.<slug>`` route
+    map from it, so a Center declared there whose feature is absent from
+    FEATURES is dropped from the nav and 403s at AccessGate — for every
+    principal, owner included. That is this branch's whole defect, and until
+    this check existed the documented recipe for adding a Center reproduced it
+    with a fully green suite.
+
+    Closed in both directions: a `center.*` entry in FEATURES with no Center in
+    the registry is equally wrong (a grantable feature that reaches nothing).
+    """
+    from gateway.routes.admin.groups import CENTER_GROUP_SLUGS
+
+    declared = _centers_ts_features()
+
+    malformed = [f for f in declared if not f.startswith("center.")]
+    assert not malformed, (
+        f"Centers declaring a non-`center.*` feature in {CENTERS_TS.name}: "
+        f"{malformed}. The slug↔feature naming rule is department_centers.md §1."
+    )
+
+    unreachable = [f for f in declared if f not in FEATURES]
+    assert not unreachable, (
+        f"Centers in {CENTERS_TS.name} whose feature is absent from FEATURES: "
+        f"{unreachable}. The nav pane is dropped and /centers/<slug> denies "
+        "everyone, owners included. Add the slug to FEATURES (and to the "
+        "feature_catalog migration) — department_centers.md §4."
+    )
+
+    in_features = {f for f in FEATURES if f.startswith("center.")}
+    assert in_features == set(declared), (
+        f"FEATURES lists {sorted(in_features)} but {CENTERS_TS.name} declares "
+        f"{sorted(declared)}. A grantable `center.*` feature with no Center "
+        "behind it reaches nothing."
+    )
+
+    slugs = {f.removeprefix("center.") for f in declared}
+    assert slugs == set(CENTER_GROUP_SLUGS), (
+        f"Center slugs {sorted(slugs)} do not match the groups "
+        f"{sorted(CENTER_GROUP_SLUGS)}. Group slug = Center slug, 1:1 — a "
+        "Center with no group cannot be granted as one admin action."
+    )
 
 
 def test_agent_service_is_not_assignable_to_people() -> None:

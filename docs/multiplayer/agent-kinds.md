@@ -1,7 +1,16 @@
 # Personal vs Shared Agents
 
-**Status:** Draft / RFC · **Date:** 2026-07-26 · **Owner:** vjvarada
+**Status:** Draft / RFC — **§6's roster is aspirational, not a work list** (see the
+warning there) · **Date:** 2026-07-26, updated 2026-08-01 (doc-truth pass) ·
+**Verified against code:** 2026-08-03 (WS-14 doc remediation — §6 only) ·
+**Owner:** vjvarada
 **Companion to:** [`README.md`](README.md) (rooms) · [`memory-clearance.md`](memory-clearance.md) (memory compartments)
+
+> **Header correction 2026-08-03 (R4).** This file read `Draft / RFC · 2026-07-26`
+> while carrying 2026-08-01 update blocks in the body. The date now reflects both.
+> Also note its **path**: this document lives at `docs/multiplayer/agent-kinds.md`, not
+> under `ai-company-brain/specs/` — `work_plan.md` §4 cited it as if it were a spec and
+> was corrected in the same change.
 
 Which agents are one-per-person and which are one-brain-for-the-team — and what that
 decides about memory, sharing, and rooms.
@@ -239,6 +248,37 @@ org-general can be promoted to `org:global` by hand. Bounded, reversible, and it
 > the quarantine of commingled agent data **landed as migration 137**.
 
 Then the actual decision, per agent we have today:
+
+> ⚠️ **This table is a DESIGN PROPOSAL, not a work list — verified 2026-08-03.**
+> Two things about it are load-bearing and were being read the wrong way by
+> `department_centers.md` Phase C:
+>
+> 1. **Seven of the twelve agents below do not exist.** `apps/agents/` holds exactly
+>    six: `agent-apis-config`, `agent-app-builder`, `agent-email-assistant`,
+>    `agent-orchestrator`, `agent-task-manager`, `agent-whatsapp-assistant`. `sales`,
+>    `billing`, `delivery`, `startup-coach`, `triage`, `reconciler` and `strategy` are
+>    all hypothetical here. A ticket cannot "make sales team-instanced"; it would first
+>    have to build a sales agent. *(`reconciler` is a **service** at
+>    `apps/services/reconciler/`, not a loadable agent — a third distinct thing.)*
+> 2. **For three agents that DO exist, this table contradicts shipped config.** It
+>    assigns `task-manager` (`:288`), `orchestrator` (`:295`) and `app-builder`
+>    (`:296`) **personal** instancing. All three `config.json` files say
+>    `"instancing": "shared"`. The measured state of the six is **four `shared`**
+>    (apis-config, app-builder, orchestrator, task-manager) **+ two `personal`**
+>    (email-assistant, whatsapp-assistant).
+>
+> **Why that matters more than a doc nit.** `instancing` is the state-partition key.
+> Flipping any of the three to `personal` to "match the roster" makes
+> `AgentManifest.instance_key()` (`packages/acb_skills/acb_skills/manifest.py:235-246`)
+> return `u:<email>` instead of `''`, which moves `memory_scope()` from `agent:<slug>`
+> to `agent:<slug>#u:<email>` and `blob_instance()` likewise — **every existing memory
+> and blob silently becomes unreachable from the running agent.** That is a data
+> migration (§6's own quarantine-then-review procedure, shipped as migration 137),
+> not a config edit, and it is explicitly **not** in `department_centers.md` C3.
+>
+> Reconciling this table with the shipped configs — annotating it as aspirational, or
+> writing the migration plan — is C3 step 2. Until then, **the `config.json` files are
+> the truth and this table is the proposal.**
 
 | Agent | Instancing | Visibility | Shareable | Why |
 |---|---|---|---|---|

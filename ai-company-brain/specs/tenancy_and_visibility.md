@@ -1,9 +1,35 @@
 # Tenancy and visibility — who can see what
 
 **Status:** Architecture of record · owner-answered 2026-08-03 · **Date:** 2026-08-03 ·
-**Verified against code:** 2026-08-03 (every claim below re-measured against the tree at
-`520476ab`; the measurement is quoted inline so a later reader can re-run it) ·
-**Owner:** vjvarada
+**Verified against code:** 2026-08-03, **re-verified and corrected 2026-08-03** against
+`ws-14-doc-remediation` (parent `bebbd924`) · **Owner:** vjvarada
+
+> **Correction pass, 2026-08-03 (WS-14 doc remediation).** The first header claimed
+> every claim was "re-measured against the tree at `520476ab`". **Six anchors were wrong
+> at that commit** and are fixed here — §2 TV-1 anchors a and b, §3.2's repeat of anchor
+> a, §1.1 leak-sites 4 and 5, and the §5 Agents row's *"nothing writes it"*, which was
+> factually false (`acb_skills/manifest.py:245` writes `t:<team>`; what is absent is a
+> shipped config that asks for it — so team instancing may need **config, not code**).
+> Anchor c (`access.py:330-336`) was correct and is unchanged. Re-measured with
+> `grep -n` against the working tree on the date above; every corrected line number is
+> reproducible with the §7 commands. **Read the numbers here, not the ones any other doc
+> quotes** — `work_plan.md` D11/D12 and the WS-14 row carried the same stale ranges and
+> were corrected in the same change.
+
+> **Repair round, 2026-08-03 (review REQUEST-CHANGES on the pass above).** Three fixes
+> here. (1) **`_load_room_row` does not exist** — §2 anchor a and §2 done-when 2 named
+> it; the function is **`_load_room`** (`gateway/rooms.py:149`), and `_load_room_state`
+> (`routes/rooms.py:118`) is a *different* function, so the wrong name pointed at real
+> but unrelated code. The line ranges were right; only the symbol was wrong.
+> (2) **WS-14a done-when 2 had no home its own command could reach** — §7 names
+> `test_app_grants.py` and `test_org_access_control.py` as the wholly hermetic files,
+> but done-when 5's command listed only the two `skipif` files, so quoting it verified
+> the DB-backed half and nothing else. Done-when 2 now names
+> `tests/unit/test_org_access_control.py` and done-when 5's command includes it.
+> (3) **§4.1's "one shared validator" named no module, and no shared home exists** —
+> it now names `packages/acb_auth/acb_auth/permissions.py` and justifies it, drops
+> `role` from the proposed schema, records the previously-unconsidered "reuse
+> `app_grants`" alternative, and cross-references the board as **D13**.
 
 **Purpose.** Two audits asked whether the multi-tenant foundation is complete. It is
 not built, and the owner's answer is that it should not be. This document records
@@ -65,8 +91,8 @@ org B. Verified samples, so a reader can judge the class:
 | 1 | `routes/admin/_common.py:96-112` | `get_org_id()` resolves the org by the literal `DEFAULT_ORG_SLUG = "default"` (`:36`) |
 | 2 | `routes/admin/_common.py:115-129` | `get_member()` looks a member up by email with **no** org predicate |
 | 3 | `routes/admin/members.py:170-178` | invite is `INSERT … ON CONFLICT (email) DO UPDATE SET organization_id = EXCLUDED.organization_id` — under two orgs this is an account-takeover primitive |
-| 4 | `gateway/rooms.py:184-190` | the `in_org` check is `SELECT 1 FROM app_user WHERE email = :email AND status='active'` — no org filter |
-| 5 | `gateway/rooms.py:346-356` | `SESSION_VISIBLE_SQL`'s org-visible arm, same shape, same absence |
+| 4 | `gateway/rooms.py:201-211` | the `in_org` check is `SELECT 1 FROM app_user WHERE email = :email AND COALESCE(status, 'active') = 'active'` (SQL at `:205-208`) — no org filter. *(Corrected 2026-08-03: the old citation `:184-190` and its `status='active'` quote were both wrong — `:184-190` is the `group_slugs` comprehension plus the head of the `my_groups` query, and the real predicate is `COALESCE`-wrapped.)* |
+| 5 | `gateway/rooms.py:384-393` | `SESSION_VISIBLE_SQL`'s `org`-participant arm — an `EXISTS` on a `subject = 'org'` row `AND` an `EXISTS` on an active `app_user`, same shape, same absence. The adjacent `s.visibility = 'org'` arm at `:394-400` has it too. *(Corrected 2026-08-03 from `:346-356`, which is the tail of `resolve_room_access`'s return — `is_shared`, `members`, `visibility` — and not SQL at all.)* |
 | 6 | `acb_auth/access.py:338-340` | `_ORG_MEMBER_SQL` is `SELECT email FROM app_user WHERE status = 'active'` — the `org` subject expands to *every* active user on the box |
 | 7 | `infra/postgres/130_org_access_control.sql:180` | role seeding does `SELECT id INTO org_id FROM organization WHERE slug = 'default'` (same in `131:` and `133:`) |
 | 8 | `acb_auth/access.py:439-458` | `_BOOTSTRAP_OWNER_SQL` hardcodes `slug = 'default'` |
@@ -125,6 +151,14 @@ retiring that constraint.
 
 ## 2. TV-1 — the three leaks that survive this decision *(AGENT-SAFE · 1 small PR)*
 
+> **Board row: `work_plan.md` §2 · WS-14a.** Until 2026-08-03 this ticket existed only
+> here, and §4 assigned it to a *spec*, not a workstream — so the corpus's most
+> dispatch-ready item could not be dispatched, because the loop selects from §2. It now
+> has a row. It is numbered **WS-14a** rather than a fresh WS-n because it is the
+> `org_group`-join half of the same subject-vocabulary surface WS-14 generalises: TV-1
+> makes the `group:` expansion correct, WS-14 spreads it to more surfaces. They are
+> independent PRs and either may land first.
+
 `org_group` is joined on **slug alone** at three places. Slug is unique only
 *within* an organization — `UNIQUE (organization_id, slug)`
 (`138_groups_and_session_participants.sql:49`) — so a slug-only join is a
@@ -138,9 +172,14 @@ Getting a wider group than intended there widens, it does not narrow.
 
 | Anchor | Symbol | The join |
 |---|---|---|
-| a | `apps/services/gateway/gateway/rooms.py:170-179` | `SELECT g.slug FROM org_group g JOIN org_group_member m … WHERE u.email = :email AND g.slug = ANY(:slugs)` |
-| b | `apps/services/gateway/gateway/rooms.py:332-340` | `SESSION_VISIBLE_SQL`: `JOIN org_group g ON g.slug = substring(p.subject from 7)` |
+| a | `apps/services/gateway/gateway/rooms.py:181-199` (the `SELECT g.slug` is at `:192`) | `SELECT g.slug FROM org_group g JOIN org_group_member m … WHERE u.email = :email AND g.slug = ANY(:slugs)` — inside **`_load_room`** (`rooms.py:149`), feeding `my_groups` |
+| b | `apps/services/gateway/gateway/rooms.py:368-403` (`SESSION_VISIBLE_SQL` opens at `:368`; the slug join is at `:377`) | `SESSION_VISIBLE_SQL`: `JOIN org_group g ON g.slug = substring(p.subject from 7)` |
 | c | `packages/acb_auth/acb_auth/access.py:330-336` | `_GROUP_MEMBER_SQL`: `WHERE g.slug = :slug AND au.status = 'active'` |
+
+*(Anchors a and b were `:170-179` and `:332-340` until 2026-08-03 and were wrong at
+`520476ab` too: `:170-179` is `if row is None` plus the participant fetch, and `:332-340`
+is the tail of `resolve_room_access`'s return value. Anchor c was and is correct.
+Re-derive all three with the `grep -n "org_group"` command in §7 before editing.)*
 
 **Done when:**
 
@@ -149,17 +188,60 @@ Getting a wider group than intended there widens, it does not narrow.
    the acting user's `app_user.organization_id`, so the predicate is *derived* and
    cannot go stale when §1 is revisited. A hardcoded `slug='default'` join does
    **not** satisfy this: it swaps one wrong constant for another.
-2. A hermetic test seeds **two** `organization` rows and two identically-slugged
-   `org_group` rows (one per org) with disjoint members, and asserts that
-   `resolve_session_access` for a room whose participant subject is
-   `group:<slug>` expands to **only** org A's members. The test must be verified
-   **red** against the current joins before the fix — a test that passes on today's
-   code is testing nothing.
-3. The same two-org fixture asserts `rooms.py`'s `my_groups` set and
-   `SESSION_VISIBLE_SQL` do not admit the org-B member.
+2. **The hermetic half — a test that cannot skip, verified red first.** Both files
+   §7 names as the extension point open with
+   `pytest.mark.skipif(not _db_ready(), …)` (`tests/unit/test_session_authority.py:33-51`,
+   `tests/unit/test_rooms.py:33-52`), so a fixture added there **skips green** with no
+   Postgres up and "verified red" is unsatisfiable against it. The red-first obligation
+   therefore attaches to a test that needs no database: assert, as strings, that each of
+   the three queries carries an organization predicate.
+   - **Where it lives — named, because the mandated command in done-when 5 reaches
+     neither skipping file's hermetic half:** `tests/unit/test_org_access_control.py`.
+     §7 measures it as one of the two *wholly* hermetic files in this area (no DB, no
+     skip, verified 2026-08-03), it already imports `acb_auth.access` where anchor c's
+     constant lives, and `tests/unit/test_admin_groups.py` shows a gateway module being
+     imported from a hermetic unit test, so pulling in `gateway.rooms` for anchors a
+     and b is established practice. A **new** file is acceptable instead — but only if
+     it carries no `_db_ready()` guard and is added to done-when 5's command; the
+     default is the named file, so this criterion always has a home.
+   - `SESSION_VISIBLE_SQL` (`gateway/rooms.py:368`) and `_GROUP_MEMBER_SQL`
+     (`acb_auth/access.py:330`) are already module-level constants — import and assert
+     on them directly.
+   - Anchor a's query is an inline string inside **`_load_room`**
+     (`gateway/rooms.py:149` — *the name was published as `_load_room_row` until
+     2026-08-03; no such symbol exists, and `_load_room_state`
+     (`routes/rooms.py:118`) is a **different** function, so the wrong name pointed
+     at real but unrelated code*). **Lift it to a
+     module-level constant** (e.g. `MY_GROUPS_SQL`) as part of this PR, so the same
+     assertion reaches all three. That extraction is the reason this criterion is
+     buildable rather than a wish.
+   - Verified **red** before the fix: run it against the current joins and quote the
+     failure. A string test that passes on today's code is testing nothing.
+3. **The behavioural half — DB-backed, and it must be shown to have actually run.**
+   A fixture seeds **two** `organization` rows and two identically-slugged `org_group`
+   rows (one per org) with disjoint members, and asserts that `resolve_session_access`
+   for a room whose participant subject is `group:<slug>` expands to **only** org A's
+   members, and that `rooms.py`'s `my_groups` set and `SESSION_VISIBLE_SQL` do not
+   admit the org-B member. This belongs beside the existing `_needs_db` tests and will
+   carry that marker. **Because it can skip, the PR must quote a run in which it did
+   not:** the pytest output for the named node ids must read `passed`, never `skipped`
+   or `no tests ran`. `-q` output that shows only a summary line does not discharge
+   this — use `-v` or `-rs` so the skip reasons are printed.
 4. `uv run ruff check <the files you touched>` is clean. Do **not** write
    "`uv run ruff check .` clean" — that command reports ~1983 pre-existing errors on
    this tree and is not a signal.
+5. **Verification commands** (name the files; never `pytest tests/unit/` as a
+   directory — whole-directory collection hangs against this box's live DB):
+   ```
+   uv run pytest tests/unit/test_session_authority.py tests/unit/test_rooms.py \
+                 tests/unit/test_org_access_control.py -v -rs
+   uv run ruff check apps/services/gateway/gateway/rooms.py \
+                     packages/acb_auth/acb_auth/access.py
+   ```
+   The third file is **not optional garnish** — it is the only one of the three that
+   runs done-when 2. The first two both `skipif` without a database, so quoting a run
+   of just those two verifies the DB-backed half and *nothing else*. If done-when 2
+   was placed in a new hermetic file instead, name that file here too.
 
 **Non-goals.** Do not add `organization_id` to any other table, do not thread
 `UserContext.organization_id` into unrelated queries, and do not touch sites 1–10 in
@@ -206,7 +288,8 @@ same `org_group_member` table.
 `routes/rooms.py::_valid_subject` (`:100-111`) accepts `org` · `group:<slug>` ·
 an email, and `chat_session.visibility` is `CHECK (visibility IN ('private',
 'people', 'org'))` (`138_…sql:83`) — the same three tiers, in shipped code, with
-group membership resolved at read time (`gateway/rooms.py:163-179`) rather than
+group membership resolved at read time (`gateway/rooms.py:181-199` — corrected
+2026-08-03 from `:163-179`, the same stale range as §2 anchor a) rather than
 denormalised.
 
 **Correction to the framing that reached this document.** The brief asserted that
@@ -216,9 +299,15 @@ ends:
 - `routes/apps/grants.py::is_valid_subject` (`:68-85`) is `email | agent:<name> |
   agents:*` and **explicitly rejects the literal `org`** (`:77`) with the rationale
   that `apps.visibility='org'` already means it. It has **no** `group:` case.
-- `routes/rooms.py::_valid_subject`'s own docstring claims it is *"Identical to
-  `routes/apps/grants.is_valid_subject` on purpose."* **That docstring is false** —
-  the two functions are disjoint on `org`, `group:` and `agent:`.
+- `routes/rooms.py::_valid_subject`'s own docstring claimed it was *"Identical to
+  `routes/apps/grants.is_valid_subject` on purpose."* **That was false** — the two
+  functions are disjoint on `org`, `group:` and `agent:` — and it was **corrected
+  2026-08-03** in a docstring-only edit (no executable line touched). The replacement
+  was written to be **line-count-neutral**, so `_valid_subject` still spans `:100-111`
+  and the correction still sits on `:103`: every anchor this document, `work_plan.md`
+  D12 and `docs/multiplayer/memory-clearance.md` publish into that file remains valid.
+  Keep that discipline when editing prose inside heavily-cited modules — an anchor-only
+  fix that silently moves eight other anchors is a net regression.
 
 So the primitive is **rooms-only** today. Apps have the *tier* vocabulary
 (`private|people|org`, `114_custom_apps.sql:30-31`) but a grant subject that cannot
@@ -240,9 +329,12 @@ its own subject grammar.
   exists (owned by `email_app_master_plan.md`, sequenced by WS-14, per D5).
 - **Tasks / GTD** — `gtd_items.user_id TEXT NOT NULL`
   (`48_task_manager_gtd.sql:91`), filtered on 27 query sites in `routes/tasks/items.py`.
-- **Notes / meetings** — `meeting.owner_email` (`95_note_taker.sql:38`). Nullable
-  and, until PR #346, not filtered on read. Private is the intended tier; PR #346 is
-  what makes it true.
+- **Notes / meetings** — `meeting.owner_email` (`95_note_taker.sql:38`). Nullable, and
+  **filtered on read since PR #346 merged as `d2ef7fa0` (2026-08-03)** — the predicate
+  lives once in `routes/notes/core.OWNED_MEETING_PREDICATE` and is applied both in the
+  list SQL and in `load_owned_meeting`. Private is now the true tier, not just the
+  intended one. Rows with a NULL `owner_email` (pre-migration-95 legacy) stay visible to
+  every feature holder by deliberate exception — see `routes/notes/meetings.py:1-27`.
 - **Memory (personal)** — the `<email>` scope; `prefs:` likewise.
 
 **Shareable, with the tier stated on the row:**
@@ -305,6 +397,71 @@ between select users of different departments"), so the cross-Center project cas
 would need a *second* mechanism the day after it shipped. A grant table is
 single-valued when it has one row.
 
+### 4.1 Where the project grant table lives *(the first decision the tasks slice makes)*
+
+`DECISION (agent-proposed, owner may overrule) — 2026-08-03.` Registered on the board as
+**D13** (`work_plan.md` §3) so it is discoverable without reading this section.
+§8 used to defer this
+("`gtd_*` vs a shared `object_grants`… WS-14's design call"), which made the tasks team
+slice undispatchable: acceptance cannot name a table the implementer is also being asked
+to invent. It is decided here so it stops blocking, and recorded as overrulable so the
+owner keeps the call.
+
+> **A `gtd_*`-local table — `gtd_project_grant (project_id, subject, granted_by,
+> created_at)` — not a polymorphic `object_grants`, and not `app_grants`.**
+
+**No `role` column.** The draft carried one, copied from `app_grants.role`
+(`114_custom_apps.sql:61-62`). Cut 2026-08-03: `app_grants.role` is read by `can_edit`
+(`routes/apps/_common.py:473`), whereas every clause of the tasks slice's acceptance
+(`department_centers.md` C1) is a **read**-path clause, so a project grant's role would
+have one legal value and no reader. Write-through-grant ("may a grantee edit items in a
+granted project?") is a real, *unanswered* question; when it is answered it arrives as
+`ALTER TABLE … ADD COLUMN role` at the next free migration number (R1), additive and
+backfill-free. See C1's boxed note for the full reasoning.
+
+**Why.** `app_grants` already exists and is per-surface. A shared `object_grants` would
+therefore be a *second* grant shape on day one unless it also migrated `app_grants` —
+which is out of any tasks ticket's scope, so the "one table" argument buys nothing it
+promises. A local table also keeps referential integrity (a real FK onto
+`gtd_projects`), which a polymorphic `(object_type, object_id)` key cannot have. What
+must **not** fork is the *subject grammar*: §3.2's standing rule forbids "a per-app grant
+table with its own subject grammar", not a per-app grant table. One shared validator
+accepting `email | group:<slug> | org` satisfies the rule; two validators would not.
+
+**Where that shared validator lives — `packages/acb_auth/acb_auth/permissions.py`,
+exported from `acb_auth/__init__.py`.** Named here because "the shared validator" named
+no module and **no shared home exists**: the only two subject validators today are
+route-local and disjoint, `routes/rooms.py::_valid_subject` (`:100-111`) and
+`routes/apps/grants.py::is_valid_subject` (`:68-85`), so an implementer told to reuse
+"the shared one" would have had to import a *private* symbol across route packages and
+the criterion would still have read green. `permissions.py` is the right home because it
+already owns the permission vocabulary, is **pure by contract** (no DB, no FastAPI, no
+I/O — `permissions.py:1-8` and `packages/AGENTS.md`), and every consumer already imports
+`acb_auth`, so it adds no import-graph edge. The tasks slice creates it and is its first
+caller; converting the two existing validators to compose with it is a **named follow-on**
+(their grammars differ, and `rooms.py:100-111` is an anchor four documents publish —
+see the line-count-neutrality rule in §3.2). Acceptance: `department_centers.md` C1
+done-when 5.
+
+**The third alternative, now that it has been asked: reuse `app_grants` itself.**
+Rejected, and not on taste — on its key. `app_grants` is
+`app_id UUID NOT NULL REFERENCES apps(id) ON DELETE CASCADE`, `PRIMARY KEY (app_id,
+subject)` (`114_custom_apps.sql:58-67`). A project is not an app, so reuse means
+dropping that FK and renaming the column to something polymorphic — which *is* the
+`object_grants` option, arrived at by mutating a live table that four Custom-Apps code
+paths read (`grants.py`, `_common.load_grants`, `lifecycle.list_apps:299-301`,
+`can_view`/`can_edit`) instead of by creating a new one. It is strictly the worse way to
+reach the same place: same loss of referential integrity, plus a migration on shipped
+data. If the owner wants one grant table, take the `object_grants` route below, not this
+one.
+
+**What the alternative costs, stated so the overrule is informed.** `object_grants`
+would mean: one expansion helper for every future surface (Notes, Workflows) instead of
+one per surface; but no FK, an index per `object_type`, a platform-level migration
+decision inside an app ticket, and `app_grants` left as an unmigrated exception. If the
+owner takes it, take it as its own ticket that *also* migrates `app_grants` — not as a
+side effect of the tasks slice.
+
 **What WS-14 can now build.** The `dynamic_agents` sharing columns (D3) and the
 tasks team slice both depend on this answer, and both now have one. Note the
 verified constraint: `dynamic_agents` today has **no** owner, visibility or sharing
@@ -324,16 +481,42 @@ Each row verified against code on 2026-08-03. "Honours `group:`" means: a
 | **Chat / rooms** | `chat_session`, `chat_session_participant` | `user_id` owner + `visibility ∈ private/people/org` + participant subjects `email\|group:\|org` | **Yes** — the only one | Nothing. This is the reference implementation. Fix TV-1's two joins here. |
 | **Tasks / GTD** | `gtd_items` (+ `gtd_projects`, `gtd_spaces`) | `user_id TEXT NOT NULL`, filtered on every read | No | A grant table keyed on the project (per §4) and a read path that unions "mine" with "granted to a group I'm in". The 27 `user_id` predicates in `items.py` are the blast radius. |
 | **Email** | `email_accounts` (+ ~20 `email_*` tables hanging off it) | `email_accounts.user_id` | No | Shared mailboxes = a grant on the *account* row, not on messages. Owned by `email_app_master_plan.md` (D5). Per-member provider credentials already exist. |
-| **Notes / meetings** | `meeting`, `transcript_segment`, `meeting_note` | `meeting.owner_email` (nullable, `95_note_taker.sql:38`); read filtering is PR #346's | No | Owner filter first (PR #346), then a grant table. Do not add sharing before the owner filter lands — sharing on an unfiltered surface is decoration. |
-| **Agents** | `dynamic_agents` + `agent_skill_setting` | No owner/visibility column at all; run rights via the `agents:run:<name>` permission | No | D3's sharing columns (WS-14, next free migration number). Note `agent_blob.instance` already reserves `t:<team>` in its vocabulary (`136_agent_blob_instance.sql:27`) but **nothing writes it** — the partition exists, the team case does not. |
+| **Notes / meetings** | `meeting`, `transcript_segment`, `meeting_note` | `meeting.owner_email` (nullable, `95_note_taker.sql:38`), **filtered on read since `d2ef7fa0` / PR #346** via `routes/notes/core.OWNED_MEETING_PREDICATE` | No | **The owner filter has landed; a grant table is the remaining work.** Sharing is now safe to add on top — it would have been decoration before. `routes/notes/meetings.py:17-19` already commits the surface to this document's vocabulary (*"Sharing, when it comes, is the `subject` vocabulary the rooms layer already speaks… deliberately NOT invented here"*), so this is an adopt, not a design. |
+| **Agents** | `dynamic_agents` + `agent_skill_setting` | No owner/visibility column at all; run rights via the `agents:run:<name>` permission | No | D3's sharing columns (WS-14, next free migration number). ⚠️ **Corrected 2026-08-03 — this row previously said `t:<team>` exists "but nothing writes it". That was false.** The writer exists and is wired: `AgentManifest.instance_key()` returns `f"t:{self.sharing.team}"` when `sharing.instancing == "team"` (`acb_skills/manifest.py:242-246`), and it has **four non-test call sites** — `manifest.py:256` (`memory_scope`), `:261` (`blob_instance`), `orchestrator/executor.py:935` (`_resolve_agent_instance`), `gateway/routes/workspace.py:256` (`_agent_instance_for`) — pinned by `tests/unit/test_agent_paths.py:164-201`. The true statement: **no shipped agent config sets `instancing: "team"`, so no `t:` value is produced today** (measured: the six `apps/agents/*/config.json` are four `shared` + two `personal`). Consequence for WS-14: **team instancing may be a config change, not a code change** — do not scope a build for a writer that already runs. |
 | **Memory** | Mem0 (pgvector), keyed by scope string | Five scope shapes: `<email>` · `prefs:` · `room:` · `agent:` · `org:global` (`routes/memory.py:16-56`) | No — `room:` is the nearest thing | A `group:` scope shape, or the `subject:` compartments already specified as **WS-10 S1** (`docs/multiplayer/memory-clearance.md` §7.1). Do not add a sixth shape independently of that slice. |
 | **Workflows** | `workflows`, `workflow_versions`, `workflow_triggers` | `owner_email` is **attribution only**; list query has no owner predicate (`crud.py:91`), delete has none (`:346`) | No | A `visibility` column + grants, if a Center ever wants a private automation. Until then, record the org-wide posture rather than assuming it. |
-| **Apps / blobs** | `apps` + `app_grants`; `agent_blob` + `agent_file_history` | `apps.visibility ∈ private/people/org`; `app_grants.subject ∈ email\|agent:<name>\|agents:*` — `org` explicitly rejected (`grants.py:77`); `agent_blob.instance ∈ ''\|u:<email>\|t:<team>` | No | Add `group:<slug>` to `is_valid_subject` and expand it at read time, mirroring `rooms.py`. Fix the false "identical to grants.is_valid_subject" docstring at `rooms.py:103` in the same change. |
+| **Apps / blobs** | `apps` + `app_grants`; `agent_blob` + `agent_file_history` | `apps.visibility ∈ private/people/org`; `app_grants.subject ∈ email\|agent:<name>\|agents:*` — `org` explicitly rejected (`grants.py:77`); `agent_blob.instance ∈ ''\|u:<email>\|t:<team>` | No | Add `group:<slug>` to `is_valid_subject` and expand it at read time, mirroring `rooms.py`. Shape measured — see §5.1. Fix the false "identical to grants.is_valid_subject" docstring at `rooms.py:103` in the same change *(done ahead of it, 2026-08-03, as a docstring-only edit — the claim was actively misleading implementers)*. |
 
 **Reading the table.** Rooms is the reference. Apps is the cheapest next
 conversion (it already has the tiers; it is missing one subject case). Tasks is the
-one §4 unblocks. Notes is sequenced behind PR #346. Workflows is a posture decision
-before it is a code change.
+one §4 unblocks. Notes's owner filter has landed (`d2ef7fa0`), so its remaining work
+is a grant table. Workflows is a posture decision before it is a code change.
+
+### 5.1 The Apps conversion, measured *(so it is not re-derived)*
+
+`GET /apps` is `list_apps` at `routes/apps/lifecycle.py:289-337`. It already pulls
+**every** grant in one ungrouped statement — `SELECT app_id, subject, role FROM
+app_grants` (`:299-301`) — buckets them into `by_app` (`:321-323`) and decides
+visibility **in Python**, `can_view(row, user, grants)` at `:331`. There is no
+per-subject SQL predicate to widen, which is why this surface is cheap: adding
+`group:` needs
+
+1. the `group:<slug>` case in `is_valid_subject` (`routes/apps/grants.py:68-85`);
+2. the caller's group set resolved **once per request** — one extra query mirroring
+   `gateway/rooms.py:181-199`'s `my_groups`, not one per app;
+3. `can_view` widened to accept a grant whose subject is a group the caller is in.
+
+**A correction to the framing that reached this document.** It was asserted that this
+also requires *inverting* `tests/unit/test_app_grants.py::test_invalid_subjects_rejected`'s
+parameter list. Measured 2026-08-03: **it does not.** That list is
+`org · "" · not-an-email · has space@x.com · @nouser.com · trailing@ · agent: ·
+agent:has space · agent:has/slash · agents: · <300 chars>@x.com` — **no `group:` case
+is pinned as invalid anywhere in that file.** So the test work is *additive* (a new
+param in `test_valid_subjects_accepted`), which makes this cheaper still — and means an
+implementer must not assume a red test will catch them: nothing currently fails if
+`group:` support is half-built. Note the separate hazard that **is** real: `org` **is**
+pinned invalid at `:49`, deliberately (`apps.visibility='org'` already means it), so
+this conversion adds `group:` **only** and must leave `org` rejected.
 
 ---
 
@@ -396,15 +579,31 @@ Test files that already exercise this area, and are the right place to extend
 `tests/unit/test_org_access_control.py`, `tests/unit/test_owner_bootstrap.py`
 (⚠️ never against prod).
 
+> ⚠️ **Two of those four skip green without a database.**
+> `test_session_authority.py:33-51` and `test_rooms.py:33-52` both open with
+> `_needs_db = pytest.mark.skipif(not _db_ready(), …)`, where `_db_ready()` probes
+> `chat_session_participant` / `org_group` / `chat_message` and returns `False` on any
+> exception. A fixture added to either file **cannot be verified red** on a box with no
+> Postgres up — it will report `skipped` and a `-q` summary will look like success.
+> Any done-when in this document that says "verified red" must therefore either live in
+> a genuinely hermetic test (assert on the SQL strings — see §2 done-when 2) or carry an
+> explicit obligation to quote a `-v`/`-rs` run showing `passed`, not `skipped`
+> (§2 done-when 3).
+
+The wholly hermetic files in this area — no DB, no skip — are
+`tests/unit/test_app_grants.py` and `tests/unit/test_org_access_control.py`.
+
 ---
 
 ## 8. Open, and deliberately unanswered here
 
 - **Whether Workflows should stay org-wide.** §5 records the posture; changing it is
   a product call, not a defect. No acceptance is written for it.
-- **Where a project grant table lives** (`gtd_*` vs a shared `object_grants`). §4
-  fixes the *semantic*; the storage shape is WS-14's design call, and the only
-  binding constraint is §3.2's subject vocabulary.
+- ~~**Where a project grant table lives** (`gtd_*` vs a shared `object_grants`).~~
+  **Answered 2026-08-03 — moved to §4.1** as a `DECISION (agent-proposed, owner may
+  overrule)`, because leaving it open made the tasks team slice undispatchable: an
+  implementer cannot invent the table *and* be judged against acceptance that names
+  it. Both options and their consequences are recorded there.
 - **Whether `subject:` memory compartments and a `group:` memory scope are the same
   feature.** WS-10 S1 owns the compartment design
   (`docs/multiplayer/memory-clearance.md` §7.1); this document only records that

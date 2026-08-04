@@ -32,7 +32,7 @@ import os
 import httpx
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, Header, HTTPException
-from gateway.routes.notes.core import _log, router
+from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
 from pydantic import BaseModel
 
 _DG_API = "https://api.deepgram.com/v1"
@@ -260,7 +260,22 @@ async def read_live_wanted(
 ) -> LiveWanted:
     """Cheap poll for the producers, so turning the copilot on mid-meeting
     starts streaming and turning it off stops it. Bot-token authed because the
-    worker is the main caller."""
+    worker is the main caller.
+
+    **Deliberately NOT member-owner-scoped** (N1, 2026-08-04). This is a
+    machine entrypoint: the caller is the meeting-bot worker in its own
+    container, holding ``MEETING_BOT_TOKEN`` and no member identity at all —
+    which is why the route is in ``core.router``'s ``exempt`` list and in
+    ``test_org_access_enforcement.GATED_ROUTERS``. Bolting a member owner
+    predicate onto it would need an owner it does not have, and the honest
+    implementations of that (trust a client-supplied email, or fall back to
+    the meeting's own owner) would each turn the bot token into a way to
+    assert an identity. The bot token IS the authority here, exactly as it is
+    for ``/live/segment`` — which posts the transcript this route only decides
+    whether to keep paying for. What leaks without a member check is one
+    boolean plus a settings-derived sentence; no meeting content, no title,
+    and the same answer for a meeting id that does not exist (``live_wanted``
+    never raises and defaults to ``True``)."""
     from gateway.routes.notes.live_transcript import _check_bot_auth
 
     _check_bot_auth(authorization)
@@ -271,14 +286,24 @@ async def read_live_wanted(
 @router.post("/stt/live-token", response_model=LiveToken)
 async def live_token(
     meeting_id: str | None = None,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> LiveToken:
     """Streaming credentials for the browser recorder (user-authenticated).
 
     With a meeting_id, refuses when nothing is listening — the recorder then
     falls back to record-only, which is exactly the same end result minus the
-    per-minute bill."""
+    per-minute bill.
+
+    The meeting_id is caller-supplied and reads per-meeting state, so it is
+    owner-scoped: without the check the 409 reason distinguished "that
+    meeting's copilot is off" from "that meeting is live", which is a
+    presence oracle over a colleague's calendar. The parameter stays optional
+    — a token minted with no meeting names nothing to scope."""
     if meeting_id:
+        async with await _get_db() as db:
+            await load_owned_meeting(
+                db, meeting_id, user.email, columns="m.id"
+            )
         wanted, reason = await live_wanted(meeting_id)
         if not wanted:
             raise HTTPException(status_code=409, detail=reason)

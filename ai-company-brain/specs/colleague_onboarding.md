@@ -1,0 +1,783 @@
+# Colleague onboarding — the readiness gate, the runbook, and the capability matrix
+
+**Status:** 🔴 NOT READY — **three** blocking gates still open (§1.1). **G4 is
+CLOSED: all four owner-scoping tickets shipped 2026-08-04** — N4 (Tasks people
+directory: directory open, HR fields restricted, writes admin-only) and N1–N3
+(Notes: sixteen routes in six files, single-item approve/reject, and the
+bot_join recording hijack). **G1, G2 and G3 are unchanged**, two of them are
+OWNER-GATE, and **it is still not safe to invite anybody.** G4 closed the holes
+that survive a *correct* identity; G1/G2 are about the identity itself, and an
+owner predicate applied to a forged one is not a control. §4 also mints **N5**
+(the rest of `routes/notes` — nine modules N1's table did not enumerate),
+deliberately outside G4 and awaiting an owner call. · **Board row:** WS-24 ·
+**Owner:** vjvarada · **Date:** 2026-08-04 ·
+**Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
+cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
+N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`; N1–N3 on
+`ws-24-n1n3-notes-scoping`, cut from `891903de`).
+
+**What this doc is for.** Exactly one person is signed in to this deployment
+(**owner-reported, not measured** — see the note below). The question "is it
+safe to invite colleagues yet" has been re-derived in conversation more than
+once and answered nowhere durable. This spec is the durable answer, in three
+parts:
+
+| § | Section | Kind |
+|---|---|---|
+| §1 | **The readiness gate** — what must be true before colleague #1 | checklist with per-item done-whens + gate labels |
+| §2 | **The onboarding runbook** — invite → role → Center group → verify | procedure, grounded in real endpoints |
+| §3 | **The capability matrix** — what a colleague on each role can actually see | evidence table, every cell carries `file:line` |
+| §4 | **The four open owner-scoping holes** — blocking items with sizes | tickets |
+
+**Executable half.** `scripts/onboarding_preflight.py` implements §1's
+machine-checkable criteria. Run it **on the box** before inviting anyone; run
+it `--mode local` anywhere else and it refuses the box-only checks rather than
+guessing. If a criterion changes here, change it there in the same PR.
+
+> The rule the script now holds to: **a check never PASSes on evidence it could
+> not actually see.** Anything that is a claim about *the deployment* — the two
+> secrets (checks 1–2), the live Caddyfile's half of check 3, the backups that
+> landed (check 4's box half), the database (checks 5–7) — SKIPs in local mode
+> rather than reporting a laptop's answer as the box's. What a local run *does*
+> answer is the repository: the repo Caddyfile's strip directives, BO-23's four
+> repo-side done-whens, and the Centers feature vocabulary. So a local run can
+> legitimately reach exit 0 once those repo defects are fixed, and today it does
+> not, because two of them are real.
+
+**Scope.** This doc owns the *gate* and the *matrix*. It does not own the
+access model (`org_access_control.md`), the visibility doctrine
+(`tenancy_and_visibility.md` — D11/D12), or the Centers IA
+(`department_centers.md`). Where they disagree with a cell here, re-measure and
+fix whichever is stale.
+
+**Non-goals.** Not an HR onboarding process. Not a rollout plan for a second
+tenant (D11: the tenant boundary is the deployment). Not a fix for §4's open
+holes — this is the gate that says they must be fixed, and sizes them.
+
+> **Two facts in this doc are OWNER-REPORTED, not measured.** *"Exactly one
+> member is signed in"* and *"there is exactly one email account"* (§3.3) are
+> live-database facts, and this document forbids an agent from running the one
+> tool that could measure them (§5: never point the preflight at production).
+> They were not verified in the session that wrote this. Treat them as the
+> owner's statement of the current state, re-check them on the box before
+> relying on either, and do not cite them as `file:line` evidence — everything
+> else in §3 is code, these two are not.
+
+**Everything else here was verified against code**, on the branch and commit in
+the status header.
+
+---
+
+## 1. The readiness gate
+
+**The verdict today: NOT READY.** Three items block colleague #1 (G4 closed
+2026-08-04). One is AGENT-SAFE and can be built now; two are OWNER-GATE and an
+agent must refuse them by name.
+
+Nothing in this section is a preference. Each one is a live path by which a
+colleague sees, changes, or destroys something that is not theirs, or by which
+the owner loses work that has no backup.
+
+### 1.1 The blocking items
+
+| # | Item | Gate | Done when |
+|---|---|---|---|
+| **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. |
+| **G2** | **`GATEWAY_INTERNAL_TOKEN` is provisioned in BOTH files and is not `LITELLM_MASTER_KEY`** | 🔴 **OWNER-GATE** (a credential provisioned on the box, in two places) | The preflight reports `[PASS] Service identity is its own secret` in **box** mode, which now requires all three of: set in `/opt/acb/app/.env`; set in `workbench/control_plane/.env.local`; **the two byte-identical**; and different from the LLM key. ⚠️ **Setting only the first is a total lockout, not a partial fix** — see the warning below. |
+| **G3** | **A restore path exists** (BO-23) | 🟢 **AGENT-SAFE** to write the scripts + runbook; 🔴 **OWNER-GATE** to run any of them, install a schedule, or point anything at prod data | The preflight reports `[PASS] A restore path exists and backups are recent`. Its repo half is **BO-23's own done-when 1–4, verbatim** (`FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-23): `scripts/backup_db.sh` taking a data-inclusive `pg_dump -Fc` (**not** `--schema-only`), `scripts/restore_db.sh` calling `pg_restore`, a runbook that states the *verification* step, and a pre-migration hook. Its box half: an artefact under `/opt/acb/backups` newer than 48h containing a dump above the size floor. **Nothing of this exists on this branch** — the only DB script that dumps anything is `scripts/dump_schema.sh` (`pg_dump --schema-only` — structure, zero rows). `scripts/backup_db.sh` and `restore_db.sh` are proposed on the **independent** PR #347 (`ws-0-bo23-backup-restore`) and are not here; G3 goes green when that lands and is scheduled, not before. See `work_plan.md` §2 exception 2. |
+| **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) — ✅ **4 of 4 CLOSED 2026-08-04** | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` (57 cases) covers N1–N3 and `tests/unit/test_tasks_people_scoping.py` (35) covers N4. **N4** — the Tasks people directory is "directory open, HR fields restricted" with all four writes on `admin:members:manage` (§4 N4's DECISION block). **N1–N3** (`ws-24-n1n3-notes-scoping`) — fifteen of sixteen Notes routes in the six named files load through `core.load_owned_meeting` / `OWNED_MEETING_PREDICATE` and answer 404 never 403, the sixteenth (`live.py:256`) is machine-authed by recorded decision; `actions._load_action` joins `meeting` so a member can no longer approve a colleague's item into their own GTD list; `bot_join`'s attach branch binds the predicate into the `UPDATE`. ⚠️ **This gate going green does not make WS-24 green** — G1/G2/G3 are untouched, and G4 closes the holes that survive a *correct* identity, not the ones that begin with a forged one. ⚠️ §4's new **N5** (nine further `routes/notes` modules N1's table never enumerated) is deliberately **outside** this gate and needs an owner call. |
+
+> ### ⚠️ G2 has a lockout mode. Read this before provisioning the token.
+>
+> The token lives in **two** files and the second one is easy to miss, because
+> the natural instruction — "set it and restart the gateway and the workbench" —
+> produces the failure. Concretely: `.env` has the token, `.env.local` does not,
+> so the Next.js BFF keeps sending its `sk-local-dev-change-me` default
+> (`workbench/control_plane/src/lib/gateway.ts:58-61`). Every proxied browser
+> call then arrives with a bad Bearer **and** a real `X-User-Email` while an
+> internal token *is* configured — and `acb_auth/deps.py:356-361` resolves
+> exactly that shape to `NO_ACCESS`. **Every signed-in member, including the
+> owner, is locked out**, and it is the mechanically-correct outcome, so there
+> is nothing to debug.
+>
+> **Do it by redeploying.** `.github/workflows/deploy.yml:166-187` reconciles
+> `.env.local`'s `GATEWAY_INTERNAL_TOKEN` from `.env` on every deploy, in place
+> and idempotently, preserving the file's other keys. That is the only path
+> that cannot leave the two disagreeing. If it must be done by hand, write both
+> files in the same sitting, then restart both processes.
+>
+> The preflight now reads `workbench/control_plane/.env.local` as well as
+> `.env` and FAILs naming the lockout when the two disagree
+> (`scripts/onboarding_preflight.py`, check 1). Before that change it read only
+> `.env` and would have certified the lockout state green.
+
+### 1.2 Already true — do not re-litigate
+
+| Item | Evidence |
+|---|---|
+| PR #348 (the WS-13 Centers feature-vocabulary fix) is in this branch's ancestry | `acb_auth/permissions.py:95-100` carries the six `center.*` slugs; the preflight's check 6 passes locally against `140_center_features.sql`. |
+| PR #346 (the Notes owner filter) is merged as `d2ef7fa0` | `routes/notes/core.py:192-217` — `OWNED_MEETING_PREDICATE` + `load_owned_meeting`. |
+| A bare `X-User-Email` with no Bearer establishes nothing | `acb_auth/deps.py:356-361` — with an internal token configured, an unaccompanied identity header resolves to `NO_ACCESS`. The exposure G1/G2 close is narrower and specific: the token that *is* configured may be the LLM key every agent holds. |
+| Default-deny for an unknown email | `acb_auth/access.py:257-263` — an authenticated stranger with no `app_user` row resolves to `is_active=False`. Pinned by `tests/unit/test_default_deny_auth.py`. |
+| The six system roles seed themselves idempotently | `infra/postgres/130_org_access_control.sql:180-260`, extended by `131_integration_memory_permissions.sql`. |
+
+### 1.3 Known-and-accepted, not blocking
+
+| Item | Why it does not block |
+|---|---|
+| Workflows are org-wide | A recorded v1 decision (`routes/workflows/crud.py:1-5`, spec Q3). It is not a defect; it is a **consequence of granting `feature:workflows`** — see §3.4. `member` does not hold it. |
+| `main` has no branch protection | `work_plan.md` §2 exception 1. Real, OWNER-GATE, and about the repo rather than about who can read whose mail. |
+| Custom-App grants do not honour `group:` | WS-14; `routes/apps/grants.py:68-85`. Narrower access than intended, not wider. |
+
+---
+
+## 2. The onboarding runbook
+
+Prerequisite: §1 is green (run `scripts/onboarding_preflight.py` on the box).
+Every step below is a real, shipped endpoint. Sign-in is Entra ID SSO — there
+is no invitation email; "inviting" means **provisioning the row that turns a
+directory identity into a member**.
+
+### Step 1 — Invite
+
+    POST /admin/members     { "email": "…", "display_name": "…", "roles": ["member"] }
+
+* Gate: `admin:members:invite` — `routes/admin/members.py:145-146`.
+* Package floor: the whole `/admin` surface additionally requires
+  `admin:members:read` (`routes/admin/_common.py:77-91`).
+* Behaviour: inserts (or re-activates) `app_user` in the `invited` state and
+  assigns the requested roles (`members.py:158-192`). Roles default to
+  `["member"]` when omitted (`:165`).
+* UI: `/settings/members`.
+
+> **Choose the role deliberately.** `member` is the default and is the right
+> answer for a new employee. Read §3 first — `manager` is not "member plus a
+> bit"; it hands over the entire member directory and both org-memory rights.
+
+### Step 2 — Assign the role (if it is not the default)
+
+    PUT /admin/members/{email}/roles     { "roles": ["member"] }
+
+* Gate: `admin:members:manage` — `members.py:370-371`.
+* Assignable set excludes `agent_service` — `permissions.py:146-148`.
+
+### Step 3 — Assign the Center group
+
+    POST /admin/groups/{slug}/members    { "email": "…", "role": "member",
+                                           "grant_center_access": true }
+
+* Gate: `admin:members:manage`, **plus** `admin:access:manage` when
+  `grant_center_access` is true — `routes/admin/groups.py:336-337, 358-367`.
+* What it writes: the membership row in `org_group_member`
+  (`groups.py:375-383`) and, for one of the six Center slugs, an
+  `allow feature:center.<slug>` row in `user_permission_override`
+  (`groups.py:386-397`).
+* `ON CONFLICT DO NOTHING` is deliberate: an existing override — **including an
+  explicit deny** — is an admin decision this shortcut must not silently flip
+  (`groups.py:350-352`). The response's `center_access_granted` is `false` in
+  that case, and in two others (not a Center group; the admin opted out), so
+  do not read `false` as failure without checking which.
+* Removing the membership does **not** revoke the override
+  (`groups.py:417-425`) — revoke it on the member's access screen.
+
+### Step 4 — Verify, before telling them it is ready
+
+1. **Read back the resolved answer, not the inputs:**
+
+        GET /admin/members/{email}/access
+
+   `routes/admin/members.py:512`. This returns the same computation
+   `/auth/me` performs for the member themselves — roles, granted patterns,
+   overrides, and the resolved yes/no per capability. Comparing it against §3's
+   row for that role is the check.
+
+2. **Confirm the nav they will see.** `/auth/me` returns
+   `list(access.allowed_features())` (`routes/admin/me.py:84`), and
+   `allowed_features()` iterates the literal tuple
+   `acb_auth.permissions.FEATURES` — *not* the `feature_catalog` table. A slug
+   seeded in SQL but absent from that tuple is invisible even to an owner
+   holding `*`. The preflight's check 6 is that invariant.
+
+3. **Confirm what they can run.** `/auth/me`'s `agents` array is the list of
+   agents `assert_can_run_agent` will accept (`acb_auth/deps.py:613-626`). A
+   `guest` gets `feature:chat` and **no** `agents:run:*`, so the chat pane opens
+   and every run 403s — see §3.
+
+4. **Confirm what they should NOT see.** Sign in as them (or ask them) and open
+   `/notes`, `/tasks`, `/artifacts`. §3.3 says what each of those actually
+   scopes and what it does not. **Hiding a control in the UI is a courtesy, not
+   a boundary** — `workbench/control_plane/src/lib/access.ts:126-129` says so in
+   its own comment. Verify against the API, not the sidebar.
+
+### Step 5 — Off-boarding (the other half, recorded here so it is not invented later)
+
+    PATCH  /admin/members/{email}   { "status": "suspended" }   # members.py:202-203
+    DELETE /admin/members/{email}                               # members.py:263-264
+
+`resolve_access` treats status as a property of the *result*, not a filter on
+the query, so a suspended member resolves to no access within the 60s cache TTL
+at worst (`acb_auth/access.py:209-215`).
+
+---
+
+## 3. THE CAPABILITY MATRIX
+
+> **How to read this.** Every cell was verified against code on 2026-08-04 and
+> carries the `file:line` that settles it. Where a cell could not be
+> established, it says **UNVERIFIED** and why. A confident wrong cell here is
+> worse than an admitted gap — this is what the owner relies on when deciding
+> to let real people in.
+
+### 3.0 Two corrections to the received account — read these first
+
+**(a) Role grants come from TWO migrations, not one.** Every summary of these
+roles circulating in the corpus quotes `130_org_access_control.sql` alone.
+`131_integration_memory_permissions.sql` adds more, and it changes the answer:
+
+| Role | 130 | 131 adds |
+|---|---|---|
+| `owner` | `*` (`130:183-190`) | nothing — `*` already covers it (`131:42`) |
+| `admin` | `130:198-207` | `integrations:use:*`, `memory:read_org`, `memory:write_org` (`131:45-53`) |
+| `manager` | `130:210-223` | `integrations:use:*`, `memory:read_org`, `memory:write_org` (`131:57-65`) |
+| `member` | `130:228-239` | `integrations:use:*`, **`memory:read_org`** (`131:70-78`) |
+| `guest` | `130:242-249` | **nothing** (`131:80`) |
+| `agent_service` | `130:252-259` | `integrations:use:*`, `memory:read_org`, `memory:write_org` (`131:85-93`) |
+
+So a `member` **can read organisation memory** and cannot write it — the exact
+split `131:67-69` argues for. Quoting `130` alone gets that cell wrong.
+
+**(b) `data:org:read` grants nothing. It has zero consumers.** It is declared
+in `permissions.py:132`, granted to `admin`, `manager` and `agent_service`, and
+referenced in `access.py:148`'s legacy-fallback list — and **no route, query or
+predicate in the repository ever checks it.** A repo-wide search for
+`data:org:read` outside the vocabulary, the seed migrations and the specs
+returns nothing.
+
+This matters because `manager` is routinely described as "the role with org-wide
+visibility, which contradicts department privacy". The contradiction is real but
+it is **not** `data:org:read` — that permission is a name with no mechanism.
+What actually widens a manager is: the whole `/admin` read surface
+(`admin:members:read`), `feature:approvals`, `feature:observability`,
+`feature:whatsapp`, and `memory:write_org`. See **D14** in `work_plan.md` §3.
+
+### 3.1 Where a feature is actually enforced
+
+A `feature:` grant is only a boundary where a route checks it. Measured:
+
+| Surface | Server-side gate | Anchor |
+|---|---|---|
+| Chat + Rooms | `require_feature_router("chat")` | `routes/chat.py:36`; `routes/rooms.py:56` |
+| Email | `require_feature_router("email", exempt=[…])` | `routes/email/core.py:39` |
+| Tasks | `require_feature_router("tasks")` | `routes/tasks/core.py:29` |
+| Notes | `require_feature_router("notes", exempt=[2 bot-token routes])` | `routes/notes/core.py:33-40` |
+| WhatsApp | `require_feature_router("whatsapp", exempt=[…])` | `routes/whatsapp/core.py:35` |
+| Workflows | `require_feature_router("workflows", exempt=EXEMPT_ROUTES)` | `routes/workflows/core.py:34` |
+| Approvals | `require_feature_router("approvals")` | `routes/actions.py:34` |
+| Integrations | `require_feature_router("integrations")` | `routes/integrations.py:37`; `routes/integrations_skills.py:31` |
+| Custom Apps | **not** a feature gate — `apps:use:*` to open, `feature:build.apps` to author | `routes/apps/_common.py:32, 129-146, 149-169` |
+| **Memory** | ⚠️ **no `feature:memory` check anywhere.** Router requires the internal Bearer; authorization is per-scope | `routes/memory.py:45-48`, `_authorize_scope` `:128-167` |
+| **Artifacts / workspace** | ⚠️ **no `feature:artifacts` check anywhere.** `get_current_user` only | `routes/workspace.py:53` |
+| **Observability** | ⚠️ **no `feature:observability` check.** Any authenticated caller | `routes/observability.py:46-51` — the comment says this is deliberate: operational metadata, never message content |
+| **Dashboard** | no backend at all | `workbench/control_plane/src/app/dashboard/page.tsx:1-14` is a `ComingSoon` stub |
+
+**Consequence, and it is the single most load-bearing line in this document:**
+for Memory, Artifacts and Observability the `feature:` grant hides the nav pane
+and nothing more. A member denied `feature:memory` can still reach `/api/memory/…`
+through the BFF; what stops them reading a colleague's memories is
+`_authorize_scope`, not the feature. Scope everything you reason about here on
+the per-object rule, not on the nav.
+
+### 3.2 Role × surface
+
+`✅` = reachable · `—` = not granted · `⚠️` = reachable but see the note.
+
+| Surface (feature) | owner | admin | manager | member | guest | Settles it |
+|---|---|---|---|---|---|---|
+| Chat / Rooms (`chat`) | ✅ | ✅ | ✅ | ✅ | ✅ | `130:189, 203, 217, 235, 248` |
+| Email (`email`) | ✅ | ✅ | ✅ | ✅ | — | `130:203, 217, 235`; guest list `130:248` |
+| Tasks (`tasks`) | ✅ | ✅ | ✅ | ✅ | — | `130:217, 235` |
+| Notes (`notes`) | ✅ | ✅ | ✅ | ✅ | — | `130:218, 235` |
+| Memory pane (`memory`) | ✅ | ✅ | ✅ | ✅ | — | `130:218, 236` |
+| Dashboard (`dashboard`) | ✅ | ✅ | ✅ | ✅ | — | `130:218, 236` — **a stub page**, `dashboard/page.tsx:1-14` |
+| Artifacts (`artifacts`) | ✅ | ✅ | ✅ | ✅ | — | `130:219, 236` |
+| Observability (`observability`) | ✅ | ✅ | ✅ | ⚠️ | ⚠️ | Feature at `130:219` (manager) — but the API is open to **any authenticated caller**, `observability.py:51` |
+| Approvals (`approvals`) | ✅ | ✅ | ✅ | — | — | `130:219`; absent from member `130:234-237` |
+| WhatsApp (`whatsapp`) | ✅ | ✅ | ✅ | — | — | `130:217`; member list omits it, and `130:226-227` says so explicitly |
+| **Workflows** (`workflows`) | ✅ | ✅ | — | — | — | Only `feature:*` covers it: `130:203`. Absent from manager `130:216-221` and member `130:234-237`. **Granting it has a consequence — §3.4.** |
+| Integrations (`integrations`) | ✅ | ✅ | — | — | — | `130:203`; `integrations:manage` at `130:205` |
+| Models (`models`) | ✅ | ✅ | — | — | — | `feature:*` only |
+| Agent Registry (`agents`) | ✅ | ✅ | — | — | — | `feature:*` only; `agents:manage` at `130:203` |
+| Build panes (`build.agents`, `build.apps`) | ✅ | ✅ | — | — | — | `feature:*` only; `130:226-227` names both as deliberate member omissions |
+| Centers (`center.*`) | ✅ | ✅ | — | — | — | `feature:*` covers them since `permissions.py:95-100`; nobody else gets one without a grant (`140_center_features.sql:19-25`, all `is_default=false`) |
+| Custom Apps — **use** (`apps:use:*`) | ✅ | ✅ | ✅ | ✅ | ✅ | `130:204, 220, 237, 248`; enforced `_common.py:129-146` |
+| Custom Apps — **author** (`feature:build.apps`) | ✅ | ✅ | — | — | — | `_common.py:149-169` |
+| Run any agent (`agents:run:*`) | ✅ | ✅ | ✅ | ✅ | **—** | `130:203, 220, 237`. **Guest has none** (`130:248`), so a guest opens `/chat` and every run 403s at `deps.py:613-626` |
+| Admin surface (`admin:members:read` floor) | ✅ | ✅ | ✅ | — | — | `130:200, 221`; floor at `admin/_common.py:77-91`. **A manager reads the whole member directory** and `/auth/me` returns `is_admin: true` for them (`me.py:96`) |
+| Admin writes (`admin:*:manage`) | ✅ | ✅ | — | — | — | `130:200-202`; manager's list `130:216-221` has only `admin:members:read` |
+| Org memory — read (`memory:read_org`) | ✅ | ✅ | ✅ | ✅ | — | `131:50, 62, 75`; guest excluded `131:80` |
+| Org memory — write (`memory:write_org`) | ✅ | ✅ | ✅ | — | — | `131:50, 62` vs member's `131:75` |
+| `data:org:read` | ✅ | ✅ | ✅ | — | — | `130:205, 221` — **grants nothing; zero consumers.** §3.0(b) |
+
+### 3.3 What a grant actually exposes, per app
+
+This is the half that matters. A `feature:` grant opens a surface; the
+per-object rule decides whose rows you see through it.
+
+| App | The scoping rule | Verified at | What a `member` sees |
+|---|---|---|---|
+| **Notes** | Owner-scoped. One predicate, written once, case-insensitive; `NULL` owner = pre-migration-95 legacy, visible to all | `routes/notes/core.py:192-194` (`OWNED_MEETING_PREDICATE`), `:197-217` (`load_owned_meeting`, 404-not-403), bound in `routes/notes/meetings.py:77` | **Their own meetings only** — on the list/get/patch/delete/dispatch paths. ⚠️ **Six other route families are NOT owner-scoped** — §4. |
+| **Tasks — items and accounts** | Owner-scoped. Per-user rows: **27** `user_id = :uid` predicates on items; accounts asserted separately | `routes/tasks/items.py` (measured: 27 occurrences of the exact predicate); `routes/tasks/core.py:189-197` (`_assert_account_owner`), bound at `accounts.py:190, 259, 285, 325, 406` | Their own items only, and only task accounts they own. No team/Center sharing exists yet — that is WS-14 C1 / D13 (`gtd_project_grant`). |
+| **Tasks — the people directory** | ✅ **Field-level projection on read, `admin:members:manage` on every write** (N4, closed 2026-08-04). The directory itself is deliberately org-wide | `routes/tasks/core.py` — `can_read_hr_fields` (`admin:members:read`) + `require_people_write()` (`admin:members:manage`); `routes/tasks/people.py` — `HR_FIELDS`, `_row_to_person(row, *, include_hr)`, and the four write routes' `dependencies=[…]` (the fourth is `capability.py`'s `POST /people/embed`). Pinned by `tests/unit/test_tasks_people_scoping.py` | **The basic org chart** — name, email, role, title, department, team, manager, ClickUp id — and **nothing else**: skills, `skills_source`, résumé summary, years of experience and capacity/load/available all come back null/empty, and `?q=` will not match a skill. No writes at all: all four 403. A `manager` (`admin:members:read`) sees the HR half but still cannot write it. |
+| **Email** | Per-account ownership, asserted on both the message-scoped and account-scoped loaders | `routes/email/core.py:168-180` (`_provider_for_account`), `:576-580` (`_assert_account_owner`) | Only accounts they own. There is (**owner-reported, not measured** — see the note in the preamble) exactly one account, `vjvarada@fracktal.in`, so a colleague's `/email` is empty until they connect their own. Shared mailboxes are ownerless work — `work_plan.md` §4. |
+| **Memory** | One rule per scope shape; an unrecognised shape is refused | `routes/memory.py:128-167` | Their own `<email>` scope (`_authorize_person` `:112-125` — **explicitly not readable by admins**); their own `prefs:` (`:95-100`); rooms they can read (`:82-92`); org memory read-only (`:73-79` + `131:75`); and — see below — **every shared agent's compartment**. |
+| **Memory, the wide edge** | `agent:<name>` is gated on `can_run_agent(name)`, and `member` holds `agents:run:*` | `routes/memory.py:103-109` + `130:237` | **A member can read and write the memory compartment of every agent they can run**, which is every agent. Documented as by-design ("shared across the agent's users"), but it means an agent that remembers something from the owner's conversation is readable by any member. |
+| **Chat sessions / Rooms** | `visibility` defaults to `private`; five explicit ways in | `138_groups_and_session_participants.sql:71` (default `'private'`); `gateway/rooms.py:368-403` (`SESSION_VISIBLE_SQL`) | Their own sessions, plus any where they are a participant directly, via a `group:` they belong to, via an `org` participant row, or where `visibility='org'`. Default is closed. |
+| **Custom Apps** | `visibility` defaults to `private`; org-visible **and** live apps are open to every app viewer | `114_custom_apps.sql:30`; `routes/apps/_common.py:290-315` (`can_view`) | Their own + apps explicitly granted to their email + **every org-visible published app**. Note `guest` is in that last set too. |
+| **Artifacts** | Partitioned by the agent's own `sharing.instancing`, resolved per viewer | `routes/workspace.py:230-260` (`_agent_instance_for`) → `acb_skills/manifest.py:235-246` (`instance_key`) | **Depends on the agent, and for most agents it is shared.** Four of the six first-party agents declare `instancing: "shared"` (`agent-orchestrator`, `agent-task-manager`, `agent-app-builder`, `agent-apis-config`), which yields `''` — **one workspace for everybody**. Only `agent-email-assistant` and `agent-whatsapp-assistant` declare `personal` (→ `u:<email>`). So a colleague with `feature:artifacts` sees the owner's orchestrator outputs. |
+| **Dashboard** | none — there is nothing to scope | `dashboard/page.tsx:1-14` | A "coming soon" card. Granting or denying `feature:dashboard` changes nothing but the sidebar. |
+| **Observability** | none — any authenticated caller | `routes/observability.py:46-51` | Run metadata for the whole deployment: agent, model, tokens, cost, status, duration. **Not** message content (the comment at `:46-50` states the split deliberately). The `feature:observability` grant is nav-only. |
+| **Workflows** | **org-wide by design** | `routes/workflows/crud.py:1-5` verbatim: "any member holding the `workflows` feature sees and edits every workflow … `owner_email` is attribution, not access" | Nothing — `member` does not hold the feature. See §3.4 before granting it. |
+| **Admin** | `admin:members:read` floor for the whole package | `routes/admin/_common.py:77-91` | Nothing. A **manager** sees the entire member directory, the role catalogue and the group list; writes stay behind the `*:manage` permissions (`members.py:203, 264, 371`; `roles.py:147, 226, 293`; `groups.py:199, 244, 281, 337, 419`). |
+
+### 3.4 Granting `feature:workflows` hands over a permanent unauthenticated trigger
+
+Recorded as a **labelled consequence, not a defect** — the org-wide read is a
+recorded v1 decision (`workflows_app.md` Q3), and the hook design is deliberate.
+
+The chain, verified:
+
+1. `feature:workflows` ⇒ see and edit **every** workflow, whoever made it —
+   `routes/workflows/crud.py:1-5`.
+2. The detail response returns the workflow's `hook_token` in the body —
+   `crud.py:230`.
+3. `POST /workflows/hooks/{hook_token}` is **unauthenticated by design**: it is
+   in the router's exempt set (`routes/workflows/core.py:29`) and in
+   `main.PUBLIC_ROUTES`. `routes/workflows/hooks.py:3` states the model: *"the
+   token IS the credential"*.
+
+So granting `feature:workflows` to a colleague gives them a **permanent,
+copyable, unauthenticated trigger credential for every workflow in the
+deployment**, which survives suspending or removing them, because revoking a
+member does not rotate a token they already read. Rotating hook tokens is
+therefore part of off-boarding anyone who ever held this feature — and there is
+no rotate endpoint today.
+
+**Before granting it:** decide whether that is acceptable, or mint a ticket for
+per-workflow ACLs + hook-token rotation first. This spec does not decide it.
+
+### 3.5 UNVERIFIED cells — admitted gaps
+
+| Cell | Why it is not settled |
+|---|---|
+| Whether `feature:models`, `feature:agents`, `feature:build.agents` are enforced server-side | `routes/settings.py:23` and `routes/agent.py:49` carry no router-level feature dependency, and I did not enumerate every route under them. The **role** answer is certain (only `feature:*` covers them, so only owner/admin hold them); the **enforcement** answer is not. Treat these as nav-only until someone measures them. |
+| Whether the BFF blocks a member from calling an un-gated gateway route directly | The BFF forwards without re-checking features (`lib/gateway.ts:217-240`, `proxyToGateway`), and `lib/access.ts:126-129` says route-level `require_permission` is the boundary. I did not test the full `/api/[...path]` set for a route that gates in the UI and not at the gateway. Assume nav-only gating is not a boundary. |
+| Per-Center data scoping | `140_center_features.sql:9-12` is explicit that Center features gate **navigation and the landing pages**, not data. There is no per-Center data predicate anywhere yet (that is WS-14 / WS-15). A `center.finance` grant does not hide anything from anyone. |
+| `/debug` routes | Described as EXECUTIVE-only in `observability.py:46-50`'s comment; not measured here. |
+| What a **suspended** member can still reach within the 60s access cache | `access.py:209-215` describes the TTL bound; not exercised. |
+
+---
+
+## 4. The open owner-scoping holes — blocking items
+
+Four route families reached somebody else's rows with no owner predicate. Three
+(N1–N3) are the ones PR #346 (`d2ef7fa0`) **explicitly named** rather than
+fixed, in its own commit body and in `apps/services/gateway/AGENTS.md:30`; they
+require `feature:notes`. The fourth (**N4**, found 2026-08-04 while building
+this matrix) is in Tasks, requires `feature:tasks`, and was the sharpest of the
+four because it is HR data. `member` holds **both** features by default
+(`130:235`).
+
+**All four are CLOSED (N4 and N1–N3, both 2026-08-04.)** They were latent with
+one user and live the moment a colleague signed in.
+
+**These are the gate's G4. They were sized here and built elsewhere — this
+document does not fix them.** All four were 🟢 **AGENT-SAFE**.
+
+> ⚠️ **G4 closing does not make WS-24 green.** G1, G2 and G3 are untouched and
+> two of them are OWNER-GATE. **It is still not safe to invite anybody.**
+> Specifically: without G1 the reverse proxy does not strip inbound
+> `X-User-Email` / `X-User-Role`, and without G2 the service identity may still
+> be the LLM key every agent holds — an identity forgery reaches *any* member's
+> data, and an owner predicate applied to a forged identity is not a control.
+> The four tickets below close the holes that survive a correct identity. They
+> do not close the ones that begin with the wrong one.
+>
+> A second qualifier, recorded in **N5** below: N1's table is a list of six
+> files, not a proof of exhaustiveness over `routes/notes`, and it was not
+> exhaustive.
+
+### N1 — Notes read paths outside the owner predicate · size: M (one PR, ~6 files) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n1n3-notes-scoping`. Fifteen of the sixteen routes in
+> the six named files now load their meeting through `core.load_owned_meeting`
+> or bind `core.OWNED_MEETING_PREDICATE`; all answer **404, never 403**. The
+> sixteenth (`live.py:256`) is deliberately left machine-authed — see the row
+> below.
+>
+> | File | What shipped |
+> |---|---|
+> | `recordings.py` | `upload_recording` and `start_recording` call `load_owned_meeting` (and unlink the file they had already written on refusal, so no bytes land in a colleague's media dir); `_recording_path` — the loader `/chunk` and `/complete` share — joins `meeting` and binds the predicate, so neither route can acquire the hole separately and the per-chunk path pays no extra round trip; `get_audio` calls `load_owned_meeting` first |
+> | `qa.py` | `ask_meeting` loads the meeting **before** the transcript, so a colleague's meeting cannot be told apart by the 409 "no transcript yet" answer |
+> | `share.py` | `draft_followup_email` loads through `load_owned_meeting`. Checked first, as the brief required: there is no sharing mechanism in the module to preserve — no grant, no token, no redemption route; the send is a separate `/email/send` call under the caller's own account, so the whole route is a *read* |
+> | `copilot.py` | both routes scoped; the stream checks **before** the `StreamingResponse` starts, since a 404 raised inside a started stream arrives as a broken connection rather than a refusal. The bus replays its ring to late subscribers and `refs.window` carries up to 400 chars of speech, so the stream was a live transcript feed |
+> | `live.py` | `POST /stt/live-token` is owner-scoped **when it names a meeting** (its 409 reason distinguished "the copilot is off for this meeting" from "live transcription is off", a presence oracle over a colleague's calendar); `GET /meetings/{id}/live/wanted` and `POST /stt/bot-live-token` stay machine-authed — see below |
+> | `actions.py` | see N2 |
+>
+> **`live.py:256` — the decision, recorded.** It stays bot-token authed. Its
+> caller is the meeting-bot worker in its own container: it holds
+> `MEETING_BOT_TOKEN` and no member identity, so an owner predicate has no
+> owner to use, and both ways to invent one (trust a client-supplied email, or
+> fall back to the meeting's own `owner_email`) turn the bot token into a way
+> to *assert* an identity. The token is the authority, exactly as it is for
+> `/live/segment`, which posts the transcript this route only decides whether
+> to keep paying for. What it discloses without a member check is one boolean
+> and a settings-derived sentence — no content, no title, and the same answer
+> for an id that does not exist (`live_wanted` never raises and defaults to
+> `True`). Pinned by
+> `test_notes_owner_scoping.py::test_the_two_bot_token_routes_stay_machine_authed`.
+>
+> ⚠️ **Found while doing this, NOT fixed here** (it would *open* a route, the
+> opposite of this change's direction, and no done-when asks for it):
+> `/notes/meetings/{meeting_id}/live/wanted` is absent from **both**
+> `gateway/main.py`'s `PUBLIC_ROUTES` **and** `routes/notes/core.py`'s
+> `require_feature_router(exempt=…)` list, while its two siblings are in both.
+> So the app-wide `require_authenticated` and then the feature gate 401 the
+> worker before `_check_bot_auth` ever runs, and the poll that decides whether
+> to keep streaming ASR is dead. `tests/unit/test_org_access_enforcement.py`
+> lists the path in its own `GATED_ROUTERS` registry, which is what let the
+> drift pass unnoticed: that registry is the test's opinion, not the router's.
+>
+> Tests: `tests/unit/test_notes_owner_scoping.py` grew 36 cases (21 → 57).
+> Every non-owner case was verified **red** against the pre-fix behaviour with
+> the parameter renames already applied, so each red is the security claim and
+> not a `TypeError`.
+
+The six route families as measured on 2026-08-04, before the fix:
+
+| File | Route(s) | The unguarded read |
+|---|---|---|
+| `recordings.py` | `POST /meetings/{id}/upload` `:64`, `POST /meetings/{id}/recordings/start` `:159`, `POST …/chunk` `:228`, `POST …/complete` `:267`, `GET /meetings/{id}/audio` `:377` | `SELECT id FROM meeting WHERE id = :id` (`:101`, `:183`) and `SELECT * FROM meeting_recording WHERE meeting_id = :id` (`:386`) — existence only. `retranscribe` `:321` is the one that *is* guarded (`load_owned_meeting` at `:337`), which is the shape the rest should copy. |
+| `qa.py` | `POST /meetings/{id}/ask` `:82` | Reads the **whole transcript** — `SELECT … FROM transcript_segment WHERE meeting_id=:id` `:95-99` — and answers questions about it. |
+| `share.py` | `POST /meetings/{id}/share/email/draft` `:25` | `SELECT title, summary_md, attendees FROM meeting WHERE id=:id` `:33-36` — drafts a recap of a colleague's meeting. |
+| `copilot.py` | `GET /meetings/{id}/copilot/stream` `:484`, `GET …/copilot/events` `:501` | Live copilot stream for any meeting id. |
+| `live.py` | `GET /meetings/{id}/live/wanted` `:256` | Bot-token authed (`_check_bot_auth`), not member-authed — a different shape from the rest; confirm before "fixing" it into member auth. |
+| `actions.py` | see N2 | |
+
+**Done when:** every route above loads its meeting through
+`core.load_owned_meeting` (or binds `OWNED_MEETING_PREDICATE`) and returns
+**404, never 403**, for a meeting the caller does not own; `live.py:256` is
+either left machine-authed with a comment saying why or moved to the same rule;
+and `tests/unit/test_notes_owner_scoping.py` gains one red-first case per route
+family asserting 404 for a non-owner. — **all met.**
+
+### N2 — `actions.py` single-item approve / reject · size: S (one file) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n1n3-notes-scoping`. `_load_action(db, action_id,
+> owner_email)` now joins `meeting m ON m.id = action_item.meeting_id` and
+> binds `OWNED_MEETING_PREDICATE`, raising 404 with the same "action item not
+> found" detail either way — the convention `dispatch.dispatch_action`
+> (`dispatch.py:614-622`) already used. Both routes inherit it from the shared
+> loader, so neither can acquire the hole separately. An `action_item` has no
+> owner column of its own; it inherits the one on its meeting, so the scope is
+> a join, not a predicate on the row.
+>
+> Both harms are pinned separately, because a 404 alone would not have proved
+> the second: `test_approving_a_colleagues_action_creates_no_task_in_your_list`
+> asserts that **no** `INSERT INTO gtd_items` and **no** `UPDATE action_item`
+> are issued, and that the colleague's description text never reaches a bound
+> parameter.
+>
+> **`approve-all` was aligned, not left alone.** It was already safe at the
+> seam — every item goes through `_dispatch`, which refuses a cross-owner actor
+> — but it answered **200 with an empty list**, which says "your meeting,
+> nothing qualified" where the truth is "not your meeting", and it read the
+> colleague's draft rows to get there. It now loads through
+> `load_owned_meeting` first, so the answer matches the single-item routes and
+> the item rows are never read. The `_dispatch` refusal is untouched: it is the
+> seam, and this is a second lock on one of its doors.
+
+`_load_action` (`actions.py:62-75`) selects `FROM action_item WHERE id = :id`
+with no join to `meeting` and no owner predicate. Both callers act on it:
+
+* `POST /actions/{id}/approve` `:78-111` — creates a `gtd_items` row with
+  `user_id` set to **the caller's** email (`_create_task_from_action` `:46-58`,
+  bound at `:90`) and copies `action.description` into its title (`:54`). So
+  any member can lift a colleague's action item into their own GTD list, and
+  the colleague's item flips to `status='created'` (`:91-97`).
+* `POST /actions/{id}/reject` `:114-130` — flips a colleague's item to
+  `rejected` (`:125-128`).
+
+`approve-all` (`:141`) was *not* in scope: it goes through
+`dispatch.cross_owner_refusal`, which is the seam PR #346 hardened. (It was
+aligned anyway — see the CLOSED block above for why a 200-with-empty-list was
+still an answer worth removing.)
+
+**Done when:** `_load_action` joins `meeting m ON m.id = action_item.meeting_id`
+and binds `OWNED_MEETING_PREDICATE`, raising 404 for a non-owner; both routes
+inherit it; and two tests (one approve, one reject) fail red before the change.
+— **all met.**
+
+### N3 — `meeting_bot.bot_join` with a `meeting_id` · size: S (one route) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n1n3-notes-scoping`, with one deliberate departure from
+> the done-when below, stated here because it is a design choice and not an
+> oversight: **the scope is bound INTO the `UPDATE`** rather than checked by a
+> preceding `load_owned_meeting`. A load-then-write leaves a window in which
+> the row can change between the two statements, and this statement *is* the
+> mutation — one statement, one decision:
+>
+> ```sql
+> UPDATE meeting AS m SET status='recording', platform=:p, start_at=now(),
+>        title=COALESCE(:t, title)
+>  WHERE m.id = CAST(:id AS UUID)
+>    AND (lower(m.owner_email) = lower(:owner) OR m.owner_email IS NULL)
+> RETURNING m.id
+> ```
+>
+> No row back ⇒ the existing 404 "unknown meeting", which is now the answer for
+> both "no such meeting" and "not yours".
+>
+> **The acting principal is the CALLER (`user.email`), and that is the whole
+> ticket.** It has to be: the caller is the only identity the request carries,
+> and resolving the check against the row's own `owner_email` would compare the
+> meeting to itself and pass every time. This is the same rule as PR #346's
+> `requested_by` choice, applied at the other end — authority follows the
+> person who asked and is never laundered through the row being acted on. After
+> the check the two coincide for an attach, which is the point; the ingest side
+> still reads `meeting_bot.requested_by` and
+> `test_the_requester_not_the_owner_is_what_the_ingest_carries` pins that it is
+> not "simplified" to the owner later.
+>
+> The create branch is **unchanged** — it stamps `owner_email = user.email`, so
+> there is no one else's row to reach — and a test asserts that.
+
+### N3 — the ticket as written
+
+`POST /meetings/bot-join` (`meeting_bot.py:691`) accepts an optional
+`body.meeting_id` and, when present, runs
+`UPDATE meeting SET status='recording', platform=…, start_at=now(), title=… WHERE id = CAST(:id AS UUID)`
+(`:728-737`) with **no owner predicate**. Any member holding `feature:notes`
+who knows a colleague's prepared meeting id can flip it into `recording`, mutate
+its title and start time, attach a bot to it, and register live presence under
+their own identity (`live_session.begin(meeting_id, "bot", user.email)` `:817`).
+
+Note the deliberate asymmetry that must be preserved: the bot pipeline carries
+`meeting_bot.requested_by` — the member who sent the notetaker — as
+`triggered_by`, **not** the meeting's owner, precisely so the requester's
+authority is not laundered into the owner's (PR #346's commit body;
+`gateway/AGENTS.md:30`).
+
+**Done when:** the attach branch loads the meeting through
+`load_owned_meeting` first and 404s for a non-owner; the create branch
+(`:741-752`, which already stamps `owner_email = user.email` at `:749`) is
+unchanged; and a test asserts 404 when a non-owner supplies another member's
+`meeting_id`. — **met, with the loader replaced by the predicate bound into
+the `UPDATE` itself** (same predicate, same 404, no TOCTOU window; see the
+CLOSED block).
+
+### N5 — the rest of `routes/notes` · size: M · 🔴 **OPEN** · ⚠️ **NOT part of G4**
+
+Found while closing N1, and recorded rather than absorbed: **N1's table was a
+list of six files, not a proof of exhaustiveness.** `routes/notes` has 24
+modules. After N1–N3, `load_owned_meeting` / `OWNED_MEETING_PREDICATE` appear
+in `meetings.py`, `recordings.py`, `summaries.py`, `actions.py`, `qa.py`,
+`share.py`, `copilot.py`, `live.py` and `meeting_bot.py` — and in **nine**
+other modules the count is still zero:
+
+| File | Routes still reaching a meeting by caller-supplied id |
+|---|---|
+| `summaries.py` | `GET`/`PUT /meetings/{id}/note`, `GET /meetings/{id}/actions` (`summarize` *is* scoped — PR #346) |
+| `copilot_context.py` | `PUT /meetings/{id}/brief`, `GET /meetings/{id}/context`, `POST /meetings/{id}/context/deep` |
+| `copilot_agenda.py` | `GET`/`PUT /meetings/{id}/agenda`, `POST /meetings/{id}/agenda/chat` |
+| `meeting_bot.py` | `GET /meetings/{id}/bot`, `/bot/diagnostics`, `/bot/screenshot`, `POST /meetings/{id}/bot/stop` (`bot-join` *is* scoped — N3) |
+| `live_transcript.py` | `/live/browser-segment`, `/live/roster`, `GET /meetings/{id}/live` (SSE), `POST /meetings/{id}/say` |
+| `live_session.py` | `GET /live/sessions`, `GET /meetings/{id}/live/session`, `POST /meetings/{id}/live/copilot` |
+| `speaker_id.py` | `POST /meetings/{id}/identify-speakers` |
+| `agenda_progress.py` | `GET /meetings/{id}/agenda/progress` |
+| `events.py` | `GET /meetings/{id}/events` (SSE progress) |
+
+Two of these are as sharp as anything in N1 — `GET /meetings/{id}/note` serves
+the generated notes, and `GET /meetings/{id}/live` is the live caption stream —
+and `POST /meetings/{id}/say` makes the notetaker *speak a line into somebody
+else's call*.
+
+**This is deliberately NOT added to G4.** G4's done-when is "each of §4's four
+tickets meets its own done-when", and all four do; re-scoping an owner-facing
+gate is the owner's call, not an implementer's. **Owner decision needed:** does
+N5 block colleague #1, or does it ship after? Note that G4 going green is
+already qualified — G1/G2/G3 keep WS-24 red regardless, so nothing turns on
+this today.
+
+**Done when:** every route in the table loads through `core.load_owned_meeting`
+or binds `OWNED_MEETING_PREDICATE`, 404 never 403; the two machine entrypoints
+(`/live/segment`, and `/live/browser-segment`'s user-authed twin) keep their
+existing trust models; and `tests/unit/test_notes_owner_scoping.py` gains a
+red-first case per route family. 🟢 **AGENT-SAFE.**
+
+### N4 — the Tasks people directory is org-wide read **and write** · size: M (one file + a decision) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n4-people-scoping`. What shipped, and where:
+>
+> | Rule | Where | Anchor |
+> |---|---|---|
+> | Write gate — all **four** routes | `require_people_write()` as a route `dependencies=[…]` entry | `routes/tasks/core.py` (`PEOPLE_WRITE_PERMISSION = "admin:members:manage"`, `require_people_write`); bound at `people.py` `POST /people`, `PATCH /people/{person_id}`, `POST /people/{person_id}/resume` and `capability.py` `POST /people/embed` |
+> | Read projection | `_row_to_person(row, *, include_hr)` — keyword-only, **no default**, so a route added later cannot inherit the permissive answer by omission | `people.py` (`HR_FIELDS`, `_blank_hr`, `_row_to_person`); the predicate is `core.can_read_hr_fields` on `PEOPLE_HR_READ_PERMISSION = "admin:members:read"` |
+> | Search may not become an oracle | `GET /people?q=` drops the `unnest(skills)` clause for a caller who cannot see skills — matching on a column that is then stripped would leak it back | `people.py::list_people` |
+> | Delegation untouched | `fetch_people_for_clarify` still takes `db` only and returns full rows; the projection is at the **serialization** layer, never in the SQL | `people.py::fetch_people_for_clarify` |
+>
+> Tests: `tests/unit/test_tasks_people_scoping.py` (35 cases). Three mutants
+> verified red first — always-include-HR, a removed write dependency, and an
+> unconditional skill-search clause.
+>
+> **Superseded 2026-08-04:** this block used to end "Still open on this gate:
+> N1–N3 (Notes), G1, G2 and G3." N1–N3 closed the same day, so G4 **is** green;
+> G1, G2 and G3 are not, and the readiness verdict is unchanged.
+
+**This was the sharpest item on the gate.** It is HR data, it was readable and
+writable by the default role, and it is the exact surface D12's department
+privacy exists to protect.
+
+`routes/tasks/people.py` mounts on the shared `/tasks` router
+(`people.py:22` ← `routes/tasks/core.py:27-30`). That router's only dependency
+is `require_feature_router("tasks")` (`core.py:29`). The people routes add
+**no** owner predicate, no admin permission and no group scope on top of it:
+
+| Route | Anchor | What it does with no scope |
+|---|---|---|
+| `GET /tasks/people` | `people.py:80-84` | Takes `_user` and never reads it; runs `SELECT * FROM gtd_people WHERE status='active'` at `:98` and returns every column through `_row_to_person` (`:56-77`) — name, email, role, title, department, team, `reports_to`, `manager_id`, skills **and `skills_source`**, `resume_summary`, `years_experience`, capacity / current load / available hours, and `clickup_user_id`. |
+| `POST /tasks/people` | `:190` | Creates a person. `user` is used only for `_uid(user)` → `updated_by` (`:233`). |
+| `PATCH /tasks/people/{person_id}` | `:241` | Edits **any** person: name, email, manager, skills, capacity, ClickUp link. Loads the row via `_get_person_row` (`:181-187`), which is `SELECT * FROM gtd_people WHERE id = :id` — id only. |
+| `POST /tasks/people/{person_id}/resume` | `:303` | Uploads a PDF/DOCX/TXT onto **any** person, parses it, writes `gtd_person_resumes` with up to 200 kB of parsed text (`:351-360`) and merges the extracted skills, summary, years and domain into the record (`:363-375`). |
+| `POST /tasks/people/embed` | `capability.py:225-228` | Backfills the roster's capability embeddings; `_user` is unused. |
+
+**The contrast that sizes it.** This is *not* a blanket gap in the Tasks
+package. Task accounts are scoped — `_assert_account_owner`
+(`routes/tasks/core.py:189-197`) is bound at `accounts.py:190, 259, 285, 325,
+406` — and items carry 27 `user_id = :uid` predicates. The people layer is the
+one that never got a rule, so the fix is local to it rather than a rewrite.
+
+#### DECISION — directory open, HR fields restricted `owner-answered 2026-08-04`
+
+`gtd_people` is an *org* roster imported from `agent-project-manager` HR data
+(`people.py:1-10`); it is not per-user rows, so "owner-scope it" was the wrong
+shape and the ticket could not be built until the owner said which shape it is.
+The answer:
+
+* **Read** stays available to anyone holding `feature:tasks` — an org chart a
+  colleague cannot open is not an org chart — **but the HR-sensitive fields are
+  stripped for non-admins**: `resume_summary`, `skills`, `skills_source`,
+  `years_experience`, and capacity / current-load / available hours. The basic
+  directory stays visible to all: name, email, role, title, department, team,
+  `reports_to` / `manager_id`, `clickup_user_id`.
+* **Writes are admin-only** — `POST /people`, `PATCH /people/{person_id}`,
+  `POST /people/{person_id}/resume` and `POST /people/embed`.
+
+**Rejected alternatives, recorded so they are not re-proposed:**
+
+1. **Fully org-wide read** (status quo, made explicit). Rejected: it is the
+   exposure this ticket exists to close. A résumé summary and a per-person load
+   figure are HR records, not directory entries, and D12's department privacy
+   is written against exactly this surface.
+2. **Center-scoped read** (a colleague sees their own Center's people). Rejected
+   for two reasons: it needs **D13's grant shape**, which is unbuilt, so the
+   ticket would block on another workstream; and it **breaks cross-team
+   delegation**, which is the roster's whole purpose — you delegate *out* of
+   your Center more often than within it.
+
+**Implementation notes that are part of the decision, not incidental:**
+
+* The two permissions are the **existing** admin vocabulary, not new slugs.
+  `admin:members:read` is the same floor the whole `/admin` package uses
+  (`admin/_common.py:77-91`) and the same predicate `/auth/me` reports as
+  `is_admin` (`admin/me.py:96`), so "may read the member directory" and "may
+  read the HR half of the people directory" are one answer that cannot drift.
+  `admin:members:manage` already governs member records. A **new** slug would
+  be nobody's grant until an admin created it — which would switch HR features
+  off for the owner too, and is the failure mode this decision avoids.
+  Consequence, stated so it is not a surprise: a `manager` (who holds
+  `admin:members:read` but not `:manage`) **can** see the HR fields and
+  **cannot** write them. That is consistent with §3.2 — a manager already reads
+  the whole member directory.
+* The projection sets fields to `null` / `[]` / `{}`; it never removes keys.
+  The response shape, the TS `OrgPerson` type and `mapOrgPerson`
+  (`workbench/control_plane/src/app/tasks/lib/api.ts:301-327`) are unchanged.
+* **`domain` and `status` are deliberately NOT restricted.** They are outside
+  both lists above. `status` drives the directory's inactive badge; `domain` is
+  a coarse field of the same kind as `department` (`robotics`, `firmware`).
+  `domain` is résumé-fillable, so if the owner wants it restricted it is a
+  one-line addition to `people.HR_FIELDS` + `_blank_hr()`.
+* The search box is part of the boundary: `GET /people?q=` matches skills only
+  for a caller who may see skills, or the strip is cosmetic.
+* ⚠️ The delegation path must keep working, and does: `fetch_people_for_clarify`
+  is an in-process helper called server-side from `ai.py`, `capture_email.py`
+  and `planning.py` — never through the router — and the projection is applied
+  at the **serialization** layer, not in the SQL, precisely so it is untouched.
+  Do not "fix" it too; that is the capability-aware delegation the roster
+  exists for.
+* Consequence on the agent path, and it is the right one: the `gtd_people`
+  skill tool (`apps/skills/skill-task-gtd/skill_task_gtd/core.py`) calls
+  `GET /tasks/people` **as the acting member**, so an agent run for a non-admin
+  now sees the same restricted directory that member sees. An agent must never
+  exceed the person it acts for; the in-process clarify path is what keeps
+  delegation capability-aware.
+
+**Done when** *(all met — see the CLOSED banner at the head of this ticket)*:
+the read decision is recorded (above); the four write routes require a
+permission strictly above `feature:tasks` and 403 for a plain `member`;
+`GET /people` enforces the read rule; `tests/unit/test_tasks_people_scoping.py`
+carries a case per route; and `fetch_people_for_clarify` is unchanged.
+
+---
+
+## 5. Verification
+
+    # The gate's machine-checkable half. On the box:
+    cd /opt/acb/app && uv run python scripts/onboarding_preflight.py
+    # Anywhere else (box-only checks report SKIP, never PASS):
+    uv run python scripts/onboarding_preflight.py --mode local
+    # Expected on this branch: 1 pass, 2 FAIL, 4 skip, exit 1. The two FAILs
+    # are repository defects, not environment ones -- the api vhost in
+    # deploy/hostinger/caddy/Caddyfile:15-17 has no `header_up -` deletions
+    # (G1), and there is no scripts/backup_db.sh (G3, PR #347).
+
+    # The access model this document describes:
+    uv run pytest tests/unit/test_org_access_control.py \
+                  tests/unit/test_admin_groups.py \
+                  tests/unit/test_default_deny_auth.py -q
+    # Baseline on ws-24-onboarding-readiness: 85 passed.
+
+    # §4's holes. All four tickets are closed and green:
+    uv run pytest tests/unit/test_tasks_people_scoping.py -q
+    # 35 passed (N4).
+    uv run pytest tests/unit/test_notes_owner_scoping.py -q
+    # 57 passed (N1-N3; 21 of them are PR #346's).
+
+    # Route wiring, because N1-N3 changed route dependencies and signatures:
+    uv run pytest tests/unit/test_org_access_enforcement.py -q
+    # 31 passed.
+    # The whole Notes suite, by file (never the directory):
+    uv run pytest tests/unit/test_notes_agenda_progress.py \
+      tests/unit/test_notes_bot_identity.py tests/unit/test_notes_copilot.py \
+      tests/unit/test_notes_copilot_agenda.py \
+      tests/unit/test_notes_copilot_context.py \
+      tests/unit/test_notes_copilot_policy.py tests/unit/test_notes_dispatch.py \
+      tests/unit/test_notes_glossary.py tests/unit/test_notes_live.py \
+      tests/unit/test_notes_live_http.py tests/unit/test_notes_live_session.py \
+      tests/unit/test_notes_live_speakers.py \
+      tests/unit/test_notes_live_transcript.py \
+      tests/unit/test_notes_meeting_bot.py tests/unit/test_notes_meeting_prep.py \
+      tests/unit/test_notes_owner_scoping.py tests/unit/test_notes_qa.py \
+      tests/unit/test_notes_settings.py tests/unit/test_notes_speaker_id.py \
+      tests/unit/test_notes_summaries.py -q
+    # 280 passed on ws-24-n1n3-notes-scoping (36 of them new here). The "242
+    # at #346" figure is not reproduced by this file list -- treat 280 as the
+    # baseline and this list as the definition of "the Notes suite".
+
+    # ⚠️ NEVER `uv run pytest tests/unit/` as a directory on this box -- it
+    # hangs against the live DB. Name the files.
+
+    uv run ruff check . --select F821,F601,F602,F502,F7,B006
+    python -m py_compile scripts/onboarding_preflight.py
+
+**Never** run the preflight against production from an agent session. The DB
+checks read the live database; `--mode local` is the agent's only mode.

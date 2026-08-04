@@ -9,7 +9,12 @@ OWNER-GATE, and **it is still not safe to invite anybody.** G4 closed the holes
 that survive a *correct* identity; G1/G2 are about the identity itself, and an
 owner predicate applied to a forged one is not a control. §4 also mints **N5**
 (the rest of `routes/notes` — nine modules N1's table did not enumerate),
-deliberately outside G4 and awaiting an owner call. · **Board row:** WS-24 ·
+deliberately outside G4 and awaiting an owner call. **§6 is new (2026-08-04):
+N6, the provisioning gap** — an unprovisioned sign-in is logged and then
+discarded, and `invited` is a status with no exit, so the owner can neither see
+who is knocking nor successfully let them in. Motivated by a measured
+production incident: 53 refusals for one colleague over 18 hours, invisible in
+the UI. · **Board row:** WS-24 ·
 **Owner:** vjvarada · **Date:** 2026-08-04 ·
 **Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
 cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
@@ -28,6 +33,8 @@ parts:
 | §2 | **The onboarding runbook** — invite → role → Center group → verify | procedure, grounded in real endpoints |
 | §3 | **The capability matrix** — what a colleague on each role can actually see | evidence table, every cell carries `file:line` |
 | §4 | **The four open owner-scoping holes** — blocking items with sizes | tickets |
+| §5 | **Verification** — the exact commands, and what must never be run | commands |
+| §6 | **The provisioning gap** — nobody can see who is knocking (N6) | ticket |
 
 **Executable half.** `scripts/onboarding_preflight.py` implements §1's
 machine-checkable criteria. Run it **on the box** before inviting anyone; run
@@ -82,7 +89,7 @@ the owner loses work that has no backup.
 
 | # | Item | Gate | Done when |
 |---|---|---|---|
-| **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. |
+| **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. **⚠️ HALF-DONE 2026-08-04:** the owner applied both directives to `/etc/caddy/Caddyfile` and they are live — verified by `caddy adapt` per vhost (`api.*` strips, the UI vhost correctly does not, since it *sets* them). **`deploy/hostinger/caddy/Caddyfile` is still unpatched, so the two have drifted**, and `deploy.yml:496-501` reinstalls the repo copy only when the live one fails validation — meaning a future config break silently removes the protection. G1 is not green until the repo file matches. Note also that `systemctl reload caddy` **has never worked on this box** (`admin off` ⇒ no admin API on :2019); only `restart` applies config. |
 | **G2** | **`GATEWAY_INTERNAL_TOKEN` is provisioned in BOTH files and is not `LITELLM_MASTER_KEY`** | 🔴 **OWNER-GATE** (a credential provisioned on the box, in two places) | The preflight reports `[PASS] Service identity is its own secret` in **box** mode, which now requires all three of: set in `/opt/acb/app/.env`; set in `workbench/control_plane/.env.local`; **the two byte-identical**; and different from the LLM key. ⚠️ **Setting only the first is a total lockout, not a partial fix** — see the warning below. |
 | **G3** | **A restore path exists** (BO-23) | 🟢 **AGENT-SAFE** to write the scripts + runbook; 🔴 **OWNER-GATE** to run any of them, install a schedule, or point anything at prod data | The preflight reports `[PASS] A restore path exists and backups are recent`. Its repo half is **BO-23's own done-when 1–4, verbatim** (`FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-23): `scripts/backup_db.sh` taking a data-inclusive `pg_dump -Fc` (**not** `--schema-only`), `scripts/restore_db.sh` calling `pg_restore`, a runbook that states the *verification* step, and a pre-migration hook. Its box half: an artefact under `/opt/acb/backups` newer than 48h containing a dump above the size floor. **Nothing of this exists on this branch** — the only DB script that dumps anything is `scripts/dump_schema.sh` (`pg_dump --schema-only` — structure, zero rows). `scripts/backup_db.sh` and `restore_db.sh` are proposed on the **independent** PR #347 (`ws-0-bo23-backup-restore`) and are not here; G3 goes green when that lands and is scheduled, not before. See `work_plan.md` §2 exception 2. |
 | **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) — ✅ **4 of 4 CLOSED 2026-08-04** | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` (57 cases) covers N1–N3 and `tests/unit/test_tasks_people_scoping.py` (35) covers N4. **N4** — the Tasks people directory is "directory open, HR fields restricted" with all four writes on `admin:members:manage` (§4 N4's DECISION block). **N1–N3** (`ws-24-n1n3-notes-scoping`) — fifteen of sixteen Notes routes in the six named files load through `core.load_owned_meeting` / `OWNED_MEETING_PREDICATE` and answer 404 never 403, the sixteenth (`live.py:256`) is machine-authed by recorded decision; `actions._load_action` joins `meeting` so a member can no longer approve a colleague's item into their own GTD list; `bot_join`'s attach branch binds the predicate into the `UPDATE`. ⚠️ **This gate going green does not make WS-24 green** — G1/G2/G3 are untouched, and G4 closes the holes that survive a *correct* identity, not the ones that begin with a forged one. ⚠️ §4's new **N5** (nine further `routes/notes` modules N1's table never enumerated) is deliberately **outside** this gate and needs an owner call. |
@@ -153,6 +160,31 @@ directory identity into a member**.
 > **Choose the role deliberately.** `member` is the default and is the right
 > answer for a new employee. Read §3 first — `manager` is not "member plus a
 > bit"; it hands over the entire member directory and both org-memory rights.
+
+### Step 1b — Activate · ⚠️ **the step this runbook was missing, and its absence is the 2026-08-04 incident**
+
+    PATCH /admin/members/{email}     { "status": "active" }
+
+* Gate: `admin:members:manage` — `members.py:202-203`.
+* UI: the **Activate** button on any `invited` row —
+  `settings/members/page.tsx:252-258`.
+* Behaviour: sets `status` and stamps `joined_at` with
+  `COALESCE(joined_at, now())` (`members.py:227-230`), so re-activating a
+  returning member keeps their original join date.
+* Allow up to 60 seconds before they retry — their refusal is cached
+  (`access.py:34`).
+
+> **Step 1 alone does not let anybody in, and nothing says so at the time.**
+> Invite writes `status = 'invited'` (`members.py:172`); `is_active` is
+> `status == "active"` **exactly** (`access.py:288`). An invited colleague sees
+> the identical "Your account is not active" screen as a total stranger, while
+> the admin who invited them sees a row in the Members list and reasonably
+> believes the job is done. Sign-in is Entra SSO — there is no invitation email
+> and therefore no acceptance event that could promote them. **Steps 1 and 1b
+> are one operation performed in two clicks.**
+>
+> Whether that should stay two clicks is an open question, recorded in §6 as
+> N6b rather than decided here.
 
 ### Step 2 — Assign the role (if it is not the default)
 
@@ -781,3 +813,200 @@ carries a case per route; and `fetch_people_for_clarify` is unchanged.
 
 **Never** run the preflight against production from an agent session. The DB
 checks read the live database; `--mode local` is the agent's only mode.
+
+---
+
+## 6. The provisioning gap — nobody can see who is knocking
+
+§2's runbook is **push-only**: the only way an `app_user` row is ever created is
+an admin typing an address into Invite (`routes/admin/members.py:168-183`).
+Somebody arriving at the front door creates nothing an admin can see. The
+refusal *is* logged — `access.py:264-272` emits `access_unprovisioned_signin`
+with the email — but it goes to journald, nothing reads it back, and it is gone
+at the next rotation. So the owner's only way to learn that a colleague is
+locked out is for that colleague to tell them out of band.
+
+**Measured on the box 2026-08-04, and this is the ticket's motivation rather
+than a hypothetical:** `journalctl -u acb-gateway` (retained back to
+2026-07-28) carries **53** `access_unprovisioned_signin` events for exactly one
+address, `ishaanpilar@fracktal.in`, first at `2026-08-03T16:21:15Z` and still
+recurring at `2026-08-04T10:46:56Z`. One colleague spent eighteen hours telling
+the system he wanted in, fifty-three times, and the system told nobody.
+
+### N6 — capture the knock, and let the owner answer it · size: M (migration + one route file + one page) · 🟢 **AGENT-SAFE**
+
+Two defects, deliberately in one ticket because shipping either alone leaves a
+half-working door.
+
+**N6a — the request queue.** Persist the unprovisioned sign-in instead of
+discarding it, and give `/settings/members` a **Requests** tab where the owner
+approves with roles in one action.
+
+**N6b — invite does not admit anybody, and the runbook never said so.**
+🔴 **NOT DISPATCHABLE — held for an owner re-read.** `POST /admin/members`
+inserts `status = 'invited'` (`members.py:172`) and `is_active` is
+`status == "active"` exactly (`access.py:288`), so Step 1 on its own leaves the
+colleague at the same dead-end screen as a stranger. That much is real, and it
+is what the owner hit on 2026-08-04.
+
+> ### ⚠️ RETRACTED — this ticket was first written on a false premise
+>
+> The first draft of N6b claimed *"there is no `invited → active` transition
+> anywhere in the codebase."* **That is wrong, and the spec-auditor caught it.**
+> `PATCH /admin/members/{email}` accepts `status: "active"` from
+> `VALID_STATUSES` (`members.py:50`) and stamps `joined_at` with
+> `COALESCE(joined_at, now())` (`members.py:224-233`) — the exact behaviour the
+> retracted draft proposed to build. It is already surfaced as an **Activate**
+> button on every `invited` row (`settings/members/page.tsx:252-258`).
+>
+> The real defect is **documentary**: §2's runbook went Invite → Roles → Group
+> → Verify and never once said "activate". Step 4 then verifies with
+> `GET /admin/members/{email}/access`, which faithfully reports `is_active=false`
+> while the row is still `invited` — so the runbook could be followed exactly,
+> the verification step could be performed exactly, and the colleague would
+> still be locked out with nothing appearing to be wrong. **That omission is
+> now fixed: §2 Step 1b.** No code was needed for it.
+
+What remains genuinely open is narrower, and is a **question, not a ticket**:
+
+**Should activation be automatic on first sign-in?** An invited member could be
+promoted on their first IdP-verified resolve — a guarded
+`UPDATE … WHERE status = 'invited'` in `access.py` — which would make Invite
+mean "let them in" and reduce the two clicks to one. Against it: it puts a
+second write on the auth path for a problem a documentation fix has already
+solved, and `invited` currently carries real information ("provisioned, never
+signed in") that the Members UI could surface instead of discarding.
+
+🔴 **OWNER DECISION:** (a) leave it at two clicks, now that the runbook says so;
+(b) auto-promote on first sign-in; or (c) make Invite insert `active` directly
+(a one-line change at `members.py:172`). **This spec recommends (a)** — the
+measured failure was a missing sentence, and (b) and (c) both spend an auth-path
+change on it. Nothing downstream is blocked either way; **N6a does not depend on
+this.**
+
+If (b) is ever chosen, one non-obvious guard must come with it: `suspended` and
+`removed` must **not** be promoted. The natural implementation
+(`status != 'active'` → activate) silently un-suspends people.
+
+#### DECISION — a separate table `agent-proposed, owner may overrule`
+
+**Chosen: a new `access_request` table, not a fifth `app_user.status`.** The
+one-table version is tempting — the Members page already lists `app_user` — but
+an `app_user` row is *the org's member record*: it carries `org_id`, it is what
+`user_role` and the member/people listings join against, and `is_active=False`
+protects the **auth** path only, not every query that reads the roster. A
+stranger who merely knocked must not acquire a row that a future join can
+surface. Approval creates the real `app_user` through the **same helper**
+`POST /admin/members` uses, so there is one provisioning path, not two.
+
+**Precondition that makes auto-capture safe, recorded so it is re-checked:**
+`AUTH_MICROSOFT_ENTRA_ID_TENANT` is set to the Fracktal directory GUID on the
+box (verified 2026-08-04 in both `/opt/acb/app/.env` and
+`workbench/control_plane/.env.local`), so `auth.ts`'s issuer is tenant-pinned
+and only directory members can reach the branch that writes. **If that variable
+is ever unset the issuer falls back to `organizations`** (`src/auth.ts:22`) and any
+Microsoft work account on earth can append a row. Rows stay bounded by the
+directory either way, but the table stops being a list of colleagues.
+
+**Done when — N6a**
+
+1. A migration at **the next free number at build time** creates
+   `access_request`: `email` (unique on `lower(email)`), `display_name`,
+   `first_seen_at`, `last_seen_at`, `attempt_count`, `status`
+   (`pending` | `approved` | `denied`), `decided_by`, `decided_at`. Idempotent
+   (`IF NOT EXISTS`), like every migration in `infra/postgres/`.
+2. `resolve_access`'s `row is None` branch (`access.py:257-276`) upserts the
+   request — insert on first sight, otherwise bump `attempt_count` and
+   `last_seen_at`. **Best-effort:** the upsert is wrapped so that a failing
+   write changes neither the returned `EffectiveAccess(is_active=False)` nor
+   the log line, and never raises into the request. Pinned by a test that makes
+   the write raise and asserts the refusal is still returned unchanged.
+3. **🔴 The write fires only on the sign-in path.** `resolve_access` is **not**
+   a sign-in-only function: `routes/rooms.py:215` calls it in a fan-out over
+   *room participants'* emails, and `access.py:433` folds it over session
+   subjects. Neither is a knock, and dw4 does not exclude them — a participant
+   with no `app_user` row would silently be filed as a "sign-in request",
+   putting people in the queue who never tried to sign in, which is precisely
+   the harm the DECISION cites to justify a separate table. **Done when** the
+   upsert is reached only from the request path — e.g. a keyword-only
+   `record_request: bool = False` passed solely by `acb_auth/deps.py:231` — and
+   a test asserts `rooms.py`'s fan-out over three unknown emails writes
+   **nothing**.
+4. It never records an email that already has an `app_user` row in **any**
+   status — the branch only runs when the row is absent, and a test pins that a
+   suspended member does not generate a request.
+5. Write volume is bounded by the existing 60-second resolution cache
+   (`access.py:34`), not per-request. A test asserts a second resolve inside
+   the TTL performs no second write.
+6. `GET /admin/members/requests` lists pending requests, newest `last_seen_at`
+   first. **⚠️ The `/admin` floor is per-route, not a package property** —
+   `_common.py:31` creates the router with **no** `dependencies=`, and every
+   existing route declares `Depends(require_admin_user)` in its own signature
+   (`_common.py:77-91`). A new route that omits it inherits no floor at all.
+   Each new route below must declare it explicitly, and a wiring test must pin
+   that. **No new permission slug** — a new slug is nobody's grant until an
+   admin creates it (the N4 lesson).
+7. `POST /admin/members/requests/{email}/approve` with an optional `roles` body
+   (defaulting to `["member"]`, as `members.py:165` does) **provisions the
+   member and activates them in one action** — `status = 'active'`, not
+   `'invited'`, because an approval *is* the admin's decision to let them in
+   and the person is already at the door (this is where §2's two-click problem
+   must not be re-created). It marks the request `approved` with
+   `decided_by`/`decided_at` and calls `invalidate_for(email)` so the cached
+   refusal does not outlive the approval. **`invalidate_for` lives at
+   `admin/_common.py:218`, not in `acb_auth`** — `members.py:43` already
+   imports it from there. Gated on `admin:members:invite`. Idempotent:
+   approving twice is not an error and does not create two members.
+8. The provisioning insert is **extracted from `invite_member`
+   (`members.py:168-183`) into a plain `async def _provision_member(db, org_id,
+   *, email, display_name, roles, admin, status)` helper that both routes
+   call** — one provisioning path, not two. Left outside the helper:
+   `invalidate_for`, `record_admin_change` (the audit action differs —
+   `org.member_invited` vs an approve action), and the `MemberEntry`
+   construction. ⚠️ **`invite_member` has no test coverage today.** Write the
+   characterisation test for the existing invite behaviour **first**, watch it
+   pass, then refactor — this is an unfenced route on the auth path.
+9. `POST /admin/members/requests/{email}/deny` sets `denied`. A denied address
+   that keeps signing in updates `last_seen_at`/`attempt_count` but **does not**
+   return to `pending`.
+10. `/settings/members` grows a **Requests** tab showing address, first seen,
+    last seen, attempt count, with Approve (role picker) and Deny. Approved and
+    denied rows leave the tab. The tab shows a count badge when anything is
+    pending — the whole point is that the owner learns without being told.
+11. The existing Members list labels an `invited` row **"invited — never signed
+    in"** rather than rendering it as though it were live. (Carried over from
+    the retracted N6b; it is a label change, independent of the open question.)
+
+**Done when — N6b:** nothing to build. §2 Step 1b shipped the fix; the
+remaining question is the owner's (a)/(b)/(c) above.
+
+**Verification**
+
+    uv run pytest tests/unit/test_signin_requests.py -q
+    # New file. Every case red-first against pre-fix behaviour.
+    uv run pytest tests/unit/test_default_deny_auth.py \
+                  tests/unit/test_org_access_control.py \
+                  tests/unit/test_org_access_enforcement.py -q
+    # test_org_access_enforcement.py is the route-wiring sweep -- run it
+    # because N6a adds routes under /admin, where the auth floor is per-route.
+    uv run ruff check . --select F821,F601,F602,F502,F7,B006
+    cd workbench/control_plane && npx tsc --noEmit
+
+⚠️ **The unprovisioned branch has no DB-free regression fence today.** The only
+test in the tree that exercises `access.py:257-276` is
+`test_owner_bootstrap.py::test_unprovisioned_signin_is_cached` (`:176-187`),
+and it is `@_needs_db` — §6 of `work_plan.md` forbids pointing it at prod, so an
+agent cannot run it. N6a is adding a **write** to that branch, so
+`test_signin_requests.py` must create the fence it is missing, not assume one.
+An earlier draft of this block claimed `test_default_deny_auth.py` pinned the
+branch; it does not — that file never calls `resolve_access`.
+
+⚠️ **OWNER-GATE is the merge, not a separate apply step.**
+`scripts/apply_migrations.sh` replays every numbered migration on **every**
+deploy (`deploy.yml:202-203`), so there is no agent-reachable "apply" to gate —
+merging this arms a deploy that changes auth behaviour (`work_plan.md` §6,
+supervised window). Writing the migration and the routes is AGENT-SAFE.
+
+**Not in scope:** notifying the owner out-of-band (email/push on a new
+request), self-service role requests, and any auto-approval rule. Capture and
+answer, nothing else.

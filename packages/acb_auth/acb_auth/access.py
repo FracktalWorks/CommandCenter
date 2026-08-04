@@ -200,11 +200,20 @@ _ACCESS_SQL = """
 """
 
 
+#: SCAFFOLD — deliberately wrong so the red-first run fails on the security
+#: claim (a denial must not be undone by the next sign-in), not on an import.
+_ACCESS_REQUEST_UPSERT_SQL = """
+    INSERT INTO access_request (email) VALUES (:email)
+    ON CONFLICT (lower(email)) DO UPDATE SET status = 'pending'
+"""
+
+
 async def resolve_access(
     email: str | None,
     *,
     legacy_role: str | None = None,
     use_cache: bool = True,
+    record_request: bool = False,
 ) -> EffectiveAccess:
     """Resolve a member's effective access by email.
 

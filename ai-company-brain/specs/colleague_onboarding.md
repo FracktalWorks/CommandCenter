@@ -1,13 +1,14 @@
 # Colleague onboarding — the readiness gate, the runbook, and the capability matrix
 
-**Status:** 🔴 NOT READY — four blocking gates open (§1.1), and G4 now carries
-**four** tickets, not three. **N4 (§4) is a live org-wide exposure of HR data
-to the default `member` role** and raises this row's severity: it is readable
-*and writable* today, and it is the exact surface D12's department privacy
-exists to protect. · **Board row:** WS-24 · **Owner:** vjvarada ·
+**Status:** 🔴 NOT READY — four blocking gates still open (§1.1). **G4 is
+partially closed: N4 shipped 2026-08-04** (the Tasks people directory is now
+"directory open, HR fields restricted", writes admin-only — §4 N4); **N1–N3
+remain open**, and G1/G2/G3 are unchanged and OWNER-GATE. Nothing here says
+it is safe to invite anybody yet. · **Board row:** WS-24 · **Owner:** vjvarada ·
 **Date:** 2026-08-04 ·
 **Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
-cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`).
+cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
+N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`).
 
 **What this doc is for.** Exactly one person is signed in to this deployment
 (**owner-reported, not measured** — see the note below). The question "is it
@@ -78,7 +79,7 @@ the owner loses work that has no backup.
 | **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. |
 | **G2** | **`GATEWAY_INTERNAL_TOKEN` is provisioned in BOTH files and is not `LITELLM_MASTER_KEY`** | 🔴 **OWNER-GATE** (a credential provisioned on the box, in two places) | The preflight reports `[PASS] Service identity is its own secret` in **box** mode, which now requires all three of: set in `/opt/acb/app/.env`; set in `workbench/control_plane/.env.local`; **the two byte-identical**; and different from the LLM key. ⚠️ **Setting only the first is a total lockout, not a partial fix** — see the warning below. |
 | **G3** | **A restore path exists** (BO-23) | 🟢 **AGENT-SAFE** to write the scripts + runbook; 🔴 **OWNER-GATE** to run any of them, install a schedule, or point anything at prod data | The preflight reports `[PASS] A restore path exists and backups are recent`. Its repo half is **BO-23's own done-when 1–4, verbatim** (`FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-23): `scripts/backup_db.sh` taking a data-inclusive `pg_dump -Fc` (**not** `--schema-only`), `scripts/restore_db.sh` calling `pg_restore`, a runbook that states the *verification* step, and a pre-migration hook. Its box half: an artefact under `/opt/acb/backups` newer than 48h containing a dump above the size floor. **Nothing of this exists on this branch** — the only DB script that dumps anything is `scripts/dump_schema.sh` (`pg_dump --schema-only` — structure, zero rows). `scripts/backup_db.sh` and `restore_db.sh` are proposed on the **independent** PR #347 (`ws-0-bo23-backup-restore`) and are not here; G3 goes green when that lands and is scheduled, not before. See `work_plan.md` §2 exception 2. |
-| **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` covers N1–N3 and `tests/unit/` gains the N4 cases. Latent with one user; live the moment a colleague signs in. **N4 is the sharpest**: the Tasks people directory is org-wide readable *and writable* by the default `member` role — HR data, and exactly the surface D12's department privacy exists to protect (§3.3, §4 N4). |
+| **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) — **1 of 4 closed** | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` covers N1–N3 and `tests/unit/test_tasks_people_scoping.py` covers N4. **N4 CLOSED 2026-08-04** — the Tasks people directory is "directory open, HR fields restricted" with all four writes on `admin:members:manage` (§4 N4's DECISION block). **N1–N3 are untouched and still block this gate**; they are latent with one user and live the moment a colleague signs in. |
 
 > ### ⚠️ G2 has a lockout mode. Read this before provisioning the token.
 >
@@ -320,7 +321,7 @@ per-object rule decides whose rows you see through it.
 |---|---|---|---|
 | **Notes** | Owner-scoped. One predicate, written once, case-insensitive; `NULL` owner = pre-migration-95 legacy, visible to all | `routes/notes/core.py:192-194` (`OWNED_MEETING_PREDICATE`), `:197-217` (`load_owned_meeting`, 404-not-403), bound in `routes/notes/meetings.py:77` | **Their own meetings only** — on the list/get/patch/delete/dispatch paths. ⚠️ **Six other route families are NOT owner-scoped** — §4. |
 | **Tasks — items and accounts** | Owner-scoped. Per-user rows: **27** `user_id = :uid` predicates on items; accounts asserted separately | `routes/tasks/items.py` (measured: 27 occurrences of the exact predicate); `routes/tasks/core.py:189-197` (`_assert_account_owner`), bound at `accounts.py:190, 259, 285, 325, 406` | Their own items only, and only task accounts they own. No team/Center sharing exists yet — that is WS-14 C1 / D13 (`gtd_project_grant`). |
-| **Tasks — the people directory** | ⚠️ **NONE. There is no owner predicate, no admin gate, and no permission beyond `feature:tasks`.** | `routes/tasks/people.py:22` imports the feature-gated `/tasks` router (`routes/tasks/core.py:27-30`) and adds nothing. `GET /people` (`:80-84`) takes `_user` and never uses it; it runs `SELECT * FROM gtd_people` at `:98`. Writes: `POST /people` (`:190`), `PATCH /people/{person_id}` (`:241`), `POST /people/{person_id}/resume` (`:303`) — `user` is used only for `_uid(user)` attribution. Also `POST /people/embed` (`capability.py:225`) | **The whole org people directory, and write access to it.** `member` holds `feature:tasks` (`130:235`), so every colleague can read every person's name, email, title, department, manager, skills (including résumé-extracted ones), capacity/current load and ClickUp user id — and can add a person, edit anybody's record, or upload a résumé onto it. **This is HR data and it is exactly what D12's department privacy exists to protect. Blocking item N4 (§4).** |
+| **Tasks — the people directory** | ✅ **Field-level projection on read, `admin:members:manage` on every write** (N4, closed 2026-08-04). The directory itself is deliberately org-wide | `routes/tasks/core.py` — `can_read_hr_fields` (`admin:members:read`) + `require_people_write()` (`admin:members:manage`); `routes/tasks/people.py` — `HR_FIELDS`, `_row_to_person(row, *, include_hr)`, and the four write routes' `dependencies=[…]` (the fourth is `capability.py`'s `POST /people/embed`). Pinned by `tests/unit/test_tasks_people_scoping.py` | **The basic org chart** — name, email, role, title, department, team, manager, ClickUp id — and **nothing else**: skills, `skills_source`, résumé summary, years of experience and capacity/load/available all come back null/empty, and `?q=` will not match a skill. No writes at all: all four 403. A `manager` (`admin:members:read`) sees the HR half but still cannot write it. |
 | **Email** | Per-account ownership, asserted on both the message-scoped and account-scoped loaders | `routes/email/core.py:168-180` (`_provider_for_account`), `:576-580` (`_assert_account_owner`) | Only accounts they own. There is (**owner-reported, not measured** — see the note in the preamble) exactly one account, `vjvarada@fracktal.in`, so a colleague's `/email` is empty until they connect their own. Shared mailboxes are ownerless work — `work_plan.md` §4. |
 | **Memory** | One rule per scope shape; an unrecognised shape is refused | `routes/memory.py:128-167` | Their own `<email>` scope (`_authorize_person` `:112-125` — **explicitly not readable by admins**); their own `prefs:` (`:95-100`); rooms they can read (`:82-92`); org memory read-only (`:73-79` + `131:75`); and — see below — **every shared agent's compartment**. |
 | **Memory, the wide edge** | `agent:<name>` is gated on `can_run_agent(name)`, and `member` holds `agents:run:*` | `routes/memory.py:103-109` + `130:237` | **A member can read and write the memory compartment of every agent they can run**, which is every agent. Documented as by-design ("shared across the agent's users"), but it means an agent that remembers something from the owner's conversation is readable by any member. |
@@ -372,18 +373,19 @@ per-workflow ACLs + hook-token rotation first. This spec does not decide it.
 
 ## 4. The open owner-scoping holes — blocking items
 
-Four routes families reach somebody else's rows with no owner predicate. Three
+Four route families reached somebody else's rows with no owner predicate. Three
 (N1–N3) are the ones PR #346 (`d2ef7fa0`) **explicitly named** rather than
 fixed, in its own commit body and in `apps/services/gateway/AGENTS.md:30`; they
 require `feature:notes`. The fourth (**N4**, found 2026-08-04 while building
-this matrix) is in Tasks, requires `feature:tasks`, and is the sharpest of the
+this matrix) is in Tasks, requires `feature:tasks`, and was the sharpest of the
 four because it is HR data. `member` holds **both** features by default
 (`130:235`).
 
-Every one is latent with one user and live the moment a colleague signs in.
+**N4 is CLOSED (2026-08-04). N1–N3 are open** — latent with one user and live
+the moment a colleague signs in.
 
-**These are the gate's G4. They are sized here and built elsewhere — this
-ticket does not fix them.** All four are 🟢 **AGENT-SAFE**.
+**These are the gate's G4. N1–N3 are sized here and built elsewhere — this
+document does not fix them.** All four are 🟢 **AGENT-SAFE**.
 
 ### N1 — Notes read paths outside the owner predicate · size: M (one PR, ~6 files)
 
@@ -448,9 +450,25 @@ authority is not laundered into the owner's (PR #346's commit body;
 unchanged; and a test asserts 404 when a non-owner supplies another member's
 `meeting_id`.
 
-### N4 — the Tasks people directory is org-wide read **and write** · size: M (one file + a decision)
+### N4 — the Tasks people directory is org-wide read **and write** · size: M (one file + a decision) · ✅ **CLOSED 2026-08-04**
 
-**This is the sharpest item on the gate.** It is HR data, it is readable and
+> **CLOSED** on `ws-24-n4-people-scoping`. What shipped, and where:
+>
+> | Rule | Where | Anchor |
+> |---|---|---|
+> | Write gate — all **four** routes | `require_people_write()` as a route `dependencies=[…]` entry | `routes/tasks/core.py` (`PEOPLE_WRITE_PERMISSION = "admin:members:manage"`, `require_people_write`); bound at `people.py` `POST /people`, `PATCH /people/{person_id}`, `POST /people/{person_id}/resume` and `capability.py` `POST /people/embed` |
+> | Read projection | `_row_to_person(row, *, include_hr)` — keyword-only, **no default**, so a route added later cannot inherit the permissive answer by omission | `people.py` (`HR_FIELDS`, `_blank_hr`, `_row_to_person`); the predicate is `core.can_read_hr_fields` on `PEOPLE_HR_READ_PERMISSION = "admin:members:read"` |
+> | Search may not become an oracle | `GET /people?q=` drops the `unnest(skills)` clause for a caller who cannot see skills — matching on a column that is then stripped would leak it back | `people.py::list_people` |
+> | Delegation untouched | `fetch_people_for_clarify` still takes `db` only and returns full rows; the projection is at the **serialization** layer, never in the SQL | `people.py::fetch_people_for_clarify` |
+>
+> Tests: `tests/unit/test_tasks_people_scoping.py` (35 cases). Three mutants
+> verified red first — always-include-HR, a removed write dependency, and an
+> unconditional skill-search clause.
+>
+> **Still open on this gate:** N1–N3 (Notes), G1, G2 and G3. N4 closing does
+> **not** make G4 green.
+
+**This was the sharpest item on the gate.** It is HR data, it was readable and
 writable by the default role, and it is the exact surface D12's department
 privacy exists to protect.
 
@@ -473,30 +491,76 @@ package. Task accounts are scoped — `_assert_account_owner`
 406` — and items carry 27 `user_id = :uid` predicates. The people layer is the
 one that never got a rule, so the fix is local to it rather than a rewrite.
 
-**What is not decided, and must be before building.** `gtd_people` is an *org*
-roster imported from `agent-project-manager` HR data (`people.py:1-10`); it is
-not per-user rows, so "owner-scope it" is the wrong shape. The decision the
-ticket needs is which of these it is, and the spec does not record it:
+#### DECISION — directory open, HR fields restricted `owner-answered 2026-08-04`
 
-* **read** — org-wide for anyone holding `feature:tasks` (status quo, made
-  explicit), or gated behind a new permission (`data:people:read`), or scoped
-  to the caller's Center/group via D13's grant shape.
-* **write** — almost certainly not `member`. `PATCH`, `POST` and the résumé
-  upload are HR-record edits; the natural floor is `admin:members:manage` or a
-  new `data:people:manage`, matching the fact that the app was made "the source
-  of truth for HR data" by an owner decision (`people.py:150-151`).
+`gtd_people` is an *org* roster imported from `agent-project-manager` HR data
+(`people.py:1-10`); it is not per-user rows, so "owner-scope it" was the wrong
+shape and the ticket could not be built until the owner said which shape it is.
+The answer:
 
-**Done when:** the read decision is recorded (here or in
-`tenancy_and_visibility.md` §5, whichever owns it); the four write routes plus
-`/people/embed` require a permission strictly above `feature:tasks` and 403 for
-a plain `member`; `GET /people` enforces whichever read rule was chosen; and
-`tests/unit/` gains a case per route asserting a `member` is refused. ⚠️ The
-delegation path must keep working: `fetch_people_for_clarify`
-(`people.py:107-147`) is an in-process helper called server-side from
-`ai.py:1240, 1452`, `capture_email.py:686, 887, 949, 1298, 1361` and
-`planning.py:119` — never through the router — so a route-level gate does not
-touch it. Do not "fix" it too; that is the capability-aware delegation the
-roster exists for.
+* **Read** stays available to anyone holding `feature:tasks` — an org chart a
+  colleague cannot open is not an org chart — **but the HR-sensitive fields are
+  stripped for non-admins**: `resume_summary`, `skills`, `skills_source`,
+  `years_experience`, and capacity / current-load / available hours. The basic
+  directory stays visible to all: name, email, role, title, department, team,
+  `reports_to` / `manager_id`, `clickup_user_id`.
+* **Writes are admin-only** — `POST /people`, `PATCH /people/{person_id}`,
+  `POST /people/{person_id}/resume` and `POST /people/embed`.
+
+**Rejected alternatives, recorded so they are not re-proposed:**
+
+1. **Fully org-wide read** (status quo, made explicit). Rejected: it is the
+   exposure this ticket exists to close. A résumé summary and a per-person load
+   figure are HR records, not directory entries, and D12's department privacy
+   is written against exactly this surface.
+2. **Center-scoped read** (a colleague sees their own Center's people). Rejected
+   for two reasons: it needs **D13's grant shape**, which is unbuilt, so the
+   ticket would block on another workstream; and it **breaks cross-team
+   delegation**, which is the roster's whole purpose — you delegate *out* of
+   your Center more often than within it.
+
+**Implementation notes that are part of the decision, not incidental:**
+
+* The two permissions are the **existing** admin vocabulary, not new slugs.
+  `admin:members:read` is the same floor the whole `/admin` package uses
+  (`admin/_common.py:77-91`) and the same predicate `/auth/me` reports as
+  `is_admin` (`admin/me.py:96`), so "may read the member directory" and "may
+  read the HR half of the people directory" are one answer that cannot drift.
+  `admin:members:manage` already governs member records. A **new** slug would
+  be nobody's grant until an admin created it — which would switch HR features
+  off for the owner too, and is the failure mode this decision avoids.
+  Consequence, stated so it is not a surprise: a `manager` (who holds
+  `admin:members:read` but not `:manage`) **can** see the HR fields and
+  **cannot** write them. That is consistent with §3.2 — a manager already reads
+  the whole member directory.
+* The projection sets fields to `null` / `[]` / `{}`; it never removes keys.
+  The response shape, the TS `OrgPerson` type and `mapOrgPerson`
+  (`workbench/control_plane/src/app/tasks/lib/api.ts:301-327`) are unchanged.
+* **`domain` and `status` are deliberately NOT restricted.** They are outside
+  both lists above. `status` drives the directory's inactive badge; `domain` is
+  a coarse field of the same kind as `department` (`robotics`, `firmware`).
+  `domain` is résumé-fillable, so if the owner wants it restricted it is a
+  one-line addition to `people.HR_FIELDS` + `_blank_hr()`.
+* The search box is part of the boundary: `GET /people?q=` matches skills only
+  for a caller who may see skills, or the strip is cosmetic.
+* ⚠️ The delegation path must keep working, and does: `fetch_people_for_clarify`
+  is an in-process helper called server-side from `ai.py`, `capture_email.py`
+  and `planning.py` — never through the router — and the projection is applied
+  at the **serialization** layer, not in the SQL, precisely so it is untouched.
+  Do not "fix" it too; that is the capability-aware delegation the roster
+  exists for.
+* Consequence on the agent path, and it is the right one: the `gtd_people`
+  skill tool (`apps/skills/skill-task-gtd/skill_task_gtd/core.py`) calls
+  `GET /tasks/people` **as the acting member**, so an agent run for a non-admin
+  now sees the same restricted directory that member sees. An agent must never
+  exceed the person it acts for; the in-process clarify path is what keeps
+  delegation capability-aware.
+
+**Done when** *(all met — see the CLOSED banner at the head of this ticket)*:
+the read decision is recorded (above); the four write routes require a
+permission strictly above `feature:tasks` and 403 for a plain `member`;
+`GET /people` enforces the read rule; `tests/unit/test_tasks_people_scoping.py`
+carries a case per route; and `fetch_people_for_clarify` is unchanged.
 
 ---
 
@@ -517,8 +581,14 @@ roster exists for.
                   tests/unit/test_default_deny_auth.py -q
     # Baseline on ws-24-onboarding-readiness: 85 passed.
 
-    # §4's holes, once they are closed (N1-N3 Notes; N4 adds its own cases):
+    # §4's holes. N4 is closed and its cases are green today:
+    uv run pytest tests/unit/test_tasks_people_scoping.py -q
+    # 35 passed.
+    # N1-N3 (Notes) are still open:
     uv run pytest tests/unit/test_notes_owner_scoping.py -q
+
+    # ⚠️ NEVER `uv run pytest tests/unit/` as a directory on this box -- it
+    # hangs against the live DB. Name the files.
 
     uv run ruff check . --select F821,F601,F602,F502,F7,B006
     python -m py_compile scripts/onboarding_preflight.py

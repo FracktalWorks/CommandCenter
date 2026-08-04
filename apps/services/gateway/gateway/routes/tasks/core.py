@@ -20,7 +20,7 @@ from acb_common import get_logger, get_settings
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import text
-from acb_auth import require_feature_router
+from acb_auth import require_feature_router, require_permission
 
 _log = get_logger("gateway.tasks")
 
@@ -28,6 +28,55 @@ router = APIRouter(
     prefix="/tasks", tags=["tasks"],
     dependencies=[require_feature_router("tasks")],
 )
+
+
+# ── People directory (HR) access ─────────────────────────────────────────────
+# Spec: ai-company-brain/specs/colleague_onboarding.md §4 N4 (owner-answered
+# 2026-08-04, "directory open, HR fields restricted").
+#
+# `gtd_people` is an ORG roster, not per-user rows, so the owner-predicate
+# shape used by items/accounts is the wrong tool. The recorded answer is two
+# rules, both expressed in the EXISTING admin vocabulary
+# (`acb_auth.permissions.CAPABILITIES`) rather than a new slug — a new slug is
+# nobody's grant until an admin creates it, which would switch HR features off
+# for the owner too:
+#
+#   * READ  — everyone holding `feature:tasks` sees the directory, but the
+#     HR-sensitive columns are projected away unless the caller holds
+#     `admin:members:read`. That is the same floor the whole `/admin` package
+#     uses (`routes/admin/_common.py:77-91`) and the same predicate `/auth/me`
+#     reports as `is_admin` (`routes/admin/me.py:96`), so "can see the member
+#     directory" and "can see the HR half of the people directory" are one
+#     answer, not two that can drift.
+#   * WRITE — `admin:members:manage`, the permission that already governs
+#     member records (`routes/admin/members.py`). These rows ARE member/HR
+#     records; the app was made the source of truth for them by an owner
+#     decision (`routes/tasks/people.py:150-151`).
+#
+# An owner holds `*`, which matches both by `permission_matches`.
+PEOPLE_HR_READ_PERMISSION = "admin:members:read"
+PEOPLE_WRITE_PERMISSION = "admin:members:manage"
+
+
+def can_read_hr_fields(user: Any) -> bool:
+    """May this caller see the HR-sensitive half of a person record?
+
+    Fails closed for anything that is not a resolved ``UserContext`` — the
+    projection is the boundary, so "I could not tell" must mean "no".
+    """
+    check = getattr(user, "has_permission", None)
+    return bool(check and check(PEOPLE_HR_READ_PERMISSION))
+
+
+def require_people_write() -> Any:
+    """The write gate for the people directory — ONE definition, bound by
+    every write route (``POST``/``PATCH``/``resume`` in ``people.py`` and
+    ``POST /people/embed`` in ``capability.py``).
+
+    Bound as a route ``dependencies=[…]`` entry, not as a parameter, so it is
+    enforced for the *route* rather than for a call site somebody remembers.
+    """
+    return require_permission(PEOPLE_WRITE_PERMISSION)
 
 
 # ── Models (snake_case — the frontend maps to camelCase) ─────────────────────

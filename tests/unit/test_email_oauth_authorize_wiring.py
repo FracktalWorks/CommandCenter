@@ -54,29 +54,91 @@ def _read(path: Path) -> str:
 
 
 def _code_only(source: str) -> str:
-    """``source`` with whole-line ``//`` and ``/* … */`` comments removed.
+    """``source`` with **every** comment removed, wherever it sits on the line.
 
     These assertions are about what the code *does*. Without this, a comment
     explaining why ``user_email`` is no longer sent reads, to a substring check,
     exactly like sending it — which is how the first draft of this file failed.
-    Only whole-line comments are dropped, so a ``//`` inside a string literal is
-    never mistaken for one.
+
+    ⚠️ **A line-based version of this helper is not enough, and shipping one
+    was this file's second false pass.** It dropped only comments that *began*
+    a line, so::
+
+        redirect: "follow", // was redirect: "manual"
+
+    left the string ``redirect: "manual"`` in the assertion input and the
+    mutation passed all eleven tests — the exact defect the helper exists to
+    prevent, one comment-position away. It also deleted real code: on a line
+    where a block comment *ended*, everything after ``*/`` went with it, so a
+    banned token could vanish and turn a ``not in`` assertion green.
+
+    So this is a character scanner that tracks string state, not a line filter.
+    ``//`` inside a string literal stays, because the scanner knows it is in a
+    string; ``{/* … */}`` in JSX goes, because it does not care about position.
+
+    **Stated limit:** regex literals are not modelled, so ``/ab\\/\\/c/`` would
+    confuse it. Nothing in the files this reads uses one, and a scanner that
+    parsed them would need to disambiguate division — worth knowing before
+    pointing this at other sources.
     """
     out: list[str] = []
-    in_block = False
-    for line in source.splitlines():
-        stripped = line.strip()
-        if in_block:
-            if "*/" in stripped:
-                in_block = False
+    i, n = 0, len(source)
+    quote: str | None = None
+    while i < n:
+        ch = source[i]
+        nxt = source[i + 1] if i + 1 < n else ""
+        if quote is not None:
+            out.append(ch)
+            if ch == "\\" and i + 1 < n:      # escape: take the next char whole
+                out.append(nxt)
+                i += 2
+                continue
+            if ch == quote:
+                quote = None
+            i += 1
             continue
-        if stripped.startswith("/*"):
-            in_block = "*/" not in stripped
+        if ch in "\"'`":
+            quote = ch
+            out.append(ch)
+            i += 1
             continue
-        if stripped.startswith("//") or stripped.startswith("*"):
+        if ch == "/" and nxt == "/":
+            while i < n and source[i] != "\n":
+                i += 1
+            continue                           # leave the newline for the loop
+        if ch == "/" and nxt == "*":
+            end = source.find("*/", i + 2)
+            i = n if end == -1 else end + 2
             continue
-        out.append(line)
-    return "\n".join(out)
+        out.append(ch)
+        i += 1
+    return "".join(out)
+
+
+def test_the_comment_stripper_is_not_line_based() -> None:
+    """`_code_only` is a fence for other fences, so it needs one of its own.
+
+    Every case below is a position a line-based stripper got wrong. The last
+    two are the converse: it must not eat code or string contents while it is
+    at it.
+    """
+    banned = 'redirect: "manual"'
+
+    for label, src in (
+        ("trailing //", 'const f = 6; // redirect: "manual" matters'),
+        ("trailing block", 'const g = 7; /* redirect: "manual" */'),
+        ("jsx block", '<div>{/* redirect: "manual" */}</div>'),
+        ("own-line //", '// redirect: "manual"'),
+        ("indented //", '    // redirect: "manual"'),
+        ("multiline block", '/*\n redirect: "manual"\n*/\nconst h = 1;'),
+    ):
+        assert banned not in _code_only(src), f"{label}: comment survived"
+
+    # …and it must not delete code that shares a line with a comment.
+    assert "const i = 8;" in _code_only('/* note */ const i = 8;')
+    assert "const j = 9;" in _code_only('const j = 9; // note')
+    # A `//` inside a string is not a comment.
+    assert "http://x" in _code_only('const k = "http://x";')
 
 
 def _callback_body(source: str, name: str) -> str:

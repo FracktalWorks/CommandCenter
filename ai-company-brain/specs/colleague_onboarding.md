@@ -10,16 +10,21 @@ that survive a *correct* identity; G1/G2 are about the identity itself, and an
 owner predicate applied to a forged one is not a control. §4 also mints **N5**
 (the rest of `routes/notes` — nine modules N1's table did not enumerate),
 deliberately outside G4 and awaiting an owner call. **§6 is new (2026-08-04):
-N6, the provisioning gap** — an unprovisioned sign-in is logged and then
-discarded, and `invited` is a status with no exit, so the owner can neither see
-who is knocking nor successfully let them in. Motivated by a measured
+N6, the provisioning gap** — an unprovisioned sign-in was logged and then
+discarded, so the owner could not see who was knocking. Motivated by a measured
 production incident: 53 refusals for one colleague over 18 hours, invisible in
-the UI. · **Board row:** WS-24 ·
+the UI. **N6a is BUILT (2026-08-04, branch `ws-24-n6-signin-requests`)** — the
+knock is persisted, the owner answers it from a Requests tab, and approving
+provisions *and* activates in one action; **N6b needs no code** (§2 Step 1b
+shipped the fix) and leaves one recorded owner question. **Merging N6a is
+OWNER-GATE**: `deploy.yml:202-203` replays every migration on deploy, so the
+merge arms an auth-behaviour deploy. · **Board row:** WS-24 ·
 **Owner:** vjvarada · **Date:** 2026-08-04 ·
 **Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
 cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
 N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`; N1–N3 on
-`ws-24-n1n3-notes-scoping`, cut from `891903de`).
+`ws-24-n1n3-notes-scoping`, cut from `891903de`; N6a on
+`ws-24-n6-signin-requests`, cut from `5beeabbe`).
 
 **What this doc is for.** Exactly one person is signed in to this deployment
 (**owner-reported, not measured** — see the note below). The question "is it
@@ -34,7 +39,7 @@ parts:
 | §3 | **The capability matrix** — what a colleague on each role can actually see | evidence table, every cell carries `file:line` |
 | §4 | **The four open owner-scoping holes** — blocking items with sizes | tickets |
 | §5 | **Verification** — the exact commands, and what must never be run | commands |
-| §6 | **The provisioning gap** — nobody can see who is knocking (N6) | ticket |
+| §6 | **The provisioning gap** — nobody could see who was knocking (N6) | ticket — **N6a built 2026-08-04**, N6b needs no code |
 
 **Executable half.** `scripts/onboarding_preflight.py` implements §1's
 machine-checkable criteria. Run it **on the box** before inviting anyone; run
@@ -835,6 +840,11 @@ the system he wanted in, fifty-three times, and the system told nobody.
 
 ### N6 — capture the knock, and let the owner answer it · size: M (migration + one route file + one page) · 🟢 **AGENT-SAFE**
 
+**Status: N6a ✅ BUILT 2026-08-04** (`ws-24-n6-signin-requests`) — all eleven
+done-whens met, fenced by `tests/unit/test_signin_requests.py` (28 cases).
+**N6b: nothing to build**; one owner question remains open below. **Merging is
+OWNER-GATE** — see the note at the end of this section.
+
 Two defects, deliberately in one ticket because shipping either alone leaves a
 half-working door.
 
@@ -980,6 +990,46 @@ directory either way, but the table stops being a list of colleagues.
 **Done when — N6b:** nothing to build. §2 Step 1b shipped the fix; the
 remaining question is the owner's (a)/(b)/(c) above.
 
+#### As built (2026-08-04) — where each done-when landed, and what the ticket got wrong
+
+| dw | Where it landed |
+|---|---|
+| 1 | `infra/postgres/143_access_request.sql` (143 was the next free number at build time; 142 was the highest) |
+| 2 | `acb_auth/access.py` — `_ACCESS_REQUEST_UPSERT_SQL` + `_record_signin_request`, called AFTER the log line inside the `row is None` branch |
+| 3 | `resolve_access(..., record_request: bool = False)`; the only caller passing `True` is `acb_auth/deps.py::_with_resolved_access` |
+| 4/5 | Properties of the existing branch + cache; pinned, not coded |
+| 6/7/9 | `gateway/routes/admin/access_requests.py` — three routes, each declaring `Depends(require_admin_user)`; both writes on `admin:members:invite` |
+| 8 | `_common.provision_member` (see below) |
+| 10/11 | `settings/members/page.tsx` — `Tabs` (Members · Requests + badge), `RequestsTab`/`RequestRow`, `STATUS_LABELS` |
+
+Four things this ticket stated imprecisely, corrected here rather than
+silently deviated from:
+
+* **dw1's column list has no primary key.** The table ships with
+  `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`, matching every other table
+  in `infra/postgres/`. Uniqueness is still the `lower(email)` index the
+  upsert's `ON CONFLICT` infers on.
+* **dw3's list of non-knock callers is incomplete.** There is a **third**:
+  `routes/chat.py:605`. It resolves the *caller's own* email, so it is harmless
+  either way — but the safety of this design is "the default is False", not
+  "we enumerated every caller". A test reads the tree and asserts exactly one
+  file contains `record_request=True`, so a fourth caller cannot appear quietly.
+* **dw8 puts the helper in `members.py`; it ships in `_common.py` as
+  `provision_member`.** `admin/__init__.py`'s contract is that feature modules
+  import from `_common`, never from each other, and `access_requests.py` is a
+  feature module. `resolve_assignable_roles` and `set_roles` moved with it —
+  they implement invariant 2 ("nobody grants above themselves"), which
+  `_common.py` already documents as its own. `MemberEntry` stayed in
+  `members.py`; approve returns its own `ApproveResult`.
+* **dw7 does not say what approve does to somebody who already has a row.**
+  It matters: approve is gated on `admin:members:invite`, which is **weaker**
+  than the `admin:members:manage` needed to suspend. **Decision as built:
+  `provision_member` applies its `status` argument only to a row that is
+  `removed` or `invited`; `active` and `suspended` are left alone.** So approve
+  can never un-suspend anybody, and invite's behaviour is unchanged
+  byte-for-byte. This is the same guard the N6b (b) option was warned about,
+  applied to the path that actually shipped.
+
 **Verification**
 
     uv run pytest tests/unit/test_signin_requests.py -q
@@ -992,14 +1042,30 @@ remaining question is the owner's (a)/(b)/(c) above.
     uv run ruff check . --select F821,F601,F602,F502,F7,B006
     cd workbench/control_plane && npx tsc --noEmit
 
-⚠️ **The unprovisioned branch has no DB-free regression fence today.** The only
-test in the tree that exercises `access.py:257-276` is
-`test_owner_bootstrap.py::test_unprovisioned_signin_is_cached` (`:176-187`),
-and it is `@_needs_db` — §6 of `work_plan.md` forbids pointing it at prod, so an
-agent cannot run it. N6a is adding a **write** to that branch, so
-`test_signin_requests.py` must create the fence it is missing, not assume one.
-An earlier draft of this block claimed `test_default_deny_auth.py` pinned the
-branch; it does not — that file never calls `resolve_access`.
+✅ **The unprovisioned branch now HAS a DB-free regression fence.** Before N6a
+the only test exercising `access.py`'s `row is None` branch was
+`test_owner_bootstrap.py::test_unprovisioned_signin_is_cached`, which is
+`@_needs_db` and unrunnable by an agent (`work_plan.md` §6 forbids pointing it
+at prod). `test_signin_requests.py` builds the fence it was missing:
+`resolve_access` runs against a fake session factory, so the whole branch —
+refusal, log line, write, and the four cases where there must be **no** write —
+is covered without Postgres. An earlier draft of this block claimed
+`test_default_deny_auth.py` pinned the branch; it does not — that file never
+calls `resolve_access`.
+
+**Measured runs (2026-08-04, `ws-24-n6-signin-requests`):**
+
+    tests/unit/test_signin_requests.py ................. 28 passed
+    the three sweeps below ............................. 97 passed
+    ruff (blocking select) ............................. All checks passed!
+    npx tsc --noEmit ................................... clean
+
+Red-first, at commit `cf28f4af` (signatures scaffolded so each red is the claim
+and not a `TypeError`): **16 failed, 12 passed.** The 12 already-green are dw8's
+characterisation of the pre-existing `invite_member` — written and watched pass
+*before* the extraction, because it was an unfenced route on the auth path —
+plus the four dw3/dw4 no-write guards, which assert the ABSENCE of a write and
+therefore cannot be red before the write exists.
 
 ⚠️ **OWNER-GATE is the merge, not a separate apply step.**
 `scripts/apply_migrations.sh` replays every numbered migration on **every**

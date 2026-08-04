@@ -5,7 +5,7 @@ Docker Compose, Postgres schema, LiteLLM tier config. LLM routing is via the gat
 
 ## Key Files
 - docker-compose.yml -- core services (Postgres 16 + pgvector, Redis 7)
-- postgres/ -- schema files (00-10) + 09_app_user.sql (NextAuth users) + 11_integration_credentials.sql (unified credential store) + 130_org_access_control.sql (organization, membership lifecycle on app_user, org_role/org_role_permission/user_role, user_permission_override, feature_catalog — spec: ai-company-brain/specs/org_access_control.md) + 131_integration_memory_permissions.sql (additive: grants `integrations:use:*` + org-memory permissions to the seeded roles; `member` reads org memory but does not write it)
+- postgres/ -- schema files (00-10) + 09_app_user.sql (NextAuth users) + 11_integration_credentials.sql (unified credential store) + 130_org_access_control.sql (organization, membership lifecycle on app_user, org_role/org_role_permission/user_role, user_permission_override, feature_catalog — spec: ai-company-brain/specs/org_access_control.md) + 131_integration_memory_permissions.sql (additive: grants `integrations:use:*` + org-memory permissions to the seeded roles; `member` reads org memory but does not write it) + 143_access_request.sql (the sign-in queue — one row per address that authenticated with no `app_user` row, unique on `lower(email)`; deliberately a SEPARATE table and not a fifth `app_user.status`, because an `app_user` row IS the org's member record and a stranger who merely knocked must not acquire one that a future join can surface — spec: ai-company-brain/specs/colleague_onboarding.md §6)
 
 ## Conventions
 - Postgres migrations are numbered SQL files

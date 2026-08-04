@@ -225,10 +225,21 @@ async def _with_resolved_access(user: UserContext) -> UserContext:
     tables are absent and to no-access when the member is unknown. Results are
     cached for 60s, so this costs one indexed query per member per minute
     rather than one per request.
+
+    **This is the one place that passes ``record_request=True``** — an
+    authenticated identity reaching a request IS the knock, and the resolver's
+    unprovisioned branch is the only place the platform ever learns about it
+    (spec ``colleague_onboarding.md`` §6, done-when 3). Do not copy the flag
+    onto a fan-out over other people's emails: ``routes/rooms.py`` and
+    ``resolve_session_access`` resolve participants, not callers, and filing
+    those would queue people who never tried to sign in. The 60s cache above
+    is also what bounds the write rate.
     """
     if not user.email:
         return user
-    access = await resolve_access(user.email, legacy_role=user.role.value)
+    access = await resolve_access(
+        user.email, legacy_role=user.role.value, record_request=True,
+    )
     user_id, organization_id = await resolve_identity(user.email)
     enriched = user.with_access(
         access, user_id=user_id, organization_id=organization_id

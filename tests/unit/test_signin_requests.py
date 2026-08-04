@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import re
 from pathlib import Path
-from typing import Any
+from typing import Any, ClassVar
 
 import pytest
 from acb_auth import UserContext, UserRole, build_access
@@ -103,7 +103,9 @@ class _FakeDB:
     rather than silently in production.
     """
 
-    ROLE_RANKS = {"owner": 0, "admin": 10, "manager": 20, "member": 30}
+    ROLE_RANKS: ClassVar[dict[str, int]] = {
+        "owner": 0, "admin": 10, "manager": 20, "member": 30,
+    }
 
     def __init__(self) -> None:
         self.users: dict[str, dict[str, Any]] = {}          # id → row

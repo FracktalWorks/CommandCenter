@@ -12,6 +12,26 @@ export type Member = {
   last_login_at?: string;
 };
 
+/**
+ * A sign-in request — somebody who authenticated against the directory and
+ * found no `app_user` row (gateway `routes/admin/access_requests.py`,
+ * migration 143; spec colleague_onboarding.md §6).
+ *
+ * This is deliberately NOT a `Member` with a fifth status: an `app_user` row is
+ * the org's member record and a stranger who merely knocked must not acquire
+ * one. Approving turns a request into a real member; until then it is just a
+ * record that the door was tried.
+ */
+export type AccessRequest = {
+  email: string;
+  display_name: string;
+  first_seen_at: string;
+  last_seen_at: string;
+  /** How many times they tried. "53" reads as stuck; "1" reads as curious. */
+  attempt_count: number;
+  status: "pending" | "approved" | "denied";
+};
+
 /** org_group membership row, as the groups API returns it. */
 export type GroupMember = {
   email: string;

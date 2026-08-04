@@ -19,6 +19,7 @@ an access model and an outage:
 from __future__ import annotations
 
 import os
+from datetime import datetime, timezone
 from typing import Any
 
 from acb_auth import UserContext, get_current_user, invalidate_access
@@ -213,6 +214,145 @@ async def assert_owner_survives(
                 "Assign another owner first."
             ),
         )
+
+
+# ── Provisioning: the one path from an address to a member ──────────────────
+
+def _iso(value: Any) -> str:
+    """Timestamps on the wire are UTC ISO-8601, and absence is ``""``."""
+    if isinstance(value, datetime):
+        return value.astimezone(timezone.utc).isoformat()
+    return "" if value is None else str(value)
+
+
+async def resolve_assignable_roles(
+    db: Any, org_id: str, slugs: list[str], admin: UserContext
+) -> list[tuple[str, str]]:
+    """Validate role slugs and return ``[(role_id, slug)]``.
+
+    Enforces invariant 2: an admin cannot assign a role more privileged than
+    their own, so `admin` cannot mint an `owner` and escalate laterally. Lives
+    in the leaf because it IS one of this package's invariants — every path
+    that hands somebody a role goes through it.
+    """
+    if not slugs:
+        raise HTTPException(status_code=400, detail="At least one role is required.")
+
+    rows = (
+        await db.execute(
+            text(
+                "SELECT id::text AS id, slug, rank FROM org_role "
+                " WHERE organization_id = CAST(:org AS uuid) AND slug = ANY(:slugs)"
+            ),
+            {"org": org_id, "slugs": list(slugs)},
+        )
+    ).mappings().all()
+
+    found = {r["slug"]: r for r in rows}
+    missing = [s for s in slugs if s not in found]
+    if missing:
+        raise HTTPException(status_code=400, detail=f"Unknown role(s): {missing}.")
+
+    blocked = [s for s in slugs if s in NON_ASSIGNABLE_ROLES]
+    if blocked:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Role(s) {blocked} are internal and cannot be assigned to people.",
+        )
+
+    my_rank = await caller_rank(db, org_id, admin)
+    too_high = [s for s in slugs if int(found[s]["rank"]) < my_rank]
+    if too_high:
+        raise HTTPException(
+            status_code=403,
+            detail=f"You cannot assign role(s) {too_high} — they outrank you.",
+        )
+    return [(found[s]["id"], s) for s in slugs]
+
+
+async def set_roles(
+    db: Any, user_id: str, role_ids: list[tuple[str, str]], assigned_by: str | None
+) -> None:
+    """Replace a member's role assignments wholesale."""
+    await db.execute(
+        text("DELETE FROM user_role WHERE user_id = CAST(:uid AS uuid)"),
+        {"uid": user_id},
+    )
+    for role_id, _slug in role_ids:
+        await db.execute(
+            text(
+                "INSERT INTO user_role (user_id, role_id, assigned_by) "
+                "VALUES (CAST(:uid AS uuid), CAST(:rid AS uuid), :by) "
+                "ON CONFLICT DO NOTHING"
+            ),
+            {"uid": user_id, "rid": role_id, "by": assigned_by},
+        )
+
+
+async def provision_member(
+    db: Any,
+    org_id: str,
+    *,
+    email: str,
+    display_name: str,
+    roles: list[str],
+    admin: UserContext,
+    status: str,
+) -> tuple[dict[str, Any], list[str]]:
+    """Create-or-update the ``app_user`` row and set its roles. THE one path.
+
+    Extracted from ``members.invite_member`` so that approving a sign-in
+    request (``access_requests.approve_access_request``) provisions through
+    exactly the same code — including invariant 2, which a second hand-rolled
+    INSERT would quietly skip. Spec ``colleague_onboarding.md`` §6 done-when 8.
+
+    Deliberately left to the CALLER: ``db.commit()`` (so an approval can mark
+    its request decided in the same transaction), ``invalidate_for``,
+    ``record_admin_change`` (the audit action differs — `org.member_invited`
+    vs `org.access_request_approved`) and the response model.
+
+    ``status`` is what a NEW row gets. On an existing row it is applied only
+    when that row is `removed` or `invited`; `active` and `suspended` are left
+    exactly as they are. That arm is load-bearing in both directions:
+
+    * invite (``status='invited'``) keeps today's behaviour byte-for-byte — a
+      removed member comes back as invited, an active one is not downgraded;
+    * approve (``status='active'``) lets an invited-but-never-activated row
+      through in ONE action (§6 done-when 7, the fix for §2's two-click trap),
+      while refusing to un-suspend anybody: approve is gated on
+      ``admin:members:invite``, which is weaker than the
+      ``admin:members:manage`` that suspended them.
+    """
+    email = (email or "").strip().lower()
+    if "@" not in email or len(email) > 254:
+        raise HTTPException(status_code=400, detail="A valid email is required.")
+
+    role_ids = await resolve_assignable_roles(db, org_id, roles or ["member"], admin)
+
+    await db.execute(
+        text(
+            "INSERT INTO app_user (email, display_name, organization_id, "
+            "                      status, invited_by, invited_at, joined_at) "
+            "VALUES (:email, :name, CAST(:org AS uuid), :status, :by, now(), "
+            "        CASE WHEN :status = 'active' THEN now() END) "
+            "ON CONFLICT (email) DO UPDATE "
+            "   SET organization_id = EXCLUDED.organization_id, "
+            "       display_name    = COALESCE(NULLIF(EXCLUDED.display_name, ''), "
+            "                                  app_user.display_name), "
+            "       status          = CASE WHEN app_user.status IN ('removed', 'invited') "
+            "                              THEN :status ELSE app_user.status END, "
+            "       joined_at       = CASE WHEN app_user.status IN ('removed', 'invited') "
+            "                               AND :status = 'active' "
+            "                              THEN COALESCE(app_user.joined_at, now()) "
+            "                              ELSE app_user.joined_at END, "
+            "       updated_at      = now()"
+        ),
+        {"email": email, "name": display_name or "", "org": org_id,
+         "by": admin.email, "status": status},
+    )
+    member = await get_member(db, email)
+    await set_roles(db, member["id"], role_ids, admin.email)
+    return member, [slug for _rid, slug in role_ids]
 
 
 def invalidate_for(*emails: str | None) -> None:

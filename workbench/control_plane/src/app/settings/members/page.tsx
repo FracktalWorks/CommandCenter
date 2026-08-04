@@ -1,28 +1,40 @@
 "use client";
 
 /**
- * Settings → Members — the organization roster.
+ * Settings → Members — the organization roster, and the queue of people
+ * trying to get into it.
  *
- * Spec: ai-company-brain/specs/org_access_control.md §6.
+ * Spec: ai-company-brain/specs/org_access_control.md §6;
+ *       ai-company-brain/specs/colleague_onboarding.md §6 (the Requests tab).
  *
  * Invite, suspend, change roles, and drill into one person's access. The
  * per-person editor is where the interesting work happens (./[email]); this
  * page is the list that gets you there.
+ *
+ * The **Requests** tab is the other direction. Until it existed this screen
+ * only showed people an admin had already thought of; somebody arriving at the
+ * front door produced a log line nobody read. The badge is the whole point —
+ * the owner is supposed to learn that a colleague is locked out without being
+ * told.
  */
 
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  Check,
+  DoorOpen,
   Loader2,
   Plus,
   RefreshCw,
   ShieldOff,
   UserPlus,
+  Users,
   X,
 } from "lucide-react";
 import FilterPills from "@/components/FilterPills";
+import Tabs from "@/components/Tabs";
 import { useAccess } from "@/components/AccessProvider";
-import type { Member, Role } from "./types";
+import type { AccessRequest, Member, Role } from "./types";
 
 const STATUS_STYLES: Record<Member["status"], string> = {
   active: "text-success",
@@ -31,12 +43,43 @@ const STATUS_STYLES: Record<Member["status"], string> = {
   removed: "text-muted-foreground",
 };
 
+/**
+ * What each status means to the person on the other end of it.
+ *
+ * `invited` is the one that matters: `is_active` is `status === "active"`
+ * exactly, so an invited colleague sees the identical dead-end screen as a
+ * total stranger while this list renders them as though they were live. That
+ * ambiguity is the 2026-08-04 incident (colleague_onboarding.md §6) — the row
+ * has to say so.
+ */
+const STATUS_LABELS: Record<Member["status"], string> = {
+  active: "active",
+  invited: "invited — never signed in",
+  suspended: "suspended",
+  removed: "removed",
+};
+
+/** Absolute date + time; a knock at 16:21 yesterday is a fact, not "a while ago". */
+function when(iso: string): string {
+  if (!iso) return "—";
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return "—";
+  return d.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
+
 export default function MembersPage() {
   const { access, refresh: refreshAccess } = useAccess();
   const [members, setMembers] = useState<Member[]>([]);
+  const [requests, setRequests] = useState<AccessRequest[]>([]);
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  const [tab, setTab] = useState("members");
   const [filter, setFilter] = useState("all");
   const [inviting, setInviting] = useState(false);
 
@@ -45,9 +88,10 @@ export default function MembersPage() {
       // The fetch goes first so no setState runs synchronously in the mount
       // effect — clearing the error afterwards is equivalent and avoids a
       // cascading render.
-      const [m, r] = await Promise.all([
+      const [m, r, q] = await Promise.all([
         fetch("/api/admin/members", { cache: "no-store" }),
         fetch("/api/admin/roles", { cache: "no-store" }),
+        fetch("/api/admin/members/requests", { cache: "no-store" }),
       ]);
       setError("");
       if (!m.ok) {
@@ -56,6 +100,9 @@ export default function MembersPage() {
       }
       setMembers(await m.json());
       if (r.ok) setRoles(await r.json());
+      // A deployment whose migration has not run yet still shows the roster;
+      // the queue is additive and must never take the page down with it.
+      setRequests(q.ok ? await q.json() : []);
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load members.");
     } finally {
@@ -103,6 +150,33 @@ export default function MembersPage() {
     await load();
     // The admin may have just changed their own access.
     await refreshAccess();
+  };
+
+  /** Approve (provisions + activates in one action) or deny a knock. */
+  const decide = async (
+    email: string,
+    decision: "approve" | "deny",
+    roleSlug?: string
+  ) => {
+    setError("");
+    const res = await fetch(
+      `/api/admin/members/requests/${encodeURIComponent(email)}/${decision}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body:
+          decision === "approve"
+            ? JSON.stringify({ roles: roleSlug ? [roleSlug] : [] })
+            : undefined,
+      }
+    );
+    if (!res.ok) {
+      const body = await res.json().catch(() => ({}));
+      setError(body.detail ?? `Could not ${decision} this request.`);
+      return;
+    }
+    // Decided rows leave the tab; an approval also adds a member.
+    await load();
   };
 
   if (!access.is_admin && !loading) {
@@ -162,18 +236,38 @@ export default function MembersPage() {
         </div>
       </div>
 
-      <div className="border-b border-border px-4 py-2.5 sm:px-6">
-        <FilterPills
-          items={[
-            { id: "all", label: "All", count: counts.all },
-            { id: "active", label: "Active", count: counts.active },
-            { id: "invited", label: "Invited", count: counts.invited },
-            { id: "suspended", label: "Suspended", count: counts.suspended },
-          ]}
-          activeId={filter}
-          onChange={setFilter}
-        />
-      </div>
+      <Tabs
+        variant="underline"
+        activeTab={tab}
+        onTabChange={setTab}
+        tabs={[
+          { id: "members", label: "Members", icon: Users, count: counts.all },
+          {
+            id: "requests",
+            label: "Requests",
+            icon: DoorOpen,
+            // Only badged when there is something to answer — a permanent "0"
+            // is the kind of chrome people stop reading.
+            count: requests.length || undefined,
+            note: "People who signed in and found no account",
+          },
+        ]}
+      />
+
+      {tab === "members" && (
+        <div className="border-b border-border px-4 py-2.5 sm:px-6">
+          <FilterPills
+            items={[
+              { id: "all", label: "All", count: counts.all },
+              { id: "active", label: "Active", count: counts.active },
+              { id: "invited", label: "Invited", count: counts.invited },
+              { id: "suspended", label: "Suspended", count: counts.suspended },
+            ]}
+            activeId={filter}
+            onChange={setFilter}
+          />
+        </div>
+      )}
 
       {error && (
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6">
@@ -189,6 +283,12 @@ export default function MembersPage() {
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
             <Loader2 size={14} className="animate-spin" /> Loading members…
           </div>
+        ) : tab === "requests" ? (
+          <RequestsTab
+            requests={requests}
+            roles={roles}
+            onDecide={decide}
+          />
         ) : shown.length === 0 ? (
           <p className="text-xs text-muted-foreground">No members here yet.</p>
         ) : (
@@ -237,8 +337,15 @@ export default function MembersPage() {
                           : "bg-muted"
                     }`}
                   />
-                  <span className={`text-[11px] ${STATUS_STYLES[m.status]}`}>
-                    {m.status}
+                  <span
+                    className={`text-[11px] ${STATUS_STYLES[m.status]}`}
+                    title={
+                      m.status === "invited"
+                        ? "Their row exists but is not active — they still see the same dead-end screen as a stranger. Activate them."
+                        : undefined
+                    }
+                  >
+                    {STATUS_LABELS[m.status]}
                   </span>
                 </div>
 
@@ -281,6 +388,139 @@ export default function MembersPage() {
           }}
         />
       )}
+    </div>
+  );
+}
+
+/**
+ * The Requests tab — everyone who authenticated and found no account.
+ *
+ * Approve provisions them AND activates them in one action: an approval is the
+ * decision to let somebody in, and they are already at the door. Leaving them
+ * `invited` here would re-create the two-click trap this whole tab exists to
+ * close (colleague_onboarding.md §6 done-when 7).
+ */
+function RequestsTab({
+  requests,
+  roles,
+  onDecide,
+}: {
+  requests: AccessRequest[];
+  roles: Role[];
+  onDecide: (
+    email: string,
+    decision: "approve" | "deny",
+    roleSlug?: string
+  ) => Promise<void>;
+}) {
+  if (requests.length === 0) {
+    return (
+      <div className="rounded-xl border border-dashed border-border p-8 text-center">
+        <DoorOpen size={18} className="mx-auto mb-2 text-muted-foreground" />
+        <p className="text-xs text-muted-foreground">
+          Nobody is waiting. Anyone who signs in without an account shows up
+          here — you do not have to be told.
+        </p>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex flex-col gap-2">
+      {requests.map((r) => (
+        <RequestRow key={r.email} request={r} roles={roles} onDecide={onDecide} />
+      ))}
+    </div>
+  );
+}
+
+function RequestRow({
+  request,
+  roles,
+  onDecide,
+}: {
+  request: AccessRequest;
+  roles: Role[];
+  onDecide: (
+    email: string,
+    decision: "approve" | "deny",
+    roleSlug?: string
+  ) => Promise<void>;
+}) {
+  const [role, setRole] = useState("member");
+  const [busy, setBusy] = useState(false);
+  const assignable = roles.filter((r) => r.slug !== "agent_service");
+
+  const act = async (decision: "approve" | "deny") => {
+    setBusy(true);
+    try {
+      await onDecide(request.email, decision, role);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3 sm:p-4">
+      <div className="min-w-0 flex-1">
+        <div className="truncate text-sm font-medium text-foreground">
+          {request.display_name || request.email}
+        </div>
+        <div className="truncate text-[11px] text-muted-foreground">
+          {request.email}
+        </div>
+        <div className="mt-1 text-[11px] text-muted-foreground">
+          First tried {when(request.first_seen_at)} · last{" "}
+          {when(request.last_seen_at)}
+        </div>
+      </div>
+
+      <span
+        className={`rounded-md px-2 py-0.5 text-[10px] ${
+          request.attempt_count > 5
+            ? "bg-warning/10 text-warning"
+            : "bg-secondary text-muted-foreground"
+        }`}
+        title="How many times they have tried to sign in"
+      >
+        {request.attempt_count}{" "}
+        {request.attempt_count === 1 ? "attempt" : "attempts"}
+      </span>
+
+      <select
+        value={role}
+        onChange={(e) => setRole(e.target.value)}
+        aria-label={`Role for ${request.email}`}
+        className="rounded-lg border border-border bg-background px-2 py-1.5 text-[11px] text-foreground outline-none focus:border-primary/50"
+      >
+        {assignable.map((r) => (
+          <option key={r.slug} value={r.slug}>
+            {r.display_name}
+          </option>
+        ))}
+      </select>
+
+      <div className="flex items-center gap-2">
+        <button
+          onClick={() => void act("approve")}
+          disabled={busy}
+          className="flex items-center gap-1.5 rounded-lg bg-primary px-2.5 py-1.5 text-[11px] font-medium text-primary-foreground tech-transition hover:opacity-90 disabled:opacity-50"
+        >
+          {busy ? (
+            <Loader2 size={12} className="animate-spin" />
+          ) : (
+            <Check size={12} />
+          )}
+          Approve
+        </button>
+        <button
+          onClick={() => void act("deny")}
+          disabled={busy}
+          className="rounded-lg bg-destructive/10 px-2.5 py-1.5 text-[11px] text-destructive tech-transition hover:bg-destructive/20 disabled:opacity-50"
+        >
+          Deny
+        </button>
+      </div>
     </div>
   );
 }

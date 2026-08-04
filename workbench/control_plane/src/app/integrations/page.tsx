@@ -11,7 +11,6 @@
  */
 
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { useSession } from "next-auth/react";
 import {
   AlertCircle,
   ArrowRight,
@@ -1261,7 +1260,6 @@ function ApisTab() {
 // ===========================================================================
 
 function EmailTab() {
-  const { data: session } = useSession();
   const [accounts, setAccounts] = useState<Array<{
     id: string; provider: string; emailAddress: string; label: string;
     unreadCount: number; syncEnabled: boolean; lastSyncedAt?: string;
@@ -1329,17 +1327,22 @@ function EmailTab() {
       setShowAdd(false);
       setShowIMAP(true);
     } else {
-      const gatewayUrl = process.env.NEXT_PUBLIC_GATEWAY_URL || "http://localhost:8000";
+      // Navigate to the BFF, never straight at the gateway host. A top-level
+      // navigation carries no Bearer and no X-User-Email (the session cookie is
+      // on this origin, not api.*), so the gated authorize route 401s every
+      // caller. api/email/oauth/[provider]/authorize runs server-side, attaches
+      // the identity, and re-issues the provider redirect. Identity now comes
+      // from the session on the server — never from a `user_email` parameter.
+      //
       // URLSearchParams already percent-encodes values — don't pre-encode with
       // encodeURIComponent or redirect_after ends up double-encoded and the
       // callback treats it as a relative path (→ /email/oauth/https%3A%2F%2F… 404).
       const params = new URLSearchParams({
         redirect_after: window.location.href,
       });
-      if (session?.user?.email) params.set("user_email", session.user.email);
-      window.location.href = `${gatewayUrl}/email/oauth/${provider}/authorize?${params.toString()}`;
+      window.location.href = `/api/email/oauth/${provider}/authorize?${params.toString()}`;
     }
-  }, [session]);
+  }, []);
 
   const handleDelete = useCallback(async (id: string) => {
     if (!confirm("Remove this email account?")) return;

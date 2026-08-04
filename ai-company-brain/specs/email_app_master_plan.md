@@ -2,6 +2,12 @@
 
 > **Product:** CommandCenter · **Feature:** Email AI Assistant App · **Created:** 2026-07-22
 > **Status:** 🟢 Live on the VPS, single Outlook account (`vjvarada@fracktal.in`), daily-driver.
+> **Last status change:** 2026-08-04 — **P0 connect-flow outage CLOSED** (§7 Tier 1 item 1, partial).
+> Nobody but the already-connected owner could add a mailbox from 2026-07-29 to 2026-08-04:
+> the Connect button navigated the browser straight at the gateway, which default-deny 401s.
+> Fixed by routing the authorize leg through a Next BFF, and the `user_email` override — the
+> cross-tenant half of the same item — is closed with it. `_oauth_states` durability and the
+> unauthenticated callback remain open under §7.
 >
 > **This document supersedes and consolidates all prior email planning docs:**
 > - [`archive/email_ai_assistant.md`](./archive/email_ai_assistant.md) — the v2.0 feature inventory (2026-06-29; historical reference for architecture detail and the provider matrix)
@@ -336,12 +342,47 @@ or API client to create a pattern by hand.
 > with one trusted user on one account, none of these is an active incident.
 
 **Tier 1 — must land before a second user/account:**
-1. **OAuth owner-binding** (`transport/oauth.py`) — the one cross-tenant *security* defect:
-   `oauth_authorize` accepts `user_email` as a Query param and lets it **override** the
-   authenticated identity (`oauth.py:36,119`); `oauth_callback` is unauthenticated (no
-   `get_current_user`); `_oauth_states` is a process-local dict with no TTL (`oauth.py:28`) —
-   breaks under >1 worker and leaks entries forever. Fix: bind to the session identity, signed
-   state + authenticated/verified callback, Redis+TTL.
+1. **OAuth owner-binding** (`transport/oauth.py`) — 🟡 **PARTIALLY CLOSED 2026-08-04.**
+
+   **What this item did not say, and what it cost.** Ranked here as "not an active incident
+   with one trusted user", it *was* an active incident for everyone else. The two Connect
+   buttons (`email/page.tsx`, `integrations/page.tsx`) navigated the browser straight at
+   `${NEXT_PUBLIC_GATEWAY_URL}/email/oauth/{provider}/authorize` — deliberately, because the
+   response is a 302 to the provider and a `fetch()` cannot put a consent screen in the address
+   bar. A top-level navigation carries no Bearer and no `X-User-Email`: session cookies are on
+   the workbench origin, not `api.*`, and a navigation cannot add custom headers. When
+   default-deny landed app-wide (57ec82d9, 2026-07-29) the authorize leg — correctly absent from
+   `main.PUBLIC_ROUTES` — began answering `{"detail":"Authentication required"}` to every user,
+   before the handler and its `user_email` fallback ever ran. **Nobody could connect an email
+   account for six days.** It surfaced only when a colleague tried; the owner's mailbox predated
+   the change. `git log -S` finds no commit that ever added the authorize leg to `PUBLIC_ROUTES`,
+   so the fallback parameter this item flagged as a *security* defect had, by then, never been a
+   working path at all.
+
+   **CLOSED — routed through the BFF, not opened up.** The navigation now targets
+   `workbench/control_plane/src/app/api/email/oauth/[provider]/authorize/route.ts`, which runs
+   server-side with the session, calls the same gated gateway route with `gatewayHeaders()` and
+   `redirect: "manual"`, and re-issues the upstream `Location` as its own redirect. No gateway
+   route changed and **no new public surface exists**. Adding the authorize template to
+   `PUBLIC_ROUTES` was the tempting repair and is strictly worse than the outage: the handler
+   writes `{"user_id": …}` into the state the callback turns into an `email_accounts` row, so
+   anonymous + identity-from-a-query-parameter lets anyone bind a mailbox to a colleague's
+   account. `tests/unit/test_email_oauth_authorize_wiring.py` pins the template *out* of
+   `PUBLIC_ROUTES` for that reason.
+
+   **CLOSED — the identity override.** `user_id` was `user_email or user.email`; it is now
+   `user.email or user_email`, so the authenticated identity outranks the parameter and the
+   parameter survives only as a fallback for a caller with no header identity. The browser no
+   longer sends it at all, and the BFF does not forward it.
+
+   **STILL OPEN.** `oauth_callback` is unauthenticated (no `get_current_user`) and its `state` is
+   an unsigned random token. `_oauth_states` (`oauth.py`) is still a module-level in-process dict:
+   **every deploy restarts the gateway, so any flow in flight when a deploy lands loses its state
+   and the callback fails validation** — the user is bounced to
+   `/email/oauth/callback?error=invalid_state` with no explanation. It is also not shared across
+   workers, and entries are never expired, so abandoned flows leak forever. Fix remains: signed
+   state + verified callback, Redis + TTL. Recorded in `apps/services/gateway/AGENTS.md` and in a
+   comment on the dict itself.
 2. **Stop holding DB sessions across LLM/provider I/O** — `_run_rules_job` opens one session
    and holds it across the whole message loop including `_llm_json` awaits (`engine.py:747,815`)
    and provider HTTP in the apply path; same in `_process_past_emails_job`. One account = a

@@ -1,14 +1,20 @@
 # Colleague onboarding — the readiness gate, the runbook, and the capability matrix
 
-**Status:** 🔴 NOT READY — four blocking gates still open (§1.1). **G4 is
-partially closed: N4 shipped 2026-08-04** (the Tasks people directory is now
-"directory open, HR fields restricted", writes admin-only — §4 N4); **N1–N3
-remain open**, and G1/G2/G3 are unchanged and OWNER-GATE. Nothing here says
-it is safe to invite anybody yet. · **Board row:** WS-24 · **Owner:** vjvarada ·
-**Date:** 2026-08-04 ·
+**Status:** 🔴 NOT READY — **three** blocking gates still open (§1.1). **G4 is
+CLOSED: all four owner-scoping tickets shipped 2026-08-04** — N4 (Tasks people
+directory: directory open, HR fields restricted, writes admin-only) and N1–N3
+(Notes: sixteen routes in six files, single-item approve/reject, and the
+bot_join recording hijack). **G1, G2 and G3 are unchanged**, two of them are
+OWNER-GATE, and **it is still not safe to invite anybody.** G4 closed the holes
+that survive a *correct* identity; G1/G2 are about the identity itself, and an
+owner predicate applied to a forged one is not a control. §4 also mints **N5**
+(the rest of `routes/notes` — nine modules N1's table did not enumerate),
+deliberately outside G4 and awaiting an owner call. · **Board row:** WS-24 ·
+**Owner:** vjvarada · **Date:** 2026-08-04 ·
 **Verified against code on 2026-08-04** (branch `ws-24-onboarding-readiness`,
 cut from `ws-14-doc-remediation` @ `ed785bea`; repair round @ `8b6dcdd3`;
-N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`).
+N4 built on `ws-24-n4-people-scoping`, cut from `007caae2`; N1–N3 on
+`ws-24-n1n3-notes-scoping`, cut from `891903de`).
 
 **What this doc is for.** Exactly one person is signed in to this deployment
 (**owner-reported, not measured** — see the note below). The question "is it
@@ -64,9 +70,9 @@ the status header.
 
 ## 1. The readiness gate
 
-**The verdict today: NOT READY.** Four items block colleague #1. Two are
-AGENT-SAFE and can be built now; two are OWNER-GATE and an agent must refuse
-them by name.
+**The verdict today: NOT READY.** Three items block colleague #1 (G4 closed
+2026-08-04). One is AGENT-SAFE and can be built now; two are OWNER-GATE and an
+agent must refuse them by name.
 
 Nothing in this section is a preference. Each one is a live path by which a
 colleague sees, changes, or destroys something that is not theirs, or by which
@@ -79,7 +85,7 @@ the owner loses work that has no backup.
 | **G1** | **Caddy strips inbound identity headers on the API vhost** | 🔴 **OWNER-GATE** (installing it on the box changes auth behaviour — `work_plan.md` §6) | `deploy/hostinger/caddy/Caddyfile`'s `api.*` `reverse_proxy` block contains **both** `header_up -X-User-Email` and `header_up -X-User-Role`; the same is true of `/etc/caddy/Caddyfile`; and `scripts/onboarding_preflight.py` reports `[PASS] Caddy strips inbound identity headers`. Writing the repo file is AGENT-SAFE; installing + reloading is not. |
 | **G2** | **`GATEWAY_INTERNAL_TOKEN` is provisioned in BOTH files and is not `LITELLM_MASTER_KEY`** | 🔴 **OWNER-GATE** (a credential provisioned on the box, in two places) | The preflight reports `[PASS] Service identity is its own secret` in **box** mode, which now requires all three of: set in `/opt/acb/app/.env`; set in `workbench/control_plane/.env.local`; **the two byte-identical**; and different from the LLM key. ⚠️ **Setting only the first is a total lockout, not a partial fix** — see the warning below. |
 | **G3** | **A restore path exists** (BO-23) | 🟢 **AGENT-SAFE** to write the scripts + runbook; 🔴 **OWNER-GATE** to run any of them, install a schedule, or point anything at prod data | The preflight reports `[PASS] A restore path exists and backups are recent`. Its repo half is **BO-23's own done-when 1–4, verbatim** (`FOUNDATION_BUILDOUT_CHECKLIST.md` §BO-23): `scripts/backup_db.sh` taking a data-inclusive `pg_dump -Fc` (**not** `--schema-only`), `scripts/restore_db.sh` calling `pg_restore`, a runbook that states the *verification* step, and a pre-migration hook. Its box half: an artefact under `/opt/acb/backups` newer than 48h containing a dump above the size floor. **Nothing of this exists on this branch** — the only DB script that dumps anything is `scripts/dump_schema.sh` (`pg_dump --schema-only` — structure, zero rows). `scripts/backup_db.sh` and `restore_db.sh` are proposed on the **independent** PR #347 (`ws-0-bo23-backup-restore`) and are not here; G3 goes green when that lands and is scheduled, not before. See `work_plan.md` §2 exception 2. |
-| **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) — **1 of 4 closed** | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` covers N1–N3 and `tests/unit/test_tasks_people_scoping.py` covers N4. **N4 CLOSED 2026-08-04** — the Tasks people directory is "directory open, HR fields restricted" with all four writes on `admin:members:manage` (§4 N4's DECISION block). **N1–N3 are untouched and still block this gate**; they are latent with one user and live the moment a colleague signs in. |
+| **G4** | **§4's four owner-scoping holes are closed** | 🟢 **AGENT-SAFE**, four tickets (§4) — ✅ **4 of 4 CLOSED 2026-08-04** | Each of §4's **four** tickets meets its own done-when; `tests/unit/test_notes_owner_scoping.py` (57 cases) covers N1–N3 and `tests/unit/test_tasks_people_scoping.py` (35) covers N4. **N4** — the Tasks people directory is "directory open, HR fields restricted" with all four writes on `admin:members:manage` (§4 N4's DECISION block). **N1–N3** (`ws-24-n1n3-notes-scoping`) — fifteen of sixteen Notes routes in the six named files load through `core.load_owned_meeting` / `OWNED_MEETING_PREDICATE` and answer 404 never 403, the sixteenth (`live.py:256`) is machine-authed by recorded decision; `actions._load_action` joins `meeting` so a member can no longer approve a colleague's item into their own GTD list; `bot_join`'s attach branch binds the predicate into the `UPDATE`. ⚠️ **This gate going green does not make WS-24 green** — G1/G2/G3 are untouched, and G4 closes the holes that survive a *correct* identity, not the ones that begin with a forged one. ⚠️ §4's new **N5** (nine further `routes/notes` modules N1's table never enumerated) is deliberately **outside** this gate and needs an owner call. |
 
 > ### ⚠️ G2 has a lockout mode. Read this before provisioning the token.
 >
@@ -381,16 +387,72 @@ this matrix) is in Tasks, requires `feature:tasks`, and was the sharpest of the
 four because it is HR data. `member` holds **both** features by default
 (`130:235`).
 
-**N4 is CLOSED (2026-08-04). N1–N3 are open** — latent with one user and live
-the moment a colleague signs in.
+**All four are CLOSED (N4 and N1–N3, both 2026-08-04.)** They were latent with
+one user and live the moment a colleague signed in.
 
-**These are the gate's G4. N1–N3 are sized here and built elsewhere — this
-document does not fix them.** All four are 🟢 **AGENT-SAFE**.
+**These are the gate's G4. They were sized here and built elsewhere — this
+document does not fix them.** All four were 🟢 **AGENT-SAFE**.
 
-### N1 — Notes read paths outside the owner predicate · size: M (one PR, ~6 files)
+> ⚠️ **G4 closing does not make WS-24 green.** G1, G2 and G3 are untouched and
+> two of them are OWNER-GATE. **It is still not safe to invite anybody.**
+> Specifically: without G1 the reverse proxy does not strip inbound
+> `X-User-Email` / `X-User-Role`, and without G2 the service identity may still
+> be the LLM key every agent holds — an identity forgery reaches *any* member's
+> data, and an owner predicate applied to a forged identity is not a control.
+> The four tickets below close the holes that survive a correct identity. They
+> do not close the ones that begin with the wrong one.
+>
+> A second qualifier, recorded in **N5** below: N1's table is a list of six
+> files, not a proof of exhaustiveness over `routes/notes`, and it was not
+> exhaustive.
 
-Six route families reach a meeting by id with no ownership predicate. Verified
-2026-08-04:
+### N1 — Notes read paths outside the owner predicate · size: M (one PR, ~6 files) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n1n3-notes-scoping`. Fifteen of the sixteen routes in
+> the six named files now load their meeting through `core.load_owned_meeting`
+> or bind `core.OWNED_MEETING_PREDICATE`; all answer **404, never 403**. The
+> sixteenth (`live.py:256`) is deliberately left machine-authed — see the row
+> below.
+>
+> | File | What shipped |
+> |---|---|
+> | `recordings.py` | `upload_recording` and `start_recording` call `load_owned_meeting` (and unlink the file they had already written on refusal, so no bytes land in a colleague's media dir); `_recording_path` — the loader `/chunk` and `/complete` share — joins `meeting` and binds the predicate, so neither route can acquire the hole separately and the per-chunk path pays no extra round trip; `get_audio` calls `load_owned_meeting` first |
+> | `qa.py` | `ask_meeting` loads the meeting **before** the transcript, so a colleague's meeting cannot be told apart by the 409 "no transcript yet" answer |
+> | `share.py` | `draft_followup_email` loads through `load_owned_meeting`. Checked first, as the brief required: there is no sharing mechanism in the module to preserve — no grant, no token, no redemption route; the send is a separate `/email/send` call under the caller's own account, so the whole route is a *read* |
+> | `copilot.py` | both routes scoped; the stream checks **before** the `StreamingResponse` starts, since a 404 raised inside a started stream arrives as a broken connection rather than a refusal. The bus replays its ring to late subscribers and `refs.window` carries up to 400 chars of speech, so the stream was a live transcript feed |
+> | `live.py` | `POST /stt/live-token` is owner-scoped **when it names a meeting** (its 409 reason distinguished "the copilot is off for this meeting" from "live transcription is off", a presence oracle over a colleague's calendar); `GET /meetings/{id}/live/wanted` and `POST /stt/bot-live-token` stay machine-authed — see below |
+> | `actions.py` | see N2 |
+>
+> **`live.py:256` — the decision, recorded.** It stays bot-token authed. Its
+> caller is the meeting-bot worker in its own container: it holds
+> `MEETING_BOT_TOKEN` and no member identity, so an owner predicate has no
+> owner to use, and both ways to invent one (trust a client-supplied email, or
+> fall back to the meeting's own `owner_email`) turn the bot token into a way
+> to *assert* an identity. The token is the authority, exactly as it is for
+> `/live/segment`, which posts the transcript this route only decides whether
+> to keep paying for. What it discloses without a member check is one boolean
+> and a settings-derived sentence — no content, no title, and the same answer
+> for an id that does not exist (`live_wanted` never raises and defaults to
+> `True`). Pinned by
+> `test_notes_owner_scoping.py::test_the_two_bot_token_routes_stay_machine_authed`.
+>
+> ⚠️ **Found while doing this, NOT fixed here** (it would *open* a route, the
+> opposite of this change's direction, and no done-when asks for it):
+> `/notes/meetings/{meeting_id}/live/wanted` is absent from **both**
+> `gateway/main.py`'s `PUBLIC_ROUTES` **and** `routes/notes/core.py`'s
+> `require_feature_router(exempt=…)` list, while its two siblings are in both.
+> So the app-wide `require_authenticated` and then the feature gate 401 the
+> worker before `_check_bot_auth` ever runs, and the poll that decides whether
+> to keep streaming ASR is dead. `tests/unit/test_org_access_enforcement.py`
+> lists the path in its own `GATED_ROUTERS` registry, which is what let the
+> drift pass unnoticed: that registry is the test's opinion, not the router's.
+>
+> Tests: `tests/unit/test_notes_owner_scoping.py` grew 36 cases (21 → 57).
+> Every non-owner case was verified **red** against the pre-fix behaviour with
+> the parameter renames already applied, so each red is the security claim and
+> not a `TypeError`.
+
+The six route families as measured on 2026-08-04, before the fix:
 
 | File | Route(s) | The unguarded read |
 |---|---|---|
@@ -406,9 +468,33 @@ Six route families reach a meeting by id with no ownership predicate. Verified
 **404, never 403**, for a meeting the caller does not own; `live.py:256` is
 either left machine-authed with a comment saying why or moved to the same rule;
 and `tests/unit/test_notes_owner_scoping.py` gains one red-first case per route
-family asserting 404 for a non-owner.
+family asserting 404 for a non-owner. — **all met.**
 
-### N2 — `actions.py` single-item approve / reject · size: S (one file)
+### N2 — `actions.py` single-item approve / reject · size: S (one file) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n1n3-notes-scoping`. `_load_action(db, action_id,
+> owner_email)` now joins `meeting m ON m.id = action_item.meeting_id` and
+> binds `OWNED_MEETING_PREDICATE`, raising 404 with the same "action item not
+> found" detail either way — the convention `dispatch.dispatch_action`
+> (`dispatch.py:614-622`) already used. Both routes inherit it from the shared
+> loader, so neither can acquire the hole separately. An `action_item` has no
+> owner column of its own; it inherits the one on its meeting, so the scope is
+> a join, not a predicate on the row.
+>
+> Both harms are pinned separately, because a 404 alone would not have proved
+> the second: `test_approving_a_colleagues_action_creates_no_task_in_your_list`
+> asserts that **no** `INSERT INTO gtd_items` and **no** `UPDATE action_item`
+> are issued, and that the colleague's description text never reaches a bound
+> parameter.
+>
+> **`approve-all` was aligned, not left alone.** It was already safe at the
+> seam — every item goes through `_dispatch`, which refuses a cross-owner actor
+> — but it answered **200 with an empty list**, which says "your meeting,
+> nothing qualified" where the truth is "not your meeting", and it read the
+> colleague's draft rows to get there. It now loads through
+> `load_owned_meeting` first, so the answer matches the single-item routes and
+> the item rows are never read. The `_dispatch` refusal is untouched: it is the
+> seam, and this is a second lock on one of its doors.
 
 `_load_action` (`actions.py:62-75`) selects `FROM action_item WHERE id = :id`
 with no join to `meeting` and no owner predicate. Both callers act on it:
@@ -421,14 +507,51 @@ with no join to `meeting` and no owner predicate. Both callers act on it:
 * `POST /actions/{id}/reject` `:114-130` — flips a colleague's item to
   `rejected` (`:125-128`).
 
-`approve-all` (`:141`) is *not* in scope: it goes through
-`dispatch.cross_owner_refusal`, which is the seam PR #346 hardened.
+`approve-all` (`:141`) was *not* in scope: it goes through
+`dispatch.cross_owner_refusal`, which is the seam PR #346 hardened. (It was
+aligned anyway — see the CLOSED block above for why a 200-with-empty-list was
+still an answer worth removing.)
 
 **Done when:** `_load_action` joins `meeting m ON m.id = action_item.meeting_id`
 and binds `OWNED_MEETING_PREDICATE`, raising 404 for a non-owner; both routes
 inherit it; and two tests (one approve, one reject) fail red before the change.
+— **all met.**
 
-### N3 — `meeting_bot.bot_join` with a `meeting_id` · size: S (one route)
+### N3 — `meeting_bot.bot_join` with a `meeting_id` · size: S (one route) · ✅ **CLOSED 2026-08-04**
+
+> **CLOSED** on `ws-24-n1n3-notes-scoping`, with one deliberate departure from
+> the done-when below, stated here because it is a design choice and not an
+> oversight: **the scope is bound INTO the `UPDATE`** rather than checked by a
+> preceding `load_owned_meeting`. A load-then-write leaves a window in which
+> the row can change between the two statements, and this statement *is* the
+> mutation — one statement, one decision:
+>
+> ```sql
+> UPDATE meeting AS m SET status='recording', platform=:p, start_at=now(),
+>        title=COALESCE(:t, title)
+>  WHERE m.id = CAST(:id AS UUID)
+>    AND (lower(m.owner_email) = lower(:owner) OR m.owner_email IS NULL)
+> RETURNING m.id
+> ```
+>
+> No row back ⇒ the existing 404 "unknown meeting", which is now the answer for
+> both "no such meeting" and "not yours".
+>
+> **The acting principal is the CALLER (`user.email`), and that is the whole
+> ticket.** It has to be: the caller is the only identity the request carries,
+> and resolving the check against the row's own `owner_email` would compare the
+> meeting to itself and pass every time. This is the same rule as PR #346's
+> `requested_by` choice, applied at the other end — authority follows the
+> person who asked and is never laundered through the row being acted on. After
+> the check the two coincide for an attach, which is the point; the ingest side
+> still reads `meeting_bot.requested_by` and
+> `test_the_requester_not_the_owner_is_what_the_ingest_carries` pins that it is
+> not "simplified" to the owner later.
+>
+> The create branch is **unchanged** — it stamps `owner_email = user.email`, so
+> there is no one else's row to reach — and a test asserts that.
+
+### N3 — the ticket as written
 
 `POST /meetings/bot-join` (`meeting_bot.py:691`) accepts an optional
 `body.meeting_id` and, when present, runs
@@ -448,7 +571,48 @@ authority is not laundered into the owner's (PR #346's commit body;
 `load_owned_meeting` first and 404s for a non-owner; the create branch
 (`:741-752`, which already stamps `owner_email = user.email` at `:749`) is
 unchanged; and a test asserts 404 when a non-owner supplies another member's
-`meeting_id`.
+`meeting_id`. — **met, with the loader replaced by the predicate bound into
+the `UPDATE` itself** (same predicate, same 404, no TOCTOU window; see the
+CLOSED block).
+
+### N5 — the rest of `routes/notes` · size: M · 🔴 **OPEN** · ⚠️ **NOT part of G4**
+
+Found while closing N1, and recorded rather than absorbed: **N1's table was a
+list of six files, not a proof of exhaustiveness.** `routes/notes` has 24
+modules. After N1–N3, `load_owned_meeting` / `OWNED_MEETING_PREDICATE` appear
+in `meetings.py`, `recordings.py`, `summaries.py`, `actions.py`, `qa.py`,
+`share.py`, `copilot.py`, `live.py` and `meeting_bot.py` — and in **nine**
+other modules the count is still zero:
+
+| File | Routes still reaching a meeting by caller-supplied id |
+|---|---|
+| `summaries.py` | `GET`/`PUT /meetings/{id}/note`, `GET /meetings/{id}/actions` (`summarize` *is* scoped — PR #346) |
+| `copilot_context.py` | `PUT /meetings/{id}/brief`, `GET /meetings/{id}/context`, `POST /meetings/{id}/context/deep` |
+| `copilot_agenda.py` | `GET`/`PUT /meetings/{id}/agenda`, `POST /meetings/{id}/agenda/chat` |
+| `meeting_bot.py` | `GET /meetings/{id}/bot`, `/bot/diagnostics`, `/bot/screenshot`, `POST /meetings/{id}/bot/stop` (`bot-join` *is* scoped — N3) |
+| `live_transcript.py` | `/live/browser-segment`, `/live/roster`, `GET /meetings/{id}/live` (SSE), `POST /meetings/{id}/say` |
+| `live_session.py` | `GET /live/sessions`, `GET /meetings/{id}/live/session`, `POST /meetings/{id}/live/copilot` |
+| `speaker_id.py` | `POST /meetings/{id}/identify-speakers` |
+| `agenda_progress.py` | `GET /meetings/{id}/agenda/progress` |
+| `events.py` | `GET /meetings/{id}/events` (SSE progress) |
+
+Two of these are as sharp as anything in N1 — `GET /meetings/{id}/note` serves
+the generated notes, and `GET /meetings/{id}/live` is the live caption stream —
+and `POST /meetings/{id}/say` makes the notetaker *speak a line into somebody
+else's call*.
+
+**This is deliberately NOT added to G4.** G4's done-when is "each of §4's four
+tickets meets its own done-when", and all four do; re-scoping an owner-facing
+gate is the owner's call, not an implementer's. **Owner decision needed:** does
+N5 block colleague #1, or does it ship after? Note that G4 going green is
+already qualified — G1/G2/G3 keep WS-24 red regardless, so nothing turns on
+this today.
+
+**Done when:** every route in the table loads through `core.load_owned_meeting`
+or binds `OWNED_MEETING_PREDICATE`, 404 never 403; the two machine entrypoints
+(`/live/segment`, and `/live/browser-segment`'s user-authed twin) keep their
+existing trust models; and `tests/unit/test_notes_owner_scoping.py` gains a
+red-first case per route family. 🟢 **AGENT-SAFE.**
 
 ### N4 — the Tasks people directory is org-wide read **and write** · size: M (one file + a decision) · ✅ **CLOSED 2026-08-04**
 
@@ -465,8 +629,9 @@ unchanged; and a test asserts 404 when a non-owner supplies another member's
 > verified red first — always-include-HR, a removed write dependency, and an
 > unconditional skill-search clause.
 >
-> **Still open on this gate:** N1–N3 (Notes), G1, G2 and G3. N4 closing does
-> **not** make G4 green.
+> **Superseded 2026-08-04:** this block used to end "Still open on this gate:
+> N1–N3 (Notes), G1, G2 and G3." N1–N3 closed the same day, so G4 **is** green;
+> G1, G2 and G3 are not, and the readiness verdict is unchanged.
 
 **This was the sharpest item on the gate.** It is HR data, it was readable and
 writable by the default role, and it is the exact surface D12's department
@@ -581,11 +746,32 @@ carries a case per route; and `fetch_people_for_clarify` is unchanged.
                   tests/unit/test_default_deny_auth.py -q
     # Baseline on ws-24-onboarding-readiness: 85 passed.
 
-    # §4's holes. N4 is closed and its cases are green today:
+    # §4's holes. All four tickets are closed and green:
     uv run pytest tests/unit/test_tasks_people_scoping.py -q
-    # 35 passed.
-    # N1-N3 (Notes) are still open:
+    # 35 passed (N4).
     uv run pytest tests/unit/test_notes_owner_scoping.py -q
+    # 57 passed (N1-N3; 21 of them are PR #346's).
+
+    # Route wiring, because N1-N3 changed route dependencies and signatures:
+    uv run pytest tests/unit/test_org_access_enforcement.py -q
+    # 31 passed.
+    # The whole Notes suite, by file (never the directory):
+    uv run pytest tests/unit/test_notes_agenda_progress.py \
+      tests/unit/test_notes_bot_identity.py tests/unit/test_notes_copilot.py \
+      tests/unit/test_notes_copilot_agenda.py \
+      tests/unit/test_notes_copilot_context.py \
+      tests/unit/test_notes_copilot_policy.py tests/unit/test_notes_dispatch.py \
+      tests/unit/test_notes_glossary.py tests/unit/test_notes_live.py \
+      tests/unit/test_notes_live_http.py tests/unit/test_notes_live_session.py \
+      tests/unit/test_notes_live_speakers.py \
+      tests/unit/test_notes_live_transcript.py \
+      tests/unit/test_notes_meeting_bot.py tests/unit/test_notes_meeting_prep.py \
+      tests/unit/test_notes_owner_scoping.py tests/unit/test_notes_qa.py \
+      tests/unit/test_notes_settings.py tests/unit/test_notes_speaker_id.py \
+      tests/unit/test_notes_summaries.py -q
+    # 280 passed on ws-24-n1n3-notes-scoping (36 of them new here). The "242
+    # at #346" figure is not reproduced by this file list -- treat 280 as the
+    # baseline and this list as the definition of "the Notes suite".
 
     # ⚠️ NEVER `uv run pytest tests/unit/` as a directory on this box -- it
     # hangs against the live DB. Name the files.

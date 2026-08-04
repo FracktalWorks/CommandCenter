@@ -28,6 +28,7 @@ plays Postgres for exactly the owner predicate, and the dispatch rules are pure.
 from __future__ import annotations
 
 import inspect
+import io
 from types import SimpleNamespace
 
 import pytest
@@ -73,6 +74,27 @@ class _FakeResult:
         return self._rows[0] if self._rows else None
 
 
+def _draft_action(
+    aid: str, meeting_id: str, description: str,
+) -> SimpleNamespace:
+    """A draft action item, with the dispatch columns ``_dispatch`` reads."""
+    return SimpleNamespace(
+        id=aid, meeting_id=meeting_id, description=description,
+        confidence=0.95, status="draft", due_hint=None, segment_ids=[],
+        resulting_task_id=None, kind="task", payload={},
+        dispatch_ref=None, dispatch_error=None, created_at=None,
+    )
+
+
+def _recording(
+    rid: str, meeting_id: str, path: str, channel: str = "mixed",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        id=rid, meeting_id=meeting_id, artifact_path=path, channel=channel,
+        mime="audio/webm", byte_size=0, duration_s=None, created_at=None,
+    )
+
+
 class _FakeDb:
     """Enough async session to answer the meeting reads, without Postgres.
 
@@ -82,26 +104,62 @@ class _FakeDb:
     ``"owner_email = :owner"``, so making the comparison case-insensitive (a
     fix) would have made the fake stop filtering (a false pass). A query that
     binds ``:owner`` is a query that means to scope; one that does not, is not.
+
+    The same rule extends to the two tables that reach a meeting by join —
+    ``action_item`` (N2) and ``meeting_recording`` (N1): a query that binds
+    ``:owner`` gets its rows filtered through the meeting they belong to, one
+    that does not gets everything. So a fix that drops the join, drops the
+    bind, or compares the wrong identity all read the same way here: the row
+    comes back.
     """
 
-    def __init__(self, meetings: list, actions: list | None = None) -> None:
+    def __init__(
+        self,
+        meetings: list,
+        actions: list | None = None,
+        recordings: list | None = None,
+        segments: list | None = None,
+    ) -> None:
         self.meetings = meetings
         self.actions = list(actions or [])
+        self.recordings = list(recordings or [])
+        self.segments = list(segments or [])
         self.statements: list[tuple[str, dict]] = []
 
-    async def execute(self, stmt, params=None):
-        sql, params = str(stmt), dict(params or {})
-        self.statements.append((sql, params))
-        # Most specific first: the library SELECT counts action items in a
-        # subquery, so testing "FROM action_item" first would misroute it.
-        # "FROM meeting m" = library + core.load_owned_meeting;
-        # "FROM meeting WHERE" = dispatch._load_meeting (unscoped by design —
-        # the dispatch seam does the owner check itself, on the loaded row).
-        is_meeting_read = "FROM meeting m" in sql or "FROM meeting WHERE" in sql
-        if not is_meeting_read:
-            if "FROM action_item" in sql:
-                return _FakeResult(list(self.actions))
-            return _FakeResult([])          # recordings / segments / runs
+    # The owner predicate, applied to a row that has a meeting_id rather than
+    # an owner of its own — the join, as the fake sees it.
+    def _owned(self, meeting_id, owner: str) -> bool:
+        for m in self.meetings:
+            if str(m.id) == str(meeting_id):
+                return (
+                    m.owner_email is None
+                    or (m.owner_email or "").casefold() == owner
+                )
+        return False
+
+    def wrote(self, needle: str) -> bool:
+        """Did any statement this session issued contain ``needle``?"""
+        return any(needle in sql for sql, _ in self.statements)
+
+    def _scope(self, rows: list, sql: str, params: dict) -> list:
+        """Apply the join-side scope: id, meeting id, then ``:owner``."""
+        if "meeting_id = :id" in sql:                    # get_audio's shape
+            return [
+                r for r in rows
+                if str(r.meeting_id) == str(params.get("id"))
+            ]
+        if ":id" in sql:
+            rows = [r for r in rows if str(r.id) == str(params.get("id"))]
+        if "mid" in params:
+            rows = [
+                r for r in rows if str(r.meeting_id) == str(params["mid"])
+            ]
+        if "owner" in params:
+            owner = str(params.get("owner") or "").casefold()
+            rows = [r for r in rows if self._owned(r.meeting_id, owner)]
+        return rows
+
+    def _meeting_rows(self, sql: str, params: dict) -> list:
         rows = list(self.meetings)
         if ":id" in sql:
             rows = [m for m in rows if str(m.id) == str(params.get("id"))]
@@ -119,7 +177,45 @@ class _FakeDb:
                 if (m.owner_email or "").casefold() == owner
                 or m.owner_email is None
             ]
-        return _FakeResult(rows)
+        return rows
+
+    #: INSERT … RETURNING id, by table. Most specific first — the bot insert
+    #: names both ``meeting_bot`` and (via its FK column) ``meeting``.
+    _RETURNS = (
+        ("INTO summary_run", "run-1"),
+        ("INTO meeting_bot", "bot-1"),
+        ("INTO meeting ", "m-new"),
+    )
+
+    async def execute(self, stmt, params=None):
+        sql, params = str(stmt), dict(params or {})
+        self.statements.append((sql, params))
+        # Most specific first: the library SELECT counts action items in a
+        # subquery, so testing "FROM action_item" first would misroute it.
+        # "FROM meeting m" = library + core.load_owned_meeting;
+        # "FROM meeting WHERE" = dispatch._load_meeting (unscoped by design —
+        # the dispatch seam does the owner check itself, on the loaded row);
+        # "UPDATE meeting" = bot_join's attach branch, which binds the scope
+        # into the write rather than reading first (N3).
+        if (
+            "FROM meeting m" in sql
+            or "FROM meeting WHERE" in sql
+            or sql.lstrip().upper().startswith("UPDATE MEETING")
+        ):
+            return _FakeResult(self._meeting_rows(sql, params))
+        if "FROM action_item" in sql:
+            return _FakeResult(self._scope(self.actions, sql, params))
+        if "FROM meeting_recording" in sql:
+            return _FakeResult(self._scope(self.recordings, sql, params))
+        if "FROM transcript_segment" in sql:
+            return _FakeResult([
+                s for s in self.segments
+                if str(s.meeting_id) == str(params.get("id"))
+            ])
+        for needle, new_id in self._RETURNS:
+            if needle in sql:
+                return _FakeResult([SimpleNamespace(id=new_id)])
+        return _FakeResult([])              # other inserts / updates
 
     async def commit(self) -> None:
         return None
@@ -476,3 +572,781 @@ async def test_summarizing_your_own_meeting_still_works(monkeypatch) -> None:
     out = await summaries.summarize("m-alice", user=_user(ALICE))
     assert out == {"run_id": "run-1", "status": "queued"}
     assert queued == [("m-alice", ALICE)]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# N1 / N2 / N3 — the three holes PR #346 named and left open.
+#
+# Everything above this line is #346. Everything below closes the rest of the
+# same defect: a meeting is private to its owner, and until now that was true
+# of the library, the by-id CRUD and the dispatch seam only. Sixteen routes in
+# six files reached a meeting by a caller-supplied id without asking whose it
+# was.
+# ═════════════════════════════════════════════════════════════════════════════
+
+# ── N1a. Recordings — the audio itself ───────────────────────────────────────
+
+@pytest.fixture
+def recordings_rig(monkeypatch, tmp_path):
+    """Alice and Bob each own a meeting with one recording on disk.
+
+    ``media_dir`` is redirected at a tmp path, so "did a colleague's upload
+    land in the media store" is a question this rig can actually answer.
+    """
+    from gateway.routes.notes import live_session
+    from gateway.routes.notes import recordings as rec
+
+    media = tmp_path / "media"
+    media.mkdir()
+    monkeypatch.setattr(rec, "media_dir", lambda: media)
+    db = _install_db(monkeypatch, rec, _FakeDb(
+        [
+            _meeting("m-alice", ALICE), _meeting("m-bob", BOB),
+            _meeting("m-legacy", None),
+        ],
+        recordings=[
+            _recording("r-alice", "m-alice", "m-alice/r-alice.webm"),
+            _recording("r-bob", "m-bob", "m-bob/r-bob.webm"),
+        ],
+    ))
+    for r in db.recordings:
+        p = media / r.artifact_path
+        p.parent.mkdir(parents=True, exist_ok=True)
+        p.write_bytes(b"0123456789")
+
+    spawned: list = []
+
+    def _spawn(coro):
+        coro.close()               # never actually transcribe
+        spawned.append(coro)
+
+    monkeypatch.setattr(rec, "_spawn_pipeline", _spawn)
+    monkeypatch.setattr(rec, "_REC_SEQ", {})
+
+    async def _begin(*a, **k):
+        return None
+
+    monkeypatch.setattr(live_session, "begin", _begin)
+    return rec, db, media, spawned
+
+
+def _upload(name: str = "audio.webm", body: bytes = b"0123456789"):
+    from fastapi import UploadFile
+
+    return UploadFile(file=io.BytesIO(body), filename=name)
+
+
+def _fake_request(body: bytes) -> SimpleNamespace:
+    async def _body() -> bytes:
+        return body
+
+    return SimpleNamespace(body=_body)
+
+
+async def test_uploading_audio_into_a_colleagues_meeting_is_404(
+    recordings_rig,
+) -> None:
+    """An upload is a write AND an entry into the transcription pipeline,
+    which chains notes generation and ``auto_dispatch`` — the same reach
+    ``retranscribe`` was guarded for in PR #346."""
+    rec, db, media, spawned = recordings_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await rec.upload_recording(
+            "m-bob", file=_upload(), channel="upload", user=_user(ALICE)
+        )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "meeting not found"
+    assert spawned == [], "a colleague's upload started a transcription run"
+    assert not db.wrote("INSERT INTO meeting_recording")
+    # ...and no bytes were left behind in the colleague's media directory.
+    assert list((media / "m-bob").glob("*")) == [
+        media / "m-bob" / "r-bob.webm"
+    ]
+
+
+async def test_uploading_audio_into_your_own_meeting_still_works(
+    recordings_rig,
+) -> None:
+    rec, _db, _media, spawned = recordings_rig
+
+    out = await rec.upload_recording(
+        "m-alice", file=_upload(), channel="upload", user=_user(ALICE)
+    )
+    assert out["status"] == "processing"
+    assert out["run_id"] == "run-1"
+    assert len(spawned) == 1
+
+
+async def test_starting_a_recording_on_a_colleagues_meeting_is_404(
+    recordings_rig,
+) -> None:
+    """``start_recording`` flips the meeting to ``status='recording'`` and
+    opens a writable file on it — the same mutation N3 closes from the
+    bot-join side."""
+    rec, db, media, _spawned = recordings_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await rec.start_recording(
+            "m-bob", rec.StartRecordingRequest(), user=_user(ALICE)
+        )
+    assert exc.value.status_code == 404
+    assert not db.wrote("UPDATE meeting SET status='recording'")
+    assert list((media / "m-bob").glob("*")) == [
+        media / "m-bob" / "r-bob.webm"
+    ]
+
+
+async def test_starting_a_recording_on_your_own_meeting_still_works(
+    recordings_rig,
+) -> None:
+    rec, db, _media, _spawned = recordings_rig
+
+    out = await rec.start_recording(
+        "m-alice", rec.StartRecordingRequest(), user=_user(ALICE)
+    )
+    assert out["recording_id"]
+    assert db.wrote("UPDATE meeting SET status='recording'")
+
+
+async def test_appending_a_chunk_to_a_colleagues_recording_is_404(
+    recordings_rig,
+) -> None:
+    """Arbitrary bytes appended to the file that is about to be transcribed
+    as somebody else's meeting."""
+    rec, _db, media, _spawned = recordings_rig
+    before = (media / "m-bob" / "r-bob.webm").read_bytes()
+
+    with pytest.raises(HTTPException) as exc:
+        await rec.append_chunk(
+            "m-bob", "r-bob", _fake_request(b"XXX"), 1, user=_user(ALICE)
+        )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "recording not found"
+    assert (media / "m-bob" / "r-bob.webm").read_bytes() == before
+
+
+async def test_appending_a_chunk_to_your_own_recording_still_works(
+    recordings_rig,
+) -> None:
+    rec, _db, media, _spawned = recordings_rig
+
+    out = await rec.append_chunk(
+        "m-alice", "r-alice", _fake_request(b"XXX"), 1, user=_user(ALICE)
+    )
+    assert out == {"ok": True, "seq": 1}
+    assert (media / "m-alice" / "r-alice.webm").read_bytes().endswith(b"XXX")
+
+
+async def test_completing_a_colleagues_recording_is_404(recordings_rig) -> None:
+    rec, _db, _media, spawned = recordings_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await rec.complete_recording(
+            "m-bob", "r-bob", rec.CompleteRecordingRequest(duration_s=1.0),
+            user=_user(ALICE),
+        )
+    assert exc.value.status_code == 404
+    assert spawned == []
+
+
+async def test_completing_your_own_recording_still_works(
+    recordings_rig,
+) -> None:
+    rec, _db, _media, spawned = recordings_rig
+
+    out = await rec.complete_recording(
+        "m-alice", "r-alice", rec.CompleteRecordingRequest(duration_s=1.0),
+        user=_user(ALICE),
+    )
+    assert out["status"] == "processing"
+    assert len(spawned) == 1
+
+
+async def test_playing_back_a_colleagues_audio_is_404(recordings_rig) -> None:
+    """The raw recording — the verbatim audio the transcript is only a lossy
+    rendering of."""
+    rec, _db, _media, _spawned = recordings_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await rec.get_audio("m-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "meeting not found"
+
+
+async def test_playing_back_your_own_audio_still_works(recordings_rig) -> None:
+    rec, _db, media, _spawned = recordings_rig
+
+    resp = await rec.get_audio("m-alice", user=_user(ALICE))
+    assert str(resp.path) == str(media / "m-alice" / "r-alice.webm")
+
+
+async def test_a_legacy_recording_with_no_owner_stays_reachable(
+    recordings_rig,
+) -> None:
+    """Same fail-safe as the library: NULL-owner rows predate migration 95 and
+    excluding them would hide a member's own old meetings."""
+    rec, db, media, _spawned = recordings_rig
+    db.recordings.append(
+        _recording("r-legacy", "m-legacy", "m-legacy/r-legacy.webm")
+    )
+    (media / "m-legacy").mkdir()
+    (media / "m-legacy" / "r-legacy.webm").write_bytes(b"0123456789")
+
+    resp = await rec.get_audio("m-legacy", user=_user(BOB))
+    assert str(resp.path) == str(media / "m-legacy" / "r-legacy.webm")
+    out = await rec.append_chunk(
+        "m-legacy", "r-legacy", _fake_request(b"Z"), 1, user=_user(BOB)
+    )
+    assert out == {"ok": True, "seq": 1}
+
+
+async def test_a_differently_cased_sign_in_still_reaches_its_own_audio(
+    recordings_rig,
+) -> None:
+    rec, _db, media, _spawned = recordings_rig
+
+    resp = await rec.get_audio("m-alice", user=_user("Alice@Fracktal.IN"))
+    assert str(resp.path) == str(media / "m-alice" / "r-alice.webm")
+
+
+# ── N1b. Ask-the-meeting — the whole transcript, in prose ────────────────────
+
+@pytest.fixture
+def qa_rig(monkeypatch):
+    from gateway.routes.notes import qa
+
+    db = _install_db(monkeypatch, qa, _FakeDb(
+        [_meeting("m-alice", ALICE), _meeting("m-bob", BOB)],
+        segments=[
+            SimpleNamespace(
+                id="s1", meeting_id="m-bob", idx=1,
+                text="we can go to 40% off", speaker_label="S1",
+                channel="mixed",
+            )
+        ],
+    ))
+
+    async def _llm_json(system, user, model, **kw):
+        return {"answer": "40% off", "refs": [1]}
+
+    monkeypatch.setattr(qa, "_llm_json", _llm_json)
+    monkeypatch.setattr(qa, "_model", lambda _k: "tier-fast")
+    return qa, db
+
+
+async def test_asking_about_a_colleagues_meeting_is_404(qa_rig) -> None:
+    """The sharpest read in N1: it does not quote the transcript, it answers
+    questions about it — a better interface to a colleague's conversations
+    than the library search PR #346 closed."""
+    qa, db = qa_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await qa.ask_meeting(
+            "m-bob", qa.AskRequest(question="what discount did we offer?"),
+            user=_user(ALICE),
+        )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "meeting not found"
+    # The refusal precedes the read: no transcript was ever loaded.
+    assert not db.wrote("FROM transcript_segment")
+
+
+async def test_asking_about_your_own_meeting_still_answers(qa_rig) -> None:
+    qa, db = qa_rig
+    db.segments[0].meeting_id = "m-alice"
+
+    out = await qa.ask_meeting(
+        "m-alice", qa.AskRequest(question="what discount did we offer?"),
+        user=_user(ALICE),
+    )
+    assert out.answer == "40% off"
+    assert [c.segment_id for c in out.citations] == ["s1"]
+
+
+async def test_the_no_transcript_409_is_not_an_oracle(qa_rig) -> None:
+    """A colleague's meeting must answer 404 whether or not it has a
+    transcript — otherwise 409-vs-404 tells you which meeting ids are real
+    and how far along they are."""
+    qa, db = qa_rig
+    db.segments.clear()
+
+    with pytest.raises(HTTPException) as exc:
+        await qa.ask_meeting(
+            "m-bob", qa.AskRequest(question="anything?"), user=_user(ALICE)
+        )
+    assert exc.value.status_code == 404
+
+
+# ── N1c. Share — drafting a recap of somebody else's meeting ─────────────────
+
+@pytest.fixture
+def share_rig(monkeypatch):
+    from gateway.routes.notes import share
+
+    db = _install_db(monkeypatch, share, _FakeDb(
+        [_meeting("m-alice", ALICE), _meeting("m-bob", BOB)]
+    ))
+
+    async def _draft(title, summary_md):
+        return f"Follow-up: {title}", summary_md
+
+    monkeypatch.setattr(share, "_draft", _draft)
+    return share, db
+
+
+async def test_drafting_a_recap_of_a_colleagues_meeting_is_404(
+    share_rig,
+) -> None:
+    """There is no sharing mechanism here to preserve — no grant, no token,
+    no redemption route anywhere in the module. The draft is returned to the
+    caller's own compose window, so the whole route is a read of a
+    colleague's notes plus their attendee list."""
+    share, _db = share_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await share.draft_followup_email("m-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "meeting not found"
+
+
+async def test_drafting_a_recap_of_your_own_meeting_still_works(
+    share_rig,
+) -> None:
+    share, _db = share_rig
+
+    draft = await share.draft_followup_email("m-alice", user=_user(ALICE))
+    assert draft.subject == "Follow-up: Q3 pricing"
+    assert draft.body_text == "the number is 4cr"
+
+
+# ── N1d. Copilot console — the live suggestions and their transcript refs ────
+
+@pytest.fixture
+def copilot_rig(monkeypatch):
+    from gateway.routes.notes import copilot
+
+    db = _install_db(monkeypatch, copilot, _FakeDb(
+        [_meeting("m-alice", ALICE), _meeting("m-bob", BOB)]
+    ))
+    return copilot, db
+
+
+async def test_streaming_a_colleagues_copilot_console_is_404(
+    copilot_rig,
+) -> None:
+    """The bus replays its ring to every late subscriber, and each suggestion
+    carries up to 400 characters of what was just said in ``refs.window`` — so
+    an unscoped stream is a live transcript feed with extra steps."""
+    copilot, _db = copilot_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await copilot.copilot_stream("m-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+
+
+async def test_streaming_your_own_copilot_console_still_works(
+    copilot_rig,
+) -> None:
+    copilot, _db = copilot_rig
+
+    resp = await copilot.copilot_stream("m-alice", user=_user(ALICE))
+    assert resp.media_type == "text/event-stream"
+
+
+async def test_reading_a_colleagues_copilot_history_is_404(
+    copilot_rig,
+) -> None:
+    copilot, db = copilot_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await copilot.copilot_events("m-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+    assert not db.wrote("FROM copilot_event")
+
+
+async def test_reading_your_own_copilot_history_still_works(
+    copilot_rig,
+) -> None:
+    copilot, db = copilot_rig
+
+    assert await copilot.copilot_events("m-alice", user=_user(ALICE)) == {
+        "events": []
+    }
+    assert db.wrote("FROM copilot_event")
+
+
+# ── N1e. Live tokens — one member route scoped, two machine routes not ───────
+
+async def test_minting_a_live_token_against_a_colleagues_meeting_is_404(
+    monkeypatch,
+) -> None:
+    """``meeting_id`` is caller-supplied and reads per-meeting state; the 409
+    reason distinguished "the copilot is off for this meeting" from "live
+    transcription is switched off", which is a presence oracle over somebody
+    else's calendar."""
+    from gateway.routes.notes import live
+
+    _install_db(monkeypatch, live, _FakeDb(
+        [_meeting("m-alice", ALICE), _meeting("m-bob", BOB)]
+    ))
+    minted: list = []
+
+    async def _issue():
+        minted.append(True)
+        return live.LiveToken(
+            provider="assemblyai", token="t", model="m", expires_in=60
+        )
+
+    async def _wanted(_mid):
+        return True, "wanted"
+
+    monkeypatch.setattr(live, "_issue_live_token", _issue)
+    monkeypatch.setattr(live, "live_wanted", _wanted)
+
+    with pytest.raises(HTTPException) as exc:
+        await live.live_token(meeting_id="m-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+    assert minted == []
+
+    # ...and the owner still gets one, as does a caller who names no meeting.
+    assert (await live.live_token(meeting_id="m-alice", user=_user(ALICE))).token == "t"
+    assert (await live.live_token(user=_user(ALICE))).token == "t"
+
+
+def test_the_two_bot_token_routes_stay_machine_authed() -> None:
+    """DECISION, recorded rather than assumed: ``/live/wanted`` and
+    ``/stt/bot-live-token`` are NOT given a member owner check.
+
+    Their caller is the meeting-bot worker — its own container, holding
+    ``MEETING_BOT_TOKEN`` and no member identity. An owner predicate needs an
+    owner, and the two ways to invent one (trust a client-supplied email, or
+    fall back to the meeting's own owner) would each turn the bot token into a
+    way to assert an identity. The bot token IS the authority here, exactly as
+    it is for ``/live/segment``, which posts the transcript ``/live/wanted``
+    only decides whether to keep paying for.
+
+    This test pins the shape so the decision cannot be reversed silently: the
+    two routes take no ``UserContext``, and they still demand the bot token.
+    (``test_org_access_enforcement`` owns the other half — it fails on ANY
+    userless route under a gated router that is not in its registry.)
+
+    ⚠️ Found while writing this, NOT fixed here (it is the opposite of this
+    PR's direction — it would *open* a route, and no acceptance criterion asks
+    for it): ``/notes/meetings/{meeting_id}/live/wanted`` is absent from BOTH
+    ``main.PUBLIC_ROUTES`` and ``core.router``'s ``exempt`` list, so the
+    app-wide ``require_authenticated`` and then the feature gate 401 the
+    worker before ``_check_bot_auth`` ever runs. Its two siblings
+    (``/live/segment``, ``/stt/bot-live-token``) are in both lists — the
+    assertion below pins that contrast rather than asserting the broken one.
+    """
+    from gateway.routes.notes import core, live
+
+    for fn in (live.read_live_wanted, live.bot_live_token):
+        params = inspect.signature(fn).parameters
+        assert not any(
+            "UserContext" in str(p.annotation) for p in params.values()
+        ), f"{fn.__name__} grew a member identity — see the docstring"
+        assert "authorization" in params, (
+            f"{fn.__name__} lost its bot-token header — it would then be "
+            "reachable by anybody the feature gate lets through"
+        )
+
+    # ``require_feature_router`` closes over its exemption set; the worker
+    # calls a route under a gated prefix, so the exemption is what makes the
+    # machine auth reachable at all.
+    dep = core.router.dependencies[0].dependency
+    exempt: set[str] = set()
+    for cell in dep.__closure__ or ():
+        value = cell.cell_contents
+        if isinstance(value, frozenset):
+            exempt |= set(value)
+    assert "/notes/stt/bot-live-token" in exempt
+    assert "/notes/meetings/{meeting_id}/live/segment" in exempt
+
+
+# ── N2. Approve / reject a single action item ────────────────────────────────
+
+@pytest.fixture
+def actions_rig(monkeypatch):
+    """One draft action item on each of Alice's and Bob's meetings."""
+    from gateway.routes.notes import actions
+
+    db = _install_db(monkeypatch, actions, _FakeDb(
+        [
+            _meeting("m-alice", ALICE), _meeting("m-bob", BOB),
+            _meeting("m-legacy", None),
+        ],
+        # Carry the dispatch columns too, so the pre-fix run of
+        # ``approve-all`` reaches its real answer (a 200 with an empty list)
+        # rather than dying on a missing attribute — the red has to be the
+        # security claim, not a fixture artefact.
+        actions=[
+            _draft_action("a-alice", "m-alice", "send Alice's quote"),
+            _draft_action(
+                "a-bob", "m-bob", "give Acme 40% off, per the call"
+            ),
+            _draft_action("a-legacy", "m-legacy", "legacy item"),
+        ],
+    ))
+    return actions, db
+
+
+async def test_approving_a_colleagues_action_item_is_404(actions_rig) -> None:
+    actions, _db = actions_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await actions.approve_action("a-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "action item not found"
+
+
+async def test_approving_a_colleagues_action_creates_no_task_in_your_list(
+    actions_rig,
+) -> None:
+    """THE N2 HARM, stated as itself.
+
+    ``_create_task_from_action`` binds ``user_id`` to **the caller** and
+    copies ``action.description`` into the task title. So the route was not
+    only a way to flip somebody else's triage state — it was a way to lift
+    the text of their action item into a durable row in your own GTD list.
+    A 404 is not enough on its own; nothing may be written.
+    """
+    actions, db = actions_rig
+
+    with pytest.raises(HTTPException):
+        await actions.approve_action("a-bob", user=_user(ALICE))
+
+    assert not db.wrote("INSERT INTO gtd_items")
+    assert not db.wrote("UPDATE action_item")
+    assert not any(
+        "40% off" in str(params) for _sql, params in db.statements
+    ), "the colleague's description reached a write"
+
+
+async def test_approving_your_own_action_item_still_creates_the_task(
+    actions_rig,
+) -> None:
+    actions, db = actions_rig
+
+    out = await actions.approve_action("a-alice", user=_user(ALICE))
+    assert out.status == "created"
+    assert out.resulting_task_id
+    assert db.wrote("INSERT INTO gtd_items")
+    inserted = [p for sql, p in db.statements if "INSERT INTO gtd_items" in sql]
+    assert inserted[0]["uid"] == ALICE
+    assert inserted[0]["title"] == "send Alice's quote"
+
+
+async def test_rejecting_a_colleagues_action_item_is_404(actions_rig) -> None:
+    """The other half of the same harm: dismissing an item out of somebody
+    else's triage queue, with no way back through this API."""
+    actions, db = actions_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await actions.reject_action("a-bob", user=_user(ALICE))
+    assert exc.value.status_code == 404
+    assert not db.wrote("UPDATE action_item")
+
+
+async def test_rejecting_your_own_action_item_still_works(actions_rig) -> None:
+    actions, db = actions_rig
+
+    out = await actions.reject_action("a-alice", user=_user(ALICE))
+    assert out.status == "rejected"
+    assert db.wrote("UPDATE action_item")
+
+
+async def test_a_legacy_action_with_no_meeting_owner_stays_reachable(
+    actions_rig,
+) -> None:
+    actions, _db = actions_rig
+
+    out = await actions.approve_action("a-legacy", user=_user(BOB))
+    assert out.status == "created"
+
+
+async def test_a_differently_cased_sign_in_still_approves_its_own_action(
+    actions_rig,
+) -> None:
+    actions, _db = actions_rig
+
+    out = await actions.approve_action(
+        "a-alice", user=_user("Alice@Fracktal.IN")
+    )
+    assert out.status == "created"
+
+
+async def test_approve_all_on_a_colleagues_meeting_is_404(
+    actions_rig,
+) -> None:
+    """Aligned with the single-item routes. ``approve-all`` was already safe
+    at the seam — every item goes through ``_dispatch``, which refuses a
+    cross-owner actor — but it answered 200 with an empty list, which says
+    "your meeting, nothing qualified" where the truth is "not your meeting",
+    and it read the colleague's draft items to get there."""
+    actions, db = actions_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await actions.approve_all(
+            "m-bob", actions.BulkApproveRequest(), user=_user(ALICE)
+        )
+    assert exc.value.status_code == 404
+    assert not db.wrote("FROM action_item")
+
+
+async def test_approve_all_on_your_own_meeting_still_dispatches(
+    actions_rig, monkeypatch,
+) -> None:
+    actions, _db = actions_rig
+    from gateway.routes.notes import dispatch as notes_dispatch
+
+    seen: list = []
+
+    async def _dispatch(action, meeting, actor):
+        seen.append((str(action.id), actor))
+        return "task:1", None
+
+    monkeypatch.setattr(notes_dispatch, "_dispatch", _dispatch)
+
+    out = await actions.approve_all(
+        "m-alice", actions.BulkApproveRequest(min_confidence=0.5),
+        user=_user(ALICE),
+    )
+    assert out.created == ["a-alice"]
+    assert seen == [("a-alice", ALICE)]
+
+
+# ── N3. bot_join's attach branch ─────────────────────────────────────────────
+
+_MEET_URL = "https://meet.google.com/abc-defg-hij"
+
+
+@pytest.fixture
+def bot_rig(monkeypatch):
+    from gateway.routes.notes import live_session
+    from gateway.routes.notes import meeting_bot as mb
+
+    db = _install_db(monkeypatch, mb, _FakeDb([
+        _meeting("m-alice", ALICE), _meeting("m-bob", BOB),
+        _meeting("m-legacy", None),
+    ]))
+    joined: list = []
+
+    class _Provider:
+        async def join(self, url, bot_name, live_callback=None):
+            joined.append((url, bot_name))
+            return "provider-bot-1"
+
+    monkeypatch.setattr(mb, "resolve_bot_provider", lambda: _Provider())
+    monkeypatch.setattr(mb, "_spawn", lambda coro: coro.close())
+
+    async def _begin(*a, **k):
+        return None
+
+    monkeypatch.setattr(live_session, "begin", _begin)
+    return mb, db, joined
+
+
+async def test_sending_a_bot_to_a_colleagues_prepared_meeting_is_404(
+    bot_rig,
+) -> None:
+    """THE N3 HARM.
+
+    With ``meeting_id`` set, the route UPDATEs an existing row: it flips the
+    meeting to ``recording``, overwrites its title and start time, puts a bot
+    in the call and registers live presence under the caller's own identity.
+    The acting principal is the CALLER — the only identity the request carries
+    — and resolving the check against the row's own ``owner_email`` would
+    compare the meeting to itself and pass every time. That is the same reason
+    the ingest side reads ``meeting_bot.requested_by`` rather than the owner.
+    """
+    mb, db, joined = bot_rig
+
+    with pytest.raises(HTTPException) as exc:
+        await mb.bot_join(
+            mb.BotJoinRequest(
+                meeting_url=_MEET_URL, meeting_id="m-bob", title="hijacked"
+            ),
+            user=_user(ALICE),
+        )
+    assert exc.value.status_code == 404
+    assert exc.value.detail == "unknown meeting"
+    assert joined == [], "a bot was dispatched to a colleague's meeting"
+    assert not db.wrote("INSERT INTO meeting_bot")
+
+
+async def test_sending_a_bot_to_your_own_prepared_meeting_still_works(
+    bot_rig,
+) -> None:
+    """The whole point of the ``meeting_id`` branch: keep the agenda, brief,
+    attendees and copilot decision you just set up."""
+    mb, _db, joined = bot_rig
+
+    out = await mb.bot_join(
+        mb.BotJoinRequest(
+            meeting_url=_MEET_URL, meeting_id="m-alice", title="Q3 pricing"
+        ),
+        user=_user(ALICE),
+    )
+    assert out.meeting_id == "m-alice"
+    assert out.status == "joining"
+    assert [url for url, _name in joined] == [_MEET_URL]
+
+
+async def test_the_bot_join_create_branch_is_unchanged(bot_rig) -> None:
+    """Creating a meeting stays open to any ``feature:notes`` holder — it
+    stamps the caller as owner, so there is nobody else's row to reach. Only
+    the attach branch is scoped."""
+    mb, db, _joined = bot_rig
+
+    out = await mb.bot_join(
+        mb.BotJoinRequest(meeting_url=_MEET_URL, title="new one"),
+        user=_user(BOB),
+    )
+    assert out.meeting_id == "m-new"
+    inserted = [p for sql, p in db.statements if "INSERT INTO meeting " in sql]
+    assert inserted and inserted[0]["o"] == BOB
+
+
+async def test_attaching_to_a_legacy_meeting_with_no_owner_still_works(
+    bot_rig,
+) -> None:
+    mb, _db, joined = bot_rig
+
+    out = await mb.bot_join(
+        mb.BotJoinRequest(meeting_url=_MEET_URL, meeting_id="m-legacy"),
+        user=_user(BOB),
+    )
+    assert out.meeting_id == "m-legacy"
+    assert joined
+
+
+async def test_a_differently_cased_sign_in_still_attaches_to_its_own_meeting(
+    bot_rig,
+) -> None:
+    mb, _db, joined = bot_rig
+
+    out = await mb.bot_join(
+        mb.BotJoinRequest(meeting_url=_MEET_URL, meeting_id="m-alice"),
+        user=_user("Alice@Fracktal.IN"),
+    )
+    assert out.meeting_id == "m-alice"
+    assert joined
+
+
+async def test_the_requester_not_the_owner_is_what_the_ingest_carries() -> None:
+    """The asymmetry PR #346 established, preserved rather than collapsed.
+
+    N3 makes the attach branch require the caller to BE the owner, so for an
+    attach the two identities coincide. That must not be taken as licence to
+    read the pipeline's actor off the meeting instead: ``bot_join`` is not the
+    only way a ``meeting_bot`` row comes to exist over time, and the rule is
+    "authority follows the person who asked".
+    """
+    from gateway.routes.notes import meeting_bot as mb
+
+    src = inspect.getsource(mb._refresh_bot)
+    assert 'getattr(row, "requested_by", None)' in src
+    param = inspect.signature(mb._ingest_recording).parameters["requested_by"]
+    assert param.default is inspect.Parameter.empty

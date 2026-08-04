@@ -82,8 +82,10 @@ async def test_live_token_503_without_any_key(monkeypatch) -> None:
 
     monkeypatch.delenv("DEEPGRAM_API_KEY", raising=False)
     monkeypatch.delenv("ASSEMBLYAI_API_KEY", raising=False)
+    # No meeting_id, so nothing is owner-scoped and the identity is unused —
+    # the scoping added for N1 only engages when a meeting is named.
     with pytest.raises(HTTPException) as ei:
-        await live.live_token(_user=None)  # type: ignore[arg-type]
+        await live.live_token(user=None)  # type: ignore[arg-type]
     assert ei.value.status_code == 503
     assert "AssemblyAI" in ei.value.detail
 

@@ -41,7 +41,13 @@ from urllib.parse import urlparse
 import httpx
 from acb_auth import UserContext, UserRole, get_current_user, require_role
 from fastapi import Depends, HTTPException, Response
-from gateway.routes.notes.core import _get_db, _log, media_dir, router
+from gateway.routes.notes.core import (
+    OWNED_MEETING_PREDICATE,
+    _get_db,
+    _log,
+    media_dir,
+    router,
+)
 from gateway.routes.notes.pipeline import run_transcription
 from pydantic import BaseModel
 from sqlalchemy import bindparam, text
@@ -695,7 +701,13 @@ async def bot_join(
 ) -> MeetingBotModel:
     """Send a notetaker bot to join a meeting URL. Creates the meeting + bot,
     dispatches the provider, and starts tracking. Call once per URL to fan out
-    to multiple meetings concurrently."""
+    to multiple meetings concurrently.
+
+    Two branches with different scopes, deliberately: creating a meeting is
+    open to any ``feature:notes`` holder and stamps them as its owner;
+    *attaching* to one that already exists is owner-only, because it is a
+    write to somebody's prepared row — it flips the meeting to ``recording``,
+    overwrites its title and start time, and puts a bot in the call."""
     url = (body.meeting_url or "").strip()
     if not is_supported_url(url):
         raise HTTPException(status_code=400, detail="Enter a valid meeting link (https://…).")
@@ -725,17 +737,38 @@ async def bot_join(
         if body.meeting_id:
             # Attaching to a prepared meeting: keep its agenda/brief/attendees
             # and just mark it recording.
+            #
+            # Owner-scoped, and the scope is bound INTO the UPDATE rather than
+            # checked by a preceding SELECT: a load-then-write leaves a window
+            # in which the row can change owner between the two statements, and
+            # this statement is the mutation — one statement, one decision.
+            #
+            # The principal is the CALLER (`user.email`), not the meeting's
+            # owner. It has to be: the caller is the only identity this request
+            # carries, and resolving the check against the row's own
+            # `owner_email` would compare the meeting to itself and pass every
+            # time. That is the same reason the ingest side reads
+            # `meeting_bot.requested_by` — the member who sent the notetaker —
+            # rather than the owner (PR #346): authority follows the person who
+            # asked, and is never laundered through the row being acted on.
+            # After this check the two are the same person for an attach, which
+            # is the point; for the create branch below they already were.
             existing = (
                 await db.execute(
                     text(
-                        "UPDATE meeting SET status = 'recording', platform = :p, "
+                        "UPDATE meeting AS m "
+                        "SET status = 'recording', platform = :p, "
                         "start_at = now(), title = COALESCE(:t, title) "
-                        "WHERE id = CAST(:id AS UUID) RETURNING id"
+                        "WHERE m.id = CAST(:id AS UUID) "
+                        f"AND {OWNED_MEETING_PREDICATE} RETURNING m.id"
                     ),
-                    {"p": platform, "t": title, "id": body.meeting_id},
+                    {"p": platform, "t": title, "id": body.meeting_id,
+                     "owner": user.email or ""},
                 )
             ).fetchone()
             if existing is None:
+                # Same answer for "no such meeting" and "not yours" — an id
+                # that belongs to a colleague must not be confirmable.
                 raise HTTPException(status_code=404, detail="unknown meeting")
             meeting_id = str(existing.id)
         else:

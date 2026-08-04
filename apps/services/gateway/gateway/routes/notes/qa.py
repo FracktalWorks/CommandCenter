@@ -13,7 +13,7 @@ import re
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
 from gateway.routes.notes.summaries import _PASS_CHARS, _llm_json, _model, _tag
 from pydantic import BaseModel
 from sqlalchemy import text
@@ -83,13 +83,23 @@ def _select_segments(segs: list, question: str) -> tuple[list, bool]:
 async def ask_meeting(
     meeting_id: str,
     body: AskRequest,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> AskResponse:
+    """Owner only. This route reads the WHOLE transcript and answers questions
+    about it — unscoped it was a natural-language interface to every recorded
+    conversation in the company, and a more useful one than the library search
+    PR #346 closed, because it summarises rather than quotes.
+
+    The ownership check runs BEFORE the transcript is loaded, so a colleague's
+    meeting cannot be distinguished by the 409 "no transcript yet" answer."""
     question = body.question.strip()
     if not question:
         raise HTTPException(status_code=400, detail="empty question")
 
     async with await _get_db() as db:
+        mrow = await load_owned_meeting(
+            db, meeting_id, user.email, columns="m.speaker_names"
+        )
         segs = (
             await db.execute(
                 text(
@@ -99,12 +109,6 @@ async def ask_meeting(
                 {"id": meeting_id},
             )
         ).fetchall()
-        mrow = (
-            await db.execute(
-                text("SELECT speaker_names FROM meeting WHERE id=:id"),
-                {"id": meeting_id},
-            )
-        ).fetchone()
     if not segs:
         raise HTTPException(
             status_code=409, detail="no transcript yet — nothing to ask about"

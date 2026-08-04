@@ -11,9 +11,8 @@ import json
 
 from acb_auth import UserContext, get_current_user
 from fastapi import Depends, HTTPException
-from gateway.routes.notes.core import _get_db, _log, router
+from gateway.routes.notes.core import _get_db, _log, load_owned_meeting, router
 from pydantic import BaseModel
-from sqlalchemy import text
 
 
 class EmailDraft(BaseModel):
@@ -25,20 +24,21 @@ class EmailDraft(BaseModel):
 @router.post("/meetings/{meeting_id}/share/email/draft")
 async def draft_followup_email(
     meeting_id: str,
-    _user: UserContext = Depends(get_current_user),
+    user: UserContext = Depends(get_current_user),
 ) -> EmailDraft:
-    """LLM-draft a follow-up recap email from the meeting notes."""
+    """LLM-draft a follow-up recap email from the meeting notes.
+
+    Owner only. This is a *drafting* route, not a sharing one — there is no
+    grant, no token and no redemption path anywhere in this module: the draft
+    is returned to the caller's own compose window and the send happens later
+    through ``/email/send`` under whichever account they pick. So the thing to
+    scope is the read, and the read is the whole of a colleague's notes plus
+    their attendee list, rendered as prose."""
     async with await _get_db() as db:
-        m = (
-            await db.execute(
-                text(
-                    "SELECT title, summary_md, attendees FROM meeting WHERE id=:id"
-                ),
-                {"id": meeting_id},
-            )
-        ).fetchone()
-    if m is None:
-        raise HTTPException(status_code=404, detail="meeting not found")
+        m = await load_owned_meeting(
+            db, meeting_id, user.email,
+            columns="m.title, m.summary_md, m.attendees",
+        )
     if not m.summary_md:
         raise HTTPException(
             status_code=409, detail="no notes yet — generate notes before drafting a recap"

@@ -204,10 +204,14 @@ def _refuse_llm_key_identity() -> bool:
 def allowed_email_domain() -> str:
     """The company's own sign-in domain, normalised (``fracktal.in``).
 
-    One reader for ``ALLOWED_EMAIL_DOMAIN`` so the default cannot drift between
-    the two branches of :func:`get_current_user` and the surfaces that need to
-    *display* the distinction — the sign-in request queue marks an off-domain
-    address, and the browser must never re-derive a policy the server owns.
+    The one **live** reader of ``ALLOWED_EMAIL_DOMAIN``, so the default cannot
+    drift between the two branches of :func:`get_current_user` and the surfaces
+    that need to *display* the distinction — the sign-in request queue marks an
+    off-domain address, and the browser must never re-derive a policy the
+    server owns. (``acb_common.settings`` also declares an
+    ``allowed_email_domain`` field with the same default; it has **no**
+    consumers today. If anything ever reads it, collapse the two — two
+    declarations of one policy is how a default drifts.)
 
     ⚠️ **This is a label, not a boundary.** Branch 1a only LOGS a mismatch
     (``auth.identity_domain_mismatch``) and carries on: the internal-token

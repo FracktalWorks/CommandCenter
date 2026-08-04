@@ -91,6 +91,14 @@ export default function MembersPage() {
    * the list route 500s, and nothing else on the page would notice.
    */
   const [queueError, setQueueError] = useState("");
+  /**
+   * A decision that SUCCEEDED but did not do what was literally asked —
+   * today only "they were already an active member, so their roles were left
+   * alone". Separate from `error` because nothing went wrong, and shown
+   * because a 200 that quietly ignored the role picker is otherwise
+   * indistinguishable from one that honoured it.
+   */
+  const [notice, setNotice] = useState("");
   const [tab, setTab] = useState("members");
   const [filter, setFilter] = useState("all");
   const [inviting, setInviting] = useState(false);
@@ -175,13 +183,29 @@ export default function MembersPage() {
     await refreshAccess();
   };
 
-  /** Approve (provisions + activates in one action) or deny a knock. */
+  /**
+   * Approve (provisions + activates in one action) or deny a knock.
+   *
+   * Two rules here, both about the queue never showing a state the server has
+   * already corrected:
+   *
+   * 1. **No early return.** A refusal is almost always ABOUT the row that was
+   *    clicked — already decided, suspended, off-boarded, or decided by
+   *    another admin mid-flight — so the row on screen is exactly the thing
+   *    that is stale. `load()` runs on every response, 200 or 409.
+   * 2. **A 200 can still carry news.** Approving over somebody who is already
+   *    an active member deliberately leaves their roles alone, so the role
+   *    picker's selection was ignored. The gateway says so in `detail`; if the
+   *    page swallowed it, that 200 would look identical to one that applied
+   *    the choice.
+   */
   const decide = async (
     email: string,
     decision: "approve" | "deny",
     roleSlug?: string
   ) => {
     setError("");
+    setNotice("");
     const res = await fetch(
       `/api/admin/members/requests/${encodeURIComponent(email)}/${decision}`,
       {
@@ -193,12 +217,14 @@ export default function MembersPage() {
             : undefined,
       }
     );
+    const body = await res.json().catch(() => ({}));
     if (!res.ok) {
-      const body = await res.json().catch(() => ({}));
       setError(body.detail ?? `Could not ${decision} this request.`);
-      return;
+    } else if (body.detail) {
+      setNotice(body.detail);
     }
-    // Decided rows leave the tab; an approval also adds a member.
+    // Decided rows leave the tab; an approval also adds a member; and a
+    // refusal means this row is not what the tab thinks it is.
     await load();
   };
 
@@ -298,6 +324,15 @@ export default function MembersPage() {
         <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive sm:mx-6">
           <span className="flex-1">{error}</span>
           <button onClick={() => setError("")} aria-label="Dismiss">
+            <X size={13} />
+          </button>
+        </div>
+      )}
+
+      {notice && (
+        <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-border bg-secondary px-3 py-2 text-xs text-muted-foreground sm:mx-6">
+          <span className="flex-1">{notice}</span>
+          <button onClick={() => setNotice("")} aria-label="Dismiss">
             <X size={13} />
           </button>
         </div>

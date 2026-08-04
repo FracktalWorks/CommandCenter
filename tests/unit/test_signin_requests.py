@@ -250,12 +250,16 @@ class _FakeDB:
 
         if "UPDATE access_request SET" in s:
             row = self.requests.get(str(p["email"]).lower())
-            if row is None:
+            # Mirrors `_DECIDE_SQL`'s `AND status = ANY(:allowed)` — the
+            # write's own copy of the filter the read already checked, which
+            # is what makes two concurrent decisions resolve to one. No rows
+            # updated ⇒ the RETURNING clause yields nothing.
+            if row is None or row["status"] not in p["allowed"]:
                 return _Rows([], rowcount=0)
             row["status"] = p["status"]
             row["decided_by"] = p["by"]
             row["decided_at"] = "now()"
-            return _Rows([], rowcount=1)
+            return _Rows([{"id": row["id"]}], rowcount=1)
 
         if "FROM access_request" in s:
             if "lower(email) = :email" in s:
@@ -731,12 +735,14 @@ async def test_approving_twice_refuses_and_creates_no_second_member(
 async def test_approving_never_un_suspends_somebody(db: _FakeDB) -> None:
     """A suspension is an ``admin:members:manage`` decision; approve is gated on
     the weaker ``admin:members:invite``. Provisioning must not become a way to
-    reverse the stronger act.
+    reverse the stronger act — and it must not *pretend* to, either.
 
-    ⚠️ Behavioural only — it runs against the fake's mirror of the CASE arms,
-    so it cannot see the statement itself being widened. The real fence for
-    this claim is
-    ``test_provisioning_only_ever_rewrites_a_status_it_names``.
+    The earlier version of this test asserted only ``out.status``, so it passed
+    while approve answered **200** on a person it had not admitted, marked the
+    request `approved`, and re-granted `['member']` through ``set_roles``. The
+    row then left a queue that renders only `pending` and the resolver's upsert
+    never puts it back, so the suspended colleague was invisible for good. All
+    four facts are asserted now, and the refusal is the loud one.
     """
     from gateway.routes.admin.access_requests import (
         ApproveRequest,
@@ -744,13 +750,21 @@ async def test_approving_never_un_suspends_somebody(db: _FakeDB) -> None:
     )
 
     db.seed_user("u-s", "suspended@fracktal.in", status="suspended")
+    db.user_roles["u-s"] = ["admin"]
     db.seed_request("suspended@fracktal.in")
 
-    out = await approve_access_request(
-        "suspended@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
-    )
-    assert out.status == "suspended"
+    with pytest.raises(HTTPException) as exc:
+        await approve_access_request(
+            "suspended@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
+        )
+
+    assert exc.value.status_code == 409
+    assert "suspended" in str(exc.value.detail)
     assert db.users["u-s"]["status"] == "suspended"
+    assert db.user_roles["u-s"] == ["admin"]           # not rewritten
+    # Still in the owner's queue — the whole point of refusing rather than
+    # filing it away as answered.
+    assert db.requests["suspended@fracktal.in"]["status"] == "pending"
 
 
 async def test_approving_never_reinstates_a_removed_member(db: _FakeDB) -> None:
@@ -762,6 +776,13 @@ async def test_approving_never_reinstates_a_removed_member(db: _FakeDB) -> None:
     ``admin:members:invite`` puts them back — live, re-granted and
     re-``joined_at``. `removed → active` has exactly one door, and it is
     ``PATCH /admin/members/{email}``.
+
+    ⚠️ The previous version asserted only ``out.status`` and ``joined_at``, and
+    so was green against a **200** that left the member `removed` while
+    ``set_roles`` re-granted `['member']` and the request went to `approved`.
+    Lock B (the SQL) held the status; nothing held the rest, and the row's
+    departure from the queue was permanent — the 53-knock incident recreated by
+    its own fix. Approve must refuse, symmetrically with lock A.
     """
     from gateway.routes.admin.access_requests import (
         ApproveRequest,
@@ -771,12 +792,83 @@ async def test_approving_never_reinstates_a_removed_member(db: _FakeDB) -> None:
     db.seed_user("u-x", "gone@fracktal.in", status="removed")
     db.seed_request("gone@fracktal.in")
 
-    out = await approve_access_request(
-        "gone@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
-    )
-    assert out.status == "removed"
+    with pytest.raises(HTTPException) as exc:
+        await approve_access_request(
+            "gone@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
+        )
+
+    assert exc.value.status_code == 409
+    assert "off-boarded" in str(exc.value.detail)
     assert db.users["u-x"]["status"] == "removed"
     assert db.users["u-x"]["joined_at"] is None
+    assert db.user_roles.get("u-x", []) == []          # nothing re-granted
+    assert db.requests["gone@fracktal.in"]["status"] == "pending"
+    assert db.audit == []                              # no approval recorded
+
+
+async def test_approving_an_existing_active_member_never_rewrites_their_roles(
+    db: _FakeDB,
+) -> None:
+    """They already have access, so there is nothing to provision — and the
+    role picker's default must not become a demotion.
+
+    ``provision_member`` ends in ``set_roles``, which REPLACES a member's
+    assignments. Approving a stale request over a live `admin` with the
+    picker's default therefore rewrote them to `member` — on
+    ``admin:members:invite``, while roles are otherwise governed by
+    ``PUT /admin/members/{email}/roles`` on ``admin:members:manage``.
+
+    Resolving the request as `approved` IS truthful here (they do have
+    access), so the row leaves the queue — but the response has to say what
+    actually happened, or a 200 that ignored the caller's role choice is
+    indistinguishable from one that applied it.
+    """
+    from gateway.routes.admin.access_requests import (
+        ApproveRequest,
+        approve_access_request,
+    )
+
+    db.seed_user("u-a", "already@fracktal.in", status="active")
+    db.user_roles["u-a"] = ["admin"]
+    db.seed_request("already@fracktal.in")
+
+    out = await approve_access_request(
+        "already@fracktal.in", ApproveRequest(roles=["member"]),
+        admin=FULL_ADMIN,
+    )
+
+    assert out.status == "active"
+    assert out.roles == ["admin"]                      # theirs, not the ask
+    assert db.user_roles["u-a"] == ["admin"]
+    assert "already an active member" in out.detail
+    assert db.requests["already@fracktal.in"]["status"] == "approved"
+
+
+async def test_approving_an_invited_member_activates_them_with_the_roles(
+    db: _FakeDB,
+) -> None:
+    """`invited` is the one existing status approve provisions over, and that
+    is exactly what approving somebody means: they were provisioned but never
+    admitted (§2 Step 1b), and they are standing at the door right now."""
+    from gateway.routes.admin.access_requests import (
+        ApproveRequest,
+        approve_access_request,
+    )
+
+    db.seed_user("u-i", "waiting@fracktal.in", status="invited")
+    db.user_roles["u-i"] = ["member"]
+    db.seed_request("waiting@fracktal.in")
+
+    out = await approve_access_request(
+        "waiting@fracktal.in", ApproveRequest(roles=["manager"]),
+        admin=FULL_ADMIN,
+    )
+
+    assert out.status == "active"
+    assert out.roles == ["manager"]
+    assert out.detail == ""                            # the normal path
+    assert db.users["u-i"]["joined_at"] is not None
+    assert db.requests["waiting@fracktal.in"]["status"] == "approved"
 
 
 async def test_a_decided_request_cannot_be_replayed_to_undo_an_off_boarding(
@@ -811,6 +903,47 @@ async def test_a_decided_request_cannot_be_replayed_to_undo_an_off_boarding(
     assert exc.value.status_code == 409
     assert row["status"] == "removed"
     assert db.user_roles[row["id"]] == []      # not re-granted
+
+
+async def test_a_decision_that_loses_a_race_commits_nothing(
+    db: _FakeDB, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The read and the write are two statements; this is the gap between them.
+
+    Another admin's transaction decides the same row after `_load_request`
+    returned it. The UPDATE's own status condition then matches nothing, and
+    the 409 is raised **before** ``db.commit()`` — so the provisioning done in
+    between never lands.
+
+    ⚠️ The fake has no rollback, so the in-memory `app_user` row survives here.
+    ``db.committed`` is the honest assertion: in Postgres an uncommitted
+    transaction is discarded when the session closes, and that is what this
+    checks.
+    """
+    from gateway.routes.admin import access_requests as mod
+
+    db.seed_request("race@fracktal.in")
+    real_load = mod._load_request
+
+    async def _load_then_lose(
+        session: Any, email: str, *, allowed_statuses: tuple[str, ...]
+    ) -> dict[str, Any]:
+        row = await real_load(session, email, allowed_statuses=allowed_statuses)
+        db.requests["race@fracktal.in"]["status"] = "approved"   # the loser
+        return row
+
+    monkeypatch.setattr(mod, "_load_request", _load_then_lose)
+
+    with pytest.raises(HTTPException) as exc:
+        await mod.approve_access_request(
+            "race@fracktal.in", mod.ApproveRequest(), admin=FULL_ADMIN,
+        )
+
+    assert exc.value.status_code == 409
+    assert "in flight" in str(exc.value.detail)
+    assert db.committed == 0
+    assert db.invalidated == []
+    assert db.audit == []
 
 
 async def test_approving_an_unknown_request_404s(db: _FakeDB) -> None:
@@ -916,17 +1049,23 @@ async def test_inviting_the_last_owner_refuses_rather_than_demoting_them(
     assert db.user_roles["u-owner"] == ["owner"]      # grant intact
 
 
-async def test_approving_the_last_owner_refuses_rather_than_demoting_them(
+async def test_approving_an_invited_last_owner_refuses_rather_than_demoting(
     db: _FakeDB,
 ) -> None:
     """The reason it belongs in the helper and not in `members.py`: the
     approve route reaches the same `set_roles` by a different door, and an
-    ownerless org is recovered with SQL on the production box."""
+    ownerless org is recovered with SQL on the production box.
+
+    The owner is `invited` here because that is now the **only** existing
+    status approve provisions over (:data:`APPROVE_MATRIX`) — over an `active`
+    owner the roles are not touched at all, which the test below pins.
+    """
     from gateway.routes.admin.access_requests import (
         ApproveRequest,
         approve_access_request,
     )
 
+    db.users["u-owner"]["status"] = "invited"
     db.seed_request("owner@fracktal.in")
 
     with pytest.raises(HTTPException) as exc:
@@ -935,8 +1074,34 @@ async def test_approving_the_last_owner_refuses_rather_than_demoting_them(
         )
 
     assert exc.value.status_code == 409
+    assert "no owner" in str(exc.value.detail)
     assert db.user_roles["u-owner"] == ["owner"]
     assert db.requests["owner@fracktal.in"]["status"] == "pending"
+
+
+async def test_approving_over_an_active_owner_leaves_the_grant_alone(
+    db: _FakeDB,
+) -> None:
+    """The same lockout, closed one layer earlier and without an error.
+
+    An `active` member's roles are never rewritten by approve, so the org's
+    only owner grant is not even a candidate for deletion here. Invariant 1
+    stays the fence for the paths that DO call `set_roles`.
+    """
+    from gateway.routes.admin.access_requests import (
+        ApproveRequest,
+        approve_access_request,
+    )
+
+    db.seed_request("owner@fracktal.in")
+
+    out = await approve_access_request(
+        "owner@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
+    )
+
+    assert out.roles == ["owner"]
+    assert db.user_roles["u-owner"] == ["owner"]
+    assert out.detail                      # says nothing was provisioned
 
 
 async def test_provisioning_a_second_owner_is_never_blocked_by_invariant_1(
@@ -954,6 +1119,36 @@ async def test_provisioning_a_second_owner_is_never_blocked_by_invariant_1(
     )
     assert entry.roles == ["member"]
     assert db.user_roles["u-owner"] == ["member"]
+
+
+async def test_provisioning_is_not_blocked_in_an_org_that_has_no_owner(
+    db: _FakeDB,
+) -> None:
+    """The narrowing in ``provision_member``'s invariant-1 check, fenced.
+
+    The check asks ``assert_owner_survives`` only when the target **actually
+    holds** `owner` and the new role set does not — i.e. only when a grant is
+    about to be lost. Without that condition every re-provision in an org with
+    no owner yet (the bootstrap state, where nothing is being taken away)
+    would 409 with "this would leave the organization with no owner", which is
+    true of an org that never had one and blocks the only way back.
+
+    ⚠️ This test exists because the `db` fixture always seeds `u-owner`:
+    deleting the ``"owner" in await roles_for_user(...)`` clause left every
+    other case in this file green. The owner is removed here on purpose.
+    """
+    from gateway.routes.admin.members import InviteRequest, invite_member
+
+    del db.user_roles["u-owner"]
+    del db.users["u-owner"]
+    db.seed_user("u-p", "priya@fracktal.in", status="invited")
+    db.user_roles["u-p"] = ["member"]
+
+    entry = await invite_member(
+        InviteRequest(email="priya@fracktal.in"), admin=FULL_ADMIN,
+    )
+    assert entry.roles == ["member"]
+    assert db.users["u-p"]["status"] == "invited"
 
 
 # ── An address from outside the company's own domain ────────────────────────
@@ -1050,6 +1245,76 @@ def test_provisioning_only_ever_rewrites_a_status_it_names() -> None:
         r"app_user\.status\s*=\s*'invited'\s+AND\s+:status\s*=\s*'active'",
         joined, re.IGNORECASE,
     )
+
+
+def test_the_approve_matrix_answers_every_member_status() -> None:
+    """The matrix is the whole of approve's answer about an existing row, so
+    it must have an answer for every status a row can be in.
+
+    ``members.VALID_STATUSES`` is the vocabulary; a fifth one added there
+    without a decision here would otherwise fall through
+    ``APPROVE_MATRIX.get(status, "refuse")`` and be silently refused with a
+    generic message — safe, but nobody would have decided it. The exact
+    dispositions are pinned too: `invited` is the ONLY status approve
+    provisions over, which is what makes "approve never rewrites the roles of
+    a member who already exists in a state other than `invited`" checkable
+    rather than a comment.
+    """
+    from gateway.routes.admin.access_requests import APPROVE_MATRIX
+    from gateway.routes.admin.members import VALID_STATUSES
+
+    assert set(APPROVE_MATRIX) == set(VALID_STATUSES)
+    assert [s for s, a in APPROVE_MATRIX.items() if a == "provision"] == [
+        "invited"
+    ]
+    assert APPROVE_MATRIX["active"] == "already-a-member"
+    assert {s for s, a in APPROVE_MATRIX.items() if a == "refuse"} == {
+        "suspended", "removed",
+    }
+
+
+def test_the_decision_write_repeats_the_filter_the_read_checked() -> None:
+    """`_load_request` reads and `_decide` writes: two statements, so two
+    admins deciding the same row both pass the read. The UPDATE carries the
+    same status condition, so the loser updates zero rows and — because that
+    happens before ``db.commit()`` — its provisioning is discarded with it.
+
+    Asserted against the statement because the fake DB re-implements the
+    UPDATE in Python; a mirror can only agree with itself.
+    """
+    from gateway.routes.admin.access_requests import _DECIDE_SQL
+
+    sql = " ".join(_DECIDE_SQL.split())
+    assert "status = ANY(:allowed)" in sql, (
+        "the decision write does not re-check the status it read, so two "
+        "concurrent decisions would both succeed"
+    )
+    assert "RETURNING" in sql, (
+        "without RETURNING there is no way to tell a lost race from a win"
+    )
+
+
+def test_each_decision_write_is_given_its_own_route_s_read_filter() -> None:
+    """The condition above is only a lock if the two call sites agree.
+
+    Approve may act on `pending` only; deny also accepts `denied`, because
+    re-denying grants nothing. Each route must hand `_decide` the SAME tuple
+    it handed `_load_request` — a wider one at the write would re-open exactly
+    what the read refused.
+    """
+    import inspect
+
+    from gateway.routes.admin import access_requests as mod
+
+    for fn, expected in (
+        (mod.approve_access_request, 'allowed_statuses=("pending",)'),
+        (mod.deny_access_request, 'allowed_statuses=("pending", "denied")'),
+    ):
+        src = inspect.getsource(fn)
+        assert src.count(expected) == 2, (
+            f"{fn.__name__} does not pass {expected} to BOTH _load_request "
+            f"and _decide (found {src.count(expected)} occurrence(s))"
+        )
 
 
 def test_the_pending_list_asks_the_database_for_the_order_it_promises() -> None:
@@ -1154,6 +1419,51 @@ def test_a_failed_queue_fetch_is_never_rendered_as_nobody_is_waiting() -> None:
     assert "The sign-in queue is unavailable" in page
     # The empty-state copy must be reachable only when the queue answered.
     assert "if (failed)" in page
+
+
+def test_the_queue_is_re_read_after_every_decision_including_a_refused_one() -> (
+    None
+):
+    """A refusal is almost always ABOUT the row the admin clicked — already
+    decided, suspended, off-boarded, or decided by somebody else mid-flight.
+
+    The first version returned early on `!res.ok`, so the tab kept rendering a
+    row whose state the server had just corrected, and the only way out was
+    Refresh. With the approve matrix adding three more 409 paths, that stale
+    row is now the common case rather than the rare one, so `decide` has no
+    early return: every response — 200 or 409 — is followed by `load()`.
+    """
+    body = _members_page().split("const decide = async (", 1)[1]
+    body = body.split("\n  };", 1)[0]
+
+    assert "await load();" in body
+    assert "return;" not in body, (
+        "decide() returns early on a failed decision, so a refused 409 leaves "
+        "the stale row on screen until the admin hits Refresh"
+    )
+
+
+def test_an_approval_that_changed_nothing_says_so_on_screen() -> None:
+    """Approving over an EXISTING active member deliberately does not touch
+    their roles, so the picker's selection is ignored. That is correct — and
+    invisible unless the page renders the `detail` the gateway returns, which
+    would leave a 200 that did something other than what was asked looking
+    exactly like one that did.
+
+    Both halves are asserted — the decision handler must SET it and the page
+    must RENDER it. A bare ``"setNotice" in page`` passes on the declaration
+    alone, which is a mirror of the code rather than a check on it: it stayed
+    green under a mutation that deleted the assignment.
+    """
+    page = _members_page()
+    body = page.split("const decide = async (", 1)[1].split("\n  };", 1)[0]
+
+    assert "setNotice(body.detail)" in body, (
+        "decide() never surfaces the gateway's `detail`, so an approval that "
+        "left an existing member's roles alone looks like one that applied "
+        "the caller's choice"
+    )
+    assert "{notice && (" in page, "the notice is set but never rendered"
 
 
 def test_the_requests_tab_marks_an_address_from_outside_the_company() -> None:

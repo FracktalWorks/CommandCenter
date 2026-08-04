@@ -44,6 +44,7 @@ import FilterPills from "@/components/FilterPills";
 import Tabs from "@/components/Tabs";
 import { useAccess } from "@/components/AccessProvider";
 import { rowActions } from "./selfGuard";
+import { purgeConfirmed } from "./confirmPurge";
 import type { AccessRequest, Member, PurgeResult, Role } from "./types";
 
 const STATUS_STYLES: Record<Member["status"], string> = {
@@ -89,6 +90,11 @@ const PURGE_LABELS: Record<string, string> = {
   email_accounts: "connected mailbox",
   whatsapp_accounts: "connected WhatsApp number",
   task_accounts: "connected task workspace",
+  // The SYNCED half of the GTD store, which the connected task workspace
+  // cascades away. Worded as "synced" on both sides so the deleted and kept
+  // task counts in one sentence do not read as a contradiction.
+  synced_tasks: "synced task",
+  synced_projects: "synced project",
   private_chat_sessions: "private chat session",
   sign_in_requests: "sign-in request",
   audit_entries: "app audit entry",
@@ -97,7 +103,11 @@ const PURGE_LABELS: Record<string, string> = {
   shared_rooms: "shared room",
   apps: "app",
   workflows: "workflow",
-  tasks: "task",
+  // Kept: the LOCAL half. Named against `synced_*` above rather than left as
+  // a bare "task", so "2 synced tasks removed; 3 local tasks kept" reads as
+  // one coherent sentence instead of a contradiction.
+  tasks: "local task",
+  projects: "local project",
   meetings: "meeting",
 };
 
@@ -802,7 +812,9 @@ function PurgeDialog({
 }) {
   const [busy, setBusy] = useState(false);
   const [typed, setTyped] = useState("");
-  const confirmed = typed.trim().toLowerCase() === member.email.toLowerCase();
+  // The rule lives in `confirmPurge.ts` and is unit-tested there. Inline, it
+  // was fenced only by a grep for the surrounding copy, and `= true` passed.
+  const confirmed = purgeConfirmed(typed, member.email);
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
@@ -824,8 +836,9 @@ function PurgeDialog({
           <li>Team and room memberships, and app access grants</li>
           <li>
             Connected accounts and their stored credentials — mailbox, WhatsApp
-            number, task workspace. Everything synced from a mailbox goes with
-            it.
+            number, task workspace. Everything mirrored from them goes with the
+            account: the whole mailbox, the whole WhatsApp history, and every
+            task and project that came from the task workspace.
           </li>
           <li>Their private chat sessions, and any sign-in request on record</li>
         </ul>
@@ -836,7 +849,12 @@ function PurgeDialog({
             The audit trail — every entry naming them stays, deliberately. An
             audit log that disappears with the person is not an audit log.
           </li>
-          <li>Apps, workflows, tasks and meetings they authored</li>
+          <li>Apps, workflows and meetings they authored</li>
+          <li>
+            Tasks and projects they created <em>here</em> — the ones synced
+            from a connected task workspace are listed above, because they go
+            with it
+          </li>
           <li>
             Shared rooms they started, so other participants keep the transcript
           </li>

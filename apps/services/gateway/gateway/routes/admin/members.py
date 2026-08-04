@@ -351,31 +351,63 @@ class _PersonRows:
         return f"DELETE FROM {self.table} WHERE {self.where}"
 
 
+#: What each credential row takes with it, by FKs the schema already declares
+#: `ON DELETE CASCADE`. The full closure, direct and transitive flattened
+#: together — the distinction between "goes directly" and "goes through
+#: `email_messages`" is not one an admin can act on; "these tables lose rows"
+#: is.
+#:
+#: ⚠️ **HAND-MAINTAINED, and therefore stale the moment a migration adds a
+#: child.** It is not derived at import time (parsing `infra/postgres/` in a
+#: request path would be absurd), so the fence is a test:
+#: `test_admin_member_purge.py::test_the_cascade_map_is_the_one_the_schema_declares`
+#: re-derives it from the numbered migrations and fails on any drift. When it
+#: fails, the map *and* the confirmation copy in the Members page owe an
+#: update — on a route whose entire safety argument is "the admin is told the
+#: blast radius before clicking", understating it is the wrong direction of
+#: error, which is exactly how the first version of this comment named 15 of
+#: 20 email tables and put `wa_media` one hop too high.
+_CREDENTIAL_CASCADES: dict[str, tuple[str, ...]] = {
+    # The whole mirrored mailbox — 17 direct children, 20 with transitives.
+    "email_accounts": (
+        "email_actions", "email_ai_drafts", "email_assistant_settings",
+        "email_attachments", "email_cold_senders", "email_contacts",
+        "email_embeddings", "email_executed_rules", "email_folders",
+        "email_knowledge", "email_learned_patterns", "email_messages",
+        "email_newsletters", "email_rule_guidance", "email_rule_patterns",
+        "email_rules", "email_senders", "email_sync_log",
+        "email_thread_status", "email_voice_profiles",
+    ),
+    # The whole WhatsApp mirror — 14 direct, 16 with transitives
+    # (`wa_media` and `wa_message_embeddings` hang off `wa_messages`).
+    "wa_accounts": (
+        "wa_ai_drafts", "wa_categories", "wa_chat_avatars", "wa_chat_labels",
+        "wa_chat_status", "wa_chats", "wa_commitments", "wa_contacts",
+        "wa_group_summaries", "wa_labels", "wa_media", "wa_message_embeddings",
+        "wa_messages", "wa_saved_replies", "wa_sync_log", "wa_templates",
+    ),
+    # The SYNCED half of the GTD store. ⚠️ The ONLY cascade children in this
+    # whole map that carry a `user_id` of their own — everything above is
+    # keyed by `account_id` alone and is mirror-of-a-credential, nothing else.
+    # That is why these two are the only ones split across both lists below
+    # and counted individually rather than summarised: the same table also
+    # holds LOCAL rows the purge must not take.
+    "task_accounts": ("gtd_items", "gtd_projects", "gtd_waiting"),
+}
+
 #: **Deleted.** Enumerated from `infra/postgres/` by grepping for every column
 #: that names a person — FKs to `app_user(id)` and the email-string columns
 #: (`owner_email`, `user_email`, `user_id`, `subject`, `*_by`) — not from
 #: memory. Ordered children-before-parent so the statements read as the
 #: dependency graph even though every count is taken first.
 #:
-#: Three of these rows own subtrees that go with them, by FKs the schema
-#: already declares `ON DELETE CASCADE`:
-#:
-#: * `email_accounts` → email_messages (→ email_attachments), email_folders,
-#:   email_sync_log, email_rules, email_senders, email_cold_senders,
-#:   email_contacts, email_newsletters, the assistant settings/voice/knowledge
-#:   rows, learned + rule patterns, reply tracking. The whole mirrored mailbox.
-#: * `wa_accounts` → wa_chats, wa_messages, wa_media, wa_contacts, templates,
-#:   categories, commitments, drafts, group summaries, saved replies, labels,
-#:   avatars.
-#: * `task_accounts` → the SYNCED half of `gtd_projects`/`gtd_items` (rows with
-#:   `account_id` set). LOCAL rows carry `account_id IS NULL` and survive.
-#:
-#: Those three carry `credentials_encrypted NOT NULL` — the live OAuth/API
-#: tokens. The credential cannot be deleted without the row, and leaving a
-#: departed colleague's tokens in the database is the hole a purge exists to
-#: close. The mirrors are mirrors: the source systems stay authoritative
-#: (root AGENTS.md, global constraint 8). The response reports every count so
-#: none of it is silent, and the UI names it before the admin confirms.
+#: The three credential rows carry `credentials_encrypted NOT NULL` — the live
+#: OAuth/API tokens. The credential cannot be deleted without the row, and
+#: leaving a departed colleague's tokens in the database is the hole a purge
+#: exists to close; `_CREDENTIAL_CASCADES` above is what goes with them. The
+#: mirrors are mirrors: the source systems stay authoritative (root AGENTS.md,
+#: global constraint 8). The response reports every count so none of it is
+#: silent, and the UI names it before the admin confirms.
 _PURGE_DELETES: tuple[_PersonRows, ...] = (
     # Access grants keyed to app_user.id. All three declare ON DELETE CASCADE,
     # so deleting the member row would take them anyway — they are deleted
@@ -399,6 +431,24 @@ _PURGE_DELETES: tuple[_PersonRows, ...] = (
     # Credentials.
     _PersonRows("email_accounts", "email_accounts", "lower(user_id) = :email"),
     _PersonRows("whatsapp_accounts", "wa_accounts", "lower(user_id) = :email"),
+    # ⚠️ The SYNCED half of the GTD store, deleted EXPLICITLY and BEFORE the
+    # account it hangs off, for one reason: it has to be **counted on this
+    # side**. `task_accounts` cascades both tables, so leaving them implicit
+    # meant the response reported the destroyed rows as *kept* — 847 synced
+    # tasks answered `kept: {"tasks": 847}` while all 847 went with the
+    # credential, and `gtd_projects` appeared on neither list at all. A count
+    # that is wrong in the reassuring direction is worse than no count.
+    #
+    # `account_id IS NOT NULL` is the SYNCED half by construction: every
+    # writer stamps `account_id` from an account the same person owns
+    # (`tasks/sync.py` binds `uid` to `account.user_id`; the account routes
+    # are owner-scoped), so "their rows with an account" and "the rows this
+    # person's accounts cascade" are the same set. The complement below keeps
+    # the LOCAL rows and is asserted to be exactly that — a complement.
+    _PersonRows("synced_tasks", "gtd_items",
+                "lower(user_id) = :email AND account_id IS NOT NULL"),
+    _PersonRows("synced_projects", "gtd_projects",
+                "lower(user_id) = :email AND account_id IS NOT NULL"),
     _PersonRows("task_accounts", "task_accounts", "lower(user_id) = :email"),
     # Their own private conversations. ⚠️ `visibility = 'private'` is
     # load-bearing and is the line the rejected "purge their content too"
@@ -424,6 +474,17 @@ _PURGE_DELETES: tuple[_PersonRows, ...] = (
 #: in its own schema — it carries `app_id UUID` with *no* FK, commented "audit
 #: survives hard delete". The rest is authored work, kept per the decision
 #: above. Nothing in this table is anonymised; see the section header for why.
+#:
+#: ⚠️ **A KEEP clause must exclude every row the delete side cascades away.**
+#: "Kept" is a claim about rows that are still there when the transaction
+#: commits, not about rows this list did not name — and a table can be
+#: emptied by a cascade three entries up. `shared_rooms` carries
+#: `visibility <> 'private'` for that reason and the two GTD entries carry
+#: `account_id IS NULL` for the same one. It is a structural fence, not a
+#: convention: `test_no_keep_clause_survives_a_cascade_on_the_delete_side`
+#: re-derives the cascade graph from the migrations and fails on any KEEP
+#: clause inside the blast radius that is not the exact complement of a
+#: matching DELETE clause.
 _PURGE_KEEPS: tuple[_PersonRows, ...] = (
     _PersonRows("audit_entries", "app_audit", "lower(user_email) = :email"),
     _PersonRows("audit_events", "audit_event", "lower(actor) = :actor"),
@@ -432,7 +493,13 @@ _PURGE_KEEPS: tuple[_PersonRows, ...] = (
                 "lower(user_id) = :email AND visibility <> 'private'"),
     _PersonRows("apps", "apps", "lower(owner_email) = :email"),
     _PersonRows("workflows", "workflows", "lower(owner_email) = :email"),
-    _PersonRows("tasks", "gtd_items", "lower(user_id) = :email"),
+    # LOCAL only — the SYNCED rows go with `task_accounts` and are counted on
+    # the delete side. Without `account_id IS NULL` this number is a lie in
+    # the reassuring direction.
+    _PersonRows("tasks", "gtd_items",
+                "lower(user_id) = :email AND account_id IS NULL"),
+    _PersonRows("projects", "gtd_projects",
+                "lower(user_id) = :email AND account_id IS NULL"),
     _PersonRows("meetings", "meeting", "lower(owner_email) = :email"),
 )
 
@@ -503,6 +570,18 @@ async def purge_member(
     a roster that still shows the person; a completed purge with no audit line
     is unreconcilable, because every row that could have told you who it was
     is gone.
+
+    ⚠️ **"The audit entry survives a rollback" is true. "A completed purge
+    always leaves an audit row" is NOT** — and only the first of those is a
+    property of this function. ``acb_audit.log.record`` wraps its write in
+    ``except Exception`` and merely logs ``audit.persist_failed``, so an audit
+    DB that is down turns the call into a no-op and the purge still commits.
+    That is the right default for every other caller (a webhook must not 5xx
+    over an audit write) and it is deliberately not overridden here, because
+    refusing the purge would leave the credentials in place — but it means the
+    only *guaranteed* record of a purge is the ``member_purged`` log line.
+    Recorded rather than fixed: making one caller strict is a change to
+    ``acb_audit``'s contract, not to this route.
     """
     db = await get_db()
     async with db:

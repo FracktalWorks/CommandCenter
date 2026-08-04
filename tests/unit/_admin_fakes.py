@@ -45,6 +45,10 @@ _PERSON_ADDR_CS = re.compile(r"(?<!lower\()\b(\w+) = :(email|actor)")
 _PERSON_UID = re.compile(r"(\w+) = CAST\(:uid AS uuid\)")
 #: ``visibility = 'private'`` / ``visibility <> 'private'``
 _PERSON_VIS = re.compile(r"visibility (=|<>) 'private'")
+#: ``<col> IS NULL`` / ``<col> IS NOT NULL`` — how the GTD store's LOCAL half
+#: is told from its SYNCED half (`account_id`). Read from the statement like
+#: everything else here, so a clause that drops the filter changes the answer.
+_PERSON_NULL = re.compile(r"(\w+) IS (NOT )?NULL")
 
 
 class _Scalars:
@@ -124,6 +128,21 @@ class _FakeDB:
     or that it never names ``app_audit`` — those live in the route's constants
     and are pinned structurally in
     ``tests/unit/test_admin_member_purge.py``.
+
+    ⚠️ **This fake models NO foreign keys and therefore NO ``ON DELETE
+    CASCADE``.** Deleting a seeded ``task_accounts`` row here leaves the
+    seeded ``gtd_items`` rows exactly where they were; Postgres would take the
+    SYNCED half with it. That is not an oversight to be fixed by a hand-written
+    cascade map — a hand-written map is another mirror, and this class already
+    documents what mirrors are worth. It is the reason a whole class of defect
+    is **invisible to every behavioural case in this file**: a KEEP clause can
+    count rows that the delete side cascades away and report them as survivors,
+    and the fake will agree, because it kept them. That claim is cross-table
+    and is fenced structurally instead —
+    ``test_admin_member_purge.py::test_no_keep_clause_survives_a_cascade_on_the_delete_side``
+    re-derives the cascade graph from ``infra/postgres/`` and checks the
+    clauses against it. It shipped once without that fence and reported 847
+    destroyed tasks as kept.
     """
 
     ROLE_RANKS: ClassVar[dict[str, int]] = {
@@ -226,6 +245,9 @@ class _FakeDB:
                 r for r in found
                 if (r.get("visibility", "private") == "private") is wants_private
             ]
+        for nul in _PERSON_NULL.finditer(s):
+            col, negated = nul.group(1), bool(nul.group(2))
+            found = [r for r in found if (r.get(col) is not None) is negated]
         return found
 
     def _person_delete(self, table: str, matched: list[dict[str, Any]]) -> None:

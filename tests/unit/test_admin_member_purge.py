@@ -68,6 +68,13 @@ ADMIN = _caller("admin@fracktal.in", roles=["admin"])
 
 PRIYA = "priya@fracktal.in"
 
+#: Her connected task workspace. Seeded with a real id because the GTD store
+#: is DUAL-SOURCE: `account_id IS NULL` is a LOCAL row she authored, a set
+#: `account_id` is a mirror of a provider task that the credential cascades
+#: away. A fixture that seeded neither would make the two halves
+#: indistinguishable, which is the state in which the counts were wrong.
+TASK_ACCOUNT = "ta-1"
+
 
 @pytest.fixture()
 def db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
@@ -98,7 +105,7 @@ def db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
     # ── credentials ──
     fake.seed_rows("email_accounts", {"user_id": PRIYA})
     fake.seed_rows("wa_accounts", {"user_id": PRIYA})
-    fake.seed_rows("task_accounts", {"user_id": PRIYA})
+    fake.seed_rows("task_accounts", {"id": TASK_ACCOUNT, "user_id": PRIYA})
     # ── sessions: two private, one shared room she started ──
     fake.seed_rows(
         "chat_session",
@@ -116,8 +123,18 @@ def db(monkeypatch: pytest.MonkeyPatch) -> _FakeDB:
     fake.seed_rows("agent_run", {"user_id": PRIYA})
     fake.seed_rows("apps", {"owner_email": PRIYA})
     fake.seed_rows("workflows", {"owner_email": PRIYA})
-    fake.seed_rows("gtd_items", {"user_id": PRIYA}, {"user_id": PRIYA},
-                   {"user_id": PRIYA})
+    # ── the GTD store, both halves: 3 LOCAL items + 2 SYNCED, 1 LOCAL
+    #    project + 1 SYNCED. The SYNCED rows go with `task_accounts`; the
+    #    LOCAL ones are hers and survive.
+    fake.seed_rows("gtd_items",
+                   {"id": "i-1", "user_id": PRIYA},
+                   {"id": "i-2", "user_id": PRIYA},
+                   {"id": "i-3", "user_id": PRIYA},
+                   {"id": "i-s1", "user_id": PRIYA, "account_id": TASK_ACCOUNT},
+                   {"id": "i-s2", "user_id": PRIYA, "account_id": TASK_ACCOUNT})
+    fake.seed_rows("gtd_projects",
+                   {"id": "p-1", "user_id": PRIYA},
+                   {"id": "p-s1", "user_id": PRIYA, "account_id": TASK_ACCOUNT})
     fake.seed_rows("meeting", {"owner_email": PRIYA})
     return fake
 
@@ -393,13 +410,47 @@ async def test_what_they_authored_is_left_readable(db: _FakeDB) -> None:
     out = await purge_member(PRIYA, admin=OWNER)
 
     for table, count in (("apps", 1), ("workflows", 1), ("gtd_items", 3),
-                         ("meeting", 1), ("agent_run", 1)):
+                         ("gtd_projects", 1), ("meeting", 1), ("agent_run", 1)):
         assert len(db.rows[table]) == count, f"{table} was purged"
     assert out.kept["apps"] == 1
     assert out.kept["workflows"] == 1
     assert out.kept["tasks"] == 3
+    assert out.kept["projects"] == 1
     assert out.kept["meetings"] == 1
     assert out.kept["agent_runs"] == 1
+
+
+async def test_the_synced_half_of_the_gtd_store_is_reported_as_destroyed(
+    db: _FakeDB,
+) -> None:
+    """The count that was a lie in the reassuring direction.
+
+    `task_accounts` cascades BOTH `gtd_items` and `gtd_projects` (48_task_
+    manager_gtd.sql:73,93). The first version of this route counted
+    `gtd_items` on the KEEP side with no exclusion, so a member with 847
+    synced tasks got `kept: {"tasks": 847}` while all 847 went with the
+    credential — the response did not merely miss a destruction, it reported
+    it as a survival. `gtd_projects` appeared on neither list.
+
+    ⚠️ Mutation-checked: dropping ``AND account_id IS NULL`` from the KEEP
+    clause makes this fail (5 tasks reported kept, 3 actually there); removing
+    either delete-side row-spec makes it fail on the missing key.
+    """
+    from gateway.routes.admin.members import purge_member
+
+    out = await purge_member(PRIYA, admin=OWNER)
+
+    # Destroyed, and said so.
+    assert out.deleted["synced_tasks"] == 2
+    assert out.deleted["synced_projects"] == 1
+    # Kept, and only the rows that really are.
+    assert out.kept["tasks"] == 3
+    assert out.kept["projects"] == 1
+    assert sorted(r["id"] for r in db.rows["gtd_items"]) == ["i-1", "i-2", "i-3"]
+    assert [r["id"] for r in db.rows["gtd_projects"]] == ["p-1"]
+    # And the two halves add up to what she had, so neither is double-counted.
+    assert out.deleted["synced_tasks"] + out.kept["tasks"] == 5
+    assert out.deleted["synced_projects"] + out.kept["projects"] == 2
 
 
 async def test_the_response_says_what_happened_table_by_table(
@@ -434,6 +485,8 @@ async def test_the_response_says_what_happened_table_by_table(
         "app_tool_grants": 1,
         "email_accounts": 1,
         "whatsapp_accounts": 1,
+        "synced_tasks": 2,
+        "synced_projects": 1,
         "task_accounts": 1,
         "private_chat_sessions": 2,
         "sign_in_requests": 1,
@@ -447,6 +500,7 @@ async def test_the_response_says_what_happened_table_by_table(
         "apps": 1,
         "workflows": 1,
         "tasks": 3,
+        "projects": 1,
         "meetings": 1,
     }
 
@@ -504,10 +558,15 @@ def test_no_audit_table_appears_on_the_delete_side_at_all() -> None:
         "the two audit tables are not even reported as kept, so an admin "
         "cannot tell they survived"
     )
-    # And no table is on both sides, which would make the report incoherent.
-    assert not (deleted_tables & kept_tables) - {"chat_session"}, (
-        "a table is both deleted and kept; only chat_session is legitimately "
-        "split, by visibility"
+    # And no table is on both sides except the three that are legitimately
+    # split — each by a column the schema forces on us, each asserted to be an
+    # exact complement below.
+    assert not (deleted_tables & kept_tables) - {
+        "chat_session", "gtd_items", "gtd_projects",
+    }, (
+        "a table is both deleted and kept; only chat_session (by visibility) "
+        "and the GTD store (by account_id, because task_accounts cascades the "
+        "SYNCED half) are legitimately split"
     )
 
 
@@ -567,9 +626,9 @@ def test_the_member_record_is_deleted_last() -> None:
 
 
 def test_the_two_halves_of_chat_session_partition_it() -> None:
-    """The one table on both lists. Split by `visibility`, and the two clauses
-    must be complements — a gap would leave sessions belonging to nobody, an
-    overlap would report a room as both destroyed and kept."""
+    """The one table split by `visibility`. The two clauses must be
+    complements — a gap would leave sessions belonging to nobody, an overlap
+    would report a room as both destroyed and kept."""
     from gateway.routes.admin.members import _PURGE_DELETES, _PURGE_KEEPS
 
     deleted = next(r for r in _PURGE_DELETES if r.table == "chat_session")
@@ -577,6 +636,232 @@ def test_the_two_halves_of_chat_session_partition_it() -> None:
 
     assert deleted.where == "lower(user_id) = :email AND visibility = 'private'"
     assert kept.where == "lower(user_id) = :email AND visibility <> 'private'"
+
+
+def test_the_two_halves_of_the_gtd_store_partition_it() -> None:
+    """The other two split tables, and the ones the FK forces apart.
+
+    `account_id IS NULL` is a LOCAL row the person authored here;
+    `IS NOT NULL` is a mirror of a provider task that `task_accounts`
+    cascades. The split is not a preference — the schema decides it — so the
+    clauses are pinned literally rather than left to the complement check
+    below to approve in the abstract.
+    """
+    from gateway.routes.admin.members import _PURGE_DELETES, _PURGE_KEEPS
+
+    for table in ("gtd_items", "gtd_projects"):
+        deleted = next(r for r in _PURGE_DELETES if r.table == table)
+        kept = next(r for r in _PURGE_KEEPS if r.table == table)
+        assert deleted.where == (
+            "lower(user_id) = :email AND account_id IS NOT NULL"
+        ), table
+        assert kept.where == "lower(user_id) = :email AND account_id IS NULL", (
+            table
+        )
+
+
+# ── The cross-table half: what the delete side cascades away ────────────────
+#
+# Everything above compares a row-spec to itself or to its own table's other
+# half. The defect that shipped was neither: `_PURGE_KEEPS` counted `gtd_items`
+# with no exclusion while `_PURGE_DELETES` took `task_accounts`, whose FK
+# cascades that very table — so the count and the delete were "the same
+# predicate" (they were) and the report was still wrong, because a THIRD
+# statement destroyed the rows. `_FakeDB` models no foreign keys, so no
+# behavioural case in this file could have seen it. These two derive the
+# cascade graph from `infra/postgres/` and check the clauses against it.
+
+#: Predicate pairs that partition a table. Order-insensitive.
+_COMPLEMENTARY = (("= 'private'", "<> 'private'"), ("IS NULL", "IS NOT NULL"))
+
+
+def _conjuncts(where: str) -> list[str]:
+    return [c.strip() for c in where.split(" AND ")]
+
+
+def _are_complements(a: str, b: str) -> bool:
+    """Do `a` and `b` cover the same rows, split on exactly one predicate?"""
+    ca, cb = _conjuncts(a), _conjuncts(b)
+    if len(ca) != len(cb):
+        return False
+    differing = [(x, y) for x, y in zip(ca, cb, strict=True) if x != y]
+    if len(differing) != 1:
+        return False
+    x, y = differing[0]
+    for left, right in _COMPLEMENTARY:
+        for p, q in ((left, right), (right, left)):
+            if (x.endswith(f" {p}") and y.endswith(f" {q}")
+                    and x[: -len(p)].strip() == y[: -len(q)].strip()):
+                return True
+    return False
+
+
+def _blast_radius() -> set[str]:
+    """Every table Postgres empties of the purged person's rows, transitively."""
+    from gateway.routes.admin.members import _PURGE_DELETES
+
+    from tests.unit._schema_cascade import cascade_closure
+
+    radius: set[str] = set()
+    for rows in _PURGE_DELETES:
+        radius |= cascade_closure(rows.table)
+    return radius
+
+
+def test_no_keep_clause_survives_a_cascade_on_the_delete_side() -> None:
+    """**"Kept" is a claim about rows that are still there when it commits.**
+
+    Not a claim about rows this list did not name. A table three entries up
+    can empty it, and then the response reports a destruction as a survival —
+    the worst direction for the number to be wrong in, because `kept` is the
+    reassurance that makes the irreversible half clickable.
+
+    ⚠️ Mutation-checked: dropping `AND account_id IS NULL` from the `tasks`
+    KEEP clause fails here, naming `gtd_items` and the cascade parent.
+    """
+    from gateway.routes.admin.members import _PURGE_DELETES, _PURGE_KEEPS
+
+    radius = _blast_radius()
+    deletes = {r.table: r for r in _PURGE_DELETES}
+
+    for kept in _PURGE_KEEPS:
+        if kept.table not in radius:
+            continue
+        assert kept.table in deletes, (
+            f"{kept.table} is reported as KEPT, but the purge cascades it away "
+            f"and no delete-side row-spec counts what goes. Either exclude the "
+            f"destroyed rows from the keep clause and count them on the delete "
+            f"side, or stop claiming they survive."
+        )
+        assert _are_complements(deletes[kept.table].where, kept.where), (
+            f"{kept.table}: the kept clause {kept.where!r} is not the exact "
+            f"complement of the deleted one {deletes[kept.table].where!r}, so "
+            f"the two counts overlap or leave a gap — and this table is inside "
+            f"the cascade blast radius, where an overlap means rows counted as "
+            f"kept are destroyed anyway."
+        )
+
+
+def test_every_person_keyed_cascade_child_is_reported_on_one_side_or_other(
+) -> None:
+    """The rule that forces `gtd_projects` onto the list at all.
+
+    Most of the blast radius is legitimately summarised rather than counted:
+    the 20 tables under `email_accounts` and the 16 under `wa_accounts` are
+    keyed by `account_id` alone — they are mirror-of-a-credential and nothing
+    else, and "the whole mailbox goes" is the honest report.
+
+    The exceptions are the cascade children that carry **their own person
+    column**. Those are dual-source: the same table holds rows the person
+    authored directly, which the purge is not entitled to take, so the split
+    has to be stated and both halves have to be counted. Today that is exactly
+    `gtd_items` and `gtd_projects` (plus the three access-grant tables under
+    `app_user`, which are wholly deleted and already listed).
+
+    ⚠️ Mutation-checked: deleting the `synced_projects` row-spec fails here.
+    A migration that hangs another dual-source table off a credential fails
+    here too, which is the point — nobody will notice it by reading.
+    """
+    from gateway.routes.admin.members import _PURGE_DELETES, _PURGE_KEEPS
+
+    from tests.unit._schema_cascade import columns_of
+
+    listed = {r.table for r in (*_PURGE_DELETES, *_PURGE_KEEPS)}
+    person_columns = {"user_id", "owner_email", "user_email"}
+
+    unreported = sorted(
+        table for table in _blast_radius()
+        if (columns_of(table) & person_columns) and table not in listed
+    )
+    assert not unreported, (
+        f"these tables are destroyed by the purge's cascades and carry their "
+        f"own person column, so they hold rows the person authored — and they "
+        f"appear on neither list: {unreported}"
+    )
+
+
+def test_the_cascade_map_is_the_one_the_schema_declares() -> None:
+    """`_CREDENTIAL_CASCADES` is hand-maintained, so it is pinned.
+
+    The first version of that comment named 15 of the 20 tables under
+    `email_accounts` (missing `email_embeddings`, `email_executed_rules`,
+    `email_ai_drafts`, `email_rule_guidance`), listed `wa_media` as a direct
+    child of `wa_accounts` when it hangs off `wa_messages`, and omitted
+    `wa_chat_status` and `wa_sync_log`. On a route whose safety argument is
+    "the admin is told the blast radius before clicking", understating it is
+    the wrong direction of error — so the map is compared against the
+    migrations rather than reviewed.
+
+    This failing means a migration widened a cascade. Update the map AND the
+    Members-page confirmation copy that summarises it.
+    """
+    from gateway.routes.admin.members import _CREDENTIAL_CASCADES
+
+    from tests.unit._schema_cascade import cascade_closure
+
+    for parent, listed in _CREDENTIAL_CASCADES.items():
+        assert set(listed) == set(cascade_closure(parent)), (
+            f"{parent}: the map says {sorted(listed)}, the migrations say "
+            f"{sorted(cascade_closure(parent))}"
+        )
+        assert list(listed) == sorted(listed), f"{parent}: keep it sorted"
+
+    # And every credential the purge deletes has an entry, so a fourth one
+    # cannot be added with no blast radius recorded at all.
+    from gateway.routes.admin.members import _PURGE_DELETES
+
+    credentials = {
+        r.table for r in _PURGE_DELETES if r.table.endswith("_accounts")
+    }
+    assert credentials == set(_CREDENTIAL_CASCADES), (
+        f"credential tables on the delete list: {sorted(credentials)}; "
+        f"tables with a recorded cascade: {sorted(_CREDENTIAL_CASCADES)}"
+    )
+
+
+# ── The gate on the door itself ─────────────────────────────────────────────
+
+def test_the_purge_route_is_gated_on_admin_members_manage() -> None:
+    """The permission is asserted; it was previously only assumed.
+
+    Deleting ``dependencies=[require_permission("admin:members:manage")]`` from
+    this route — leaving ``Depends(require_admin_user)`` in place — left **162
+    tests green**. The remaining floor is `admin:members:read`, which a seeded
+    `manager` holds (D14 says so, and `_admin_fakes.ROLE_PERMISSIONS` seeds
+    it), so that mutation silently hands hard-delete of any member to every
+    manager. The nearest existing wiring test filters on
+    ``path.startswith("/admin/members/requests")`` and cannot see this route.
+
+    The exact slug is read out of ``require_permission``'s closure rather than
+    matched by name, so widening it to a weaker permission fails too.
+    """
+    from gateway.routes.admin._common import require_admin_user, router
+
+    route = next(
+        r for r in router.routes
+        if getattr(r, "path", "") == "/admin/members/{email}/purge"
+    )
+    assert sorted(route.methods) == ["DELETE"]
+
+    granted: list[tuple[str, ...]] = []
+    for dep in getattr(route, "dependencies", []):
+        fn = dep.dependency
+        free = getattr(fn, "__code__", None)
+        if free is None or "required" not in free.co_freevars:
+            continue
+        cell = fn.__closure__[free.co_freevars.index("required")]
+        granted.append(tuple(cell.cell_contents))
+
+    assert granted == [("admin:members:manage",)], (
+        "the most destructive route in this package does not require "
+        f"admin:members:manage (found {granted!r}). Without it the floor is "
+        "admin:members:read, which a manager holds."
+    )
+    # And the package floor, which is per-route and not a router property.
+    assert any(
+        getattr(p.default, "dependency", None) is require_admin_user
+        for p in inspect.signature(route.endpoint).parameters.values()
+    ), "the purge route declares no require_admin_user floor"
 
 
 def test_the_purge_outcome_name_is_not_a_member_status() -> None:
@@ -778,6 +1063,39 @@ def test_the_confirmation_names_what_goes_and_what_stays() -> None:
     assert "role" in dialog.lower()
     # And it points at the reversible action for anybody who wanted that.
     assert "Remove" in dialog
+
+
+def test_the_typed_confirmation_is_a_rule_and_not_a_paragraph() -> None:
+    """Done-when 6 says the dialog "requires the address to be typed".
+
+    The first version tested that by grepping the dialog for the word "Type",
+    which is a claim about copy. Replacing the comparison itself with
+    ``const confirmed = true;`` left **32 pytest and 173 vitest cases green** —
+    the last barrier in front of the one irreversible action on the screen,
+    with nothing behind it.
+
+    The rule now lives in `confirmPurge.ts` (unit-tested by vitest, including
+    that an empty address confirms nothing) and this asserts the WIRING: the
+    dialog calls it, passes the member's own address, and holds no second
+    opinion of its own.
+    """
+    page = _page()
+    dialog = page.split("function PurgeDialog(", 1)[1].split("\nfunction ", 1)[0]
+
+    assert 'from "./confirmPurge"' in page, (
+        "the dialog does not import the rule; a comparison written inline here "
+        "is fenced by nothing but a grep for the copy around it"
+    )
+    assert "const confirmed = purgeConfirmed(typed, member.email);" in dialog, (
+        "the confirm flag is not the rule's answer about THIS member"
+    )
+    # The button is disabled by it, and the input feeds it.
+    assert "disabled={busy || !confirmed}" in dialog
+    assert "onChange={(e) => setTyped(e.target.value)}" in dialog
+    # No second copy of the comparison anywhere on the page.
+    assert "member.email.toLowerCase()" not in page, (
+        "an inline address comparison is back on the page"
+    )
 
 
 def test_the_purge_call_reads_the_counts_back_and_surfaces_refusals() -> None:

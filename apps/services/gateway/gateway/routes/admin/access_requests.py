@@ -444,6 +444,33 @@ async def approve_access_request(
                 status="active",
             )
 
+        # Verify; do not predict. `_disposition_for` read `app_user` BEFORE
+        # the upsert, and `_PROVISION_MEMBER_SQL`'s CASE arms are re-evaluated
+        # by Postgres against the latest committed row (ON CONFLICT DO UPDATE
+        # waits on a concurrent writer, then re-reads). So a second admin
+        # off-boarding or suspending this person in that window lands every
+        # arm on `ELSE app_user.status`, and the provisioning declines in
+        # silence — which is exactly the shape the matrix above exists to
+        # stop, one table over. `_DECIDE_SQL` made the `access_request` row
+        # race-safe; without this check the `app_user` row stayed a
+        # read-then-write with no write-side guard, and approve would stamp
+        # `approved` over a person who still cannot sign in, removing them
+        # from a queue that renders only `pending`.
+        #
+        # Raising here abandons the whole transaction — the provisioning
+        # above included — because nothing has been committed yet.
+        if member["status"] != "active":
+            raise HTTPException(
+                status_code=409,
+                detail=(
+                    f"'{member['email']}' was changed by somebody else while "
+                    "this approval was in flight and is now "
+                    f"'{member['status']}', so nothing here was applied and "
+                    "the request is still waiting. Refresh the queue and "
+                    "look again."
+                ),
+            )
+
         await _decide(db, member["email"].lower(), "approved", admin,
                       allowed_statuses=("pending",))
         await db.commit()

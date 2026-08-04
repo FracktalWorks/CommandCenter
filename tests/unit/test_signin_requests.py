@@ -1482,3 +1482,93 @@ def test_the_members_list_labels_an_invited_row_as_never_signed_in() -> None:
     dead end it is — that ambiguity is what let the owner believe the job was
     done on 2026-08-04."""
     assert "never signed in" in _members_page()
+
+
+async def test_approve_verifies_the_write_instead_of_trusting_the_matrix(
+    db: _FakeDB,
+) -> None:
+    """The third instance of the silent-success shape — a race, not a sequence.
+
+    ``APPROVE_MATRIX`` is read BEFORE the write, which closed the two
+    sequential holes. It does not close the concurrent one:
+    ``_PROVISION_MEMBER_SQL``'s CASE arms are re-evaluated by Postgres against
+    the latest committed row (``ON CONFLICT DO UPDATE`` waits on a concurrent
+    writer, then re-reads). A second admin off-boarding this person between
+    approve's ``find_member`` and its upsert therefore lands every arm on
+    ``ELSE app_user.status``, the provisioning declines **in silence**, and
+    approve went on to stamp `approved` and record an audit entry for it.
+
+    That is the same three consequences the two earlier rounds fixed: 200
+    returned, person still locked out, and the request gone from a queue that
+    renders only `pending` — so they can never reappear, because the
+    resolver's upsert deliberately never rewrites `status` (dw9).
+
+    Approve must therefore VERIFY, not predict: the person is `active` before
+    the decision is stamped, or nothing is.
+    """
+    from gateway.routes.admin.access_requests import (
+        ApproveRequest,
+        approve_access_request,
+    )
+
+    db.seed_user("u-race", "priya@fracktal.in", status="invited")
+    db.seed_request("priya@fracktal.in")
+
+    # The concurrent off-boarding, committed from OUTSIDE the route: it lands
+    # after approve has read the row and decided `provision`, but before the
+    # upsert. The SUT is not patched — only the world underneath it moves.
+    inner = db.execute
+    seen = {"reads": 0}
+
+    async def racing_execute(sql: Any, params: dict | None = None) -> Any:
+        s = " ".join(str(sql).split())
+        if "FROM app_user WHERE lower(email)" in s:
+            seen["reads"] += 1
+            if seen["reads"] == 1:
+                result = await inner(sql, params)
+                db.users["u-race"]["status"] = "removed"
+                return result
+        return await inner(sql, params)
+
+    db.execute = racing_execute  # type: ignore[method-assign]
+
+    with pytest.raises(HTTPException) as exc:
+        await approve_access_request(
+            "priya@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
+        )
+
+    assert exc.value.status_code == 409
+    assert "in flight" in str(exc.value.detail)
+    # Nothing declared, nothing lost: the request is still in the queue, no
+    # approval was recorded, and the transaction never reached commit.
+    assert db.requests["priya@fracktal.in"]["status"] == "pending"
+    assert db.audit == []
+    assert db.committed == 0
+
+
+async def test_an_unrecognised_member_status_fails_closed(db: _FakeDB) -> None:
+    """The matrix's sixth row — the one no shipped status exercises.
+
+    ``APPROVE_MATRIX.get(status, "refuse")`` is the only thing standing
+    between a future ``app_user.status`` and provisioning-by-default. Nothing
+    pinned it: flipping the fallback to `"provision"` left all 50 cases green.
+    The lesson of round 1 was that a test mirroring the code is not a check on
+    it, so this asserts the behaviour a new status must meet, not the dict.
+    """
+    from gateway.routes.admin.access_requests import (
+        ApproveRequest,
+        approve_access_request,
+    )
+
+    db.seed_user("u-odd", "future@fracktal.in", status="archived")
+    db.seed_request("future@fracktal.in")
+
+    with pytest.raises(HTTPException) as exc:
+        await approve_access_request(
+            "future@fracktal.in", ApproveRequest(), admin=FULL_ADMIN,
+        )
+
+    assert exc.value.status_code == 409
+    assert db.users["u-odd"]["status"] == "archived"
+    assert db.requests["future@fracktal.in"]["status"] == "pending"
+    assert db.audit == []

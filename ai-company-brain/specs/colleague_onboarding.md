@@ -13,10 +13,15 @@ deliberately outside G4 and awaiting an owner call. **§6 is new (2026-08-04):
 N6, the provisioning gap** — an unprovisioned sign-in was logged and then
 discarded, so the owner could not see who was knocking. Motivated by a measured
 production incident: 53 refusals for one colleague over 18 hours, invisible in
-the UI. **N6a is BUILT (2026-08-04, branch `ws-24-n6-signin-requests`)** — the
-knock is persisted, the owner answers it from a Requests tab, and approving
-provisions *and* activates in one action; **N6b needs no code** (§2 Step 1b
-shipped the fix) and leaves one recorded owner question. **Merging N6a is
+the UI. **N6a is BUILT + REPAIRED (2026-08-04, branch `ws-24-n6-signin-requests`)** —
+the knock is persisted, the owner answers it from a Requests tab, and approving
+provisions *and* activates in one action; a same-day adversarial review found a
+**P1 cross-gate escalation** (approve could reinstate an off-boarded member on
+the weaker `admin:members:invite`) and proved the test that claimed to fence it
+was a mirror of the code, not a check on it — both are fixed and the fence is
+now a structural assertion against the SQL itself (§6 *Repair round*).
+**N6b needs no code** (§2 Step 1b shipped the fix) and leaves one recorded
+owner question. **Merging N6a is
 OWNER-GATE**: `deploy.yml:202-203` replays every migration on deploy, so the
 merge arms an auth-behaviour deploy. · **Board row:** WS-24 ·
 **Owner:** vjvarada · **Date:** 2026-08-04 ·
@@ -254,6 +259,12 @@ directory identity into a member**.
 `resolve_access` treats status as a property of the *result*, not a filter on
 the query, so a suspended member resolves to no access within the 60s cache TTL
 at worst (`acb_auth/access.py:209-215`).
+
+**Bringing somebody back is `admin:members:manage`, and only that.** Neither
+Invite nor approving a sign-in request can turn a `removed` or `suspended` row
+back into `active` — both hold the weaker `admin:members:invite`. Invite
+returns a removed member to `invited`; the activation is still Step 1b. See §6
+*Repair round* for why that boundary is enforced in two places.
 
 ---
 
@@ -840,8 +851,12 @@ the system he wanted in, fifty-three times, and the system told nobody.
 
 ### N6 — capture the knock, and let the owner answer it · size: M (migration + one route file + one page) · 🟢 **AGENT-SAFE**
 
-**Status: N6a ✅ BUILT 2026-08-04** (`ws-24-n6-signin-requests`) — all eleven
-done-whens met, fenced by `tests/unit/test_signin_requests.py` (28 cases).
+**Status: N6a ✅ BUILT 2026-08-04, + one repair round the same day**
+(`ws-24-n6-signin-requests`) — all eleven done-whens met, fenced by
+`tests/unit/test_signin_requests.py` (40 cases). The repair round closed a **P1
+cross-gate escalation** (approve reinstated an off-boarded member) and replaced
+the fence that had missed it; dw7's "approving twice is not an error" is
+superseded — see *Repair round* below before reading the done-whens as built.
 **N6b: nothing to build**; one owner question remains open below. **Merging is
 OWNER-GATE** — see the note at the end of this section.
 
@@ -913,10 +928,37 @@ surface. Approval creates the real `app_user` through the **same helper**
 `AUTH_MICROSOFT_ENTRA_ID_TENANT` is set to the Fracktal directory GUID on the
 box (verified 2026-08-04 in both `/opt/acb/app/.env` and
 `workbench/control_plane/.env.local`), so `auth.ts`'s issuer is tenant-pinned
-and only directory members can reach the branch that writes. **If that variable
-is ever unset the issuer falls back to `organizations`** (`src/auth.ts:22`) and any
-Microsoft work account on earth can append a row. Rows stay bounded by the
-directory either way, but the table stops being a list of colleagues.
+and only **directory members** can reach the branch that writes. **If that
+variable is ever unset the issuer falls back to `organizations`**
+(`src/auth.ts:22`) and any Microsoft work account on earth can append a row.
+
+> ### ⚠️ CORRECTED (repair round, 2026-08-04) — "directory member" ≠ "colleague"
+>
+> This block previously implied the tenant pin bounds the table to people who
+> work here. **It does not, and two separate mechanisms say so:**
+>
+> 1. **Entra B2B guests are directory members.** A guest invited into the
+>    Fracktal tenant authenticates against the pinned issuer exactly like an
+>    employee. The pin bounds who can **authenticate**; it says nothing about
+>    who **belongs to the company**.
+> 2. **`ALLOWED_EMAIL_DOMAIN` does not refuse them either.** On the branch that
+>    matters (`acb_auth/deps.py`, branch 1a — Bearer + identity headers, i.e.
+>    every browser call), an off-domain address is **logged**
+>    (`auth.identity_domain_mismatch`) and passed through, deliberately: the
+>    internal-token holder is trusted to say who it is acting for, and refusing
+>    would lock out any member whose sign-in address is off-domain.
+>
+> So an off-domain identity can and does reach the write, Approve provisions
+> `active` immediately, and the row was the only place left where the
+> difference could be seen. **Fixed:** the queue entry now carries
+> `is_external` — resolved by the gateway through
+> `acb_auth.is_company_email()`, because the domain is server policy and the
+> browser must not re-derive it — and the Requests tab marks such a row
+> "outside the company domain". It is a **label for the admin**, not a
+> refusal; refusing here would re-create the lockout branch 1a avoids.
+
+Rows stay bounded by the directory either way, but the table is a list of
+everyone who knocked, not a list of colleagues.
 
 **Done when — N6a**
 
@@ -998,8 +1040,8 @@ remaining question is the owner's (a)/(b)/(c) above.
 | 2 | `acb_auth/access.py` — `_ACCESS_REQUEST_UPSERT_SQL` + `_record_signin_request`, called AFTER the log line inside the `row is None` branch |
 | 3 | `resolve_access(..., record_request: bool = False)`; the only caller passing `True` is `acb_auth/deps.py::_with_resolved_access` |
 | 4/5 | Properties of the existing branch + cache; pinned, not coded |
-| 6/7/9 | `gateway/routes/admin/access_requests.py` — three routes, each declaring `Depends(require_admin_user)`; both writes on `admin:members:invite` |
-| 8 | `_common.provision_member` (see below) |
+| 6/7/9 | `gateway/routes/admin/access_requests.py` — three routes, each declaring `Depends(require_admin_user)`; both writes on `admin:members:invite`. `_load_request` takes the statuses it may act on as a required keyword (repair round) |
+| 8 | `_common.provision_member` (see below), which also enforces invariant 1 (repair round) |
 | 10/11 | `settings/members/page.tsx` — `Tabs` (Members · Requests + badge), `RequestsTab`/`RequestRow`, `STATUS_LABELS` |
 
 Four things this ticket stated imprecisely, corrected here rather than
@@ -1009,11 +1051,16 @@ silently deviated from:
   `id UUID PRIMARY KEY DEFAULT gen_random_uuid()`, matching every other table
   in `infra/postgres/`. Uniqueness is still the `lower(email)` index the
   upsert's `ON CONFLICT` infers on.
-* **dw3's list of non-knock callers is incomplete.** There is a **third**:
-  `routes/chat.py:605`. It resolves the *caller's own* email, so it is harmless
-  either way — but the safety of this design is "the default is False", not
-  "we enumerated every caller". A test reads the tree and asserts exactly one
-  file contains `record_request=True`, so a fourth caller cannot appear quietly.
+* **dw3's list of non-knock callers is incomplete — and so was the correction.**
+  The first draft named two callers; the as-built note added a third
+  (`routes/chat.py:605`) and there is a **fourth**,
+  `apps/services/orchestrator/orchestrator/executor.py:1644`. That is twice this
+  list has been wrong, which is the point: **the safety property is "the default
+  is `False`", enforced by the tree-scan test — it is not "we enumerated the
+  callers".** `test_the_signin_path_is_the_only_caller_that_opts_in` reads every
+  `.py` in the tree and asserts exactly one file contains `record_request=True`,
+  so a fifth caller cannot appear quietly and no enumeration needs maintaining.
+  Any caller list in this spec or in an `AGENTS.md` is illustrative.
 * **dw8 puts the helper in `members.py`; it ships in `_common.py` as
   `provision_member`.** `admin/__init__.py`'s contract is that feature modules
   import from `_common`, never from each other, and `access_requests.py` is a
@@ -1023,17 +1070,124 @@ silently deviated from:
   `members.py`; approve returns its own `ApproveResult`.
 * **dw7 does not say what approve does to somebody who already has a row.**
   It matters: approve is gated on `admin:members:invite`, which is **weaker**
-  than the `admin:members:manage` needed to suspend. **Decision as built:
-  `provision_member` applies its `status` argument only to a row that is
-  `removed` or `invited`; `active` and `suspended` are left alone.** So approve
-  can never un-suspend anybody, and invite's behaviour is unchanged
-  byte-for-byte. This is the same guard the N6b (b) option was warned about,
-  applied to the path that actually shipped.
+  than the `admin:members:manage` needed to suspend or off-board. The general
+  rule this ticket needed and never stated: **no path holding the weaker
+  permission may reverse a decision taken under the stronger one.** See the
+  repair block below for how the first attempt at that guard failed.
+
+#### Repair round (2026-08-04) — the guard was half a guard
+
+An adversarial review of the built branch found a **P1** and proved the fence
+around it was not one. Both are fixed on `ws-24-n6-signin-requests`; recorded
+here because the failure is more instructive than the fix.
+
+**The P1 — approve reinstated a REMOVED member.** The claim "approve can never
+reverse a decision taken under the stronger permission" was true for
+`suspended` and false for `removed`:
+
+1. Someone knocks → is approved → becomes a member.
+2. They are off-boarded via `DELETE /admin/members/{email}`
+   (`members.py:251-252`, gated `admin:members:manage`): `status='removed'`,
+   `user_role` rows dropped.
+3. Their `access_request` row **survives** — decided rows are kept on purpose
+   (dw9) and the tab renders only `pending`, so the row is invisible in the UI
+   *and* still addressable by the API.
+4. A caller holding only `admin:members:invite` re-POSTs approve. The old
+   `CASE WHEN app_user.status IN ('removed','invited')` matched `'removed'`,
+   applied `:status='active'`, `set_roles` re-granted, `joined_at` was
+   re-stamped and `invalidate_for` made it immediate.
+
+On `main` that transition always required `admin:members:manage`. No seeded
+role splits invite from manage today — but the Roles page exists to create
+exactly such a role, at which point it is a straight cross-gate escalation.
+
+**Fixed with two independent locks**, because each covers a sequence the other
+does not:
+
+| Lock | Where | Covers |
+|---|---|---|
+| A decided request cannot be decided again | `access_requests._load_request(db, email, *, allowed_statuses)` — keyword-only, **no default**, the `_row_to_person` shape from N4 | the sequence above (the request row is `approved`) |
+| Provisioning never activates a row that is not `invited` | `_common._PROVISION_MEMBER_SQL`'s `ON CONFLICT` arms | a **pending** request whose address was invited and then removed in between — lock A does not fire there |
+
+The SQL rule, stated so it is not "tidied" back: **the guard names the statuses
+it rewrites and never negates.** `invited` → the caller's status (the one door
+to `active`); `removed` → the caller's status **only when it is not `'active'`**
+(so invite still returns an off-boarded person as `invited`, byte-for-byte as
+before, while approve cannot reinstate them); `active` and `suspended` are never
+touched. `IN (…)` and `<> 'active'` are both "…and everything else that
+qualifies", which is how a row set under a stronger permission gets rewritten.
+
+**dw7's "idempotent: approving twice is not an error" is superseded.** A second
+approve now answers **409**, naming the decision and who made it. The invariant
+dw7 actually cared about — never two members — is unchanged and stronger; what
+went away is a 200 that silently did nothing, which was indistinguishable from
+a 200 that provisioned, and which *was* the vehicle for the escalation above.
+Deny stays replayable (`("pending", "denied")`): it provisions nobody and
+revokes nothing, so re-denying changes only `decided_by`/`decided_at`. Denying
+an *approved* request is refused — it cannot touch the live member it created,
+so it could only produce a queue record that contradicts the roster.
+
+**The fence that let it through, and what replaced it.**
+`tests/unit/test_signin_requests.py`'s `_FakeDB` re-implements the
+`ON CONFLICT DO UPDATE` arms in Python. **A mirror can only agree with itself:**
+the verifier mutated `_common.py`'s guard to `app_user.status <> 'active'` —
+the exact escalation — and all 28 tests passed.
+`test_approving_never_un_suspends_somebody` did not test what its docstring
+said. The repair adds `test_provisioning_only_ever_rewrites_a_status_it_names`,
+which asserts **against the statement string**: every comparison against
+`app_user.status` must be `=` against a literal we chose, the only two literals
+are `'invited'` and `'removed'`, the `removed` arm must carry
+`AND :status <> 'active'`, and no unaccounted reference to `app_user.status`
+may appear. Re-applying the verifier's mutation now fails that test **and only
+that test** — 39 behavioural cases stayed green, which is the demonstration.
+
+> **⚠️ What the fake-DB suite does and does not prove — read before adding a
+> case.** These tests never touch Postgres: routes are called directly with the
+> DB seam monkeypatched, SQL is matched on normalised substrings, `ORDER BY` is
+> ignored and `ON CONFLICT` is re-implemented. A behavioural case therefore
+> proves *the route issues the right statement with the right parameters* — it
+> cannot prove the statement says what we think. **These claims rest on
+> structural assertions instead, and would be unfalsifiable without them:**
+>
+> | Claim | Asserted by |
+> |---|---|
+> | Which statuses provisioning may rewrite (both halves of the P1) | `test_provisioning_only_ever_rewrites_a_status_it_names` |
+> | dw6's "newest `last_seen_at` first" | `test_the_pending_list_asks_the_database_for_the_order_it_promises` — the behavioural case compares a **set** and was renamed to say so |
+> | dw9's "a denial is not undone by the next sign-in" | `test_a_denied_address_that_keeps_knocking_never_returns_to_pending` (reads `_ACCESS_REQUEST_UPSERT_SQL`; this one always worked and is the model the others copy) |
+>
+> Everything else here — the auth floor, the permission gates, invariants 1
+> and 2, the decided-row refusal — is real Python and is genuinely exercised.
+
+**Also fixed in the same round:**
+
+* **`provision_member` never called `assert_owner_survives`** while `set_roles`
+  wipes assignments first, so inviting *or approving* the address that is the
+  last `owner` deleted the org's only owner grant and left it ownerless —
+  recoverable only with SQL on the box. Every sibling write in `members.py`
+  checks (`:209-210`, `:273`, `:311-315`); the helper now does too, narrowed to
+  fire only when the target actually holds `owner` and the new set does not, so
+  it cannot block provisioning in an org that has no owner yet. Pre-existing
+  inside invite on `main`; the extraction hung a second route off it.
+* **The queue could fail and look like success.**
+  `setRequests(q.ok ? await q.json() : [])` swallowed a failed fetch, so a
+  deployment where migration 143 had not run rendered *"Nobody is waiting."* —
+  **the broken state was indistinguishable from the working one, which is the
+  exact failure this ticket exists to fix.** (`_record_signin_request` swallows
+  the same error into a journald warning nobody reads, by dw2's design.) The
+  page now keeps a separate `queueError`, shows a non-dismissible warning
+  banner without taking the roster down, drops the badge count rather than
+  showing a false `0`, and never renders the empty-state copy unless the queue
+  actually answered.
+* **`143_access_request.sql` gained `CHECK (status IN (…))`.** The vocabulary
+  was enforced only in `_decide`. Safe to edit in place *only* because the
+  migration has never been applied anywhere — `CREATE TABLE IF NOT EXISTS`
+  silently skips a constraint added after the fact.
 
 **Verification**
 
     uv run pytest tests/unit/test_signin_requests.py -q
-    # New file. Every case red-first against pre-fix behaviour.
+    # 40 passed after the repair round (28 before). Every case red-first
+    # against pre-fix behaviour.
     uv run pytest tests/unit/test_default_deny_auth.py \
                   tests/unit/test_org_access_control.py \
                   tests/unit/test_org_access_enforcement.py -q
@@ -1053,12 +1207,24 @@ is covered without Postgres. An earlier draft of this block claimed
 `test_default_deny_auth.py` pinned the branch; it does not — that file never
 calls `resolve_access`.
 
-**Measured runs (2026-08-04, `ws-24-n6-signin-requests`):**
+**Measured runs (2026-08-04, `ws-24-n6-signin-requests`, after the repair
+round):**
 
-    tests/unit/test_signin_requests.py ................. 28 passed
-    the three sweeps below ............................. 97 passed
+    tests/unit/test_signin_requests.py ................. 40 passed  (was 28)
+    the three sweeps above ............................. 97 passed
     ruff (blocking select) ............................. All checks passed!
     npx tsc --noEmit ................................... clean
+
+Mutation evidence for the two guards, taken in this tree and restored
+byte-identically afterwards (sha256 verified):
+
+    _common.py CASE -> `app_user.status <> 'active'`
+      => 1 failed, 39 passed — and the ONLY failure is the structural test.
+         The behavioural cases cannot see it; that is why it is there.
+    access_requests._load_request status guard disabled
+      => 3 failed, 37 passed (approve-twice, the decided-row replay, deny-an-
+         approved-request). With lock A disabled, lock B still held the member
+         at `removed` — verified by probe, then discarded.
 
 Red-first, at commit `cf28f4af` (signatures scaffolded so each red is the claim
 and not a `TypeError`): **16 failed, 12 passed.** The 12 already-green are dw8's

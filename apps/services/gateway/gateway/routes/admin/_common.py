@@ -113,8 +113,13 @@ async def get_org_id(db: Any) -> str:
     return row["id"]
 
 
-async def get_member(db: Any, email: str) -> dict[str, Any]:
-    """Fetch one member row by email, or 404."""
+async def find_member(db: Any, email: str) -> dict[str, Any] | None:
+    """Fetch one member row by email, or ``None``.
+
+    The non-raising half of :func:`get_member`. Provisioning needs it: it has
+    to know whether the address already has a row *before* it writes one, and
+    a 404 is the wrong answer there — an absent row is the normal case.
+    """
     row = (
         await db.execute(
             text(
@@ -126,9 +131,15 @@ async def get_member(db: Any, email: str) -> dict[str, Any]:
             {"email": email.lower().strip()},
         )
     ).mappings().first()
+    return dict(row) if row is not None else None
+
+
+async def get_member(db: Any, email: str) -> dict[str, Any]:
+    """Fetch one member row by email, or 404."""
+    row = await find_member(db, email)
     if row is None:
         raise HTTPException(status_code=404, detail=f"No member '{email}'.")
-    return dict(row)
+    return row
 
 
 async def get_role(db: Any, org_id: str, slug: str) -> dict[str, Any]:
@@ -289,6 +300,57 @@ async def set_roles(
         )
 
 
+#: The one provisioning statement, held as a module constant so the fence can
+#: read it. ``tests/unit/test_signin_requests.py`` asserts against THIS STRING —
+#: the fake DB in that file re-implements the ``ON CONFLICT`` arms in Python and
+#: a mirror can only ever agree with itself, so a behavioural test alone cannot
+#: notice the guard being widened. The structural assertion is the fence.
+#:
+#: **The guard names the statuses it rewrites; it never names the ones it does
+#: not.** A `<>`/`NOT IN` comparison against ``app_user.status`` would mean
+#: "every status except…", which is how a row nobody meant to touch gets
+#: rewritten — `app_user.status <> 'active'` is exactly the mutation that turns
+#: approve into a way to reinstate a REMOVED member.
+#:
+#: The two arms, and why each is where it is:
+#:
+#: * ``invited`` → the caller's ``status``, unconditionally. This is the only
+#:   route to `active`, and it is what makes approve one action rather than
+#:   §2's two clicks (§6 done-when 7).
+#: * ``removed`` → the caller's ``status``, but **never `active`**. Bringing an
+#:   off-boarded person back is a `removed → active` transition, which on
+#:   ``PATCH /admin/members/{email}`` requires ``admin:members:manage``; approve
+#:   holds only the weaker ``admin:members:invite``. Invite (``'invited'``)
+#:   passes the clause and keeps its pre-extraction behaviour byte-for-byte.
+#:
+#: `active` and `suspended` rows are never rewritten by either caller.
+_PROVISION_MEMBER_SQL = """
+    INSERT INTO app_user (email, display_name, organization_id,
+                          status, invited_by, invited_at, joined_at)
+    VALUES (:email, :name, CAST(:org AS uuid), :status, :by, now(),
+            CASE WHEN :status = 'active' THEN now() END)
+    ON CONFLICT (email) DO UPDATE
+       SET organization_id = EXCLUDED.organization_id,
+           display_name    = COALESCE(NULLIF(EXCLUDED.display_name, ''),
+                                      app_user.display_name),
+           status          = CASE
+                               WHEN app_user.status = 'invited'
+                                    THEN :status
+                               WHEN app_user.status = 'removed'
+                                    AND :status <> 'active'
+                                    THEN :status
+                               ELSE app_user.status
+                             END,
+           joined_at       = CASE
+                               WHEN app_user.status = 'invited'
+                                    AND :status = 'active'
+                                    THEN COALESCE(app_user.joined_at, now())
+                               ELSE app_user.joined_at
+                             END,
+           updated_at      = now()
+"""
+
+
 async def provision_member(
     db: Any,
     org_id: str,
@@ -303,25 +365,26 @@ async def provision_member(
 
     Extracted from ``members.invite_member`` so that approving a sign-in
     request (``access_requests.approve_access_request``) provisions through
-    exactly the same code — including invariant 2, which a second hand-rolled
-    INSERT would quietly skip. Spec ``colleague_onboarding.md`` §6 done-when 8.
+    exactly the same code — including invariants 1 and 2, which a second
+    hand-rolled INSERT would quietly skip. Spec ``colleague_onboarding.md`` §6
+    done-when 8.
 
     Deliberately left to the CALLER: ``db.commit()`` (so an approval can mark
     its request decided in the same transaction), ``invalidate_for``,
     ``record_admin_change`` (the audit action differs — `org.member_invited`
     vs `org.access_request_approved`) and the response model.
 
-    ``status`` is what a NEW row gets. On an existing row it is applied only
-    when that row is `removed` or `invited`; `active` and `suspended` are left
-    exactly as they are. That arm is load-bearing in both directions:
+    ``status`` is what a NEW row gets; on an existing row it is applied only by
+    the arms `_PROVISION_MEMBER_SQL` names, which is where that rule is
+    documented. The short version: **neither caller can activate a row that is
+    not `invited`**, so approve — on the weaker ``admin:members:invite`` — can
+    reverse neither a suspension nor an off-boarding, both of which are
+    ``admin:members:manage`` decisions.
 
-    * invite (``status='invited'``) keeps today's behaviour byte-for-byte — a
-      removed member comes back as invited, an active one is not downgraded;
-    * approve (``status='active'``) lets an invited-but-never-activated row
-      through in ONE action (§6 done-when 7, the fix for §2's two-click trap),
-      while refusing to un-suspend anybody: approve is gated on
-      ``admin:members:invite``, which is weaker than the
-      ``admin:members:manage`` that suspended them.
+    Invariant 1 is enforced here rather than only in ``members.py`` because
+    ``set_roles`` below **replaces** a member's assignments wholesale: inviting
+    or approving the last `owner` with the default `member` role would delete
+    the org's only owner grant, and the only way back is SQL on the box.
     """
     email = (email or "").strip().lower()
     if "@" not in email or len(email) > 254:
@@ -329,24 +392,25 @@ async def provision_member(
 
     role_ids = await resolve_assignable_roles(db, org_id, roles or ["member"], admin)
 
+    # Refuse BEFORE the upsert, like every sibling write does (`members.py`
+    # `update_member` / `remove_member` / `set_member_roles`): an existing row
+    # whose roles are about to be replaced by a set without `owner` is the same
+    # lockout as demoting them on the roles screen. Narrower than the roles
+    # route on purpose — it only asks when the grant is actually about to be
+    # taken away, so provisioning is not blocked in an org that has no owner
+    # yet (the bootstrap state, where nothing is being lost).
+    existing = await find_member(db, email)
+    if (
+        existing is not None
+        and "owner" not in {slug for _rid, slug in role_ids}
+        # Short-circuits, so provisioning a NEW address still costs no extra
+        # query — the check only asks when there is a grant to lose.
+        and "owner" in await roles_for_user(db, existing["id"])
+    ):
+        await assert_owner_survives(db, org_id, excluding_user_id=existing["id"])
+
     await db.execute(
-        text(
-            "INSERT INTO app_user (email, display_name, organization_id, "
-            "                      status, invited_by, invited_at, joined_at) "
-            "VALUES (:email, :name, CAST(:org AS uuid), :status, :by, now(), "
-            "        CASE WHEN :status = 'active' THEN now() END) "
-            "ON CONFLICT (email) DO UPDATE "
-            "   SET organization_id = EXCLUDED.organization_id, "
-            "       display_name    = COALESCE(NULLIF(EXCLUDED.display_name, ''), "
-            "                                  app_user.display_name), "
-            "       status          = CASE WHEN app_user.status IN ('removed', 'invited') "
-            "                              THEN :status ELSE app_user.status END, "
-            "       joined_at       = CASE WHEN app_user.status IN ('removed', 'invited') "
-            "                               AND :status = 'active' "
-            "                              THEN COALESCE(app_user.joined_at, now()) "
-            "                              ELSE app_user.joined_at END, "
-            "       updated_at      = now()"
-        ),
+        text(_PROVISION_MEMBER_SQL),
         {"email": email, "name": display_name or "", "org": org_id,
          "by": admin.email, "status": status},
     )

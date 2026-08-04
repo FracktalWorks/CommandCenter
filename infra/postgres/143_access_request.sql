@@ -25,6 +25,12 @@
 -- person per minute at worst, not one per request.
 --
 -- Idempotent. Depends on: nothing (additive, standalone table).
+--
+-- ⚠️ `CREATE TABLE IF NOT EXISTS` means a column or constraint ADDED to this
+-- file after the migration has run somewhere is silently skipped there. This
+-- file has never been applied to any deployment (merging it is the OWNER-GATE,
+-- spec §6), so editing it in place is still safe. Once it merges, a change to
+-- the shape below needs its own numbered migration.
 -- ============================================================================
 
 CREATE TABLE IF NOT EXISTS access_request (
@@ -41,7 +47,14 @@ CREATE TABLE IF NOT EXISTS access_request (
     -- pending | approved | denied. A decided request stays in the table as the
     -- record of the decision; a denied address that keeps signing in bumps
     -- last_seen_at/attempt_count but never returns to pending.
-    status          TEXT NOT NULL DEFAULT 'pending',
+    --
+    -- The CHECK is here as well as in `access_requests._decide` because the
+    -- vocabulary is load-bearing for ACCESS, not just for display: the approve
+    -- route acts only on `pending` rows, and a typo'd status would drop a row
+    -- out of the pending list AND out of the decided record — invisible in the
+    -- tab, and un-decidable through the API.
+    status          TEXT NOT NULL DEFAULT 'pending'
+                    CHECK (status IN ('pending', 'approved', 'denied')),
     decided_by      TEXT NOT NULL DEFAULT '',
     decided_at      TIMESTAMPTZ
 );

@@ -21,6 +21,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import {
+  AlertTriangle,
   Check,
   DoorOpen,
   Loader2,
@@ -79,6 +80,17 @@ export default function MembersPage() {
   const [roles, setRoles] = useState<Role[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState("");
+  /**
+   * The queue's own failure, kept apart from `error` so it can be shown
+   * WITHOUT taking the roster down — and so it cannot be silent.
+   *
+   * A failed `/members/requests` used to fall back to `[]`, which renders as
+   * "Nobody is waiting." That is indistinguishable from the working state, and
+   * it is the exact failure this tab exists to fix: somebody is locked out and
+   * the screen says everything is fine. If migration 143 has not been applied
+   * the list route 500s, and nothing else on the page would notice.
+   */
+  const [queueError, setQueueError] = useState("");
   const [tab, setTab] = useState("members");
   const [filter, setFilter] = useState("all");
   const [inviting, setInviting] = useState(false);
@@ -100,9 +112,20 @@ export default function MembersPage() {
       }
       setMembers(await m.json());
       if (r.ok) setRoles(await r.json());
-      // A deployment whose migration has not run yet still shows the roster;
-      // the queue is additive and must never take the page down with it.
-      setRequests(q.ok ? await q.json() : []);
+      // A deployment whose migration has not run yet still shows the roster —
+      // the queue is additive and must never take the page down with it — but
+      // it says so out loud rather than rendering an empty queue as calm.
+      if (q.ok) {
+        setRequests(await q.json());
+        setQueueError("");
+      } else {
+        const body = await q.json().catch(() => ({}));
+        setRequests([]);
+        setQueueError(
+          body.detail ??
+            `The sign-in queue could not be loaded (${q.status}). Somebody may be locked out and not shown here.`
+        );
+      }
     } catch (e) {
       setError(e instanceof Error ? e.message : "Failed to load members.");
     } finally {
@@ -247,9 +270,11 @@ export default function MembersPage() {
             label: "Requests",
             icon: DoorOpen,
             // Only badged when there is something to answer — a permanent "0"
-            // is the kind of chrome people stop reading.
-            count: requests.length || undefined,
-            note: "People who signed in and found no account",
+            // is the kind of chrome people stop reading. When the queue failed
+            // to load there is no honest count, so the tooltip says so rather
+            // than letting an absent badge read as "nobody is waiting".
+            count: queueError ? undefined : requests.length || undefined,
+            note: queueError || "People who signed in and found no account",
           },
         ]}
       />
@@ -278,6 +303,19 @@ export default function MembersPage() {
         </div>
       )}
 
+      {/* Non-blocking, and deliberately NOT dismissible: the roster below is
+          fine, but the queue is not, and an owner who dismisses this goes back
+          to a screen that says nobody is locked out. It clears when a reload
+          succeeds. */}
+      {queueError && (
+        <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-warning/30 bg-warning/10 px-3 py-2 text-xs text-warning sm:mx-6">
+          <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+          <span className="flex-1">
+            {queueError} The roster below is unaffected.
+          </span>
+        </div>
+      )}
+
       <div className="flex-1 overflow-y-auto px-4 py-4 sm:px-6">
         {loading ? (
           <div className="flex items-center gap-2 text-xs text-muted-foreground">
@@ -288,6 +326,7 @@ export default function MembersPage() {
             requests={requests}
             roles={roles}
             onDecide={decide}
+            failed={Boolean(queueError)}
           />
         ) : shown.length === 0 ? (
           <p className="text-xs text-muted-foreground">No members here yet.</p>
@@ -404,6 +443,7 @@ function RequestsTab({
   requests,
   roles,
   onDecide,
+  failed,
 }: {
   requests: AccessRequest[];
   roles: Role[];
@@ -412,7 +452,25 @@ function RequestsTab({
     decision: "approve" | "deny",
     roleSlug?: string
   ) => Promise<void>;
+  /** The queue could not be loaded — an empty list means nothing here. */
+  failed: boolean;
 }) {
+  // "Nobody is waiting" is a claim about the queue, and it may only be made
+  // when the queue actually answered. Saying it after a failed fetch is the
+  // same silence this tab was built to end.
+  if (failed) {
+    return (
+      <div className="rounded-xl border border-dashed border-warning/40 p-8 text-center">
+        <AlertTriangle size={18} className="mx-auto mb-2 text-warning" />
+        <p className="text-xs text-muted-foreground">
+          The sign-in queue is unavailable, so this list is not the truth.
+          People may be locked out without appearing here. Retry with Refresh;
+          if it persists, check that migration 143 has been applied.
+        </p>
+      </div>
+    );
+  }
+
   if (requests.length === 0) {
     return (
       <div className="rounded-xl border border-dashed border-border p-8 text-center">
@@ -463,8 +521,23 @@ function RequestRow({
   return (
     <div className="flex flex-wrap items-center gap-3 rounded-xl border border-border bg-card p-3 sm:p-4">
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium text-foreground">
-          {request.display_name || request.email}
+        <div className="flex items-center gap-1.5">
+          <span className="truncate text-sm font-medium text-foreground">
+            {request.display_name || request.email}
+          </span>
+          {/* Approve provisions them `active` immediately, so this chip is the
+              last point at which "not one of us" is visible. The tenant pin
+              bounds who can AUTHENTICATE, not who works here — a B2B guest is
+              a directory member like anybody else. */}
+          {request.is_external && (
+            <span
+              className="flex shrink-0 items-center gap-1 rounded-md bg-warning/10 px-1.5 py-0.5 text-[10px] text-warning"
+              title="Outside the company sign-in domain. Guests invited into the directory can sign in too — check who this is before approving."
+            >
+              <AlertTriangle size={10} />
+              outside the company domain
+            </span>
+          )}
         </div>
         <div className="truncate text-[11px] text-muted-foreground">
           {request.email}

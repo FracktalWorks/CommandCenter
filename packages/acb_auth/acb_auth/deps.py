@@ -201,6 +201,31 @@ def _refuse_llm_key_identity() -> bool:
     ).strip().lower() in {"1", "true", "yes", "on"}
 
 
+def allowed_email_domain() -> str:
+    """The company's own sign-in domain, normalised (``fracktal.in``).
+
+    One reader for ``ALLOWED_EMAIL_DOMAIN`` so the default cannot drift between
+    the two branches of :func:`get_current_user` and the surfaces that need to
+    *display* the distinction — the sign-in request queue marks an off-domain
+    address, and the browser must never re-derive a policy the server owns.
+
+    ⚠️ **This is a label, not a boundary.** Branch 1a only LOGS a mismatch
+    (``auth.identity_domain_mismatch``) and carries on: the internal-token
+    holder is trusted to say who it is acting as, and refusing here would lock
+    out any member whose sign-in address is off-domain. Nor does the Entra
+    tenant pin exclude these addresses — a B2B guest **is** a directory member
+    and authenticates against the tenant like anybody else.
+    """
+    return os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
+
+
+def is_company_email(email: str | None) -> bool:
+    """Is this address inside :func:`allowed_email_domain`?"""
+    return bool(email) and (email or "").lower().endswith(
+        "@" + allowed_email_domain()
+    )
+
+
 def _trust_unverified_sso_headers() -> bool:
     """Escape hatch: when true, X-User-Email is trusted even without a valid
     internal Bearer token (the pre-2026-07 behaviour).
@@ -320,9 +345,9 @@ async def get_current_user(
     #     alongside the internal Bearer token.  We trust the identity because
     #     only the Next.js server can produce a valid Bearer token.
     if bearer_ok and x_user_email:
-        allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
+        allowed_domain = allowed_email_domain()
         email = x_user_email
-        if not email.lower().endswith("@" + allowed_domain):
+        if not is_company_email(email):
             # NOT a rejection, deliberately: the token holder is trusted to say
             # who it is acting as, and refusing here would lock out any member
             # whose sign-in address is off-domain. The mismatch is only ever
@@ -371,14 +396,12 @@ async def get_current_user(
     ):
         return UserContext(email=None, role=UserRole.EMPLOYEE, access=NO_ACCESS)
 
-    email = x_user_email
-    if email:
-        # Domain enforcement (defence in depth) for the fail-open / escape-hatch
-        # paths that still trust the header.
-        allowed_domain = os.getenv("ALLOWED_EMAIL_DOMAIN", "fracktal.in").lower().lstrip("@")
-        if not email.lower().endswith("@" + allowed_domain):
-            # Treat as anonymous rather than raising — callers use require_role() to enforce.
-            email = None
+    # Domain enforcement (defence in depth) for the fail-open / escape-hatch
+    # paths that still trust the header. An off-domain address is treated as
+    # anonymous rather than raising — callers use require_role() to enforce.
+    # Note this is the OPPOSITE of branch 1a, which only logs: there the Bearer
+    # already proved the caller is the proxy, here nothing has.
+    email = x_user_email if is_company_email(x_user_email) else None
 
     return await _with_resolved_access(
         UserContext(email=email, role=_coerce_role(x_user_role))

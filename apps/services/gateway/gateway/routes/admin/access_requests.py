@@ -13,7 +13,7 @@ hours on 2026-08-03/04 and the system told nobody.
 (migration 143) when — and only when — it comes from the sign-in path. This
 module is the other half: the owner sees the queue and answers it.
 
-Two things worth knowing before editing:
+Three things worth knowing before editing:
 
 1. **The ``/admin`` auth floor is per-route, not a package property.**
    ``_common.py`` creates the router with **no** ``dependencies=``; every route
@@ -24,13 +24,22 @@ Two things worth knowing before editing:
    ``admin:members:invite``, which the roles seed already grants. A brand-new
    slug is nobody's grant until an admin creates it — which would switch the
    feature off for the owner too (the N4 lesson, spec §4).
+3. **A decided request is not a re-usable handle.** Both writes are gated on
+   ``admin:members:invite``, which is *weaker* than the
+   ``admin:members:manage`` that suspends or off-boards somebody. Rows are kept
+   after a decision (§6 done-when 9) and the tab renders only `pending`, so a
+   decided row is invisible **and** still findable — exactly the shape that
+   lets a weaker permission quietly reverse a stronger one. ``_load_request``
+   takes the statuses it will act on as a required argument, and
+   ``_common._PROVISION_MEMBER_SQL`` refuses to activate anything that is not
+   `invited`. Two locks, because either alone is one edit away from open.
 """
 
 from __future__ import annotations
 
 from typing import Any
 
-from acb_auth import UserContext, require_permission
+from acb_auth import UserContext, is_company_email, require_permission
 from fastapi import Depends, HTTPException
 from gateway.routes.admin._common import (
     _iso,
@@ -58,6 +67,13 @@ _REQUEST_COLUMNS = (
     "  FROM access_request "
 )
 
+#: The owner's inbox. Held as a constant so the fence can read it: the fake DB
+#: in ``tests/unit/test_signin_requests.py`` ignores ``ORDER BY`` entirely, so
+#: "newest knock first" (§6 done-when 6) is only ever a claim about THIS STRING.
+_PENDING_REQUESTS_SQL = (
+    _REQUEST_COLUMNS + " WHERE status = 'pending' ORDER BY last_seen_at DESC"
+)
+
 
 # ── Models ──────────────────────────────────────────────────────────────────
 
@@ -70,6 +86,10 @@ class AccessRequestEntry(BaseModel):
     #: somebody stuck rather than somebody curious.
     attempt_count: int = 0
     status: str = "pending"
+    #: The address is outside ``ALLOWED_EMAIL_DOMAIN``. Resolved on the server
+    #: because the domain is server policy and the browser must not re-derive
+    #: it. See :func:`_entry` for why the row has to say so.
+    is_external: bool = False
 
 
 class ApproveRequest(BaseModel):
@@ -87,6 +107,18 @@ class ApproveResult(BaseModel):
 
 
 def _entry(row: dict[str, Any]) -> AccessRequestEntry:
+    """Project one row, flagging an address from outside the company domain.
+
+    **Why the flag exists.** ``deps.get_current_user`` branch 1a only *logs* an
+    off-domain identity (`auth.identity_domain_mismatch`) and passes it into
+    the resolve that files this row — deliberately, so a member whose sign-in
+    address is off-domain is not locked out. Nor does the Entra tenant pin
+    exclude these addresses: a **B2B guest is a directory member** and
+    authenticates against the tenant like anybody else, so "tenant-pinned"
+    bounds who can authenticate, not who works here. Approve provisions
+    `active` immediately, so the one place that difference can still be seen is
+    this row — an unmarked queue makes a guest look like a colleague.
+    """
     return AccessRequestEntry(
         email=row["email"],
         display_name=row["display_name"] or "",
@@ -94,11 +126,37 @@ def _entry(row: dict[str, Any]) -> AccessRequestEntry:
         last_seen_at=_iso(row["last_seen_at"]),
         attempt_count=int(row["attempt_count"] or 0),
         status=row["status"],
+        is_external=not is_company_email(row["email"]),
     )
 
 
-async def _load_request(db: Any, email: str) -> dict[str, Any]:
-    """Fetch one request by email, or 404."""
+async def _load_request(
+    db: Any, email: str, *, allowed_statuses: tuple[str, ...]
+) -> dict[str, Any]:
+    """Fetch one request by email, or 404 — and refuse an already-decided row.
+
+    ``allowed_statuses`` is keyword-only with **no default**, the same shape as
+    ``routes/tasks/people._row_to_person(row, *, include_hr)``: a route added
+    later must state which rows it is entitled to act on rather than inherit
+    the permissive answer by omission.
+
+    **This filter is a security boundary, not tidiness.** A decided row
+    outlives its decision — that is the point of keeping it (§6 done-when 9) —
+    so without this check the decided row is still findable and re-POSTing
+    approve re-runs provisioning. Combined with an off-boarding
+    (``DELETE /admin/members/{email}``, gated ``admin:members:manage``) that
+    turned a `removed` row back into `active` on the weaker
+    ``admin:members:invite``: a decision taken under the stronger permission,
+    reversed by the weaker one, and invisible because the Requests tab renders
+    only `pending`. ``_common._PROVISION_MEMBER_SQL`` closes the same hole from
+    the other end; both are here on purpose.
+
+    The refusal is checked in Python rather than bound into the ``WHERE``
+    clause deliberately: the fake DB the tests run against matches SQL on
+    substrings and does not evaluate predicates, so a filter hidden in the SQL
+    would be unfenceable by a behavioural test, and an admin looking at a stale
+    tab deserves "already approved by X" rather than "no such request".
+    """
     row = (
         await db.execute(
             text(_REQUEST_COLUMNS + " WHERE lower(email) = :email"),
@@ -109,7 +167,18 @@ async def _load_request(db: Any, email: str) -> dict[str, Any]:
         raise HTTPException(
             status_code=404, detail=f"No sign-in request from '{email}'."
         )
-    return dict(row)
+    request = dict(row)
+    if request["status"] not in allowed_statuses:
+        raise HTTPException(
+            status_code=409,
+            detail=(
+                f"This sign-in request was already {request['status']}"
+                + (f" by {request['decided_by']}" if request["decided_by"] else "")
+                + ". A decided request cannot be decided again — manage the "
+                  "member from the roster instead."
+            ),
+        )
+    return request
 
 
 async def _decide(db: Any, email: str, status: str, admin: UserContext) -> None:
@@ -141,14 +210,7 @@ async def list_access_requests(
     """
     db = await get_db()
     async with db:
-        rows = (
-            await db.execute(
-                text(
-                    _REQUEST_COLUMNS
-                    + " WHERE status = 'pending' ORDER BY last_seen_at DESC"
-                ),
-            )
-        ).mappings().all()
+        rows = (await db.execute(text(_PENDING_REQUESTS_SQL))).mappings().all()
     return [_entry(dict(r)) for r in rows]
 
 
@@ -169,15 +231,21 @@ async def approve_access_request(
 
     Provisioning goes through ``_common.provision_member``, the same helper
     ``POST /admin/members`` uses, so there is one provisioning path and
-    invariant 2 ("nobody grants above themselves") applies here too: an admin
-    cannot approve somebody straight into `owner`.
+    invariants 1 and 2 apply here too: an admin cannot approve somebody
+    straight into `owner`, and approving the last owner with the default
+    `member` role cannot silently drop the org's only owner grant.
 
-    Idempotent. Two admins clicking the same row is a normal race, not an
-    error, and it must not produce two members.
+    **Only a `pending` request can be approved.** Two admins clicking the same
+    row is a normal race and must never produce two members; the loser now
+    learns *why* (409, naming the decision) instead of receiving a 200 that
+    silently did nothing. That 200 was also the vehicle for a real escalation —
+    a request approved, the member later off-boarded under
+    ``admin:members:manage``, and the same row re-approved under the weaker
+    ``admin:members:invite`` to put them back. See ``_load_request``.
     """
     db = await get_db()
     async with db:
-        request = await _load_request(db, email)
+        request = await _load_request(db, email, allowed_statuses=("pending",))
         org_id = await get_org_id(db)
 
         member, _assigned = await provision_member(
@@ -218,10 +286,20 @@ async def deny_access_request(
     ``attempt_count`` — that is the resolver's upsert, which never touches
     ``status`` — so the row stays out of the owner's queue rather than
     reappearing on the next sign-in.
+
+    **Re-denying a denied row is harmless and stays allowed**, so a stale tab
+    or a double click answers 200 rather than an error nobody can act on: deny
+    provisions nobody, revokes nothing and takes no access away, so replaying
+    it changes only ``decided_by``/``decided_at``. Denying an **approved**
+    request is refused (409): it would not touch the live member it created,
+    so the only thing it could achieve is a queue record that contradicts the
+    roster. Suspend or remove them from the roster instead.
     """
     db = await get_db()
     async with db:
-        request = await _load_request(db, email)
+        request = await _load_request(
+            db, email, allowed_statuses=("pending", "denied"),
+        )
         await _decide(db, request["email"].lower(), "denied", admin)
         await db.commit()
 
